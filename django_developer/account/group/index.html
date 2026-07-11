@@ -1223,10 +1223,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#per-group-auth_-settings" class="md-nav__link">
+  <a href="#per-group-auth-config" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Per-group AUTH_* settings
+        Per-group auth config
       
     </span>
   </a>
@@ -4099,10 +4099,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#per-group-auth_-settings" class="md-nav__link">
+  <a href="#per-group-auth-config" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Per-group AUTH_* settings
+        Per-group auth config
       
     </span>
   </a>
@@ -4369,25 +4369,37 @@ cache is automatically invalidated when <code>auth_domain</code> or <code>is_act
 </code></pre></div>
 <p>The bouncer calls this automatically on every page request — no setup beyond
 setting <code>auth_domain</code> is required.</p>
-<h3 id="per-group-auth_-settings">Per-group AUTH_* settings<a class="headerlink" href="#per-group-auth_-settings" title="Permanent link">&para;</a></h3>
-<p>All <code>AUTH_*</code> settings resolve per-group when a group is detected. Set them
-via the <code>Setting</code> model with the <code>group</code> argument:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">settings</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">group</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">uuid</span><span class="o">=</span><span class="s1">&#39;...&#39;</span><span class="p">)</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_APP_TITLE&#39;</span><span class="p">,</span> <span class="s1">&#39;Client Brand&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_LOGO_URL&#39;</span><span class="p">,</span> <span class="s1">&#39;https://cdn.client.com/logo.svg&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_SUCCESS_REDIRECT&#39;</span><span class="p">,</span> <span class="s1">&#39;/client-dashboard/&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_ENABLE_GOOGLE&#39;</span><span class="p">,</span> <span class="kc">True</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+<h3 id="per-group-auth-config">Per-group auth config<a class="headerlink" href="#per-group-auth-config" title="Permanent link">&para;</a></h3>
+<p>Hosted-auth-page branding and offered methods are configured through the
+structured <a href="../auth_config/">auth config</a> stored in
+<code>group.metadata["auth_config"]</code> (the flat <code>AUTH_*</code> settings are retired — see
+the migration table in that doc):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Group</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">group</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">uuid</span><span class="o">=</span><span class="s1">&#39;...&#39;</span><span class="p">)</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">metadata</span> <span class="ow">or</span> <span class="p">{}</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;auth_config&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="s2">&quot;theme&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>        <span class="s2">&quot;app_title&quot;</span><span class="p">:</span> <span class="s2">&quot;Client Brand&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>        <span class="s2">&quot;logo_url&quot;</span><span class="p">:</span> <span class="s2">&quot;https://cdn.client.com/logo.svg&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>        <span class="s2">&quot;success_redirect&quot;</span><span class="p">:</span> <span class="s2">&quot;/client-dashboard/&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="p">},</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>    <span class="s2">&quot;login&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;methods&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;password&quot;</span><span class="p">,</span> <span class="s2">&quot;google&quot;</span><span class="p">]},</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="p">}</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">update_fields</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;metadata&quot;</span><span class="p">])</span>
 </code></pre></div>
-<p>Settings resolve with parent-chain fallback: group → parent group → global.</p>
+<p>The config resolves per group: code defaults ← the global <code>AUTH_CONFIG</code>
+setting ← each ancestor's <code>metadata["auth_config"]</code> deep-merged down the
+parent chain (root → leaf; dicts merge key-by-key, lists replace wholesale).
+Invalid configs (unknown method token, bad enum) are rejected at Group save
+time.</p>
 <h3 id="challenge-page-branding-opt-in">Challenge page branding (opt-in)<a class="headerlink" href="#challenge-page-branding-opt-in" title="Permanent link">&para;</a></h3>
 <p>By default, the bouncer challenge page always uses the default branding. To
 override it for a specific group:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;BOUNCER_CHALLENGE_LOGO_URL&#39;</span><span class="p">,</span> <span class="s1">&#39;https://cdn.client.com/logo.svg&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;BOUNCER_CHALLENGE_BRAND&#39;</span><span class="p">,</span> <span class="s1">&#39;CLIENT BRAND&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">settings</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;BOUNCER_CHALLENGE_LOGO_URL&#39;</span><span class="p">,</span> <span class="s1">&#39;https://cdn.client.com/logo.svg&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;BOUNCER_CHALLENGE_BRAND&#39;</span><span class="p">,</span> <span class="s1">&#39;CLIENT BRAND&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
 </code></pre></div>
 <p>These settings are intentionally not global — they only take effect when a
 group is detected. This preserves the default branding for the default flow.</p>
@@ -4397,7 +4409,7 @@ group is detected. This preserves the default branding for the default flow.</p>
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="n">LOG_META_CHANGES</span> <span class="o">=</span> <span class="kc">True</span>          <span class="c1"># logs key-level changes to metadata</span>
 <a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">VIEW_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;view_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_group&quot;</span><span class="p">,</span> <span class="s2">&quot;groups&quot;</span><span class="p">]</span>
 <a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">SAVE_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_groups&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_group&quot;</span><span class="p">,</span> <span class="s2">&quot;groups&quot;</span><span class="p">]</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">PROTECTED_JSON_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_groups&quot;</span><span class="p">]</span>  <span class="c1"># required to write metadata[&quot;protected&quot;]</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">PROTECTED_JSON_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;admin_compliance&quot;</span><span class="p">,</span> <span class="s2">&quot;admin_verify&quot;</span><span class="p">]</span>  <span class="c1"># required to write metadata[&quot;protected&quot;]</span>
 <a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">POST_SAVE_ACTIONS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;realtime_message&#39;</span><span class="p">,</span> <span class="s1">&#39;disable&#39;</span><span class="p">,</span> <span class="s1">&#39;reactivate&#39;</span><span class="p">]</span>
 <a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    <span class="n">SEARCH_FIELDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span>
 </code></pre></div>
@@ -4448,14 +4460,14 @@ group is detected. This preserves the default branding for the default flow.</p>
 <a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <h3 id="protected-metadata">Protected Metadata<a class="headerlink" href="#protected-metadata" title="Permanent link">&para;</a></h3>
-<p>The reserved root key <code>"protected"</code> in <code>metadata</code> is write-protected at the framework level. Only a superuser or a user with a permission listed in <code>PROTECTED_JSON_PERMS</code> (e.g. <code>"manage_groups"</code>) can set or update it via the REST API. Any attempt by an unprivileged user raises a <code>403 PermissionDeniedException</code>.</p>
+<p>The reserved root key <code>"protected"</code> in <code>metadata</code> is write-protected at the framework level. Only a superuser or a user with a permission listed in <code>PROTECTED_JSON_PERMS</code> (for Group: <code>"admin_compliance"</code> or <code>"admin_verify"</code>) can set or update it via the REST API. Any attempt by an unprivileged user raises a <code>403 PermissionDeniedException</code>. The gate cannot be bypassed with <code>"__replace": true</code> or a non-dict overwrite — a wholesale replace that would rewrite <strong>or drop</strong> the existing <code>protected</code> subtree is denied the same as a merge that touches it.</p>
 <p>Use it to store config that group editors should be able to read but never overwrite:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span>
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="s2">&quot;timezone&quot;</span><span class="p">:</span> <span class="s2">&quot;America/New_York&quot;</span><span class="p">,</span>       <span class="c1"># any group editor can change</span>
 <a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="s2">&quot;theme&quot;</span><span class="p">:</span> <span class="s2">&quot;dark&quot;</span><span class="p">,</span>                       <span class="c1"># any group editor can change</span>
 <a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="s2">&quot;protected&quot;</span><span class="p">:</span> <span class="p">{</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>        <span class="s2">&quot;stripe_account_id&quot;</span><span class="p">:</span> <span class="s2">&quot;acct_123&quot;</span><span class="p">,</span>  <span class="c1"># requires manage_groups</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>        <span class="s2">&quot;webhook_secret&quot;</span><span class="p">:</span> <span class="s2">&quot;whsec_abc&quot;</span><span class="p">,</span>    <span class="c1"># requires manage_groups</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>        <span class="s2">&quot;stripe_account_id&quot;</span><span class="p">:</span> <span class="s2">&quot;acct_123&quot;</span><span class="p">,</span>  <span class="c1"># requires admin_compliance/admin_verify</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>        <span class="s2">&quot;webhook_secret&quot;</span><span class="p">:</span> <span class="s2">&quot;whsec_abc&quot;</span><span class="p">,</span>    <span class="c1"># requires admin_compliance/admin_verify</span>
 <a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>        <span class="s2">&quot;plan&quot;</span><span class="p">:</span> <span class="s2">&quot;enterprise&quot;</span><span class="p">,</span>
 <a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>        <span class="s2">&quot;disable&quot;</span><span class="p">:</span> <span class="p">{</span>                      <span class="c1"># see disable_lifecycle.md</span>
 <a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>            <span class="s2">&quot;exempt_from_auto_disable&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>

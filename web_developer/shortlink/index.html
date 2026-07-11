@@ -4285,7 +4285,7 @@
 <hr />
 <h2 id="quick-create-endpoint">Quick Create Endpoint<a class="headerlink" href="#quick-create-endpoint" title="Permanent link">&para;</a></h2>
 <p><strong>POST</strong> <code>/api/shortlink/link/create</code></p>
-<p>Requires authentication (<code>@requires_auth</code>) and reads input from <code>request.DATA</code>.</p>
+<p>Requires authentication (<code>@md.requires_auth()</code>) and reads input from <code>request.DATA</code>.</p>
 <p>Use this endpoint when you want a ready-to-use short URL string in one call.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/page&quot;</span><span class="p">,</span>

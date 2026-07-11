@@ -5385,7 +5385,7 @@ ceilings.</p>
 </table>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Return just the data — framework wraps it</span>
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">GET</span><span class="p">(</span><span class="s1">&#39;book/stats&#39;</span><span class="p">)</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span><span class="p">()</span>
 <a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_book_stats</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
 <a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;total&quot;</span><span class="p">:</span> <span class="n">Book</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">count</span><span class="p">()}</span>
 <a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="c1"># client gets: {&quot;status&quot;: true, &quot;data&quot;: {&quot;total&quot;: 42}}</span>
@@ -5400,7 +5400,7 @@ ceilings.</p>
 <a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>
 <a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="c1"># Raise for errors — auto-converted to 400/403</span>
 <a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s1">&#39;book/publish&#39;</span><span class="p">)</span>
-<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span>
+<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span><span class="p">()</span>
 <a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_publish</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
 <a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a>    <span class="n">book</span> <span class="o">=</span> <span class="n">Book</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">book_id</span><span class="p">)</span>
 <a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">request</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">has_permission</span><span class="p">(</span><span class="s2">&quot;publish_books&quot;</span><span class="p">):</span>
@@ -5513,6 +5513,11 @@ ceilings.</p>
 <td><code>fk_attach_denied</code></td>
 <td>n/a</td>
 <td>FK save silently skipped — field unchanged, no HTTP error</td>
+</tr>
+<tr>
+<td><code>batch_row_denied</code></td>
+<td>n/a</td>
+<td>Batch row dropped by per-row instance permission check — no HTTP error (see <a href="#batch-operations">Batch Operations</a>)</td>
 </tr>
 </tbody>
 </table>
@@ -5639,6 +5644,16 @@ ceilings.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="p">{</span><span class="nt">&quot;batched&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;New&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Updated&quot;</span><span class="p">}]}</span>
 </code></pre></div>
 <p>Items with <code>id</code>/<code>pk</code> are updated; items without are created.</p>
+<p>Every row is permission-checked individually, with the same evaluation as the
+single-instance paths: update rows run <code>["SAVE_PERMS", "VIEW_PERMS"]</code> against
+the instance (owner match, group/<code>GROUP_FIELD</code> tenant binding,
+<code>check_view/edit_permission</code> hooks), create rows run <code>["CREATE_PERMS",
+"SAVE_PERMS", "VIEW_PERMS"]</code>. A denied row is dropped — it appears in the
+response <code>errors</code> list as <code>{"index": N, "error": "permission denied"}</code> and
+emits a <code>batch_row_denied</code> incident (level 2, branch <code>batch_update</code> or
+<code>batch_create</code>) — while the rest of the batch proceeds. Rows are written
+sequentially with no transaction, so a denial never rolls back earlier rows;
+<code>count</code> reflects successful rows only.</p>
 <h2 id="programmatic-non-http-usage">Programmatic (Non-HTTP) Usage<a class="headerlink" href="#programmatic-non-http-usage" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Create from dict (service layer / management commands)</span>
 <a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="n">book</span> <span class="o">=</span> <span class="n">Book</span><span class="o">.</span><span class="n">create_from_dict</span><span class="p">({</span><span class="s2">&quot;title&quot;</span><span class="p">:</span> <span class="s2">&quot;My Book&quot;</span><span class="p">})</span>
@@ -5654,17 +5669,18 @@ ceilings.</p>
 <p>Any <code>JSONField</code> on a MojoModel supports a reserved root key <code>"protected"</code>. Writes to <code>metadata["protected"]</code> (or any other JSONField's <code>"protected"</code> key) are blocked at the framework level unless the requesting user is a superuser or holds a permission listed in <code>PROTECTED_JSON_PERMS</code>.</p>
 <h3 id="setup_1">Setup<a class="headerlink" href="#setup_1" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
-<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>    <span class="n">PROTECTED_JSON_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;manage_groups&quot;</span><span class="p">]</span>  <span class="c1"># who can write the &quot;protected&quot; key</span>
-<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>    <span class="n">LOG_META_CHANGES</span> <span class="o">=</span> <span class="kc">True</span>                   <span class="c1"># optional — audit all JSONField changes</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>    <span class="n">PROTECTED_JSON_PERMS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;admin_compliance&quot;</span><span class="p">]</span>  <span class="c1"># who can write the &quot;protected&quot; key</span>
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>    <span class="n">LOG_META_CHANGES</span> <span class="o">=</span> <span class="kc">True</span>                      <span class="c1"># optional — audit all JSONField changes</span>
 </code></pre></div>
 <h3 id="behavior">Behavior<a class="headerlink" href="#behavior" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Any save attempt that includes <code>"protected"</code> in a JSONField value will raise a <code>403 PermissionDeniedException</code> if the user lacks the required permission.</li>
-<li>Changes to the <code>"protected"</code> key are <strong>always</strong> written to the audit log (<code>kind="meta:protected_changed"</code>) regardless of <code>LOG_CHANGES</code> or <code>LOG_META_CHANGES</code> — it is an unconditional security audit trail.</li>
+<li>The guard covers <strong>every</strong> write path: merges (the default), full replaces (<code>"__replace": true</code> or <code>JSON_REPLACE_FIELDS</code>), and non-dict overwrites (e.g. posting a list or string over a dict). A replace or overwrite that would <strong>clobber an existing</strong> <code>"protected"</code> subtree is denied the same as one that writes it — even if the incoming value doesn't contain a <code>"protected"</code> key.</li>
+<li>Changes to the <code>"protected"</code> key are <strong>always</strong> written to the audit log (<code>kind="meta:protected_changed"</code>) regardless of <code>LOG_CHANGES</code> or <code>LOG_META_CHANGES</code> — it is an unconditional security audit trail. On a replace, the logged changed-keys include keys that were removed.</li>
 <li>When <code>LOG_META_CHANGES = True</code>, all root-level key changes to any JSONField are logged (<code>kind="meta:changed"</code>).</li>
 </ul>
 <h3 id="example-storing-protected-config">Example — storing protected config<a class="headerlink" href="#example-storing-protected-config" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># Only superusers or users with &quot;manage_groups&quot; can set this via the API</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># Only superusers or users with &quot;admin_compliance&quot; can set this via the API</span>
 <a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span>
 <a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>    <span class="s2">&quot;timezone&quot;</span><span class="p">:</span> <span class="s2">&quot;America/New_York&quot;</span><span class="p">,</span>      <span class="c1"># normal — any editor can change</span>
 <a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>    <span class="s2">&quot;protected&quot;</span><span class="p">:</span> <span class="p">{</span>

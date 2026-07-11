@@ -4778,9 +4778,9 @@ tooling can tell them apart.</p>
 </tr>
 <tr>
 <td>File</td>
-<td>view_fileman, manage_files, <strong>files</strong></td>
-<td>manage_files, <strong>files</strong></td>
-<td></td>
+<td>view_fileman, manage_files, <strong>files</strong>, <strong>owner</strong></td>
+<td>manage_files, <strong>files</strong>, <strong>owner</strong></td>
+<td><code>owner</code> = the initiating uploader (<code>OWNER_FIELD=user</code>); <code>DELETE_PERMS = manage_files, files, owner</code>. Owner may view/complete/attach/delete own file; list auto-scoped to own rows</td>
 </tr>
 <tr>
 <td>FileRendition</td>
@@ -4892,7 +4892,10 @@ tooling can tell them apart.</p>
 <h3 id="2-geolocatedip-uses-manage_users-fixed">2. ~~GeoLocatedIP uses <code>manage_users</code>~~ (Fixed)<a class="headerlink" href="#2-geolocatedip-uses-manage_users-fixed" title="Permanent link">&para;</a></h3>
 <p>GeoLocatedIP now accepts <code>view_security</code>/<code>manage_security</code> in addition to <code>manage_users</code>. Security admins can see firewall data without needing user management access.</p>
 <h3 id="3-file-models-missing-explicit-save_perms-fixed">3. ~~File models missing explicit SAVE_PERMS~~ (Fixed)<a class="headerlink" href="#3-file-models-missing-explicit-save_perms-fixed" title="Permanent link">&para;</a></h3>
-<p>FileManager, File, and FileRendition now have <code>SAVE_PERMS = ["manage_files"]</code>.</p>
+<p>FileManager, File, and FileRendition now have <code>SAVE_PERMS = ["manage_files"]</code>.
+File additionally carries the <code>"owner"</code> token in <code>VIEW_PERMS</code>/<code>SAVE_PERMS</code>/
+<code>DELETE_PERMS</code> (ITEM-033) so the member who initiated an upload can complete and
+manage their own file without <code>manage_files</code>/<code>files</code>.</p>
 <h2 id="known-issues">Known Issues<a class="headerlink" href="#known-issues" title="Permanent link">&para;</a></h2>
 <h3 id="1-event-create_perms-all-intentional">1. Event CREATE_PERMS = <code>all</code> (intentional)<a class="headerlink" href="#1-event-create_perms-all-intentional" title="Permanent link">&para;</a></h3>
 <p>The Event model allows anyone to create security events via <code>POST /api/incident/event</code>. This is the public reporting API used by frontend JavaScript to report security signals (XSS attempts, suspicious behavior, etc.). Viewing events requires <code>view_security</code>. This asymmetry is intentional and correct.</p>

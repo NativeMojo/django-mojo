@@ -4300,6 +4300,10 @@ above). An API key must be scoped to the group <strong>and</strong> hold the per
 the <strong>global</strong> <code>manage_geofence</code>/<code>security</code> perm — a tenant admin with
 <code>manage_group</code> cannot flip it. The member-reachable <code>realtime_message</code>
 POST_SAVE_ACTION also requires <code>manage_group</code>.</p>
+<p>Note: <code>metadata.protected.*</code> requires <code>admin_compliance</code> or <code>admin_verify</code> — a
+write grant alone is not enough. Any update that would touch it (a merge
+carrying <code>"protected"</code>, a <code>"__replace": true</code> payload, or a non-dict <code>metadata</code>
+value that would overwrite the existing <code>protected</code> subtree) returns a <code>403</code>.</p>
 <h2 id="list-groups">List Groups<a class="headerlink" href="#list-groups" title="Permanent link">&para;</a></h2>
 <p>Requires <code>view_groups</code> or <code>manage_groups</code> permission.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/group?kind=organization&amp;sort=name
@@ -4344,6 +4348,7 @@ POST_SAVE_ACTION also requires <code>manage_group</code>.</p>
 <h3 id="invite-a-user">Invite a User<a class="headerlink" href="#invite-a-user" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/group/member/invite</code></p>
 <p>Requires <code>manage_users</code>, <code>manage_members</code>, <code>manage_group</code>, <code>manage_groups</code>, or <code>groups</code> permission within the group.</p>
+<p>Requires authentication: an unauthenticated request receives a clean <code>403</code> (<code>{"error": "Permission Denied", "code": 403, "status": false}</code>), never a <code>500</code>. A <code>group</code> that does not resolve to an active group is likewise rejected with a generic <code>403</code> (not distinguished from a permission denial).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bob@example.com&quot;</span><span class="p">,</span>
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>

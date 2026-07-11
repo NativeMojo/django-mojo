@@ -3975,7 +3975,7 @@
 <a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">&quot;server&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;host1&quot;</span>
 <a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="p">}</span>
 </code></pre></div>
-<p>Permissions: the share action is a POST_SAVE_ACTION on <code>File</code> / <code>FileRendition</code>, so it is gated by <code>SAVE_PERMS</code> (<code>manage_files</code>, <code>files</code>).</p>
+<p>Permissions: the share action is a POST_SAVE_ACTION, so it is gated by the instance's <code>SAVE_PERMS</code> like any other save. For <code>File</code> that's <code>manage_files</code>, <code>files</code>, or <code>owner</code> — the file's own uploader may mint a share link for their own file without <code>manage_files</code>/<code>files</code>. <code>FileRendition</code> has no owner token, so sharing a rendition requires <code>manage_files</code>/<code>files</code>.</p>
 <h3 id="clamps">Clamps<a class="headerlink" href="#clamps" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>expire_days</code> is clamped to <code>File.MAX_SHARE_EXPIRE_DAYS = 3650</code>. Values above that are silently capped.</li>

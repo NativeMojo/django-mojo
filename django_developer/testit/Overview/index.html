@@ -4510,6 +4510,7 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <li>NO <code>X-Forwarded-For</code>, <code>Forwarded</code>, or <code>Via</code> header on the request.</li>
 </ol>
 <p>Production deployments don't set the flag, AND any LB always adds <code>X-Forwarded-For</code>. The gate is closed-by-default and survives accidental flag leaks because external traffic can never satisfy #2 + #3.</p>
+<p><code>MOJO_TEST_MODE</code> is read <strong>conf-file-only</strong> (<code>settings.get_static</code>) — a DB/Redis <code>Setting</code> row (writable via the generic <code>/api/settings</code> REST or Redis access) can NOT enable it. The same applies to the geofence <code>GEOFENCE_TEST_OVERRIDE</code> knob. Both are deploy-time settings-file values by design; the header plane and geo override can never be armed through the remotely-writable settings plane.</p>
 <h3 id="enabling-for-your-own-projects-tests">Enabling for your own project's tests<a class="headerlink" href="#enabling-for-your-own-projects-tests" title="Permanent link">&para;</a></h3>
 <p>If you're a consumer of django-mojo writing tests against these endpoints, add ONE line to your test environment settings:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># In your project&#39;s local/test settings module:</span>

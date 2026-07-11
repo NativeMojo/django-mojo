@@ -3973,7 +3973,8 @@
 </table>
 <h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>view_fileman</code> or <code>manage_files</code></li>
+<li><code>view_fileman</code> or <code>manage_files</code> — full access to list, view, update, and delete any file</li>
+<li><strong>Owner</strong> — the user who initiated the upload (<code>upload/initiate</code> stamps the file to the calling user) may view, update, and delete their <strong>own</strong> file without either permission above. A permissionless caller's <code>GET /api/fileman/file</code> list is auto-scoped to their own files. See <a href="../upload/#step-3-confirm-upload">Upload — Step 3</a> and <a href="../upload/#step-4-associate-with-a-model-optional">Step 4</a>.</li>
 </ul>
 <h2 id="urls-are-short-urls-by-default">URLs are short URLs by default<a class="headerlink" href="#urls-are-short-urls-by-default" title="Permanent link">&para;</a></h2>
 <p>The <code>url</code> and <code>thumbnail</code> fields on File, and the <code>url</code> field on each rendition, return a short URL (e.g. <code>https://app.example.com/s/Xk9mR2p</code>) that redirects to the underlying backend URL. This is intentional:</p>

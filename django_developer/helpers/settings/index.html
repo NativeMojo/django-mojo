@@ -955,6 +955,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#settingsget_static-conf-file-only-reads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        settings.get_static() — Conf-File-Only Reads
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#write-time-validation-registered-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4003,6 +4014,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#settingsget_static-conf-file-only-reads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        settings.get_static() — Conf-File-Only Reads
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#write-time-validation-registered-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4119,6 +4141,31 @@
 </ul>
 <p>Because the default is what a garbage value degrades to, pass the same default
 at every read site of a key (the framework's geofence reads already do).</p>
+<h2 id="settingsget_static-conf-file-only-reads"><code>settings.get_static()</code> — Conf-File-Only Reads<a class="headerlink" href="#settingsget_static-conf-file-only-reads" title="Permanent link">&para;</a></h2>
+<p><code>settings.get()</code> is DB/Redis-aware: it checks the <code>Setting</code> model (Redis cache →
+DB, group parent chain → global) before falling back to the Django settings
+file. That's the right default for most keys, but it also means <strong>any key read
+with <code>settings.get()</code> can be overridden by a global <code>Setting</code> row</strong> — writable
+via the generic <code>POST /api/settings</code> REST (with <code>manage_settings</code>) or direct
+Redis access — even if the key has no registered validator, no group scoping
+rule, and no cache-invalidation or audit trail of its own.</p>
+<p><code>settings.get_static(name, default=None, kind=None)</code> skips the DB/Redis lookup
+entirely and reads <strong>only</strong> the Django settings file (same <code>kind=</code> coercion as
+<code>get()</code>). Use it for:</p>
+<ul>
+<li>Settings that gate test/dev plumbing and must never be remotely armable
+  (e.g. <code>MOJO_TEST_MODE</code>, <code>GEOFENCE_TEST_OVERRIDE</code>) — a DB row must not be able
+  to flip a behavior that was only ever meant to be a deploy-time flag.
+  See <a href="../../testit/Overview/#security-gate">testit Overview</a> and
+  <a href="../../account/geofence/#settings-reference">Geofencing</a>.</li>
+<li>Settings read before Django (or the DB) is ready, e.g. <code>REDIS_URL</code> /
+  <code>REDIS_SERVER</code> in <code>mojo/helpers/redis/client.py</code> — the DB-backed path itself
+  depends on Redis, so reading it via <code>get()</code> would be circular.</li>
+<li>Process-boot constants read once at import time (URL prefixes, middleware
+  toggles) where DB-backed override was never intended.</li>
+</ul>
+<p>If a setting is meant to be admin-tunable at runtime, use <code>settings.get()</code> and
+register a validator (see below) instead of reaching for <code>get_static()</code>.</p>
 <h2 id="write-time-validation-registered-keys">Write-Time Validation (Registered Keys)<a class="headerlink" href="#write-time-validation-registered-keys" title="Permanent link">&para;</a></h2>
 <p>Enforcement-bearing DB settings should be <strong>validated at write time</strong> so
 garbage can never persist. Register a validator on the <code>Setting</code> model:</p>
@@ -4142,7 +4189,7 @@ masked value would hide enforcement config from admins). All
 at import time (e.g. mverify's <code>PAYMENTS_GEOFENCE_RULES</code>).</p>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Always use <code>settings.get()</code> rather than importing directly from <code>django.conf</code> — it provides defaults and avoids <code>AttributeError</code> on missing keys.</li>
+<li>Always go through the settings helper (<code>settings.get()</code> for DB-tunable keys, <code>settings.get_static()</code> for conf-file-only keys — see above) rather than importing directly from <code>django.conf</code>; the helper provides defaults and avoids <code>AttributeError</code> on missing keys.</li>
 <li>App-specific settings are cached after first load.</li>
 </ul>
 <h2 id="framework-keys">Framework Keys<a class="headerlink" href="#framework-keys" title="Permanent link">&para;</a></h2>

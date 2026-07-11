@@ -4026,7 +4026,7 @@
 </table>
 <p>The CRUD endpoints require <code>manage_group</code> or <code>manage_groups</code> permission. The
 <code>me</code> and <code>rotate</code> endpoints require only that the request is authenticated
-<strong>with an API key</strong> (<code>@requires_auth</code>) — no management permission (the caller
+<strong>with an API key</strong> (<code>@md.requires_auth()</code>) — no management permission (the caller
 already holds the secret).</p>
 <h3 id="get-apigroupapikeyme-whoami"><code>GET /api/group/apikey/me</code> — whoami<a class="headerlink" href="#get-apigroupapikeyme-whoami" title="Permanent link">&para;</a></h3>
 <p>A self-introspection endpoint for service principals, analogous to

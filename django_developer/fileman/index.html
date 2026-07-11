@@ -4038,8 +4038,9 @@
 <h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>view_fileman</code>, <code>manage_files</code>, <code>files</code> — domain category permission model</li>
-<li><code>manage_files</code> appears in both <code>VIEW_PERMS</code> and <code>SAVE_PERMS</code> on <code>File</code></li>
-<li><code>FileRendition</code> follows the same permission set (read-only)</li>
+<li><code>manage_files</code> appears in <code>VIEW_PERMS</code>, <code>SAVE_PERMS</code>, and <code>DELETE_PERMS</code> on <code>File</code></li>
+<li><code>File</code> also grants the <code>owner</code> token (<code>OWNER_FIELD=user</code>, stamped by <code>upload/initiate</code>) — the initiating uploader may view, complete, FK-attach, and delete their own file without <code>manage_files</code>/<code>files</code>; a permissionless owner's list is auto-scoped to their own rows. See <a href="file/#restmeta">file.md</a>.</li>
+<li><code>FileRendition</code> follows the <code>manage_files</code>/<code>files</code> permission set (read-only) — it has no owner token</li>
 </ul>
 
 

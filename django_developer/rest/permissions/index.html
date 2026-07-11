@@ -3998,6 +3998,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#batch-save-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batch Save Permissions
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4031,6 +4042,9 @@
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  └─ no pk:
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>       GET    → on_rest_handle_list(request)             → checks VIEW_PERMS (system-level first, then owner/group fallback)
 <a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>       POST   → on_rest_handle_create(request)           → checks SAVE_PERMS → VIEW_PERMS
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>       POST with `batched` list (CAN_BATCH=True)
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>              → on_rest_handle_batch(request)            → class-level SAVE_PERMS → VIEW_PERMS gate, then a per-row
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                                                           instance check (see &quot;Batch Save Permissions&quot; below)
 </code></pre></div>
 <h2 id="restmeta-properties">RestMeta Properties<a class="headerlink" href="#restmeta-properties" title="Permanent link">&para;</a></h2>
 <table>
@@ -4385,6 +4399,7 @@ different name, or when the tenant is reached through a related path:</p>
 <p>When a save payload assigns a ForeignKey field by primary key — e.g. <code>data={"group": 5}</code> — the framework looks up the target via <code>field.related_model.objects.get(pk=value)</code> and then runs <code>field.related_model.rest_check_permission(request, "VIEW_PERMS", related_instance)</code> before assigning. On denial the assignment is silently skipped (the parent save proceeds with the field unchanged) and a <code>fk_attach_denied</code> incident event is emitted directly by <code>on_rest_save_related_field</code> via <code>_report_fk_attach_denied</code>.</p>
 <p>The event carries these metadata fields: <code>field_name</code>, <code>related_model</code>, <code>related_id</code>, <code>branch</code>. It is not a 403 response — the request still returns 200 with the field left at its previous value.</p>
 <p>This prevents cross-model privilege escalation: a user with SAVE_PERMS on model A but no view access to model B cannot attach B records to A. The same gate has always applied when the value is a dict (which triggers a cascading save and additionally requires SAVE_PERMS on the target).</p>
+<p><strong>Models with a custom <code>on_rest_related_save</code></strong> (e.g. <code>fileman.File</code>) are gated the same way: when the assigned value is an <strong>integer pk</strong> (an "attach existing"), the VIEW_PERMS check runs on the target <em>before</em> <code>on_rest_related_save</code> is dispatched, honoring <code>NO_FK_VIEW_CHECK_FIELDS</code> on the parent. A <strong>string / base64 / data-URL</strong> value is an inline <em>create</em> (a new record the caller owns), so it skips the gate. Before ITEM-033 these models bypassed the check entirely — any authenticated caller could attach any File by id (cross-user/cross-tenant).</p>
 <p>Cases that do <strong>not</strong> require VIEW_PERMS on the target:</p>
 <table>
 <thead>
@@ -4406,8 +4421,38 @@ different name, or when the tenant is reached through a related path:</p>
 <td>Related model is non-MojoModel (no <code>rest_check_permission</code>)</td>
 <td>Framework only gates models that opt in</td>
 </tr>
+<tr>
+<td>Inline create via <code>on_rest_related_save</code> (base64 / data-URL string)</td>
+<td>New record the caller owns — a create, not an attach</td>
+</tr>
+<tr>
+<td>Field listed in the parent's <code>NO_FK_VIEW_CHECK_FIELDS</code></td>
+<td>Model opts the field out (guarded elsewhere)</td>
+</tr>
 </tbody>
 </table>
+<h2 id="batch-save-permissions">Batch Save Permissions<a class="headerlink" href="#batch-save-permissions" title="Permanent link">&para;</a></h2>
+<p><code>on_rest_handle_batch</code> (<code>CAN_BATCH = True</code> + a <code>batched</code> list in the payload)
+gates once at class level with <code>["SAVE_PERMS", "VIEW_PERMS"]</code> and no instance,
+then re-checks <strong>every row individually</strong> with the same evaluation as the
+single-instance paths:</p>
+<ul>
+<li><strong>Update rows</strong> (<code>id</code>/<code>pk</code> resolves to an instance): <code>rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], instance)</code> — the owner match, group/<code>GROUP_FIELD</code> tenant binding, and <code>check_view/edit_permission</code> hooks all apply per row, exactly as in <code>on_rest_handle_save</code>.</li>
+<li><strong>Create rows</strong> (no <code>id</code>/<code>pk</code>, or the pk doesn't resolve): <code>rest_check_permission(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"])</code>, exactly as in <code>on_rest_handle_create</code>.</li>
+</ul>
+<p>Denial is drop-with-audit, mirroring the FK-attach gate: the row is skipped,
+the response's <code>errors</code> list gains <code>{"index": N, "error": "permission denied"}</code>,
+and a <code>batch_row_denied</code> incident is emitted (level 2, metadata: <code>branch</code>
+(<code>batch_update</code>/<code>batch_create</code>), <code>index</code>, <code>instance_id</code>, <code>model_name</code>,
+<code>request_path</code>). It is not a 403 — the batch response is still 200 and the
+remaining rows proceed. Rows are written sequentially with no transaction, so
+failing the whole batch could not undo rows already written.</p>
+<p><code>request.group</code> is restored between rows: the per-instance check binds
+<code>request.group</code> to each row's owning group (the row's true tenant), and the
+handler resets it to the caller's original group before every row so one row's
+tenant binding cannot leak into the next row's check or save.</p>
+<p>Without this per-row gate, a caller who cleared the class-level gate for their
+own group could update rows belonging to other tenants in the same batch.</p>
 
 
 

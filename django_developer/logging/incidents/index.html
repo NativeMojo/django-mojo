@@ -5850,10 +5850,16 @@ pushed into the fleet-wide firewall.</p>
 <td>n/a</td>
 <td>FK field silently skipped during save — no HTTP error, parent save still returns 200</td>
 </tr>
+<tr>
+<td><code>batch_row_denied</code></td>
+<td>n/a</td>
+<td>Batch row dropped by the per-row instance permission check — no HTTP error, batch response still returns 200</td>
+</tr>
 </tbody>
 </table>
 <p><strong>Recovery paths emit no events.</strong> When a list endpoint returns HTTP 200 with a scoped or empty result (Group list fallback, owner/group-filtered list, <code>MOJO_REST_LIST_PERM_DENY=False</code> branch), no denial event is recorded.</p>
 <p><strong><code>fk_attach_denied</code> metadata fields:</strong> <code>field_name</code>, <code>related_model</code>, <code>related_id</code>, <code>branch</code>. These can be matched by Rules to alert when users attempt to attach records they cannot view.</p>
+<p><strong><code>batch_row_denied</code> metadata fields:</strong> <code>branch</code> (<code>batch_update</code>/<code>batch_create</code>), <code>index</code>, <code>instance_id</code>, <code>model_name</code>, <code>request_path</code>. Emitted per dropped row from <code>on_rest_handle_batch</code> — see <a href="../../rest/permissions/#batch-save-permissions">Batch Save Permissions</a>.</p>
 <p>No extra code required — the dispatcher handles this automatically for all framework 401/403 paths.</p>
 <hr />
 <h2 id="event-fields">Event Fields<a class="headerlink" href="#event-fields" title="Permanent link">&para;</a></h2>

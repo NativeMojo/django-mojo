@@ -3961,9 +3961,9 @@
 <p>The <code>tokens</code> dict from <code>generate_jwt()</code> contains <code>access_token</code>, <code>refresh_token</code>, and <code>expires_in</code>.</p>
 <hr />
 <h2 id="4-protecting-player-endpoints">4. Protecting Player Endpoints<a class="headerlink" href="#4-protecting-player-endpoints" title="Permanent link">&para;</a></h2>
-<p>Use <code>@md.requires_auth</code> as normal — it checks that <code>request.bearer</code> is set. For player-specific endpoints, check <code>request.player</code> yourself:</p>
+<p>Use <code>@md.requires_auth()</code> as normal — it checks that <code>request.bearer</code> is set. For player-specific endpoints, check <code>request.player</code> yourself:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">GET</span><span class="p">(</span><span class="s2">&quot;game/player/me&quot;</span><span class="p">)</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span><span class="p">()</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_player_me</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="c1"># AuthMiddleware has already verified the player token</span>
 <a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="c1"># and set request.player</span>

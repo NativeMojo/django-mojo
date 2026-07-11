@@ -4429,6 +4429,9 @@
 <a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span><span class="p">}</span>
 <a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="p">}</span>
 </code></pre></div>
+<p>Requires authentication — an unauthenticated call returns a clean <code>403</code>, never
+a <code>500</code>. See <a href="../group/#invite-a-user">Invite a User</a> for the full permission
+list and error-response detail.</p>
 <h3 id="reading-current-permissions">Reading Current Permissions<a class="headerlink" href="#reading-current-permissions" title="Permanent link">&para;</a></h3>
 <p>Permissions are returned in the user and group member responses as a JSON object:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
@@ -4690,12 +4693,19 @@ front. See <a href="../api_keys/">API Keys</a>.</p>
 </tr>
 </tbody>
 </table>
-<p>Enforcement-bearing keys registered with a write validator (all <code>GEOFENCE_*</code>
+<p>Enforcement-bearing keys registered with a write validator (most <code>GEOFENCE_*</code>
 keys, plus app-registered keys) reject malformed values with a readable <code>400</code>
 and are global-only — a group-scoped row for such a key is refused with
 <code>"...is a global-only setting"</code>, and <code>is_secret: true</code> is refused too (a
 validated setting cannot be masked). Other keys accept arbitrary values as
 before.</p>
+<p><code>GEOFENCE_TEST_OVERRIDE</code> and <code>MOJO_TEST_MODE</code> are the exception: they are
+<strong>conf-file-only</strong> (read from the Django settings file via <code>get_static</code>, never
+from this API's backing store). <code>POST /api/settings</code> will still accept a row
+for either key — there's no validator refusing the write — but it has <strong>no
+effect</strong>: geofence enforcement and the <code>X-Mojo-Test-*</code> header plane never read
+it. Don't expose these two as admin-console toggles; they are deploy-time
+settings-file values only.</p>
 <h3 id="create-a-global-setting">Create a global setting<a class="headerlink" href="#create-a-global-setting" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/se</span><span class="kc">tt</span><span class="err">i</span><span class="kc">n</span><span class="err">gs</span>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="p">{</span>

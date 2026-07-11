@@ -3946,6 +3946,7 @@
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="p">}</span>
 </code></pre></div>
 <p>The file's <code>upload_status</code> becomes <code>completed</code> immediately. Renditions (thumbnails, previews, etc.) are generated <strong>asynchronously</strong> in the background — the <code>renditions</code> map may be empty <code>{}</code> right after this call. Re-fetch the file after a short delay if you need renditions.</p>
+<p><strong>Who may call this:</strong> the user who <strong>initiated</strong> the upload (files are stamped to the calling user on <code>upload/initiate</code>), or any user holding <code>manage_files</code> / <code>files</code> (or a superuser). A member who did not initiate the upload and lacks those permissions gets <code>403 group_member_permission_denied</code>. This means the same member who initiated an upload can always finalize it — no elevated permission required.</p>
 <h3 id="step-4-associate-with-a-model-optional">Step 4: Associate with a Model (optional)<a class="headerlink" href="#step-4-associate-with-a-model-optional" title="Permanent link">&para;</a></h3>
 <p>If you want to associate the uploaded file with a model instance, set the relevant field to the returned file id after upload completes.</p>
 <p><strong>POST</strong> <code>/api/user/1</code></p>
@@ -3953,6 +3954,7 @@
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;avatar&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">124</span>
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="p">}</span>
 </code></pre></div>
+<p>You may only attach a file you can <strong>see</strong>: one you uploaded (own), or any file if you hold <code>manage_files</code> / <code>files</code>. Attaching a file id you don't have view access to is silently ignored — the record saves (HTTP 200) but the field stays unchanged. So the normal flow — initiate → upload → complete → attach — works end-to-end for the uploading user with no elevated permissions.</p>
 <hr />
 <h2 id="method-2-fallback-multipart-form-upload">Method 2 (Fallback): Multipart Form Upload<a class="headerlink" href="#method-2-fallback-multipart-form-upload" title="Permanent link">&para;</a></h2>
 <p><strong>Use this only for small, one-off files where the initiated flow would be disproportionate overhead</strong> — for example, a simple avatar upload in a low-traffic context.</p>

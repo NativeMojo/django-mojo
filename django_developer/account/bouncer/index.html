@@ -4513,14 +4513,22 @@ forwarded query string.</p>
 <a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="n">group</span><span class="o">.</span><span class="n">auth_domain</span> <span class="o">=</span> <span class="s1">&#39;auth.clientbrand.com&#39;</span>
 <a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 <a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># Set group-scoped auth settings</span>
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_APP_TITLE&#39;</span><span class="p">,</span> <span class="s1">&#39;Client Brand&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
-<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_LOGO_URL&#39;</span><span class="p">,</span> <span class="s1">&#39;https://cdn.client.com/logo.svg&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
-<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_SUCCESS_REDIRECT&#39;</span><span class="p">,</span> <span class="s1">&#39;/client-dashboard/&#39;</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
-<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="n">settings</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s1">&#39;AUTH_ENABLE_GOOGLE&#39;</span><span class="p">,</span> <span class="kc">True</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># Set the group&#39;s auth config (branding + offered methods)</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">metadata</span> <span class="ow">or</span> <span class="p">{}</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;auth_config&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>    <span class="s2">&quot;theme&quot;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>        <span class="s2">&quot;app_title&quot;</span><span class="p">:</span> <span class="s2">&quot;Client Brand&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>        <span class="s2">&quot;logo_url&quot;</span><span class="p">:</span> <span class="s2">&quot;https://cdn.client.com/logo.svg&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>        <span class="s2">&quot;success_redirect&quot;</span><span class="p">:</span> <span class="s2">&quot;/client-dashboard/&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a>    <span class="p">},</span>
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>    <span class="s2">&quot;login&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;methods&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;password&quot;</span><span class="p">,</span> <span class="s2">&quot;google&quot;</span><span class="p">]},</span>
+<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a><span class="p">}</span>
+<a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">update_fields</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;metadata&quot;</span><span class="p">])</span>
 </code></pre></div>
-<p>All <code>AUTH_*</code> settings resolve per-group using the parent-chain fallback:
-group → parent group → global.</p>
+<p>The auth config resolves per group: code defaults ← the global <code>AUTH_CONFIG</code>
+setting ← <code>metadata["auth_config"]</code> deep-merged down the parent chain
+(root → leaf). The flat <code>AUTH_*</code> settings are retired — see the migration
+table in <a href="../auth_config/">Auth Config</a>.</p>
 <h3 id="challenge-page-branding">Challenge page branding<a class="headerlink" href="#challenge-page-branding" title="Permanent link">&para;</a></h3>
 <p>The bouncer challenge page uses the configured default branding. To override it
 for a specific group (opt-in only):</p>

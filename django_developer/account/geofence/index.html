@@ -4068,9 +4068,20 @@ parses transparently.</p>
 <p>REST writes to <code>metadata.geofence</code> are <strong>validated at save time</strong>
 (<code>Group.on_rest_pre_save</code> runs <code>validate_rule</code> on the merged metadata and
 returns a readable 400 — a typo'd rule can no longer lie in wait as a
-request-time <code>rule_invalid</code> deny). Note REST JSON fields <strong>merge</strong> by default;
-send <code>{"geofence": {..., "__replace": true}}</code> to replace the rule wholesale.
-Every group save also invalidates that group's cached decisions.</p>
+request-time <code>rule_invalid</code> deny). Note REST JSON fields <strong>merge</strong> by default,
+recursively — posting <code>{"metadata": {"geofence": {...}}}</code> merges into the
+existing rule rather than replacing it. To drop a key (or the whole rule),
+merge a <code>null</code>: e.g. <code>{"metadata": {"geofence": null}}</code>, then post the new
+rule. Every group save also invalidates that group's cached decisions.</p>
+<p><code>__replace</code> is only honored at the <strong>top level</strong> of the JSONField value —
+nested inside <code>geofence</code> it is not interpreted (it would be stored literally).
+A top-level <code>{"metadata": {"__replace": true, ...}}</code> does replace wholesale,
+but it replaces the <strong>entire</strong> <code>metadata</code> value, and <code>geofence</code> and
+<code>protected</code> live in the same JSONField: if the group has a <code>protected</code>
+subtree, the replace is treated as touching it and requires
+<code>PROTECTED_JSON_PERMS</code> (see <a href="../group/#protected-metadata">Protected Metadata</a>)
+even though the payload only mentions <code>geofence</code>. Callers with only
+geofence-management perms should use merge + <code>null</code> deletion instead.</p>
 <hr />
 <h2 id="strict-compliance-posture-opt-in">Strict / Compliance Posture (opt-in)<a class="headerlink" href="#strict-compliance-posture-opt-in" title="Permanent link">&para;</a></h2>
 <p>The engine defaults <strong>fail-open</strong> (a resilience choice). Deployments that

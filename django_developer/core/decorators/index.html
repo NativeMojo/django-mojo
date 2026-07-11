@@ -721,7 +721,7 @@
   <a href="#mdrequires_auth" class="md-nav__link">
     <span class="md-ellipsis">
       
-        @md.requires_auth
+        @md.requires_auth()
       
     </span>
   </a>
@@ -4192,7 +4192,7 @@
   <a href="#mdrequires_auth" class="md-nav__link">
     <span class="md-ellipsis">
       
-        @md.requires_auth
+        @md.requires_auth()
       
     </span>
   </a>
@@ -4447,10 +4447,13 @@
 </code></pre></div>
 <p>See <a href="../mojo_model/#post_save_actions">mojo_model.md — POST_SAVE_ACTIONS</a> for the full pattern.</p>
 <h2 id="authentication-decorators">Authentication Decorators<a class="headerlink" href="#authentication-decorators" title="Permanent link">&para;</a></h2>
-<h3 id="mdrequires_auth"><code>@md.requires_auth</code><a class="headerlink" href="#mdrequires_auth" title="Permanent link">&para;</a></h3>
-<p>Rejects unauthenticated requests with 401.</p>
+<h3 id="mdrequires_auth"><code>@md.requires_auth()</code><a class="headerlink" href="#mdrequires_auth" title="Permanent link">&para;</a></h3>
+<p>Rejects unauthenticated requests with a <code>403</code> (<code>PermissionDeniedException</code>'s
+default) — not <code>401</code>. This is a different code path from the RestMeta /
+<code>uses_model_security</code> unauthenticated case, which does return <code>401</code> (see
+<a href="../../rest/permissions/">REST Permissions</a>).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">GET</span><span class="p">(</span><span class="s1">&#39;profile&#39;</span><span class="p">)</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span><span class="p">()</span>
 <a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_profile</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="k">return</span> <span class="n">request</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">on_rest_get</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
 </code></pre></div>
@@ -4515,6 +4518,13 @@ for the full rationale.</p>
 </tr>
 </tbody>
 </table>
+<p><strong>Pair <code>@md.custom_security()</code> with an actual gate.</strong> It only annotates — an
+anonymous caller still reaches the function body unless the body itself checks
+<code>request.user.is_authenticated</code> or the endpoint also carries
+<code>@md.requires_auth()</code> / <code>@md.requires_perms(...)</code>. A handler that assumes an
+authenticated <code>request.user</code> (e.g. passes it into <code>group.user_has_permission(...)</code>)
+needs a real gate, not just the annotation — a missing one let an anonymous
+caller reach such a check and crash instead of being rejected (ITEM-028).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">GET</span><span class="p">(</span><span class="s1">&#39;status&#39;</span><span class="p">)</span>
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">public_endpoint</span><span class="p">()</span>
 <a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_status</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
@@ -4575,7 +4585,7 @@ for the full rationale.</p>
 <p><strong>Always return raw dicts. Never import or use <code>JsonResponse</code> in view functions.</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Good — return plain data</span>
 <a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">GET</span><span class="p">(</span><span class="s1">&#39;book/stats&#39;</span><span class="p">)</span>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span><span class="p">()</span>
 <a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_book_stats</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
 <a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;total&quot;</span><span class="p">:</span> <span class="n">Book</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">count</span><span class="p">(),</span> <span class="s2">&quot;active&quot;</span><span class="p">:</span> <span class="n">Book</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">status</span><span class="o">=</span><span class="s2">&quot;active&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">count</span><span class="p">()}</span>
 <a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>
@@ -4591,7 +4601,7 @@ for the full rationale.</p>
 <a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a>
 <a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a><span class="c1"># Good — raise for error conditions (auto-converted to 400/403/500)</span>
 <a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s1">&#39;book/approve&#39;</span><span class="p">)</span>
-<a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span>
+<a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span><span class="p">()</span>
 <a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_approve</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
 <a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a>    <span class="n">book</span> <span class="o">=</span> <span class="n">Book</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">book_id</span><span class="p">)</span>
 <a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">request</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">has_permission</span><span class="p">(</span><span class="s2">&quot;approve_books&quot;</span><span class="p">):</span>
@@ -4615,7 +4625,7 @@ for the full rationale.</p>
 <h2 id="decorator-stacking-order">Decorator Stacking Order<a class="headerlink" href="#decorator-stacking-order" title="Permanent link">&para;</a></h2>
 <p>When stacking multiple decorators, routing decorators (<code>@md.URL</code>, <code>@md.GET</code>, etc.) go first (outermost), followed by auth/validation:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">POST</span><span class="p">(</span><span class="s1">&#39;resource&#39;</span><span class="p">)</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span><span class="p">()</span>
 <a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_params</span><span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">)</span>
 <a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_create</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
 <a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="o">...</span>
