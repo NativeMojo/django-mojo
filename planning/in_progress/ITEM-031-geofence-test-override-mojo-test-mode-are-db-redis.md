@@ -302,6 +302,16 @@ with `bin/run_tests --agent -t test_geofence.test_override_file_only`.
 - Final suite: total 2414 (+3 new tests), passed 2358, failed 0 — green.
 - `report_block` verb sub-finding left OUT of scope (split recommended, per
   the open question) — no code touched for it.
+- Post-build agents: test-runner green (2414/2358/0, test_geofence 106/106);
+  docs-updater added `get_static` documentation to `helpers/settings.md` and a
+  "accepted-but-inert" note to `web_developer/account/admin_portal.md` (both
+  verified accurate). Security-review gave the fix a clean bill of health
+  (complete for both keys, no fail-open, no re-bypass path) BUT found a
+  **CRITICAL pre-existing sibling** outside this diff: `phone_register.py:102`
+  reads `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` via DB-aware `settings.get` — a
+  remotely-armable phone-verification bypass (same vector as ITEM-031, worse
+  impact). Out of scope here; filed to `planning/inbox/`
+  (`phone-verify-dev-bypass-code-db-settable.md`, P1) for separate scoping.
 
 ## Resolution
 - closed:

@@ -91,6 +91,34 @@ rules = settings.get("MY_RULES", {}, kind="dict")     # JSON object
 Because the default is what a garbage value degrades to, pass the same default
 at every read site of a key (the framework's geofence reads already do).
 
+## `settings.get_static()` — Conf-File-Only Reads
+
+`settings.get()` is DB/Redis-aware: it checks the `Setting` model (Redis cache →
+DB, group parent chain → global) before falling back to the Django settings
+file. That's the right default for most keys, but it also means **any key read
+with `settings.get()` can be overridden by a global `Setting` row** — writable
+via the generic `POST /api/settings` REST (with `manage_settings`) or direct
+Redis access — even if the key has no registered validator, no group scoping
+rule, and no cache-invalidation or audit trail of its own.
+
+`settings.get_static(name, default=None, kind=None)` skips the DB/Redis lookup
+entirely and reads **only** the Django settings file (same `kind=` coercion as
+`get()`). Use it for:
+
+- Settings that gate test/dev plumbing and must never be remotely armable
+  (e.g. `MOJO_TEST_MODE`, `GEOFENCE_TEST_OVERRIDE`) — a DB row must not be able
+  to flip a behavior that was only ever meant to be a deploy-time flag.
+  See [testit Overview](../testit/Overview.md#security-gate) and
+  [Geofencing](../account/geofence.md#settings-reference).
+- Settings read before Django (or the DB) is ready, e.g. `REDIS_URL` /
+  `REDIS_SERVER` in `mojo/helpers/redis/client.py` — the DB-backed path itself
+  depends on Redis, so reading it via `get()` would be circular.
+- Process-boot constants read once at import time (URL prefixes, middleware
+  toggles) where DB-backed override was never intended.
+
+If a setting is meant to be admin-tunable at runtime, use `settings.get()` and
+register a validator (see below) instead of reaching for `get_static()`.
+
 ## Write-Time Validation (Registered Keys)
 
 Enforcement-bearing DB settings should be **validated at write time** so
@@ -119,7 +147,7 @@ at import time (e.g. mverify's `PAYMENTS_GEOFENCE_RULES`).
 
 ## Notes
 
-- Always use `settings.get()` rather than importing directly from `django.conf` — it provides defaults and avoids `AttributeError` on missing keys.
+- Always go through the settings helper (`settings.get()` for DB-tunable keys, `settings.get_static()` for conf-file-only keys — see above) rather than importing directly from `django.conf`; the helper provides defaults and avoids `AttributeError` on missing keys.
 - App-specific settings are cached after first load.
 
 ## Framework Keys

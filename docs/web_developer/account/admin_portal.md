@@ -219,12 +219,20 @@ The secure settings API is intended for admin portals and configuration consoles
 | `POST` | `/api/settings/<id>` | Update setting |
 | `DELETE` | `/api/settings/<id>` | Delete setting |
 
-Enforcement-bearing keys registered with a write validator (all `GEOFENCE_*`
+Enforcement-bearing keys registered with a write validator (most `GEOFENCE_*`
 keys, plus app-registered keys) reject malformed values with a readable `400`
 and are global-only — a group-scoped row for such a key is refused with
 `"...is a global-only setting"`, and `is_secret: true` is refused too (a
 validated setting cannot be masked). Other keys accept arbitrary values as
 before.
+
+`GEOFENCE_TEST_OVERRIDE` and `MOJO_TEST_MODE` are the exception: they are
+**conf-file-only** (read from the Django settings file via `get_static`, never
+from this API's backing store). `POST /api/settings` will still accept a row
+for either key — there's no validator refusing the write — but it has **no
+effect**: geofence enforcement and the `X-Mojo-Test-*` header plane never read
+it. Don't expose these two as admin-console toggles; they are deploy-time
+settings-file values only.
 
 ### Create a global setting
 
