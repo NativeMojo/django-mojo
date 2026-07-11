@@ -557,8 +557,8 @@ Any `JSONField` on a MojoModel supports a reserved root key `"protected"`. Write
 
 ```python
 class RestMeta:
-    PROTECTED_JSON_PERMS = ["manage_groups"]  # who can write the "protected" key
-    LOG_META_CHANGES = True                   # optional — audit all JSONField changes
+    PROTECTED_JSON_PERMS = ["admin_compliance"]  # who can write the "protected" key
+    LOG_META_CHANGES = True                      # optional — audit all JSONField changes
 ```
 
 ### Behavior
@@ -571,7 +571,7 @@ class RestMeta:
 ### Example — storing protected config
 
 ```python
-# Only superusers or users with "manage_groups" can set this via the API
+# Only superusers or users with "admin_compliance" can set this via the API
 group.metadata = {
     "timezone": "America/New_York",      # normal — any editor can change
     "protected": {

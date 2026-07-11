@@ -90,9 +90,21 @@ group.save()
 REST writes to `metadata.geofence` are **validated at save time**
 (`Group.on_rest_pre_save` runs `validate_rule` on the merged metadata and
 returns a readable 400 — a typo'd rule can no longer lie in wait as a
-request-time `rule_invalid` deny). Note REST JSON fields **merge** by default;
-send `{"geofence": {..., "__replace": true}}` to replace the rule wholesale.
-Every group save also invalidates that group's cached decisions.
+request-time `rule_invalid` deny). Note REST JSON fields **merge** by default,
+recursively — posting `{"metadata": {"geofence": {...}}}` merges into the
+existing rule rather than replacing it. To drop a key (or the whole rule),
+merge a `null`: e.g. `{"metadata": {"geofence": null}}`, then post the new
+rule. Every group save also invalidates that group's cached decisions.
+
+`__replace` is only honored at the **top level** of the JSONField value —
+nested inside `geofence` it is not interpreted (it would be stored literally).
+A top-level `{"metadata": {"__replace": true, ...}}` does replace wholesale,
+but it replaces the **entire** `metadata` value, and `geofence` and
+`protected` live in the same JSONField: if the group has a `protected`
+subtree, the replace is treated as touching it and requires
+`PROTECTED_JSON_PERMS` (see [Protected Metadata](group.md#protected-metadata))
+even though the payload only mentions `geofence`. Callers with only
+geofence-management perms should use merge + `null` deletion instead.
 
 ---
 
