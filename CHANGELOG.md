@@ -1,4 +1,4 @@
-## v1.2.45 - July 10, 2026
+## v1.2.46 - July 10, 2026
 
 **bug/security** — **A fileman upload's initiator (owner) can now complete and manage their own File; File FK-attach is no longer ungated.**
 `POST /api/fileman/upload/initiate` is auth-only, so any member can start an
@@ -91,6 +91,8 @@ checks, `member.can_change_permission`) — no grant changes, since it always re
 False. No membership was ever created (the crash preceded `invite()`), so this is a
 robustness / API-hygiene fix; matters for API consumers (e.g. maestro workspaces)
 that expect a clean rejection. (ITEM-028)
+
+## v1.2.45 - July 10, 2026
 
 **feature** — **GitHub OAuth is now a hosted-page login/registration method.**
 `github` joins `LOGIN_METHODS` / `REGISTRATION_METHODS` in
