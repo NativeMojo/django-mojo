@@ -209,6 +209,31 @@ async function completeOAuthLogin(provider) {
 
 For Apple, the backend relay (step 3–4 above) delivers `?code=` and `?state=` to your page exactly as Google does — `completeOAuthLogin` works unchanged.
 
+**Preserving a post-login redirect.** If your login page was reached with a
+`?redirect=<path>` (or `?next=`/`?returnTo=`), pass the page's *current* URL —
+query string included — as `redirect_uri` when you call `begin`, so the target
+survives the provider round-trip:
+
+```javascript
+async function startOAuthLogin(provider) {
+  // keep ?redirect= etc.; drop stale completion params from a prior attempt
+  const qp = new URLSearchParams(window.location.search);
+  qp.delete('code'); qp.delete('state');
+  const qs = qp.toString();
+  const returnUrl = window.location.origin + window.location.pathname + (qs ? '?' + qs : '');
+  const resp = await fetch(`/api/auth/oauth/${provider}/begin?redirect_uri=${encodeURIComponent(returnUrl)}`);
+  const { data } = await resp.json();
+  window.location.href = data.auth_url;
+}
+```
+
+The backend stores that URL and, after the provider callback, bounces the browser
+back to it with `code`/`state` appended (merged into any existing query with `&`).
+The bundled `mojo-auth.js` `startOAuthLogin()` already does exactly this when you
+don't pass an explicit callback URL. `returnUrl` must still sit under the backend
+allowlist (`ALLOWED_REDIRECT_URLS`); the appended query does not affect the prefix
+match.
+
 ---
 
 ## Configuration

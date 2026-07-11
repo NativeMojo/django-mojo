@@ -124,11 +124,27 @@ group.save()
 
 The group list is retrieved via `get_metadata_value()`, which traverses the parent chain. Project-wide and group lists are combined at validation time.
 
+A `redirect_uri` may carry its own query string (e.g. an app passing
+`?redirect=/workspaces/` through the login page). The allowlist is a **prefix**
+match, so an appended query does not affect validation. The full URI — query
+included — is stored as `frontend_uri` and reproduced when the callback bounces
+the browser back: the callback merges its `code`/`state` (and any `group_uuid`)
+into the existing query with `&` rather than appending a second `?`. This is what
+lets a `?redirect=` target survive the OAuth round-trip. (The bundled
+`mojo-auth.js` cooperates: when no explicit callback URL is given, its default
+return URL keeps the current page's query string — minus any stale `code`/`state`
+— and strips only the hash.)
+
 ### Security
 
 - The validated `redirect_uri` is stored in the Redis state token (single-use, TTL-bound).
 - The `complete` endpoint retrieves it from the state — the client never re-sends it.
 - This prevents an attacker from substituting a different `redirect_uri` in the callback.
+- Because the allowlist is a **prefix** match, the query part of a `frontend_uri`
+  is not validated. So the callback strips any `code`/`state`/`group_uuid` the
+  caller smuggled into that query before appending the server's own — otherwise a
+  duplicate `?code=` placed first would shadow the real value (`URLSearchParams
+  .get()` returns the first match) and sabotage the victim's login.
 
 ---
 

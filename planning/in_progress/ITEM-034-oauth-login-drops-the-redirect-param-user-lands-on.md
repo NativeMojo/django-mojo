@@ -265,6 +265,12 @@ Filed from maestro's planning doc (`bouncer-auth-portals.md`, follow-up section
 dated 2026-07-10), which contains the full prod trace and the downstream
 publish/relock steps that stay in the maestro repo.
 
+**Baseline (2026-07-10, before first edit)** — `bin/run_tests --agent`, per
+`var/test_failures.json`: status `passed`, total 2423, passed 2367, failed 0,
+skipped 56. Green baseline — every post-change failure is mine. (`test_incident`
+243 + `test_security` 82 shown "failed" in the terminal are opt-in `--full`
+modules excluded from the default agent suite — not part of the baseline.)
+
 ## Resolution
 - closed: YYYY-MM-DD
 - branch:

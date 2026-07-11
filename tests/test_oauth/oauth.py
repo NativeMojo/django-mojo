@@ -116,6 +116,130 @@ def test_oauth_callback_redirects(opts):
     )
 
 
+@th.django_unit_test("oauth: begin stores a query-carrying frontend_uri verbatim")
+def test_oauth_begin_preserves_query_in_frontend_uri(opts):
+    """
+    Regression (ITEM-034), guard leg: a frontend redirect_uri that already
+    carries a query (e.g. ?redirect=/workspaces/) must pass the allowlist
+    (prefix match) and be stored verbatim as frontend_uri, so the post-login
+    redirect target survives the OAuth round-trip. The JS default now keeps the
+    page's query string; this locks in that the server does not strip it.
+    """
+    from urllib.parse import quote
+    from mojo.apps.account.services.oauth import get_provider
+
+    # Must sit under the pinned allowlist prefix "https://example.com/".
+    # quote(..., safe='') so the inner ?/#/% are not parsed as top-level params.
+    frontend_uri = "https://example.com/auth?redirect=%2Fworkspaces%2F%23%2F"
+    resp = opts.client.get(
+        f"/api/auth/oauth/{PROVIDER}/begin?redirect_uri={quote(frontend_uri, safe='')}"
+    )
+    assert resp.status_code == 200, (
+        f"begin with a query-carrying redirect_uri should pass the allowlist, "
+        f"got {resp.status_code}: {resp.response}"
+    )
+    state = resp.response.data.state
+    assert state, "begin must return a state token"
+    stored = get_provider(PROVIDER).peek_state(state)
+    assert stored, "state must be retrievable via peek_state"
+    assert stored.get("frontend_uri") == frontend_uri, (
+        f"frontend_uri must be stored verbatim including its query string; "
+        f"got {stored.get('frontend_uri')!r}"
+    )
+
+
+@th.django_unit_test("oauth: callback merges code/state into an existing frontend query")
+def test_oauth_callback_preserves_frontend_query(opts):
+    """
+    Regression (ITEM-034): when frontend_uri already carries a query (the
+    ?redirect= the app passed through), the callback bounce must APPEND
+    code/state with '&' — not a naive f"{uri}?{params}" that yields a malformed
+    double-'?' URL and clobbers the redirect param. Fails before the fix
+    (two '?', redirect lost), passes after.
+    """
+    from urllib.parse import urlsplit, parse_qs
+    from mojo.apps.account.services.oauth import get_provider
+
+    svc = get_provider(PROVIDER)
+    frontend_uri = "https://example.com/auth?redirect=%2Fworkspaces%2F%23%2F"
+    callback_uri = "http://localhost:9009/api/auth/oauth/google/callback"
+    state = svc.create_state(extra={
+        "redirect_uri": callback_uri,
+        "frontend_uri": frontend_uri,
+    })
+    resp = opts.client.get(
+        f"/api/auth/oauth/{PROVIDER}/callback?code=testcode123&state={state}",
+        allow_redirects=False,
+    )
+    assert resp.status_code == 302, (
+        f"Callback should 302 redirect, got {resp.status_code}: {resp.response}"
+    )
+
+    headers = opts.client.last_response.headers
+    location = next((v for k, v in headers.items() if k.lower() == "location"), None)
+    assert location, f"302 must carry a Location header; got headers {headers}"
+
+    assert location.count("?") == 1, (
+        f"bounce URL must have exactly one '?', got {location.count('?')}: {location}"
+    )
+    params = parse_qs(urlsplit(location).query)
+    assert params.get("redirect") == ["/workspaces/#/"], (
+        f"the app's ?redirect= must survive the bounce; got {params.get('redirect')!r} "
+        f"in {location}"
+    )
+    assert params.get("code") == ["testcode123"], (
+        f"callback must append exactly one code; got {params.get('code')!r} in {location}"
+    )
+    assert params.get("state") == [state], (
+        f"callback must append exactly one state; got {params.get('state')!r} in {location}"
+    )
+
+
+@th.django_unit_test("oauth: callback strips a smuggled code/state from frontend_uri")
+def test_oauth_callback_strips_smuggled_params(opts):
+    """
+    Security (ITEM-034): frontend_uri passes only an allowlist *prefix* check,
+    so an attacker could smuggle ?code=EVIL into an allowed URL. URLSearchParams
+    .get() returns the FIRST match, so a duplicate placed before the real value
+    would shadow it and sabotage the victim's login. The callback must drop
+    caller-supplied copies of code/state so only the server-set values remain.
+    """
+    from urllib.parse import urlsplit, parse_qs
+    from mojo.apps.account.services.oauth import get_provider
+
+    svc = get_provider(PROVIDER)
+    frontend_uri = "https://example.com/auth?redirect=%2Fw&code=EVIL&state=EVIL"
+    callback_uri = "http://localhost:9009/api/auth/oauth/google/callback"
+    state = svc.create_state(extra={
+        "redirect_uri": callback_uri,
+        "frontend_uri": frontend_uri,
+    })
+    resp = opts.client.get(
+        f"/api/auth/oauth/{PROVIDER}/callback?code=testcode123&state={state}",
+        allow_redirects=False,
+    )
+    assert resp.status_code == 302, (
+        f"Callback should 302 redirect, got {resp.status_code}: {resp.response}"
+    )
+    headers = opts.client.last_response.headers
+    location = next((v for k, v in headers.items() if k.lower() == "location"), None)
+    assert location, f"302 must carry a Location header; got headers {headers}"
+
+    params = parse_qs(urlsplit(location).query)
+    assert params.get("code") == ["testcode123"], (
+        f"smuggled code must be stripped; only the server code should survive, "
+        f"got {params.get('code')!r} in {location}"
+    )
+    assert params.get("state") == [state], (
+        f"smuggled state must be stripped; only the server state should survive, "
+        f"got {params.get('state')!r} in {location}"
+    )
+    assert params.get("redirect") == ["/w"], (
+        f"the app's own ?redirect= must still survive the strip; "
+        f"got {params.get('redirect')!r} in {location}"
+    )
+
+
 @th.django_unit_test("oauth: callback rejects missing code or state")
 def test_oauth_callback_rejects_missing_params(opts):
     resp = opts.client.get(f"/api/auth/oauth/{PROVIDER}/callback?code=testcode123")

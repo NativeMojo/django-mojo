@@ -12,7 +12,7 @@ frontend with code + state as query params, where the JS calls /complete.
 
 Supported providers: google, apple (more can be added to services/oauth/__init__.py)
 """
-from urllib.parse import urlencode, quote
+from urllib.parse import urlencode, quote, urlsplit, urlunsplit, parse_qsl
 
 from django.http import HttpResponseRedirect
 
@@ -304,8 +304,21 @@ def on_oauth_callback(request, provider):
     if group_uuid:
         redirect_params["group_uuid"] = group_uuid
 
-    params = urlencode(redirect_params, quote_via=quote)
-    return HttpResponseRedirect(f"{frontend_uri}?{params}")
+    # frontend_uri may already carry a query (e.g. the app's ?redirect=), so
+    # merge rather than naively concatenating a second "?". Preserving that
+    # query is what lets the post-login redirect target survive the OAuth
+    # round-trip. Drop any caller-supplied copies of the keys we set here:
+    # frontend_uri passed only an allowlist *prefix* check, so an attacker
+    # could smuggle e.g. ?code=EVIL into an allowed URL; since URLSearchParams
+    # .get() returns the first match, a duplicate placed before the real value
+    # would shadow it and sabotage the victim's login. Stripping them makes the
+    # server-set values the only ones present.
+    parts = urlsplit(frontend_uri)
+    preserved = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                 if k not in redirect_params]
+    query = urlencode(preserved + list(redirect_params.items()), quote_via=quote)
+    return HttpResponseRedirect(urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, query, parts.fragment)))
 
 
 # -----------------------------------------------------------------

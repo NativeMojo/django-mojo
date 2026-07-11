@@ -357,10 +357,13 @@ when a group is resolved. Requests with no group always use the default branding
 ### OAuth round-trip
 
 `group_uuid` is embedded in the OAuth state so branding survives the
-provider redirect. The callback reconstructs `?group_uuid=<uuid>` and appends
-it to the frontend redirect URI before handing back to the auth page (using
-`group_uuid` rather than `group` so the framework dispatcher accepts the
-next request through the rest of the flow).
+provider redirect. The callback merges `code`, `state`, and `group_uuid` into
+the frontend redirect URI's query with `&` — not a naive appended `?` — so any
+query the frontend URI already carries (e.g. `?redirect=`) is preserved rather
+than clobbered (using `group_uuid` rather than `group` so the framework
+dispatcher accepts the next request through the rest of the flow). See
+[OAuth § Per-Request redirect_uri](oauth.md#per-request-redirect_uri) for the
+full merge mechanics.
 
 ### Nginx setup for custom auth domains
 

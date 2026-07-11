@@ -62,7 +62,7 @@ nothing about whether the number has an account.
 | `?token=ml:...` | Magic login token — auto-consumed on page load |
 | `?token=pr:...` | Password reset token — opens "Set New Password" view |
 | `?code=...&state=...` | OAuth callback — auto-completes the OAuth flow |
-| `?redirect=<url>` | Custom redirect after login (also `?next=` or `?returnTo=`). Preserved through bouncer challenge. |
+| `?redirect=<url>` | Custom redirect after login (also `?next=` or `?returnTo=`). Preserved through the bouncer challenge **and** the OAuth provider round-trip. |
 | `?back=<url>` | Override the "Back to website" hero link |
 | `?group_uuid=<uuid>` | Load per-group branding and restrict to the group's enabled methods. Must be `group_uuid` — the framework reserves `?group=` for integer IDs. |
 

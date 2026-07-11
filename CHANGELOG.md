@@ -1,3 +1,27 @@
+## Unreleased
+
+**bug** — **OAuth login preserves `?redirect=` across the provider round-trip.**
+Signing in via an OAuth provider (Google/Apple/GitHub) from
+`/auth?redirect=<path>` used to drop the `redirect` param and land the user on
+`/` (the `ON_SUCCESS` default) instead of returning them to `<path>` — while
+password, magic-link, and passkey logins returned correctly. Two coordinated
+fixes: `mojo/apps/account/static/account/mojo-auth.js` `startOAuthLogin()` now
+keeps the current page's query string (minus stale `code`/`state`) in its default
+return URL instead of stripping it, and `mojo/apps/account/rest/oauth.py`
+`on_oauth_callback` now merges `code`/`state`/`group_uuid` into any existing query
+on `frontend_uri` with `&` (via `urlsplit`/`urlunsplit`) rather than a naive
+`f"{uri}?{params}"` that produced a malformed double-`?` URL and clobbered the
+redirect. The callback also strips any caller-supplied `code`/`state`/`group_uuid`
+already present in `frontend_uri`'s query before appending the server's — since
+`frontend_uri` passes only an allowlist *prefix* check, this stops an attacker
+from smuggling a duplicate `?code=` that would shadow the real value (via
+`URLSearchParams.get()` first-match) and sabotage a victim's login. The allowlist
+itself is unaffected (prefix match). Consumers that call
+`begin` themselves should pass the page's current URL — query included — as
+`redirect_uri`; the bundled `mojo-auth.js` does this automatically. `mojo-auth.js`
+ships with `max-age=86400`, so deployed browsers may run the old script for up to
+24h after upgrade. (ITEM-034)
+
 ## v1.2.46 - July 10, 2026
 
 **bug/security** — **A fileman upload's initiator (owner) can now complete and manage their own File; File FK-attach is no longer ungated.**

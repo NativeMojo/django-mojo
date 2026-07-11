@@ -640,14 +640,24 @@
          * Stores the provider in sessionStorage so the callback page knows which provider to complete.
          * @param {string} provider     - e.g. 'google', 'apple', 'github'
          * @param {string} [callbackUrl] - URL the provider should redirect back to.
-         *                                 Defaults to the current page URL (strip query/hash).
+         *                                 Defaults to the current page URL, keeping its
+         *                                 query string (minus code/state) and stripping the
+         *                                 hash — so ?redirect= survives the OAuth round-trip.
          *                                 Must be registered in the provider's console AND
          *                                 allowed by the backend (ALLOWED_REDIRECT_URLS or per-group).
          * @returns {Promise<void>}
          */
         startOAuthLogin: function (provider, callbackUrl) {
             sessionStorage.setItem('oauth_provider', provider);
-            var redirectUri = callbackUrl || (window.location.origin + window.location.pathname);
+            // Preserve the page's query string (e.g. ?redirect=) so the user
+            // returns to the right place after the provider round-trip. Drop
+            // code/state, which are stale completion params from a prior attempt.
+            var qp = new URLSearchParams(window.location.search);
+            qp.delete('code');
+            qp.delete('state');
+            var qs = qp.toString();
+            var redirectUri = callbackUrl ||
+                (window.location.origin + window.location.pathname + (qs ? '?' + qs : ''));
             var url = ep('oauthBegin', { provider: provider }) + '?redirect_uri=' + encodeURIComponent(redirectUri);
             return get(url)
                 .then(function (resp) {
