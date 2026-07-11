@@ -102,7 +102,7 @@ class RestMeta:
     LOG_META_CHANGES = True          # logs key-level changes to metadata
     VIEW_PERMS = ["view_groups", "manage_groups", "manage_group", "groups"]
     SAVE_PERMS = ["manage_groups", "manage_group", "groups"]
-    PROTECTED_JSON_PERMS = ["manage_groups"]  # required to write metadata["protected"]
+    PROTECTED_JSON_PERMS = ["admin_compliance", "admin_verify"]  # required to write metadata["protected"]
     POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate']
     SEARCH_FIELDS = ["name"]
 ```
@@ -147,7 +147,7 @@ group.save()
 
 ### Protected Metadata
 
-The reserved root key `"protected"` in `metadata` is write-protected at the framework level. Only a superuser or a user with a permission listed in `PROTECTED_JSON_PERMS` (e.g. `"manage_groups"`) can set or update it via the REST API. Any attempt by an unprivileged user raises a `403 PermissionDeniedException`.
+The reserved root key `"protected"` in `metadata` is write-protected at the framework level. Only a superuser or a user with a permission listed in `PROTECTED_JSON_PERMS` (for Group: `"admin_compliance"` or `"admin_verify"`) can set or update it via the REST API. Any attempt by an unprivileged user raises a `403 PermissionDeniedException`. The gate cannot be bypassed with `"__replace": true` or a non-dict overwrite — a wholesale replace that would rewrite **or drop** the existing `protected` subtree is denied the same as a merge that touches it.
 
 Use it to store config that group editors should be able to read but never overwrite:
 
@@ -156,8 +156,8 @@ group.metadata = {
     "timezone": "America/New_York",       # any group editor can change
     "theme": "dark",                       # any group editor can change
     "protected": {
-        "stripe_account_id": "acct_123",  # requires manage_groups
-        "webhook_secret": "whsec_abc",    # requires manage_groups
+        "stripe_account_id": "acct_123",  # requires admin_compliance/admin_verify
+        "webhook_secret": "whsec_abc",    # requires admin_compliance/admin_verify
         "plan": "enterprise",
         "disable": {                      # see disable_lifecycle.md
             "exempt_from_auto_disable": True,

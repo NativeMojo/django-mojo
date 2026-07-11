@@ -289,3 +289,28 @@ edit; regression test must fail on the unfixed code (tests 1, 2, 4 fail;
 ### Open questions
 
 None.
+
+## Notes
+
+- Baseline (2026-07-10, pre-edit, `bin/run_tests --agent`): total 2404,
+  passed 2348, failed 0, skipped 56 — all green, no pre-existing failures.
+- Post-fix (same suite): total 2410 (+6 new regression tests), passed 2354,
+  failed 0 — green, no regressions.
+- Small scope addition found during build: `_can_edit_protected_json` read
+  `user.is_superuser` directly, but under apikey auth `request.user` is an
+  ApiKey (no `is_superuser` attr) → the already-guarded MERGE path 500'd
+  (`AttributeError`) instead of 403 for keys. Fixed with
+  `getattr(user, "is_superuser", False)`; covered by the merge-path regression
+  test (asserts 403, not 500).
+- Regression tests confirmed failing pre-fix exactly as predicted: replace,
+  clobber, non-dict = 200 (bypass); merge = 500; privileged replace = no
+  audit row. All six pass post-fix.
+
+## Resolution
+- closed:
+- branch:
+- files changed:
+- tests added: tests/test_account/test_group_protected_metadata.py — 6 tests
+  (replace-with-protected 403, replace-clobbering-protected 403,
+  merge-with-protected clean 403 for ApiKey, non-dict-overwrite 403,
+  unprotected replace still 200, privileged replace 200 + audit row)

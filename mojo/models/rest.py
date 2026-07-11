@@ -1480,6 +1480,10 @@ class MojoModel:
         Full replace happens when:
         - The field is listed in RestMeta.JSON_REPLACE_FIELDS, OR
         - The incoming dict contains "__replace": true (stripped before saving)
+
+        The "protected" root key is guarded on every path — merge, replace, and
+        non-dict overwrite — whether the incoming value carries it or an existing
+        one would be clobbered.
         """
         # parse JSON strings into dicts/lists (e.g. form submissions send strings)
         if isinstance(field_value, str):
@@ -1493,17 +1497,30 @@ class MojoModel:
             replace_fields = self.get_rest_meta_prop("JSON_REPLACE_FIELDS", [])
             should_replace = field_name in replace_fields or field_value.pop("__replace", False)
 
+            # guard the "protected" root key — only superuser or users with PROTECTED_JSON_PERMS
+            # can modify it; a merge touches it only when the incoming dict carries it, but a
+            # replace also clobbers any existing protected subtree
+            touches_protected = "protected" in field_value or (should_replace and "protected" in existing_value)
+            if touches_protected:
+                if not self._can_edit_protected_json(request):
+                    raise me.PermissionDeniedException("Permission denied: cannot modify protected metadata")
+                # always audit protected metadata changes regardless of LOG_CHANGES/LOG_META_CHANGES
+                username = getattr(getattr(request, "user", None), "username", "unknown")
+                incoming_prot = field_value.get("protected")
+                existing_prot = existing_value.get("protected")
+                if isinstance(incoming_prot, (dict, type(None))) and isinstance(existing_prot, (dict, type(None))):
+                    incoming_prot = incoming_prot or {}
+                    existing_prot = existing_prot or {}
+                    # merge: only keys the caller sent can change; replace: removed keys change too
+                    keys = set(incoming_prot) | (set(existing_prot) if should_replace else set())
+                    changed_keys = sorted(k for k in keys if incoming_prot.get(k) != existing_prot.get(k))
+                else:
+                    changed_keys = ["*"]
+                self.model_logit(request, f"{username} modified {field_name}.protected keys: {', '.join(changed_keys)} on pk={self.pk}", kind="meta:protected_changed")
+
             if should_replace:
                 setattr(self, field_name, field_value)
             else:
-                # guard the "protected" root key — only superuser or users with PROTECTED_JSON_PERMS can modify it
-                if "protected" in field_value:
-                    if not self._can_edit_protected_json(request):
-                        raise me.PermissionDeniedException("Permission denied: cannot modify protected metadata")
-                    # always audit protected metadata changes regardless of LOG_CHANGES/LOG_META_CHANGES
-                    username = getattr(getattr(request, "user", None), "username", "unknown")
-                    changed_keys = [k for k, v in field_value["protected"].items() if v != existing_value.get("protected", {}).get(k)] if isinstance(field_value["protected"], dict) else ["*"]
-                    self.model_logit(request, f"{username} modified {field_name}.protected keys: {', '.join(changed_keys)} on pk={self.pk}", kind="meta:protected_changed")
                 merged_value = objict.merge_dicts(existing_value, field_value)
                 setattr(self, field_name, merged_value)
             # log all jsonfield key changes if enabled
@@ -1513,6 +1530,13 @@ class MojoModel:
                     username = getattr(getattr(request, "user", None), "username", "unknown")
                     self.model_logit(request, f"{username} modified {field_name} keys: {', '.join(changed_keys)} on pk={self.pk}", kind="meta:changed")
         else:
+            # wholesale overwrite with/of a non-dict can also create or clobber "protected"
+            if (isinstance(existing_value, dict) and "protected" in existing_value) or \
+                    (isinstance(field_value, dict) and "protected" in field_value):
+                if not self._can_edit_protected_json(request):
+                    raise me.PermissionDeniedException("Permission denied: cannot modify protected metadata")
+                username = getattr(getattr(request, "user", None), "username", "unknown")
+                self.model_logit(request, f"{username} modified {field_name}.protected keys: * on pk={self.pk}", kind="meta:protected_changed")
             setattr(self, field_name, field_value)
 
     def _can_edit_protected_json(self, request):
@@ -1522,7 +1546,8 @@ class MojoModel:
         user = getattr(request, "user", None)
         if user is None or not user.is_authenticated:
             return False
-        if user.is_superuser:
+        # request.user may be an ApiKey (no is_superuser attribute)
+        if getattr(user, "is_superuser", False):
             return True
         perms = self.get_rest_meta_prop("PROTECTED_JSON_PERMS", [])
         if perms:

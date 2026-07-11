@@ -1,5 +1,21 @@
 ## v1.2.45 - July 10, 2026
 
+**bug/security** — **JSONField `__replace` (and non-dict overwrites) can no longer bypass `PROTECTED_JSON_PERMS`.**
+`on_rest_update_jsonfield` ran the protected-JSON guard and its
+`meta:protected_changed` audit only on the merge branch, so a payload like
+`{"metadata": {"__replace": true, ...}}` (or a `JSON_REPLACE_FIELDS` field, or a
+non-dict value posted over a dict) rewrote the field wholesale — including
+`metadata.protected.*` — with no permission check and no audit. Concretely: a
+group-confined ApiKey holding only `manage_group` could rewrite
+`Group.metadata.protected` (e.g. payment `allowed_origins`). The guard now runs
+on every write path and in both directions — an incoming `"protected"` key, or a
+replace/overwrite that would clobber an existing `protected` subtree, requires
+`PROTECTED_JSON_PERMS` (superuser fallback unchanged) and is always audited; on
+a replace the audit's changed-keys include removed keys. Also fixed: the guard
+read `user.is_superuser` directly, which ApiKey callers don't define, so even
+the previously-guarded merge path returned a 500 instead of a clean 403 for
+keys. (ITEM-030)
+
 **bug** — **`POST /api/group/member/invite` now fail-closes with a clean 403 instead of a raw HTTP 500 for unauthenticated (and unresolved-group) callers.**
 The handler was gated only by `@md.custom_security` (a no-op marker) plus an
 in-view group-permission check, so an anonymous request reached

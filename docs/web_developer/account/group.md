@@ -77,6 +77,11 @@ the **global** `manage_geofence`/`security` perm — a tenant admin with
 `manage_group` cannot flip it. The member-reachable `realtime_message`
 POST_SAVE_ACTION also requires `manage_group`.
 
+Note: `metadata.protected.*` requires `admin_compliance` or `admin_verify` — a
+write grant alone is not enough. Any update that would touch it (a merge
+carrying `"protected"`, a `"__replace": true` payload, or a non-dict `metadata`
+value that would overwrite the existing `protected` subtree) returns a `403`.
+
 ## List Groups
 
 Requires `view_groups` or `manage_groups` permission.
