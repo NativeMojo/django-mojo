@@ -4112,7 +4112,8 @@ wrong one is a <strong>cross-tenant privilege-escalation risk</strong>.</p>
 </ul>
 <p>Why it matters: <code>GroupMember.permissions</code> accepts <strong>arbitrary key names</strong>, and
 any group admin (holding <code>manage_group</code>/<code>manage_members</code>/<code>manage_users</code>/
-<code>manage_groups</code>) can assign them — bounded only by <code>MEMBER_PERMS_PROTECTION</code>
+<code>manage_groups</code> — or the combined <code>users</code>/<code>groups</code> term, which satisfies the
+<code>manage_users</code>/<code>manage_groups</code> checks by definition) can assign them — bounded only by <code>MEMBER_PERMS_PROTECTION</code>
 (empty by default). So under <code>requires_perms</code>, a tenant admin can grant a
 teammate any permission <em>scoped to their own group</em>, then satisfy the check on
 <strong>any</strong> endpoint by passing their own <code>group</code> id. If that endpoint's effect is
@@ -4187,6 +4188,22 @@ tooling can tell them apart.</p>
 <h2 id="permission-names">Permission Names<a class="headerlink" href="#permission-names" title="Permanent link">&para;</a></h2>
 <h3 id="category-permissions-broad-access">Category Permissions (Broad Access)<a class="headerlink" href="#category-permissions-broad-access" title="Permanent link">&para;</a></h3>
 <p>Category permissions grant full read+write access to an entire domain. Use these for admin roles that need everything in a domain without toggling individual permissions.</p>
+<p><strong>The bare category term is <code>view_X</code> + <code>manage_X</code> combined into one simple
+term</strong> — and the permission checkers enforce that automatically. A check for
+<code>view_users</code> or <code>manage_users</code> is satisfied by a holder of bare <code>users</code> (same
+for every category in the table below), at all three checker levels
+(<code>User.has_permission</code>, <code>GroupMember.has_permission</code>, <code>ApiKey.has_permission</code>
+— see <code>mojo/helpers/perms.py</code>). You do not need to remember to add the bare
+term to every perm list; a list naming <code>manage_users</code> admits <code>users</code> holders
+by definition.</p>
+<p>Two boundaries to the expansion:</p>
+<ul>
+<li><strong>One-directional.</strong> <code>manage_users</code> alone does NOT satisfy a check for bare
+  <code>users</code> — the combined term is the superset, not the other way around.</li>
+<li><strong>Categories only.</strong> Fine-grained perms that aren't <code>view_</code>/<code>manage_</code> +
+  a category name (<code>manage_group</code> (singular), <code>manage_members</code>,
+  <code>manage_settings</code>, <code>manage_chat</code>, ...) are never expanded.</li>
+</ul>
 <table>
 <thead>
 <tr>
@@ -4902,7 +4919,7 @@ manage their own file without <code>manage_files</code>/<code>files</code>.</p>
 <h2 id="design-guidelines">Design Guidelines<a class="headerlink" href="#design-guidelines" title="Permanent link">&para;</a></h2>
 <p>When adding permissions to a new model:</p>
 <ol>
-<li><strong>Always add the category permission</strong> — every model should include its domain's category perm (<code>security</code>, <code>users</code>, <code>groups</code>, <code>comms</code>, <code>jobs</code>, <code>metrics</code>, <code>files</code>) in both VIEW_PERMS and SAVE_PERMS</li>
+<li><strong>Always add the category permission</strong> — every model should include its domain's category perm (<code>security</code>, <code>users</code>, <code>groups</code>, <code>comms</code>, <code>jobs</code>, <code>metrics</code>, <code>files</code>) in both VIEW_PERMS and SAVE_PERMS. (Since the checkers expand <code>view_X</code>/<code>manage_X</code> to also accept bare <code>X</code>, omitting it is no longer a lockout — but list it anyway for clarity.)</li>
 <li><strong>Use view/manage pairs for fine-grained access</strong> — <code>view_X</code> for read-only, <code>manage_X</code> for write</li>
 <li><strong>Always include manage in view</strong> — if <code>manage_X</code> is in SAVE_PERMS, add it to VIEW_PERMS too</li>
 <li><strong>Use <code>owner</code> sparingly</strong> — only for user-facing models where users manage their own records</li>

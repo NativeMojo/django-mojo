@@ -4440,7 +4440,7 @@ group is detected. This preserves the default branding for the default flow.</p>
 </tr>
 </tbody>
 </table>
-<p><code>disable</code>/<code>reactivate</code> require <code>manage_groups</code> (stricter than the broader Group <code>SAVE_PERMS</code> since these are destructive). See <a href="../disable_lifecycle/">disable_lifecycle.md</a>.</p>
+<p><code>disable</code>/<code>reactivate</code> require a global <code>manage_groups</code> grant — the combined <code>groups</code> term satisfies it too, since it includes <code>manage_groups</code> by definition (stricter than the broader Group <code>SAVE_PERMS</code> since these are destructive; a member-level <code>manage_group</code> grant is not sufficient). See <a href="../disable_lifecycle/">disable_lifecycle.md</a>.</p>
 <h2 id="hierarchy">Hierarchy<a class="headerlink" href="#hierarchy" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">group</span><span class="o">.</span><span class="n">parent</span>          <span class="c1"># immediate parent</span>
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">group</span><span class="o">.</span><span class="n">groups</span>          <span class="c1"># direct children (related_name)</span>

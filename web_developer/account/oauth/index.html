@@ -4274,7 +4274,7 @@ match.</p>
 </code></pre></div>
 <h3 id="unlink-a-connection">Unlink a Connection<a class="headerlink" href="#unlink-a-connection" title="Permanent link">&para;</a></h3>
 <p><strong>DELETE</strong> <code>/api/account/oauth_connection/&lt;id&gt;</code></p>
-<p>Removes an OAuth connection. Admins with <code>manage_users</code> can delete any connection. Regular users can only delete their own.</p>
+<p>Removes an OAuth connection. Admins with <code>manage_users</code> (or the combined <code>users</code> admin permission, which includes it) can delete any connection. Regular users can only delete their own.</p>
 <p><strong>Response (success):</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p">{</span>
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
@@ -4293,7 +4293,7 @@ match.</p>
 <a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>To unlink, the user must first set a password (via the password-reset or set-password flow) or link a second OAuth provider.</p>
-<p>Admins with <code>manage_users</code> bypass the lockout guard and can always delete any connection.</p>
+<p>Admins with <code>manage_users</code> (or the combined <code>users</code> permission) bypass the lockout guard and can always delete any connection.</p>
 <table>
 <thead>
 <tr>

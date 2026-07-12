@@ -4200,8 +4200,8 @@ return URL keeps the current page's query string — minus any stale <code>code<
 <h3 id="rest-permissions">REST Permissions<a class="headerlink" href="#rest-permissions" title="Permanent link">&para;</a></h3>
 <p><code>OAuthConnection</code> exposes a REST endpoint via <code>MojoModel</code>:</p>
 <ul>
-<li><strong>View:</strong> <code>owner</code> (the connected user) or <code>manage_users</code></li>
-<li><strong>Save/Delete:</strong> <code>manage_users</code> only</li>
+<li><strong>View:</strong> <code>owner</code> (the connected user), <code>manage_users</code>, or the combined <code>users</code> term</li>
+<li><strong>Save/Delete:</strong> <code>manage_users</code> or the combined <code>users</code> term (it includes <code>manage_users</code> by definition)</li>
 <li><code>mojo_secrets</code> is always excluded from REST output (<code>NO_SHOW_FIELDS</code>)</li>
 </ul>
 <hr />

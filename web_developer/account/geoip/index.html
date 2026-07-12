@@ -4122,6 +4122,9 @@ supported key-based access path.</p>
 </tr>
 </tbody>
 </table>
+<p>Actions are gated by the model's <code>SAVE_PERMS</code>: <code>manage_users</code>,
+<code>manage_security</code>, or <code>security</code> — and the combined <code>users</code> term (it includes
+<code>manage_users</code> by definition).</p>
 <p>See <a href="../firewall/">firewall.md</a> for full firewall management and security dashboard guide.</p>
 <hr />
 <h2 id="get-systemgeoiplookup-authenticated-ip-lookup"><code>GET system/geoip/lookup</code> — Authenticated IP Lookup<a class="headerlink" href="#get-systemgeoiplookup-authenticated-ip-lookup" title="Permanent link">&para;</a></h2>

@@ -4506,7 +4506,7 @@
 <a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>POST /api/system/geoip/123
 <a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>{&quot;unwhitelist&quot;: 1}
 </code></pre></div>
-<p>All actions require <code>manage_users</code> permission (from RestMeta).</p>
+<p>All actions are gated by <code>SAVE_PERMS</code>: <code>manage_users</code>, <code>manage_security</code>, or <code>security</code> — and the combined <code>users</code> term (it includes <code>manage_users</code> by definition).</p>
 <hr />
 <h2 id="restmeta">RestMeta<a class="headerlink" href="#restmeta" title="Permanent link">&para;</a></h2>
 <table>
@@ -4520,6 +4520,10 @@
 <tr>
 <td><code>VIEW_PERMS</code></td>
 <td><code>['manage_users']</code></td>
+</tr>
+<tr>
+<td><code>SAVE_PERMS</code></td>
+<td><code>['manage_users', 'manage_security', 'security']</code> (the combined <code>users</code> term also satisfies <code>manage_users</code>)</td>
 </tr>
 <tr>
 <td><code>SEARCH_FIELDS</code></td>

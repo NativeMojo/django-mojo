@@ -4192,7 +4192,7 @@
 <h2 id="api-keys-group-scoped">API Keys (Group-Scoped)<a class="headerlink" href="#api-keys-group-scoped" title="Permanent link">&para;</a></h2>
 <h3 id="create-an-api-key">Create an API Key<a class="headerlink" href="#create-an-api-key" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/group/apikey</code></p>
-<p>Requires <code>manage_group</code> or <code>manage_groups</code> permission.</p>
+<p>Requires <code>manage_group</code>, <code>manage_groups</code>, or the combined <code>groups</code> permission (global or member-level).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Mobile App v2&quot;</span><span class="p">,</span>
@@ -4221,7 +4221,7 @@
 <tr>
 <td><code>permissions</code></td>
 <td>No</td>
-<td>JSON dict of granted permissions (default: empty)</td>
+<td>JSON <strong>object</strong> of granted permissions (default: empty). Must be a real object — any other shape, including a JSON-encoded string, is rejected with <code>400</code></td>
 </tr>
 <tr>
 <td><code>limits</code></td>
