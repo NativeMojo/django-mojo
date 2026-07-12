@@ -230,3 +230,9 @@ None.
 - Backfill `related:` on both sides once all three items are scoped and have
   IDs (cross-repo refs use the `org/other-repo#ITEM-007` form per this
   repo's `_template.md`).
+
+## Resolution
+- closed: 2026-07-12
+- branch: main
+- files changed: mojo/apps/account/models/api_key.py,tests/test_user_mgmt/api_keys.py,docs/django_developer/account/api_keys.md,docs/web_developer/account/api_keys.md,CHANGELOG.md
+- tests added: tests/test_user_mgmt/api_keys.py::apikey_rest_permissions_rejects_non_dict (string payload → 400, list payload → 400, record unchanged after rejection, dict add+remove control)
