@@ -3,6 +3,7 @@ from mojo.models import MojoModel
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
 from mojo.helpers import dates
+from mojo.helpers.perms import implied_perms
 
 
 def _member_perms_protection():
@@ -126,7 +127,9 @@ class GroupMember(models.Model, MojoModel):
 
         if perm_key in ["all", "authenticated", "member"]:
             return True
-        return self.permissions.get(perm_key, False)
+        # Bare domain terms ("groups") satisfy their view_/manage_ forms —
+        # one-directional; see mojo.helpers.perms.
+        return any(bool(self.permissions.get(pk, False)) for pk in implied_perms(perm_key))
 
     def add_permission(self, perm_key, value=True):
         """Dynamically add a permission."""

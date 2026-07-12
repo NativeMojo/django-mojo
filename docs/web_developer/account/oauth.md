@@ -318,7 +318,7 @@ Returns the authenticated user's OAuth connections. Admins with `manage_users` p
 
 **DELETE** `/api/account/oauth_connection/<id>`
 
-Removes an OAuth connection. Admins with `manage_users` can delete any connection. Regular users can only delete their own.
+Removes an OAuth connection. Admins with `manage_users` (or the combined `users` admin permission, which includes it) can delete any connection. Regular users can only delete their own.
 
 **Response (success):**
 
@@ -346,7 +346,7 @@ In that case the server returns `400`:
 
 To unlink, the user must first set a password (via the password-reset or set-password flow) or link a second OAuth provider.
 
-Admins with `manage_users` bypass the lockout guard and can always delete any connection.
+Admins with `manage_users` (or the combined `users` permission) bypass the lockout guard and can always delete any connection.
 
 | Status | Cause |
 |--------|-------|

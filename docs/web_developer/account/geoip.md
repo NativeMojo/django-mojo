@@ -111,6 +111,10 @@ Returns a single GeoIP record. Supports `?graph=` parameter.
 | `whitelist` | `"reason string"` or `{"reason": "...", "ttl": 3600, "until": "<iso>"}` | Whitelist — prevents all future blocks. `ttl` seconds or ISO `until` sets an expiry (invalid `until` → 400); omit both for permanent. |
 | `unwhitelist` | — | Remove whitelist status |
 
+Actions are gated by the model's `SAVE_PERMS`: `manage_users`,
+`manage_security`, or `security` — and the combined `users` term (it includes
+`manage_users` by definition).
+
 See [firewall.md](firewall.md) for full firewall management and security dashboard guide.
 
 ---

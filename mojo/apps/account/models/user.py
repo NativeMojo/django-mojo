@@ -7,6 +7,7 @@ from mojo.helpers import dates
 from mojo.helpers import content_guard
 from mojo.helpers import crypto
 from mojo.helpers import logit
+from mojo.helpers.perms import implied_perms
 from mojo.apps.account.utils.jwtoken import JWToken
 from mojo.apps import metrics
 from .device import UserDevice
@@ -500,7 +501,9 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             return False
         if perm_key in ["all", "authenticated"]:
             return True
-        return self.permissions.get(perm_key, False)
+        # Bare domain terms ("users") satisfy their view_/manage_ forms —
+        # one-directional; see mojo.helpers.perms.
+        return any(bool(self.permissions.get(pk, False)) for pk in implied_perms(perm_key))
 
     def add_perm(self, perm_key, value=True, commit=True):
         self.add_permission(perm_key, value, commit)

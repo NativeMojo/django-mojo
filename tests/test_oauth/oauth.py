@@ -587,6 +587,9 @@ OTHER_USER = "oauth_other"
 OTHER_PWORD = "oauthother##secret99"
 OTHER_EMAIL = "oauth_other@example.com"
 
+USERS_ADMIN = "oauth_usersadmin"
+USERS_ADMIN_PWORD = "oauthusers##secret99"
+
 
 @th.django_unit_setup()
 def setup_oauth_connection_env(opts):
@@ -628,6 +631,18 @@ def setup_oauth_connection_env(opts):
     other.save_password(OTHER_PWORD)
     OAuthConnection.objects.filter(user=other).delete()
     opts.other_user = other
+
+    # Admin holding ONLY the bare "users" perm (ITEM-035: view+manage combined)
+    users_admin = User.objects.filter(username=USERS_ADMIN).last()
+    if users_admin is None:
+        users_admin = User(username=USERS_ADMIN, email=f"{USERS_ADMIN}@example.com", display_name="Users Admin")
+        users_admin.save()
+    users_admin.is_active = True
+    users_admin.is_email_verified = True
+    users_admin.add_permission(["users"])
+    users_admin.save_password(USERS_ADMIN_PWORD)
+    OAuthConnection.objects.filter(user=users_admin).delete()
+    opts.users_admin = users_admin
 
 
 @th.django_unit_test("oauth: new user created via OAuth has unusable password")
@@ -799,6 +814,30 @@ def test_oauth_connection_admin_delete(opts):
     resp = opts.client.delete(f"/api/account/oauth_connection/{conn.id}")
     assert resp.status_code == 200, f"Admin delete failed: {resp.status_code}: {resp.response}"
     assert not OAuthConnection.objects.filter(pk=conn.id).exists(), "Connection should be deleted by admin"
+
+
+@th.django_unit_test("oauth: bare 'users' admin can delete any connection (ITEM-035)")
+def test_oauth_connection_bare_users_admin_delete(opts):
+    """Bare "users" is view_users+manage_users combined — the admin-bypass
+    delete gate must accept it, not just literal manage_users."""
+    from mojo.apps.account.models.oauth import OAuthConnection
+
+    OAuthConnection.objects.filter(user=opts.other_user).delete()
+    conn = OAuthConnection.objects.create(
+        user=opts.other_user,
+        provider=PROVIDER,
+        provider_uid="google_uid_users_del",
+        email=OTHER_EMAIL,
+    )
+
+    resp = opts.client.login(USERS_ADMIN, USERS_ADMIN_PWORD)
+    assert opts.client.is_authenticated, "bare-'users' admin authentication failed"
+
+    resp = opts.client.delete(f"/api/account/oauth_connection/{conn.id}")
+    assert resp.status_code == 200, \
+        f"bare-'users' admin delete must succeed: {resp.status_code}: {resp.response}"
+    assert not OAuthConnection.objects.filter(pk=conn.id).exists(), \
+        "connection should be deleted by a bare-'users' admin"
 
 
 @th.django_unit_test("oauth: 404 when trying to delete another user's connection")

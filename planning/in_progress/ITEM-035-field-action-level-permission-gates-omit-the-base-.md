@@ -398,6 +398,9 @@ GeoLocatedIP and the invite endpoint fold-ins resolved (both IN, as
 consequences of the central fix, no list edits).
 
 ## Notes
+- **Baseline (2026-07-12, before any edit):** `bin/run_tests --agent` →
+  total 2427 / passed 2371 / failed 0 / skipped 56. All green — any
+  post-change failure is attributable to this build.
 - Discovered via an audit prompted by investigating the `ApiKey` permissions
   bug — sibling item filed separately (different root cause, mechanical
   string-vs-dict fix, different acceptance criteria):

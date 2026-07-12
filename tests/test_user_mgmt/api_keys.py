@@ -5,6 +5,8 @@ TEST_USER = "apikey_user"
 TEST_PWORD = "apikey##mojo99"
 ADMIN_USER = "apikey_admin"
 ADMIN_PWORD = "apikey##mojo99"
+BT_MEMBER = "apikey_baseterm"
+BT_PWORD = "apikey##mojo99"
 
 
 @th.django_unit_setup()
@@ -14,7 +16,7 @@ def setup_api_key_testing(opts):
     # Clean up existing test data
     ApiKey.objects.filter(name__startswith="test_").delete()
     Group.objects.filter(name__in=["test_apikey_parent", "test_apikey_child"]).delete()
-    User.objects.filter(username__in=[TEST_USER, ADMIN_USER]).delete()
+    User.objects.filter(username__in=[TEST_USER, ADMIN_USER, BT_MEMBER]).delete()
 
     # Create parent group
     parent = Group.objects.create(name="test_apikey_parent", kind="organization")
@@ -34,6 +36,16 @@ def setup_api_key_testing(opts):
     # Add admin as member of parent group
     from mojo.apps.account.models import GroupMember
     GroupMember.objects.get_or_create(user=admin, group=parent, defaults={"permissions": {"manage_group": True}})
+
+    # Member holding ONLY the bare "groups" perm at the member level (no
+    # global perms) — ITEM-035: bare terms are view+manage combined.
+    bt = User(username=BT_MEMBER, email=f"{BT_MEMBER}@test.com")
+    bt.save()
+    bt.is_active = True
+    bt.is_email_verified = True
+    bt.save_password(BT_PWORD)
+    bt.save()
+    GroupMember.objects.get_or_create(user=bt, group=parent, defaults={"permissions": {"groups": True}})
 
     opts.parent_id = parent.id
     opts.child_id = child.id
@@ -471,6 +483,32 @@ def test_apikey_group_user_has_permission_bool(opts):
         "ApiKey lacking the perm must be denied (bool), not raise"
     assert child.user_has_permission(api_key, ["sys.superuser"]) is False, \
         "sys.* must always be denied for an ApiKey"
+
+
+@th.unit_test("apikey_rest_create_bare_groups_member")
+def test_apikey_rest_create_bare_groups_member(opts):
+    """ITEM-035: a member holding ONLY member-level {"groups": True} can create
+    a key AND set permissions on it — bare "groups" is view_groups+manage_groups
+    combined, so the can_change_permission fallback must accept it. Before the
+    fix this was a surprise 403 from set_permissions."""
+    from mojo.apps.account.models import ApiKey
+
+    opts.client.logout()
+    opts.client.login(BT_MEMBER, BT_PWORD)
+    assert opts.client.is_authenticated, "bare-groups member login failed"
+
+    resp = opts.client.post(
+        "/api/group/apikey",
+        {"name": "test_baseterm_key", "group": opts.parent_id, "permissions": {"view_data": True}},
+    )
+    assert resp.status_code == 200, (
+        f"bare-'groups' member must be able to create a key with permissions, "
+        f"got {resp.status_code}: {resp.response}"
+    )
+    key = ApiKey.objects.get(pk=resp.response.data.id)
+    assert key.permissions.get("view_data") is True, \
+        f"permission set by a bare-'groups' member must persist: {key.permissions!r}"
+    opts.client.logout()
 
 
 @th.unit_test("apikey_cleanup")

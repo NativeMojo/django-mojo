@@ -9,6 +9,8 @@ TARGET_USERNAME = "disable_target@test.com"
 SECONDARY_USERNAME = "disable_secondary@test.com"
 NONADMIN_USERNAME = "disable_nonadmin@test.com"
 NONADMIN_PASSWORD = "disable_nonadmin_pw_99"
+GROUPSONLY_USERNAME = "disable_groupsonly@test.com"
+GROUPSONLY_PASSWORD = "disable_groupsonly_pw_99"
 GROUP_NAME = "disable_lifecycle_group"
 
 
@@ -19,6 +21,7 @@ def setup_disable_lifecycle(opts):
     # Clean up any leftover test data so the suite is repeatable.
     User.objects.filter(email__in=[
         ADMIN_USERNAME, TARGET_USERNAME, SECONDARY_USERNAME, NONADMIN_USERNAME,
+        GROUPSONLY_USERNAME,
     ]).delete()
     Group.objects.filter(name=GROUP_NAME).delete()
 
@@ -52,6 +55,17 @@ def setup_disable_lifecycle(opts):
     nonadmin.save()
     nonadmin.add_permission("view_users")  # can view but not manage
     opts.nonadmin_id = nonadmin.pk
+
+    # ITEM-035: bare "groups" is view_groups+manage_groups combined — enough
+    # to disable/reactivate a group on its own.
+    groupsonly = User.objects.create_user(username=GROUPSONLY_USERNAME, email=GROUPSONLY_USERNAME, password=GROUPSONLY_PASSWORD)
+    groupsonly.is_active = True
+    groupsonly.is_email_verified = True
+    groupsonly.requires_mfa = False
+    groupsonly.metadata = {}
+    groupsonly.save()
+    groupsonly.add_permission("groups")
+    opts.groupsonly_id = groupsonly.pk
 
     group = Group.objects.create(name=GROUP_NAME, is_active=True)
     opts.group_id = group.pk
@@ -568,6 +582,38 @@ def test_rest_group_disable_reactivate(opts):
     history = block.get("history") or []
     assert len(history) == 1, f"history should have 1 entry, got: {len(history)}"
     assert history[0]["reason"] == "archived", "history should preserve archived reason"
+
+
+@th.django_unit_test()
+def test_rest_group_disable_reactivate_bare_groups(opts):
+    """ITEM-035: bare "groups" is view_groups+manage_groups combined into one
+    term — a holder must be able to disable/reactivate a group, mirroring the
+    User analog which accepts ["users", "manage_users"]. Before the fix the
+    inner gate required literal manage_groups and returned a surprise 403."""
+    from mojo.apps.account.models import Group
+
+    group = Group.objects.get(pk=opts.group_id)
+    Group.objects.filter(pk=group.pk).update(is_active=True, metadata={})
+
+    assert opts.client.login(GROUPSONLY_USERNAME, GROUPSONLY_PASSWORD), "groups-only login failed"
+    with mock.patch("mojo.apps.incident.report_event"):
+        resp1 = opts.client.post(
+            f"/api/group/{group.pk}",
+            {"disable": {"reason": "archived", "note": "bare groups"}},
+        )
+        group.refresh_from_db()
+        resp2 = opts.client.post(
+            f"/api/group/{group.pk}",
+            {"reactivate": {"note": "bare groups"}},
+        )
+    opts.client.logout()
+
+    assert resp1.status_code == 200, \
+        f"bare-'groups' disable should succeed, got {resp1.status_code}: {opts.client.last_response.body}"
+    assert resp2.status_code == 200, \
+        f"bare-'groups' reactivate should succeed, got {resp2.status_code}: {opts.client.last_response.body}"
+    group.refresh_from_db()
+    assert group.is_active is True, "group should be reactivated"
 
 
 # ---------------------------------------------------------------------------

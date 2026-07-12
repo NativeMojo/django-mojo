@@ -129,6 +129,23 @@ tooling can tell them apart.
 
 Category permissions grant full read+write access to an entire domain. Use these for admin roles that need everything in a domain without toggling individual permissions.
 
+**The bare category term is `view_X` + `manage_X` combined into one simple
+term** — and the permission checkers enforce that automatically. A check for
+`view_users` or `manage_users` is satisfied by a holder of bare `users` (same
+for every category in the table below), at all three checker levels
+(`User.has_permission`, `GroupMember.has_permission`, `ApiKey.has_permission`
+— see `mojo/helpers/perms.py`). You do not need to remember to add the bare
+term to every perm list; a list naming `manage_users` admits `users` holders
+by definition.
+
+Two boundaries to the expansion:
+
+- **One-directional.** `manage_users` alone does NOT satisfy a check for bare
+  `users` — the combined term is the superset, not the other way around.
+- **Categories only.** Fine-grained perms that aren't `view_`/`manage_` +
+  a category name (`manage_group` (singular), `manage_members`,
+  `manage_settings`, `manage_chat`, ...) are never expanded.
+
 | Permission | Domain | Grants access to |
 |-----------|--------|-----------------|
 | `security` | Security & Logs | Incidents, events, rules, tickets, IPSets, bouncer devices/signals/signatures, GeoLocatedIP, system logs, geofence config |
@@ -319,7 +336,7 @@ The Event model allows anyone to create security events via `POST /api/incident/
 
 When adding permissions to a new model:
 
-1. **Always add the category permission** — every model should include its domain's category perm (`security`, `users`, `groups`, `comms`, `jobs`, `metrics`, `files`) in both VIEW_PERMS and SAVE_PERMS
+1. **Always add the category permission** — every model should include its domain's category perm (`security`, `users`, `groups`, `comms`, `jobs`, `metrics`, `files`) in both VIEW_PERMS and SAVE_PERMS. (Since the checkers expand `view_X`/`manage_X` to also accept bare `X`, omitting it is no longer a lockout — but list it anyway for clarity.)
 2. **Use view/manage pairs for fine-grained access** — `view_X` for read-only, `manage_X` for write
 3. **Always include manage in view** — if `manage_X` is in SAVE_PERMS, add it to VIEW_PERMS too
 4. **Use `owner` sparingly** — only for user-facing models where users manage their own records

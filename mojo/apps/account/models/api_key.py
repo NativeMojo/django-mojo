@@ -4,6 +4,7 @@ from django.db import models
 from mojo.models import MojoModel
 from mojo.models.secrets import MojoSecrets
 from mojo.helpers import crypto, dates
+from mojo.helpers.perms import implied_perms
 from mojo.helpers.settings import settings
 from mojo import errors as merrors
 
@@ -131,7 +132,10 @@ class ApiKey(MojoSecrets, MojoModel):
             return False
         if perm_key in ["all", "authenticated", "member"]:
             return True
-        return bool(self._get_permissions_dict().get(perm_key, False))
+        # Bare domain terms ("groups") satisfy their view_/manage_ forms —
+        # one-directional; see mojo.helpers.perms.
+        perms = self._get_permissions_dict()
+        return any(bool(perms.get(pk, False)) for pk in implied_perms(perm_key))
 
     def can_change_permission(self, perm, value, request):
         """Whether `request.user` may assign `perm` to this key.

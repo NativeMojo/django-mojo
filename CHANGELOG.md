@@ -1,5 +1,22 @@
 ## v1.2.48 - July 12, 2026
 
+**bug** — **Bare domain-category permissions now satisfy their `view_`/`manage_` checks everywhere.**
+The bare category term (`users`, `groups`, `security`, `comms`, `jobs`,
+`metrics`, `files`) is `view_X` + `manage_X` combined into one simple term —
+but several narrow gates only accepted the literal `manage_X`, so a holder of
+the combined term passed a resource's broad gate and then hit a surprise 403.
+The fix is central: `mojo/helpers/perms.py` (new) defines the category set and
+a one-directional expansion, and all three permission checkers
+(`User.has_permission`, `GroupMember.has_permission`, `ApiKey.has_permission`)
+apply it, so no perm list needed editing. Gates this repairs: ApiKey and
+GroupMember `can_change_permission` (a bare-`groups` member can now edit key/
+member permissions — the shipped Group Member permission editor 403), Group
+`disable`/`reactivate` actions, the OAuth-connection admin delete, the
+GeoLocatedIP `POST_SAVE_ACTIONS` gate, and the group-member invite endpoint.
+One-directional: `manage_users` alone still does NOT grant the combined
+`users`. Non-category perms (`manage_group`, `manage_members`,
+`manage_settings`, ...) are never expanded. (ITEM-035)
+
 **bug** — **Non-dict `permissions` payloads on API key save now return 400 instead of being silently ignored.**
 `ApiKey.set_permissions` (`mojo/apps/account/models/api_key.py`) opened with
 `if not isinstance(value, dict): return` — a `permissions` value that wasn't a

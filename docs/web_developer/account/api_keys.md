@@ -25,7 +25,7 @@ MOJO provides two ways to authenticate programmatic access:
 
 **POST** `/api/group/apikey`
 
-Requires `manage_group` or `manage_groups` permission.
+Requires `manage_group`, `manage_groups`, or the combined `groups` permission (global or member-level).
 
 ```json
 {

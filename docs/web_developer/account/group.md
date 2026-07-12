@@ -163,7 +163,7 @@ GET /api/group?parent=7
 
 ## Disable Lifecycle
 
-Admins manage group `is_active` state through two named POST_SAVE_ACTIONS. Writing the bare `is_active` field directly still works but does not populate the disable namespace or emit audit events. The actions below are the recommended path for any new code. Requires `manage_groups` — stricter than the rest of the Group `SAVE_PERMS` since disable is destructive.
+Admins manage group `is_active` state through two named POST_SAVE_ACTIONS. Writing the bare `is_active` field directly still works but does not populate the disable namespace or emit audit events. The actions below are the recommended path for any new code. Requires a global `manage_groups` grant (the combined `groups` term includes it) — stricter than the rest of the Group `SAVE_PERMS` since disable is destructive: a member-level grant is not sufficient.
 
 ### Disable a group
 
