@@ -39,7 +39,7 @@ Requires `manage_group` or `manage_groups` permission.
 |---|---|---|
 | `group` | Yes | Group ID the key is scoped to |
 | `name` | Yes | Descriptive name for the key |
-| `permissions` | No | JSON dict of granted permissions (default: empty) |
+| `permissions` | No | JSON **object** of granted permissions (default: empty). Must be a real object — any other shape, including a JSON-encoded string, is rejected with `400` |
 | `limits` | No | Per-endpoint rate limit overrides |
 
 **Response:**

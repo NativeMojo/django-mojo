@@ -203,6 +203,46 @@ def test_apikey_rest_get(opts):
     assert "token_hash" not in data, "token_hash must not be exposed"
 
 
+@th.unit_test("apikey_rest_permissions_rejects_non_dict")
+def test_apikey_rest_permissions_rejects_non_dict(opts):
+    """Non-dict `permissions` payloads (JSON strings, lists) must be rejected
+    with 400 — not silently ignored with a 200 and the field unchanged."""
+    from mojo.apps.account.models import ApiKey
+
+    opts.client.login(ADMIN_USER, ADMIN_PWORD)
+    assert opts.client.is_authenticated, "admin login failed"
+
+    url = f"/api/group/apikey/{opts.rest_key_id}"
+    before = ApiKey.objects.get(pk=opts.rest_key_id).permissions
+
+    # JSON-encoded string (not an object) — the silent-drop repro shape
+    resp = opts.client.post(url, {"group": opts.parent_id, "permissions": '{"manage_group": true}'})
+    assert resp.status_code == 400, (
+        f"string permissions must be rejected with 400, got {resp.status_code}: {resp.response}"
+    )
+
+    # Non-dict JSON (list) — same contract
+    resp = opts.client.post(url, {"group": opts.parent_id, "permissions": ["manage_group"]})
+    assert resp.status_code == 400, (
+        f"list permissions must be rejected with 400, got {resp.status_code}: {resp.response}"
+    )
+
+    after = ApiKey.objects.get(pk=opts.rest_key_id).permissions
+    assert after == before, f"permissions must be untouched after rejection: {before!r} -> {after!r}"
+
+    # Control: a real dict still saves — add then remove a throwaway perm,
+    # leaving the key exactly as the earlier tests expect it.
+    resp = opts.client.post(url, {"group": opts.parent_id, "permissions": {"test_extra_perm": True}})
+    assert resp.status_code == 200, f"dict permissions must save, got {resp.status_code}: {resp.response}"
+    assert ApiKey.objects.get(pk=opts.rest_key_id).permissions.get("test_extra_perm") is True, \
+        "dict permission grant must persist"
+
+    resp = opts.client.post(url, {"group": opts.parent_id, "permissions": {"test_extra_perm": False}})
+    assert resp.status_code == 200, f"dict permissions must save, got {resp.status_code}: {resp.response}"
+    after = ApiKey.objects.get(pk=opts.rest_key_id).permissions
+    assert after == before, f"key must end unchanged after add+remove: {before!r} -> {after!r}"
+
+
 @th.unit_test("apikey_auth_header")
 def test_apikey_auth_header(opts):
     """Authorization: apikey <token> authenticates and sets request context."""

@@ -214,6 +214,8 @@ so `opts.rest_key_id` from the create test is available):
 None.
 
 ## Notes
+- Build baseline (2026-07-12, `bin/run_tests --agent`): 2426 total / 2370
+  passed / 0 failed / 56 skipped — all green. No pre-existing failures.
 - Companion finding, same investigation thread, different root cause and
   filed separately (mechanical fix, different acceptance criteria):
   `permission-gate-fallback-missing-base-groups-users-perm.md` — covers

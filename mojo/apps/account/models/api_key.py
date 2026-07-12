@@ -167,9 +167,12 @@ class ApiKey(MojoSecrets, MojoModel):
         """REST setter for `permissions` — gates each key through
         can_change_permission so a group admin cannot assign perms they aren't
         entitled to grant. (create_for_group assigns `permissions` directly and
-        is not affected — it is a trusted internal call.)"""
+        is not affected — it is a trusted internal call.)
+
+        Accepts only a real JSON object; any other shape — including a
+        JSON-encoded string — is rejected with a 400."""
         if not isinstance(value, dict):
-            return
+            raise merrors.ValueException("permissions must be a JSON object")
         request = self.active_request
         for perm, perm_value in value.items():
             if not self.can_change_permission(perm, perm_value, request):

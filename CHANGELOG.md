@@ -1,3 +1,19 @@
+## v1.2.48 - July 12, 2026
+
+**bug** — **Non-dict `permissions` payloads on API key save now return 400 instead of being silently ignored.**
+`ApiKey.set_permissions` (`mojo/apps/account/models/api_key.py`) opened with
+`if not isinstance(value, dict): return` — a `permissions` value that wasn't a
+real JSON object (most commonly a JSON-*encoded string* like
+`'{"manage_group": true}'`, but also lists, numbers, `null`) was silently
+dropped: 200 response, field unchanged, no error anywhere. The setter now
+raises `ValueException` (HTTP 400, "permissions must be a JSON object") for
+any non-dict payload. Dict payloads behave exactly as before, including the
+per-permission `can_change_permission` gating; `{}` remains a valid no-op.
+Note the contract is strict — JSON-encoded strings are *not* leniently parsed
+(unlike the generic JSONField path used by `metadata`/`limits`); send a real
+object. Callers that previously sent `"permissions": null` (a silent no-op)
+now get a 400. (ITEM-036)
+
 ## v1.2.47 - July 11, 2026
 
 **bug** — **OAuth login preserves `?redirect=` across the provider round-trip.**
