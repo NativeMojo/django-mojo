@@ -115,7 +115,7 @@ class RestMeta:
 | `disable` | `{"disable": {"reason": "admin\|abuse\|archived", "note": "..."}}` | Flips `is_active=False`, writes `metadata.protected.disable.*` |
 | `reactivate` | `{"reactivate": {"note": "..."}}` | Flips `is_active=True`, appends to `disable.history` (FIFO cap 20) |
 
-`disable`/`reactivate` require `manage_groups` (stricter than the broader Group `SAVE_PERMS` since these are destructive). See [disable_lifecycle.md](disable_lifecycle.md).
+`disable`/`reactivate` require a global `manage_groups` grant — the combined `groups` term satisfies it too, since it includes `manage_groups` by definition (stricter than the broader Group `SAVE_PERMS` since these are destructive; a member-level `manage_group` grant is not sufficient). See [disable_lifecycle.md](disable_lifecycle.md).
 
 ## Hierarchy
 

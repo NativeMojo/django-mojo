@@ -57,7 +57,8 @@ wrong one is a **cross-tenant privilege-escalation risk**.
 
 Why it matters: `GroupMember.permissions` accepts **arbitrary key names**, and
 any group admin (holding `manage_group`/`manage_members`/`manage_users`/
-`manage_groups`) can assign them — bounded only by `MEMBER_PERMS_PROTECTION`
+`manage_groups` — or the combined `users`/`groups` term, which satisfies the
+`manage_users`/`manage_groups` checks by definition) can assign them — bounded only by `MEMBER_PERMS_PROTECTION`
 (empty by default). So under `requires_perms`, a tenant admin can grant a
 teammate any permission *scoped to their own group*, then satisfy the check on
 **any** endpoint by passing their own `group` id. If that endpoint's effect is

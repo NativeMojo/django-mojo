@@ -421,3 +421,9 @@ consequences of the central fix, no list edits).
   `account/services/inactive.py:163-167` already treats `manage_groups` and
   `groups` as equivalent via an explicit OR query — this is the correct
   pattern the 4 confirmed findings above should converge on.
+
+## Resolution
+- closed: 2026-07-12
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/api_keys.md,docs/django_developer/core/permissions.md,docs/web_developer/account/api_keys.md,docs/web_developer/account/geoip.md,docs/web_developer/account/group.md,docs/web_developer/account/oauth.md,memory.md,mojo/apps/account/models/api_key.py,mojo/apps/account/models/group.py,mojo/apps/account/models/member.py,mojo/apps/account/models/user.py,mojo/helpers/perms.py,planning/.next_id,planning/done/ITEM-036-apikey-set-permissions-silently-discards-non-dict-.md,planning/in_progress/ITEM-035-field-action-level-permission-gates-omit-the-base-.md,tests/test_account/test_disable_lifecycle.py,tests/test_global_perms/base_term_expansion.py,tests/test_oauth/oauth.py,tests/test_user_mgmt/api_keys.py
+- tests added: tests/test_global_perms/base_term_expansion.py (3 checker-expansion tests + member perm-toggle, invite, geoip SAVE-gate regressions); tests/test_user_mgmt/api_keys.py::apikey_rest_create_bare_groups_member; tests/test_account/test_disable_lifecycle.py::test_rest_group_disable_reactivate_bare_groups; tests/test_oauth/oauth.py::test_oauth_connection_bare_users_admin_delete

@@ -174,7 +174,9 @@ A follow-up migration in the next release will remove the legacy keys.
 - `is_active` is in `MANAGE_USERS_ONLY_FIELDS` ([user.py](../../../mojo/apps/account/models/user.py)),
   so direct writes via REST already require `manage_users`.
 - The new POST_SAVE_ACTIONS additionally re-check `manage_users` (User) /
-  `manage_groups` (Group) inside `on_action_*` and validate the reason enum.
+  `manage_groups` (Group) inside `on_action_*` and validate the reason enum —
+  the combined `users`/`groups` term satisfies these checks too, since it
+  includes `manage_users`/`manage_groups` by definition.
 - The disable service emits `model_logit(kind="disabled"|"reactivated"|"auto_disabled")`
   and an `incident.report_event` per state change. These are the long-term
   audit records — `disable.history` is bounded.

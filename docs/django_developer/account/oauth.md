@@ -174,8 +174,8 @@ Access/refresh tokens from the provider are stored encrypted in `mojo_secrets` (
 
 `OAuthConnection` exposes a REST endpoint via `MojoModel`:
 
-- **View:** `owner` (the connected user) or `manage_users`
-- **Save/Delete:** `manage_users` only
+- **View:** `owner` (the connected user), `manage_users`, or the combined `users` term
+- **Save/Delete:** `manage_users` or the combined `users` term (it includes `manage_users` by definition)
 - `mojo_secrets` is always excluded from REST output (`NO_SHOW_FIELDS`)
 
 ---

@@ -183,7 +183,7 @@ POST /api/system/geoip/123
 {"unwhitelist": 1}
 ```
 
-All actions require `manage_users` permission (from RestMeta).
+All actions are gated by `SAVE_PERMS`: `manage_users`, `manage_security`, or `security` — and the combined `users` term (it includes `manage_users` by definition).
 
 ---
 
@@ -192,6 +192,7 @@ All actions require `manage_users` permission (from RestMeta).
 | Setting | Value |
 |---|---|
 | `VIEW_PERMS` | `['manage_users']` |
+| `SAVE_PERMS` | `['manage_users', 'manage_security', 'security']` (the combined `users` term also satisfies `manage_users`) |
 | `SEARCH_FIELDS` | `ip_address`, `city`, `country_name`, `asn_org`, `isp` |
 | `POST_SAVE_ACTIONS` | `refresh`, `threat_analysis`, `block`, `unblock`, `whitelist`, `unwhitelist` |
 
