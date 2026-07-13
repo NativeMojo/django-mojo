@@ -190,10 +190,16 @@ class ApiKey(MojoSecrets, MojoModel):
 
     def is_group_allowed(self, group):
         """
-        Returns True if the given group is this key's own group or a descendant.
-        Used by the dispatcher to validate group= request param for API key requests.
+        Returns True if the given group is ACTIVE and is this key's own group or
+        a descendant. An inactive group is never allowed (ITEM-037) — the check
+        is per-group, so an active child under an inactive parent still passes.
+        Used by the dispatcher to validate the group= request param and by
+        Group.check_view_permission / check_edit_permission (whose instance hooks
+        run before the model-security is_active gate — without this, a suspended
+        tenant's key could still read/write its own Group row, including
+        flipping is_active back).
         """
-        if group is None:
+        if group is None or not group.is_active:
             return False
         if group.pk == self.group.pk:
             return True

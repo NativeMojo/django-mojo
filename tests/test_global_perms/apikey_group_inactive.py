@@ -188,6 +188,100 @@ def test_apikey_active_child_still_reachable(opts):
         parent.delete()
 
 
+@th.django_unit_test("group row: inactive group's key cannot read or self-reactivate its own Group")
+def test_group_self_access_denied_when_inactive(opts):
+    """Post-build review gap A: Group.check_view/edit_permission gate an ApiKey
+    via is_group_allowed (hierarchy-only) and run BEFORE the rest.py is_active
+    gate — so an inactive-group key could still GET/PUT /api/group/<own pk>,
+    including flipping is_active back (self-reversible suspension)."""
+    from mojo.apps.account.models import ApiKey, Group
+
+    group = _mk_group()
+    key, token = ApiKey.create_for_group(
+        group=group, name="ak_ia_test_selfgrp", permissions={"groups": True})
+    try:
+        # Active control — the key reads its own Group row.
+        use_apikey(opts, token)
+        resp = opts.client.get(f"/api/group/{group.pk}")
+        assert resp.status_code == 200, \
+            f"active-group key must read its own group row, got {resp.status_code}: {opts.client.last_response.body}"
+        opts.client.logout()
+
+        group.is_active = False
+        group.save()
+
+        # Read of the Group row itself must now be denied.
+        use_apikey(opts, token)
+        resp = opts.client.get(f"/api/group/{group.pk}")
+        assert resp.status_code in (401, 403, 404), \
+            f"inactive-group key must not read its own group row, got {resp.status_code}: {opts.client.last_response.body}"
+
+        # The escalation: a suspended tenant's key must NOT be able to
+        # reactivate its own group.
+        resp = opts.client.post(f"/api/group/{group.pk}", {"is_active": True})
+        assert resp.status_code in (401, 403, 404), \
+            f"inactive-group key must not write its own group row, got {resp.status_code}: {opts.client.last_response.body}"
+        group.refresh_from_db()
+        assert group.is_active is False, \
+            "SECURITY: a suspended tenant's key reactivated its own group"
+    finally:
+        opts.client.logout()
+        ApiKey.objects.filter(pk=key.pk).delete()
+        group.delete()
+
+
+@th.django_unit_test("requires_perms: a key is trusted only within an ACTIVE group context")
+def test_requires_perms_denies_key_without_active_group(opts):
+    """Post-build review gap B (in-process — the decorator short-circuits on
+    request.user.has_permission BEFORE any group consideration, so a deactivated
+    tenant's key kept passing plain @md.requires_perms endpoints, e.g. sms/send).
+    validate_token strips request.group for an inactive group; the decorator must
+    treat that as no-context and fail closed for a non-User identity."""
+    import mojo.errors
+    from objict import objict
+    from mojo.apps.account.models import ApiKey
+    from mojo.decorators.auth import requires_perms, requires_group_perms
+
+    PERM = "itest_ak37_perm"
+
+    @requires_perms(PERM)
+    def dummy_perms_view(request):
+        return "ran"
+
+    @requires_group_perms(PERM)
+    def dummy_group_perms_view(request):
+        return "ran"
+
+    group = _mk_group()
+    key, _token = ApiKey.create_for_group(
+        group=group, name="ak_ia_test_reqperms", permissions={PERM: True})
+    key.is_authenticated = True
+    try:
+        # Control: ACTIVE group context → the key's perm dict authorizes.
+        req = objict(user=key, api_key=key, group=group, DATA=objict())
+        assert dummy_perms_view(req) == "ran", \
+            "active-group key with the perm must pass requires_perms"
+        assert dummy_group_perms_view(req) == "ran", \
+            "active-group key with the perm must pass requires_group_perms"
+
+        # Inactive group → validate_token yields request.group=None; the key's
+        # self-claimed perm must no longer be trusted.
+        group.is_active = False
+        group.save()
+        req2 = objict(user=key, api_key=key, group=None, DATA=objict())
+        for view, name in ((dummy_perms_view, "requires_perms"),
+                           (dummy_group_perms_view, "requires_group_perms")):
+            try:
+                result = view(req2)
+                assert False, \
+                    f"a groupless-context key must not pass {name}, but the view ran: {result!r}"
+            except mojo.errors.PermissionDeniedException:
+                pass  # fail-closed deny is correct
+    finally:
+        ApiKey.objects.filter(pk=key.pk).delete()
+        group.delete()
+
+
 @th.django_unit_test("guard: ALLOW_API_KEY_GLOBAL is refused on a group-scoped model (fail closed)")
 def test_allow_api_key_global_guard_on_group_scoped_model(opts):
     """Secondary hardening: a group-scoped model must never grant an api_key

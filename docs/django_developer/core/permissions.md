@@ -49,7 +49,11 @@ wrong one is a **cross-tenant privilege-escalation risk**.
   default) falls back to their **group/member** permission for the group named in
   the request (`request.group.user_has_permission(...)`). Correct when the
   endpoint's effect is confined to `request.group` (e.g. rotating *that* group's
-  webhook secret).
+  webhook secret). A **non-User identity (ApiKey)** is trusted only within an
+  **active** group context: if `request.group` is `None` (which is what
+  `validate_token` yields when the key's group is deactivated — ITEM-037) the
+  request is denied before the key's self-claimed permission dict is consulted.
+  Same gate in `requires_group_perms`.
 - **`@md.requires_global_perms(...)`** — checks **global `User.permissions` (or
   superuser) only**, never the group/member fallback. Use it for any endpoint
   whose effect is **platform-wide**: global settings, fleet/job control, AWS

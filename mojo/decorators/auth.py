@@ -32,6 +32,19 @@ def requires_perms(*required_perms):
                 raise mojo.errors.PermissionDeniedException()
             perms = set(required_perms)
 
+            # A non-User identity (a group-scoped ApiKey) is trusted only within
+            # an ACTIVE group context — validate_token strips request.group when
+            # the key's group is deactivated, so this fails closed the moment a
+            # tenant is suspended (ITEM-037). Without it, the has_permission
+            # short-circuit below would trust the key's self-claimed perms with
+            # no group consideration at all. Platform-global machine access uses
+            # requires_global_perms (which ignores request.group) instead.
+            if not hasattr(request.user, "is_request_user"):
+                group = getattr(request, "group", None)
+                if group is None or not group.is_active:
+                    logger.error(f"{getattr(request.user, 'username', request.user)} has no active group context for {perms}")
+                    raise mojo.errors.PermissionDeniedException()
+
             # First check user-based permissions
             if request.user.has_permission(perms):
                 return func(request, *args, **kwargs)
@@ -81,6 +94,13 @@ def requires_group_perms(*required_perms):
             if not request.user.is_authenticated:
                 raise mojo.errors.PermissionDeniedException()
             perms = set(required_perms)
+
+            # Same ApiKey active-group-context gate as requires_perms (ITEM-037).
+            if not hasattr(request.user, "is_request_user"):
+                group = getattr(request, "group", None)
+                if group is None or not group.is_active:
+                    logger.error(f"{getattr(request.user, 'username', request.user)} has no active group context for {perms}")
+                    raise mojo.errors.PermissionDeniedException()
 
             # First check user-based permissions
             if request.user.has_permission(perms):

@@ -15,7 +15,15 @@ never enumerates a deactivated tenant's rows). Not a hard token reject: an
 inactive-group key still authenticates with no group context, preserving the
 group-independent federation path (`requires_global_perms(..., allow_api_keys=True)`,
 e.g. geoip `/sync`). An active child under an inactive parent stays reachable
-via explicit `group=<child id>`. Secondary hardening: `RestMeta.ALLOW_API_KEY_GLOBAL`
+via explicit `group=<child id>`. Two further surfaces closed after post-build
+review: `ApiKey.is_group_allowed` now requires the target group to be active
+(without it, `Group.check_view/edit_permission` — which run before the
+model-security gate — let a suspended tenant's key read/write its own Group
+row, including flipping `is_active` back on), and the
+`requires_perms`/`requires_group_perms` decorators now trust a non-User
+identity's permission dict only within an ACTIVE group context (without it,
+custom endpoints like `sms/send` still honored a deactivated tenant's key).
+Secondary hardening: `RestMeta.ALLOW_API_KEY_GLOBAL`
 is now ignored (fail-closed, logged) on any model that has a `group` FK — the
 flag is only valid on genuinely groupless models. (ITEM-037)
 

@@ -59,6 +59,8 @@ Every API key belongs to one group. The key can access that group and any of its
 - `validate_token` sets `request.group` only when the key's group is active; an inactive group leaves it `None`, so a no-`group=` request fails closed at model security.
 - A detail/save/delete op re-binds `request.group` from the target row's group; the model-security api_key branch re-checks `is_active` there too, so it fails closed rather than being revived by the re-bind.
 - The RestMeta list fallback derives the key's groups from `ApiKey.get_groups`, which excludes inactive groups — so a deactivated tenant's rows never enumerate.
+- `ApiKey.is_group_allowed` requires the target group to be active. This also gates `Group.check_view_permission`/`check_edit_permission` (which run before the model-security branch), so a suspended tenant's key cannot read or write its own `Group` row — in particular it cannot flip `is_active` back on and un-suspend itself.
+- The `@md.requires_perms` / `@md.requires_group_perms` decorators trust a non-User identity's permission dict only within an ACTIVE group context — a key with `request.group = None` is denied before its self-claimed perms are consulted. This closes custom (non-RestMeta) endpoints like `sms/send` too.
 
 Not a hard token reject: an inactive-group key still **authenticates** (it returns `request.group = None`, not a 401). This preserves the group-independent federation path (`requires_global_perms(..., allow_api_keys=True)`, e.g. the geoip `/sync` receiver), which authorizes on the key's `has_permission` and ignores `request.group`. An **active child under an inactive parent** stays reachable via explicit `group=<child id>` — the filter is per-group, not a cascade.
 

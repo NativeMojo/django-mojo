@@ -330,5 +330,22 @@ approved by the user 2026-07-12.
   `member.is_active` but not `Group.is_active` — remains the sibling item
   `member-perms-ignore-group-is-active`). Required to meet this item's own LIST
   acceptance criterion.
+- **Post-build review round (2026-07-12):** docs-updater + security-review found
+  TWO residual surfaces; both fixed in a follow-up commit with failing-first
+  regressions (suite re-verified: 2444/2383, only the 5 recorded flaky):
+  1. **Group's own instance hooks** — `Group.check_view/edit_permission` gate a
+     key via `is_group_allowed` (was hierarchy-only) and run BEFORE the rest.py
+     is_active gate, so a suspended tenant's key could still read/write its own
+     Group row — including flipping `is_active` back on (self-reversible
+     suspension). Fixed at the choke point: `is_group_allowed` now requires the
+     TARGET group active (per-group; active-child boundary preserved; both
+     dispatcher callers already fed it active-only groups).
+  2. **`requires_perms`/`requires_group_perms` short-circuit** (CRITICAL per
+     security-review) — `request.user.has_permission(perms)` trusted an ApiKey's
+     self-claimed dict before any group consideration, so custom endpoints
+     (e.g. `sms/send`, assistant memory) still honored a deactivated tenant's
+     key. Fixed: a non-User identity now requires an ACTIVE `request.group`
+     before its dict is consulted (real Users unaffected; requires_global_perms
+     — the federation path — deliberately untouched).
 - Decide the failure mode carefully: rejecting the token entirely (401) vs stripping group context (403 at model security). 401 is cleaner but changes auth semantics; group-context stripping matches ITEM-025's shape.
 - Check the geoip federation receiver (`allow_api_keys=True` surface) for interaction before changing validate_token.
