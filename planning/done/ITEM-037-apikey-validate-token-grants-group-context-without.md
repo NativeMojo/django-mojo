@@ -349,3 +349,9 @@ approved by the user 2026-07-12.
      — the federation path — deliberately untouched).
 - Decide the failure mode carefully: rejecting the token entirely (401) vs stripping group context (403 at model security). 401 is cleaner but changes auth semantics; group-context stripping matches ITEM-025's shape.
 - Check the geoip federation receiver (`allow_api_keys=True` surface) for interaction before changing validate_token.
+
+## Resolution
+- closed: 2026-07-12
+- branch: main
+- files changed: CHANGELOG.md,docs/django_developer/account/api_keys.md,docs/django_developer/core/permissions.md,docs/web_developer/account/api_keys.md,mojo/apps/account/models/api_key.py,mojo/decorators/auth.py,mojo/models/rest.py,planning/.next_id,planning/confirmed/ITEM-038-rest-batch-save-ignores-can-update-can-create-flag.md,planning/confirmed/ITEM-039-get-api-group-pk-member-resolves-touches-any-group.md,planning/in_progress/ITEM-037-apikey-validate-token-grants-group-context-without.md,planning/inbox/apikey-group-context-ignores-group-is-active.md,planning/inbox/group-me-member-endpoint-oracle-touch.md,tests/test_global_perms/apikey_group_inactive.py
+- tests added: tests/test_global_perms/apikey_group_inactive.py (8 tests: validate_token strip, list deny, detail re-bind deny, reactivation restore, active-child control, Group self-row read/write + self-reactivation escalation, requires_perms/requires_group_perms active-context gate, ALLOW_API_KEY_GLOBAL guard)
