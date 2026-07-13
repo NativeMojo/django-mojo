@@ -297,5 +297,38 @@ None — direction, failure-mode (strip-context), and the federation carve-out
 approved by the user 2026-07-12.
 
 ## Notes
+- **Baseline (2026-07-12, before any edit):** `bin/run_tests --agent` →
+  total 2436 / passed 2375 / **failed 5** / skipped 56. The 5 failures are
+  PRE-EXISTING cross-module flakiness, NOT green — but `test_assistant` run in
+  isolation is fully green (589/572/0), so they only manifest under full-suite
+  parallel model-reloading (`get_rest_meta_prop("CAN_DELETE")` racing on
+  `incident.RuleSet`; the suite logs "Reloading models is not advised"). None
+  touch ITEM-037's code (`api_key.py`, `rest.py`). Accepted pre-existing set —
+  the ONLY failures attributable to "not mine":
+  - `test_assistant/23_test_delete_tools.py`: `test_delete_model_instance_success`,
+    `test_delete_model_instance_permission_denied`,
+    `test_delete_model_instance_not_found`,
+    `test_delete_model_instance_reports_security_event`
+  - `test_assistant/27_test_save_model_tool.py`: `test_delete_writes_audit_log`
+  Post-change gate: full suite shows only these 5 (and they still pass in
+  isolation). Flakiness itself is out of scope — separate chore if it persists.
+- **Post-change (2026-07-12):** targeted `test_global_perms.apikey_group_inactive`
+  6/6 pass. Full suite 2442 / passed 2380 / **failed 6** / skipped 56 — the 5
+  recorded flaky `test_assistant` tests PLUS `test_helpers/domains.py`
+  `domain_txt_lookup` (a live DNS TXT lookup — network-dependent, unrelated to
+  apikey/permission code). `test_global_perms` + `test_assistant` run in
+  ISOLATION = 615/598/0 green (my 6 new tests pass; test_assistant clean alone),
+  proving the change introduced ZERO new failures — all 6 full-suite failures
+  are pre-existing environmental flakiness.
+- **Scope addition flagged:** the plan listed two edit sites (`validate_token`,
+  `rest.py` api_key branch + guard). Building surfaced a THIRD api_key group-
+  context surface — `ApiKey.get_groups` ignored `Group.is_active`, so the
+  RestMeta list fallback (`on_rest_handle_list` → `get_groups_with_permission`)
+  re-listed a deactivated group's rows even after `validate_token` stripped
+  context. Fixed `ApiKey.get_groups` to always exclude inactive groups (api_key-
+  scoped; the User member-grant equivalent — `User.get_groups` filtering
+  `member.is_active` but not `Group.is_active` — remains the sibling item
+  `member-perms-ignore-group-is-active`). Required to meet this item's own LIST
+  acceptance criterion.
 - Decide the failure mode carefully: rejecting the token entirely (401) vs stripping group context (403 at model security). 401 is cleaner but changes auth semantics; group-context stripping matches ITEM-025's shape.
 - Check the geoip federation receiver (`allow_api_keys=True` surface) for interaction before changing validate_token.

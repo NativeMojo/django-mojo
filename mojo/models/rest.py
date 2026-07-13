@@ -296,6 +296,17 @@ class MojoModel:
 
         if request.group and is_group_scoped:
             if hasattr(request, 'api_key') and request.api_key:
+                if not request.group.is_active:
+                    # The instance re-bind above can repopulate request.group
+                    # from a detail instance owned by a now-inactive group; gate
+                    # it here so detail/save/delete fail closed too, not just the
+                    # list path (validate_token already strips context there).
+                    # ApiKey-only — user semantics unchanged.
+                    return False, objict.objict(
+                        branch="api_key.group_inactive",
+                        event_type="user_permission_denied",
+                        status=403,
+                    )
                 allowed = request.api_key.has_permission(perms)
                 if allowed:
                     return True, None
@@ -322,7 +333,17 @@ class MojoModel:
             # (parallel to the requires_global_perms decorator's allow_api_keys).
             # Group-scoped models take the Branch above (request.group +
             # hasattr(cls,"group")) and are unaffected.
-            if not cls.get_rest_meta_prop("ALLOW_API_KEY_GLOBAL", False):
+            allow_global = cls.get_rest_meta_prop("ALLOW_API_KEY_GLOBAL", False)
+            if allow_global and is_group_scoped:
+                # Misconfiguration: a group-scoped model must never opt into
+                # global api-key access — a key could reach unscoped rows by
+                # arriving with no active group context. Fail closed and shout
+                # so it's discoverable.
+                logit.error(
+                    f"ALLOW_API_KEY_GLOBAL=True on group-scoped model {cls.__name__} "
+                    "— ignored (fail-closed). Remove the flag or the group FK.")
+                allow_global = False
+            if not allow_global:
                 return False, objict.objict(
                     branch="api_key.groupless_denied",
                     event_type="user_permission_denied",

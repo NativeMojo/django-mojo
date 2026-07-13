@@ -1,3 +1,24 @@
+## v1.2.49 - July 12, 2026
+
+**bug** — **Deactivating a group now instantly suspends its API keys.**
+`ApiKey.validate_token` set `request.group = api_key.group` with no
+`group.is_active` check, so a request that omitted a `group=` param kept full
+group-scoped access to a deactivated tenant's data (ITEM-025's active-only
+resolution only bit when a `group=` param was explicitly passed). The check is
+now enforced at request time — keys are never mutated, so reactivating the
+group restores them instantly — across every surface a key derives group
+context from: `validate_token` (leaves `request.group` None for an inactive
+group), the model-security api_key branch (re-checks `is_active` after the
+detail instance re-bind, so detail/save/delete fail closed too), and
+`ApiKey.get_groups` (excludes inactive groups, so the RestMeta list fallback
+never enumerates a deactivated tenant's rows). Not a hard token reject: an
+inactive-group key still authenticates with no group context, preserving the
+group-independent federation path (`requires_global_perms(..., allow_api_keys=True)`,
+e.g. geoip `/sync`). An active child under an inactive parent stays reachable
+via explicit `group=<child id>`. Secondary hardening: `RestMeta.ALLOW_API_KEY_GLOBAL`
+is now ignored (fail-closed, logged) on any model that has a `group` FK — the
+flag is only valid on genuinely groupless models. (ITEM-037)
+
 ## v1.2.48 - July 12, 2026
 
 **bug** — **Bare domain-category permissions now satisfy their `view_`/`manage_` checks everywhere.**

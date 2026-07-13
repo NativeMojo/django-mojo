@@ -201,28 +201,35 @@ class ApiKey(MojoSecrets, MojoModel):
 
     def get_groups(self, is_active=True, include_children=True):
         """
-        Returns a QuerySet of groups accessible to this API key.
+        Returns a QuerySet of ACTIVE groups accessible to this API key.
 
         An API key is scoped to its own group and, when include_children is True,
-        all descendant groups. The is_active argument is accepted for interface
-        compatibility with User.get_groups() but has no effect — API key group
-        access is determined solely by the group hierarchy, not member activity.
+        all descendant groups. Inactive groups are ALWAYS excluded (ITEM-037):
+        deactivating a group suspends its keys' access at request time — the key
+        is never mutated, so reactivating instantly restores it. An active child
+        under an inactive parent stays reachable (the filter is per-group). This
+        is the derivation the RestMeta list fallback uses
+        (mojo/models/rest.py on_rest_handle_list), so an inactive tenant's rows
+        never leak there. The `is_active` argument is accepted for interface
+        compatibility with User.get_groups() (which filters *member* activity,
+        N/A for keys) and does not change this group-level active filter.
 
         Args:
-            is_active: Accepted for interface compatibility. Not used.
+            is_active: Accepted for interface compatibility. Not used — group
+                       active-state is always enforced.
             include_children: Include descendant groups (default True).
 
         Returns:
-            QuerySet of Group objects.
+            QuerySet of active Group objects.
         """
         from mojo.apps.account.models import Group
 
         if not include_children:
-            return Group.objects.filter(pk=self.group_id)
+            return Group.objects.filter(pk=self.group_id, is_active=True)
 
         all_ids = set([self.group_id])
         all_ids.update(self.group._get_all_child_ids())
-        return Group.objects.filter(id__in=all_ids)
+        return Group.objects.filter(id__in=all_ids, is_active=True)
 
     def get_groups_with_permission(self, perms, is_active=True):
         """
@@ -300,7 +307,15 @@ class ApiKey(MojoSecrets, MojoModel):
         if api_key.expires_at and dates.utcnow() > api_key.expires_at:
             return None, "API key has expired"
 
-        request.group = api_key.group
+        # Group context is granted only for an ACTIVE group. Deactivating a
+        # tenant instantly suspends its keys; reactivating restores them (no key
+        # mutation). An inactive group leaves request.group None so group-scoped
+        # model security fails closed via the groupless-deny branch
+        # (mojo/models/rest.py), matching ITEM-025's active-only contract. NOT a
+        # hard reject: the federation path (requires_global_perms,
+        # allow_api_keys) ignores request.group, so rejecting the token would
+        # over-suspend legitimate fleet-peer keys.
+        request.group = api_key.group if (api_key.group_id and api_key.group.is_active) else None
         request.api_key = api_key
 
         try:

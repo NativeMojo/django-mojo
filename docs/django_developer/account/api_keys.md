@@ -22,7 +22,7 @@ From that point forward the request behaves like a **group-scoped** request agai
 **A key is confined to its group — it cannot reach platform-global data.** Two gates enforce this beyond the group filter:
 
 - **`@md.requires_global_perms`** — endpoints with platform-wide effect (job control, AWS infra, geofence config, etc.) reject an ApiKey identity by default, regardless of its permissions dict — `hasattr(user, "is_request_user")` is `False` for an `ApiKey`, so it never reaches the permission check. Pass `allow_api_keys=True` only for a federation/machine-ingest surface.
-- **Model security on groupless models** — a `uses_model_security` model that has **no `group` foreign key** (e.g. `User`, `GeoLocatedIP`, `Job`, `UserLoginEvent`) is platform-global; there is no group to confine a key to, so the model-security layer **denies ApiKey identities by default**. A model may opt in with `RestMeta.ALLOW_API_KEY_GLOBAL = True` (default `False`) — no model does initially. Without this, a key self-claiming `manage_users` could otherwise read every tenant's rows. `Group` (also groupless) confines a key to its own group + descendants on both list and detail.
+- **Model security on groupless models** — a `uses_model_security` model that has **no `group` foreign key** (e.g. `User`, `GeoLocatedIP`, `Job`, `UserLoginEvent`) is platform-global; there is no group to confine a key to, so the model-security layer **denies ApiKey identities by default**. A model may opt in with `RestMeta.ALLOW_API_KEY_GLOBAL = True` (default `False`) — no model does initially. Without this, a key self-claiming `manage_users` could otherwise read every tenant's rows. `Group` (also groupless) confines a key to its own group + descendants on both list and detail. **`ALLOW_API_KEY_GLOBAL` is honored only on genuinely groupless models — setting it `True` on a model that has a `group` FK is a misconfiguration and is ignored (fail-closed, logged via `logit.error`), since such a key could otherwise reach unscoped rows by arriving with no active group context.**
 
 Machine access to platform-global data should use a dedicated `allow_api_keys` endpoint (like the geoip federation sync) or a **service-account `User`** with a real global grant — not a group ApiKey. See [permissions.md](../core/permissions.md#global-vs-group-scoped-permission-checks).
 
@@ -48,11 +48,19 @@ In `GroupMember.has_permission`, a permission like `sys.manage_users` strips the
 
 **Why regular permissions are still group-scoped:**
 
-`validate_token` always sets `request.group`. In `rest_check_permission`, when `request.group` is set the check routes to `group.user_has_permission(request.user, perms)` and returns immediately — the system-level user permission branch is never reached. This means `manage_users` on an API key applies within the key's group only, not system-wide.
+`validate_token` sets `request.group` to the key's group when that group is active (else `None` — see Group Scoping below). In `rest_check_permission`, when `request.group` is set the check routes to the api_key branch and returns immediately — the system-level user permission branch is never reached. This means `manage_users` on an API key applies within the key's group only, not system-wide.
 
 ## Group Scoping
 
-Every API key belongs to one group. The key can access that group and any of its descendants. If a request passes `group=<id>` in the request data and that group is not the key's group or a descendant, the dispatcher returns 403. An **inactive** group's id never resolves at all (same as a nonexistent id) — this only bites when a request explicitly passes `group=<id>` naming the key's own (now-deactivated) group: the dispatcher clobbers `request.group` to `None` and the request fails closed at model security. A request that omits `group=` is unaffected — it still gets `request.group = api_key.group` straight from `validate_token` (step 3 above) with **no `is_active` check**, so the key keeps working against its own group's data after that group is deactivated; deactivate the key itself (`is_active=False`) to actually cut off its access.
+Every API key belongs to one group. The key can access that group and any of its **active** descendants. If a request passes `group=<id>` in the request data and that group is not the key's group or a descendant, the dispatcher returns 403; an **inactive** group's id never resolves at all (same as a nonexistent id).
+
+**Deactivating a group suspends its keys instantly (ITEM-037).** The active-state check is enforced at request time, so keys are never mutated — reactivating the group restores them immediately. It holds on every surface a key derives group context from:
+
+- `validate_token` sets `request.group` only when the key's group is active; an inactive group leaves it `None`, so a no-`group=` request fails closed at model security.
+- A detail/save/delete op re-binds `request.group` from the target row's group; the model-security api_key branch re-checks `is_active` there too, so it fails closed rather than being revived by the re-bind.
+- The RestMeta list fallback derives the key's groups from `ApiKey.get_groups`, which excludes inactive groups — so a deactivated tenant's rows never enumerate.
+
+Not a hard token reject: an inactive-group key still **authenticates** (it returns `request.group = None`, not a 401). This preserves the group-independent federation path (`requires_global_perms(..., allow_api_keys=True)`, e.g. the geoip `/sync` receiver), which authorizes on the key's `has_permission` and ignores `request.group`. An **active child under an inactive parent** stays reachable via explicit `group=<child id>` — the filter is per-group, not a cascade.
 
 ## Creating Keys
 
