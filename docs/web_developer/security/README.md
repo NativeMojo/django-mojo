@@ -55,6 +55,7 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | IPSet | `/api/incident/ipset` | Bulk CIDR blocking: countries, datacenters, abuse lists |
 
 See individual API docs for full details:
+- [Rate Limits & Client Backoff](rate_limits.md) — the 429/`Retry-After` contract every client must honor
 - [Incidents](../logging/incidents.md)
 - [Events & Reporting](../logging/reporting_events.md)
 - [Firewall & GeoIP](../account/firewall.md)

@@ -16,7 +16,15 @@ def on_incident_history(request, pk=None):
 
 @md.URL('event')
 @md.URL('event/<int:pk>')
+@md.rate_limit('incident_event', ip_limit=240, muid_limit=120)
 def on_event(request, pk=None):
+    # CREATE_PERMS is ["all"] — any authenticated caller can ingest events, so
+    # this heavier path (Event INSERT + rule evaluation per call) gets its own
+    # bound on top of the global identity throttle (DM-042). Limits are
+    # generous because the same route serves security-dashboard reads.
+    # NOTE: OSSEC agents do NOT post here (they use incident/ossec/alert/batch,
+    # which must stay unlimited — its client parks batches after 3 failed
+    # retries, so 429s there mean silently lost security alerts).
     return Event.on_rest_request(request, pk)
 
 

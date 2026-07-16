@@ -60,7 +60,7 @@ def _report_bouncer_event(category, details, level, request, **kwargs):
 
 @md.POST('account/bouncer/assess')
 @md.public_endpoint("Bouncer signal assessment — public, rate-limited, no user auth required")
-@md.rate_limit('bouncer_assess', ip_limit=60)
+@md.rate_limit('bouncer_assess', ip_limit=60, muid_limit=30)
 def on_bouncer_assess(request):
     """
     Stage 1: receive client-side signals, score them, issue token if human.

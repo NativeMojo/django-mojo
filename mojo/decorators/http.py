@@ -11,6 +11,7 @@ from functools import wraps
 from mojo.models import rest
 from django.http import HttpResponse
 from mojo.apps import metrics
+from mojo.decorators.limits import check_api_throttle
 
 logger = logit.get_logger("error", "error.log")
 # logger.info("created")
@@ -70,6 +71,12 @@ def dispatcher(request, *args, **kwargs):
     Dispatches incoming requests to the appropriate registered URL method.
     """
     key = kwargs.pop('__mojo_rest_root_key__', None)
+    # Global per-identity throttle + traffic accounting (DM-042). Runs BEFORE
+    # group resolution so a rejected request never touches the DB beyond the
+    # auth SELECT already spent in middleware. Anonymous requests are a no-op.
+    throttled = check_api_throttle(request)
+    if throttled is not None:
+        return throttled
     if "group" in request.DATA and request.DATA.group:
         # SECURITY: active groups only — same contract as the group_uuid
         # branch below. An inactive id must resolve exactly like a

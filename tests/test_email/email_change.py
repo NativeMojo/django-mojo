@@ -1381,7 +1381,7 @@ def test_confirm_code_race_email_claimed(opts):
               "email must not change after a code confirm rejected for availability")
 
 
-@th.django_unit_test("email/change/confirm code: inactive user is blocked (403)")
+@th.django_unit_test("email/change/confirm code: inactive user is blocked (401)")
 def test_confirm_code_inactive_user_blocked(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.utils import tokens
@@ -1394,14 +1394,20 @@ def test_confirm_code_inactive_user_blocked(opts):
     # Deactivate after OTP generation
     User.objects.filter(pk=user.pk).update(is_active=False)
 
-    opts.client.login(TEST_USER, TEST_PWORD)
-    resp = opts.client.post("/api/auth/email/change/confirm", {"code": otp})
-    opts.client.logout()
-    assert_eq(resp.status_code, 403,
-              f"Inactive user must receive 403 at code confirm, got {resp.status_code}")
+    try:
+        opts.client.login(TEST_USER, TEST_PWORD)
+        resp = opts.client.post("/api/auth/email/change/confirm", {"code": otp})
+        opts.client.logout()
+        # Since DM-042 validate_jwt rejects is_active=False at the middleware,
+        # so the inactive user is stopped with a 401 before reaching the view
+        # (previously a 403 from the view's own check).
+        assert_eq(resp.status_code, 401,
+                  f"Inactive user must be rejected at auth (401) at code confirm, got {resp.status_code}")
+    finally:
+        # Restore even on assertion failure — later tests in this module reuse
+        # this account and cascade-fail if it is left inactive.
+        User.objects.filter(pk=user.pk).update(is_active=True)
 
-    # Restore
-    User.objects.filter(pk=user.pk).update(is_active=True)
     user.refresh_from_db()
     user.set_secret("pending_email", None)
     user.set_secret("email_change_otp", None)

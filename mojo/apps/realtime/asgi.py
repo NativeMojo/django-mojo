@@ -25,7 +25,7 @@ class ASGIApplication:
 
     async def websocket_application(self, scope, receive, send):
         """Handle WebSocket connections"""
-        from .handler import WebSocketHandler
+        from .handler import WebSocketHandler, check_connect_rate
 
         path = scope["path"]
 
@@ -34,6 +34,17 @@ class ASGIApplication:
             await send({
                 "type": "websocket.close",
                 "code": 404
+            })
+            return
+
+        # Per-IP connection-rate gate BEFORE accept (DM-042): a reconnect
+        # storm costs one Redis INCR and a refused handshake — no pub/sub
+        # connection, no tasks, no 30s of connection state. 4429 tells a
+        # well-behaved client this was a deliberate rejection: back off.
+        if not await check_connect_rate(scope):
+            await send({
+                "type": "websocket.close",
+                "code": 4429
             })
             return
 

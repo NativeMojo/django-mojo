@@ -1,5 +1,36 @@
 ## v1.2.49 - July 12, 2026
 
+**feature** — **Authenticated-abuse / doom-loop hardening: default per-identity API throttle, traffic-concentration alerts, instant account kill switch, websocket connection limits.**
+Prompted by a sibling system's 27-hour outage where a customer's AI agent
+scraped an authenticated portal at machine rate (1M+ requests, 96% of traffic,
+undetected for 20 hours). Every `@md.URL` request is now throttled per
+authenticated identity in the dispatcher — `API_THROTTLE_USER` 240/min,
+`API_THROTTLE_APIKEY` 600/min (per-key override via `ApiKey.limits["api"]`,
+path carve-outs via `API_THROTTLE_EXEMPT_PREFIXES`), enforcement toggle
+`API_THROTTLE_ENABLED` (default ON), cheap static 429 + `Retry-After`,
+fail-open on Redis errors; hot-path cost is one pipelined Redis round-trip,
+anonymous requests unaffected. Accounting always runs: a 5-minute cron
+(`check_traffic_concentration`) alerts via the new `traffic:concentration`
+ruleset (`notify://`, never `block://`) when one identity sustains
+`TRAFFIC_CONCENTRATION_RPM` (120) for ~10 min or exceeds 20% of traffic above
+a 1000-request floor. **Kill switch:** disabling a user now rotates `auth_key`
+in the same atomic UPDATE as the `is_active` flip and force-disconnects their
+websockets — every outstanding JWT (incl. `user_api_key` tokens) dies on the
+next request with a generic error, and reactivation does NOT resurrect
+pre-disable tokens; `validate_jwt` also rejects `is_active=False` outright.
+**WebSockets:** per-IP connect-rate gate before accept (`WS_CONNECT_RATE_LIMIT`
+30/min, close code 4429), per-identity concurrency cap (`WS_MAX_CONNECTIONS`
+10), unauthenticated window shortened to `WS_UNAUTH_TIMEOUT` (10 s), and the
+per-connection Redis pub/sub is now created only after successful auth.
+**Telemetry:** bouncer event/assess gain `muid_limit=30`, `incident/event`
+gains its own limits; every 429 path (new + existing decorators) now emits at
+most one incident event per engagement window instead of one per rejected
+request — a failed request must never cost more than a served one. Docs:
+`django_developer/security/abuse_hardening.md` (incl. deployment hardening:
+edge limits, burstable-credit alarms, reload traps, CGNAT, blocking playbook)
+and `web_developer/security/rate_limits.md` (client backoff contract).
+(DM-042)
+
 **bug** — **REST batch save now honors the `CAN_UPDATE` / `CAN_CREATE` feature flags per row.**
 `on_rest_handle_batch` (`mojo/models/rest.py`) enforced per-row *permission*
 checks (DM-032) but never read the per-verb feature flags, so a model that

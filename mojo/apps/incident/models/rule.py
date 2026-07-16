@@ -273,6 +273,7 @@ class RuleSet(models.Model, MojoModel):
         cls.ensure_bouncer_rules()
         cls.ensure_auth_rules()
         cls.ensure_health_rules()
+        cls.ensure_traffic_rules()
         cls.ensure_catchall_rules()
 
     @classmethod
@@ -522,6 +523,31 @@ class RuleSet(models.Model, MojoModel):
             rules=[
                 {"name": "Level >= 7", "field_name": "level",
                  "comparator": ">=", "value": "7", "value_type": "int"},
+            ],
+        )
+
+    @classmethod
+    def ensure_traffic_rules(cls):
+        """
+        Create the default RuleSet for traffic-concentration events (DM-042).
+        Safe to call multiple times — uses get_or_create.
+
+        These are authenticated identities dominating API traffic — never
+        IP-block (CGNAT collateral; the abuser has valid credentials and can
+        rotate IPs). Notify security staff so they can use the account-level
+        kill switch (disable) or tighten the identity's limits.
+        """
+        cls._create_ruleset(
+            category="traffic:concentration",
+            name="Traffic - Authenticated Concentration",
+            priority=5,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.MODEL_NAME_AND_ID,   # one incident per identity
+            bundle_minutes=BundleMinutes.ONE_HOUR,
+            handler="notify://perm@manage_security",
+            rules=[
+                {"name": "Level >= 6", "field_name": "level",
+                 "comparator": ">=", "value": "6", "value_type": "int"},
             ],
         )
 

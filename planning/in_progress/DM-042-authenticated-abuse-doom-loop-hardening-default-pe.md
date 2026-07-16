@@ -576,6 +576,47 @@ existing test home for limits if one exists — check first).
 
 ## Notes
 
+**Build baseline (2026-07-16, pre-edit):** `bin/run_tests --agent` →
+total 2451 / passed 2395 / failed 0 / skipped 56 (opt-in modules test_incident +
+test_security excluded per rules). GREEN — all post-change failures are ours.
+
+**Build deviations from the plan (all improvements, same cost budget):**
+- Top-talkers accounting: the planned sampled ZINCRBY (every Nth request)
+  quantized detection to ~2× the threshold. Replaced with an EXACT flush — on
+  the first request of a new window (count == 1), the previous window's final
+  count is ZINCRBY'd into the 5-min bucket zset (identities ≥
+  `API_THROTTLE_REPORT_FLOOR`, default 60/window, only). Same amortized cost
+  (~1 small extra RTT per identity-minute), exact rpm data.
+  `API_THROTTLE_SAMPLE_EVERY` was dropped in favor of
+  `API_THROTTLE_REPORT_FLOOR`.
+- Sustained detection needs no Redis state hash: the detector requires the
+  identity's presence over threshold in N consecutive bucket zsets.
+- Detector lives in `mojo/apps/incident/asyncjobs.py::run_concentration_check`
+  (repo pattern: cronjobs publish → asyncjobs), not a new services/traffic.py.
+- Detector + throttle tests live in `tests/test_limits/` — the planned
+  `tests/test_incident/` is an opt-in (--full) module that never runs in the
+  default suite.
+- Throttle tests use a new `X-Mojo-Test-Api-Throttle` header override
+  (test_mode-gated, per-request) instead of `th.server_settings` — keeps the
+  module parallel-safe and can't poison other modules.
+- `incident/event` limits set to ip 240 / muid 120 (not 60/30): the same route
+  serves security-dashboard reads; ingest is additionally bounded by the
+  global throttle.
+- Test profile also sets `WS_CONNECT_RATE_LIMIT = 0` (whole suite shares
+  127.0.0.1); the pre-accept 4429 path is exercised in-process by driving the
+  real ASGI app with a seeded counter.
+- `_block()` dedup key is key+IP with EX 60 (fixed dedup window regardless of
+  the caller's rate window) — bounded ≤1 event/min per key+IP.
+
+**Deliberate test-contract updates (full-suite run):** two pre-existing tests
+encoded the superseded "inactive user's live JWT still authenticates, view
+returns 403" contract — `tests/test_email/email_change.py`
+(inactive-user-blocked; now 401 at middleware, restore made try/finally to
+stop cascade into 2 later tests) and `tests/test_verification/verification.py`
+(banned-account-reactivate; 401 added to accepted rejections, the real
+invariant — is_active stays False — unchanged). Both are the kill switch
+working as designed, not regressions.
+
 Survey inventory (2026-07-16) — key refs for /scope:
 - Limiter toolkit: `mojo/decorators/limits.py` — `rate_limit` (:134, fixed-window),
   `strict_rate_limit` (:215, sliding), `check_account_attempt` (:298, per-account,
@@ -613,4 +654,19 @@ Survey inventory (2026-07-16) — key refs for /scope:
 - closed: YYYY-MM-DD
 - branch:
 - files changed:
-- tests added:
+- tests added: tests/test_limits/api_throttle.py (6: over-limit 429 + Retry-After,
+  anonymous skip, exempt prefix, accounting-with-enforcement-off, per-key
+  ApiKey.limits override, Redis fail-open), tests/test_limits/block_dedup.py
+  (2: legacy _block and _throttle_block each emit exactly 1 event per window),
+  tests/test_limits/traffic_concentration.py (5: sustained alert + hourly
+  dedup, single-bucket spike no-alert, share trigger + MIN_TOTAL floor,
+  ip-members never alert, ruleset bootstrap notify-not-block),
+  tests/test_account/test_disable_kill_switch.py (4: disable kills live JWT +
+  reactivation doesn't resurrect, validate_jwt generic error, user_api_key of
+  disabled user rejected, revoke_sessions still rotates),
+  tests/test_realtime/connection_limits.py (5: connect-rate block + single
+  event, disabled + fail-open, pre-accept 4429 via real ASGI app, auth_required
+  advertises 10s, 11th concurrent socket rejected),
+  tests/test_account/test_bouncer_limits.py (1: muid limit blocks 31st, fresh
+  session same IP passes). Updated to the new kill-switch contract:
+  tests/test_email/email_change.py, tests/test_verification/verification.py.

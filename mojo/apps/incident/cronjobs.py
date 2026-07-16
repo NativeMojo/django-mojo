@@ -71,6 +71,16 @@ def triage_new_incidents(force=False, verbose=False, now=None):
         channel="incident_handlers", payload={})
 
 
+# Every 5 minutes — detect traffic concentration by one authenticated
+# identity (DM-042). Reads the accounting counters the API throttle maintains;
+# zero request-path cost.
+@schedule(minutes="*/5")
+def check_traffic_concentration(force=False, verbose=False, now=None):
+    jobs.publish(
+        func="mojo.apps.incident.asyncjobs.check_traffic_concentration",
+        payload={})
+
+
 # Every 3 minutes — check system health across all runners
 @schedule(minutes="*/3")
 def check_system_health(force=False, verbose=False, now=None):

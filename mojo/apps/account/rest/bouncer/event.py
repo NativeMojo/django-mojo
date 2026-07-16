@@ -11,7 +11,7 @@ logger = logit.get_logger('bouncer', 'bouncer.log')
 
 @md.POST('account/bouncer/event')
 @md.public_endpoint("Bouncer client event reporting — public, rate-limited")
-@md.rate_limit('bouncer_event', ip_limit=60)
+@md.rate_limit('bouncer_event', ip_limit=60, muid_limit=30)
 def on_bouncer_event(request):
     """
     Client-side event reporting from mojo-bouncer.js (single-event legacy

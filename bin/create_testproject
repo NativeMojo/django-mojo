@@ -184,6 +184,16 @@ LOGGING = {"version": 1, "disable_existing_loggers": False}
 
 INCIDENT_EVENT_METRICS = False  # no metrics processing needed in tests
 
+# Global per-identity API throttle (DM-042) — enforcement off in the suite so
+# high-volume test modules never 429. Tests opt in per-request with the
+# X-Mojo-Test-Api-Throttle header (accounting still runs regardless).
+API_THROTTLE_ENABLED = False
+
+# WS per-IP connect-rate limit off in the suite — every test module connects
+# from 127.0.0.1, so a shared-IP limit would flake the whole run. The check
+# itself is unit-tested in-process (tests/test_realtime/connection_limits.py).
+WS_CONNECT_RATE_LIMIT = 0
+
 JOBS_CHANNELS = ["default", "email", "incident_handlers", "renditions"]
 JOBS_DEFAULT_MAX_RETRIES = 0
 JOBS_ENGINE_MAX_WORKERS = 2

@@ -482,5 +482,122 @@ def triage_new_incidents(job):
     job.add_log(f"Queued {queued}/{len(incidents)} incidents for LLM triage")
 
 
+def run_concentration_check(now=None):
+    """Detect traffic concentration by a single authenticated identity (DM-042).
+
+    Reads the traffic:top:{bucket} zsets and traffic:total:{bucket} counters
+    that check_api_throttle maintains (5-minute buckets, exact per-window
+    counts for identities above API_THROTTLE_REPORT_FLOOR). Alerts when an
+    identity is over TRAFFIC_CONCENTRATION_RPM for
+    TRAFFIC_CONCENTRATION_SUSTAIN_WINDOWS consecutive complete buckets, or
+    holds more than TRAFFIC_CONCENTRATION_SHARE of a bucket's total when the
+    total is at least TRAFFIC_CONCENTRATION_MIN_TOTAL (the floor keeps a dev
+    box where one user IS the traffic from paging).
+
+    One incident event per identity per hour (SET NX dedup) — the prebuilt
+    "traffic:concentration" ruleset bundles them per identity and notifies
+    manage_security holders. Returns the list of alerts emitted.
+    """
+    import time as _time
+    from mojo.helpers.redis import get_connection
+    from mojo.apps import incident
+    from mojo.apps.incident.models import RuleSet
+    from mojo.decorators.limits import TRAFFIC_BUCKET_SECONDS
+
+    try:
+        if not RuleSet.objects.filter(category="traffic:concentration").exists():
+            RuleSet.ensure_traffic_rules()
+    except Exception:
+        pass
+
+    rpm_threshold = settings.get("TRAFFIC_CONCENTRATION_RPM", 120, kind="int")
+    sustain = max(1, settings.get("TRAFFIC_CONCENTRATION_SUSTAIN_WINDOWS", 2, kind="int"))
+    share_threshold = settings.get("TRAFFIC_CONCENTRATION_SHARE", 0.20, kind="float")
+    min_total = settings.get("TRAFFIC_CONCENTRATION_MIN_TOTAL", 1000, kind="int")
+
+    now = int(now or _time.time())
+    bucket_minutes = TRAFFIC_BUCKET_SECONDS / 60.0
+    current = now // TRAFFIC_BUCKET_SECONDS * TRAFFIC_BUCKET_SECONDS
+    # Most recent COMPLETE bucket first, then the ones before it.
+    buckets = [current - TRAFFIC_BUCKET_SECONDS * (i + 1) for i in range(sustain)]
+    newest = buckets[0]
+
+    r = get_connection()
+    top = r.zrevrange(f"traffic:top:{newest}", 0, 19, withscores=True)
+    if not top:
+        return []
+    total_raw = r.get(f"traffic:total:{newest}")
+    total = int(total_raw) if total_raw else 0
+    top_ips = [m for m, _ in top if m.startswith("ip:")][:3]
+
+    alerts = []
+    for member, score in top:
+        if member.startswith("ip:"):
+            # IP entries are approximate attribution, not an alert unit —
+            # identities are what we can act on (kill switch, per-key limits).
+            continue
+        rpm = score / bucket_minutes
+        share = (score / total) if total else 0.0
+
+        sustained = rpm >= rpm_threshold
+        if sustained:
+            for bucket in buckets[1:]:
+                prev = r.zscore(f"traffic:top:{bucket}", member)
+                if not prev or (prev / bucket_minutes) < rpm_threshold:
+                    sustained = False
+                    break
+        share_hit = total >= min_total and share >= share_threshold
+        if not sustained and not share_hit:
+            continue
+
+        # At most one alert per identity per hour — the abuser is already
+        # known; re-paging every 5 minutes is noise.
+        if not r.set(f"traffic:alerted:{member}", 1, nx=True, ex=3600):
+            continue
+
+        kind, _, pk = member.partition(":")
+        reasons = []
+        if sustained:
+            reasons.append(f"{rpm:.0f} req/min sustained over {sustain * bucket_minutes:.0f} min")
+        if share_hit:
+            reasons.append(f"{share:.0%} of {total} requests in {bucket_minutes:.0f} min")
+        details = f"Traffic concentration: {member} — " + "; ".join(reasons)
+        event_kwargs = {
+            "model_name": f"traffic:{kind}",
+            "model_id": int(pk) if pk.isdigit() else None,
+            "identity": member,
+            "rpm": round(rpm, 1),
+            "share": round(share, 4),
+            "bucket_total": total,
+            "top_ips": top_ips,
+        }
+        if kind == "user" and pk.isdigit():
+            event_kwargs["uid"] = int(pk)
+        try:
+            incident.report_event(
+                details,
+                title=f"Traffic concentration: {member}",
+                category="traffic:concentration",
+                scope="api",
+                level=6,
+                **event_kwargs,
+            )
+        except Exception:
+            logit.exception(f"traffic concentration: failed to report {member}")
+            continue
+        alerts.append({"identity": member, "rpm": rpm, "share": share, "total": total})
+    return alerts
+
+
+def check_traffic_concentration(job):
+    alerts = run_concentration_check()
+    job.add_log(f"Traffic concentration check: {len(alerts)} alert(s)")
+    for alert in alerts:
+        job.add_log(
+            f"  {alert['identity']}: {alert['rpm']:.0f} rpm, "
+            f"{alert['share']:.0%} of {alert['total']}"
+        )
+
+
 def example(job):
     job.add_log("This is an example job")

@@ -1553,9 +1553,10 @@ def test_owner_cannot_deactivate_self(opts):
 def test_owner_cannot_reactivate_banned_account(opts):
     """
     An admin deactivates an account as a ban. The user must not be able to
-    flip is_active back to True via a REST POST. Confirming this requires
-    that the user can still authenticate (e.g. they still have a valid JWT
-    from before the ban was applied), so we seed the token directly.
+    flip is_active back to True via a REST POST. Since DM-042, a pre-ban JWT
+    dies at the middleware (validate_jwt rejects is_active=False), so the
+    rejection arrives as a 401 before the field-protection layer is even
+    reached — 400/403 stay accepted in case that outer gate ever moves.
     """
     from mojo.apps.account.models import User
     from mojo.apps.account.utils.jwtoken import JWToken
@@ -1571,7 +1572,7 @@ def test_owner_cannot_reactivate_banned_account(opts):
     User.objects.filter(pk=opts.wp_target_id).update(is_active=False)
 
     resp = opts.client.post(f"/api/user/{opts.wp_target_id}", {"is_active": True})
-    assert resp.status_code in [400, 403], \
+    assert resp.status_code in [400, 401, 403], \
         f"Banned user must not reactivate own account, got {resp.status_code}"
 
     target = User.objects.get(pk=opts.wp_target_id)

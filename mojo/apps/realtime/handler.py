@@ -18,6 +18,7 @@ import uuid
 from mojo.helpers import logit
 from mojo.helpers.redis.client import get_connection
 from mojo.helpers.request import normalize_ip
+from mojo.helpers.settings import settings
 from .auth import async_validate_bearer_token
 
 logger = logit.get_logger("realtime", "realtime.log")
@@ -27,6 +28,75 @@ CONNECTION_TTL_SECONDS = 300         # connection record TTL
 ONLINE_TTL_SECONDS = 300             # user online presence TTL
 TOPIC_TTL_SECONDS = 300              # topic membership TTL
 PRESENCE_REFRESH_MIN_INTERVAL = 30   # throttle presence refreshes
+AUTH_IDLE_TIMEOUT_SECONDS = 30       # authenticated idle timeout
+WS_CONNECT_WINDOW_SECONDS = 60       # fixed window for the pre-accept rate check
+
+
+def resolve_scope_ip(scope):
+    """Resolve the client IP from an ASGI scope. Prefer the proxy-authoritative
+    X-Real-IP; never trust the client-controllable X-Forwarded-For / Forwarded.
+    Falls back to the ASGI transport peer (empty over a unix socket)."""
+    headers = {}
+    for k, v in scope.get("headers", []):
+        try:
+            headers[k.decode().lower()] = v.decode()
+        except Exception:
+            pass
+
+    ip = normalize_ip(headers.get("x-real-ip"))
+    if ip:
+        return ip
+
+    client = scope.get("client")
+    if client and client[0]:
+        return normalize_ip(client[0])
+
+    return None
+
+
+def _connect_rate_check_sync(ip):
+    """Fixed-window per-IP connection-rate check (DM-042). Returns True when
+    the connection may proceed. Disabled with WS_CONNECT_RATE_LIMIT <= 0.
+    Fail-open on Redis errors — an outage must never refuse all sockets."""
+    try:
+        limit = settings.get("WS_CONNECT_RATE_LIMIT", 30, kind="int")
+        if limit <= 0 or not ip:
+            return True
+        r = get_connection()
+        now = int(time.time())
+        window_start = now // WS_CONNECT_WINDOW_SECONDS * WS_CONNECT_WINDOW_SECONDS
+        key = f"rl:ws_connect:{ip}:{window_start}"
+        count = r.incr(key)
+        if count == 1:
+            r.expire(key, WS_CONNECT_WINDOW_SECONDS * 2)
+        if count <= limit:
+            return True
+        # First engagement per IP per window reports one incident event —
+        # never one per refused handshake (no self-amplification).
+        if r.set(f"rl:ws_connect:blocked:{ip}:{window_start}", 1, nx=True,
+                 ex=WS_CONNECT_WINDOW_SECONDS * 2):
+            from mojo.apps import incident
+            incident.report_event(
+                f"WebSocket connect storm: {ip} exceeded {limit} connects/{WS_CONNECT_WINDOW_SECONDS}s",
+                category="traffic:ws_connect",
+                scope="realtime",
+                level=6,
+                source_ip=ip,
+            )
+        return False
+    except Exception:
+        logger.exception("ws connect rate check failed — failing open")
+        return True
+
+
+async def check_connect_rate(scope):
+    """Async pre-accept gate: one Redis INCR per connection attempt, run off
+    the event loop. A refused storm costs a rejected handshake, not pub/sub +
+    tasks + 30s of connection state."""
+    ip = resolve_scope_ip(scope)
+    return await asyncio.get_event_loop().run_in_executor(
+        None, _connect_rate_check_sync, ip
+    )
 
 
 class WebSocketHandler:
@@ -43,9 +113,19 @@ class WebSocketHandler:
         self.remote_ip = self.resolve_remote_ip()
         self.user_agent = self.resolve_user_agent()
 
-        # Redis clients - separate for pub/sub
+        # Redis clients - separate for pub/sub.
+        # pubsub stays None until authentication succeeds (DM-042): an
+        # unauthenticated socket must not hold a dedicated Redis pub/sub
+        # connection — that's exactly the cost a reconnect storm multiplies.
         self.redis_client = get_connection()
         self.pubsub = None
+        self._redis_task = None
+
+        # Unauthenticated sockets get a short window to send their token.
+        try:
+            self.unauth_timeout = settings.get("WS_UNAUTH_TIMEOUT", 10, kind="int")
+        except Exception:
+            self.unauth_timeout = 10
 
         # Control flags
         self.running = True
@@ -95,27 +175,10 @@ class WebSocketHandler:
         return None
 
     def get_remote_ip(self, scope):
-        # Build a lowercase header map from the ASGI scope.
-        headers = {}
-        for k, v in scope.get("headers", []):
-            try:
-                headers[k.decode().lower()] = v.decode()
-            except Exception:
-                pass
-
         # Prefer the proxy-authoritative X-Real-IP (set by asgi.inc, overwriting any
         # client value). Never trust X-Forwarded-For / RFC 7239 Forwarded — both are
         # client-controllable and spoofable.
-        ip = normalize_ip(headers.get("x-real-ip"))
-        if ip:
-            return ip
-
-        # Last-resort fallback: the ASGI transport peer (empty over a unix socket).
-        client = scope.get("client")
-        if client and client[0]:
-            return normalize_ip(client[0])
-
-        return None
+        return resolve_scope_ip(scope)
 
     def resolve_user_agent(self):
         """
@@ -155,14 +218,15 @@ class WebSocketHandler:
             # Send auth required message
             await self.send_message({
                 "type": "auth_required",
-                "timeout": 30
+                "timeout": self.unauth_timeout
             })
 
-            # Start background tasks
+            # Start background tasks. handle_redis_messages (the dedicated
+            # pub/sub connection) starts only after successful auth — see
+            # start_redis_messages() called from handle_authenticate.
             tasks = [
                 asyncio.create_task(self.activity_timeout()),
-                asyncio.create_task(self.handle_client_messages()),
-                asyncio.create_task(self.handle_redis_messages())
+                asyncio.create_task(self.handle_client_messages())
             ]
 
             # Wait for any task to complete (usually means connection ended)
@@ -246,14 +310,17 @@ class WebSocketHandler:
         await asyncio.get_event_loop().run_in_executor(None, get_and_update)
 
     async def activity_timeout(self):
-        """Handle both auth and activity timeouts"""
+        """Handle both auth and activity timeouts. Unauthenticated sockets get
+        the short WS_UNAUTH_TIMEOUT window; authenticated ones the normal idle
+        timeout."""
         while self.running:
             await asyncio.sleep(5)  # Check every 5 seconds
 
             time_since_activity = time.time() - self.last_activity
             connected_duration = time.time() - self.connected_at
+            threshold = AUTH_IDLE_TIMEOUT_SECONDS if self.authenticated else self.unauth_timeout
 
-            if time_since_activity >= 30:
+            if time_since_activity >= threshold:
                 if not self.authenticated:
                     await self.report_incident("auth timeout", "auth", 6)
                     await self.send_error("Authentication timeout")
@@ -286,21 +353,31 @@ class WebSocketHandler:
         finally:
             self.running = False
 
+    async def start_redis_messages(self):
+        """Create the pub/sub connection and start the delivery task.
+
+        Called from handle_authenticate AFTER a successful auth (and before
+        any topic subscription — subscribe_to_topic needs self.pubsub). The
+        pub/sub connection is created synchronously here so there is no race
+        between auth completing and the first topic subscribe."""
+        if self.pubsub is not None:
+            return
+
+        def create_pubsub():
+            pubsub = self.redis_client.pubsub()
+            # Subscribe to connection-specific channel
+            pubsub.subscribe(f"realtime:messages:{self.connection_id}")
+            pubsub.subscribe("realtime:broadcast")
+            return pubsub
+
+        self.pubsub = await asyncio.get_event_loop().run_in_executor(
+            None, create_pubsub
+        )
+        self._redis_task = asyncio.create_task(self.handle_redis_messages())
+
     async def handle_redis_messages(self):
-        """Handle messages from Redis pub/sub"""
+        """Handle messages from Redis pub/sub (started post-auth)"""
         try:
-            # Create pubsub connection
-            def create_pubsub():
-                pubsub = self.redis_client.pubsub()
-                # Subscribe to connection-specific channel
-                pubsub.subscribe(f"realtime:messages:{self.connection_id}")
-                pubsub.subscribe("realtime:broadcast")
-                return pubsub
-
-            self.pubsub = await asyncio.get_event_loop().run_in_executor(
-                None, create_pubsub
-            )
-
             # Listen for messages
             while self.running:
                 def get_message():
@@ -374,6 +451,35 @@ class WebSocketHandler:
             await self.send_error(f"Authentication failed: {error}")
             return
 
+        # Per-identity concurrency cap (DM-042): a reconnect loop that leaks
+        # sockets (or an agent opening one per scrape) is bounded here. The
+        # presence set is TTL'd (300s) so a stale overcount self-heals.
+        max_connections = settings.get("WS_MAX_CONNECTIONS", 10, kind="int")
+        if max_connections > 0:
+            def count_connections():
+                try:
+                    return self.redis_client.scard(f"realtime:online:{key_name}:{user.id}")
+                except Exception:
+                    return 0  # fail open
+            current = await asyncio.get_event_loop().run_in_executor(None, count_connections)
+            if current >= max_connections:
+                # One incident event per identity per minute — never one per
+                # rejected attempt.
+                def report_once():
+                    try:
+                        return self.redis_client.set(
+                            f"rl:ws_maxconn:{key_name}:{user.id}", 1, nx=True, ex=60)
+                    except Exception:
+                        return False
+                if await asyncio.get_event_loop().run_in_executor(None, report_once):
+                    await self.report_incident(
+                        f"too many connections for {key_name}:{user.id} "
+                        f"({current} >= {max_connections})",
+                        "traffic:ws_maxconn", 6)
+                await self.send_error("Too many connections")
+                await self.close_connection()
+                return
+
         self.user = user
         self.user_type = key_name
         self.authenticated = True
@@ -381,6 +487,10 @@ class WebSocketHandler:
         # Update Redis state
         await self.update_connection_auth()
         await self.register_user_online()
+
+        # Start pub/sub delivery now that the socket is authenticated —
+        # must happen before any topic subscription.
+        await self.start_redis_messages()
 
         # Auto-subscribe to user's own topic
         user_topic = f"{self.user_type}:{self.user.id}"
@@ -746,6 +856,15 @@ class WebSocketHandler:
     async def cleanup_connection(self):
         """Clean up connection state in Redis"""
         self._log("disconnected")
+
+        # Stop the post-auth pub/sub task if it was started (it is not in
+        # handle_connection's task set, so it must be cancelled here).
+        if self._redis_task is not None and not self._redis_task.done():
+            self._redis_task.cancel()
+            try:
+                await self._redis_task
+            except (asyncio.CancelledError, Exception):
+                pass
         def cleanup():
             try:
                 # Remove connection record

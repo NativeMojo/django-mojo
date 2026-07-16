@@ -1008,6 +1008,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         self._require_fresh_auth()
         self.auth_key = uuid.uuid4().hex
         self.save(update_fields=["auth_key", "modified"])
+        from mojo.apps.account.services.disable import disconnect_realtime
+        disconnect_realtime(self)
         self.report_incident(f"{self.username} revoked all sessions by {self.active_user.username}", "sessions:revoked")
         return {
             "status": True,
@@ -1594,7 +1596,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             if not jti:
                 return None, "Invalid token: missing jti"
             key_record = UserAPIKey.objects.filter(jti=jti, is_active=True).select_related("user").first()
-            if key_record is None:
+            if key_record is None or not key_record.user.is_active:
                 return None, "Invalid token: api key not found or revoked"
             if dates.utcnow() > key_record.expires:
                 return None, "Token expired"
@@ -1611,6 +1613,11 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
         user = User.objects.filter(id=jwt_data.uid).last()
         if user is None:
+            return None, "Invalid token user"
+        if not user.is_active:
+            # Disabled account: dead on the very next request, same generic
+            # error as a missing user — no account-state oracle for holders
+            # of stale tokens. (DM-042 kill switch)
             return None, "Invalid token user"
         token_manager.key = user.auth_key
         if not token_manager.is_token_valid(token):

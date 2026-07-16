@@ -29,6 +29,8 @@ Schema for `metadata.protected.disable`:
 History is FIFO-capped at HISTORY_CAP. Long-term audit lives in incident events
 and `logit.Log`, not on the user record.
 """
+import uuid
+
 from mojo.helpers import dates, logit
 from mojo import errors as merrors
 
@@ -76,9 +78,11 @@ def _read_disable(entity):
     return _ensure_dict(protected.get("disable"))
 
 
-def _write_metadata(entity, new_metadata, *, atomic_with_active=None):
+def _write_metadata(entity, new_metadata, *, atomic_with_active=None, extra_updates=None):
     """Persist new_metadata. If atomic_with_active is True/False, also flip
-    is_active atomically and return the row count touched.
+    is_active atomically and return the row count touched. extra_updates are
+    additional column values applied in the SAME atomic UPDATE (used by
+    disable_entity to rotate a User's auth_key with the is_active flip).
 
     When atomic_with_active is None, the caller will save() entity.metadata
     themselves (used by record_anonymize, where pii_anonymize controls the save).
@@ -93,7 +97,23 @@ def _write_metadata(entity, new_metadata, *, atomic_with_active=None):
     current_state = not target_state
     return Model.objects.filter(
         pk=entity.pk, is_active=current_state,
-    ).update(is_active=target_state, metadata=new_metadata)
+    ).update(is_active=target_state, metadata=new_metadata, **(extra_updates or {}))
+
+
+def disconnect_realtime(entity):
+    """Best-effort: force-close a disabled/revoked User's live websockets
+    (cross-process via the realtime pub/sub disconnect channel). WS auth
+    happens once at connect, so without this a disabled user's sockets would
+    live until they drop naturally. The auth_key rotation is the guarantee;
+    the socket drop is hygiene — a Redis/realtime failure must never make a
+    disable or revoke fail."""
+    if type(entity).__name__ != "User":
+        return
+    try:
+        from mojo.apps.realtime import manager
+        manager.disconnect_user("user", entity.pk)
+    except Exception:
+        logit.warning(f"disable_service: realtime disconnect failed for user pk={entity.pk}")
 
 
 def disable_entity(entity, *, reason, by_user=None, note=None, request=None):
@@ -129,11 +149,20 @@ def disable_entity(entity, *, reason, by_user=None, note=None, request=None):
     protected["disable"] = disable_block
     meta["protected"] = protected
 
-    updated = _write_metadata(entity, meta, atomic_with_active=False)
+    # DM-042 kill switch: for Users, rotate auth_key in the SAME atomic UPDATE
+    # as the is_active flip. Every outstanding JWT fails its signature check on
+    # the next request, and a later reactivation does NOT resurrect tokens
+    # minted before the disable — the holder must re-authenticate.
+    extra_updates = None
+    if hasattr(entity, "auth_key"):
+        extra_updates = {"auth_key": uuid.uuid4().hex}
+
+    updated = _write_metadata(entity, meta, atomic_with_active=False, extra_updates=extra_updates)
     if not updated:
         raise merrors.ValueException(f"{Model.__name__} is already disabled")
 
     entity.refresh_from_db()
+    disconnect_realtime(entity)
 
     prefix = _category_prefix(entity)
     kind = "auto_disabled" if reason == "inactive" else "disabled"

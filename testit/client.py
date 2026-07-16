@@ -63,6 +63,9 @@ class RestClient:
             target = User.objects.filter(username=username).only("pk").first()
             if target is not None:
                 clear_rate_limits(key="login", account_id=target.pk)
+                # Also clear the global API throttle counters so a user reused
+                # across many tests never carries a stale request budget.
+                clear_rate_limits(user_id=target.pk)
         except Exception:
             pass
         resp = self.post("/api/login", dict(username=username, password=password))
