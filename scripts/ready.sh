@@ -11,6 +11,11 @@ src="${1:?usage: scripts/ready.sh <item-file>}"
 # config-less repos working unchanged.
 [ -f planning/.config ] && . planning/.config
 PREFIX="${PREFIX:-ITEM}"
+# Guard against a typo'd config silently mis-numbering items.
+case "$PREFIX" in
+  [!A-Za-z]*|*[!A-Za-z0-9]*)
+    echo "error: invalid PREFIX '$PREFIX' in planning/.config (want letters/digits, starting with a letter)" >&2; exit 2 ;;
+esac
 
 locate() {  # echo the stage folder holding id $1 (done first), else nothing
   local d

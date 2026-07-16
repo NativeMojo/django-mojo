@@ -14,6 +14,11 @@ counter="planning/.next_id"
 # config-less repos working unchanged.
 [ -f planning/.config ] && . planning/.config
 PREFIX="${PREFIX:-ITEM}"
+# Guard against a typo'd config silently mis-numbering items.
+case "$PREFIX" in
+  [!A-Za-z]*|*[!A-Za-z0-9]*)
+    echo "error: invalid PREFIX '$PREFIX' in planning/.config (want letters/digits, starting with a letter)" >&2; exit 1 ;;
+esac
 
 # Refuse if the item already has a non-empty id (don't consume a number).
 have="$(awk -F': *' '/^---/{f++;next} f==1&&$1=="id"{print $2;exit}' "$src" | tr -d '[:space:]')"
