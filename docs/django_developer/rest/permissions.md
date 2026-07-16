@@ -54,7 +54,7 @@ class RestMeta:
     CAN_DELETE = False
 ```
 
-On denial the REST layer returns `403` with `error = "UPDATE not allowed: <ModelName>"` and emits a `feature_disabled` incident event — a distinct category so operators can tell the block is policy, not a per-user permission shortfall. `CAN_DELETE=False`, `CAN_CREATE=False`, and `CAN_BATCH=False` use the same `feature_disabled` category, each with a distinguishable `branch` (`can_update_false`, `can_delete_false`, `can_create_false`, `can_batch_false`).
+On denial the REST layer returns `403` with `error = "UPDATE not allowed: <ModelName>"` and emits a `feature_disabled` incident event — a distinct category so operators can tell the block is policy, not a per-user permission shortfall. `CAN_DELETE=False`, `CAN_CREATE=False`, and `CAN_BATCH=False` use the same `feature_disabled` category, each with a distinguishable `branch` (`can_update_false`, `can_delete_false`, `can_create_false`, `can_batch_false`). Batch save enforces `CAN_UPDATE`/`CAN_CREATE` per row too, dropping the offending rows with the same `feature_disabled` category under branches `batch_can_update_false` / `batch_can_create_false` (see [Batch Save Permissions](#batch-save-permissions)).
 
 ### `CAN_SAVE` is deprecated
 
@@ -330,13 +330,25 @@ single-instance paths:
 - **Update rows** (`id`/`pk` resolves to an instance): `rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], instance)` — the owner match, group/`GROUP_FIELD` tenant binding, and `check_view/edit_permission` hooks all apply per row, exactly as in `on_rest_handle_save`.
 - **Create rows** (no `id`/`pk`, or the pk doesn't resolve): `rest_check_permission(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"])`, exactly as in `on_rest_handle_create`.
 
+Batch also honors the per-verb feature flags, per row: **update rows** are
+dropped when `CAN_UPDATE` is `False` (with the deprecated `CAN_SAVE` alias
+resolved identically to the single-instance path), and **create rows** are
+dropped when `CAN_CREATE` is `False`. This is enforced per row, not by refusing
+the whole batch — a create-only ledger (`CAN_UPDATE = False`, `CAN_CREATE`
+default `True`) with `CAN_BATCH = True` still batches its creates while its
+update rows are dropped. A feature-disabled row gets an `errors` entry
+(`"UPDATE not allowed"` / `"CREATE not allowed"`) and a `feature_disabled`
+incident (the same category the single-instance gates emit), branch
+`batch_can_update_false` / `batch_can_create_false`.
+
 Denial is drop-with-audit, mirroring the FK-attach gate: the row is skipped,
 the response's `errors` list gains `{"index": N, "error": "permission denied"}`,
 and a `batch_row_denied` incident is emitted (level 2, metadata: `branch`
 (`batch_update`/`batch_create`), `index`, `instance_id`, `model_name`,
 `request_path`). It is not a 403 — the batch response is still 200 and the
 remaining rows proceed. Rows are written sequentially with no transaction, so
-failing the whole batch could not undo rows already written.
+failing the whole batch could not undo rows already written. The feature-flag
+drops above use the same drop-with-audit shape.
 
 `request.group` is restored between rows: the per-instance check binds
 `request.group` to each row's owning group (the row's true tenant), and the

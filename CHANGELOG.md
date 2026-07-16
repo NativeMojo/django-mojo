@@ -1,5 +1,22 @@
 ## v1.2.49 - July 12, 2026
 
+**bug** — **REST batch save now honors the `CAN_UPDATE` / `CAN_CREATE` feature flags per row.**
+`on_rest_handle_batch` (`mojo/models/rest.py`) enforced per-row *permission*
+checks (DM-032) but never read the per-verb feature flags, so a model that
+opted into `CAN_BATCH = True` while hard-disabling a verb — `CAN_UPDATE = False`
+for an immutable/ledger record, or `CAN_CREATE = False` — could have that verb
+bypassed through the batch endpoint even though the single-instance
+`POST /api/<model>/<pk>` raised `feature_disabled`. Batch now resolves both
+flags once (update rows via the shared `_resolve_can_update` helper, honoring
+the deprecated `CAN_SAVE` alias exactly as the single-instance path does; create
+rows via `CAN_CREATE` default `True`) and drops the offending rows with the same
+drop-with-audit shape as the permission checks: an `errors` entry
+(`"UPDATE not allowed"` / `"CREATE not allowed"`) plus a `feature_disabled`
+incident under branch `batch_can_update_false` / `batch_can_create_false`.
+Enforced per row, not by refusing the whole batch — a create-only ledger
+(`CAN_UPDATE = False`) still batches its creates. **Latent:** no shipped model
+sets `CAN_BATCH = True`, so no live behavior changes. (DM-038)
+
 **bug** — **`GET /api/group/<pk>/member` no longer leaks group existence (uniform 403; breaking for `id: -1` consumers).**
 The membership self-lookup resolved ANY group (no `is_active` filter),
 unconditionally `touch()`ed it (bumping a deactivated group's

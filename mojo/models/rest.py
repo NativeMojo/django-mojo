@@ -464,15 +464,7 @@ class MojoModel:
         Returns:
             JsonResponse representing the result of the save operation.
         """
-        can_update = cls.get_rest_meta_prop("CAN_UPDATE", None)
-        if can_update is None:
-            can_save = cls.get_rest_meta_prop("CAN_SAVE", None)
-            if can_save is not None:
-                _warn_can_save_deprecated(cls.__name__)
-                can_update = can_save
-            else:
-                can_update = True
-        if not can_update:
+        if not cls._resolve_can_update():
             raise me.PermissionDeniedException(
                 reason=f"UPDATE not allowed: {cls.__name__}",
                 model_name=cls.__name__,
@@ -482,6 +474,25 @@ class MojoModel:
 
         cls.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"], instance)
         return instance.on_rest_save_and_respond(request)
+
+    @classmethod
+    def _resolve_can_update(cls):
+        """
+        Resolve the effective ``CAN_UPDATE`` flag (default True), honoring the
+        deprecated ``CAN_SAVE`` alias for one release: if ``CAN_UPDATE`` is unset
+        but ``CAN_SAVE`` is set, ``CAN_SAVE`` is used and a once-per-process
+        deprecation warning is emitted. Shared by ``on_rest_handle_save`` and the
+        per-row batch gate so the alias/default semantics never drift.
+        """
+        can_update = cls.get_rest_meta_prop("CAN_UPDATE", None)
+        if can_update is None:
+            can_save = cls.get_rest_meta_prop("CAN_SAVE", None)
+            if can_save is not None:
+                _warn_can_save_deprecated(cls.__name__)
+                can_update = can_save
+            else:
+                can_update = True
+        return can_update
 
     @classmethod
     def on_rest_handle_delete(cls, request, instance):
@@ -667,6 +678,14 @@ class MojoModel:
         if not isinstance(batched, list):
             return cls.rest_error_response(request, 400, error="Invalid 'batched' payload: expected a list")
 
+        # Per-verb feature flags are class-level and static — resolve once. Update
+        # rows honor CAN_UPDATE (with the CAN_SAVE alias, via the shared resolver);
+        # create rows honor CAN_CREATE. A disabled verb drops its rows with the same
+        # drop-with-audit convention as the permission checks, so a mixed batch on a
+        # single-verb-disabled model still applies the rows for the enabled verb.
+        can_update = cls._resolve_can_update()
+        can_create = cls.get_rest_meta_prop("CAN_CREATE", True)
+
         results = []
         errors = []
         original_group = getattr(request, "group", None)
@@ -681,6 +700,13 @@ class MojoModel:
                 pk = item.get("id") or item.get("pk")
                 instance = cls.objects.filter(pk=pk).first() if pk else None
                 if instance is not None:
+                    # Feature gate before the permission gate, mirroring
+                    # on_rest_handle_save's ordering.
+                    if not can_update:
+                        cls._report_batch_row_feature_disabled(
+                            request, instance, idx, branch="batch_can_update_false")
+                        errors.append({"index": idx, "error": "UPDATE not allowed"})
+                        continue
                     # Same keys + instance as on_rest_handle_save. Boolean
                     # check (not _or_raise): a raise here would be swallowed
                     # by the except below and lose the audit event.
@@ -690,6 +716,13 @@ class MojoModel:
                         continue
                     instance.update_from_dict(item)
                 else:
+                    # Feature gate before the permission gate, mirroring
+                    # on_rest_handle_create's ordering.
+                    if not can_create:
+                        cls._report_batch_row_feature_disabled(
+                            request, None, idx, branch="batch_can_create_false")
+                        errors.append({"index": idx, "error": "CREATE not allowed"})
+                        continue
                     # Same keys as on_rest_handle_create.
                     if not cls.rest_check_permission(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"]):
                         cls._report_batch_row_denied(request, None, idx, branch="batch_create")
@@ -1443,6 +1476,33 @@ class MojoModel:
             cls.class_report_incident_for_user(
                 details=f"Batch row denied: index {index} on {cls.__name__}",
                 event_type="batch_row_denied",
+                level=2,
+                request=request,
+                branch=branch,
+                index=index,
+                instance_id=getattr(instance, "pk", None),
+                model_name=cls.__name__,
+                request_path=getattr(request, "path", None),
+            )
+        except Exception:
+            # Audit reporting must never block a save flow.
+            pass
+
+    @classmethod
+    def _report_batch_row_feature_disabled(cls, request, instance, index, branch):
+        """
+        Emit a `feature_disabled` incident when a batch row is dropped because
+        the row's verb is hard-disabled by a RestMeta flag (CAN_UPDATE for
+        update rows, CAN_CREATE for create rows) in on_rest_handle_batch. Uses
+        the same event category as the single-instance feature gates so the
+        block reads as policy, not a per-user permission shortfall; the branch
+        (`batch_can_update_false`/`batch_can_create_false`) marks the batch
+        origin.
+        """
+        try:
+            cls.class_report_incident_for_user(
+                details=f"Batch row feature-disabled: index {index} on {cls.__name__}",
+                event_type="feature_disabled",
                 level=2,
                 request=request,
                 branch=branch,

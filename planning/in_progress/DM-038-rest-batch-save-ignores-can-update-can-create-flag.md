@@ -218,6 +218,10 @@ Run: `bin/run_tests --agent -t test_models.batch_feature_flags`. Baseline first
 None.
 
 ## Notes
+- **Baseline (2026-07-16, pre-edit)** — `bin/run_tests --agent`, authoritative
+  `var/test_failures.json`: total 2448, passed 2392, failed 0, skipped 56. GREEN.
+  (The terminal table's `test_incident`/`test_security` rows are `--full`-only
+  opt-in modules, excluded from the default suite — not failures.)
 - Filed from DM-032's security review (post-build agent, 2026-07-10),
   which rated it INFO/latent. Sibling of the per-row permission fix.
 - The same review noted (no change required) that batch concentrates the

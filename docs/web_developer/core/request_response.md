@@ -122,7 +122,7 @@ Some list endpoints accept a `batched` array to create/update several rows in on
 {"batched": [{"title": "New"}, {"id": 5, "title": "Updated"}]}
 ```
 
-The response wraps successes under `data.items` (`data.count` = number saved) and any per-row failures — including a row you don't have permission to write — under `data.errors`, e.g. `{"index": 1, "error": "permission denied"}`. A denied or invalid row is skipped, not fatal to the rest of the batch. See the framework reference for the full permission model: [Batch Save Permissions](../../django_developer/rest/permissions.md#batch-save-permissions).
+The response wraps successes under `data.items` (`data.count` = number saved) and any per-row failures — including a row you don't have permission to write (`"error": "permission denied"`), or a row whose verb the model has disabled (`"error": "UPDATE not allowed"` / `"CREATE not allowed"`) — under `data.errors`, e.g. `{"index": 1, "error": "permission denied"}`. A denied, disabled, or invalid row is skipped, not fatal to the rest of the batch. See the framework reference for the full permission model: [Batch Save Permissions](../../django_developer/rest/permissions.md#batch-save-permissions).
 
 ## Owner Assignment on Create
 
