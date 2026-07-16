@@ -390,6 +390,9 @@ class TicketHandler:
 
     Handler syntax:
         ticket://?status=open&priority=8&title=Investigate&category=security
+
+    Optional board=<maestro board id> pushes the created ticket into that
+    maestro board (DM-040) — enqueue only, failures log and never block.
     """
 
     def __init__(self, target=None, **params):
@@ -425,7 +428,7 @@ class TicketHandler:
                     logger.info("TicketHandler: skipping duplicate for rule_set %s", incident.rule_set_id)
                     return True
 
-            Ticket.objects.create(
+            ticket = Ticket.objects.create(
                 title=title,
                 description=description,
                 status=status,
@@ -435,10 +438,24 @@ class TicketHandler:
                 incident=incident,
                 metadata={**getattr(event, "metadata", {})},
             )
+            if self.params.get("board"):
+                self._push_to_board(ticket, self.params.get("board"))
             return True
         except Exception:
             logger.exception("TicketHandler failed for event %s", event.pk)
             return False
+
+    def _push_to_board(self, ticket, board_id):
+        try:
+            from mojo.apps.incident.models import MaestroBoard
+            from mojo.apps.incident.services import maestro_sync
+            board = MaestroBoard.objects.filter(pk=int(board_id), is_active=True).first()
+            if board is None:
+                logger.warning("TicketHandler: maestro board %s not found or inactive", board_id)
+                return
+            maestro_sync.enqueue_push(ticket.pk, board.pk)
+        except Exception:
+            logger.exception("TicketHandler: maestro push enqueue failed for ticket %s", ticket.pk)
 
 
 class ResolveHandler:

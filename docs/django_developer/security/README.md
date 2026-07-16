@@ -280,10 +280,12 @@ Creates a Ticket linked to the incident for human review.
 | `priority` | `5` | Priority 1-10 (10 = highest) |
 | `category` | | Optional ticket category |
 | `assignee` | | Optional username to assign to |
+| `board` | | Optional MaestroBoard id — auto-push the created ticket to that remote maestro board (see [Maestro Board Link](maestro_board.md)) |
 
 ```
 ticket://?priority=9&status=open
 ticket://?priority=5&assignee=oncall
+ticket://?priority=9&board=3
 ```
 
 #### `notify://<targets>`
@@ -889,6 +891,7 @@ Health rules **never** use `block://` — infrastructure issues should not block
 ## Related Documentation
 
 - [Authenticated-Abuse Hardening](abuse_hardening.md) — global per-identity API throttle, traffic-concentration detection, account kill switch, websocket connection limits, deployment hardening
+- [Maestro Board Link](maestro_board.md) — push tickets into a remote maestro board and sync both directions (registration, status_map, signed webhooks, echo suppression)
 - [Bouncer Architecture](../account/bouncer.md) — bot detection, scoring, tokens, signatures
 - [GeoIP System](../account/geoip.md) — IP geolocation, blocking, threat escalation
 - [Permissions](../core/permissions.md) — `security` category permission for admin access

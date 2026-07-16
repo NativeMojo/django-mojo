@@ -488,6 +488,10 @@ approved 2026-07-12; decisions recorded under Design decisions.
 
 ## Notes
 
+Build baseline (2026-07-16, `bin/run_tests --agent`, default suite): status
+passed — total 2474, passed 2418, failed 0, skipped 56. No pre-existing
+failures; every post-change failure is attributable to this build.
+
 Origin: maestro repo `planning/confirmed/maestro-connect.md` (scoped 2026-07-12) —
 that file carries the full two-repo investigation (what exists, constraints,
 endpoints, test matrix). Sequencing: this side can be scoped now, but its tests
@@ -498,4 +502,4 @@ end-to-end; the receiver + push paths can be tested against a stub first.
 - closed: YYYY-MM-DD
 - branch:
 - files changed:
-- tests added:
+- tests added: tests/test_maestro_board/ (19 tests, default suite) — test_maestro_service.py: paste-URL parsing, register success/failure (no remote-error echo), push idempotency + link/note creation, sync payload shaping + status_map, webhook apply (note/status/no-map/unlinked) with echo-suppression job-count assertions; test_maestro_rest.py: board CRUD perms + secret non-exposure, fail-closed create (malformed/unreachable/missing paste), push_to_board action (enqueue, inactive 400, group-mismatch 403), linked-edit + note sync triggers (incl. maestro-origin and sync_notes=False negative cases), signed webhook E2E (valid, bad/missing sig, unknown token, inactive board, status_map apply, unlinked ignored), TicketHandler board= param

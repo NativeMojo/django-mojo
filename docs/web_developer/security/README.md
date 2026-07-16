@@ -53,9 +53,12 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | Bouncer Signals | `/api/account/bouncer/signal` | Assessment audit trail with full signal payloads |
 | Bot Signatures | `/api/account/bouncer/signature` | Manage bot signatures (auto-learned + manual) |
 | IPSet | `/api/incident/ipset` | Bulk CIDR blocking: countries, datacenters, abuse lists |
+| Maestro Boards | `/api/incident/maestro/board` | Push tickets into a remote maestro board, two-way sync |
+| Maestro Links | `/api/incident/maestro/link` | Which tickets are linked to which board items |
 
 See individual API docs for full details:
 - [Rate Limits & Client Backoff](rate_limits.md) — the 429/`Retry-After` contract every client must honor
+- [Maestro Boards](maestro_board.md) — register a board link, push tickets, status_map, webhook contract
 - [Incidents](../logging/incidents.md)
 - [Events & Reporting](../logging/reporting_events.md)
 - [Firewall & GeoIP](../account/firewall.md)

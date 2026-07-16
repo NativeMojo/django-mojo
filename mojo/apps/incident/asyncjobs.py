@@ -599,5 +599,72 @@ def check_traffic_concentration(job):
         )
 
 
+def _maestro_fail(job, err, what):
+    """Shared failure policy for maestro sync jobs (DM-040, fail-open).
+
+    Retriable errors re-raise so the jobs engine retries (max_retries=3 with
+    backoff); terminal errors (4xx — revoked key, validation) drop with a
+    local log. Nothing here ever propagates back to a ticket save.
+    """
+    if getattr(err, "retriable", False):
+        logit.warning("maestro sync failed (attempt %s/%s) %s: %s",
+                      job.attempt, job.max_retries, what, err)
+        raise err
+    logit.warning("maestro sync dropped %s: %s", what, err)
+    job.add_log(f"maestro sync dropped {what}: {err}", kind="error")
+
+
+def maestro_push_ticket(job):
+    """Push a ticket into a maestro board — creates the board item + link row
+    on first push, updates the existing item on re-push (idempotent)."""
+    from mojo.apps.incident.models import MaestroBoard, Ticket
+    from mojo.apps.incident.services import maestro_sync
+
+    board = MaestroBoard.objects.filter(pk=job.payload.get("board_id"), is_active=True).first()
+    ticket = Ticket.objects.filter(pk=job.payload.get("ticket_id")).first()
+    if board is None or ticket is None:
+        job.add_log("maestro_push_ticket: board or ticket missing/inactive — skipped")
+        return
+    try:
+        maestro_sync.push_ticket(board, ticket)
+    except maestro_sync.MaestroRequestError as err:
+        _maestro_fail(job, err, f"pushing ticket {ticket.pk} to board {board.pk}")
+
+
+def maestro_sync_change(job):
+    """Push changed fields of a linked ticket to its maestro board item."""
+    from mojo.apps.incident.models import MaestroBoardLink
+    from mojo.apps.incident.services import maestro_sync
+
+    link = MaestroBoardLink.objects.filter(
+        pk=job.payload.get("link_id"),
+        maestro_board__is_active=True).select_related("maestro_board", "ticket").first()
+    if link is None:
+        job.add_log("maestro_sync_change: link missing or board inactive — skipped")
+        return
+    try:
+        maestro_sync.sync_ticket_change(link, job.payload.get("changed") or [])
+    except maestro_sync.MaestroRequestError as err:
+        _maestro_fail(job, err, f"syncing ticket {link.ticket_id} to board {link.maestro_board_id}")
+
+
+def maestro_push_note(job):
+    """Mirror a ticket note as a comment on the linked maestro board item."""
+    from mojo.apps.incident.models import MaestroBoardLink, TicketNote
+    from mojo.apps.incident.services import maestro_sync
+
+    link = MaestroBoardLink.objects.filter(
+        pk=job.payload.get("link_id"),
+        maestro_board__is_active=True).select_related("maestro_board").first()
+    note = TicketNote.objects.filter(pk=job.payload.get("note_id")).first()
+    if link is None or note is None:
+        job.add_log("maestro_push_note: link or note missing — skipped")
+        return
+    try:
+        maestro_sync.push_note(link, note)
+    except maestro_sync.MaestroRequestError as err:
+        _maestro_fail(job, err, f"pushing note {note.pk} to board {link.maestro_board_id}")
+
+
 def example(job):
     job.add_log("This is an example job")

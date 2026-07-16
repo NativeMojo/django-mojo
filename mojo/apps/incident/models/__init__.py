@@ -4,3 +4,5 @@ from .incident import Incident
 from .history import IncidentHistory
 from .ticket import Ticket, TicketNote
 from .ipset import IPSet
+from .maestro_board import MaestroBoard
+from .maestro_board_link import MaestroBoardLink

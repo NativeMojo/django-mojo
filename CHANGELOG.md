@@ -1,5 +1,30 @@
 ## v1.2.49 - July 12, 2026
 
+**feature** — **Maestro board link (client): push incident tickets into a remote maestro board with two-way sync.**
+An admin pastes a maestro board link URL into
+`POST /api/incident/maestro/board` — the save registers synchronously against
+maestro's `link/register` (fail-closed: a bad or unreachable link never
+persists) and caches the board name/schema; the raw link key lives in
+MojoSecrets and never serializes. Tickets push via the `push_to_board` save
+action, automatically on linked-ticket edits (title/description/notes; status
+only when the board's `status_map` is configured), or from rules via the new
+`ticket://?board=<id>` param. Pushes are idempotent (re-push updates, never
+duplicates) and fail-open: all remote calls run as jobs
+(`incident_handlers`, max_retries=3, backoff) — a maestro outage can never
+block or break a ticket save. Board-side changes arrive on the new public
+webhook receiver `/api/incident/maestro/webhook/<callback_token>`
+(unguessable token + `X-Mojo-Signature` HMAC over the canonical payload dict,
+keyed by the raw link key; 401 fail-closed) and land as system ticket notes
+(`user=None`, `metadata.origin="maestro"`), with `status_map` reverse-mapping
+board column changes onto ticket status. Echo suppression is structural:
+webhook writes use direct ORM saves and cannot re-enter the REST sync hooks,
+and maestro never dispatches back to the originating link. New models
+`incident.MaestroBoard` / `incident.MaestroBoardLink` (migration 0032), new
+service layer `incident/services/maestro_sync.py` (single file holding every
+wire shape), settings `MAESTRO_CALLBACK_BASE` (falls back to `BASE_URL`) and
+`MAESTRO_LINK_TIMEOUT`. `manage_security`-gated CRUD; links are list/delete
+only. Docs: `security/maestro_board.md` in both tracks. (DM-040)
+
 **feature** — **Authenticated-abuse / doom-loop hardening: default per-identity API throttle, traffic-concentration alerts, instant account kill switch, websocket connection limits.**
 Prompted by a sibling system's 27-hour outage where a customer's AI agent
 scraped an authenticated portal at machine rate (1M+ requests, 96% of traffic,
