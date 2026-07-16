@@ -497,11 +497,18 @@ for its own identities.
   clears its keys in setup (never leave global throttle poisoned — geofence
   test-hygiene lesson). Cron detector tested by direct function call, not the
   scheduler.
-- **`incident_event` rate limit on `incident/rest/event.py`** — fleet OSSEC
-  ingestion also posts there (`allow_api_keys=True` recon); ip_limit 60/min may
-  be low for a busy fleet node → set generous limits (e.g. ip_limit=300) and
-  document; per-key override still available. Decide exact number in build
-  against ossec.py usage.
+- **`incident_event` rate limit vs OSSEC fleet volume — RESOLVED 2026-07-16
+  (verified against mojo-ossec repo):** OSSEC agents do NOT post to
+  `incident/rest/event.py` — they post batches to
+  `/api/incident/ossec/alert/batch` with an `X-OSSEC-SECRET` header
+  (mojo-ossec `install_ec2.sh:30`, `ossec-webhook-batch.sh:89`), and the
+  sender is a single flock'd loop flushing max 10 events/POST every 5 s —
+  structurally capped ≈12 POSTs/min/host. So `incident/event` can take the
+  ordinary `ip_limit=60, muid_limit=30` with no fleet concern. Do NOT add a
+  limit to the ossec alert endpoint in this item: its client treats 429 like
+  any error (`curl -f`, no Retry-After handling) and after 3 retries parks
+  the batch to a backup dir nothing re-reads — sustained 429 there = silent
+  alert loss. If it ever gets a limit, it must stay well above 12/min/host.
 - **Clock**: window_start = `int(time.time()) // window * window` — workers need
   NTP-sane clocks (same assumption as existing fixed-window limiter).
 
@@ -562,8 +569,10 @@ existing test home for limits if one exists — check first).
 ### Open questions
 - none — posture and defaults approved by owner 2026-07-16 (enforcement ON,
   240/600 per min, concentration 120 rpm sustained 10 min or 20% share over
-  1000-total floor, WS deferral in scope). The only build-time judgment call:
-  exact `incident_event` endpoint limit vs OSSEC fleet volume (see edge cases).
+  1000-total floor, WS deferral in scope). The former build-time judgment call
+  (`incident_event` limit vs OSSEC fleet volume) is resolved — see edge cases:
+  OSSEC posts to a different endpoint, is structurally capped ≈12 POSTs/min/host,
+  and its endpoint must NOT get a limit in this item.
 
 ## Notes
 
