@@ -32,6 +32,15 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `API_METRICS`
 - `API_METRICS_GRANULARITY`
+- `API_THROTTLE_ENABLED` — global per-identity API throttle enforcement
+  on/off (default `True`; accounting runs regardless). See
+  [Authenticated-Abuse Hardening](../security/abuse_hardening.md#settings).
+- `API_THROTTLE_USER`
+- `API_THROTTLE_APIKEY`
+- `API_THROTTLE_WINDOW`
+- `API_THROTTLE_EXEMPT_PREFIXES`
+- `API_THROTTLE_REPORT_FLOOR`
+- `API_THROTTLE_CONFIG_TTL`
 
 ### APIKEY
 
@@ -411,6 +420,15 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `TOTP_ISSUER`
 
+### TRAFFIC
+
+- `TRAFFIC_CONCENTRATION_RPM` — sustained requests/minute by one identity
+  that trigger a concentration alert (default `120`). See
+  [Authenticated-Abuse Hardening](../security/abuse_hardening.md#settings).
+- `TRAFFIC_CONCENTRATION_SUSTAIN_WINDOWS`
+- `TRAFFIC_CONCENTRATION_SHARE`
+- `TRAFFIC_CONCENTRATION_MIN_TOTAL`
+
 ### TWILIO
 
 - `TWILIO_ACCOUNT_SID`
@@ -440,6 +458,16 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 ### WEBHOOK
 
 - `WEBHOOK_SIGNATURE_HEADER` — header name used for the outbound webhook HMAC signature and honored as the default by inbound `verify_signed_request` (default `"X-Mojo-Signature"`). Override to avoid advertising the framework; renaming is a contract change with your webhook consumers, who must read the same name. See [Webhook Signing](../account/webhook_signing.md).
+
+### WS
+
+- `WS_CONNECT_RATE_LIMIT` — per-IP websocket connect rate, checked before
+  accept (default `30`/min, `<= 0` disables). See
+  [Authenticated-Abuse Hardening](../security/abuse_hardening.md#4-websocket-connection-limits).
+- `WS_MAX_CONNECTIONS` — concurrent sockets per authenticated identity
+  (default `10`, `<= 0` disables).
+- `WS_UNAUTH_TIMEOUT` — seconds an unauthenticated socket may live before
+  being closed (default `10`).
 
 ## Notes
 

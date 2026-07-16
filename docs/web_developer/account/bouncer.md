@@ -50,7 +50,7 @@ called directly by application code in the normal flow.
 
 **POST** `/api/account/bouncer/assess`
 
-No authentication required. Rate-limited per IP.
+No authentication required. Rate-limited per IP (60/min) and per session (`_muid` cookie, 30/min) — the muid limit bounds a client that rotates IP but keeps its session (DM-042).
 
 ### Request
 
@@ -154,7 +154,7 @@ real-time signal streaming — not called directly in the normal flow.
 
 **POST** `/api/account/bouncer/event`
 
-No authentication required. Rate-limited per IP.
+No authentication required. Rate-limited per IP (60/min) and per session (`_muid` cookie, 30/min) — the muid limit bounds a client that rotates IP but keeps its session (DM-042).
 
 ```json
 {

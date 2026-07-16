@@ -334,6 +334,13 @@ Admins manage user `is_active` state through two named POST_SAVE_ACTIONS. Writin
 
 Effect: `is_active=False`, populates `metadata.protected.disable` with `{reason, at, by_user_id, by_username, note}`. Also clears any `disable.warning` block.
 
+**Disable is instant (kill switch).** The user's `auth_key` is rotated in the
+same update as the flip, and their live websocket connections are dropped —
+every outstanding token (including API-key-derived tokens) is rejected on
+its very next request with a generic error, whether that request lands in
+under a second or the JWT wouldn't otherwise have expired for hours. There
+is no propagation delay to plan around.
+
 ### Reactivate a user
 
 **POST** `/api/user/<id>`  · requires `manage_users`
@@ -343,6 +350,10 @@ Effect: `is_active=False`, populates `metadata.protected.disable` with `{reason,
 ```
 
 Effect: `is_active=True`. Appends a history entry to `disable.history` (FIFO cap 20) with the prior disable context plus `reactivated_at`, `reactivated_by_user_id`, `reactivated_by_username`, `reactivated_note`.
+
+**Reactivation does not restore old sessions.** Because disable rotated the
+user's `auth_key`, tokens issued before the disable remain invalid after
+reactivation — the user must log in again to get a working token.
 
 ### Read disable state
 

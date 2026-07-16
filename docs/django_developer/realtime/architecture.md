@@ -73,17 +73,44 @@ uvicorn project.asgi:application --host 0.0.0.0 --port 8000
 
 ## Authentication Flow
 
-1. Client connects to `ws://host/ws/realtime/`
-2. Server sends: `{"type": "auth_required", "timeout": 30}`
+1. Client connects to `ws/realtime/` — gated first by a pre-accept per-IP
+   connect-rate check (`WS_CONNECT_RATE_LIMIT`, default 30/min); over budget
+   closes with code `4429` before `websocket.accept` is even sent (DM-042).
+2. Server sends: `{"type": "auth_required", "timeout": <WS_UNAUTH_TIMEOUT>}`
 3. Client sends: `{"type": "authenticate", "token": "<jwt>", "prefix": "bearer"}`
 4. Server validates token via `AUTH_BEARER_HANDLERS`
-5. Registers connection and user online status in Redis
-6. Auto-subscribes to `<user_type>:<id>` topic
-7. Calls `on_realtime_connection(connection_data)` hook (if defined)
-8. Processes hook response (sends response, subscribes to topics)
-9. Sends: `{"type": "auth_success", "user_type": "user", "user_id": 42}`
+5. Per-identity concurrency cap (`WS_MAX_CONNECTIONS`, default 10) is checked
+   against `realtime:online:{user_type}:{user_id}`; over the cap sends an
+   error and closes the connection.
+6. Registers connection and user online status in Redis
+7. The dedicated Redis pub/sub connection (`start_redis_messages`) is created
+   here, **after** successful authentication — an unauthenticated socket
+   never holds a pub/sub connection or its delivery task (DM-042; see
+   [Abuse Hardening](../security/abuse_hardening.md#4-websocket-connection-limits)).
+8. Auto-subscribes to `<user_type>:<id>` topic
+9. Calls `on_realtime_connection(connection_data)` hook (if defined)
+10. Processes hook response (sends response, subscribes to topics)
+11. Sends: `{"type": "auth_success", "user_type": "user", "user_id": 42}`
 
-If no `authenticate` message arrives within 30 seconds, the connection is closed.
+If no `authenticate` message arrives within `WS_UNAUTH_TIMEOUT` seconds
+(default **10**, shortened from 30 in DM-042), the connection is closed.
+Once authenticated, the normal activity/idle timeout (30s of inactivity)
+applies instead.
+
+### WebSocket Limits (DM-042)
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `WS_CONNECT_RATE_LIMIT` | `30` | Connects per minute per IP, checked before accept. `<= 0` disables. |
+| `WS_MAX_CONNECTIONS` | `10` | Concurrent sockets per authenticated identity. `<= 0` disables. |
+| `WS_UNAUTH_TIMEOUT` | `10` | Seconds an unauthenticated socket may live. |
+
+A rejected pre-accept connection closes with code **4429** — clients should
+treat this as a deliberate rejection and back off, not a network error. See
+[Authenticated-Abuse Hardening](../security/abuse_hardening.md#4-websocket-connection-limits)
+for the full rationale and deployment notes, and
+[Rate Limits & Client Backoff](../../web_developer/security/rate_limits.md#websocket-rules)
+for the client-side contract.
 
 ## Message Handlers
 

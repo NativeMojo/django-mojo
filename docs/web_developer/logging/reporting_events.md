@@ -8,6 +8,12 @@ Use this endpoint to report security or application events from a web page or cl
 
 No authentication is required — the endpoint is open to all (`CREATE_PERMS = ["all"]`).
 
+**Rate limited** (240/min per IP, 120/min per session — DM-042): this endpoint
+becomes a DB write per call, so a client that reports one event per failure
+inside a retry loop can turn its own error handling into an amplifier. Sample
+and dedupe repeated errors, and buffer/batch where possible — see
+[Rate Limits & Client Backoff](../security/rate_limits.md#never-report-one-telemetry-event-per-failure).
+
 ## Fields
 
 | Field | Type | Required | Description |

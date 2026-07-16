@@ -230,15 +230,22 @@ Dimensions that are absent on the request (no duid, unauthenticated user, no gro
 
 When a limit is exceeded, all three rate limiting decorators:
 
-1. Record a violation metric: `rate_limit:{key}` in category `rate_limits`
-2. Report to the incident system: `category="rate_limit:{key}"`, `level=5`
-3. Return 429 with `Retry-After` header — the view is never called
+1. Return 429 with `Retry-After` header — the view is never called
+2. Record a violation metric: `rate_limit:{key}` in category `rate_limits`
+3. Report to the incident system: `category="rate_limit:{key}"`, `level=5`
 
 ```json
 {"error": "Rate limit exceeded", "code": 429, "status": false}
 ```
 
-This means violations are automatically visible in both the metrics dashboard and the incident system, with no extra code.
+**Metric + incident event are deduped to first-engagement per key+IP per
+minute (DM-042)** — a client stuck retrying against a live limit no longer
+turns every rejected request into its own metric write + `Event` INSERT +
+rule evaluation. The 429 response itself is always returned on every
+over-budget request; only the accounting side is deduped. This means
+violations are still automatically visible in both the metrics dashboard and
+the incident system, with no extra code, but a failed request never costs
+the server more than a served one.
 
 ---
 
@@ -336,7 +343,8 @@ clear_rate_limits(key="login", account_id=user.pk)
 ```python
 from mojo.decorators.limits import clear_rate_limits
 
-clear_rate_limits(ip=None, key=None, duid=None, muid=None, account_id=None)
+clear_rate_limits(ip=None, key=None, duid=None, muid=None, account_id=None,
+                  user_id=None, apikey_id=None)
 ```
 
 | Param | Description |
@@ -346,8 +354,27 @@ clear_rate_limits(ip=None, key=None, duid=None, muid=None, account_id=None)
 | `duid` | Clear the device UUID counter for this bucket (requires `key`) |
 | `muid` | Clear the server-cookie counter for this bucket (requires `key`) |
 | `account_id` | Clear the per-account counter for this user (requires `key`) |
+| `user_id` | Clear the global per-identity API throttle counters (`rl:api:user:*`) for this user (DM-042) |
+| `apikey_id` | Clear the global per-identity API throttle counters (`rl:api:apikey:*`) for this ApiKey (DM-042) |
 
 Returns the number of Redis keys deleted.
+
+---
+
+## Global Per-Identity API Throttle (DM-042)
+
+Separate from the per-endpoint decorators above, **every** `@md.URL` route is
+also throttled per authenticated identity (User pk or ApiKey pk) in the URL
+dispatcher itself, before the view runs — `check_api_throttle` in
+`mojo/decorators/limits.py`, hooked into `dispatcher()` in
+`mojo/decorators/http.py`. It requires no per-endpoint decoration; anonymous
+requests are skipped entirely (they remain covered by `rate_limit` /
+`strict_rate_limit` above). Default budgets: 240/min per User, 600/min per
+ApiKey, overridable per-key via `ApiKey.limits["api"]`.
+
+See [Authenticated-Abuse Hardening](../security/abuse_hardening.md) for the
+full settings table, traffic-concentration detection, and deployment
+guidance — this page documents the per-endpoint decorators only.
 
 ---
 
@@ -358,6 +385,9 @@ Returns the number of Redis keys deleted.
 | `API_METRICS` | `False` | Must be `True` for `endpoint_metrics` to record anything |
 
 Redis connection uses the standard `REDIS_*` settings — see the Redis helper docs.
+
+The global per-identity throttle's settings (`API_THROTTLE_*`) are documented
+in [Authenticated-Abuse Hardening](../security/abuse_hardening.md#settings).
 
 ---
 

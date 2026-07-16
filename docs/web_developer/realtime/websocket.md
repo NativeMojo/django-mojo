@@ -15,13 +15,31 @@ The server records a client IP for every WebSocket connection (used in connectio
 
 ---
 
+## Connection Limits
+
+- **Connect rate:** connecting too fast from one IP gets the handshake
+  closed with code **`4429`** before the connection is even accepted. Treat
+  this as a deliberate rejection, not a network error — back off
+  exponentially before reconnecting.
+- **Concurrent sockets:** each authenticated account may hold a limited
+  number of live connections at once (default 10). Share one connection per
+  tab/app rather than opening one per widget.
+- **Auth window:** you must authenticate within the advertised timeout (see
+  below) or the socket is closed.
+
+See [Rate Limits & Client Backoff](../security/rate_limits.md#websocket-rules)
+for the full client contract.
+
 ## Authentication Flow
 
 ### Step 1: Server sends auth challenge
 
 ```json
-{"type": "auth_required", "timeout_seconds": 30}
+{"type": "auth_required", "timeout_seconds": 10}
 ```
+
+The timeout is server-configured (default **10 seconds**) — always read it
+from the message rather than assuming a fixed value.
 
 ### Step 2: Client authenticates
 

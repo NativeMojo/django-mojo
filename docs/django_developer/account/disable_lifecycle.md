@@ -100,6 +100,32 @@ on a race or already-in-target-state collision.
 
 ---
 
+## Kill Switch: Disable Is Instant (DM-042)
+
+For `User` entities, `disable_entity` rotates `auth_key` in the **same atomic
+UPDATE** as the `is_active` flip, then best-effort force-disconnects the
+user's live websockets (`disconnect_realtime`, cross-process via the realtime
+pub/sub disconnect channel — a Redis/realtime failure never blocks the
+disable itself). Consequences:
+
+- Every outstanding JWT (including `user_api_key` tokens) fails its signature
+  check on the very next request — `User.validate_jwt` checks both the
+  rotated `auth_key` and `is_active` directly, and rejects with the same
+  generic `"Invalid token user"` error either way (no account-state oracle
+  for whoever holds a stale token).
+- **Reactivating does NOT resurrect pre-disable tokens** — the key was
+  rotated, so the user must re-authenticate after reactivation. This is
+  deliberate for the abuse case (see
+  [Authenticated-Abuse Hardening](../security/abuse_hardening.md#3-the-account-kill-switch)).
+- `User.revoke_sessions` (rotate `auth_key` without disabling) also drops
+  live websockets via the same `disconnect_realtime` call.
+
+`Group` entities are unaffected by the key rotation (`hasattr(entity,
+"auth_key")` gates it to `User`); `Group.is_active` is already checked
+per-request.
+
+---
+
 ## REST Surface
 
 | Method | Path | Body | Permission |
@@ -201,3 +227,4 @@ fields can be promoted to columns without breaking the namespace contract.
 - [Group model](group.md)
 - [Inactive sweep](inactive_sweep.md)
 - [Login throttling](../../../mojo/decorators/limits.py) — `read_account_attempt`
+- [Authenticated-Abuse Hardening](../security/abuse_hardening.md) — kill switch rationale, API throttle, websocket limits

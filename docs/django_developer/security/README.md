@@ -117,6 +117,10 @@ Categories are hierarchical strings using `:` as separator. The rule engine matc
 | `totp:login_failed` | Auth | TOTP MFA failure |
 | `totp:login_unknown` | Auth | TOTP attempt for unknown user |
 | `passkey:login_failed` | Auth | Passkey authentication failure |
+| `rate_limit:api` | API throttle | Global per-identity throttle engaged (DM-042) |
+| `traffic:concentration` | Incident cron | One identity dominating traffic (DM-042) |
+| `traffic:ws_connect` | Realtime | Per-IP websocket connect-rate storm (DM-042) |
+| `traffic:ws_maxconn` | Realtime | Identity exceeded concurrent websocket cap (DM-042) |
 
 ### Event Levels
 

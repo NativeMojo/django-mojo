@@ -316,6 +316,10 @@ These are the built-in detection sources. Your app can add custom events via the
 | Failed login (wrong password) | `invalid_password` | 1 | Brute force |
 | Invalid/expired token | `invalid_token`, `expired_token` | 8 | Token abuse |
 | Rate limit hit | `rate_limit:{endpoint}` | 5 | API abuse |
+| Global API throttle engaged | `rate_limit:api` | 5 | One identity over its per-minute request budget |
+| Traffic concentration | `traffic:concentration` | 6 | One identity dominating overall API traffic |
+| WebSocket connect storm | `traffic:ws_connect` | 6 | One IP connecting too fast |
+| WebSocket connection cap | `traffic:ws_maxconn` | 6 | One identity over its concurrent-socket limit |
 | Bouncer block | `security:bouncer:block` | 8 | Bot detected |
 | MFA failures | `totp:login_failed` | 1 | MFA bypass attempt |
 | OSSEC alerts | `ossec` | varies | OS-level threats |

@@ -187,7 +187,12 @@ Returns the authenticated user's own record using their `pk`.
 
 1. `Authorization: Bearer <token>` header parsed
 2. Bearer type looked up in handler registry
-3. Default handler: `User.validate_jwt(token)` → returns `(user, error)`
+3. Default handler: `User.validate_jwt(token)` → returns `(user, error)`. A
+   disabled user (`is_active=False`) is rejected here with the generic
+   `"Invalid token user"` error — same message as a missing user, so a stale
+   token never discloses account state. This applies to `user_api_key`
+   tokens too. See the [kill switch](disable_lifecycle.md#kill-switch-disable-is-instant-dm-042)
+   (DM-042).
 4. `request.user` set to the resolved user (or anonymous)
 5. `request.group` set if `group` param present, the group is active, and user is a member (an inactive group's id resolves to no group, same as a nonexistent one)
 
