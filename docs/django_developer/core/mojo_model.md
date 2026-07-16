@@ -365,7 +365,7 @@ The REST dispatcher in `mojo/decorators/http.py` is the **single emission site**
 | `view_permission_denied` | 403 | `instance.check_view_permission` rejected |
 | `edit_permission_denied` | 403 | `instance.check_edit_permission` rejected |
 | `group_member_permission_denied` | 403 | Group-scoped perm check failed |
-| `feature_disabled` | 403 | `CAN_UPDATE/CAN_DELETE/CAN_CREATE/CAN_BATCH = False` |
+| `feature_disabled` | 403 | `CAN_UPDATE/CAN_DELETE/CAN_CREATE/CAN_BATCH = False`. Per-row batch drops (`CAN_UPDATE`/`CAN_CREATE` false on an individual batch row) are the n/a exception — no HTTP error, batch response still 200 (see [Batch Operations](#batch-operations)) |
 | `fk_attach_denied` | n/a | FK save silently skipped — field unchanged, no HTTP error |
 | `batch_row_denied` | n/a | Batch row dropped by per-row instance permission check — no HTTP error (see [Batch Operations](#batch-operations)) |
 
@@ -546,6 +546,17 @@ emits a `batch_row_denied` incident (level 2, branch `batch_update` or
 `batch_create`) — while the rest of the batch proceeds. Rows are written
 sequentially with no transaction, so a denial never rolls back earlier rows;
 `count` reflects successful rows only.
+
+Rows are also gated by the per-verb feature flags, checked before the
+per-row permission check: update rows are dropped when `CAN_UPDATE` is
+`False` (deprecated `CAN_SAVE` alias honored the same as the single-instance
+path), create rows when `CAN_CREATE` is `False`. This is per row, not
+whole-batch — e.g. a `CAN_UPDATE = False` ledger with `CAN_BATCH = True`
+still batches its creates. A dropped row gets an `errors` entry
+(`"UPDATE not allowed"` / `"CREATE not allowed"`) and a `feature_disabled`
+incident, branch `batch_can_update_false` / `batch_can_create_false`. See
+[Batch Save Permissions](../rest/permissions.md#batch-save-permissions) for
+the full reference.
 
 ## Programmatic (Non-HTTP) Usage
 
