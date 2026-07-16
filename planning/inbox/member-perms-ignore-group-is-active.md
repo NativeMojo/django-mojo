@@ -8,14 +8,14 @@ effort:
 owner:
 opened: 2026-07-10
 depends_on: []
-related: [ITEM-025]
+related: [DM-025]
 links: []
 ---
 
 # Member-permission resolution ignores Group.is_active — deactivated-tenant grants still authorize lists, metrics, WS subscribe
 
 ## What & Why
-ITEM-025 made client-supplied numeric `group=` ids resolve ACTIVE groups only
+DM-025 made client-supplied numeric `group=` ids resolve ACTIVE groups only
 (dispatcher + `requires_perms`/`requires_group_perms`), but a parallel
 member-permission resolver never considers `Group.is_active`, so a member
 grant in a **deactivated** group still authorizes several surfaces:
@@ -39,7 +39,7 @@ grant in a **deactivated** group still authorizes several surfaces:
   `can_subscribe_to_topic` for `group:<id>` topics): same unfiltered lookup
   feeding a membership check.
 
-Consequence: ITEM-025's "a member grant in a deactivated group no longer
+Consequence: DM-025's "a member grant in a deactivated group no longer
 authorizes" holds only for the decorator paths; list endpoints (e.g.
 `GET /api/group/member`), metrics accounts, and realtime topics still honor
 grants in deactivated tenants. The CHANGELOG was narrowed accordingly
@@ -56,16 +56,16 @@ grants in deactivated tenants. The CHANGELOG was narrowed accordingly
 1. Create group G with a member M holding `view_members` (GroupMember-level only). Set `G.is_active=False`.
 2. As M: `GET /api/group/member?group=<G.pk>` (or omit `group=` entirely — the fallback never depended on it).
 - Expected: no rows from G (deactivated tenant's data not member-readable).
-- Actual: G's member roster returns via the `get_groups_with_permission` fallback. Post-ITEM-025 the same request can even AGGREGATE rows from all of M's permitted groups (request.group is None → no narrowing), returning strictly more than before.
+- Actual: G's member roster returns via the `get_groups_with_permission` fallback. Post-DM-025 the same request can even AGGREGATE rows from all of M's permitted groups (request.group is None → no narrowing), returning strictly more than before.
 
 ## Investigation
-Root cause traced by the ITEM-025 post-build security review (2026-07-10) with
+Root cause traced by the DM-025 post-build security review (2026-07-10) with
 file:line evidence as above — confidence: **high** (code-path reading;
-re-verify the exact lines during /scope). Pre-existing (reachable pre-ITEM-025
-by omitting `group=`); not introduced by ITEM-025. One root cause
+re-verify the exact lines during /scope). Pre-existing (reachable pre-DM-025
+by omitting `group=`); not introduced by DM-025. One root cause
 (`Group.is_active` absent from the member-side resolvers), four surfaces.
 Regression-test feasibility: high — `tests/test_middleware/group_param_is_active.py`
-(ITEM-025) already builds the inactive-group + member-grant fixture to copy.
+(DM-025) already builds the inactive-group + member-grant fixture to copy.
 
 ## Plan
 <!-- PLAN PENDING — /scope fills this section. While this marker is present the item

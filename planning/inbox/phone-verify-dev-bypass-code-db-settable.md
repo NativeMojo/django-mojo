@@ -7,9 +7,9 @@ effort: XS
 owner: backend
 opened: 2026-07-10
 depends_on: []
-related: [ITEM-031, ITEM-023]
+related: [DM-031, DM-023]
 links:
-  - found by ITEM-031 post-build security review (2026-07-10)
+  - found by DM-031 post-build security review (2026-07-10)
 ---
 
 # `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` read via DB-aware `settings.get` — remotely-armable phone-verify bypass
@@ -29,8 +29,8 @@ session. So an attacker who can write one Setting row (or one Redis key) sets a
 known bypass code and then satisfies **any** phone-verification session with it
 — a full phone-verification auth bypass, not test plumbing.
 
-This is the exact vector ITEM-031 just closed for `GEOFENCE_TEST_OVERRIDE` /
-`MOJO_TEST_MODE`, in the phone-verification path. It is worse than ITEM-031:
+This is the exact vector DM-031 just closed for `GEOFENCE_TEST_OVERRIDE` /
+`MOJO_TEST_MODE`, in the phone-verification path. It is worse than DM-031:
 that one was a test knob / DoS; this is an authentication bypass.
 
 Note the design is already half-implemented file-only: the startup warning at
@@ -53,7 +53,7 @@ blind to the actual enforcement source.
 
 Change phone_register.py:102 to
 `settings.get_static("AUTH_PHONE_VERIFY_DEV_BYPASS_CODE", "")`, matching
-apps.py:25 and the ITEM-031 fix pattern (the code is a conf-file/deploy-time
+apps.py:25 and the DM-031 fix pattern (the code is a conf-file/deploy-time
 knob by design). Add a regression test: a DB/Redis
 `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` Setting row must NOT be accepted by
 `verify_code` (only a real generated code or a conf-file bypass value works).
@@ -70,8 +70,8 @@ knob by design). Add a regression test: a DB/Redis
 
 ## Notes
 
-- Found by ITEM-031's post-build security review (2026-07-10). Same family as
-  ITEM-031 and ITEM-023 ("adjacent/remotely-writable settings bypass the
+- Found by DM-031's post-build security review (2026-07-10). Same family as
+  DM-031 and DM-023 ("adjacent/remotely-writable settings bypass the
   intended file-only or validated plane"). Worth a sweep: audit every
   `settings.get(...)` read of a `*_BYPASS_*` / `*_DEV_*` / test/debug-style key
   for the same DB-vector exposure.

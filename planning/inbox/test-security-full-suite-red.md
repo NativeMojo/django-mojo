@@ -19,7 +19,7 @@ links: []
 is RED at HEAD, independent of any current feature work. The default suite is
 green, so this is invisible day-to-day, but it must be green for pre-publish
 validation and for the build-baseline rule to be usable. Discovered 2026-06-07
-while building ITEM-002 (step-up auth); confirmed these failures pre-date and are
+while building DM-002 (step-up auth); confirmed these failures pre-date and are
 unrelated to that change (zero `fresh_auth` registry entries; failing routes are
 untouched login/pii paths).
 

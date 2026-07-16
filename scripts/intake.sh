@@ -10,29 +10,31 @@ src="${1:?usage: scripts/intake.sh <inbox-file>}"
 case "$src" in planning/inbox/*) ;; *) echo "warning: $src is not in planning/inbox/" >&2 ;; esac
 counter="planning/.next_id"
 
+# Per-project workflow config (id PREFIX etc.); fallback keeps
+# config-less repos working unchanged.
+[ -f planning/.config ] && . planning/.config
+PREFIX="${PREFIX:-ITEM}"
+
 # Refuse if the item already has a non-empty id (don't consume a number).
-# Strip any trailing `# ...` comment from the value first, so the template's
-# commented-but-blank `id:` line (e.g. `id:   # leave blank`) reads as empty
-# rather than being mistaken for an assigned id.
-have="$(awk -F': *' '/^---/{f++;next} f==1&&$1=="id"{v=$2; sub(/[[:space:]]*#.*/,"",v); gsub(/[[:space:]]/,"",v); print v; exit}' "$src")"
+have="$(awk -F': *' '/^---/{f++;next} f==1&&$1=="id"{print $2;exit}' "$src" | tr -d '[:space:]')"
 [ -z "${have:-}" ] || { echo "already has id ($have); not consuming a number" >&2; exit 2; }
 
 # N = max(counter, highest ASSIGNED id + 1). Reconciling against the actual tree
 # means a stale or merged-back counter can never hand out a duplicate id.
-# Only count real assignments — `id:` frontmatter lines and `ITEM-###-` filenames
-# — NOT every ITEM-### mention, so example ids in _template.md / depends_on / prose
+# Only count real assignments — `id:` frontmatter lines and `<PREFIX>-###-` filenames
+# — NOT every <PREFIX>-### mention, so example ids in _template.md / depends_on / prose
 # don't advance the counter. `10#` forces base-10 (a zero-padded id isn't octal).
 # Trailing `|| true`: with `set -euo pipefail`, an empty match makes grep exit 1
 # and would abort the script — so a repo with no assigned ids yet (every fresh
 # project's first intake) must not fail here; empty hi → N falls back to 1.
-hi="$( { grep -rhoE '^id:[[:space:]]*ITEM-[0-9]+' planning 2>/dev/null
-         find planning -type f -name 'ITEM-*-*.md' 2>/dev/null; } \
-       | grep -oE 'ITEM-[0-9]+' | grep -oE '[0-9]+' | sort -n | tail -1 || true)"
+hi="$( { grep -rhoE "^id:[[:space:]]*${PREFIX}-[0-9]+" planning 2>/dev/null
+         find planning -type f -name "${PREFIX}-*-*.md" 2>/dev/null; } \
+       | grep -oE "${PREFIX}-[0-9]+" | grep -oE '[0-9]+' | sort -n | tail -1 || true)"
 ctr=0; [ -f "$counter" ] && ctr="$(tr -dc 0-9 < "$counter")"
 floor=$(( 10#${hi:-0} + 1 ))
 cur=$(( 10#${ctr:-0} ))
 N=$(( cur > floor ? cur : floor ))
-id="$(printf 'ITEM-%03d' "$N")"
+id="$(printf '%s-%03d' "$PREFIX" "$N")"
 
 # Slug from title:, else filename; never empty.
 title="$(awk -F'title:' '/^---/{f++;next} f==1&&/^title:/{print $2;exit}' "$src")"

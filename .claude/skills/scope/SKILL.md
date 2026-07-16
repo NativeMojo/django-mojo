@@ -20,8 +20,8 @@ plan mode.
 
 ## Intake — Run This First (every pickup, before anything else)
 When you pick up an item from `planning/inbox/`, run the intake script. It does
-the deterministic, must-be-exact work atomically: allocate the next `ITEM-###`
-from `planning/.next_id`, stamp it into the file's frontmatter, `git mv` the file
+the deterministic, must-be-exact work atomically: allocate the next `DM-###`
+(prefix from `planning/.config`) from `planning/.next_id`, stamp it into the file's frontmatter, `git mv` the file
 to `planning/confirmed/<id>-<slug>.md`, and increment the counter.
 
     scripts/intake.sh planning/inbox/<file>.md
@@ -41,15 +41,15 @@ item already has an `id`. Then:
 ### Item Frontmatter (YAML)
 ```yaml
 ---
-id: ITEM-014           # allocated here if missing; never reassigned
+id: DM-014             # allocated here if missing; never reassigned
 type: bug              # feature | bug | chore
 title: Bonus event not emitted on first purchase
 priority: P2           # P0 (drop everything) | P1 | P2 | P3
 effort: M              # XS | S | M | L | XL  (estimate; no hour precision)
 owner: backend         # team or person
 opened: 2026-06-05     # ISO date
-depends_on: []         # hard blockers: [ITEM-003, org/other-repo#ITEM-007]
-related: []            # soft links: [ITEM-009]  (e.g. the feature a bug came from)
+depends_on: []         # hard blockers: [DM-003, wmwx/wmx_api#WA-007]
+related: []            # soft links: [DM-009]  (e.g. the feature a bug came from)
 links: []              # external URLs: PRs, design docs, tracker issues
 ---
 ```

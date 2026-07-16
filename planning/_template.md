@@ -7,8 +7,8 @@ priority: P2           # P0 (drop everything) | P1 | P2 | P3
 effort:                # XS | S | M | L | XL
 owner:                 # team or person
 opened: YYYY-MM-DD
-depends_on: []         # hard blockers: [ITEM-003, org/other-repo#ITEM-007]
-related: []            # soft links: [ITEM-009]
+depends_on: []         # hard blockers: [DM-003, wmwx/wmx_api#WA-007]
+related: []            # soft links: [DM-009]
 links: []              # external URLs
 ---
 

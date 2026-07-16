@@ -8,7 +8,7 @@ effort: XS
 owner: backend
 opened: 2026-07-08
 depends_on: []
-related: [ITEM-019, ITEM-018]
+related: [DM-019, DM-018]
 links: []
 ---
 
@@ -16,7 +16,7 @@ links: []
 
 ## What & Why
 
-Defense-in-depth hardening flagged by ITEM-019's post-build security review
+Defense-in-depth hardening flagged by DM-019's post-build security review
 (2026-07-08). `request.user` / `self.active_user` can be a bare **`ApiKey`**
 (under `Authorization: apikey <token>`), which has **no `is_superuser`
 attribute**. Several `User` methods do `self.active_user.is_superuser` (or
@@ -25,7 +25,7 @@ raises `AttributeError` → 500 instead of a clean permission decision. Sites th
 review named (verify line numbers, they drift): `user.py` ~877
 (`_handle_existing_user_pre_save`), ~825, ~462, ~467, ~573, ~601, ~651.
 
-ITEM-019 already fixed the analogous crash in
+DM-019 already fixed the analogous crash in
 `mojo/apps/assistant/services/memory.py` via
 `getattr(user, "is_superuser", False)`, and — importantly — **closed the
 security boundary** so a key can no longer reach `User`'s write path
@@ -56,10 +56,10 @@ is UNPLANNED and /build MUST refuse it. Delete this comment when the plan is com
 
 ## Notes
 
-- Origin: ITEM-019 post-build security review (2026-07-08). The review rated the
+- Origin: DM-019 post-build security review (2026-07-08). The review rated the
   two override bypasses (`User.check_edit_permission` cross-tenant read via
   `/api/user/<pk>`; `Group` SAVE by a zero-perm key) CRITICAL/WARNING — both
-  fixed in ITEM-019. These `is_superuser` accesses were the INFO/robustness tail.
+  fixed in DM-019. These `is_superuser` accesses were the INFO/robustness tail.
 - Canonical idiom already in the codebase: `getattr(user, "is_superuser",
-  False)` (ITEM-019, `memory.py`) and `hasattr(user, "is_request_user")` for the
+  False)` (DM-019, `memory.py`) and `hasattr(user, "is_request_user")` for the
   "is this a real request User?" test.

@@ -34,8 +34,8 @@ Drop a file from `planning/_template.md` by hand for the same effect.
 ```
 /scope <path to an inbox item, or a description of new work>
 ```
-Owns intake. It runs `scripts/intake.sh`, which allocates the next `ITEM-###`
-from `planning/.next_id`, stamps the YAML frontmatter, moves the file
+Owns intake. It runs `scripts/intake.sh`, which allocates the next `DM-###`
+(prefix from `planning/.config`) from `planning/.next_id`, stamps the YAML frontmatter, moves the file
 `inbox/ → confirmed/`, and bumps the counter — atomically. Then it explores
 (via the read-only Explore subagent) and writes a **self-contained `## Plan`** —
 full enough that a cold session can build it without re-exploring — and deletes the
@@ -44,7 +44,7 @@ Claude Code's built-in plan mode.
 
 ### Build It
 ```
-/build <path to a confirmed item, or its ITEM id>
+/build <path to a confirmed item, or its item id (DM-###)>
 ```
 Pre-flight refuses an `UNPLANNED` item (one still carrying the `PLAN PENDING`
 marker — run `/scope` first) and `scripts/ready.sh` gates on `depends_on`. It works
@@ -75,7 +75,7 @@ new work
   |  (or drop a file from planning/_template.md by hand)
   v
 /scope <item>
-  |  scripts/intake.sh: ITEM-### + frontmatter + inbox/ -> confirmed/ + counter bump
+  |  scripts/intake.sh: DM-### + frontmatter + inbox/ -> confirmed/ + counter bump
   |  writes a self-contained ## Plan and deletes the PLAN PENDING marker
   v
 /build <item>

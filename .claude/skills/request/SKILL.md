@@ -58,7 +58,7 @@ lowercased, hyphenated title). Fill:
 
 ## 5. Hand off
 Print the file path, the chosen type, and
-`To scope it: /scope planning/inbox/<slug>.md (a fresh session is ideal).`
+`To scope it: /scope planning/inbox/<slug>.md (same session is fine — the item file carries everything; start fresh if this one is already long).`
 
 ## Forbidden
 - Writing implementation code (a bug fix included).

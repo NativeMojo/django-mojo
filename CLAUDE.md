@@ -36,9 +36,10 @@ There is **one kind of work item**. Bugs, features, and chores differ only by a
   Advance an item only with the scripts — `scripts/intake.sh` (→ confirmed),
   `scripts/start.sh` (→ in_progress), `scripts/close.sh` (→ done). There is no
   `stage` field; don't hand-move files.
-- **One ID space.** Every item gets `ITEM-###`, allocated once by
-  `scripts/intake.sh` from `planning/.next_id`. Never hand-assign, edit the
-  counter by hand, or reuse an ID.
+- **One ID space.** Every item gets `DM-###`, allocated once by
+  `scripts/intake.sh` from `planning/.next_id`. The prefix comes from
+  `planning/.config` (`PREFIX=DM`; scripts default to `ITEM` when the file is
+  absent). Never hand-assign, edit the counter by hand, or reuse an ID.
 - **Capture, scope, build.** `/request` is the chat front door (PR-style — a
   request for a feature, bug, or chore). It determines the `type` and writes an
   un-ID'd item to `planning/inbox/` (no id yet). `/scope` owns intake (runs `scripts/intake.sh`, allocates the id,
