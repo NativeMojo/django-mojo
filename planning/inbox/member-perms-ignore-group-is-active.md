@@ -38,6 +38,17 @@ grant in a **deactivated** group still authorizes several surfaces:
 - **WS subscribe** (`mojo/apps/account/models/user.py:1488-1495`,
   `can_subscribe_to_topic` for `group:<id>` topics): same unfiltered lookup
   feeding a membership check.
+- **Detail/save/delete instance re-bind** (added 2026-07-16 from the DM-037
+  post-close review, adversarially verified): `_evaluate_permission` re-binds
+  `request.group` from the target row's own group (`mojo/models/rest.py:290-295`)
+  with no `is_active` check, then the USER branch (rest.py:~318) authorizes via
+  `request.group.user_has_permission(...)` (`group.py:213-221`), which never
+  consults `Group.is_active`. So a member grant in a deactivated group still
+  authorizes detail GET/save/delete on that group's rows by pk (e.g.
+  `GET /api/group/member/<pk>`) — no `group=` param involved, so DM-025 never
+  bites. DM-037 gated this exact path for the api_key branch only
+  (rest.py:~299, comment "ApiKey-only — user semantics unchanged"); the user
+  side is THIS item's fifth surface.
 
 Consequence: DM-025's "a member grant in a deactivated group no longer
 authorizes" holds only for the decorator paths; list endpoints (e.g.
@@ -47,6 +58,7 @@ grants in deactivated tenants. The CHANGELOG was narrowed accordingly
 
 ## Acceptance Criteria
 - [ ] A member whose only grant lives in an inactive group gets NO rows from RestMeta list endpoints for that group (fallback path included), no metrics account access, and no `group:<id>` WS subscription for it.
+- [ ] Detail ops fail closed too: the same member is denied GET/save/delete by pk on the inactive group's rows (the rest.py:290-295 instance re-bind path) — mirror DM-037's api_key gate (rest.py:~299) on the USER branch, or gate the re-bind itself.
 - [ ] `get_groups_with_permission` direct-membership branch and `get_groups`/`get_group_ids` (`include_children=False`) filter `Group.is_active` consistently with the `include_children=True` path.
 - [ ] Members with grants in OTHER active groups are unaffected (their lists/metrics/subscriptions keep working).
 - [ ] Regression tests: inactive-group member denied on a list endpoint via the fallback path; metrics account gate; ws subscribe (feasible per existing realtime test patterns).
