@@ -102,17 +102,21 @@ def on_group_webhook_secret(request):
 @md.GET('group/<int:pk>/member')
 @md.requires_auth()
 def on_group_me_member(request, pk=None):
-    request.group = Group.objects.filter(pk=pk).last()
-    if request.group is None:
+    # SECURITY: active-only resolution (inactive == nonexistent, the DM-025
+    # contract) and ONE raise site for every non-member outcome — nonexistent,
+    # inactive, and not-a-member must be wire-indistinguishable (no existence
+    # oracle). No touch until membership is confirmed, so probes cause no writes.
+    request.group = Group.get_active(pk)
+    member = None
+    if request.group is not None:
+        member = request.group.get_member_for_user(request.user, check_parents=True)
+    if member is None:
         raise merrors.PermissionDeniedException(
-            reason="GET permission denied: Group",
-            model_name="Group",
-            branch="group_member_endpoint_unknown_group",
+            reason="GET permission denied: GroupMember",
+            model_name="GroupMember",
+            branch="group_member_endpoint_denied",
             event_type="user_permission_denied",
         )
     request.group.touch()
-    member = request.group.get_member_for_user(request.user, check_parents=True)
-    if member is None:
-        return {"status": True, "data": {"id": -1, "permissions": [] }}
     member.touch()
     return member.on_rest_get(request)

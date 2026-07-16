@@ -235,3 +235,4 @@ None — contract decided (uniform 403, user-approved 2026-07-12). The web-mojo
 
 ## Notes
 - The endpoint's purpose is "current user's membership in group" — check what web-mojo actually calls it for before changing the non-member response shape.
+- Build baseline (2026-07-16, `bin/run_tests --agent`): **green** — total 2444, passed 2388, failed 0, skipped 56. No pre-existing failures; every post-change failure is attributable to this build.

@@ -1,5 +1,22 @@
 ## v1.2.49 - July 12, 2026
 
+**bug** — **`GET /api/group/<pk>/member` no longer leaks group existence (uniform 403; breaking for `id: -1` consumers).**
+The membership self-lookup resolved ANY group (no `is_active` filter),
+unconditionally `touch()`ed it (bumping a deactivated group's
+`last_activity`/`modified` from a non-member request), and split its deny
+responses — nonexistent id → 403, real-group-but-not-a-member → 200 with the
+`{"id": -1, "permissions": []}` sentinel — so any authenticated user could
+probe arbitrary ids and learn which groups exist. It now resolves via
+`Group.get_active` (the DM-025 inactive == nonexistent contract) and returns
+one indistinguishable `403` for every non-member outcome: nonexistent id,
+inactive group, or active group the caller isn't a member of. Nothing is
+written until membership in an active group is confirmed; member self-lookup
+on active groups is unchanged. **Breaking / web-mojo migration:** the
+documented `200` + `{"id": -1, "permissions": []}` non-member sentinel is
+gone — before pinning this release downstream, audit clients (web-mojo) for
+`id === -1` branching and treat a `403` from this endpoint as "not a member".
+(DM-039)
+
 **bug** — **Deactivating a group now instantly suspends its API keys.**
 `ApiKey.validate_token` set `request.group = api_key.group` with no
 `group.is_active` check, so a request that omitted a `group=` param kept full

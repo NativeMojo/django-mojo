@@ -117,7 +117,17 @@ Returns the authenticated user's membership record in the specified group.
 }
 ```
 
-Returns `{"id": -1, "permissions": []}` if not a member.
+Succeeds only when the caller is an active member of an **active** group. Every
+other outcome — the caller is not a member, the group is inactive, or the id
+does not exist — returns the standard `403` permission-denied response
+(`{"error": "GET permission denied: GroupMember", "code": 403, "status": false}`),
+indistinguishable by design (no existence oracle: probing an id reveals nothing
+about whether a group exists). Treat a `403` from this endpoint as "no
+membership here."
+
+> **Changed:** this endpoint previously returned `200` with
+> `{"id": -1, "permissions": []}` for non-members. Clients branching on
+> `id === -1` must instead handle the `403`.
 
 ### Invite a User
 
