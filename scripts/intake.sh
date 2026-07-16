@@ -16,8 +16,8 @@ counter="planning/.next_id"
 PREFIX="${PREFIX:-ITEM}"
 # Guard against a typo'd config silently mis-numbering items.
 case "$PREFIX" in
-  [!A-Za-z]*|*[!A-Za-z0-9]*)
-    echo "error: invalid PREFIX '$PREFIX' in planning/.config (want letters/digits, starting with a letter)" >&2; exit 1 ;;
+  [!A-Za-z]*|*[!A-Za-z0-9-]*|*-)
+    echo "error: invalid PREFIX '$PREFIX' in planning/.config (want letters/digits/hyphens, starting with a letter, not ending in a hyphen)" >&2; exit 1 ;;
 esac
 
 # Refuse if the item already has a non-empty id (don't consume a number).
@@ -32,9 +32,12 @@ have="$(awk -F': *' '/^---/{f++;next} f==1&&$1=="id"{print $2;exit}' "$src" | tr
 # Trailing `|| true`: with `set -euo pipefail`, an empty match makes grep exit 1
 # and would abort the script — so a repo with no assigned ids yet (every fresh
 # project's first intake) must not fail here; empty hi → N falls back to 1.
-hi="$( { grep -rhoE "^id:[[:space:]]*${PREFIX}-[0-9]+" planning 2>/dev/null
-         find planning -type f -name "${PREFIX}-*-*.md" 2>/dev/null; } \
-       | grep -oE "${PREFIX}-[0-9]+" | grep -oE '[0-9]+' | sort -n | tail -1 || true)"
+# Legacy `ITEM-` ids are always counted alongside ${PREFIX} — migrated repos
+# keep old ITEM-### items in place (forward-only migration) and both schemes
+# share the one counter, so neither may ever be re-minted.
+hi="$( { grep -rhoE "^id:[[:space:]]*(${PREFIX}|ITEM)-[0-9]+" planning 2>/dev/null
+         find planning -type f \( -name "${PREFIX}-*-*.md" -o -name 'ITEM-*-*.md' \) 2>/dev/null; } \
+       | grep -oE "(${PREFIX}|ITEM)-[0-9]+" | grep -oE '[0-9]+' | sort -n | tail -1 || true)"
 ctr=0; [ -f "$counter" ] && ctr="$(tr -dc 0-9 < "$counter")"
 floor=$(( 10#${hi:-0} + 1 ))
 cur=$(( 10#${ctr:-0} ))

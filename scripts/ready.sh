@@ -13,8 +13,8 @@ src="${1:?usage: scripts/ready.sh <item-file>}"
 PREFIX="${PREFIX:-ITEM}"
 # Guard against a typo'd config silently mis-numbering items.
 case "$PREFIX" in
-  [!A-Za-z]*|*[!A-Za-z0-9]*)
-    echo "error: invalid PREFIX '$PREFIX' in planning/.config (want letters/digits, starting with a letter)" >&2; exit 2 ;;
+  [!A-Za-z]*|*[!A-Za-z0-9-]*|*-)
+    echo "error: invalid PREFIX '$PREFIX' in planning/.config (want letters/digits/hyphens, starting with a letter, not ending in a hyphen)" >&2; exit 2 ;;
 esac
 
 locate() {  # echo the stage folder holding id $1 (done first), else nothing
@@ -30,12 +30,16 @@ locate() {  # echo the stage folder holding id $1 (done first), else nothing
 # so a dep resolves regardless of how many digits the author wrote. Only touch
 # strictly numeric <PREFIX>-<digits>; leave anything else (e.g. cross-repo) verbatim.
 norm() {
-  local n="${1#"$PREFIX"-}"
-  if [ "$1" != "$n" ] && [ -n "$n" ] && [ -z "${n//[0-9]/}" ]; then
-    printf '%s-%03d' "$PREFIX" "$(( 10#$n ))"
-  else
-    printf '%s' "$1"
-  fi
+  # Legacy `ITEM-` ids get the same treatment — migrated repos keep old
+  # ITEM-### items (forward-only), and deps may still point at them.
+  local p n
+  for p in "$PREFIX" ITEM; do
+    n="${1#"$p"-}"
+    if [ "$1" != "$n" ] && [ -n "$n" ] && [ -z "${n//[0-9]/}" ]; then
+      printf '%s-%03d' "$p" "$(( 10#$n ))"; return
+    fi
+  done
+  printf '%s' "$1"
 }
 
 # Handle both inline (`depends_on: [ITEM-003, ITEM-007]`) and block style
