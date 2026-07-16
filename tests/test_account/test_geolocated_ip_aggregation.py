@@ -25,10 +25,16 @@ def _reset_admin(username, password):
     return user
 
 
+# Only this module's own fixture IPs — a prefix-wide 203.0.113. delete races
+# with other modules (test_global_perms, test_geofence, test_geoip_*) that
+# keep their own fixtures in the same documentation block.
+SEED_IPS = ["203.0.113.1", "203.0.113.2", "203.0.113.3", "203.0.113.10", "203.0.113.11"]
+
+
 @th.django_unit_setup()
 def setup_geolocated_ip_aggregation(opts):
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
-    GeoLocatedIP.objects.filter(ip_address__startswith="203.0.113.").delete()
+    GeoLocatedIP.objects.filter(ip_address__in=SEED_IPS).delete()
 
     _reset_admin(TEST_USER, TEST_PWORD)
     opts.user_name = TEST_USER
@@ -37,7 +43,7 @@ def setup_geolocated_ip_aggregation(opts):
 
 def _seed_geoip():
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
-    GeoLocatedIP.objects.filter(ip_address__startswith="203.0.113.").delete()
+    GeoLocatedIP.objects.filter(ip_address__in=SEED_IPS).delete()
     # Three blocked, two not blocked.
     GeoLocatedIP.objects.create(ip_address="203.0.113.1", is_blocked=True)
     GeoLocatedIP.objects.create(ip_address="203.0.113.2", is_blocked=True)

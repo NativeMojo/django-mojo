@@ -264,6 +264,12 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `LOGIT_REQUEST_BODY`
 - `LOGIT_RETURN_REAL_ERROR`
 
+### MAESTRO
+
+- `MAESTRO_CALLBACK_BASE` — public base URL for the maestro board webhook receiver; falls back to `BASE_URL` when unset (see [Maestro Board Link](../security/maestro_board.md))
+- `MAESTRO_LINK_TIMEOUT` — outbound HTTP timeout in seconds for maestro link API calls (default `10`)
+- `MAESTRO_ALLOW_HTTP` — dev-only: allow `http://` board-link pastes and local/private hosts (default off; production pastes must be https to a public hostname)
+
 ### MAGIC
 
 - `MAGIC_LOGIN_TOKEN_TTL`

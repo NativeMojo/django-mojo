@@ -8,6 +8,7 @@ from mojo.apps.incident.models import MaestroBoard
 
 @md.POST('maestro/webhook/<str:token>')
 @md.public_endpoint("maestro board link webhook — HMAC-verified against the board's link key")
+@md.rate_limit("maestro_webhook", ip_limit=60)
 def on_maestro_webhook(request, token=None):
     """Receiver for maestro board webhooks (DM-040).
 
@@ -28,11 +29,17 @@ def on_maestro_webhook(request, token=None):
     if not isinstance(payload, dict):
         raise ValueException("invalid payload", 400)
 
+    # A missing link_key must fail closed — verify_signature(secret_key=None)
+    # would silently fall back to settings.SECRET_KEY.
+    key = board.get_secret("link_key")
+    if not key:
+        raise PermissionDeniedException("invalid webhook target", 401, 401)
+
     header = get_signature_header()
     signature = request.META.get("HTTP_" + header.replace("-", "_").upper())
     if signature is None and hasattr(request, "headers"):
         signature = request.headers.get(header)
-    if not signature or not verify_signature(payload, signature, board.get_secret("link_key")):
+    if not signature or not verify_signature(payload, signature, key):
         raise PermissionDeniedException("invalid signature", 401, 401)
 
     from mojo.apps.incident.services import maestro_sync

@@ -21,9 +21,16 @@ webhook writes use direct ORM saves and cannot re-enter the REST sync hooks,
 and maestro never dispatches back to the originating link. New models
 `incident.MaestroBoard` / `incident.MaestroBoardLink` (migration 0032), new
 service layer `incident/services/maestro_sync.py` (single file holding every
-wire shape), settings `MAESTRO_CALLBACK_BASE` (falls back to `BASE_URL`) and
-`MAESTRO_LINK_TIMEOUT`. `manage_security`-gated CRUD; links are list/delete
-only. Docs: `security/maestro_board.md` in both tracks. (DM-040)
+wire shape), settings `MAESTRO_CALLBACK_BASE` (falls back to `BASE_URL`),
+`MAESTRO_LINK_TIMEOUT`, and dev-only `MAESTRO_ALLOW_HTTP`.
+`manage_security`-gated CRUD; links are list/delete only. Security-review
+hardening: pastes must be https to a public host (loopback/private/link-local
+IP literals rejected — SSRF/key-leak guard), the group-scoping boundary is
+enforced on the rules path and in the service choke point (not just the
+manual action), the webhook receiver is IP rate-limited, 401s on a keyless
+board instead of falling back to `SECRET_KEY`, and dedups replayed
+`note.created` deliveries by remote note id. Docs:
+`security/maestro_board.md` in both tracks. (DM-040)
 
 **feature** — **Authenticated-abuse / doom-loop hardening: default per-identity API throttle, traffic-concentration alerts, instant account kill switch, websocket connection limits.**
 Prompted by a sibling system's 27-hour outage where a customer's AI agent

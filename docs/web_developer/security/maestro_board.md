@@ -25,7 +25,9 @@ POST /api/incident/maestro/board
 ```
 
 The save validates the link against maestro synchronously — a bad or
-unreachable link returns 400 and nothing is created. On success the response
+unreachable link returns 400 and nothing is created. The paste must be
+`https` with a public hostname (local/private hosts are rejected unless the
+server sets the dev-only `MAESTRO_ALLOW_HTTP`). On success the response
 carries the cached board `name`, `remote_board_id`, and `schema`
 (`{"label": ..., "columns": [...]}`). The link key itself is stored encrypted
 and never appears in any response.

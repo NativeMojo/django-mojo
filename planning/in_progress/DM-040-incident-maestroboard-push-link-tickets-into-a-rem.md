@@ -490,7 +490,27 @@ approved 2026-07-12; decisions recorded under Design decisions.
 
 Build baseline (2026-07-16, `bin/run_tests --agent`, default suite): status
 passed — total 2474, passed 2418, failed 0, skipped 56. No pre-existing
-failures; every post-change failure is attributable to this build.
+failures; every post-change failure is attributable to this build. End state:
+2494 total, 2438 passed, 0 failed, 56 skipped — green twice consecutively.
+
+Post-build security review (2026-07-16): fixed in-build — https-only paste +
+IP-literal SSRF guard (`MAESTRO_ALLOW_HTTP` dev escape hatch), group-scoping
+enforced on the rules path AND in `push_ticket` (service choke point), webhook
+IP rate limit, keyless-board 401 (no `SECRET_KEY` fallback in
+`verify_signature`), `note.created` replay dedup by remote note id. Deferred
+(accepted/filed): full replay protection needs a timestamp/nonce in the
+maestro-signed payload (cross-repo contract change — filed to inbox);
+DNS-rebinding SSRF residual (IP-literal blocking only, admin-tier perm
+required to paste); `metadata.origin="maestro"` is settable by any
+manage_security note author (same trust tier — accepted); remote note text is
+stored as plain text — any UI rendering ticket notes as markup must escape.
+
+Post-build flake fixes (outside plan, flagged): two pre-existing cross-module
+suite races surfaced by the new module's scheduling shift — scoped
+`test_assistant/28_test_fk_perm_check.py` fk_attach_denied count by uid
+(raced with test_models/fk_attach_audit.py's category delete), and narrowed
+`test_account/test_geolocated_ip_aggregation.py`'s prefix-wide 203.0.113.
+delete to its own five fixture IPs (raced with test_global_perms fixtures).
 
 Origin: maestro repo `planning/confirmed/maestro-connect.md` (scoped 2026-07-12) —
 that file carries the full two-repo investigation (what exists, constraints,

@@ -13,6 +13,7 @@ local log) and never raise into a ticket save. Registration is the exception —
 it runs synchronously inside MaestroBoard's REST save and is fail-closed so an
 admin pasting a bad link sees the failure immediately.
 """
+import ipaddress
 from urllib.parse import urlparse
 
 import requests
@@ -48,14 +49,36 @@ def parse_paste_url(url):
 
     Paste format: https://<host>/api/boards/link/<key> — nothing is served at
     that path; it exists only to carry the endpoint and key in one string.
+
+    The server POSTs the link key to this host, so the paste is an SSRF/
+    key-leak surface: https is required and loopback/private/link-local
+    IP-literal hosts are rejected. MAESTRO_ALLOW_HTTP=true relaxes both for
+    local development against a dev maestro. (IP-literal blocking, not DNS
+    resolution — a rebinding hostname is residual risk, mitigated by the
+    admin-tier permission required to paste.)
     """
     parsed = urlparse(str(url or "").strip())
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+    allow_http = settings.get("MAESTRO_ALLOW_HTTP", False, kind="bool")
+    schemes = ("http", "https") if allow_http else ("https",)
+    if parsed.scheme not in schemes or not parsed.netloc:
+        raise ValueException("invalid maestro board link", 400)
+    if not allow_http and _is_blocked_host(parsed.hostname):
         raise ValueException("invalid maestro board link", 400)
     parts = [p for p in parsed.path.split("/") if p]
     if len(parts) != 4 or parts[:3] != ["api", "boards", "link"]:
         raise ValueException("invalid maestro board link", 400)
     return f"{parsed.scheme}://{parsed.netloc}", parts[3]
+
+
+def _is_blocked_host(host):
+    if not host or host.lower() == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return (ip.is_loopback or ip.is_private or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
 
 
 def get_callback_url(board):
@@ -176,6 +199,13 @@ def push_ticket(board, ticket):
     from django.db import IntegrityError
     from mojo.apps.incident.models import MaestroBoardLink
 
+    # Group choke point: every push path (action, rules, queued jobs) lands
+    # here — a group-scoped board only ever accepts its own group's tickets.
+    if board.group_id and board.group_id != ticket.group_id:
+        logger.warning("[maestro] board %s is group-scoped; refusing ticket %s (group %s)",
+                       board.pk, ticket.pk, ticket.group_id)
+        return None
+
     link = MaestroBoardLink.objects.filter(ticket=ticket, maestro_board=board).first()
     payload = build_item_payload(board, ticket)
     if link is None:
@@ -244,7 +274,7 @@ def handle_board_webhook(board, payload):
     outbound sync hooks (echo suppression). Unknown items and events return
     200/ignored so maestro's queue stays quiet.
     """
-    from mojo.apps.incident.models import MaestroBoardLink
+    from mojo.apps.incident.models import MaestroBoardLink, TicketNote
 
     event = payload.get("event") or ""
     item = payload.get("item") or {}
@@ -263,8 +293,15 @@ def handle_board_webhook(board, payload):
     }
     if event == "note.created":
         note = payload.get("note") or {}
+        remote_note_id = note.get("id")
+        # Dedup on the board-side note id — a replayed or retried delivery of
+        # the same signed payload must not duplicate the ticket note.
+        if remote_note_id is not None and TicketNote.objects.filter(
+                parent=ticket, metadata__origin="maestro",
+                metadata__remote_note_id=remote_note_id).exists():
+            return {"status": True, "ignored": True}
         author = note.get("author") or "maestro"
-        meta["remote_note_id"] = note.get("id")
+        meta["remote_note_id"] = remote_note_id
         meta["author"] = author
         ticket.add_note(f"[maestro] {author}: {note.get('text') or ''}", None, metadata=meta)
     elif event == "item.updated":

@@ -589,6 +589,7 @@ After a successful block, the handler also:
 | `priority` | Integer priority (defaults to `event.level`) |
 | `category` | Ticket category (default: `"incident"`) |
 | `assignee` | User ID to assign the ticket to |
+| `board` | Optional MaestroBoard id — auto-push the created ticket to that remote maestro board (see [Maestro Board Link](../security/maestro_board.md)) |
 
 ---
 

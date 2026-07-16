@@ -60,10 +60,16 @@ The callback URL is built from settings:
 | `MAESTRO_CALLBACK_BASE` | Preferred public base URL for the webhook receiver |
 | `BASE_URL` | Fallback when `MAESTRO_CALLBACK_BASE` is unset |
 | `MAESTRO_LINK_TIMEOUT` | Outbound HTTP timeout in seconds (default 10) |
+| `MAESTRO_ALLOW_HTTP` | Dev-only: allow http:// pastes and local hosts (default off) |
 
 One of the two base URLs must be configured or registration fails with a
 clear 400. The webhook path is
 `/api/incident/maestro/webhook/<callback_token>`.
+
+Because the server POSTs the link key to the pasted host, the paste is an
+SSRF/key-leak surface: `https` is required and loopback/private/link-local
+IP-literal hosts are rejected. Set `MAESTRO_ALLOW_HTTP=true` only for local
+development against a dev maestro instance.
 
 ## Pushing tickets
 
@@ -115,10 +121,19 @@ reverse mapping applies a board column change to `ticket.status`
 (`rest/maestro_webhook.py`) — public endpoint, fail-closed:
 
 - board looked up by its unguessable `callback_token`, must be `is_active`
+  and must hold a link key (a keyless board 401s rather than falling back to
+  any other signing secret)
 - `X-Mojo-Signature` must verify: HMAC-SHA256 of the canonical JSON payload
   dict keyed by the raw link key (`mojo.helpers.crypto.sign.verify_signature`
   on the **parsed dict**, not raw bytes)
 - rejections are 401 — terminal to maestro's retry queue
+- IP rate-limited (`rate_limit("maestro_webhook", ip_limit=60)`), matching
+  the app's other public receivers
+- `note.created` deliveries dedup on the board-side note id — a replayed or
+  retried payload never duplicates a ticket note. (The signed payload carries
+  no timestamp/nonce yet, so a captured `item.updated` can still be replayed
+  to re-apply a stale status until the maestro contract adds one;
+  compare-before-write bounds the effect.)
 
 Verified events (`item.updated`, `item.archived`, `item.restored`,
 `note.created`) always produce a system ticket note (`user=None`,

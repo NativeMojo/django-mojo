@@ -171,13 +171,16 @@ def test_denied_assignment_records_incident(opts):
     from mojo.apps.assistant.models import Skill
     from mojo.apps.incident.models import Event
 
-    before = Event.objects.filter(category="fk_attach_denied").count()
+    # Scope to this test's user — a global count races with other modules
+    # (test_models/fk_attach_audit.py deletes fk_attach_denied events in its
+    # setup) when the suite runs in parallel.
+    before = Event.objects.filter(category="fk_attach_denied", uid=opts.nopriv.id).count()
 
     skill = Skill(tier="user", name="fkperm_incident")
     request = _build_synthetic_request(opts.nopriv)
     skill.on_rest_save(request, {"name": "fkperm_incident", "tier": "user", "group": opts.group.pk})
 
-    after = Event.objects.filter(category="fk_attach_denied").count()
+    after = Event.objects.filter(category="fk_attach_denied", uid=opts.nopriv.id).count()
     assert after > before, \
         f"Silent FK denial should still report an fk_attach_denied incident event, before={before} after={after}"
 

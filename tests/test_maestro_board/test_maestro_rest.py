@@ -117,10 +117,22 @@ def test_board_create_fail_closed(opts):
                             json={"name": f"{PREFIX} badpaste", "paste_url": "not-a-url"})
     assert resp.status_code == 400, f"malformed paste must 400, got {resp.status_code}: {resp.body}"
 
+    # http (non-TLS) paste -> rejected (link key would travel cleartext)
+    resp = opts.client.post("/api/incident/maestro/board", json={
+        "name": f"{PREFIX} badpaste",
+        "paste_url": "http://maestromojo.com/api/boards/link/deadbeefdeadbeef"})
+    assert resp.status_code == 400, f"http paste must 400, got {resp.status_code}: {resp.body}"
+
+    # Loopback/private host -> rejected (SSRF guard)
+    resp = opts.client.post("/api/incident/maestro/board", json={
+        "name": f"{PREFIX} badpaste",
+        "paste_url": "https://127.0.0.1:1/api/boards/link/deadbeefdeadbeef"})
+    assert resp.status_code == 400, f"loopback paste must 400, got {resp.status_code}: {resp.body}"
+
     # Unreachable maestro endpoint -> registration fails -> 400, nothing persisted
     resp = opts.client.post("/api/incident/maestro/board", json={
         "name": f"{PREFIX} badpaste",
-        "paste_url": "http://127.0.0.1:1/api/boards/link/deadbeefdeadbeef"})
+        "paste_url": "https://maestro-unreachable.invalid/api/boards/link/deadbeefdeadbeef"})
     assert resp.status_code == 400, f"failed registration must 400, got {resp.status_code}: {resp.body}"
 
     # No paste_url at all -> 400
@@ -364,3 +376,19 @@ def test_rules_ticket_handler_board_param(opts):
     assert Ticket.objects.filter(title=f"{PREFIX} rule ticket 2").exists(), (
         "ticket creation must not depend on the board push")
     assert not _maestro_jobs("maestro_push_ticket"), "unknown board must not enqueue a push"
+
+    # Group-scoped board -> rule-created (group-less) tickets are refused,
+    # matching the manual push_to_board action's boundary
+    from mojo.apps.account.models import Group
+    Group.objects.filter(name=f"{PREFIX} rules grp").delete()
+    grp = Group.objects.create(name=f"{PREFIX} rules grp", kind="organization")
+    grouped_board = _make_board(name=f"{PREFIX} rules grouped", group=grp)
+    _clear_maestro_jobs()
+    event3 = objict(title=f"{PREFIX} rule event 3", details="", level=3,
+                    incident=None, metadata={}, pk=0)
+    handler3 = TicketHandler(None, board=str(grouped_board.pk), title=f"{PREFIX} rule ticket 3")
+    assert handler3.run(event3) is True, "TicketHandler must not fail on a group-scoped board"
+    assert Ticket.objects.filter(title=f"{PREFIX} rule ticket 3").exists(), (
+        "ticket creation must not depend on the board push")
+    assert not _maestro_jobs("maestro_push_ticket"), (
+        "a group-scoped board must not accept rule-created tickets of another/no group")

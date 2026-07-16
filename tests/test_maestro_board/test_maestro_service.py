@@ -79,6 +79,11 @@ def test_parse_paste_url(opts):
     for bad in (
         "not-a-url",
         "ftp://maestromojo.com/api/boards/link/abc",
+        "http://maestromojo.com/api/boards/link/abc",       # https required
+        "https://localhost/api/boards/link/abc",            # SSRF guard
+        "https://127.0.0.1/api/boards/link/abc",            # SSRF guard
+        "https://192.168.1.5/api/boards/link/abc",          # SSRF guard
+        "https://169.254.169.254/api/boards/link/abc",      # SSRF guard (metadata)
         "https://maestromojo.com/api/boards/link",          # missing key
         "https://maestromojo.com/api/other/link/abc",       # wrong path
         "",
@@ -269,6 +274,31 @@ def test_sync_ticket_change_sends_only_changed_and_mapped(opts):
 
 
 @th.django_unit_test()
+def test_push_ticket_group_choke_point(opts):
+    """The service itself refuses group-mismatched pushes — covers queued jobs
+    and any future enqueue path, not just the REST action / rules pre-checks."""
+    from mojo.apps.account.models import Group
+    from mojo.apps.incident.models import MaestroBoardLink
+    from mojo.apps.incident.services import maestro_sync
+
+    Group.objects.filter(name=f"{PREFIX} grp").delete()
+    grp = Group.objects.create(name=f"{PREFIX} grp", kind="organization")
+    board = _make_board(name=f"{PREFIX} grouped", group=grp)
+    ticket = _make_ticket(title=f"{PREFIX} groupless")
+
+    patcher, mock_requests = _mock_requests({"id": 999, "url": "/w"})
+    try:
+        result = maestro_sync.push_ticket(board, ticket)
+    finally:
+        patcher.stop()
+
+    assert result is None, "group-mismatched push must be refused"
+    assert not mock_requests.post.called, "group-mismatched push must never reach maestro"
+    assert not MaestroBoardLink.objects.filter(ticket=ticket, maestro_board=board).exists(), (
+        "group-mismatched push must not create a link row")
+
+
+@th.django_unit_test()
 def test_webhook_note_creates_system_note_no_echo(opts):
     from mojo.apps.incident.models import TicketNote
     from mojo.apps.incident.services import maestro_sync
@@ -299,6 +329,18 @@ def test_webhook_note_creates_system_note_no_echo(opts):
     # maestro sync work (notes were written via ORM, not the REST pipeline).
     assert _maestro_job_count() == jobs_before, (
         "webhook-applied changes must NOT enqueue outbound maestro jobs (echo)")
+
+    # Replay dedup: re-delivering the same signed note payload must not
+    # duplicate the ticket note.
+    result = maestro_sync.handle_board_webhook(board, {
+        "v": 1, "event": "note.created", "board": 77,
+        "item": {"id": 801, "title": ticket.title, "values": {}, "is_active": True},
+        "note": {"id": 9, "text": "looks good", "author": "Alice"},
+    })
+    assert result.get("ignored") is True, f"replayed note delivery must be ignored: {result}"
+    assert TicketNote.objects.filter(
+        parent=ticket, metadata__event="note.created").count() == 1, (
+        "a replayed note.created must not create a second ticket note")
 
 
 @th.django_unit_test()

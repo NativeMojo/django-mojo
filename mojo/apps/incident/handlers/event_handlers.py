@@ -453,6 +453,12 @@ class TicketHandler:
             if board is None:
                 logger.warning("TicketHandler: maestro board %s not found or inactive", board_id)
                 return
+            # Same boundary the manual push_to_board action enforces: a
+            # group-scoped board only accepts tickets of its own group.
+            if board.group_id and board.group_id != ticket.group_id:
+                logger.warning("TicketHandler: maestro board %s is group-scoped and does not accept ticket %s",
+                               board.pk, ticket.pk)
+                return
             maestro_sync.enqueue_push(ticket.pk, board.pk)
         except Exception:
             logger.exception("TicketHandler: maestro push enqueue failed for ticket %s", ticket.pk)
