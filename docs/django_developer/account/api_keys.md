@@ -54,7 +54,7 @@ In `GroupMember.has_permission`, a permission like `sys.manage_users` strips the
 
 Every API key belongs to one group. The key can access that group and any of its **active** descendants. If a request passes `group=<id>` in the request data and that group is not the key's group or a descendant, the dispatcher returns 403; an **inactive** group's id never resolves at all (same as a nonexistent id).
 
-**Deactivating a group suspends its keys instantly (ITEM-037).** The active-state check is enforced at request time, so keys are never mutated — reactivating the group restores them immediately. It holds on every surface a key derives group context from:
+**Deactivating a group suspends its keys instantly (DM-037).** The active-state check is enforced at request time, so keys are never mutated — reactivating the group restores them immediately. It holds on every surface a key derives group context from:
 
 - `validate_token` sets `request.group` only when the key's group is active; an inactive group leaves it `None`, so a no-`group=` request fails closed at model security.
 - A detail/save/delete op re-binds `request.group` from the target row's group; the model-security api_key branch re-checks `is_active` there too, so it fails closed rather than being revived by the re-bind.

@@ -51,7 +51,7 @@ wrong one is a **cross-tenant privilege-escalation risk**.
   endpoint's effect is confined to `request.group` (e.g. rotating *that* group's
   webhook secret). A **non-User identity (ApiKey)** is trusted only within an
   **active** group context: if `request.group` is `None` (which is what
-  `validate_token` yields when the key's group is deactivated — ITEM-037) the
+  `validate_token` yields when the key's group is deactivated — DM-037) the
   request is denied before the key's self-claimed permission dict is consulted.
   Same gate in `requires_group_perms`.
 - **`@md.requires_global_perms(...)`** — checks **global `User.permissions` (or
@@ -328,7 +328,7 @@ GeoLocatedIP now accepts `view_security`/`manage_security` in addition to `manag
 
 FileManager, File, and FileRendition now have `SAVE_PERMS = ["manage_files"]`.
 File additionally carries the `"owner"` token in `VIEW_PERMS`/`SAVE_PERMS`/
-`DELETE_PERMS` (ITEM-033) so the member who initiated an upload can complete and
+`DELETE_PERMS` (DM-033) so the member who initiated an upload can complete and
 manage their own file without `manage_files`/`files`.
 
 ## Known Issues

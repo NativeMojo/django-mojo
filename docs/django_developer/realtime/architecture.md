@@ -132,7 +132,7 @@ All keys have automatic TTL (default 300 seconds, refreshed on activity).
 
 ## Client IP Resolution
 
-The WS handler derives the client IP using the same trust order as the HTTP path (ITEM-009 / ITEM-010):
+The WS handler derives the client IP using the same trust order as the HTTP path (DM-009 / DM-010):
 
 1. **`X-Real-IP`** (proxy-authoritative) — checked first in both the ASGI `scope` headers and the wrapper `request_headers`. This is the canonical source.
 2. **Transport peer** (`scope["client"]` / `peername`) — last-resort fallback only, used when `X-Real-IP` is absent (e.g. a direct-connect dev setup).

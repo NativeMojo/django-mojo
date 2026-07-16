@@ -3,7 +3,7 @@
 **bug** — **Deactivating a group now instantly suspends its API keys.**
 `ApiKey.validate_token` set `request.group = api_key.group` with no
 `group.is_active` check, so a request that omitted a `group=` param kept full
-group-scoped access to a deactivated tenant's data (ITEM-025's active-only
+group-scoped access to a deactivated tenant's data (DM-025's active-only
 resolution only bit when a `group=` param was explicitly passed). The check is
 now enforced at request time — keys are never mutated, so reactivating the
 group restores them instantly — across every surface a key derives group
@@ -25,7 +25,7 @@ identity's permission dict only within an ACTIVE group context (without it,
 custom endpoints like `sms/send` still honored a deactivated tenant's key).
 Secondary hardening: `RestMeta.ALLOW_API_KEY_GLOBAL`
 is now ignored (fail-closed, logged) on any model that has a `group` FK — the
-flag is only valid on genuinely groupless models. (ITEM-037)
+flag is only valid on genuinely groupless models. (DM-037)
 
 ## v1.2.48 - July 12, 2026
 
@@ -44,7 +44,7 @@ member permissions — the shipped Group Member permission editor 403), Group
 GeoLocatedIP `POST_SAVE_ACTIONS` gate, and the group-member invite endpoint.
 One-directional: `manage_users` alone still does NOT grant the combined
 `users`. Non-category perms (`manage_group`, `manage_members`,
-`manage_settings`, ...) are never expanded. (ITEM-035)
+`manage_settings`, ...) are never expanded. (DM-035)
 
 **bug** — **Non-dict `permissions` payloads on API key save now return 400 instead of being silently ignored.**
 `ApiKey.set_permissions` (`mojo/apps/account/models/api_key.py`) opened with
@@ -58,7 +58,7 @@ per-permission `can_change_permission` gating; `{}` remains a valid no-op.
 Note the contract is strict — JSON-encoded strings are *not* leniently parsed
 (unlike the generic JSONField path used by `metadata`/`limits`); send a real
 object. Callers that previously sent `"permissions": null` (a silent no-op)
-now get a 400. (ITEM-036)
+now get a 400. (DM-036)
 
 ## v1.2.47 - July 11, 2026
 
@@ -82,7 +82,7 @@ itself is unaffected (prefix match). Consumers that call
 `begin` themselves should pass the page's current URL — query included — as
 `redirect_uri`; the bundled `mojo-auth.js` does this automatically. `mojo-auth.js`
 ships with `max-age=86400`, so deployed browsers may run the old script for up to
-24h after upgrade. (ITEM-034)
+24h after upgrade. (DM-034)
 
 ## v1.2.46 - July 10, 2026
 
@@ -110,7 +110,7 @@ pk (an "attach existing"), honoring the parent's `NO_FK_VIEW_CHECK_FIELDS`;
 string / base64 / data-URL values are an inline *create* the caller owns and skip
 the gate. Denial is the existing drop-with-audit (`fk_attach_denied` incident,
 save still 200). The owner token above is what lets the file's own uploader clear
-this gate. (ITEM-033)
+this gate. (DM-033)
 
 **bug/security** — **REST batch save now enforces per-row instance permissions.**
 `on_rest_handle_batch` gated once at class level (no instance) and then wrote
@@ -128,7 +128,7 @@ parity batch previously ignored); a denied row is dropped with a per-row
 the FK-attach gate — rows are written sequentially with no transaction, so
 failing the whole batch could not undo earlier rows). `request.group` is
 restored between rows so one row's tenant binding cannot leak into the next
-row's check or save. (ITEM-032)
+row's check or save. (DM-032)
 
 **bug/security** — **`GEOFENCE_TEST_OVERRIDE` and `MOJO_TEST_MODE` are now read conf-file-only.**
 Both keys were read through the DB/Redis-aware `settings.get(...)`, so a single
@@ -142,7 +142,7 @@ row (stored as text, read with no `kind=`) made `dict(...)` raise → an unaudit
 HTTP 400 on every geofenced request. Both now read via `settings.get_static(...)`
 (Django settings file only), matching what the docs already described. The
 legitimate conf-file override still works; only the DB/Redis vector is closed.
-(ITEM-031)
+(DM-031)
 
 **bug/security** — **JSONField `__replace` (and non-dict overwrites) can no longer bypass `PROTECTED_JSON_PERMS`.**
 `on_rest_update_jsonfield` ran the protected-JSON guard and its
@@ -159,7 +159,7 @@ a replace — or a merge wiping the subtree with an explicit `"protected": null`
 — the audit's changed-keys include the removed keys. Also fixed: the guard
 read `user.is_superuser` directly, which ApiKey callers don't define, so even
 the previously-guarded merge path returned a 500 instead of a clean 403 for
-keys. (ITEM-030)
+keys. (DM-030)
 
 **bug** — **`POST /api/group/member/invite` now fail-closes with a clean 403 instead of a raw HTTP 500 for unauthenticated (and unresolved-group) callers.**
 The handler was gated only by `@md.custom_security` (a no-op marker) plus an
@@ -176,7 +176,7 @@ crash at the other ungated permission-check sites (`chat` room admin/moderator
 checks, `member.can_change_permission`) — no grant changes, since it always returns
 False. No membership was ever created (the crash preceded `invite()`), so this is a
 robustness / API-hygiene fix; matters for API consumers (e.g. maestro workspaces)
-that expect a clean rejection. (ITEM-028)
+that expect a clean rejection. (DM-028)
 
 ## v1.2.45 - July 10, 2026
 
@@ -198,7 +198,7 @@ google/apple — a request carrying a `group_uuid` whose config excludes github
 gets 403 (requests with no group context remain ungated). Also fixed the
 auth-pages doc to use the real provider setting names (`GOOGLE_CLIENT_ID`,
 `APPLE_CLIENT_ID`, … — the previous `GOOGLE_OAUTH_*`/`APPLE_OAUTH_*` names were
-never read by the code). (ITEM-026)
+never read by the code). (DM-026)
 
 **security** — **Group REST writes now require `SAVE_PERMS`, not mere membership — closing an any-member write to top-level Group fields.**
 `POST`/`PUT`/`DELETE` on `/api/group/<pk>` (and Group's `POST_SAVE_ACTIONS`) was
@@ -283,7 +283,7 @@ resolve member grants via `User.get_groups_with_permission`, which does not
 yet filter `Group.is_active`; and an API key whose own group is deactivated
 keeps working unless the request explicitly names that group
 (`ApiKey.validate_token` sets the key's group as request context without an
-`is_active` check — deactivate the key itself to cut access). (ITEM-025)
+`is_active` check — deactivate the key itself to cut access). (DM-025)
 
 **api** — **Sending the same key in both the query string and the JSON body no longer 500s.**
 `request.DATA` previously merged a key that arrived from two sources into a
@@ -298,7 +298,7 @@ Multi-value keys within one source (`?tag=a&tag=b`, `tags[]=`, JSON lists)
 still produce lists. A genuinely unusable `group` value (list/dict/etc.) now
 returns mojo's JSON 400 `Invalid group ID` from the dispatcher, and the
 `requires_perms`/`requires_group_perms` group fallback treats it as
-no-group-context (fail-closed 403) instead of a coercion crash. (ITEM-024)
+no-group-context (fail-closed 403) instead of a coercion crash. (DM-024)
 
 **security** — **Geofence-adjacent Settings can no longer be written as garbage; `kind=` coercion is loud and fail-safe.**
 Write-time validation now covers every geofence-consumed Setting (previously
@@ -319,7 +319,7 @@ cached `private_ip` allows for up to `GEOFENCE_CACHE_TTL`). On the read side,
 present-but-uncoercible value returns the DECLARED default and logs a
 `settings` warning; an unrecognized bool string no longer truthy-coerces to
 `True` (allow-flavored flags previously failed open); a bracket-wrapped
-unparsable list no longer comma-splits into nonsense entries. (ITEM-023)
+unparsable list no longer comma-splits into nonsense entries. (DM-023)
 
 **security** — **Member-readable geofence policy + events (group-scoped).**
 New `GET /api/geo/policy`: a brand's own admin holding a group-member
@@ -333,7 +333,7 @@ group via the framework group fallback, giving them their group-attributed
 `geofence_block`/`geofence_exempt` history (attribution caveat documented;
 `geofence_config` stays platform-only) — now locked by regression tests
 (`tests/test_geofence/member_visibility.py`). The config plane (`geo/rules`
-etc.) remains global-only and unchanged. (ITEM-022)
+etc.) remains global-only and unchanged. (DM-022)
 
 **api** — **Info endpoints open to any authenticated user (no `INFO_KEY` needed).**
 `GET /api/versions`, `GET /api/sysinfo/detailed`, and
@@ -364,7 +364,7 @@ rows (`tor_exits`, `blocklist_de`; created `is_enabled=False`, the REST
 never reach the kernel firewall) refreshed 6-hourly by a new `refresh_threat_lists` cron;
 `detect_tor` / `check_blocklist_de` read the cache and fall back to the old
 live fetch until it warms, removing the per-lookup download of the full
-lists from the geolocation path. (ITEM-021)
+lists from the geolocation path. (DM-021)
 
 **metrics** — **Geofence evidence metrics are now recorded per-tenant (`account=group-<id>`) alongside global.**
 When a geofenced request carries a group (`group`/`group_uuid` param — e.g.
@@ -376,7 +376,7 @@ existing `GET /api/metrics/fetch` group-account permission gate
 (`view_metrics`/`metrics`, member grant suffices). No-group requests record
 exactly as before, and the per-country/per-region breakdown slugs stay
 global-only — a per-group geographic cross-product would explode the Redis
-key space (monthly/yearly counter keys never expire). (ITEM-020)
+key space (monthly/yearly counter keys never expire). (DM-020)
 
 ## v1.2.44 - July 08, 2026
 
@@ -446,7 +446,7 @@ cross-tenant user administration. A new framework decorator
 `@md.requires_global_perms(...)` authorizes on the caller's **global**
 `User.permissions` (or superuser) only — never the group fallback — and is now
 applied to ~50 platform-wide endpoints across the jobs, aws, account, metrics,
-incident, assistant, and geofence (ITEM-017 config plane) surfaces. This also
+incident, assistant, and geofence (DM-017 config plane) surfaces. This also
 closes a sibling vector on the AWS email CRUD + device-location endpoints
 (`EmailDomain`/`Mailbox`/`EmailTemplate`/`IncomingEmail`/`SentMessage`/
 `UserDeviceLocation` — all groupless models): a self-minted group **ApiKey**

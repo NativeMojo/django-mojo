@@ -134,7 +134,7 @@ is the `ANONYMOUS_USER` sentinel (`is_authenticated=False`), not `None` — so
 always safe to call. The sentinel's `has_permission` accepts any arguments and
 always returns `False` (fail-closed); it used to be zero-argument only, which
 raised `TypeError` (surfaced as a 500) if a real permission check called it
-with a perm list (ITEM-028).
+with a perm list (DM-028).
 
 **`request.group`** is auto-populated if the request includes a `group` param that matches a group the user belongs to. Only **active** groups resolve — an inactive group's id (or uuid) behaves exactly like a nonexistent one: `request.group` stays `None`, and nothing (including the group's activity timestamps) is written.
 

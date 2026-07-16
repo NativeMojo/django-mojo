@@ -329,7 +329,7 @@ inspecting an inactive group stays a `geo/rules` (admin) affordance.
 to `group__in=<their groups>`, and groupless rows are excluded. Geofence
 events carry a group only when the enforced request itself supplied
 `group`/`group_uuid` (the incident reporter falls back to `request.group`;
-attribution is client-reported — ITEM-020), so members see group-attributed
+attribution is client-reported — DM-020), so members see group-attributed
 activity, not verified totals. `geofence_config` events are effectively
 always groupless (platform config history) and stay platform-only.
 Regression tests: `tests/test_geofence/member_visibility.py`.

@@ -167,7 +167,7 @@ anonymous caller still reaches the function body unless the body itself checks
 `@md.requires_auth()` / `@md.requires_perms(...)`. A handler that assumes an
 authenticated `request.user` (e.g. passes it into `group.user_has_permission(...)`)
 needs a real gate, not just the annotation — a missing one let an anonymous
-caller reach such a check and crash instead of being rejected (ITEM-028).
+caller reach such a check and crash instead of being rejected (DM-028).
 
 ```python
 @md.GET('status')
