@@ -10,6 +10,7 @@ import json
 import objict
 import datetime
 from mojo.helpers import dates, logit
+from mojo.helpers.request import is_request_user
 from contextvars import ContextVar
 
 
@@ -242,7 +243,47 @@ class MojoModel:
         if "authenticated" in perms:
             return True, None
 
+        # An authenticated MACHINE identity (no is_request_user marker — see
+        # mojo/helpers/request.py) that did not register itself as
+        # request.api_key has no branch below: falling through to the USER
+        # branches would authorize its self-claimed has_permission with no
+        # group confinement and no inactive-group gating (DM-019/DM-037). Fail
+        # closed. ApiKey always sets request.api_key (validate_token), so this
+        # is a no-op today; it exists for custom AUTH_BEARER_HANDLERS
+        # identities (mojo/middleware/auth.py), which must either set
+        # request.api_key or define the is_request_user marker (DM-045).
+        if (request.user is not None
+                and getattr(request.user, "is_authenticated", False)
+                and not is_request_user(request)
+                and not getattr(request, "api_key", None)):
+            return False, objict.objict(
+                branch="non_user_no_api_key",
+                event_type="user_permission_denied",
+                status=403,
+            )
+
         if instance is not None:
+            # For a machine (api_key) identity, an instance owned by an
+            # INACTIVE group is denied BEFORE any instance hook can run — the
+            # hooks below return directly, so without this gate a hook that
+            # grants via bare api_key.has_permission would reopen the
+            # self-reversible-suspension class on detail ops (DM-037/DM-045).
+            # The api_key branch's is_active gate further down still covers the
+            # instance-less re-bind paths. NOTE: a future "parent key may
+            # manage an inactive descendant group's rows" carve-out (see
+            # planning item apikey-parent-key-inactive-descendant-one-way-door)
+            # belongs HERE, not in the hooks.
+            if is_group_scoped and getattr(request, "api_key", None):
+                if GROUP_FIELD:
+                    inst_group = cls._resolve_group_from_instance(instance, GROUP_FIELD)
+                else:
+                    inst_group = getattr(instance, "group", None)
+                if inst_group is not None and not inst_group.is_active:
+                    return False, objict.objict(
+                        branch="api_key.group_inactive",
+                        event_type="user_permission_denied",
+                        status=403,
+                    )
             # Classify the operation from the permission keys: a WRITE carries a
             # write perm-key (CREATE/SAVE/DELETE_PERMS); a read carries only
             # VIEW_PERMS. A read prefers the instance's view hook. A write MUST
@@ -301,7 +342,10 @@ class MojoModel:
                     # from a detail instance owned by a now-inactive group; gate
                     # it here so detail/save/delete fail closed too, not just the
                     # list path (validate_token already strips context there).
-                    # ApiKey-only — user semantics unchanged.
+                    # ApiKey-only — user semantics unchanged. Instance detail
+                    # ops are ALSO gated pre-hook at the top of the instance
+                    # block (DM-045) — keep both: this one covers non-instance
+                    # paths where request.group arrives inactive.
                     return False, objict.objict(
                         branch="api_key.group_inactive",
                         event_type="user_permission_denied",

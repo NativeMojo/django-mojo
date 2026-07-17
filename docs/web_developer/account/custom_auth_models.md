@@ -86,6 +86,17 @@ Now a request with `Authorization: player <token>` will:
 2. On success, set `request.player` to the `Player` instance
 3. On failure, return `401`
 
+> **Identity contract with model security.** If you map your custom identity to
+> `request.user` (via `AUTH_BEARER_NAME_MAP`), RestMeta model security must be
+> able to classify it: a **person**-like identity must define the
+> `is_request_user` marker (see `account.User`); a **machine** identity must set
+> `request.api_key` in its validate handler (see `ApiKey.validate_token`).
+> An authenticated `request.user` with neither is denied by model security
+> (`non_user_no_api_key`, 403) — it would otherwise be authorized on its own
+> self-claimed permissions with no tenant confinement. Identities mapped to
+> their own attribute (like `request.player` above) are unaffected — protect
+> those endpoints with your own decorator as shown below.
+
 ---
 
 ## 3. Login Endpoint

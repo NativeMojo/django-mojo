@@ -282,6 +282,101 @@ def test_requires_perms_denies_key_without_active_group(opts):
         group.delete()
 
 
+@th.django_unit_test("gate above hooks: a naive instance hook cannot bypass the inactive-group gate")
+def test_inactive_group_gate_runs_before_instance_hooks(opts):
+    """DM-045 item 1 — the inactive-group invariant must be STRUCTURAL, not
+    per-hook convention. A group-scoped model's instance hook that grants via
+    bare ``request.api_key.has_permission(perms)`` (the pre-DM-037 Group shape,
+    and the obvious pattern for a future model to copy) runs BEFORE the
+    api_key branch's is_active gate — without the pre-hook gate this reopens
+    the self-reversible-suspension class on detail GET/save/delete."""
+    from objict import objict
+    from mojo.apps.account.models import ApiKey
+
+    group = _mk_group()
+    key, _token = ApiKey.create_for_group(
+        group=group, name="ak_ia_test_hookgate", permissions={"groups": True})
+    key.is_authenticated = True
+    try:
+        # ApiKey itself is group-scoped (has a `group` FK) — attach the naive
+        # hook as an INSTANCE attribute so the model class stays clean.
+        inst = key
+        inst.check_view_permission = (
+            lambda perms, request: request.api_key.has_permission(perms))
+
+        # Control: active group → the naive hook may grant.
+        req = objict(user=key, api_key=key, group=group, DATA=objict())
+        allowed, denial = ApiKey._evaluate_permission(req, "VIEW_PERMS", instance=inst)
+        assert allowed is True, \
+            f"control: active-group key + naive hook must be allowed, got {denial!r}"
+
+        # Deactivate the tenant → the gate must fire BEFORE the hook.
+        group.is_active = False
+        group.save()
+        req2 = objict(user=key, api_key=key, group=None, DATA=objict())
+        allowed2, denial2 = ApiKey._evaluate_permission(req2, "VIEW_PERMS", instance=inst)
+        assert allowed2 is False, \
+            "SECURITY: a naive instance hook granted an api_key access to a row " \
+            "owned by an INACTIVE group (hook ran before the is_active gate)"
+        assert denial2 is not None and denial2.branch == "api_key.group_inactive", \
+            f"denial must come from the pre-hook inactive-group gate, got {denial2!r}"
+    finally:
+        ApiKey.objects.filter(pk=key.pk).delete()
+        group.delete()
+
+
+@th.django_unit_test("machine identity without request.api_key fails closed (never the USER branch)")
+def test_unregistered_machine_identity_denied(opts):
+    """DM-045 item 2 — a custom AUTH_BEARER_HANDLERS identity (mojo/middleware/
+    auth.py) that neither defines the ``is_request_user`` marker nor sets
+    ``request.api_key`` must be denied outright: routing it to the USER branches
+    would authorize its self-claimed has_permission with no group confinement
+    and no inactive-group gating (the DM-019/DM-037 protections).
+
+    The fakes are plain classes ON PURPOSE — objict answers hasattr() True for
+    every name, which would make a fake look like a real User to the marker
+    predicate."""
+    from objict import objict
+    from mojo.apps.account.models import ApiKey, Group
+
+    class FakeMachineIdentity:
+        # deliberately NO is_request_user marker and NO request.api_key
+        is_authenticated = True
+        username = "custom-bearer:1"
+
+        def has_permission(self, perms):
+            return True  # self-claims everything — must never be consulted
+
+    class FakeUserLike(FakeMachineIdentity):
+        def is_request_user(self, request=None):
+            return True
+
+    machine = FakeMachineIdentity()
+
+    # (a) a groupless model (Group has no group FK / GROUP_FIELD).
+    req = objict(user=machine, group=None, DATA=objict())
+    allowed, denial = Group._evaluate_permission(req, "VIEW_PERMS")
+    assert allowed is False, \
+        "SECURITY: an unregistered machine identity reached the USER branch of a groupless model"
+    assert denial is not None and denial.branch == "non_user_no_api_key", \
+        f"denial must come from the machine-identity guard, got {denial!r}"
+
+    # (b) a group-scoped model with no group context.
+    req2 = objict(user=machine, group=None, DATA=objict())
+    allowed2, denial2 = ApiKey._evaluate_permission(req2, "VIEW_PERMS")
+    assert allowed2 is False, \
+        "SECURITY: an unregistered machine identity reached the USER branch of a group-scoped model"
+    assert denial2 is not None and denial2.branch == "non_user_no_api_key", \
+        f"denial must come from the machine-identity guard, got {denial2!r}"
+
+    # Control: an identity carrying the is_request_user marker still reaches
+    # the normal user fallthrough (user.has_permission).
+    req3 = objict(user=FakeUserLike(), group=None, DATA=objict())
+    allowed3, denial3 = Group._evaluate_permission(req3, "VIEW_PERMS")
+    assert allowed3 is True, \
+        f"control: a User-marked identity must keep its user.has_permission path, got {denial3!r}"
+
+
 @th.django_unit_test("guard: ALLOW_API_KEY_GLOBAL is refused on a group-scoped model (fail closed)")
 def test_allow_api_key_global_guard_on_group_scoped_model(opts):
     """Secondary hardening: a group-scoped model must never grant an api_key

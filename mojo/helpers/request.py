@@ -39,6 +39,19 @@ def get_referer(request):
     return request.META.get('HTTP_REFERER')
 
 
+def is_request_user(request):
+    # The framework's ONE predicate for "a real logged-in User is driving this
+    # request" vs a machine identity (an ApiKey, or a custom
+    # AUTH_BEARER_HANDLERS identity — see mojo/middleware/auth.py). User defines
+    # the `is_request_user` marker (mojo/apps/account/models/user.py); machine
+    # identities must not. Absence of the marker is the fail-closed direction:
+    # an unknown identity is treated as a machine. Both the auth decorators
+    # (mojo/decorators/auth.py) and model security (mojo/models/rest.py) key on
+    # this — keep them aligned here, not on hand-rolled hasattr checks (DM-045).
+    user = getattr(request, "user", None)
+    return user is not None and hasattr(user, "is_request_user")
+
+
 def normalize_ip(value):
     # Return a clean IP string, or None for empty/garbage. Handles surrounding
     # whitespace, an IP:port suffix, bracketed IPv6 ([::1]), and IPv4-mapped IPv6

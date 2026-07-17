@@ -321,7 +321,9 @@ class ApiKey(MojoSecrets, MojoModel):
         # hard reject: the federation path (requires_global_perms,
         # allow_api_keys) ignores request.group, so rejecting the token would
         # over-suspend legitimate fleet-peer keys.
-        request.group = api_key.group if (api_key.group_id and api_key.group.is_active) else None
+        # (The group FK is non-nullable and select_related-loaded above — there
+        # is no null-group key variant to guard for.)
+        request.group = api_key.group if api_key.group.is_active else None
         request.api_key = api_key
 
         try:

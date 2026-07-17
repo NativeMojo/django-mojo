@@ -1,5 +1,22 @@
 ## v1.2.49 - July 12, 2026
 
+**chore** — **Internal hardening of the DM-037 machine-identity gates (DM-045).**
+No API or behavior change for real Users, active-group keys, or the federation
+path. Four structural fixes so the "suspended tenant = no access" invariant is
+framework-enforced rather than per-site convention: (1) model security now
+denies an api_key access to any group-scoped instance owned by an inactive
+group BEFORE instance permission hooks run — a hook that grants via bare
+`api_key.has_permission` can no longer reopen the self-reversible-suspension
+class; (2) one shared machine-identity predicate
+(`mojo.helpers.request.is_request_user`) now backs both the auth decorators and
+model security, and an authenticated non-User identity that doesn't set
+`request.api_key` (possible via custom `AUTH_BEARER_HANDLERS`) fails closed
+(`non_user_no_api_key`) instead of being routed to the USER branches with
+self-claimed perms; (3) the decorators' active-group-context gate exists once
+(module helper) instead of two verbatim copies; (4) `validate_token`'s dead
+`group_id` guard removed (the FK is non-nullable). Regression tests in
+`tests/test_global_perms/apikey_group_inactive.py`.
+
 **feature** — **Login-flow geofencing now enforces after credential verification (DM-043).**
 Identity-bearing auth endpoints (password login, TOTP/SMS finish + standalone,
 passkey complete, OAuth complete, handoff exchange, magic link, email verify,

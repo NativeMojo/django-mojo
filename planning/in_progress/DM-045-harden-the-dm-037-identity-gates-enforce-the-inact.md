@@ -337,6 +337,10 @@ edit).
 none
 
 ## Notes
+- **Baseline (2026-07-17, before first edit)**: `bin/run_tests --agent` →
+  status=passed, total=2503, passed=2447, failed=0, skipped=56 (opt-in modules
+  test_incident/test_security etc. — normal). All-green: every post-change
+  failure is ours.
 - Two review leftovers deliberately NOT in scope here: test-fixture
   boilerplate in `tests/test_global_perms/apikey_group_inactive.py` (nice-to-
   have contextmanager, fold in only if touching that file anyway) and the
