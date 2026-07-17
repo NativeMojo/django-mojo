@@ -110,7 +110,7 @@ def on_sms_send(request):
 @md.requires_params("code")
 @md.strict_rate_limit(10, 60)
 @md.public_endpoint()
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 def on_sms_verify(request):
     """
     Verify an SMS OTP code.

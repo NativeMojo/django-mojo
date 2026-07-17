@@ -198,6 +198,51 @@ geo-lookup failure (use for money/payment endpoints), while everything else
 keeps the fail-open default. Because posture is scope-sensitive,
 `lookup_failed` decisions are never cached.
 
+### Post-credential enforcement (`after_auth=True`)
+
+Identity-bearing auth endpoints — everything that verifies a credential
+mid-flow and issues a JWT (password login, TOTP/SMS MFA finish and standalone
+logins, passkey complete, OAuth complete, handoff exchange, magic link, email
+verify, invite accept, password reset) — carry
+`@md.requires_geofence(scope="auth", after_auth=True)`. The deferred mode
+registers the endpoint in the security registry (it still appears in
+`GET /api/geo/rules` → `enforced_endpoints`, annotated `after_auth`) but does
+**not** block pre-view. Enforcement instead runs **after credential
+verification** with the verified user, via the shared
+`services.geofence.enforcement.enforce(request, scope, user)` routine at two
+points:
+
+1. **The top of `jwt_login()`** — before `last_login`, the `UserLoginEvent`,
+   and `USER_LOGIN_HANDLER`, so a blocked login records **zero** success side
+   effects. Every issuance flow funnels through here.
+2. **The MFA branch of the password login** — a blocked user is denied before
+   the challenge and never receives an `mfa_token`.
+
+Why: the engine's `bypass_geofence` short-circuit needs an identified user, and
+block evidence should name who was blocked. The ordering contract is: invalid
+credentials → the normal 401 (a blocked geo never changes it); valid
+credentials → the standard geofence 403 (body shape unchanged).
+
+Consequences to know:
+
+- **Exempt sources** — `jwt_login` skips the check for
+  `source in GEOFENCE_EXEMPT_JWT_SOURCES` (`"sessions_revoke"`,
+  `"email_change"`): authed re-issues of an existing session, not logins — a
+  user in a blocked geo must still be able to revoke their own sessions. Every
+  other source (including new ones you add) is geofenced by default.
+- **Token-proven actions complete before the session is withheld** — a
+  password reset / email verify / invite accept from a blocked geo applies its
+  mutation (the emailed secret proved it), then returns the geofence 403
+  instead of tokens.
+- **Accepted tradeoff**: a caller in a blocked geo holding valid stolen
+  credentials can distinguish 403 (valid, geo-blocked) from 401 (invalid).
+  Geofencing is not a credential-testing defense; bouncer + rate limits still
+  run first.
+
+Identity-less auth endpoints (register, forgot-password, magic-link/OTP sends,
+passkey/OAuth begin, phone-register) keep the default pre-view blocking mode —
+register in particular must block **before** account creation.
+
 When a request is blocked the decorator returns 403 immediately with only:
 
 ```json
@@ -211,15 +256,21 @@ When a request is blocked the decorator returns 403 immediately with only:
 
 Country, region, and abuse details are intentionally omitted from the blocked response to prevent information leakage. Every block is also recorded by the evidence plane (below).
 
-### OAuth `/complete` is not decorated
+### OAuth `/callback` is not decorated
 
-The OAuth `/callback` endpoint returns an HTTP redirect, not JSON, so `@md.requires_geofence` is not applied there. System rules still apply at other OAuth steps; group rules do not apply at `/complete` because the `group_uuid` is encoded inside the signed OAuth state string and is not decoded until inside the view — after any decorator would have run.
+The OAuth `/callback` endpoint returns an HTTP redirect, not JSON, so `@md.requires_geofence` is not applied there. `/begin` is geofenced pre-view; `/complete` uses `after_auth=True` and is enforced post-credential inside `jwt_login`. Group rules do not apply at `/complete` because the `group_uuid` is encoded inside the signed OAuth state string and is not decoded until inside the view — so only system rules apply there.
 
 ---
 
 ## `bypass_geofence` Permission
 
 A user with the `bypass_geofence` permission short-circuits all geofence checks entirely. The check returns `allowed=True` immediately without writing a cache entry, so revoking the permission takes effect on the very next request.
+
+**It works at login too**: identity-bearing auth endpoints enforce geofencing
+after credential verification (see *Post-credential enforcement* above), so a
+whitelisted user completes a fresh login from a blocked geo — the per-user
+whitelist covers the full session lifecycle, not just already-authenticated
+traffic.
 
 **This is a high-privilege grant** — superusers hold it implicitly
 (`User.has_permission` returns `True` for a superuser on every perm).
@@ -340,8 +391,12 @@ Regression tests: `tests/test_geofence/member_visibility.py`.
 
 Every enforcement outcome that matters to an auditor becomes an incident
 Event (`mojo.apps.incident`); blocks also record metrics. Emission happens at
-the **decorator** (so cache hits still emit); `/api/geo/check` and simulate
-are advisory and emit nothing.
+the **enforcement point** — the decorator for pre-view endpoints, the
+post-credential check for `after_auth` endpoints (so cache hits still emit);
+`/api/geo/check` and simulate are advisory and emit nothing. Post-credential
+blocks additionally carry the **verified user**: `uid` on the event plus
+`username` in metadata — pre-view blocks are anonymous (`uid=None`) as
+before.
 
 | Category | When | Level |
 |---|---|---|

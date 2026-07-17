@@ -142,7 +142,7 @@ def on_totp_recovery_codes_regenerate(request):
 @md.strict_rate_limit("totp_verify", ip_limit=10, ip_window=60)
 @md.requires_params("mfa_token", "code")
 @md.public_endpoint()
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 def on_totp_verify(request):
     """
     Second factor: verify TOTP code after password login.
@@ -177,7 +177,7 @@ def on_totp_verify(request):
 @md.strict_rate_limit("totp_recover", ip_limit=10, ip_window=60)
 @md.requires_params("mfa_token", "recovery_code")
 @md.public_endpoint()
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 def on_totp_recover(request):
     """
     Authenticate using a recovery code instead of a TOTP code.
@@ -218,7 +218,7 @@ def on_totp_recover(request):
 @md.strict_rate_limit("totp_login", ip_limit=10, ip_window=60)
 @md.requires_params("username", "code")
 @md.public_endpoint()
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 def on_totp_login(request):
     """Passwordless login using a TOTP code."""
     from mojo.decorators.limits import check_account_attempt, clear_rate_limits

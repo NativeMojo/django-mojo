@@ -13,10 +13,12 @@ The pre-flight endpoint at `GET /api/geo/check` lets UIs render
 """
 from .dsl import evaluate_rule, validate_rule
 from .engine import GeoFenceEngine, GeoDecision
+from . import enforcement
 
 __all__ = [
     "GeoFenceEngine",
     "GeoDecision",
     "evaluate_rule",
     "validate_rule",
+    "enforcement",
 ]

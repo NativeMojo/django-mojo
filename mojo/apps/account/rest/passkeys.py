@@ -211,7 +211,7 @@ def on_passkeys_login_begin(request):
 @md.strict_rate_limit("passkey_login", ip_limit=10, ip_window=60)
 @md.requires_params("challenge_id", "credential")
 @md.public_endpoint()
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 def on_passkeys_login_complete(request):
     """Complete passkey authentication and issue JWT tokens."""
     challenge_id = request.DATA.get("challenge_id")

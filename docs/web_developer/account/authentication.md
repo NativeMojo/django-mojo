@@ -561,3 +561,41 @@ When the server has `REQUIRE_VERIFIED_EMAIL` or `REQUIRE_VERIFIED_PHONE` enabled
 Detect this error and show a **Resend verification email** prompt rather than a generic error message. The user does not need to re-enter their password — they only need to click the link.
 
 See [Email & Phone Verification](email_verification.md) for the full send/verify flow, invite link handling, phone verification, and settings reference.
+
+## Geofence Block
+
+When the deployment has geofencing rules configured, login-type endpoints can
+return a geofence 403 **after the credentials have been verified** — the
+credential check always runs first, so invalid credentials return the normal
+401 regardless of location:
+
+```json
+{
+  "error": "geofence_blocked",
+  "code": 403,
+  "reason": "country_not_allowed",
+  "detail": "Service is not available in your country."
+}
+```
+
+The body carries only `reason` + `detail` (no country/region/connection
+signals — intentional). Users holding the `bypass_geofence` permission are
+exempt and log in normally from anywhere.
+
+Notes for clients:
+
+- MFA users are blocked before the challenge — a geofenced login never
+  returns an `mfa_token`.
+- Token-proven actions still complete: a password reset / email verify /
+  invite accept from a blocked region **applies the action** but returns this
+  403 instead of a session — show "done, but you can't sign in from this
+  location", not "failed".
+- `POST /api/auth/sessions/revoke` and the email-change confirm are never
+  geofenced (an already-authenticated user can always take those security
+  actions).
+- Identity-less steps (register, forgot-password, magic-link/OTP send, OAuth
+  begin) are still checked up front and can return the same 403 before any
+  processing.
+
+Use `GET /api/geo/check` as a pre-flight to render a "not available in your
+region" page before showing the login form — see [GeoIP & Geofencing](geoip.md).

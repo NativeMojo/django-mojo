@@ -31,15 +31,32 @@ DEDUPE_TTL = 3600  # one event per (ip, reason) per hour
 _ABUSE_REASONS = {"tor_detected", "vpn_detected", "proxy_detected", "datacenter_detected"}
 
 
-def report_block(request, decision, scope=None):
-    """Record a geofence block — or a fail-open lookup-failure allow."""
+def _attribution(user):
+    """Event-attribution kwargs for a verified user, or {}.
+
+    Post-credential enforcement (DM-043) passes the credential-verified User;
+    the pre-auth decorator path passes request.user (the anonymous objict,
+    is_authenticated=False) which must not be attributed.
+    """
+    if user is not None and getattr(user, "is_authenticated", False):
+        return {"uid": user.id, "username": user.username}
+    return {}
+
+
+def report_block(request, decision, scope=None, user=None):
+    """Record a geofence block — or a fail-open lookup-failure allow.
+
+    `user` is the credential-verified user when enforcement ran post-auth
+    (DM-043) — attributed on the event as uid/username. The reporter can't
+    derive it from `request.user` (login requests are anonymous).
+    """
     try:
-        _report_block(request, decision, scope)
+        _report_block(request, decision, scope, user)
     except Exception as exc:
         logit.error("geofence", f"evidence report_block failed: {exc}")
 
 
-def _report_block(request, decision, scope):
+def _report_block(request, decision, scope, user=None):
     blocked = decision.allowed is False
     if blocked:
         _record_block_metrics(decision, getattr(request, "group", None))
@@ -54,6 +71,7 @@ def _report_block(request, decision, scope):
         level=_block_level(request, decision, scope),
         request=request,
         reason=decision.reason,
+        **_attribution(user),
         rule_level=decision.get("rule_level"),
         geofence_scope=scope,
         country_code=decision.get("country_code"),
@@ -63,8 +81,11 @@ def _report_block(request, decision, scope):
     )
 
 
-def report_exempt(request, decision, scope=None):
-    """Record an allowlisted pass that would otherwise have blocked."""
+def report_exempt(request, decision, scope=None, user=None):
+    """Record an allowlisted pass that would otherwise have blocked.
+
+    `user` — same post-auth attribution contract as report_block.
+    """
     try:
         # every occurrence counts, deduped or not
         metrics.record("geofence:exempt", category="geofence")
@@ -83,6 +104,7 @@ def report_exempt(request, decision, scope=None):
             level=3,
             request=request,
             reason=decision.reason,
+            **_attribution(user),
             geofence_scope=scope,
             allowlist_source=decision.get("allowlist_source"),
             allowlist_reason=decision.get("allowlist_reason"),

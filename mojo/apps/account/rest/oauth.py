@@ -329,7 +329,7 @@ def on_oauth_callback(request, provider):
 @md.POST("oauth/<str:provider>/complete")
 @md.requires_params("code", "state")
 @md.public_endpoint()
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 def on_oauth_complete(request, provider):
     """Exchange authorization code for tokens, resolve user, issue JWT."""
     try:

@@ -149,7 +149,7 @@ def on_refresh_token(request):
 @md.endpoint_metrics("login_attempts", by=["ip", "muid"])
 @md.requires_params("password")
 @md.requires_bouncer_token('login')
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 def on_user_login(request):
     from mojo.decorators.limits import check_account_attempt, clear_rate_limits
 
@@ -198,6 +198,13 @@ def on_user_login(request):
 
     mfa_methods = get_mfa_methods(user)
     if mfa_methods:
+        # Post-credential geofence (DM-043): the MFA branch never reaches
+        # jwt_login, so enforce here — a blocked user must not receive an
+        # mfa_token. Non-MFA logins are checked once, inside jwt_login.
+        from mojo.apps.account.services.geofence import enforcement
+        blocked = enforcement.enforce(request, scope="auth", user=user)
+        if blocked is not None:
+            return blocked
         return mfa_required_response(user, mfa_methods)
     return jwt_login(request, user, "account/jwt/login" in request.path, source="password")
 
@@ -230,7 +237,7 @@ def on_auth_handoff(request):
 @md.POST("auth/exchange")
 @md.public_endpoint()
 @md.strict_rate_limit("auth_exchange", ip_limit=20, ip_window=60)
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 @md.requires_params("code")
 def on_auth_exchange(request):
     """
@@ -618,6 +625,13 @@ def _check_verification_gate(user, source=None):
         )
 
 
+# jwt_login sources that skip post-credential geofencing (DM-043): authed
+# re-issues of an existing session, not logins — a user in a blocked geo must
+# still be able to revoke their own sessions / confirm an email change. Every
+# OTHER source (including future ones) is geofenced by default (fail-closed).
+GEOFENCE_EXEMPT_JWT_SOURCES = ("sessions_revoke", "email_change")
+
+
 def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=False):
     """Issue an access+refresh JWT pair for the given user.
 
@@ -630,7 +644,17 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
             enforcement against a *lookup* channel (e.g. password login) must
             call _check_verification_gate themselves before invoking this.
         is_new_user: True only for the first login of a freshly-created account.
+
+    Post-credential geofence (DM-043): the check runs FIRST — before
+    last_login / UserLoginEvent / USER_LOGIN_HANDLER — so a blocked login
+    records no success side effects. Evaluated with the verified `user`, so
+    `bypass_geofence` holders pass and block evidence carries the user.
     """
+    if source not in GEOFENCE_EXEMPT_JWT_SOURCES:
+        from mojo.apps.account.services.geofence import enforcement
+        blocked = enforcement.enforce(request, scope="auth", user=user)
+        if blocked is not None:
+            return blocked
     user.last_login = dates.utcnow()
     user.track()
     # Record login event with geo data — must not break login on failure
@@ -767,7 +791,7 @@ def on_user_forgot(request):
 @md.POST("auth/password/reset/code")
 @md.strict_rate_limit("password_reset_code", ip_limit=5, ip_window=300)
 @md.public_endpoint()
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 @md.requires_params("code", "new_password")
 def on_user_password_reset_code(request):
     code = request.DATA.get("code")
@@ -800,7 +824,7 @@ def on_user_password_reset_code(request):
 
 @md.POST("auth/password/reset/token")
 @md.custom_security("requires valid token")
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 @md.requires_params("token", "new_password")
 def on_user_password_reset_token(request):
     token = request.DATA.get("token")
@@ -863,7 +887,7 @@ def on_magic_login_send(request):
 @md.POST("auth/magic/login")
 @md.strict_rate_limit("magic_login", ip_limit=10, ip_window=300)
 @md.custom_security("requires valid magic login token")
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 @md.requires_params("token")
 def on_magic_login_complete(request):
     """Exchange a magic login token for a JWT — logs the user in."""
@@ -905,7 +929,7 @@ def on_email_verify_send(request):
 @md.POST("auth/email/verify")
 @md.strict_rate_limit("email_verify", ip_limit=10, ip_window=300)
 @md.custom_security("requires valid email verify token")
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 @md.requires_params("token")
 def on_email_verify(request):
     """Exchange an email verify token — marks email verified and logs the user in."""
@@ -923,7 +947,7 @@ def on_email_verify(request):
 @md.POST("auth/invite/accept")
 @md.strict_rate_limit("invite_accept", ip_limit=10, ip_window=300)
 @md.custom_security("requires valid invite token")
-@md.requires_geofence(scope="auth")
+@md.requires_geofence(scope="auth", after_auth=True)
 @md.requires_params("token")
 def on_invite_accept(request):
     """

@@ -1,5 +1,32 @@
 ## v1.2.49 - July 12, 2026
 
+**feature** — **Login-flow geofencing now enforces after credential verification (DM-043).**
+Identity-bearing auth endpoints (password login, TOTP/SMS finish + standalone,
+passkey complete, OAuth complete, handoff exchange, magic link, email verify,
+invite accept, password reset) switch to
+`@md.requires_geofence(scope="auth", after_auth=True)`: the endpoint stays in
+the security registry, but enforcement runs post-credential — at the top of
+`jwt_login()` (before any success side effect: no `last_login`, no
+`UserLoginEvent`, no `USER_LOGIN_HANDLER` on a block) and before the MFA
+challenge (a blocked user never receives an `mfa_token`). Evaluated with the
+verified user, so **`bypass_geofence` now works at login** — a whitelisted
+user completes a fresh login from a blocked geo — and `geofence_block`/
+`geofence_exempt` events carry the verified `uid` + `username`. Ordering
+contract: invalid credentials → the normal 401 regardless of geo; valid
+credentials → the standard leak-scrubbed geofence 403. `jwt_login` enforces
+for every source by default; `sessions_revoke` and `email_change` are exempt
+(authed re-issues — revoking your own sessions must work from anywhere).
+Token-proven actions (password reset, email verify, invite accept) still
+apply their mutation before the session is withheld. Identity-less endpoints
+(register, forgot, sends, begins) keep pre-view blocking. Shared enforcement
+routine `services/geofence/enforcement.enforce()` now backs both the
+decorator and the post-auth checks; evidence emission (levels, dedupe,
+metrics, fail-open/allowlist handling) is unchanged. Accepted tradeoff
+(explicit): a caller in a blocked geo with valid stolen credentials can
+distinguish 403 from 401 — geofencing is not a credential-testing defense.
+Docs also fix a factual error: OAuth `/callback` (not `/complete`) is the
+undecorated redirect endpoint.
+
 **feature** — **Maestro board link (client): push incident tickets into a remote maestro board with two-way sync.**
 An admin pastes a maestro board link URL into
 `POST /api/incident/maestro/board` — the save registers synchronously against
