@@ -350,3 +350,9 @@ none
 - The unthrottled `ALLOW_API_KEY_GLOBAL` logit.error + wrong "group FK"
   message are in the sibling bug item (`apikey-suspension-residual-surfaces.md`),
   not here.
+
+## Resolution
+- closed: 2026-07-17
+- branch: main
+- files changed: mojo/helpers/request.py,mojo/decorators/auth.py,mojo/models/rest.py,mojo/apps/account/models/api_key.py,tests/test_global_perms/apikey_group_inactive.py,CHANGELOG.md,docs/web_developer/account/custom_auth_models.md,docs/django_developer/account/api_keys.md,docs/django_developer/core/permissions.md,docs/django_developer/helpers/request.md
+- tests added: tests/test_global_perms/apikey_group_inactive.py — test_inactive_group_gate_runs_before_instance_hooks (item 1: naive hook cannot bypass the pre-hook inactive-group gate; confirmed failing pre-fix), test_unregistered_machine_identity_denied (item 2: authenticated non-User identity without request.api_key fails closed as non_user_no_api_key; confirmed failing pre-fix). Items 3/4 covered by the existing DM-037 suite (10/10 green).
