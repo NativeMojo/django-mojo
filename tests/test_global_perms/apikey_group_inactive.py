@@ -244,6 +244,46 @@ def test_apikey_child_key_dark_when_parent_inactive(opts):
         parent.delete()
 
 
+@th.django_unit_test("DM-048: get_groups prunes every descendant beneath an inactive node (batched, no per-group walk)")
+def test_apikey_get_groups_prunes_dark_subtree(opts):
+    """The RestMeta list-fallback derivation: parent -> mid -> leaf, plus an
+    active sibling. Deactivating MID must drop mid AND leaf (leaf's own flag
+    stays True) while keeping parent + sibling; deactivating the key's own
+    group must yield an empty set."""
+    from mojo.apps.account.models import ApiKey
+
+    parent = _mk_group()
+    mid = _mk_group(parent=parent)
+    leaf = _mk_group(parent=mid)
+    sibling = _mk_group(parent=parent)
+    key, _token = ApiKey.create_for_group(
+        group=parent, name="ak_ia_test_prune", permissions={"groups": True})
+    try:
+        ids = set(key.get_groups().values_list("id", flat=True))
+        assert ids == {parent.pk, mid.pk, leaf.pk, sibling.pk}, \
+            f"all-active subtree must be fully reachable, got {ids!r}"
+
+        mid.is_active = False
+        mid.save()
+        ids = set(key.get_groups().values_list("id", flat=True))
+        assert mid.pk not in ids and leaf.pk not in ids, \
+            f"an inactive node AND everything beneath it must be pruned, got {ids!r}"
+        assert ids == {parent.pk, sibling.pk}, \
+            f"the active parent and sibling branch must survive the prune, got {ids!r}"
+
+        parent.is_active = False
+        parent.save()
+        key_fresh = ApiKey.objects.get(pk=key.pk)  # drop the cached group FK
+        assert key_fresh.get_groups().count() == 0, \
+            "a key whose own group chain is dark must derive an EMPTY group set"
+    finally:
+        ApiKey.objects.filter(pk=key.pk).delete()
+        leaf.delete()
+        mid.delete()
+        sibling.delete()
+        parent.delete()
+
+
 @th.django_unit_test("group row: inactive group's key cannot read or self-reactivate its own Group")
 def test_group_self_access_denied_when_inactive(opts):
     """Post-build review gap A: Group.check_view/edit_permission gate an ApiKey

@@ -122,9 +122,11 @@ Returns the authenticated user's membership record in the specified group.
 }
 ```
 
-Succeeds only when the caller is an active member of an **active** group. Every
-other outcome — the caller is not a member, the group is inactive, or the id
-does not exist — returns the standard `403` permission-denied response
+Succeeds only when the caller is an active member of an **active** group — "active"
+here means the group and every parent above it (see [Group Context](#group-context)
+above). Every other outcome — the caller is not a member, the group (or an
+ancestor) is inactive, or the id does not exist — returns the standard `403`
+permission-denied response
 (`{"error": "GET permission denied: GroupMember", "code": 403, "status": false}`),
 indistinguishable by design (no existence oracle: probing an id reveals nothing
 about whether a group exists). Treat a `403` from this endpoint as "no

@@ -122,7 +122,9 @@ disable itself). Consequences:
 
 `Group` entities are unaffected by the key rotation (`hasattr(entity,
 "auth_key")` gates it to `User`); `Group.is_active` is already checked
-per-request.
+per-request — and since DM-048, so is every ancestor's, via
+`Group.is_effectively_active()` (deactivating a parent instantly darkens the
+whole subtree; see [Group → Membership](group.md#membership)).
 
 ---
 

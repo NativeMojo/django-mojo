@@ -234,15 +234,34 @@ class ApiKey(MojoSecrets, MojoModel):
         """
         from mojo.apps.account.models import Group
 
+        # DM-048: the key's own group carries the whole ancestor burden — if
+        # its chain is dark, every descendant is dark too (one bounded walk,
+        # not one per group).
+        if not self.group.is_effectively_active():
+            return Group.objects.none()
         if not include_children:
-            queryset = Group.objects.filter(pk=self.group_id, is_active=True)
-        else:
-            all_ids = set([self.group_id])
-            all_ids.update(self.group._get_all_child_ids())
-            queryset = Group.objects.filter(id__in=all_ids, is_active=True)
-        # DM-048: prune anything whose ancestor chain is dark. A key's subtree
-        # is bounded, so the per-group chain walk stays small.
-        kept_ids = [g.pk for g in queryset if g.is_effectively_active()]
+            return Group.objects.filter(pk=self.group_id, is_active=True)
+        # Descendants: with the own group's chain verified above, a descendant
+        # is effectively active iff it is reachable from the key's group
+        # through own-flag-active nodes. ONE query for the subtree's
+        # (id, parent_id) pairs, then an in-memory walk — no per-group
+        # ancestor queries (N+1 guard).
+        all_ids = set([self.group_id])
+        all_ids.update(self.group._get_all_child_ids())
+        children_of = {}
+        for gid, pid in Group.objects.filter(
+                id__in=all_ids, is_active=True).values_list("id", "parent_id"):
+            children_of.setdefault(pid, []).append(gid)
+        kept_ids = []
+        seen = set()
+        stack = [self.group_id]
+        while stack:
+            gid = stack.pop()
+            if gid in seen:
+                continue
+            seen.add(gid)
+            kept_ids.append(gid)
+            stack.extend(children_of.get(gid, []))
         return Group.objects.filter(id__in=kept_ids)
 
     def get_groups_with_permission(self, perms, is_active=True):

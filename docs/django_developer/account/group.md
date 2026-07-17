@@ -37,13 +37,19 @@ group.save()
 ```
 
 The mapping is cached in Redis (`auth_domain:<hostname>` key, 24h TTL). The
-cache is automatically invalidated when `auth_domain` or `is_active` changes.
+cache is automatically invalidated when the group's own `auth_domain` or
+`is_active` changes. It is keyed to the raw own-flag row, so it does **not**
+get invalidated by an ancestor's `is_active` flip (DM-048) — effective
+activeness is instead re-verified on every read, cache hit or miss, so a
+parent deactivation/reactivation is reflected immediately without a stale
+negative entry.
 
 ### Resolving a group by hostname
 
 ```python
 group = Group.resolve_by_auth_domain('auth.clientbrand.com')
-# Returns the active Group with that auth_domain, or None.
+# Returns the effectively active Group with that auth_domain (it and every
+# ancestor — DM-048), or None.
 # Result is Redis-cached (24h for hits, 1h for misses).
 ```
 
@@ -285,7 +291,7 @@ member.save()
 
 ## request.group
 
-When a request includes `?group=<id>`, `MojoMiddleware` and auth decorators auto-populate `request.group` with the `Group` instance if the user is a member. Only **active** groups resolve (`Group.get_active`) — an inactive group's id behaves exactly like a nonexistent one (`request.group` stays `None`, no touch side effect), for both the `group=` and `group_uuid=` params. `GET /api/group/<pk>/member` follows the same contract: it resolves via `Group.get_active` and returns one indistinguishable `403` for every non-member outcome (nonexistent, inactive, or not a member), only `touch()`ing the group/member after membership in an active group is confirmed. All permission checks and list queries are then scoped to that group — **except** endpoints gated with `@md.requires_global_perms`, which never consult `request.group` at all (global `User.permissions` or superuser only). See [Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks).
+When a request includes `?group=<id>`, `MojoMiddleware` and auth decorators auto-populate `request.group` with the `Group` instance if the user is a member. Only **effectively active** groups resolve (`Group.get_active` — see [Effective activeness](#membership) above) — an inactive group's id, including an active child under a deactivated ancestor, behaves exactly like a nonexistent one (`request.group` stays `None`, no touch side effect), for both the `group=` and `group_uuid=` params. `GET /api/group/<pk>/member` follows the same contract: it resolves via `Group.get_active` and returns one indistinguishable `403` for every non-member outcome (nonexistent, inactive, or not a member), only `touch()`ing the group/member after membership in an effectively active group is confirmed. All permission checks and list queries are then scoped to that group — **except** endpoints gated with `@md.requires_global_perms`, which never consult `request.group` at all (global `User.permissions` or superuser only). See [Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks).
 
 ```python
 # In a REST handler

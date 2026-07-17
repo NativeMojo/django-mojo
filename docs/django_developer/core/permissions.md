@@ -50,10 +50,10 @@ wrong one is a **cross-tenant privilege-escalation risk**.
   the request (`request.group.user_has_permission(...)`). Correct when the
   endpoint's effect is confined to `request.group` (e.g. rotating *that* group's
   webhook secret). A **non-User identity (ApiKey)** is trusted only within an
-  **active** group context: if `request.group` is `None` (which is what
-  `validate_token` yields when the key's group is deactivated — DM-037) the
-  request is denied before the key's self-claimed permission dict is consulted.
-  Same gate in `requires_group_perms`.
+  **effectively active** group context: if `request.group` is `None` (which is
+  what `validate_token` yields when the key's group — or any ancestor of it,
+  DM-048 — is deactivated, DM-037) the request is denied before the key's
+  self-claimed permission dict is consulted. Same gate in `requires_group_perms`.
 - **`@md.requires_global_perms(...)`** — checks **global `User.permissions` (or
   superuser) only**, never the group/member fallback. Use it for any endpoint
   whose effect is **platform-wide**: global settings, fleet/job control, AWS
@@ -102,12 +102,14 @@ owner match, the group-membership check, and finally `user.has_permission`.
 
 **A hook never sees an inactive-group instance for an ApiKey identity
 (DM-045).** For a group-scoped model, `_evaluate_permission` denies an ApiKey
-access to an instance owned by an inactive group **before either hook runs**.
-This closes a structural gap: a hook that grants via a bare
-`request.api_key.has_permission(perms)` call (the obvious pattern to copy) can
-no longer reopen a suspended tenant's rows just because it doesn't itself
-check `instance.group.is_active`. Write hook-level ApiKey handling as an
-additional check on top of this gate, not a substitute for it — see
+access to an instance owned by an effectively inactive group (the group or any
+ancestor — DM-048) **before either hook runs**. This closes a structural gap:
+a hook that grants via a bare `request.api_key.has_permission(perms)` call
+(the obvious pattern to copy) can no longer reopen a suspended tenant's rows
+just because it doesn't itself check `instance.group.is_effectively_active()`
+— a bare `instance.group.is_active` check would miss a deactivated ancestor
+entirely. Write hook-level ApiKey handling as an additional check on top of
+this gate, not a substitute for it — see
 [API Keys → Group Scoping](../account/api_keys.md#group-scoping).
 
 `Group` is the canonical example: `check_view_permission` lets any active member

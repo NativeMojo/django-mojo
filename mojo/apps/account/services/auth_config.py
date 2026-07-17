@@ -279,15 +279,19 @@ def validate_auth_config(cfg):
 
 
 def resolve_group_from_request(request):
-    """Resolve an active Group from `group_uuid` on the request. None if absent
-    or unknown — callers treat None as 'no group context, no restriction'."""
+    """Resolve an EFFECTIVELY active Group (it and every ancestor — DM-048)
+    from `group_uuid` on the request. None if absent or unknown — callers
+    treat None as 'no group context, no restriction'."""
     if not hasattr(request, "DATA"):
         return None
     group_uuid = (request.DATA.get("group_uuid") or "").strip()
     if not group_uuid:
         return None
     from mojo.apps.account.models.group import Group
-    return Group.objects.filter(uuid=group_uuid, is_active=True).first()
+    group = Group.objects.filter(uuid=group_uuid, is_active=True).first()
+    if group is not None and not group.is_effectively_active():
+        return None
+    return group
 
 
 def assert_login_method(method, group):

@@ -57,11 +57,15 @@ def _resolve_group(request):
     except Exception:
         pass
 
-    # 2. Query param fallback
+    # 2. Query param fallback. Effective activeness (DM-048): a group under a
+    # deactivated ancestor must not brand the page either — matches the
+    # hostname path above (resolve_by_auth_domain verifies the chain).
     group_uuid = request.GET.get('group_uuid', '')
     if group_uuid:
         try:
-            return Group.objects.filter(uuid=group_uuid, is_active=True).first()
+            group = Group.objects.filter(uuid=group_uuid, is_active=True).first()
+            if group is not None and group.is_effectively_active():
+                return group
         except Exception:
             pass
 

@@ -208,7 +208,7 @@ Returns the authenticated user's own record using their `pk`.
    tokens too. See the [kill switch](disable_lifecycle.md#kill-switch-disable-is-instant-dm-042)
    (DM-042).
 4. `request.user` set to the resolved user (or anonymous)
-5. `request.group` set if `group` param present, the group is active, and user is a member (an inactive group's id resolves to no group, same as a nonexistent one)
+5. `request.group` set if `group` param present, the group is **effectively** active (it and every ancestor — DM-048), and user is a member (an inactive group's id — including an active child under a deactivated ancestor — resolves to no group, same as a nonexistent one)
 
 **Malformed headers don't error.** If the `Authorization` value isn't exactly `<scheme>
 <token>`, the middleware treats the request as unauthenticated and continues — it does not
