@@ -206,3 +206,45 @@ def test_password_reset_blocked_geo_no_session(opts):
     user = User.objects.get(pk=opts.reset_user_id)
     assert user.check_password(new_password), \
         "the password reset itself must have been applied (token-proven action)"
+
+
+@th.django_unit_test("post-auth: deferred endpoints stay in the audit registry, annotated after_auth")
+def test_registry_annotates_after_auth(opts):
+    """GET /api/geo/rules enforced_endpoints must keep deferred endpoints and
+    distinguish them from pre-view ones (compliance artifact).
+
+    Probe views are registered here because several auth decorators
+    (public_endpoint, custom_security, requires_auth, ...) OVERWRITE the
+    shared SECURITY_REGISTRY entry when applied above @requires_geofence —
+    a pre-existing bug (filed separately) that drops most real endpoints
+    from enforced_endpoints regardless of after_auth. on_user_login has no
+    overwriting decorator above it, so it doubles as the real-world anchor.
+    """
+    from mojo import decorators as md
+
+    @md.requires_geofence(scope="dm043_probe")
+    def dm043_preview_probe(request):
+        pass
+
+    @md.requires_geofence(scope="dm043_probe", after_auth=True)
+    def dm043_deferred_probe(request):
+        pass
+
+    # Importing the rest modules populates SECURITY_REGISTRY in-process.
+    import mojo.apps.account.rest.user  # noqa: F401
+    from mojo.apps.account.rest.geofence import _enforced_endpoints
+
+    entries = {e["endpoint"]: e for e in _enforced_endpoints()}
+    preview = next((e for k, e in entries.items() if k.endswith(".dm043_preview_probe")), None)
+    deferred = next((e for k, e in entries.items() if k.endswith(".dm043_deferred_probe")), None)
+    login = next((e for k, e in entries.items() if k.endswith(".on_user_login")), None)
+
+    assert deferred is not None, "deferred endpoint must appear in enforced_endpoints"
+    assert deferred.get("after_auth") is True, \
+        f"deferred endpoint must be annotated after_auth, got {deferred}"
+    assert deferred.get("scope") == "dm043_probe", f"scope must survive, got {deferred}"
+    assert preview is not None, "pre-view endpoint must appear in enforced_endpoints"
+    assert "after_auth" not in preview, \
+        f"pre-view endpoint must NOT carry after_auth, got {preview}"
+    assert login is not None and login.get("after_auth") is True, \
+        f"on_user_login must be listed and annotated after_auth, got {login}"

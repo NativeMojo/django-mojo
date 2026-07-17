@@ -205,10 +205,12 @@ mid-flow and issues a JWT (password login, TOTP/SMS MFA finish and standalone
 logins, passkey complete, OAuth complete, handoff exchange, magic link, email
 verify, invite accept, password reset) — carry
 `@md.requires_geofence(scope="auth", after_auth=True)`. The deferred mode
-registers the endpoint in the security registry (it still appears in
-`GET /api/geo/rules` → `enforced_endpoints`, annotated `after_auth`) but does
-**not** block pre-view. Enforcement instead runs **after credential
-verification** with the verified user, via the shared
+registers the endpoint in the security registry — it still appears in
+`GET /api/geo/rules` → `enforced_endpoints` with its `scope`, annotated
+`after_auth: true` so an auditor can distinguish pre-view from
+post-credential enforcement — but does **not** block pre-view. Enforcement
+instead runs **after credential verification** with the verified user, via
+the shared
 `services.geofence.enforcement.enforce(request, scope, user)` routine at two
 points:
 
@@ -258,7 +260,7 @@ Country, region, and abuse details are intentionally omitted from the blocked re
 
 ### OAuth `/callback` is not decorated
 
-The OAuth `/callback` endpoint returns an HTTP redirect, not JSON, so `@md.requires_geofence` is not applied there. `/begin` is geofenced pre-view; `/complete` uses `after_auth=True` and is enforced post-credential inside `jwt_login`. Group rules do not apply at `/complete` because the `group_uuid` is encoded inside the signed OAuth state string and is not decoded until inside the view — so only system rules apply there.
+The OAuth `/callback` endpoint returns an HTTP redirect, not JSON, so `@md.requires_geofence` is not applied there. `/begin` is geofenced pre-view; `/complete` uses `after_auth=True` and enforces **immediately after the provider exchange proves the identity — before `_find_or_create_user`** — so a blocked-geo caller can never provision a new account, join a group, fire the registration webhook, or persist provider tokens (existing users resolve lookup-only so `bypass_geofence` is honored; unknown identities enforce anonymously). `jwt_login` re-checks as the backstop. Group rules do not apply at `/complete` because the `group_uuid` is encoded inside the signed OAuth state string and is not decoded until inside the view — so only system rules apply there.
 
 ---
 

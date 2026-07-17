@@ -149,13 +149,17 @@ def _resolve_group_param(request):
 def _enforced_endpoints():
     """Every @requires_geofence endpoint + its scope, from SECURITY_REGISTRY —
     part of the compliance artifact ("rules in an active state" includes WHERE
-    they are enforced)."""
+    they are enforced). Deferred endpoints (DM-043) carry `after_auth: true` —
+    enforced post-credential inside jwt_login rather than pre-view."""
     from mojo.decorators.auth import SECURITY_REGISTRY
     out = []
     for key, entry in sorted(SECURITY_REGISTRY.items()):
         gf = entry.get("geofence") if isinstance(entry, dict) else None
         if gf is not None:
-            out.append({"endpoint": key, "scope": gf.get("scope")})
+            item = {"endpoint": key, "scope": gf.get("scope")}
+            if gf.get("after_auth"):
+                item["after_auth"] = True
+            out.append(item)
     return out
 
 

@@ -401,6 +401,33 @@ None — both decision points approved (see top of Plan).
 - **Baseline (2026-07-17, before first edit)**: `bin/run_tests --agent` →
   total 2494 / passed 2438 / failed 0 / skipped 56. All green — no
   pre-existing failures; any post-change failure is attributable to DM-043.
+- **Post-build security review (WARNING, fixed)**: `on_oauth_complete` on the
+  deferred decorator let a blocked-geo caller with a valid provider code
+  provision a NEW account (user + connection + GroupMember + registration
+  webhook + stored provider tokens) before the jwt_login check. Fixed:
+  `enforce()` now runs in-view right after the provider exchange proves the
+  identity, before `_find_or_create_user` — existing users resolve via the
+  new lookup-only `_lookup_known_user` (bypass honored), unknown identities
+  enforce anonymously. Regression: lookup-only test in `tests/test_oauth/`.
+  Full `/complete` endpoint flow is not end-to-end testable (real provider
+  network exchange; no test provider exists — same reason existing oauth
+  tests exercise `_find_or_create_user` in-process).
+- **Security review INFO (accepted, no action)**: (1) in the MFA branch,
+  `clear_rate_limits(account_id)` runs before the geofence check — resets a
+  brute-force counter for an already-correct password, no access granted;
+  (2) a crash inside `enforce()` on after_auth endpoints burns already-
+  consumed single-use artifacts (mfa_token, recovery/magic tokens) —
+  fail-closed, availability-only, same class as the accepted
+  mutation-before-check design.
+- **Follow-up from docs sweep**: `enforced_endpoints` now surfaces
+  `after_auth: true` (`rest/geofence.py::_enforced_endpoints`) so the audit
+  API distinguishes pre-view from post-credential enforcement.
+- **Pre-existing bug discovered & filed** (not caused by DM-043): ten
+  decorators in `mojo/decorators/auth.py` OVERWRITE `SECURITY_REGISTRY[key]`,
+  clobbering the geofence sub-entry whenever they sit above
+  `@requires_geofence` — `enforced_endpoints` has been under-reporting most
+  geofenced endpoints all along (enforcement unaffected). Filed:
+  `planning/inbox/security-registry-decorator-clobbering.md`.
 
 ## Resolution
 - closed: YYYY-MM-DD

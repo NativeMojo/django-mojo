@@ -49,6 +49,20 @@ On every `jwt_login` call the framework captures the frontend origin from `reque
 
 These are used as a fallback in the `build_token_url` lookup chain (see [Token URLs](#token-urls)).
 
+### Geofence enforcement
+
+`jwt_login` is also the post-credential geofence enforcement point (DM-043):
+its first statement checks the geofence engine with the now-verified `user`
+and, on block, returns the standard geofence 403 before `last_login`, the
+`UserLoginEvent`, or `USER_LOGIN_HANDLER` fire — a blocked login has zero
+success side effects. This only applies to `source`s not listed in
+`GEOFENCE_EXEMPT_JWT_SOURCES` (`sessions_revoke`, `email_change` — authed
+re-issues, not logins). See [Geofencing — Post-credential
+enforcement](geofence.md#post-credential-enforcement-after_authtrue) for the
+full contract, including the MFA-branch check in `on_user_login` and the
+token-proven-action behavior (password reset / email verify / invite accept
+apply their mutation before the session is withheld).
+
 ---
 
 ## MFA Challenge (Login with MFA enabled)

@@ -376,6 +376,60 @@ def test_oauth_autolink_by_email_already_verified(opts):
     assert fresh.is_email_verified is True, "Already-verified flag should remain True"
 
 
+@th.django_unit_test("oauth: _lookup_known_user is lookup-only (DM-043 geofence pre-check)")
+def test_oauth_lookup_known_user_is_side_effect_free(opts):
+    """The post-credential geofence check on /complete resolves the user via
+    _lookup_known_user BEFORE _find_or_create_user runs. It must never
+    create rows or flip verification flags — a blocked-geo caller must leave
+    zero footprint."""
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.oauth import OAuthConnection
+    from mojo.apps.account.rest.oauth import _lookup_known_user
+
+    # Unknown identity → None, and nothing created.
+    unknown_email = "lookup_only_unknown@geofence.test"
+    User.objects.filter(email=unknown_email).delete()
+    users_before = User.objects.count()
+    conns_before = OAuthConnection.objects.count()
+    result = _lookup_known_user(PROVIDER, {
+        "uid": "google_uid_lookup_unknown", "email": unknown_email})
+    assert result is None, "unknown identity must resolve to None"
+    assert User.objects.count() == users_before, \
+        "lookup must NOT create a User"
+    assert OAuthConnection.objects.count() == conns_before, \
+        "lookup must NOT create an OAuthConnection"
+
+    # Existing connection → its user, still no writes.
+    OAuthConnection.objects.filter(user=opts.user).delete()
+    OAuthConnection.objects.create(
+        user=opts.user, provider=PROVIDER,
+        provider_uid="google_uid_lookup_conn", email=TEST_EMAIL)
+    result = _lookup_known_user(PROVIDER, {
+        "uid": "google_uid_lookup_conn", "email": TEST_EMAIL})
+    assert result is not None and result.id == opts.user.id, \
+        "existing connection must resolve to its user"
+
+    # Email match without a connection → the user, and the unverified flag
+    # must NOT be flipped (that mutation belongs to _find_or_create_user,
+    # which only runs after the geofence check passes).
+    OAuthConnection.objects.filter(user=opts.user).delete()
+    opts.user.is_email_verified = False
+    opts.user.save(update_fields=["is_email_verified", "modified"])
+    result = _lookup_known_user(PROVIDER, {
+        "uid": "google_uid_lookup_email", "email": TEST_EMAIL})
+    assert result is not None and result.id == opts.user.id, \
+        "email match must resolve to the existing user"
+    fresh = User.objects.get(pk=opts.user.pk)
+    assert fresh.is_email_verified is False, \
+        "lookup must NOT flip is_email_verified"
+    assert OAuthConnection.objects.filter(user=opts.user).count() == 0, \
+        "email-match lookup must NOT create a connection"
+
+    # Restore for subsequent tests
+    opts.user.is_email_verified = True
+    opts.user.save(update_fields=["is_email_verified", "modified"])
+
+
 @th.django_unit_test("oauth: auto-link creates new user for unknown email")
 def test_oauth_autolink_creates_user(opts):
     from mojo.apps.account.models import User

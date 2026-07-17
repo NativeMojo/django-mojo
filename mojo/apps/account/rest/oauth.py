@@ -98,6 +98,23 @@ def _resolve_state_group(state_data):
     return group
 
 
+def _lookup_known_user(provider_name, profile):
+    """Lookup-only resolution of the local user an OAuth profile maps to.
+
+    Mirrors steps 1-2 of _find_or_create_user WITHOUT any side effect — no
+    connection/user creation, no email-verified flip. Used by the
+    post-credential geofence check (DM-043) so an existing user's
+    bypass_geofence is honored while an unknown identity is enforced
+    anonymously BEFORE any account provisioning happens.
+    """
+    conn = OAuthConnection.objects.filter(
+        provider=provider_name, provider_uid=profile["uid"]
+    ).select_related("user").first()
+    if conn:
+        return conn.user
+    return User.lookup(email=profile["email"])
+
+
 def _find_or_create_user(provider_name, profile, state_data=None, request=None):
     """
     Auto-link logic:
@@ -355,6 +372,19 @@ def on_oauth_complete(request, provider):
 
     if not profile.get("uid"):
         raise merrors.PermissionDeniedException("Could not retrieve user identity from provider")
+
+    # Post-credential geofence (DM-043): the provider exchange has proven the
+    # identity — enforce BEFORE _find_or_create_user so a blocked-geo caller
+    # can never provision an account, join a group, fire the registration
+    # webhook, or persist provider tokens. Existing users resolve lookup-only
+    # (bypass_geofence honored); an unknown identity enforces anonymously —
+    # the same posture as the old pre-view block. jwt_login re-checks below
+    # (cached no-op / bypass short-circuit).
+    from mojo.apps.account.services.geofence import enforcement
+    blocked = enforcement.enforce(
+        request, scope="auth", user=_lookup_known_user(provider, profile))
+    if blocked is not None:
+        return blocked
 
     user, conn, created = _find_or_create_user(provider, profile, state_data, request)
 

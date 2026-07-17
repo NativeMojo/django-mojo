@@ -24,6 +24,12 @@ decorator and the post-auth checks; evidence emission (levels, dedupe,
 metrics, fail-open/allowlist handling) is unchanged. Accepted tradeoff
 (explicit): a caller in a blocked geo with valid stolen credentials can
 distinguish 403 from 401 — geofencing is not a credential-testing defense.
+Security-review hardening: OAuth `/complete` enforces in-view right after the
+provider exchange proves the identity — before `_find_or_create_user` — so a
+blocked-geo caller can never provision a new account, join a group, fire the
+registration webhook, or persist provider tokens (existing users resolve
+lookup-only, so `bypass_geofence` is honored). `GET /api/geo/rules` →
+`enforced_endpoints` now annotates deferred endpoints `after_auth: true`.
 Docs also fix a factual error: OAuth `/callback` (not `/complete`) is the
 undecorated redirect endpoint.
 
