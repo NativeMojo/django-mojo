@@ -251,6 +251,9 @@ None — the three embedded calls (lists own-flag in v1, api-key test flip,
 timing side-channel parked to `planning/future/`) were approved 2026-07-17.
 
 ## Notes
+- Baseline (2026-07-17, pre-edit, `bin/run_tests --agent`): 2830 total / 2449
+  passed / 0 failed / 381 skipped (opt-in + env-gated skips). All green — any
+  post-change failure is DM-048's.
 - Source: DM-039 post-build security-review (2026-07-16); verified + rescoped to
   the subtree contract by /scope with user ruling (2026-07-17).
 - The minor DM-039-review timing side-channel (deny paths wire-identical but not

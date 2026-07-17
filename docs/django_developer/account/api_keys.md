@@ -52,18 +52,18 @@ In `GroupMember.has_permission`, a permission like `sys.manage_users` strips the
 
 ## Group Scoping
 
-Every API key belongs to one group. The key can access that group and any of its **active** descendants. If a request passes `group=<id>` in the request data and that group is not the key's group or a descendant, the dispatcher returns 403; an **inactive** group's id never resolves at all (same as a nonexistent id).
+Every API key belongs to one group. The key can access that group and any of its **effectively active** descendants. If a request passes `group=<id>` in the request data and that group is not the key's group or a descendant, the dispatcher returns 403; an **inactive** group's id never resolves at all (same as a nonexistent id).
 
-**Deactivating a group suspends its keys instantly (DM-037).** The active-state check is enforced at request time, so keys are never mutated — reactivating the group restores them immediately. It holds on every surface a key derives group context from:
+**Deactivating a group suspends its keys instantly (DM-037), and deactivating an ancestor suspends the whole subtree's keys (DM-048).** "Active" on every surface below means *effectively* active — the group **and every ancestor** (`Group.is_effectively_active`). The check is enforced at request time, so keys are never mutated — reactivating the group (or the ancestor) restores them immediately. It holds on every surface a key derives group context from:
 
-- `validate_token` sets `request.group` only when the key's group is active; an inactive group leaves it `None`, so a no-`group=` request fails closed at model security.
-- A detail/save/delete op re-binds `request.group` from the target row's group; the model-security api_key branch re-checks `is_active` there too, so it fails closed rather than being revived by the re-bind.
-- The RestMeta list fallback derives the key's groups from `ApiKey.get_groups`, which excludes inactive groups — so a deactivated tenant's rows never enumerate.
-- `ApiKey.is_group_allowed` requires the target group to be active. This also gates `Group.check_view_permission`/`check_edit_permission` (which run before the model-security branch), so a suspended tenant's key cannot read or write its own `Group` row — in particular it cannot flip `is_active` back on and un-suspend itself.
+- `validate_token` sets `request.group` only when the key's group is effectively active; a dark chain leaves it `None`, so a no-`group=` request fails closed at model security.
+- A detail/save/delete op re-binds `request.group` from the target row's group; the model-security api_key branch re-checks effective activeness there too, so it fails closed rather than being revived by the re-bind.
+- The RestMeta list fallback derives the key's groups from `ApiKey.get_groups`, which excludes effectively-inactive groups — so a deactivated tenant's rows never enumerate.
+- `ApiKey.is_group_allowed` requires the target group to be effectively active. This also gates `Group.check_view_permission`/`check_edit_permission` (which run before the model-security branch), so a suspended tenant's key cannot read or write its own `Group` row — in particular it cannot flip `is_active` back on and un-suspend itself.
 - The `@md.requires_perms` / `@md.requires_group_perms` decorators trust a non-User identity's permission dict only within an ACTIVE group context — a key with `request.group = None` is denied before its self-claimed perms are consulted. This closes custom (non-RestMeta) endpoints like `sms/send` too.
 - **(DM-045)** For a group-scoped model, the model-security layer denies an inactive-group instance to an ApiKey identity *before* `check_view_permission`/`check_edit_permission` run — a future hook that naively grants via bare `request.api_key.has_permission(perms)` cannot reopen a suspended tenant's rows. See [Core → Instance-Level Permission Hooks](../core/permissions.md#instance-level-permission-hooks).
 
-Not a hard token reject: an inactive-group key still **authenticates** (it returns `request.group = None`, not a 401). This preserves the group-independent federation path (`requires_global_perms(..., allow_api_keys=True)`, e.g. the geoip `/sync` receiver), which authorizes on the key's `has_permission` and ignores `request.group`. An **active child under an inactive parent** stays reachable via explicit `group=<child id>` — the filter is per-group, not a cascade.
+Not a hard token reject: an inactive-group key still **authenticates** (it returns `request.group = None`, not a 401). This preserves the group-independent federation path (`requires_global_perms(..., allow_api_keys=True)`, e.g. the geoip `/sync` receiver), which authorizes on the key's `has_permission` and ignores `request.group`. An **active child under an inactive parent is NOT reachable** (DM-048 overturned the old per-group carve-out): the child is effectively inactive, so `group=<child id>` resolves like a nonexistent id and the child's own keys go dark too. No flag is written to the child — reactivating the parent restores the entire subtree instantly.
 
 ## Creating Keys
 

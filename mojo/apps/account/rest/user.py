@@ -313,7 +313,10 @@ def on_register(request):
         group = Group.objects.filter(uuid=group_uuid).first()
         if group is None:
             raise merrors.ValueException("Unknown group")
-        if not group.is_active:
+        # Effective activeness (DM-048): a deactivated ancestor darkens the
+        # group too — registration against any group of a suspended subtree
+        # behaves exactly like an inactive group.
+        if not group.is_effectively_active():
             raise merrors.ValueException("Group is not active")
     elif require_group:
         raise merrors.ValueException("group_uuid is required")

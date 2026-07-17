@@ -1,5 +1,30 @@
 ## v1.2.49 - July 12, 2026
 
+**security** — **Deactivating a parent group now disables its entire subtree (DM-048).**
+A group is *effectively active* only if it **and every ancestor** is active —
+the new single owner of that contract is `Group.is_effectively_active(max_depth=8)`,
+enforced dynamically (no flag cascade), so reactivating the parent instantly
+restores individually-active children (no one-way door). Previously the
+membership parent-walk (`Group.get_member_for_user(check_parents=True)`)
+checked only the membership row's `is_active`, so an active membership in a
+*deactivated* parent still authorized against active children on every surface
+backed by the walk (member endpoint, group view/edit permission checks,
+realtime topics, assistant tiers, member/api-key permission grants). Now
+routed through the effective check: `Group.get_active` (dispatcher `group=`,
+perm-fallback decorators, `GET /api/group/<pk>/member`), the membership walk
+itself (denies even a *direct* member of an active child under a deactivated
+ancestor; `is_active=False` admin lookups unchanged), `ApiKey.validate_token`
+/ `is_group_allowed` / `get_groups` (DM-037 extended to subtrees — deliberately
+overturning the old "active child under an inactive parent stays reachable"
+carve-out), the model-security inactive-group gates, the dispatcher
+`group_uuid` branch, registration, OAuth state, geofence pre-flight, and
+`resolve_by_auth_domain` (chain verified per read — the 24h cache can't see an
+ancestor flip). List endpoints still filter on the own flag only (SQL-level);
+every resolution/authorization gate denies. Regression tests in
+`tests/test_account/test_group_me_member_oracle.py`,
+`tests/test_middleware/group_param_is_active.py`, and
+`tests/test_global_perms/apikey_group_inactive.py`.
+
 **chore** — **Internal hardening of the DM-037 machine-identity gates (DM-045).**
 No API or behavior change for real Users, active-group keys, or the federation
 path. Four structural fixes so the "suspended tenant = no access" invariant is

@@ -22,16 +22,17 @@ def _deny_machine_identity_without_active_group(request, perms):
     perms with no group consideration at all. Platform-global machine access
     uses requires_global_perms (which ignores request.group) instead.
 
-    The `not group.is_active` half is unreachable today — every pre-decorator
-    request.group assignment is active-only (validate_token, the dispatcher's
-    Group.get_active resolution) — but is kept deliberately as defense-in-depth
-    on a security boundary (DM-045): a future group-context source that forgets
-    the active filter still fails closed here.
+    The `not group.is_effectively_active()` half is unreachable today — every
+    pre-decorator request.group assignment is effective-active-only
+    (validate_token, the dispatcher's Group.get_active resolution) — but is
+    kept deliberately as defense-in-depth on a security boundary (DM-045): a
+    future group-context source that forgets the active filter still fails
+    closed here. Effective = the group AND every ancestor (DM-048).
     """
     if is_request_user(request):
         return
     group = getattr(request, "group", None)
-    if group is None or not group.is_active:
+    if group is None or not group.is_effectively_active():
         logger.error(
             f"{getattr(request.user, 'username', request.user)} has no active group context for {perms}")
         raise mojo.errors.PermissionDeniedException()

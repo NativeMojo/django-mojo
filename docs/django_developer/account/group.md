@@ -209,7 +209,28 @@ member = group.invite("alice@example.com")
 
 # Active direct member count (excludes inactive memberships and descendants)
 n = group.member_count
+
+# A group is EFFECTIVELY active only if it and every ancestor is active
+alive = group.is_effectively_active()
 ```
+
+> **Effective activeness — deactivating a parent disables the subtree (DM-048).**
+> `Group.is_effectively_active(max_depth=8)` is the single owner of this
+> contract: a group counts as active only if it **and every ancestor** (up to 8
+> levels, matching the membership walk) is `is_active`. It is enforced
+> dynamically — no flag is cascaded onto children — so reactivating the parent
+> instantly restores individually-active descendants (no one-way door).
+> `get_member_for_user(..., is_active=True)` returns `None` for any group whose
+> chain is dark — a membership in a deactivated ancestor never resolves, and
+> even a *direct* membership in an active child of a deactivated parent is
+> denied. Pass `is_active=False` for raw admin/introspection lookups.
+> `Group.get_active`, the dispatcher's `group=`/`group_uuid` resolution, API-key
+> group context ([API Keys — Group Scoping](api_keys.md#group-scoping)),
+> registration, OAuth state, geofence pre-flight, and `resolve_by_auth_domain`
+> all route through the same check. List endpoints still filter on the group's
+> *own* flag only (SQL-level) — a child of a deactivated parent may appear in a
+> list to already-permitted callers, but every resolution/authorization gate
+> denies it.
 
 `member_count` is exposed via REST as an `extra` on the `default` graph (not `basic` — that stays minimal). List endpoints use `default` by, well, default, so the field appears in list payloads without an explicit `?graph=` parameter. Backed by `members.filter(is_active=True).count()` per record — at very large scale, consider an annotated queryset instead.
 

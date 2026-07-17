@@ -190,16 +190,18 @@ class ApiKey(MojoSecrets, MojoModel):
 
     def is_group_allowed(self, group):
         """
-        Returns True if the given group is ACTIVE and is this key's own group or
-        a descendant. An inactive group is never allowed (ITEM-037) — the check
-        is per-group, so an active child under an inactive parent still passes.
-        Used by the dispatcher to validate the group= request param and by
-        Group.check_view_permission / check_edit_permission (whose instance hooks
-        run before the model-security is_active gate — without this, a suspended
-        tenant's key could still read/write its own Group row, including
-        flipping is_active back).
+        Returns True if the given group is EFFECTIVELY ACTIVE (it and every
+        ancestor — DM-048) and is this key's own group or a descendant. An
+        inactive group is never allowed (ITEM-037), and deactivating an
+        ancestor darkens the whole subtree — an active child under an inactive
+        parent no longer passes (the old per-group carve-out was overturned by
+        DM-048). Used by the dispatcher to validate the group= request param
+        and by Group.check_view_permission / check_edit_permission (whose
+        instance hooks run before the model-security is_active gate — without
+        this, a suspended tenant's key could still read/write its own Group
+        row, including flipping is_active back).
         """
-        if group is None or not group.is_active:
+        if group is None or not group.is_effectively_active():
             return False
         if group.pk == self.group.pk:
             return True
@@ -207,14 +209,16 @@ class ApiKey(MojoSecrets, MojoModel):
 
     def get_groups(self, is_active=True, include_children=True):
         """
-        Returns a QuerySet of ACTIVE groups accessible to this API key.
+        Returns a QuerySet of EFFECTIVELY ACTIVE groups accessible to this API key.
 
         An API key is scoped to its own group and, when include_children is True,
-        all descendant groups. Inactive groups are ALWAYS excluded (ITEM-037):
-        deactivating a group suspends its keys' access at request time — the key
-        is never mutated, so reactivating instantly restores it. An active child
-        under an inactive parent stays reachable (the filter is per-group). This
-        is the derivation the RestMeta list fallback uses
+        all descendant groups. Inactive groups are ALWAYS excluded (ITEM-037),
+        and DM-048 extends the exclusion to the whole chain: a group whose
+        ancestor is deactivated is effectively inactive too (the old "active
+        child under an inactive parent stays reachable" carve-out was
+        overturned). Deactivating suspends access at request time — nothing is
+        mutated, so reactivating an ancestor instantly restores the subtree.
+        This is the derivation the RestMeta list fallback uses
         (mojo/models/rest.py on_rest_handle_list), so an inactive tenant's rows
         never leak there. The `is_active` argument is accepted for interface
         compatibility with User.get_groups() (which filters *member* activity,
@@ -226,16 +230,20 @@ class ApiKey(MojoSecrets, MojoModel):
             include_children: Include descendant groups (default True).
 
         Returns:
-            QuerySet of active Group objects.
+            QuerySet of effectively active Group objects.
         """
         from mojo.apps.account.models import Group
 
         if not include_children:
-            return Group.objects.filter(pk=self.group_id, is_active=True)
-
-        all_ids = set([self.group_id])
-        all_ids.update(self.group._get_all_child_ids())
-        return Group.objects.filter(id__in=all_ids, is_active=True)
+            queryset = Group.objects.filter(pk=self.group_id, is_active=True)
+        else:
+            all_ids = set([self.group_id])
+            all_ids.update(self.group._get_all_child_ids())
+            queryset = Group.objects.filter(id__in=all_ids, is_active=True)
+        # DM-048: prune anything whose ancestor chain is dark. A key's subtree
+        # is bounded, so the per-group chain walk stays small.
+        kept_ids = [g.pk for g in queryset if g.is_effectively_active()]
+        return Group.objects.filter(id__in=kept_ids)
 
     def get_groups_with_permission(self, perms, is_active=True):
         """
@@ -313,17 +321,18 @@ class ApiKey(MojoSecrets, MojoModel):
         if api_key.expires_at and dates.utcnow() > api_key.expires_at:
             return None, "API key has expired"
 
-        # Group context is granted only for an ACTIVE group. Deactivating a
-        # tenant instantly suspends its keys; reactivating restores them (no key
-        # mutation). An inactive group leaves request.group None so group-scoped
-        # model security fails closed via the groupless-deny branch
-        # (mojo/models/rest.py), matching ITEM-025's active-only contract. NOT a
-        # hard reject: the federation path (requires_global_perms,
-        # allow_api_keys) ignores request.group, so rejecting the token would
-        # over-suspend legitimate fleet-peer keys.
+        # Group context is granted only for an EFFECTIVELY ACTIVE group — the
+        # group AND every ancestor (DM-048). Deactivating a tenant (or any of
+        # its ancestors) instantly suspends its keys; reactivating restores
+        # them (no key mutation). An effectively-inactive group leaves
+        # request.group None so group-scoped model security fails closed via
+        # the groupless-deny branch (mojo/models/rest.py), matching ITEM-025's
+        # active-only contract. NOT a hard reject: the federation path
+        # (requires_global_perms, allow_api_keys) ignores request.group, so
+        # rejecting the token would over-suspend legitimate fleet-peer keys.
         # (The group FK is non-nullable and select_related-loaded above — there
         # is no null-group key variant to guard for.)
-        request.group = api_key.group if api_key.group.is_active else None
+        request.group = api_key.group if api_key.group.is_effectively_active() else None
         request.api_key = api_key
 
         try:

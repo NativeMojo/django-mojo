@@ -220,16 +220,40 @@ class Group(MojoSecrets, MojoModel):
             return ms.has_permission(perms)
         return False
 
+    def is_effectively_active(self, max_depth=8):
+        """A group counts as active only if it AND every ancestor is active
+        (DM-048): deactivating a parent darkens its whole subtree dynamically —
+        no flag cascade, so reactivating the parent instantly restores
+        individually-active children (no one-way door). The single owner of
+        this contract; every gate delegates here.
+
+        Depth-capped like get_member_for_user (also guards a parent cycle);
+        ancestors beyond the cap are not verified — chains that deep are
+        already unsupported for membership."""
+        current = self
+        depth = 0
+        while current is not None and depth <= max_depth:
+            if not current.is_active:
+                return False
+            current = current.parent
+            depth += 1
+        return True
+
     @classmethod
     def get_active(cls, pk):
-        """Resolve a client-supplied numeric group id to an ACTIVE group, else None.
+        """Resolve a client-supplied numeric group id to an EFFECTIVELY ACTIVE
+        group, else None.
 
         The one resolver for ids arriving from request params (dispatcher
         `group=` and the requires_perms/requires_group_perms fallbacks).
-        An inactive id resolves exactly like a nonexistent one — no touch,
+        An inactive id — including an active child under a deactivated
+        ancestor (DM-048) — resolves exactly like a nonexistent one: no touch,
         no error, no existence oracle — matching the dispatcher's group_uuid
         branch contract."""
-        return cls.objects.filter(pk=pk, is_active=True).first()
+        group = cls.objects.filter(pk=pk, is_active=True).first()
+        if group is not None and not group.is_effectively_active():
+            return None
+        return group
 
     def touch(self):
         # can't subtract offset-naive and offset-aware datetimes
@@ -280,6 +304,13 @@ class Group(MojoSecrets, MojoModel):
         # raise 'Must be "User" instance.'. Treat it as "no membership" so every
         # caller (guarded or not) degrades to deny/None instead of crashing.
         if not hasattr(user, "is_request_user"):
+            return None
+        # DM-048: a group under a deactivated ancestor is effectively inactive —
+        # no membership (direct OR inherited) may resolve from it. One check
+        # covers self and every parent level: a clean chain from self to root
+        # means every group the walk below visits is active. is_active=False
+        # (admin/introspection) keeps raw behavior.
+        if is_active and not self.is_effectively_active(max_depth=max_depth):
             return None
         # First check direct membership
         queryset = self.members.filter(user=user)
@@ -769,7 +800,13 @@ class Group(MojoSecrets, MojoModel):
 
     @classmethod
     def resolve_by_auth_domain(cls, hostname):
-        """Look up active group by auth_domain. Cached in Redis."""
+        """Look up active group by auth_domain. Cached in Redis.
+
+        DM-048: effective activeness is verified at read time on BOTH paths —
+        the 24h cache entry can't see an ANCESTOR's is_active flip (only the
+        group's own save invalidates it), and the cache/negative-cache stores
+        stay keyed to the raw own-flag row so a parent reactivation restores
+        resolution instantly (no stale negative entry)."""
         if not hostname:
             return None
         try:
@@ -781,7 +818,10 @@ class Group(MojoSecrets, MojoModel):
                     if cached == b'0':
                         return None  # negative cache — hostname not mapped
                     group_id = int(cached)
-                    return cls.objects.filter(pk=group_id, is_active=True).first()
+                    group = cls.objects.filter(pk=group_id, is_active=True).first()
+                    if group is not None and not group.is_effectively_active():
+                        return None
+                    return group
         except Exception:
             pass
         # DB lookup
@@ -797,6 +837,8 @@ class Group(MojoSecrets, MojoModel):
                     r.set(f"{cls.AUTH_DOMAIN_CACHE_PREFIX}{hostname}", 0, ex=3600)
         except Exception:
             pass
+        if group is not None and not group.is_effectively_active():
+            return None
         return group
 
     @classmethod

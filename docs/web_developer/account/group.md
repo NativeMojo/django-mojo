@@ -26,7 +26,12 @@ When working with group-scoped resources, pass the group ID as a parameter:
 
 This scopes all requests to that group. Only **active** groups resolve — a
 deactivated group's id behaves exactly like an unknown one (no group context;
-member-scoped requests are denied).
+member-scoped requests are denied). Active means the group **and every parent
+above it**: deactivating a parent group disables its entire subtree — child
+group ids stop resolving, memberships (inherited *or* direct) stop
+authorizing, and the children's API keys are suspended, even though the
+children's own `is_active` flags are untouched. Reactivating the parent
+restores all of it instantly.
 
 ## Get Group
 

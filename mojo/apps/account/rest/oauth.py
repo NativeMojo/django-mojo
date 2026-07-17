@@ -92,7 +92,8 @@ def _resolve_state_group(state_data):
     if group is None:
         logit.warn("oauth", f"OAuth state references unknown group_uuid={group_uuid}")
         return None
-    if not group.is_active:
+    # Effective activeness (DM-048): a deactivated ancestor darkens the group too.
+    if not group.is_effectively_active():
         logit.warn("oauth", f"OAuth state references inactive group_uuid={group_uuid}")
         return None
     return group

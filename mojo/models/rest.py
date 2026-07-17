@@ -278,7 +278,9 @@ class MojoModel:
                     inst_group = cls._resolve_group_from_instance(instance, GROUP_FIELD)
                 else:
                     inst_group = getattr(instance, "group", None)
-                if inst_group is not None and not inst_group.is_active:
+                # Effective activeness (DM-048): an active group under a
+                # deactivated ancestor is inactive too.
+                if inst_group is not None and not inst_group.is_effectively_active():
                     return False, objict.objict(
                         branch="api_key.group_inactive",
                         event_type="user_permission_denied",
@@ -337,15 +339,17 @@ class MojoModel:
 
         if request.group and is_group_scoped:
             if hasattr(request, 'api_key') and request.api_key:
-                if not request.group.is_active:
+                if not request.group.is_effectively_active():
                     # The instance re-bind above can repopulate request.group
                     # from a detail instance owned by a now-inactive group; gate
                     # it here so detail/save/delete fail closed too, not just the
                     # list path (validate_token already strips context there).
-                    # ApiKey-only — user semantics unchanged. Instance detail
-                    # ops are ALSO gated pre-hook at the top of the instance
-                    # block (DM-045) — keep both: this one covers non-instance
-                    # paths where request.group arrives inactive.
+                    # Effective activeness (DM-048): a deactivated ancestor
+                    # darkens the group too. ApiKey-only — user semantics
+                    # unchanged. Instance detail ops are ALSO gated pre-hook at
+                    # the top of the instance block (DM-045) — keep both: this
+                    # one covers non-instance paths where request.group arrives
+                    # inactive.
                     return False, objict.objict(
                         branch="api_key.group_inactive",
                         event_type="user_permission_denied",

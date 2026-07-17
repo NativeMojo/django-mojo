@@ -106,16 +106,19 @@ def dispatcher(request, *args, **kwargs):
     # group by UUID rather than integer-id (e.g. OAuth begin, geofence pre-flight).
     # Only used when `group` was not already resolved above.
     #
-    # SECURITY: filter is_active=True so inactive groups never become
-    # request.group via this public path — prevents touching the modified
-    # timestamp and avoids a slight existence-disclosure via side effect.
-    # Endpoints that need to surface inactive-group state (e.g. /api/geo/check)
-    # do their own lookup against Group.objects directly.
+    # SECURITY: filter is_active=True (and verify the ancestor chain — DM-048:
+    # a child of a deactivated parent is effectively inactive) so inactive
+    # groups never become request.group via this public path — prevents
+    # touching the modified timestamp and avoids a slight existence-disclosure
+    # via side effect. Endpoints that need to surface inactive-group state
+    # (e.g. /api/geo/check) do their own lookup against Group.objects directly.
     elif "group_uuid" in request.DATA and request.DATA.group_uuid and not getattr(request, "group", None):
         from mojo.apps.account.models.group import Group
         group_uuid = str(request.DATA.group_uuid).strip()
         if group_uuid:
             grp = Group.objects.filter(uuid=group_uuid, is_active=True).first()
+            if grp is not None and not grp.is_effectively_active():
+                grp = None
             if grp is not None:
                 request.group = grp
                 grp.touch()

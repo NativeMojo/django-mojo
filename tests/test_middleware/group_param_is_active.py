@@ -25,6 +25,10 @@ MEMBER_USERNAME = "item025_member@test.com"
 MEMBER_PASSWORD = "item025_member_pw_99"
 ACTIVE_GROUP = "item025-active-group"
 INACTIVE_GROUP = "item025-inactive-group"
+# DM-048: an ACTIVE child under a DEACTIVATED parent is effectively inactive —
+# the dispatcher must not resolve (or touch) it either.
+INACTIVE_PARENT = "dm048-mw-inactive-parent"
+ACTIVE_CHILD = "dm048-mw-active-child"
 
 
 def _login(opts, email, password):
@@ -39,7 +43,8 @@ def setup_group_param_is_active(opts):
     from mojo.apps.account.models import User, Group, GroupMember
 
     User.objects.filter(email__in=[SELF_USERNAME, MEMBER_USERNAME]).delete()
-    Group.objects.filter(name__in=[ACTIVE_GROUP, INACTIVE_GROUP]).delete()
+    Group.objects.filter(name__in=[
+        ACTIVE_GROUP, INACTIVE_GROUP, INACTIVE_PARENT, ACTIVE_CHILD]).delete()
 
     self_user = User.objects.create_user(
         username=SELF_USERNAME, email=SELF_USERNAME, password=SELF_PASSWORD)
@@ -80,6 +85,18 @@ def setup_group_param_is_active(opts):
     ms_inactive.save()
     ms_inactive.add_permission("view_security")
     ms_inactive.add_permission("item025_member_perm")
+
+    # DM-048: deactivated parent -> active child (last_activity=None on the
+    # child so any dispatcher touch() would be visible).
+    inactive_parent = Group.objects.create(name=INACTIVE_PARENT, kind="organization")
+    inactive_parent.is_active = False
+    inactive_parent.last_activity = None
+    inactive_parent.save()
+    active_child = Group.objects.create(
+        name=ACTIVE_CHILD, kind="team", parent=inactive_parent)
+    active_child.last_activity = None
+    active_child.save()
+    opts.active_child_id = active_child.pk
 
 
 @th.django_unit_test("dispatcher: numeric group= with an INACTIVE id resolves nothing — no touch, no modified bump (THE regression)")
@@ -140,6 +157,31 @@ def test_nonexistent_group_id_silently_ignored(opts):
 
     assert resp.status_code == 200, \
         f"a nonexistent group id resolves to no group context, not an error, got {resp.status_code}: {opts.client.last_response.body}"
+
+
+@th.django_unit_test("DM-048 dispatcher: numeric group= with an ACTIVE child of a DEACTIVATED parent resolves nothing — no touch")
+def test_child_of_inactive_parent_not_resolved_not_touched(opts):
+    from mojo.apps.account.models import Group
+
+    before = Group.objects.get(pk=opts.active_child_id)
+    assert before.last_activity is None, \
+        f"fixture must start untouched (last_activity None), got {before.last_activity!r}"
+    modified_before = before.modified
+
+    _login(opts, SELF_USERNAME, SELF_PASSWORD)
+    resp = opts.client.post(
+        f"/api/user/{opts.self_user_id}?group={opts.active_child_id}",
+        {"display_name": "DM048 Child"},
+    )
+    opts.client.logout()
+
+    assert resp.status_code == 200, \
+        f"a child of a deactivated parent must behave like a nonexistent id (request proceeds), got {resp.status_code}: {opts.client.last_response.body}"
+    after = Group.objects.get(pk=opts.active_child_id)
+    assert after.last_activity is None, \
+        f"an effectively-inactive child must NOT be touch()ed by numeric group= resolution, but last_activity was set: {after.last_activity!r}"
+    assert after.modified == modified_before, \
+        f"an effectively-inactive child's modified must not bump (existence oracle): {modified_before!r} -> {after.modified!r}"
 
 
 @th.django_unit_test("requires_perms fallback: a member grant in an INACTIVE group must not authorize (403), an ACTIVE one must (200)")

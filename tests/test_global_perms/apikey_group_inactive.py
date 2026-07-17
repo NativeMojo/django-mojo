@@ -166,10 +166,13 @@ def test_apikey_restored_on_group_reactivation(opts):
         group.delete()
 
 
-@th.django_unit_test("active child group under an active parent key is not over-restricted")
+@th.django_unit_test("child group under an ACTIVE parent is reachable; under a DEACTIVATED parent it is not (DM-048)")
 def test_apikey_active_child_still_reachable(opts):
-    """The fix gates the RESOLVED group per-request; an active child reached via
-    explicit group=<child id> with a parent key must still work."""
+    """With the whole chain active, a parent key reaching an active child via
+    explicit group=<child id> must work. DM-048 flips the old per-group
+    carve-out: once the parent is deactivated the child is EFFECTIVELY inactive
+    too — the same request must be denied, even though the child's own flag is
+    still True."""
     from mojo.apps.account.models import ApiKey
 
     parent = _mk_group()
@@ -181,6 +184,59 @@ def test_apikey_active_child_still_reachable(opts):
         resp = opts.client.get("/api/group/apikey", params={"group": child.pk})
         assert resp.status_code == 200, \
             f"parent key must still reach an ACTIVE child group, got {resp.status_code}: {opts.client.last_response.body}"
+        opts.client.logout()
+
+        # DM-048: deactivate the PARENT only — the child's own flag stays True,
+        # but the subtree is dark: group=<child> must no longer authorize.
+        parent.is_active = False
+        parent.save()
+        use_apikey(opts, token)
+        resp = opts.client.get("/api/group/apikey", params={"group": child.pk})
+        assert resp.status_code in (401, 403), \
+            f"an active child of a DEACTIVATED parent must be unreachable, got {resp.status_code}: {opts.client.last_response.body}"
+    finally:
+        opts.client.logout()
+        ApiKey.objects.filter(pk=key.pk).delete()
+        child.delete()
+        parent.delete()
+
+
+@th.django_unit_test("DM-048: a key bound to an active CHILD goes dark when an ancestor is deactivated; reactivation restores it")
+def test_apikey_child_key_dark_when_parent_inactive(opts):
+    """DM-037 extended to subtrees: validate_token grants group context only for
+    an EFFECTIVELY active group. Deactivating the parent suspends the child's
+    keys at request time (child flag untouched); reactivating the parent
+    restores them instantly — no key or child mutation, no one-way door."""
+    from mojo.apps.account.models import ApiKey
+
+    parent = _mk_group()
+    child = _mk_group(parent=parent)
+    key, token = ApiKey.create_for_group(
+        group=child, name="ak_ia_test_subtree", permissions={"groups": True})
+    try:
+        # Active chain control — the child key lists its group's keys.
+        use_apikey(opts, token)
+        resp = opts.client.get("/api/group/apikey")
+        assert resp.status_code == 200, \
+            f"child key must work while the whole chain is active, got {resp.status_code}: {opts.client.last_response.body}"
+        opts.client.logout()
+
+        # Deactivate the PARENT only → the child key must be denied.
+        parent.is_active = False
+        parent.save()
+        use_apikey(opts, token)
+        resp = opts.client.get("/api/group/apikey")
+        assert resp.status_code in (401, 403), \
+            f"deactivating an ancestor must suspend the child group's key, got {resp.status_code}: {opts.client.last_response.body}"
+        opts.client.logout()
+
+        # Reactivate → the SAME token works again immediately.
+        parent.is_active = True
+        parent.save()
+        use_apikey(opts, token)
+        resp = opts.client.get("/api/group/apikey")
+        assert resp.status_code == 200, \
+            f"reactivating the ancestor must instantly restore the child key, got {resp.status_code}: {opts.client.last_response.body}"
     finally:
         opts.client.logout()
         ApiKey.objects.filter(pk=key.pk).delete()

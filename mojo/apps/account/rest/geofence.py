@@ -72,10 +72,12 @@ def on_geo_check(request):
         group = Group.objects.filter(uuid=group_uuid).first()
         if group is None:
             raise merrors.ValueException("Unknown group")
-        if not group.is_active:
-            # Don't 400 — return system-only evaluation with an explanatory detail.
-            # This matches the OAuth-state behavior: inactive group is a degraded
-            # state, not a hard error for a pre-flight check.
+        if not group.is_effectively_active():
+            # Effective activeness (DM-048): a deactivated ancestor darkens the
+            # group too. Don't 400 — return system-only evaluation with an
+            # explanatory detail. This matches the OAuth-state behavior:
+            # inactive group is a degraded state, not a hard error for a
+            # pre-flight check.
             decision = GeoFenceEngine.check(
                 request, group=None, user=getattr(request, "user", None), scope=scope)
             data = dict(decision)
