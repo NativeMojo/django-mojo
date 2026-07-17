@@ -198,6 +198,11 @@ geo-lookup failure (use for money/payment endpoints), while everything else
 keeps the fail-open default. Because posture is scope-sensitive,
 `lookup_failed` decisions are never cached.
 
+Registry entries merge across stacked decorators, so
+`GET /api/geo/rules` → `enforced_endpoints` lists every
+`@requires_geofence` endpoint regardless of which other security decorators
+(`@public_endpoint`, `@requires_auth`, ...) sit above or below it (DM-044).
+
 ### Post-credential enforcement (`after_auth=True`)
 
 Identity-bearing auth endpoints — everything that verifies a credential

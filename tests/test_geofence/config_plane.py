@@ -109,6 +109,12 @@ def test_rules_post_and_get(opts):
             f"evaluation_order wrong: {d.evaluation_order}"
         assert len(d.enforced_endpoints) > 0, \
             "enforced_endpoints must list the @requires_geofence auth endpoints"
+        # DM-044: entries must survive auth decorators stacked above
+        # @requires_geofence — assert known members, not just non-emptiness.
+        listed = {e["endpoint"] for e in d.enforced_endpoints}
+        for expected in (".on_register", ".on_user_login"):
+            assert any(k.endswith(expected) for k in listed), \
+                f"enforced_endpoints must include *{expected}, got: {sorted(listed)}"
         assert "allowlist_summary" in d, "response must include allowlist_summary"
 
         # Config-change evidence: the POST must land in the geofence_config stream

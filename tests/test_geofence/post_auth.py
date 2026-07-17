@@ -213,12 +213,12 @@ def test_registry_annotates_after_auth(opts):
     """GET /api/geo/rules enforced_endpoints must keep deferred endpoints and
     distinguish them from pre-view ones (compliance artifact).
 
-    Probe views are registered here because several auth decorators
-    (public_endpoint, custom_security, requires_auth, ...) OVERWRITE the
-    shared SECURITY_REGISTRY entry when applied above @requires_geofence —
-    a pre-existing bug (filed separately) that drops most real endpoints
-    from enforced_endpoints regardless of after_auth. on_user_login has no
-    overwriting decorator above it, so it doubles as the real-world anchor.
+    Probe views give this test deterministic pre-view/deferred fixtures
+    independent of how the real endpoints are decorated. (They originally
+    worked around auth decorators OVERWRITING the shared SECURITY_REGISTRY
+    entry when stacked above @requires_geofence — fixed in DM-044, all
+    registration sites merge now; see tests/test_geofence/registry.py.)
+    on_user_login doubles as the real-world anchor.
     """
     from mojo import decorators as md
 

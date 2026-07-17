@@ -11,6 +11,23 @@ SECURITY_REGISTRY = {}
 REQUIRES_PERMS_IS_GROUP = settings.get_static('REQUIRES_PERMS_IS_GROUP', True)
 
 
+def _register_security(func, **info):
+    """Merge security metadata into the function's SECURITY_REGISTRY entry.
+
+    Decorators apply bottom-up, so several registering decorators can stack on
+    one view (e.g. @public_endpoint above @requires_geofence). Each must MERGE
+    into the shared entry — a full-dict overwrite drops what the others wrote
+    (DM-044: the `geofence` sub-entry vanished from enforced_endpoints).
+    Overlapping scalar keys keep last-writer-wins semantics via update().
+    All wrapping decorators use functools.wraps, so the key is stable
+    regardless of stack position.
+    """
+    key = f"{func.__module__}.{func.__name__}"
+    entry = SECURITY_REGISTRY.get(key, {})
+    entry.update(info)
+    SECURITY_REGISTRY[key] = entry
+
+
 def _deny_machine_identity_without_active_group(request, perms):
     """The ONE machine-identity gate for requires_perms/requires_group_perms.
 
@@ -46,13 +63,13 @@ def requires_perms(*required_perms):
         func._mojo_security_type = "permissions"
 
         # Register in global security registry
-        key = f"{func.__module__}.{func.__name__}"
-        SECURITY_REGISTRY[key] = {
-            'type': 'permissions',
-            'permissions': list(required_perms),
-            'function': func,
-            'requires_auth': True
-        }
+        _register_security(
+            func,
+            type='permissions',
+            permissions=list(required_perms),
+            function=func,
+            requires_auth=True,
+        )
 
         @wraps(func)
         def wrapper(request, *args, **kwargs):
@@ -100,13 +117,13 @@ def requires_group_perms(*required_perms):
         func._mojo_security_type = "permissions"
 
         # Register in global security registry
-        key = f"{func.__module__}.{func.__name__}"
-        SECURITY_REGISTRY[key] = {
-            'type': 'permissions',
-            'permissions': list(required_perms),
-            'function': func,
-            'requires_auth': True
-        }
+        _register_security(
+            func,
+            type='permissions',
+            permissions=list(required_perms),
+            function=func,
+            requires_auth=True,
+        )
 
         @wraps(func)
         def wrapper(request, *args, **kwargs):
@@ -169,14 +186,14 @@ def requires_global_perms(*required_perms, allow_api_keys=False):
         func._mojo_required_permissions = list(required_perms)
         func._mojo_security_type = "permissions"
 
-        key = f"{func.__module__}.{func.__name__}"
-        SECURITY_REGISTRY[key] = {
-            'type': 'permissions',
-            'permissions': list(required_perms),
-            'function': func,
-            'requires_auth': True,
-            'global_only': True,
-        }
+        _register_security(
+            func,
+            type='permissions',
+            permissions=list(required_perms),
+            function=func,
+            requires_auth=True,
+            global_only=True,
+        )
 
         @wraps(func)
         def wrapper(request, *args, **kwargs):
@@ -209,13 +226,13 @@ def public_endpoint(reason=""):
         func._mojo_security_type = "public"
 
         # Register in global security registry
-        key = f"{func.__module__}.{func.__name__}"
-        SECURITY_REGISTRY[key] = {
-            'type': 'public',
-            'reason': reason,
-            'function': func,
-            'requires_auth': False
-        }
+        _register_security(
+            func,
+            type='public',
+            reason=reason,
+            function=func,
+            requires_auth=False,
+        )
 
         return func
     return decorator
@@ -234,13 +251,13 @@ def custom_security(description=""):
         func._mojo_security_type = "custom"
 
         # Register in global security registry
-        key = f"{func.__module__}.{func.__name__}"
-        SECURITY_REGISTRY[key] = {
-            'type': 'custom',
-            'description': description,
-            'function': func,
-            'requires_auth': True  # Custom security usually requires auth
-        }
+        _register_security(
+            func,
+            type='custom',
+            description=description,
+            function=func,
+            requires_auth=True,  # Custom security usually requires auth
+        )
 
         return func
     return decorator
@@ -260,14 +277,14 @@ def uses_model_security(model_class=None):
         func._mojo_security_type = "model"
 
         # Register in global security registry
-        key = f"{func.__module__}.{func.__name__}"
-        SECURITY_REGISTRY[key] = {
-            'type': 'model',
-            'model_class': model_class,
-            'model_name': model_class.__name__ if model_class else None,
-            'function': func,
-            'requires_auth': True
-        }
+        _register_security(
+            func,
+            type='model',
+            model_class=model_class,
+            model_name=model_class.__name__ if model_class else None,
+            function=func,
+            requires_auth=True,
+        )
 
         return func
     return decorator
@@ -287,14 +304,14 @@ def token_secured(token_types=None, description=""):
         func._mojo_security_type = "token"
 
         # Register in global security registry
-        key = f"{func.__module__}.{func.__name__}"
-        SECURITY_REGISTRY[key] = {
-            'type': 'token',
-            'token_types': token_types or [],
-            'description': description,
-            'function': func,
-            'requires_auth': False  # Token auth doesn't require user session
-        }
+        _register_security(
+            func,
+            type='token',
+            token_types=token_types or [],
+            description=description,
+            function=func,
+            requires_auth=False,  # Token auth doesn't require user session
+        )
 
         return func
     return decorator
@@ -307,12 +324,12 @@ def requires_auth():
         func._mojo_security_type = "authentication"
 
         # Register in global security registry
-        key = f"{func.__module__}.{func.__name__}"
-        SECURITY_REGISTRY[key] = {
-            'type': 'authentication',
-            'function': func,
-            'requires_auth': True
-        }
+        _register_security(
+            func,
+            type='authentication',
+            function=func,
+            requires_auth=True,
+        )
 
         @wraps(func)
         def wrapper(request, *args, **kwargs):
@@ -336,13 +353,13 @@ def requires_fresh_auth(seconds=None):
         func._mojo_fresh_auth_seconds = seconds
         func._mojo_security_type = "fresh_auth"
 
-        key = f"{func.__module__}.{func.__name__}"
-        SECURITY_REGISTRY[key] = {
-            'type': 'fresh_auth',
-            'seconds': seconds,
-            'function': func,
-            'requires_auth': True
-        }
+        _register_security(
+            func,
+            type='fresh_auth',
+            seconds=seconds,
+            function=func,
+            requires_auth=True,
+        )
 
         @wraps(func)
         def wrapper(request, *args, **kwargs):
@@ -363,13 +380,13 @@ def requires_bearer(bearer):
         func._mojo_security_type = "bearer_token"
 
         # Register in global security registry
-        key = f"{func.__module__}.{func.__name__}"
-        SECURITY_REGISTRY[key] = {
-            'type': 'bearer_token',
-            'bearer_token': bearer,
-            'function': func,
-            'requires_auth': False  # Bearer token is alternative to user auth
-        }
+        _register_security(
+            func,
+            type='bearer_token',
+            bearer_token=bearer,
+            function=func,
+            requires_auth=False,  # Bearer token is alternative to user auth
+        )
 
         @wraps(func)
         def wrapper(request, *args, **kwargs):

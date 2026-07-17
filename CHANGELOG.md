@@ -1,5 +1,17 @@
 ## v1.2.49 - July 12, 2026
 
+**bug** — **`enforced_endpoints` no longer under-reports geofenced endpoints (DM-044).**
+Ten decorators in `mojo/decorators/auth.py` (`requires_perms`, `public_endpoint`,
+`requires_auth`, ...) registered endpoints in `SECURITY_REGISTRY` with a
+full-dict overwrite; any of them stacked above `@requires_geofence` wiped the
+`geofence` sub-entry, so `GET /api/geo/rules` → `enforced_endpoints` — the
+compliance artifact for WHERE geofencing is enforced — silently omitted most
+geofenced endpoints (register, magic links, passkeys, OAuth, handoff, ...).
+All registration sites now merge into the shared entry via a single
+`_register_security` helper (last-writer-wins for overlapping scalar keys —
+unchanged semantics). Enforcement itself was never affected; this is registry
+bookkeeping only. Regression tests in `tests/test_geofence/registry.py`.
+
 **security** — **Deactivating a parent group now disables its entire subtree (DM-048).**
 A group is *effectively active* only if it **and every ancestor** is active —
 the new single owner of that contract is `Group.is_effectively_active(max_depth=8)`,
