@@ -100,6 +100,16 @@ never authorize a save. A read carries only `VIEW_PERMS` and prefers
 hook isn't defined for the classified operation, evaluation falls through to the
 owner match, the group-membership check, and finally `user.has_permission`.
 
+**A hook never sees an inactive-group instance for an ApiKey identity
+(DM-045).** For a group-scoped model, `_evaluate_permission` denies an ApiKey
+access to an instance owned by an inactive group **before either hook runs**.
+This closes a structural gap: a hook that grants via a bare
+`request.api_key.has_permission(perms)` call (the obvious pattern to copy) can
+no longer reopen a suspended tenant's rows just because it doesn't itself
+check `instance.group.is_active`. Write hook-level ApiKey handling as an
+additional check on top of this gate, not a substitute for it — see
+[API Keys → Group Scoping](../account/api_keys.md#group-scoping).
+
 `Group` is the canonical example: `check_view_permission` lets any active member
 read their group with a downgraded (`basic`) graph, while `check_edit_permission`
 requires an actual `SAVE_PERMS` grant (global `manage_groups`/`groups`, or
@@ -127,6 +137,18 @@ ApiKey can only ever reach **group-owned** data, confined to its own group.
 
 The security registry records `global_only: True` for these endpoints, so audit
 tooling can tell them apart.
+
+**Identity classification (DM-045).** Before any of the group/owner logic
+above runs, `_evaluate_permission` classifies `request.user` itself: it must
+either be a real `User` (carries the `is_request_user` marker) or have
+`request.api_key` set. An authenticated identity that is neither — a custom
+`AUTH_BEARER_HANDLERS` identity mapped to `request.user` without registering
+either marker — is denied outright (branch `non_user_no_api_key`, 403) rather
+than falling through to the USER branches with its own self-claimed
+`has_permission`. The shared predicate is
+[`is_request_user`](../helpers/request.md#is_request_user); see
+[Custom Auth Models](../../web_developer/account/custom_auth_models.md#2-register-a-bearer-token-type)
+for the contract a custom identity must satisfy.
 
 ## Permission Names
 

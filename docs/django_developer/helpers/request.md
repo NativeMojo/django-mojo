@@ -78,6 +78,31 @@ device_id = get_device_id(request)
 ### `get_referer(request)`
 Returns the HTTP Referer header value.
 
+## Identity Classification
+
+### `is_request_user(request)`
+Returns `True` when `request.user` is a real, logged-in `User` — `False` for a
+machine identity (an `ApiKey`, or any custom `AUTH_BEARER_HANDLERS` identity
+mapped to `request.user`; see [Custom Auth Models](../../web_developer/account/custom_auth_models.md)).
+
+This is the framework's **one** predicate for "person vs machine" — both the
+auth decorators (`requires_perms`, `requires_group_perms`,
+`requires_global_perms`) and model security (`MojoModel._evaluate_permission`)
+key on it, so a custom bearer identity classifies the same way everywhere.
+`User` defines the `is_request_user` marker attribute
+(`mojo/apps/account/models/user.py`); a machine identity must not — absence of
+the marker is the fail-closed direction. A machine identity mapped to
+`request.user` must additionally set `request.api_key` in its validate
+handler, or model security denies it outright (`non_user_no_api_key`; see
+[Permissions](../core/permissions.md#instance-level-permission-hooks)).
+
+```python
+from mojo.helpers.request import is_request_user
+
+if is_request_user(request):
+    ...  # a real User is driving this request
+```
+
 ## Request Data Parsing
 
 `request.DATA` is already set by `MojoMiddleware`. In rare cases where you need to parse outside of middleware:
