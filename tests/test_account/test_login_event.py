@@ -29,6 +29,7 @@ def setup_login_event(opts):
         ip_address="203.0.113.45",
         country_code="US",
         region="California",
+        region_code="US-CA",
         city="San Francisco",
         latitude=37.7749,
         longitude=-122.4194,
@@ -64,6 +65,7 @@ def test_track_creates_event_with_geo(opts):
     assert event.ip_address == "203.0.113.45", f"Expected IP 203.0.113.45, got {event.ip_address}"
     assert event.country_code == "US", f"Expected country_code US, got {event.country_code}"
     assert event.region == "California", f"Expected region California, got {event.region}"
+    assert event.region_code == "US-CA", f"Expected region_code US-CA, got {event.region_code}"
     assert event.city == "San Francisco", f"Expected city San Francisco, got {event.city}"
     assert event.latitude == 37.7749, f"Expected latitude 37.7749, got {event.latitude}"
     assert event.longitude == -122.4194, f"Expected longitude -122.4194, got {event.longitude}"
@@ -159,6 +161,7 @@ def test_unknown_ip_creates_event_with_null_geo(opts):
     assert event.ip_address == opts.unknown_ip, f"Expected {opts.unknown_ip}, got {event.ip_address}"
     assert event.country_code is None, f"Expected None country_code, got {event.country_code}"
     assert event.region is None, f"Expected None region, got {event.region}"
+    assert event.region_code is None, f"Expected None region_code, got {event.region_code}"
     assert event.is_new_country is False, "No country means no new-country flag"
     assert event.is_new_region is False, "No region means no new-region flag"
 

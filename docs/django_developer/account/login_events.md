@@ -17,6 +17,7 @@ Inherits `models.Model, MojoModel`. Append-only audit log — no REST writes.
 | `ip_address` | `GenericIPAddressField` | IP at login time (indexed). Nullable — a login can be recorded with no resolved client IP. |
 | `country_code` | `CharField(3)` | ISO 3166 code from GeoLocatedIP (nullable, indexed) |
 | `region` | `CharField(100)` | Region/state name (nullable, indexed) |
+| `region_code` | `CharField(10)` | ISO 3166-2 subdivision code from GeoLocatedIP, e.g. `US-CA` (nullable, indexed). May be `None` while `region` is set for older/subnet-fallback geo rows |
 | `city` | `CharField(100)` | City name (nullable) |
 | `latitude` | `FloatField` | Geo centroid latitude (nullable) |
 | `longitude` | `FloatField` | Geo centroid longitude (nullable) |
@@ -42,7 +43,7 @@ No `SAVE_PERMS` — the model is append-only. All writes go through `UserLoginEv
 
 | Graph | Fields |
 |---|---|
-| `list` | `id`, `ip_address`, `country_code`, `region`, `city`, `latitude`, `longitude`, `source`, `is_new_country`, `is_new_region`, `created` + `user` (basic graph) |
+| `list` | `id`, `ip_address`, `country_code`, `region`, `region_code`, `city`, `latitude`, `longitude`, `source`, `is_new_country`, `is_new_region`, `created` + `user` (basic graph) |
 | `default` | All list fields + `user_agent_info`, `modified` + `user` (basic) + `device` (basic) |
 
 ---

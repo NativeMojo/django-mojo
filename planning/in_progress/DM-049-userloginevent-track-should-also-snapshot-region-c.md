@@ -171,6 +171,11 @@ None.
 
 ## Notes
 
+- Baseline (`bin/run_tests --agent`, default suite, before any edit): total 2537 /
+  passed 2481 / failed 0 / skipped 56. All green — `failures: []`. Opt-in modules
+  `test_incident` (243) and `test_security` (82) skipped (require `--extra slow`),
+  out of scope for the default baseline. Any failure after this change is mine.
+
 ## Resolution
 - closed: YYYY-MM-DD
 - branch:

@@ -21,6 +21,8 @@ class UserLoginEvent(models.Model, MojoModel):
     ip_address = models.GenericIPAddressField(db_index=True, null=True, blank=True)
     country_code = models.CharField(max_length=3, db_index=True, null=True, blank=True)
     region = models.CharField(max_length=100, db_index=True, null=True, blank=True)
+    # ISO 3166-2 subdivision code, e.g. "US-CA" (see GeoLocatedIP.region_code)
+    region_code = models.CharField(max_length=10, db_index=True, null=True, blank=True)
     city = models.CharField(max_length=100, null=True, blank=True)
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
@@ -50,14 +52,14 @@ class UserLoginEvent(models.Model, MojoModel):
         GRAPHS = {
             'basic': {
                 'fields': [
-                    'id', 'ip_address', 'country_code', 'region', 'city',
+                    'id', 'ip_address', 'country_code', 'region', 'region_code', 'city',
                     'latitude', 'longitude', 'source',
                     'is_new_country', 'is_new_region', 'created',
                 ]
             },
             'list': {
                 'fields': [
-                    'id', 'ip_address', 'country_code', 'region', 'city',
+                    'id', 'ip_address', 'country_code', 'region', 'region_code', 'city',
                     'latitude', 'longitude', 'source',
                     'is_new_country', 'is_new_region', 'created',
                 ],
@@ -67,7 +69,7 @@ class UserLoginEvent(models.Model, MojoModel):
             },
             'default': {
                 'fields': [
-                    'id', 'ip_address', 'country_code', 'region', 'city',
+                    'id', 'ip_address', 'country_code', 'region', 'region_code', 'city',
                     'latitude', 'longitude', 'source', 'user_agent_info',
                     'is_new_country', 'is_new_region', 'created', 'modified',
                 ],
@@ -94,6 +96,7 @@ class UserLoginEvent(models.Model, MojoModel):
 
         country_code = None
         region = None
+        region_code = None
         city = None
         latitude = None
         longitude = None
@@ -101,6 +104,7 @@ class UserLoginEvent(models.Model, MojoModel):
         if geo:
             country_code = geo.country_code
             region = geo.region
+            region_code = geo.region_code
             city = geo.city
             latitude = geo.latitude
             longitude = geo.longitude
@@ -126,6 +130,7 @@ class UserLoginEvent(models.Model, MojoModel):
             ip_address=request.ip,
             country_code=country_code,
             region=region,
+            region_code=region_code,
             city=city,
             latitude=latitude,
             longitude=longitude,

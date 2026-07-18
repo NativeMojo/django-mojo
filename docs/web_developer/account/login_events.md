@@ -27,6 +27,7 @@ Paginated list of individual login events. Supports filtering and search.
 | `user` | int | Filter by user ID |
 | `country_code` | string | ISO 3166 country code (e.g., `US`, `BR`) |
 | `region` | string | Region/state name |
+| `region_code` | string | ISO 3166-2 subdivision code, exact-match filter (e.g., `US-CA`) |
 | `is_new_country` | bool | Only logins flagged as first-time country for that user |
 | `is_new_region` | bool | Only logins flagged as first-time region for that user |
 | `source` | string | Login method: `password`, `magic`, `sms`, `totp`, `oauth` |
@@ -51,6 +52,7 @@ Paginated list of individual login events. Supports filtering and search.
       "ip_address": "203.0.113.45",
       "country_code": "US",
       "region": "California",
+      "region_code": "US-CA",
       "city": "San Francisco",
       "latitude": 37.7749,
       "longitude": -122.4194,
@@ -74,6 +76,7 @@ Adds `user_agent_info`, `device`, and `modified` fields:
   "ip_address": "203.0.113.45",
   "country_code": "US",
   "region": "California",
+  "region_code": "US-CA",
   "city": "San Francisco",
   "latitude": 37.7749,
   "longitude": -122.4194,

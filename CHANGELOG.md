@@ -1,5 +1,20 @@
 ## v1.2.49 - July 12, 2026
 
+**chore** — **`UserLoginEvent.track()` now snapshots `region_code` (ISO 3166-2) alongside the region name (DM-049).**
+New `region_code` column on `UserLoginEvent` (`CharField(10)`, nullable, indexed),
+populated at `track()` time from `GeoLocatedIP.region_code` (e.g. `"US-CA"`) next to
+the subdivision NAME already denormalized in `region`. Exposed in the
+`basic`/`list`/`default` REST graphs — so CSV export (which inherits `basic`) and the
+generic `?region_code=US-CA` exact-match list filter both pick it up for free —
+letting downstream consumers join login geo against ISO code-based policy lists
+instead of maintaining their own name→code map (wmx_api's geolocation compliance
+report builder, WMX-API-131). Historical rows stay name-only: no backfill, the field
+is nullable and legitimately `None` where a provider or subnet-fallback row supplied
+only the region name. Metrics slugs (`login:region:{CC}:{region}`) and the
+`is_new_region` anomaly flag remain keyed on the region NAME, unchanged. Migration
+`0047_userloginevent_region_code`; tests extended in
+`tests/test_account/test_login_event.py`.
+
 **feature** — **`_mode=count` gains `_stats` for batched named counts (DM-051).**
 List endpoints in count mode now accept an optional `_stats` parameter — a JSON
 object mapping caller-chosen bundle names to filter bundles, e.g.
