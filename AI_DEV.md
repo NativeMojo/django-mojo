@@ -55,6 +55,13 @@ push), spawns three agents in parallel — full test suite, docs, security revie
 and runs `scripts/close.sh`, which stamps the Resolution block (closed/branch/files
 changed) and moves the file `in_progress/ → done/`.
 
+Routing: `/scope` may stamp optional `build_strategy` (`inline` | `delegate` |
+`fanout`) and `build_model` (`sonnet` | `opus` | `fable`) frontmatter. `delegate`
+hands the whole build to one sub-agent on the chosen model; `fanout` (L/XL with
+disjoint file partitions only) parallelizes implementation while the orchestrator
+alone runs tests. Invariant: exactly one entity ever runs tests — the session
+(inline), the delegate, or the fanout orchestrator.
+
 ### Show Memory
 ```
 /memory

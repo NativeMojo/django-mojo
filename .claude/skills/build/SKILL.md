@@ -36,6 +36,38 @@ Read `CLAUDE.md` for conventions. Read the item file in `planning/confirmed/`.
   worktree unless the user explicitly asked — the suite uses a dedicated port and a
   shared PostgreSQL DB, so parallel checkouts collide (see `.claude/rules/git.md`).
 
+## Execution Strategy (from `build_strategy` / `build_model` frontmatter)
+
+Absent fields mean `inline` + the session model; the user can override either at
+build time. **Test-lock invariant — exactly one entity ever runs tests** (shared
+port + shared Postgres): the session (inline), the delegate (delegate), or the
+orchestrator (fanout). Sub-agents inherit the session's permission config; a
+background builder *pauses* on any command the session wouldn't already allow, so
+delegate/fanout work best when the session's mode covers tests, `bin/create_testproject`,
+and `git commit`.
+
+- **inline** — run this skill in-session, exactly as the Workflow below.
+- **delegate** — spawn ONE builder sub-agent (model = `build_model`) that executes
+  this entire skill end-to-end: claim → baseline → implement → test → docs →
+  commit → post-build agents → close. Its prompt must point it at this file,
+  `CLAUDE.md`, `.claude/rules/`, and the item file, and state explicitly: the
+  item's `## Plan` is user-approved (skip the interactive confirmation gate);
+  work in place on main (never branch/worktree); it is the ONLY test runner; the
+  commit trailer names **its own** model; never push; if the baseline is red,
+  STOP and report back instead of building. While it runs, the orchestrator stays
+  hands-off the working tree — no edits, no test runs. On completion, verify
+  (item Resolution, `var/test_failures.json`, `git log -p` spot-check) and relay.
+  If the sub-agent cannot spawn the post-build agents itself, it performs those
+  three passes inline, sequentially.
+- **fanout** — L/XL items ONLY, and only when the plan defines **disjoint file
+  partitions** (refuse otherwise). Orchestrator: claim + record the baseline
+  BEFORE spawning; spawn one builder per partition (all share this one working
+  tree — worktrees are forbidden), each implements code + tests for its partition
+  and **NEVER runs `bin/run_tests`** (state this in every builder prompt);
+  integrate their reports, then run targeted tests and the default suite
+  yourself; loop failures back to the owning builder; make the single commit;
+  then post-build agents and close — all orchestrator-side.
+
 ## Workflow
 1. **Claim it:** `scripts/start.sh <file>` — moves it `confirmed/ → in_progress/`
    (no-op if you're resuming one already there; refuses if another item is already

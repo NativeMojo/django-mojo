@@ -10,6 +10,9 @@ opened: YYYY-MM-DD
 depends_on: []         # hard blockers: [DM-003, wmwx/wmx_api#WA-007]
 related: []            # soft links: [DM-009]
 links: []              # external URLs
+# Build routing — optional; /scope stamps these at plan time (see scope skill rubric)
+build_strategy:        # inline (default) | delegate | fanout
+build_model:           # sonnet | opus | fable  (default: session model)
 ---
 
 # [Title]

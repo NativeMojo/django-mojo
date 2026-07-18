@@ -2,7 +2,7 @@
 name: security-review
 description: Review recent code changes for security concerns including permission gaps, data exposure, injection risks, and auth bypasses. Use after code changes are committed.
 tools: Bash, Read, Grep, Glob
-model: sonnet
+model: opus
 ---
 
 # Security Review Agent

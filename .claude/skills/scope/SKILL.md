@@ -51,6 +51,9 @@ opened: 2026-06-05     # ISO date
 depends_on: []         # hard blockers: [DM-003, wmwx/wmx_api#WA-007]
 related: []            # soft links: [DM-009]  (e.g. the feature a bug came from)
 links: []              # external URLs: PRs, design docs, tracker issues
+# Build routing — optional; stamped by /scope at plan time (user may override at build)
+build_strategy: inline # inline (default) | delegate | fanout — how /build executes
+build_model: sonnet    # sonnet | opus | fable — builder model (default: session model)
 ---
 ```
 
@@ -64,8 +67,9 @@ links: []              # external URLs: PRs, design docs, tracker issues
      `mojo/helpers/` so you don't reinvent existing framework features/utilities.
 3. Propose a plan using the output format below
 4. Gate: get explicit user approval before this thread ends
-5. Write the approved plan into the item's `## Plan` section (subsections below)
-   and **delete the `PLAN PENDING` marker**. The plan must be **self-contained** —
+5. Write the approved plan into the item's `## Plan` section (subsections below),
+   stamp the build routing (`build_strategy`, `build_model` — rubric below) into
+   the frontmatter, and **delete the `PLAN PENDING` marker**. The plan must be **self-contained** —
    a fresh session with no memory of this one must be able to `/build` it without
    re-exploring: include real file paths and `file:line` refs, the current
    behavior, key snippets, the exact changes, decisions + rationale, and the tests
@@ -82,6 +86,19 @@ links: []              # external URLs: PRs, design docs, tracker issues
   Tests use testit — see `docs/django_developer/testit/Overview.md`.
 - **Docs**: which tracks (`docs/django_developer/`, `docs/web_developer/`)
 - **Open questions**: anything unresolved that would block building (or "none")
+- **Build routing**: recommend `build_strategy` + `build_model` with a one-line
+  rationale, and stamp both into the frontmatter (the user can override at build
+  approval).
+  - Strategy: `inline` (default — run in-session) | `delegate` (one sub-agent
+    executes the whole build on the chosen model) | `fanout` (L/XL ONLY, and only
+    when the plan partitions the work into **disjoint file sets** — write the
+    partition into the plan; `/build` refuses fanout without one).
+  - Model rubric — **risk biases upward; size only sets the floor**:
+    - `sonnet`: XS/S mechanical changes with an exact in-repo precedent
+    - `opus`: M/L, root-cause bug work, or anything touching auth/permissions/
+      security surfaces regardless of size
+    - `fable`: XL, cross-cutting invariant work, or retry after a cheaper build
+      failed
 
 ## Forbidden in This Mode
 - Writing implementation code

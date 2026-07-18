@@ -20,5 +20,9 @@ Only **one test run at a time** — never spawn parallel agents that each run th
   Don't leave finished work uncommitted in the tree.
 - **Pushing is still opt-in.** Never `git push` unless the user explicitly asks —
   pushing is outward-facing and hard to reverse.
-- End commit messages with:
+- End commit messages with a trailer naming the model that actually authored the
+  commit — for delegate/fanout builds that's the **builder's** model, not the
+  orchestrator's:
+  `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
+  `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`

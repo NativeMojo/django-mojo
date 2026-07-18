@@ -49,6 +49,11 @@ There is **one kind of work item**. Bugs, features, and chores differ only by a
   `scripts/start.sh` (`confirmed/ → in_progress/`), implements from that plan; bugs
   get a regression test, then it commits, spawns the post-build agents, and runs
   `scripts/close.sh`. Nothing is built until it has been scoped.
+- **Build routing is optional frontmatter.** `/scope` may stamp `build_strategy`
+  (`inline` | `delegate` | `fanout`) and `build_model` (`sonnet` | `opus` |
+  `fable`); `/build` honors them — see the build skill's Execution Strategy
+  section. Absent = inline + session model. Invariant: exactly one entity ever
+  runs tests.
 - **`in_progress/` = actively being built.** `/build` claims into it
   automatically; at most one item lives there (WIP = 1), and it's resume-safe — a
   half-done build is obvious, never mistaken for a fresh `ready` item.
