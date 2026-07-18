@@ -154,6 +154,18 @@ Validates that a Bearer token is present and valid.
 
 These decorators do not enforce access — they annotate the function in the security registry for auditing and documentation purposes.
 
+All security-registering decorators — the enforcement ones above
+(`requires_auth`, `requires_perms`, `requires_group_perms`,
+`requires_global_perms`, `requires_bearer`, `requires_fresh_auth`) and the
+annotation-only ones below — write into one shared `SECURITY_REGISTRY` entry
+per view function, keyed by `module.function_name`. When several stack on the
+same view (e.g. `@public_endpoint` above `@requires_geofence`), each call
+**merges** into the existing entry rather than overwriting it, so no
+decorator's info is lost regardless of stacking order (last-writer-wins only
+for overlapping scalar keys). This is what feeds compliance artifacts like
+`GET /api/geo/rules` → `enforced_endpoints` (see
+[geofence.md](../account/geofence.md)).
+
 | Decorator | Purpose |
 |---|---|
 | `@md.public_endpoint()` | Explicitly marks endpoint as public (no auth) |
