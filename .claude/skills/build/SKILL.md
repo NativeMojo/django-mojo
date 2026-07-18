@@ -53,8 +53,9 @@ and `git commit`.
   `CLAUDE.md`, `.claude/rules/`, and the item file, and state explicitly: the
   item's `## Plan` is user-approved (skip the interactive confirmation gate);
   work in place on main (never branch/worktree); it is the ONLY test runner; the
-  commit trailer names **its own** model; never push; if the baseline is red,
-  STOP and report back instead of building. While it runs, the orchestrator stays
+  commit trailer names **its own** model; commits go by explicit pathspec (see
+  `.claude/rules/git.md`); never push; if the baseline is red, STOP and report
+  back instead of building. While it runs, the orchestrator stays
   hands-off the working tree — no edits, no test runs. On completion, verify
   (item Resolution, `var/test_failures.json`, `git log -p` spot-check) and relay.
   If the sub-agent cannot spawn the post-build agents itself, it performs those

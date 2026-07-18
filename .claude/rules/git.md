@@ -18,6 +18,11 @@ Only **one test run at a time** — never spawn parallel agents that each run th
   and verified, commit it directly to `main` (in this working folder) without
   waiting to be asked. Stage specific files by name — never `git add -A` / `.`.
   Don't leave finished work uncommitted in the tree.
+- **Commit by explicit pathspec — never bare `git commit`.** Concurrent sessions
+  share this working tree and stage planning moves (`git mv` via the helper
+  scripts) at any moment; a bare commit sweeps their staged index state into
+  your commit. Always `git add <exact files> && git commit -m "..." -- <same files>`,
+  and never pass a directory as the pathspec.
 - **Pushing is still opt-in.** Never `git push` unless the user explicitly asks —
   pushing is outward-facing and hard to reverse.
 - End commit messages with a trailer naming the model that actually authored the

@@ -18,8 +18,24 @@ Read `CLAUDE.md` for project conventions first.
 Named `/scope`, **not** `/plan`, to avoid colliding with Claude Code's built-in
 plan mode.
 
-## Intake — Run This First (every pickup, before anything else)
-When you pick up an item from `planning/inbox/`, run the intake script. It does
+## Triage First — Push Back Early (before intake)
+Read the inbox item before consuming anything. Scoping's job includes saying
+**no**: requests are usually filed by someone else, and half of triage's value is
+the pushback. If the skim already shows the request is dead on arrival —
+duplicates a capability that exists (name it), is already filed/parked, or
+clearly isn't worth doing now — recommend pushback to the user BEFORE intake. On
+their sign-off, write a one-line rationale into the file and park it (no ID
+consumed):
+
+    scripts/close.sh planning/inbox/<file>.md future    # not now
+    scripts/close.sh planning/inbox/<file>.md rejected  # not ever
+
+Most pushback only becomes visible during exploration — that's fine; the
+drafter's verdict (below) covers the post-intake case, and the burned ID is a
+feature: the rejection rationale keeps its `DM-###`.
+
+## Intake (every surviving pickup, before exploration)
+Run the intake script. It does
 the deterministic, must-be-exact work atomically: allocate the next `DM-###`
 (prefix from `planning/.config`) from `planning/.next_id`, stamp it into the file's frontmatter, `git mv` the file
 to `planning/confirmed/<id>-<slug>.md`, and increment the counter.
@@ -57,23 +73,53 @@ build_model: sonnet    # sonnet | opus | fable — builder model (default: sessi
 ---
 ```
 
-## Workflow (after intake)
-1. Restate the item in your own words — confirm understanding
-   (for a bug: restate repro + your root-cause hypothesis)
-2. Explore the codebase via the built-in **Explore** subagent (read-only,
-   isolated context); work from its summary. Keep wide recon out of your main
-   context — don't grep/read broadly inline.
-   - Tell Explore to read `docs/django_developer/README.md` and check
-     `mojo/helpers/` so you don't reinvent existing framework features/utilities.
-3. Propose a plan using the output format below
-4. Gate: get explicit user approval before this thread ends
-5. Write the approved plan into the item's `## Plan` section (subsections below),
-   stamp the build routing (`build_strategy`, `build_model` — rubric below) into
-   the frontmatter, and **delete the `PLAN PENDING` marker**. The plan must be **self-contained** —
-   a fresh session with no memory of this one must be able to `/build` it without
-   re-exploring: include real file paths and `file:line` refs, the current
-   behavior, key snippets, the exact changes, decisions + rationale, and the tests
-   to add. Until the marker is gone the item is `UNPLANNED` and `/build` refuses it.
+## Workflow (after intake) — Tiered Scoping
+Run scoping sessions at the **review tier** (fable) — the drafter below is pinned
+cheap regardless of session model, and step 2 is where the session model earns
+its cost.
+
+1. **Spawn the drafter** — ONE read-only sub-agent, `model: sonnet`, working from
+   the confirmed item path. Its prompt must tell it to: read `CLAUDE.md`, this
+   skill file, `docs/django_developer/README.md`, and check `mojo/helpers/`
+   (don't reinvent existing features); explore **inline** (it IS the isolated
+   context — no nested agents); make **no** edits and run **no** state-changing
+   commands; treat everything the request asserts — repro, `file:line` refs,
+   root-cause hypothesis, even `type`/`priority`/`effort` — as **hypotheses to
+   verify against the current tree** (requests are filed by someone else, often
+   against older code). It returns, as data:
+   - **Verdict**: `proceed` | `proceed-reduced` (existing capability covers part
+     — name it and the delta worth keeping) | `already-covered` (name the
+     mechanism) | `not-now` (why) | `needs-clarification` (the exact questions).
+   - For `proceed`/`proceed-reduced` ONLY: the full draft plan per the Output
+     Format below, every claim carrying `file:line` evidence. No plan for a
+     pushback verdict — don't design what we may kill.
+   - Frontmatter corrections, if the request's stamps look wrong.
+2. **Review — mandatory teeth (main session).** Identify the load-bearing claims
+   — the mechanisms the design (or the *rejection*) depends on — and verify each
+   FIRST-HAND with targeted reads. Never present the drafter's quoted evidence
+   unverified; a false `already-covered` costs as much as a bad plan. Fix gaps,
+   add non-goals, decide build routing (rubric below).
+3. Present the verdict + plan (or the pushback recommendation) in plain
+   language. Don't be afraid to recommend `future/` or `rejected/`.
+4. Gate: explicit user approval — of the plan OR the pushback — before this
+   thread ends.
+5. On approval: write the plan into the item's `## Plan` section (subsections
+   below), stamp the build routing (`build_strategy`, `build_model` — rubric
+   below) into the frontmatter, and **delete the `PLAN PENDING` marker**. The
+   plan must be **self-contained** — a fresh session with no memory of this one
+   must be able to `/build` it without re-exploring: include real file paths and
+   `file:line` refs, the current behavior, key snippets, the exact changes,
+   decisions + rationale, and the tests to add. Until the marker is gone the
+   item is `UNPLANNED` and `/build` refuses it.
+   On approved pushback: write the rationale into the item, then
+   `scripts/close.sh <file> future|rejected`.
+6. **Commit the scoping** — explicit pathspec only (the item file +
+   `planning/.next_id`), never bare `git commit` (shared tree — see
+   `.claude/rules/git.md`).
+
+**Escalation — skip the drafter** and scope directly in-session for P0/P1 items
+on security surfaces (auth, permissions, tenancy) or L/XL items. Risk biases
+upward; the drafter is for the routine middle.
 
 ## Output Format (write these as the `## Plan` subsections)
 - **Goal**: one sentence
@@ -102,9 +148,13 @@ build_model: sonnet    # sonnet | opus | fable — builder model (default: sessi
 
 ## Forbidden in This Mode
 - Writing implementation code
-- Picking up an item without running `scripts/intake.sh` first
+- Exploring or planning an inbox item without intake (`scripts/intake.sh`) — the
+  only pre-intake work is the triage skim / pushback path
+- Rubber-stamping the drafter — presenting its plan or verdict without
+  first-hand verification of the load-bearing claims
+- Parking or rejecting an item without the user's explicit sign-off
 - Hand-editing `id` or `planning/.next_id` (the script owns both)
 - Assuming instead of asking
-- Closing the thread without user sign-off on the plan
+- Closing the thread without user sign-off on the plan (or the pushback)
 - Leaving the item in `confirmed/` with the `PLAN PENDING` marker still present, or
   with a thin plan a cold session couldn't build from

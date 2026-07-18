@@ -34,12 +34,21 @@ Drop a file from `planning/_template.md` by hand for the same effect.
 ```
 /scope <path to an inbox item, or a description of new work>
 ```
-Owns intake. It runs `scripts/intake.sh`, which allocates the next `DM-###`
-(prefix from `planning/.config`) from `planning/.next_id`, stamps the YAML frontmatter, moves the file
-`inbox/ → confirmed/`, and bumps the counter — atomically. Then it explores
-(via the read-only Explore subagent) and writes a **self-contained `## Plan`** —
-full enough that a cold session can build it without re-exploring — and deletes the
-`PLAN PENDING` marker. No code is written. Named `/scope` (not `/plan`) to avoid
+Owns triage + intake. A pre-intake skim may push back immediately (duplicate /
+not-now → `future/` or `rejected/` with user sign-off — no ID consumed).
+Surviving items get `scripts/intake.sh`, which allocates the next `DM-###`
+(prefix from `planning/.config`) from `planning/.next_id`, stamps the YAML
+frontmatter, moves the file `inbox/ → confirmed/`, and bumps the counter —
+atomically. Then **tiered scoping**: a read-only sonnet drafter sub-agent
+verifies the request's claims against the current tree and returns a verdict
+(`proceed` | `proceed-reduced` | `already-covered` | `not-now` |
+`needs-clarification`) plus, for proceed verdicts, a full draft plan with
+`file:line` evidence; the session (run scoping at the review tier — fable)
+verifies the load-bearing claims first-hand, stamps
+`build_strategy`/`build_model`, gates with the user, writes the
+**self-contained `## Plan`**, deletes the `PLAN PENDING` marker, and commits by
+explicit pathspec. No code is written. P0/P1-security or L/XL items skip the
+drafter (the session scopes directly). Named `/scope` (not `/plan`) to avoid
 Claude Code's built-in plan mode.
 
 ### Build It
