@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -4825,11 +4825,20 @@
 </code></pre></div>
 <p><code>reason</code> must be one of: <code>admin</code>, <code>abuse</code>. Server-set reasons (<code>inactive</code>, <code>anonymized</code>) are rejected from REST.</p>
 <p>Effect: <code>is_active=False</code>, populates <code>metadata.protected.disable</code> with <code>{reason, at, by_user_id, by_username, note}</code>. Also clears any <code>disable.warning</code> block.</p>
+<p><strong>Disable is instant (kill switch).</strong> The user's <code>auth_key</code> is rotated in the
+same update as the flip, and their live websocket connections are dropped —
+every outstanding token (including API-key-derived tokens) is rejected on
+its very next request with a generic error, whether that request lands in
+under a second or the JWT wouldn't otherwise have expired for hours. There
+is no propagation delay to plan around.</p>
 <h3 id="reactivate-a-user">Reactivate a user<a class="headerlink" href="#reactivate-a-user" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/user/&lt;id&gt;</code>  · requires <code>manage_users</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="p">{</span><span class="nt">&quot;reactivate&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Appeal granted&quot;</span><span class="p">}}</span>
 </code></pre></div>
 <p>Effect: <code>is_active=True</code>. Appends a history entry to <code>disable.history</code> (FIFO cap 20) with the prior disable context plus <code>reactivated_at</code>, <code>reactivated_by_user_id</code>, <code>reactivated_by_username</code>, <code>reactivated_note</code>.</p>
+<p><strong>Reactivation does not restore old sessions.</strong> Because disable rotated the
+user's <code>auth_key</code>, tokens issued before the disable remain invalid after
+reactivation — the user must log in again to get a working token.</p>
 <h3 id="read-disable-state">Read disable state<a class="headerlink" href="#read-disable-state" title="Permanent link">&para;</a></h3>
 <p><code>metadata</code> is included in the default and list graphs, so <code>data.metadata.protected.disable</code> is on every user response. Distinguish admin-disabled vs auto-disabled vs anonymized via <code>disable.reason</code>.</p>
 <table>
@@ -4938,7 +4947,7 @@
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -4930,6 +4930,26 @@
 <td>Auth</td>
 <td>Passkey authentication failure</td>
 </tr>
+<tr>
+<td><code>rate_limit:api</code></td>
+<td>API throttle</td>
+<td>Global per-identity throttle engaged (DM-042)</td>
+</tr>
+<tr>
+<td><code>traffic:concentration</code></td>
+<td>Incident cron</td>
+<td>One identity dominating traffic (DM-042)</td>
+</tr>
+<tr>
+<td><code>traffic:ws_connect</code></td>
+<td>Realtime</td>
+<td>Per-IP websocket connect-rate storm (DM-042)</td>
+</tr>
+<tr>
+<td><code>traffic:ws_maxconn</code></td>
+<td>Realtime</td>
+<td>Identity exceeded concurrent websocket cap (DM-042)</td>
+</tr>
 </tbody>
 </table>
 <h3 id="event-levels">Event Levels<a class="headerlink" href="#event-levels" title="Permanent link">&para;</a></h3>
@@ -5209,10 +5229,16 @@
 <td></td>
 <td>Optional username to assign to</td>
 </tr>
+<tr>
+<td><code>board</code></td>
+<td></td>
+<td>Optional MaestroBoard id — auto-push the created ticket to that remote maestro board (see <a href="maestro_board/">Maestro Board Link</a>)</td>
+</tr>
 </tbody>
 </table>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>ticket://?priority=9&amp;status=open
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>ticket://?priority=5&amp;assignee=oncall
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>ticket://?priority=9&amp;board=3
 </code></pre></div>
 <h4 id="notifytargets"><code>notify://&lt;targets&gt;</code><a class="headerlink" href="#notifytargets" title="Permanent link">&para;</a></h4>
 <p>Sends in-app notification + push notification to resolved targets.</p>
@@ -6384,6 +6410,8 @@ into the kernel firewall fleet-wide.</p>
 <p>Health rules <strong>never</strong> use <code>block://</code> — infrastructure issues should not block IPs.</p>
 <h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
 <ul>
+<li><a href="abuse_hardening/">Authenticated-Abuse Hardening</a> — global per-identity API throttle, traffic-concentration detection, account kill switch, websocket connection limits, deployment hardening</li>
+<li><a href="maestro_board/">Maestro Board Link</a> — push tickets into a remote maestro board and sync both directions (registration, status_map, signed webhooks, echo suppression)</li>
 <li><a href="../account/bouncer/">Bouncer Architecture</a> — bot detection, scoring, tokens, signatures</li>
 <li><a href="../account/geoip/">GeoIP System</a> — IP geolocation, blocking, threat escalation</li>
 <li><a href="../core/permissions/">Permissions</a> — <code>security</code> category permission for admin access</li>
@@ -6448,7 +6476,7 @@ into the kernel firewall fleet-wide.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

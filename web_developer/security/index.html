@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -4314,9 +4314,21 @@ have no group field and require a <strong>global</strong> grant.</p>
 <td><code>/api/incident/ipset</code></td>
 <td>Bulk CIDR blocking: countries, datacenters, abuse lists</td>
 </tr>
+<tr>
+<td>Maestro Boards</td>
+<td><code>/api/incident/maestro/board</code></td>
+<td>Push tickets into a remote maestro board, two-way sync</td>
+</tr>
+<tr>
+<td>Maestro Links</td>
+<td><code>/api/incident/maestro/link</code></td>
+<td>Which tickets are linked to which board items</td>
+</tr>
 </tbody>
 </table>
 <p>See individual API docs for full details:
+- <a href="rate_limits/">Rate Limits &amp; Client Backoff</a> — the 429/<code>Retry-After</code> contract every client must honor
+- <a href="maestro_board/">Maestro Boards</a> — register a board link, push tickets, status_map, webhook contract
 - <a href="../logging/incidents/">Incidents</a>
 - <a href="../logging/reporting_events/">Events &amp; Reporting</a>
 - <a href="../account/firewall/">Firewall &amp; GeoIP</a>
@@ -4662,6 +4674,30 @@ not authorize this endpoint.</p>
 <td><code>rate_limit:{endpoint}</code></td>
 <td>5</td>
 <td>API abuse</td>
+</tr>
+<tr>
+<td>Global API throttle engaged</td>
+<td><code>rate_limit:api</code></td>
+<td>5</td>
+<td>One identity over its per-minute request budget</td>
+</tr>
+<tr>
+<td>Traffic concentration</td>
+<td><code>traffic:concentration</code></td>
+<td>6</td>
+<td>One identity dominating overall API traffic</td>
+</tr>
+<tr>
+<td>WebSocket connect storm</td>
+<td><code>traffic:ws_connect</code></td>
+<td>6</td>
+<td>One IP connecting too fast</td>
+</tr>
+<tr>
+<td>WebSocket connection cap</td>
+<td><code>traffic:ws_maxconn</code></td>
+<td>6</td>
+<td>One identity over its concurrent-socket limit</td>
 </tr>
 <tr>
 <td>Bouncer block</td>
@@ -5611,7 +5647,7 @@ full list into the fleet-wide firewall is not permitted.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -1244,6 +1244,17 @@
     <span class="md-ellipsis">
       
         Webapp URL tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#geofence-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Geofence enforcement
       
     </span>
   </a>
@@ -4253,6 +4264,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#geofence-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Geofence enforcement
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4630,6 +4652,18 @@
 <li><code>user.metadata["protected"]["last_webapp_url"]</code> — updated on every subsequent login</li>
 </ul>
 <p>These are used as a fallback in the <code>build_token_url</code> lookup chain (see <a href="#token-urls">Token URLs</a>).</p>
+<h3 id="geofence-enforcement">Geofence enforcement<a class="headerlink" href="#geofence-enforcement" title="Permanent link">&para;</a></h3>
+<p><code>jwt_login</code> is also the post-credential geofence enforcement point (DM-043):
+its first statement checks the geofence engine with the now-verified <code>user</code>
+and, on block, returns the standard geofence 403 before <code>last_login</code>, the
+<code>UserLoginEvent</code>, or <code>USER_LOGIN_HANDLER</code> fire — a blocked login has zero
+success side effects. This only applies to <code>source</code>s not listed in
+<code>GEOFENCE_EXEMPT_JWT_SOURCES</code> (<code>sessions_revoke</code>, <code>email_change</code> — authed
+re-issues, not logins). See <a href="../geofence/#post-credential-enforcement-after_authtrue">Geofencing — Post-credential
+enforcement</a> for the
+full contract, including the MFA-branch check in <code>on_user_login</code> and the
+token-proven-action behavior (password reset / email verify / invite accept
+apply their mutation before the session is withheld).</p>
 <hr />
 <h2 id="mfa-challenge-login-with-mfa-enabled">MFA Challenge (Login with MFA enabled)<a class="headerlink" href="#mfa-challenge-login-with-mfa-enabled" title="Permanent link">&para;</a></h2>
 <p>MFA is opt-in per user via the <code>requires_mfa</code> boolean field (default <code>False</code>). Your app sets this when creating or updating users — the framework never forces it automatically. When <code>requires_mfa=True</code>, the login endpoint does <strong>not</strong> return a JWT. Instead it returns an MFA challenge:</p>
@@ -4745,9 +4779,14 @@ for the end-to-end client-side flow.</p>
 <ol>
 <li><code>Authorization: Bearer &lt;token&gt;</code> header parsed</li>
 <li>Bearer type looked up in handler registry</li>
-<li>Default handler: <code>User.validate_jwt(token)</code> → returns <code>(user, error)</code></li>
+<li>Default handler: <code>User.validate_jwt(token)</code> → returns <code>(user, error)</code>. A
+   disabled user (<code>is_active=False</code>) is rejected here with the generic
+   <code>"Invalid token user"</code> error — same message as a missing user, so a stale
+   token never discloses account state. This applies to <code>user_api_key</code>
+   tokens too. See the <a href="../disable_lifecycle/#kill-switch-disable-is-instant-dm-042">kill switch</a>
+   (DM-042).</li>
 <li><code>request.user</code> set to the resolved user (or anonymous)</li>
-<li><code>request.group</code> set if <code>group</code> param present, the group is active, and user is a member (an inactive group's id resolves to no group, same as a nonexistent one)</li>
+<li><code>request.group</code> set if <code>group</code> param present, the group is <strong>effectively</strong> active (it and every ancestor — DM-048), and user is a member (an inactive group's id — including an active child under a deactivated ancestor — resolves to no group, same as a nonexistent one)</li>
 </ol>
 <p><strong>Malformed headers don't error.</strong> If the <code>Authorization</code> value isn't exactly <code>&lt;scheme&gt;
 &lt;token&gt;</code>, the middleware treats the request as unauthenticated and continues — it does not
@@ -5210,7 +5249,7 @@ path and new-user creation.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

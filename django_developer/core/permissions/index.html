@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -4104,7 +4104,11 @@ wrong one is a <strong>cross-tenant privilege-escalation risk</strong>.</p>
   default) falls back to their <strong>group/member</strong> permission for the group named in
   the request (<code>request.group.user_has_permission(...)</code>). Correct when the
   endpoint's effect is confined to <code>request.group</code> (e.g. rotating <em>that</em> group's
-  webhook secret).</li>
+  webhook secret). A <strong>non-User identity (ApiKey)</strong> is trusted only within an
+  <strong>effectively active</strong> group context: if <code>request.group</code> is <code>None</code> (which is
+  what <code>validate_token</code> yields when the key's group — or any ancestor of it,
+  DM-048 — is deactivated, DM-037) the request is denied before the key's
+  self-claimed permission dict is consulted. Same gate in <code>requires_group_perms</code>.</li>
 <li><strong><code>@md.requires_global_perms(...)</code></strong> — checks <strong>global <code>User.permissions</code> (or
   superuser) only</strong>, never the group/member fallback. Use it for any endpoint
   whose effect is <strong>platform-wide</strong>: global settings, fleet/job control, AWS
@@ -4161,6 +4165,17 @@ never authorize a save. A read carries only <code>VIEW_PERMS</code> and prefers
 (e.g. <code>User</code>) uses it for reads too, since there is no view hook to prefer. If a
 hook isn't defined for the classified operation, evaluation falls through to the
 owner match, the group-membership check, and finally <code>user.has_permission</code>.</p>
+<p><strong>A hook never sees an inactive-group instance for an ApiKey identity
+(DM-045).</strong> For a group-scoped model, <code>_evaluate_permission</code> denies an ApiKey
+access to an instance owned by an effectively inactive group (the group or any
+ancestor — DM-048) <strong>before either hook runs</strong>. This closes a structural gap:
+a hook that grants via a bare <code>request.api_key.has_permission(perms)</code> call
+(the obvious pattern to copy) can no longer reopen a suspended tenant's rows
+just because it doesn't itself check <code>instance.group.is_effectively_active()</code>
+— a bare <code>instance.group.is_active</code> check would miss a deactivated ancestor
+entirely. Write hook-level ApiKey handling as an additional check on top of
+this gate, not a substitute for it — see
+<a href="../../account/api_keys/#group-scoping">API Keys → Group Scoping</a>.</p>
 <p><code>Group</code> is the canonical example: <code>check_view_permission</code> lets any active member
 read their group with a downgraded (<code>basic</code>) graph, while <code>check_edit_permission</code>
 requires an actual <code>SAVE_PERMS</code> grant (global <code>manage_groups</code>/<code>groups</code>, or
@@ -4185,6 +4200,17 @@ Without this, a key self-claiming <code>manage_users</code> could read every ten
 ApiKey can only ever reach <strong>group-owned</strong> data, confined to its own group.</p>
 <p>The security registry records <code>global_only: True</code> for these endpoints, so audit
 tooling can tell them apart.</p>
+<p><strong>Identity classification (DM-045).</strong> Before any of the group/owner logic
+above runs, <code>_evaluate_permission</code> classifies <code>request.user</code> itself: it must
+either be a real <code>User</code> (carries the <code>is_request_user</code> marker) or have
+<code>request.api_key</code> set. An authenticated identity that is neither — a custom
+<code>AUTH_BEARER_HANDLERS</code> identity mapped to <code>request.user</code> without registering
+either marker — is denied outright (branch <code>non_user_no_api_key</code>, 403) rather
+than falling through to the USER branches with its own self-claimed
+<code>has_permission</code>. The shared predicate is
+<a href="../../helpers/request/#is_request_user"><code>is_request_user</code></a>; see
+<a href="../../../web_developer/account/custom_auth_models/#2-register-a-bearer-token-type">Custom Auth Models</a>
+for the contract a custom identity must satisfy.</p>
 <h2 id="permission-names">Permission Names<a class="headerlink" href="#permission-names" title="Permanent link">&para;</a></h2>
 <h3 id="category-permissions-broad-access">Category Permissions (Broad Access)<a class="headerlink" href="#category-permissions-broad-access" title="Permanent link">&para;</a></h3>
 <p>Category permissions grant full read+write access to an entire domain. Use these for admin roles that need everything in a domain without toggling individual permissions.</p>
@@ -4911,7 +4937,7 @@ by definition.</p>
 <h3 id="3-file-models-missing-explicit-save_perms-fixed">3. ~~File models missing explicit SAVE_PERMS~~ (Fixed)<a class="headerlink" href="#3-file-models-missing-explicit-save_perms-fixed" title="Permanent link">&para;</a></h3>
 <p>FileManager, File, and FileRendition now have <code>SAVE_PERMS = ["manage_files"]</code>.
 File additionally carries the <code>"owner"</code> token in <code>VIEW_PERMS</code>/<code>SAVE_PERMS</code>/
-<code>DELETE_PERMS</code> (ITEM-033) so the member who initiated an upload can complete and
+<code>DELETE_PERMS</code> (DM-033) so the member who initiated an upload can complete and
 manage their own file without <code>manage_files</code>/<code>files</code>.</p>
 <h2 id="known-issues">Known Issues<a class="headerlink" href="#known-issues" title="Permanent link">&para;</a></h2>
 <h3 id="1-event-create_perms-all-intentional">1. Event CREATE_PERMS = <code>all</code> (intentional)<a class="headerlink" href="#1-event-create_perms-all-intentional" title="Permanent link">&para;</a></h3>
@@ -4986,7 +5012,7 @@ manage their own file without <code>manage_files</code>/<code>files</code>.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

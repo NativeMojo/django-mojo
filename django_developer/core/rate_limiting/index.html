@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -3938,6 +3938,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#global-per-identity-api-throttle-dm-042" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Global Per-Identity API Throttle (DM-042)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4248,13 +4259,20 @@
 <h2 id="on-violation">On Violation<a class="headerlink" href="#on-violation" title="Permanent link">&para;</a></h2>
 <p>When a limit is exceeded, all three rate limiting decorators:</p>
 <ol>
+<li>Return 429 with <code>Retry-After</code> header — the view is never called</li>
 <li>Record a violation metric: <code>rate_limit:{key}</code> in category <code>rate_limits</code></li>
 <li>Report to the incident system: <code>category="rate_limit:{key}"</code>, <code>level=5</code></li>
-<li>Return 429 with <code>Retry-After</code> header — the view is never called</li>
 </ol>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Rate limit exceeded&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">429</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}</span>
 </code></pre></div>
-<p>This means violations are automatically visible in both the metrics dashboard and the incident system, with no extra code.</p>
+<p><strong>Metric + incident event are deduped to first-engagement per key+IP per
+minute (DM-042)</strong> — a client stuck retrying against a live limit no longer
+turns every rejected request into its own metric write + <code>Event</code> INSERT +
+rule evaluation. The 429 response itself is always returned on every
+over-budget request; only the accounting side is deduped. This means
+violations are still automatically visible in both the metrics dashboard and
+the incident system, with no extra code, but a failed request never costs
+the server more than a served one.</p>
 <hr />
 <h2 id="decorator-stacking-order">Decorator Stacking Order<a class="headerlink" href="#decorator-stacking-order" title="Permanent link">&para;</a></h2>
 <p>Routing decorator outermost, then rate limiting, then metrics, then auth/validation:</p>
@@ -4344,7 +4362,8 @@
 <h2 id="clear_rate_limits-cache-clearing-helper"><code>clear_rate_limits</code> — Cache Clearing Helper<a class="headerlink" href="#clear_rate_limits-cache-clearing-helper" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.decorators.limits</span><span class="w"> </span><span class="kn">import</span> <span class="n">clear_rate_limits</span>
 <a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>
-<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="n">clear_rate_limits</span><span class="p">(</span><span class="n">ip</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">duid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">muid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">account_id</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="n">clear_rate_limits</span><span class="p">(</span><span class="n">ip</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">duid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">muid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">account_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>                  <span class="n">user_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">apikey_id</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
 </code></pre></div>
 <table>
 <thead>
@@ -4374,9 +4393,30 @@
 <td><code>account_id</code></td>
 <td>Clear the per-account counter for this user (requires <code>key</code>)</td>
 </tr>
+<tr>
+<td><code>user_id</code></td>
+<td>Clear the global per-identity API throttle counters (<code>rl:api:user:*</code>) for this user (DM-042)</td>
+</tr>
+<tr>
+<td><code>apikey_id</code></td>
+<td>Clear the global per-identity API throttle counters (<code>rl:api:apikey:*</code>) for this ApiKey (DM-042)</td>
+</tr>
 </tbody>
 </table>
 <p>Returns the number of Redis keys deleted.</p>
+<hr />
+<h2 id="global-per-identity-api-throttle-dm-042">Global Per-Identity API Throttle (DM-042)<a class="headerlink" href="#global-per-identity-api-throttle-dm-042" title="Permanent link">&para;</a></h2>
+<p>Separate from the per-endpoint decorators above, <strong>every</strong> <code>@md.URL</code> route is
+also throttled per authenticated identity (User pk or ApiKey pk) in the URL
+dispatcher itself, before the view runs — <code>check_api_throttle</code> in
+<code>mojo/decorators/limits.py</code>, hooked into <code>dispatcher()</code> in
+<code>mojo/decorators/http.py</code>. It requires no per-endpoint decoration; anonymous
+requests are skipped entirely (they remain covered by <code>rate_limit</code> /
+<code>strict_rate_limit</code> above). Default budgets: 240/min per User, 600/min per
+ApiKey, overridable per-key via <code>ApiKey.limits["api"]</code>.</p>
+<p>See <a href="../../security/abuse_hardening/">Authenticated-Abuse Hardening</a> for the
+full settings table, traffic-concentration detection, and deployment
+guidance — this page documents the per-endpoint decorators only.</p>
 <hr />
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>
@@ -4396,6 +4436,8 @@
 </tbody>
 </table>
 <p>Redis connection uses the standard <code>REDIS_*</code> settings — see the Redis helper docs.</p>
+<p>The global per-identity throttle's settings (<code>API_THROTTLE_*</code>) are documented
+in <a href="../../security/abuse_hardening/#settings">Authenticated-Abuse Hardening</a>.</p>
 <hr />
 <h2 id="fail-open-behaviour">Fail-Open Behaviour<a class="headerlink" href="#fail-open-behaviour" title="Permanent link">&para;</a></h2>
 <p>If Redis is unavailable, all rate limit checks are skipped and the request is allowed through. A Redis outage will not take down the API. The error is logged to <code>error.log</code>.</p>
@@ -4457,7 +4499,7 @@
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

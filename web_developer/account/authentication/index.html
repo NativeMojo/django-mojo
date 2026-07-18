@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -2987,6 +2987,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#geofence-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Geofence Block
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4330,6 +4341,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#geofence-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Geofence Block
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4846,6 +4868,38 @@ for end-to-end flow and security trade-offs.</p>
 </code></pre></div>
 <p>Detect this error and show a <strong>Resend verification email</strong> prompt rather than a generic error message. The user does not need to re-enter their password — they only need to click the link.</p>
 <p>See <a href="../email_verification/">Email &amp; Phone Verification</a> for the full send/verify flow, invite link handling, phone verification, and settings reference.</p>
+<h2 id="geofence-block">Geofence Block<a class="headerlink" href="#geofence-block" title="Permanent link">&para;</a></h2>
+<p>When the deployment has geofencing rules configured, login-type endpoints can
+return a geofence 403 <strong>after the credentials have been verified</strong> — the
+credential check always runs first, so invalid credentials return the normal
+401 regardless of location:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="p">{</span>
+<a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;geofence_blocked&quot;</span><span class="p">,</span>
+<a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">403</span><span class="p">,</span>
+<a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a><span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;country_not_allowed&quot;</span><span class="p">,</span>
+<a id="__codelineno-32-5" name="__codelineno-32-5" href="#__codelineno-32-5"></a><span class="w">  </span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Service is not available in your country.&quot;</span>
+<a id="__codelineno-32-6" name="__codelineno-32-6" href="#__codelineno-32-6"></a><span class="p">}</span>
+</code></pre></div>
+<p>The body carries only <code>reason</code> + <code>detail</code> (no country/region/connection
+signals — intentional). Users holding the <code>bypass_geofence</code> permission are
+exempt and log in normally from anywhere.</p>
+<p>Notes for clients:</p>
+<ul>
+<li>MFA users are blocked before the challenge — a geofenced login never
+  returns an <code>mfa_token</code>.</li>
+<li>Token-proven actions still complete: a password reset / email verify /
+  invite accept from a blocked region <strong>applies the action</strong> but returns this
+  403 instead of a session — show "done, but you can't sign in from this
+  location", not "failed".</li>
+<li><code>POST /api/auth/sessions/revoke</code> and the email-change confirm are never
+  geofenced (an already-authenticated user can always take those security
+  actions).</li>
+<li>Identity-less steps (register, forgot-password, magic-link/OTP send, OAuth
+  begin) are still checked up front and can return the same 403 before any
+  processing.</li>
+</ul>
+<p>Use <code>GET /api/geo/check</code> as a pre-flight to render a "not available in your
+region" page before showing the login form — see <a href="../geoip/">GeoIP &amp; Geofencing</a>.</p>
 
 
 
@@ -4904,7 +4958,7 @@ for end-to-end flow and security trade-offs.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

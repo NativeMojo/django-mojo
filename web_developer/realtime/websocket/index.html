@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -3701,6 +3701,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#connection-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#authentication-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4023,6 +4034,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#connection-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#authentication-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4217,10 +4239,26 @@
 <h2 id="client-ip">Client IP<a class="headerlink" href="#client-ip" title="Permanent link">&para;</a></h2>
 <p>The server records a client IP for every WebSocket connection (used in connection logs and security events). It is derived from the <code>X-Real-IP</code> header set by the reverse proxy — <strong>not</strong> from <code>X-Forwarded-For</code>, <code>Forwarded</code>, or the raw ASGI transport peer. Sending forged <code>X-Forwarded-For</code> or <code>Forwarded</code> headers has no effect on the recorded IP.</p>
 <hr />
+<h2 id="connection-limits">Connection Limits<a class="headerlink" href="#connection-limits" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Connect rate:</strong> connecting too fast from one IP gets the handshake
+  closed with code <strong><code>4429</code></strong> before the connection is even accepted. Treat
+  this as a deliberate rejection, not a network error — back off
+  exponentially before reconnecting.</li>
+<li><strong>Concurrent sockets:</strong> each authenticated account may hold a limited
+  number of live connections at once (default 10). Share one connection per
+  tab/app rather than opening one per widget.</li>
+<li><strong>Auth window:</strong> you must authenticate within the advertised timeout (see
+  below) or the socket is closed.</li>
+</ul>
+<p>See <a href="../../security/rate_limits/#websocket-rules">Rate Limits &amp; Client Backoff</a>
+for the full client contract.</p>
 <h2 id="authentication-flow">Authentication Flow<a class="headerlink" href="#authentication-flow" title="Permanent link">&para;</a></h2>
 <h3 id="step-1-server-sends-auth-challenge">Step 1: Server sends auth challenge<a class="headerlink" href="#step-1-server-sends-auth-challenge" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;auth_required&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;timeout_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;auth_required&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;timeout_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">}</span>
 </code></pre></div>
+<p>The timeout is server-configured (default <strong>10 seconds</strong>) — always read it
+from the message rather than assuming a fixed value.</p>
 <h3 id="step-2-client-authenticates">Step 2: Client authenticates<a class="headerlink" href="#step-2-client-authenticates" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;authenticate&quot;</span><span class="p">,</span>
@@ -4439,7 +4477,7 @@
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

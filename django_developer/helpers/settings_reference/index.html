@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -1259,6 +1259,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#maestro" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MAESTRO
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#magic" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1545,6 +1556,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#traffic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TRAFFIC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#twilio" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1604,6 +1626,17 @@
     <span class="md-ellipsis">
       
         WEBHOOK
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ws" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WS
       
     </span>
   </a>
@@ -4890,6 +4923,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#maestro" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MAESTRO
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#magic" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5176,6 +5220,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#traffic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TRAFFIC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#twilio" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5235,6 +5290,17 @@
     <span class="md-ellipsis">
       
         WEBHOOK
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ws" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WS
       
     </span>
   </a>
@@ -5306,6 +5372,15 @@
 <ul>
 <li><code>API_METRICS</code></li>
 <li><code>API_METRICS_GRANULARITY</code></li>
+<li><code>API_THROTTLE_ENABLED</code> — global per-identity API throttle enforcement
+  on/off (default <code>True</code>; accounting runs regardless). See
+  <a href="../../security/abuse_hardening/#settings">Authenticated-Abuse Hardening</a>.</li>
+<li><code>API_THROTTLE_USER</code></li>
+<li><code>API_THROTTLE_APIKEY</code></li>
+<li><code>API_THROTTLE_WINDOW</code></li>
+<li><code>API_THROTTLE_EXEMPT_PREFIXES</code></li>
+<li><code>API_THROTTLE_REPORT_FLOOR</code></li>
+<li><code>API_THROTTLE_CONFIG_TTL</code></li>
 </ul>
 <h3 id="apikey">APIKEY<a class="headerlink" href="#apikey" title="Permanent link">&para;</a></h3>
 <ul>
@@ -5529,6 +5604,12 @@
 <li><code>LOGIT_REQUEST_BODY</code></li>
 <li><code>LOGIT_RETURN_REAL_ERROR</code></li>
 </ul>
+<h3 id="maestro">MAESTRO<a class="headerlink" href="#maestro" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>MAESTRO_CALLBACK_BASE</code> — public base URL for the maestro board webhook receiver; falls back to <code>BASE_URL</code> when unset (see <a href="../../security/maestro_board/">Maestro Board Link</a>)</li>
+<li><code>MAESTRO_LINK_TIMEOUT</code> — outbound HTTP timeout in seconds for maestro link API calls (default <code>10</code>)</li>
+<li><code>MAESTRO_ALLOW_HTTP</code> — dev-only: allow <code>http://</code> board-link pastes and local/private hosts (default off; production pastes must be https to a public hostname)</li>
+</ul>
 <h3 id="magic">MAGIC<a class="headerlink" href="#magic" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>MAGIC_LOGIN_TOKEN_TTL</code></li>
@@ -5685,6 +5766,15 @@
 <ul>
 <li><code>TOTP_ISSUER</code></li>
 </ul>
+<h3 id="traffic">TRAFFIC<a class="headerlink" href="#traffic" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>TRAFFIC_CONCENTRATION_RPM</code> — sustained requests/minute by one identity
+  that trigger a concentration alert (default <code>120</code>). See
+  <a href="../../security/abuse_hardening/#settings">Authenticated-Abuse Hardening</a>.</li>
+<li><code>TRAFFIC_CONCENTRATION_SUSTAIN_WINDOWS</code></li>
+<li><code>TRAFFIC_CONCENTRATION_SHARE</code></li>
+<li><code>TRAFFIC_CONCENTRATION_MIN_TOTAL</code></li>
+</ul>
 <h3 id="twilio">TWILIO<a class="headerlink" href="#twilio" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>TWILIO_ACCOUNT_SID</code></li>
@@ -5714,6 +5804,16 @@
 <h3 id="webhook">WEBHOOK<a class="headerlink" href="#webhook" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>WEBHOOK_SIGNATURE_HEADER</code> — header name used for the outbound webhook HMAC signature and honored as the default by inbound <code>verify_signed_request</code> (default <code>"X-Mojo-Signature"</code>). Override to avoid advertising the framework; renaming is a contract change with your webhook consumers, who must read the same name. See <a href="../../account/webhook_signing/">Webhook Signing</a>.</li>
+</ul>
+<h3 id="ws">WS<a class="headerlink" href="#ws" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>WS_CONNECT_RATE_LIMIT</code> — per-IP websocket connect rate, checked before
+  accept (default <code>30</code>/min, <code>&lt;= 0</code> disables). See
+  <a href="../../security/abuse_hardening/#4-websocket-connection-limits">Authenticated-Abuse Hardening</a>.</li>
+<li><code>WS_MAX_CONNECTIONS</code> — concurrent sockets per authenticated identity
+  (default <code>10</code>, <code>&lt;= 0</code> disables).</li>
+<li><code>WS_UNAUTH_TIMEOUT</code> — seconds an unauthenticated socket may live before
+  being closed (default <code>10</code>).</li>
 </ul>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
 <ul>
@@ -5778,7 +5878,7 @@
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

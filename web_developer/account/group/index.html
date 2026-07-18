@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -4260,7 +4260,12 @@
 </code></pre></div>
 <p>This scopes all requests to that group. Only <strong>active</strong> groups resolve — a
 deactivated group's id behaves exactly like an unknown one (no group context;
-member-scoped requests are denied).</p>
+member-scoped requests are denied). Active means the group <strong>and every parent
+above it</strong>: deactivating a parent group disables its entire subtree — child
+group ids stop resolving, memberships (inherited <em>or</em> direct) stop
+authorizing, and the children's API keys are suspended, even though the
+children's own <code>is_active</code> flags are untouched. Reactivating the parent
+restores all of it instantly.</p>
 <h2 id="get-group">Get Group<a class="headerlink" href="#get-group" title="Permanent link">&para;</a></h2>
 <p><strong>GET</strong> <code>/api/group/7</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
@@ -4344,7 +4349,20 @@ value that would overwrite the existing <code>protected</code> subtree) returns 
 <a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="p">}</span>
 <a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="p">}</span>
 </code></pre></div>
-<p>Returns <code>{"id": -1, "permissions": []}</code> if not a member.</p>
+<p>Succeeds only when the caller is an active member of an <strong>active</strong> group — "active"
+here means the group and every parent above it (see <a href="#group-context">Group Context</a>
+above). Every other outcome — the caller is not a member, the group (or an
+ancestor) is inactive, or the id does not exist — returns the standard <code>403</code>
+permission-denied response
+(<code>{"error": "GET permission denied: GroupMember", "code": 403, "status": false}</code>),
+indistinguishable by design (no existence oracle: probing an id reveals nothing
+about whether a group exists). Treat a <code>403</code> from this endpoint as "no
+membership here."</p>
+<blockquote>
+<p><strong>Changed:</strong> this endpoint previously returned <code>200</code> with
+<code>{"id": -1, "permissions": []}</code> for non-members. Clients branching on
+<code>id === -1</code> must instead handle the <code>403</code>.</p>
+</blockquote>
 <h3 id="invite-a-user">Invite a User<a class="headerlink" href="#invite-a-user" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/group/member/invite</code></p>
 <p>Requires <code>manage_users</code>, <code>manage_members</code>, <code>manage_group</code>, <code>manage_groups</code>, or the combined <code>users</code>/<code>groups</code> term within the group (each combined term satisfies its <code>manage_</code> form by definition).</p>
@@ -4444,7 +4462,7 @@ value that would overwrite the existing <code>protected</code> subtree) returns 
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

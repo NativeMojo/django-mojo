@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -3794,6 +3794,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#kill-switch-disable-is-instant-dm-042" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kill Switch: Disable Is Instant (DM-042)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#rest-surface" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4019,6 +4030,31 @@ on a race or already-in-target-state collision.</p>
 <p><code>disable_service.HISTORY_CAP</code> and the reason frozensets
 (<code>USER_REST_REASONS</code>, <code>GROUP_REST_REASONS</code>) are exported for callers / tests.</p>
 <hr />
+<h2 id="kill-switch-disable-is-instant-dm-042">Kill Switch: Disable Is Instant (DM-042)<a class="headerlink" href="#kill-switch-disable-is-instant-dm-042" title="Permanent link">&para;</a></h2>
+<p>For <code>User</code> entities, <code>disable_entity</code> rotates <code>auth_key</code> in the <strong>same atomic
+UPDATE</strong> as the <code>is_active</code> flip, then best-effort force-disconnects the
+user's live websockets (<code>disconnect_realtime</code>, cross-process via the realtime
+pub/sub disconnect channel — a Redis/realtime failure never blocks the
+disable itself). Consequences:</p>
+<ul>
+<li>Every outstanding JWT (including <code>user_api_key</code> tokens) fails its signature
+  check on the very next request — <code>User.validate_jwt</code> checks both the
+  rotated <code>auth_key</code> and <code>is_active</code> directly, and rejects with the same
+  generic <code>"Invalid token user"</code> error either way (no account-state oracle
+  for whoever holds a stale token).</li>
+<li><strong>Reactivating does NOT resurrect pre-disable tokens</strong> — the key was
+  rotated, so the user must re-authenticate after reactivation. This is
+  deliberate for the abuse case (see
+  <a href="../../security/abuse_hardening/#3-the-account-kill-switch">Authenticated-Abuse Hardening</a>).</li>
+<li><code>User.revoke_sessions</code> (rotate <code>auth_key</code> without disabling) also drops
+  live websockets via the same <code>disconnect_realtime</code> call.</li>
+</ul>
+<p><code>Group</code> entities are unaffected by the key rotation (<code>hasattr(entity,
+"auth_key")</code> gates it to <code>User</code>); <code>Group.is_active</code> is already checked
+per-request — and since DM-048, so is every ancestor's, via
+<code>Group.is_effectively_active()</code> (deactivating a parent instantly darkens the
+whole subtree; see <a href="../group/#membership">Group → Membership</a>).</p>
+<hr />
 <h2 id="rest-surface">REST Surface<a class="headerlink" href="#rest-surface" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -4145,6 +4181,7 @@ fields can be promoted to columns without breaking the namespace contract.</p>
 <li><a href="../group/">Group model</a></li>
 <li><a href="../inactive_sweep/">Inactive sweep</a></li>
 <li><a href="../../../mojo/decorators/limits.py">Login throttling</a> — <code>read_account_attempt</code></li>
+<li><a href="../../security/abuse_hardening/">Authenticated-Abuse Hardening</a> — kill switch rationale, API throttle, websocket limits</li>
 </ul>
 
 
@@ -4204,7 +4241,7 @@ fields can be promoted to columns without breaking the namespace contract.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

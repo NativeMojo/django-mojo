@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -3928,6 +3928,18 @@
 1. Call <code>Player.validate_jwt(token, request)</code>
 2. On success, set <code>request.player</code> to the <code>Player</code> instance
 3. On failure, return <code>401</code></p>
+<blockquote>
+<p><strong>Identity contract with model security.</strong> If you map your custom identity to
+<code>request.user</code> (via <code>AUTH_BEARER_NAME_MAP</code>), RestMeta model security must be
+able to classify it: a <strong>person</strong>-like identity must define the
+<code>is_request_user</code> marker (see <code>account.User</code>); a <strong>machine</strong> identity must set
+<code>request.api_key</code> in its validate handler (see <code>ApiKey.validate_token</code>).
+An authenticated <code>request.user</code> with neither is denied by model security
+(<code>non_user_no_api_key</code>, 403) — it would otherwise be authorized on its own
+self-claimed permissions with no tenant confinement. Identities mapped to
+their own attribute (like <code>request.player</code> above) are unaffected — protect
+those endpoints with your own decorator as shown below.</p>
+</blockquote>
 <hr />
 <h2 id="3-login-endpoint">3. Login Endpoint<a class="headerlink" href="#3-login-endpoint" title="Permanent link">&para;</a></h2>
 <p>Write a login view that issues a player JWT:</p>
@@ -4206,7 +4218,7 @@
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -4246,6 +4246,7 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Authorization: apikey &lt;token&gt;
 </code></pre></div>
 <p>The key's group is automatically set on the request. Only permissions in the key's <code>permissions</code> dict are allowed. System-level permissions (<code>sys.*</code>) are always denied.</p>
+<p><strong>Deactivating the key's group instantly suspends the key</strong> — every group-scoped request (list, detail, save, delete, custom endpoints, with or without a <code>group=</code> param) is denied while the group is inactive, including reads/writes of the group record itself. The key is never modified, so reactivating the group restores it immediately; you do not need to (and should not have to) deactivate the key itself. The key still <em>authenticates</em> (so the group-independent federation-sync path keeps working) — it simply has no group context. <strong>Deactivating a parent group also suspends every descendant's keys</strong> — a child group is only reachable via <code>group=&lt;child id&gt;</code> while it <em>and every ancestor</em> are active; an active child under a deactivated parent is treated as inactive too, with no flag written to the child. Reactivating the parent restores the whole subtree instantly.</p>
 <p><strong>A key cannot reach platform-global data, even with a matching permission.</strong>
 Some models have no per-group ownership at all — <code>User</code>, <code>GeoLocatedIP</code>,
 jobs (<code>Job</code>/<code>JobEvent</code>/<code>JobLog</code>/<code>ScheduledTask</code>), login events, bouncer
@@ -4464,7 +4465,7 @@ returning HTTP 400 <code>Must be "User" instance.</code>.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

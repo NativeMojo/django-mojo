@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -2253,6 +2253,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Authentication Flow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#websocket-limits-dm-042" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WebSocket Limits (DM-042)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4045,6 +4062,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Authentication Flow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#websocket-limits-dm-042" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WebSocket Limits (DM-042)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4190,17 +4224,62 @@
 </code></pre></div>
 <h2 id="authentication-flow">Authentication Flow<a class="headerlink" href="#authentication-flow" title="Permanent link">&para;</a></h2>
 <ol>
-<li>Client connects to <code>ws://host/ws/realtime/</code></li>
-<li>Server sends: <code>{"type": "auth_required", "timeout": 30}</code></li>
+<li>Client connects to <code>ws/realtime/</code> — gated first by a pre-accept per-IP
+   connect-rate check (<code>WS_CONNECT_RATE_LIMIT</code>, default 30/min); over budget
+   closes with code <code>4429</code> before <code>websocket.accept</code> is even sent (DM-042).</li>
+<li>Server sends: <code>{"type": "auth_required", "timeout": &lt;WS_UNAUTH_TIMEOUT&gt;}</code></li>
 <li>Client sends: <code>{"type": "authenticate", "token": "&lt;jwt&gt;", "prefix": "bearer"}</code></li>
 <li>Server validates token via <code>AUTH_BEARER_HANDLERS</code></li>
+<li>Per-identity concurrency cap (<code>WS_MAX_CONNECTIONS</code>, default 10) is checked
+   against <code>realtime:online:{user_type}:{user_id}</code>; over the cap sends an
+   error and closes the connection.</li>
 <li>Registers connection and user online status in Redis</li>
+<li>The dedicated Redis pub/sub connection (<code>start_redis_messages</code>) is created
+   here, <strong>after</strong> successful authentication — an unauthenticated socket
+   never holds a pub/sub connection or its delivery task (DM-042; see
+   <a href="../../security/abuse_hardening/#4-websocket-connection-limits">Abuse Hardening</a>).</li>
 <li>Auto-subscribes to <code>&lt;user_type&gt;:&lt;id&gt;</code> topic</li>
 <li>Calls <code>on_realtime_connection(connection_data)</code> hook (if defined)</li>
 <li>Processes hook response (sends response, subscribes to topics)</li>
 <li>Sends: <code>{"type": "auth_success", "user_type": "user", "user_id": 42}</code></li>
 </ol>
-<p>If no <code>authenticate</code> message arrives within 30 seconds, the connection is closed.</p>
+<p>If no <code>authenticate</code> message arrives within <code>WS_UNAUTH_TIMEOUT</code> seconds
+(default <strong>10</strong>, shortened from 30 in DM-042), the connection is closed.
+Once authenticated, the normal activity/idle timeout (30s of inactivity)
+applies instead.</p>
+<h3 id="websocket-limits-dm-042">WebSocket Limits (DM-042)<a class="headerlink" href="#websocket-limits-dm-042" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WS_CONNECT_RATE_LIMIT</code></td>
+<td><code>30</code></td>
+<td>Connects per minute per IP, checked before accept. <code>&lt;= 0</code> disables.</td>
+</tr>
+<tr>
+<td><code>WS_MAX_CONNECTIONS</code></td>
+<td><code>10</code></td>
+<td>Concurrent sockets per authenticated identity. <code>&lt;= 0</code> disables.</td>
+</tr>
+<tr>
+<td><code>WS_UNAUTH_TIMEOUT</code></td>
+<td><code>10</code></td>
+<td>Seconds an unauthenticated socket may live.</td>
+</tr>
+</tbody>
+</table>
+<p>A rejected pre-accept connection closes with code <strong>4429</strong> — clients should
+treat this as a deliberate rejection and back off, not a network error. See
+<a href="../../security/abuse_hardening/#4-websocket-connection-limits">Authenticated-Abuse Hardening</a>
+for the full rationale and deployment notes, and
+<a href="../../../web_developer/security/rate_limits/#websocket-rules">Rate Limits &amp; Client Backoff</a>
+for the client-side contract.</p>
 <h2 id="message-handlers">Message Handlers<a class="headerlink" href="#message-handlers" title="Permanent link">&para;</a></h2>
 <p>Register custom message types in settings:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># settings.py</span>
@@ -4271,7 +4350,7 @@
 </table>
 <p>All keys have automatic TTL (default 300 seconds, refreshed on activity).</p>
 <h2 id="client-ip-resolution">Client IP Resolution<a class="headerlink" href="#client-ip-resolution" title="Permanent link">&para;</a></h2>
-<p>The WS handler derives the client IP using the same trust order as the HTTP path (ITEM-009 / ITEM-010):</p>
+<p>The WS handler derives the client IP using the same trust order as the HTTP path (DM-009 / DM-010):</p>
 <ol>
 <li><strong><code>X-Real-IP</code></strong> (proxy-authoritative) — checked first in both the ASGI <code>scope</code> headers and the wrapper <code>request_headers</code>. This is the canonical source.</li>
 <li><strong>Transport peer</strong> (<code>scope["client"]</code> / <code>peername</code>) — last-resort fallback only, used when <code>X-Real-IP</code> is absent (e.g. a direct-connect dev setup).</li>
@@ -4346,7 +4425,7 @@
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

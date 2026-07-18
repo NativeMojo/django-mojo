@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -4492,6 +4492,17 @@ for the full rationale.</p>
 <p>Validates that a Bearer token is present and valid.</p>
 <h2 id="security-annotation-decorators">Security Annotation Decorators<a class="headerlink" href="#security-annotation-decorators" title="Permanent link">&para;</a></h2>
 <p>These decorators do not enforce access — they annotate the function in the security registry for auditing and documentation purposes.</p>
+<p>All security-registering decorators — the enforcement ones above
+(<code>requires_auth</code>, <code>requires_perms</code>, <code>requires_group_perms</code>,
+<code>requires_global_perms</code>, <code>requires_bearer</code>, <code>requires_fresh_auth</code>) and the
+annotation-only ones below — write into one shared <code>SECURITY_REGISTRY</code> entry
+per view function, keyed by <code>module.function_name</code>. When several stack on the
+same view (e.g. <code>@public_endpoint</code> above <code>@requires_geofence</code>), each call
+<strong>merges</strong> into the existing entry rather than overwriting it, so no
+decorator's info is lost regardless of stacking order (last-writer-wins only
+for overlapping scalar keys). This is what feeds compliance artifacts like
+<code>GET /api/geo/rules</code> → <code>enforced_endpoints</code> (see
+<a href="../../account/geofence/">geofence.md</a>).</p>
 <table>
 <thead>
 <tr>
@@ -4524,7 +4535,7 @@ anonymous caller still reaches the function body unless the body itself checks
 <code>@md.requires_auth()</code> / <code>@md.requires_perms(...)</code>. A handler that assumes an
 authenticated <code>request.user</code> (e.g. passes it into <code>group.user_has_permission(...)</code>)
 needs a real gate, not just the annotation — a missing one let an anonymous
-caller reach such a check and crash instead of being rejected (ITEM-028).</p>
+caller reach such a check and crash instead of being rejected (DM-028).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">GET</span><span class="p">(</span><span class="s1">&#39;status&#39;</span><span class="p">)</span>
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">public_endpoint</span><span class="p">()</span>
 <a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_status</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
@@ -4688,7 +4699,7 @@ caller reach such a check and crash instead of being rejected (ITEM-028).</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

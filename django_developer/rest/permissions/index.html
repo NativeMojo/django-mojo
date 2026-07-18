@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -4150,7 +4150,7 @@
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">CAN_UPDATE</span> <span class="o">=</span> <span class="kc">False</span>   <span class="c1"># blocks PUT to existing rows</span>
 <a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">CAN_DELETE</span> <span class="o">=</span> <span class="kc">False</span>
 </code></pre></div>
-<p>On denial the REST layer returns <code>403</code> with <code>error = "UPDATE not allowed: &lt;ModelName&gt;"</code> and emits a <code>feature_disabled</code> incident event — a distinct category so operators can tell the block is policy, not a per-user permission shortfall. <code>CAN_DELETE=False</code>, <code>CAN_CREATE=False</code>, and <code>CAN_BATCH=False</code> use the same <code>feature_disabled</code> category, each with a distinguishable <code>branch</code> (<code>can_update_false</code>, <code>can_delete_false</code>, <code>can_create_false</code>, <code>can_batch_false</code>).</p>
+<p>On denial the REST layer returns <code>403</code> with <code>error = "UPDATE not allowed: &lt;ModelName&gt;"</code> and emits a <code>feature_disabled</code> incident event — a distinct category so operators can tell the block is policy, not a per-user permission shortfall. <code>CAN_DELETE=False</code>, <code>CAN_CREATE=False</code>, and <code>CAN_BATCH=False</code> use the same <code>feature_disabled</code> category, each with a distinguishable <code>branch</code> (<code>can_update_false</code>, <code>can_delete_false</code>, <code>can_create_false</code>, <code>can_batch_false</code>). Batch save enforces <code>CAN_UPDATE</code>/<code>CAN_CREATE</code> per row too, dropping the offending rows with the same <code>feature_disabled</code> category under branches <code>batch_can_update_false</code> / <code>batch_can_create_false</code> (see <a href="#batch-save-permissions">Batch Save Permissions</a>).</p>
 <h3 id="can_save-is-deprecated"><code>CAN_SAVE</code> is deprecated<a class="headerlink" href="#can_save-is-deprecated" title="Permanent link">&para;</a></h3>
 <p>Earlier versions referenced <code>CAN_SAVE</code> in RestMeta, but <code>rest.py</code> never read it — so <code>CAN_SAVE = False</code> on models like <code>LoginEvent</code> and <code>ShortLinkClick</code> did not actually block updates. <code>CAN_UPDATE</code> is the real gate. <code>CAN_SAVE</code> is now honored as a one-release deprecated alias: the framework prefers <code>CAN_UPDATE</code> when both are set, and emits a one-shot <code>logit.warning</code> for any class that still uses <code>CAN_SAVE</code> alone. Rename your models to <code>CAN_UPDATE</code> before the next release.</p>
 <h2 id="create-time-owner-stamping">Create-time owner stamping<a class="headerlink" href="#create-time-owner-stamping" title="Permanent link">&para;</a></h2>
@@ -4399,7 +4399,7 @@ different name, or when the tenant is reached through a related path:</p>
 <p>When a save payload assigns a ForeignKey field by primary key — e.g. <code>data={"group": 5}</code> — the framework looks up the target via <code>field.related_model.objects.get(pk=value)</code> and then runs <code>field.related_model.rest_check_permission(request, "VIEW_PERMS", related_instance)</code> before assigning. On denial the assignment is silently skipped (the parent save proceeds with the field unchanged) and a <code>fk_attach_denied</code> incident event is emitted directly by <code>on_rest_save_related_field</code> via <code>_report_fk_attach_denied</code>.</p>
 <p>The event carries these metadata fields: <code>field_name</code>, <code>related_model</code>, <code>related_id</code>, <code>branch</code>. It is not a 403 response — the request still returns 200 with the field left at its previous value.</p>
 <p>This prevents cross-model privilege escalation: a user with SAVE_PERMS on model A but no view access to model B cannot attach B records to A. The same gate has always applied when the value is a dict (which triggers a cascading save and additionally requires SAVE_PERMS on the target).</p>
-<p><strong>Models with a custom <code>on_rest_related_save</code></strong> (e.g. <code>fileman.File</code>) are gated the same way: when the assigned value is an <strong>integer pk</strong> (an "attach existing"), the VIEW_PERMS check runs on the target <em>before</em> <code>on_rest_related_save</code> is dispatched, honoring <code>NO_FK_VIEW_CHECK_FIELDS</code> on the parent. A <strong>string / base64 / data-URL</strong> value is an inline <em>create</em> (a new record the caller owns), so it skips the gate. Before ITEM-033 these models bypassed the check entirely — any authenticated caller could attach any File by id (cross-user/cross-tenant).</p>
+<p><strong>Models with a custom <code>on_rest_related_save</code></strong> (e.g. <code>fileman.File</code>) are gated the same way: when the assigned value is an <strong>integer pk</strong> (an "attach existing"), the VIEW_PERMS check runs on the target <em>before</em> <code>on_rest_related_save</code> is dispatched, honoring <code>NO_FK_VIEW_CHECK_FIELDS</code> on the parent. A <strong>string / base64 / data-URL</strong> value is an inline <em>create</em> (a new record the caller owns), so it skips the gate. Before DM-033 these models bypassed the check entirely — any authenticated caller could attach any File by id (cross-user/cross-tenant).</p>
 <p>Cases that do <strong>not</strong> require VIEW_PERMS on the target:</p>
 <table>
 <thead>
@@ -4440,13 +4440,24 @@ single-instance paths:</p>
 <li><strong>Update rows</strong> (<code>id</code>/<code>pk</code> resolves to an instance): <code>rest_check_permission(request, ["SAVE_PERMS", "VIEW_PERMS"], instance)</code> — the owner match, group/<code>GROUP_FIELD</code> tenant binding, and <code>check_view/edit_permission</code> hooks all apply per row, exactly as in <code>on_rest_handle_save</code>.</li>
 <li><strong>Create rows</strong> (no <code>id</code>/<code>pk</code>, or the pk doesn't resolve): <code>rest_check_permission(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"])</code>, exactly as in <code>on_rest_handle_create</code>.</li>
 </ul>
+<p>Batch also honors the per-verb feature flags, per row: <strong>update rows</strong> are
+dropped when <code>CAN_UPDATE</code> is <code>False</code> (with the deprecated <code>CAN_SAVE</code> alias
+resolved identically to the single-instance path), and <strong>create rows</strong> are
+dropped when <code>CAN_CREATE</code> is <code>False</code>. This is enforced per row, not by refusing
+the whole batch — a create-only ledger (<code>CAN_UPDATE = False</code>, <code>CAN_CREATE</code>
+default <code>True</code>) with <code>CAN_BATCH = True</code> still batches its creates while its
+update rows are dropped. A feature-disabled row gets an <code>errors</code> entry
+(<code>"UPDATE not allowed"</code> / <code>"CREATE not allowed"</code>) and a <code>feature_disabled</code>
+incident (the same category the single-instance gates emit), branch
+<code>batch_can_update_false</code> / <code>batch_can_create_false</code>.</p>
 <p>Denial is drop-with-audit, mirroring the FK-attach gate: the row is skipped,
 the response's <code>errors</code> list gains <code>{"index": N, "error": "permission denied"}</code>,
 and a <code>batch_row_denied</code> incident is emitted (level 2, metadata: <code>branch</code>
 (<code>batch_update</code>/<code>batch_create</code>), <code>index</code>, <code>instance_id</code>, <code>model_name</code>,
 <code>request_path</code>). It is not a 403 — the batch response is still 200 and the
 remaining rows proceed. Rows are written sequentially with no transaction, so
-failing the whole batch could not undo rows already written.</p>
+failing the whole batch could not undo rows already written. The feature-flag
+drops above use the same drop-with-audit shape.</p>
 <p><code>request.group</code> is restored between rows: the per-instance check binds
 <code>request.group</code> to each row's owning group (the row's true tenant), and the
 handler resets it to the caller's original group before every row so one row's
@@ -4511,7 +4522,7 @@ own group could update rows belonging to other tenants in the same batch.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

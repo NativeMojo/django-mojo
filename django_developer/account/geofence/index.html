@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -3867,10 +3867,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#oauth-complete-is-not-decorated" class="md-nav__link">
+  <a href="#post-credential-enforcement-after_authtrue" class="md-nav__link">
     <span class="md-ellipsis">
       
-        OAuth /complete is not decorated
+        Post-credential enforcement (after_auth=True)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oauth-callback-is-not-decorated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OAuth /callback is not decorated
       
     </span>
   </a>
@@ -4204,6 +4215,54 @@ posture: scopes listed in <code>GEOFENCE_FAIL_CLOSED_SCOPES</code> fail <strong>
 geo-lookup failure (use for money/payment endpoints), while everything else
 keeps the fail-open default. Because posture is scope-sensitive,
 <code>lookup_failed</code> decisions are never cached.</p>
+<p>Registry entries merge across stacked decorators, so
+<code>GET /api/geo/rules</code> → <code>enforced_endpoints</code> lists every
+<code>@requires_geofence</code> endpoint regardless of which other security decorators
+(<code>@public_endpoint</code>, <code>@requires_auth</code>, ...) sit above or below it (DM-044).</p>
+<h3 id="post-credential-enforcement-after_authtrue">Post-credential enforcement (<code>after_auth=True</code>)<a class="headerlink" href="#post-credential-enforcement-after_authtrue" title="Permanent link">&para;</a></h3>
+<p>Identity-bearing auth endpoints — everything that verifies a credential
+mid-flow and issues a JWT (password login, TOTP/SMS MFA finish and standalone
+logins, passkey complete, OAuth complete, handoff exchange, magic link, email
+verify, invite accept, password reset) — carry
+<code>@md.requires_geofence(scope="auth", after_auth=True)</code>. The deferred mode
+registers the endpoint in the security registry — it still appears in
+<code>GET /api/geo/rules</code> → <code>enforced_endpoints</code> with its <code>scope</code>, annotated
+<code>after_auth: true</code> so an auditor can distinguish pre-view from
+post-credential enforcement — but does <strong>not</strong> block pre-view. Enforcement
+instead runs <strong>after credential verification</strong> with the verified user, via
+the shared
+<code>services.geofence.enforcement.enforce(request, scope, user)</code> routine at two
+points:</p>
+<ol>
+<li><strong>The top of <code>jwt_login()</code></strong> — before <code>last_login</code>, the <code>UserLoginEvent</code>,
+   and <code>USER_LOGIN_HANDLER</code>, so a blocked login records <strong>zero</strong> success side
+   effects. Every issuance flow funnels through here.</li>
+<li><strong>The MFA branch of the password login</strong> — a blocked user is denied before
+   the challenge and never receives an <code>mfa_token</code>.</li>
+</ol>
+<p>Why: the engine's <code>bypass_geofence</code> short-circuit needs an identified user, and
+block evidence should name who was blocked. The ordering contract is: invalid
+credentials → the normal 401 (a blocked geo never changes it); valid
+credentials → the standard geofence 403 (body shape unchanged).</p>
+<p>Consequences to know:</p>
+<ul>
+<li><strong>Exempt sources</strong> — <code>jwt_login</code> skips the check for
+  <code>source in GEOFENCE_EXEMPT_JWT_SOURCES</code> (<code>"sessions_revoke"</code>,
+  <code>"email_change"</code>): authed re-issues of an existing session, not logins — a
+  user in a blocked geo must still be able to revoke their own sessions. Every
+  other source (including new ones you add) is geofenced by default.</li>
+<li><strong>Token-proven actions complete before the session is withheld</strong> — a
+  password reset / email verify / invite accept from a blocked geo applies its
+  mutation (the emailed secret proved it), then returns the geofence 403
+  instead of tokens.</li>
+<li><strong>Accepted tradeoff</strong>: a caller in a blocked geo holding valid stolen
+  credentials can distinguish 403 (valid, geo-blocked) from 401 (invalid).
+  Geofencing is not a credential-testing defense; bouncer + rate limits still
+  run first.</li>
+</ul>
+<p>Identity-less auth endpoints (register, forgot-password, magic-link/OTP sends,
+passkey/OAuth begin, phone-register) keep the default pre-view blocking mode —
+register in particular must block <strong>before</strong> account creation.</p>
 <p>When a request is blocked the decorator returns 403 immediately with only:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;geofence_blocked&quot;</span><span class="p">,</span>
@@ -4213,11 +4272,16 @@ keeps the fail-open default. Because posture is scope-sensitive,
 <a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="p">}</span>
 </code></pre></div>
 <p>Country, region, and abuse details are intentionally omitted from the blocked response to prevent information leakage. Every block is also recorded by the evidence plane (below).</p>
-<h3 id="oauth-complete-is-not-decorated">OAuth <code>/complete</code> is not decorated<a class="headerlink" href="#oauth-complete-is-not-decorated" title="Permanent link">&para;</a></h3>
-<p>The OAuth <code>/callback</code> endpoint returns an HTTP redirect, not JSON, so <code>@md.requires_geofence</code> is not applied there. System rules still apply at other OAuth steps; group rules do not apply at <code>/complete</code> because the <code>group_uuid</code> is encoded inside the signed OAuth state string and is not decoded until inside the view — after any decorator would have run.</p>
+<h3 id="oauth-callback-is-not-decorated">OAuth <code>/callback</code> is not decorated<a class="headerlink" href="#oauth-callback-is-not-decorated" title="Permanent link">&para;</a></h3>
+<p>The OAuth <code>/callback</code> endpoint returns an HTTP redirect, not JSON, so <code>@md.requires_geofence</code> is not applied there. <code>/begin</code> is geofenced pre-view; <code>/complete</code> uses <code>after_auth=True</code> and enforces <strong>immediately after the provider exchange proves the identity — before <code>_find_or_create_user</code></strong> — so a blocked-geo caller can never provision a new account, join a group, fire the registration webhook, or persist provider tokens (existing users resolve lookup-only so <code>bypass_geofence</code> is honored; unknown identities enforce anonymously). <code>jwt_login</code> re-checks as the backstop. Group rules do not apply at <code>/complete</code> because the <code>group_uuid</code> is encoded inside the signed OAuth state string and is not decoded until inside the view — so only system rules apply there.</p>
 <hr />
 <h2 id="bypass_geofence-permission"><code>bypass_geofence</code> Permission<a class="headerlink" href="#bypass_geofence-permission" title="Permanent link">&para;</a></h2>
 <p>A user with the <code>bypass_geofence</code> permission short-circuits all geofence checks entirely. The check returns <code>allowed=True</code> immediately without writing a cache entry, so revoking the permission takes effect on the very next request.</p>
+<p><strong>It works at login too</strong>: identity-bearing auth endpoints enforce geofencing
+after credential verification (see <em>Post-credential enforcement</em> above), so a
+whitelisted user completes a fresh login from a blocked geo — the per-user
+whitelist covers the full session lifecycle, not just already-authenticated
+traffic.</p>
 <p><strong>This is a high-privilege grant</strong> — superusers hold it implicitly
 (<code>User.has_permission</code> returns <code>True</code> for a superuser on every perm).
 <code>GET /api/geo/bypass_holders</code> lists everyone who is exempt this way (explicit
@@ -4339,15 +4403,17 @@ internals, fail-closed scopes, cache TTL, config source/modified). It reads
 persisted config (settings + <code>Group.metadata</code>) like <code>geo/rules</code> does — not
 the engine's test-header overlays. A <code>group</code>/<code>group_uuid</code> param is required:
 members without one 403 at the decorator; global holders get a 400. The
-dispatcher resolves both <code>group</code> and <code>group_uuid</code> for <strong>active</strong> groups only —
-inspecting an inactive group stays a <code>geo/rules</code> (admin) affordance.</p>
+dispatcher resolves both <code>group</code> and <code>group_uuid</code> for <strong>effectively active</strong>
+groups only (it and every ancestor — DM-048) — inspecting an inactive group,
+including an active child under a deactivated ancestor, stays a <code>geo/rules</code>
+(admin) affordance.</p>
 <p><strong>Events — no new mechanics.</strong> <code>Event.VIEW_PERMS = ["view_security",
 "security"]</code> plus the framework's group-scoped list fallback
 (<code>mojo/models/rest.py::on_rest_handle_list</code>) already confine a member grant
 to <code>group__in=&lt;their groups&gt;</code>, and groupless rows are excluded. Geofence
 events carry a group only when the enforced request itself supplied
 <code>group</code>/<code>group_uuid</code> (the incident reporter falls back to <code>request.group</code>;
-attribution is client-reported — ITEM-020), so members see group-attributed
+attribution is client-reported — DM-020), so members see group-attributed
 activity, not verified totals. <code>geofence_config</code> events are effectively
 always groupless (platform config history) and stay platform-only.
 Regression tests: <code>tests/test_geofence/member_visibility.py</code>.</p>
@@ -4355,8 +4421,12 @@ Regression tests: <code>tests/test_geofence/member_visibility.py</code>.</p>
 <h2 id="evidence-plane-incident-events-metrics">Evidence Plane — Incident Events + Metrics<a class="headerlink" href="#evidence-plane-incident-events-metrics" title="Permanent link">&para;</a></h2>
 <p>Every enforcement outcome that matters to an auditor becomes an incident
 Event (<code>mojo.apps.incident</code>); blocks also record metrics. Emission happens at
-the <strong>decorator</strong> (so cache hits still emit); <code>/api/geo/check</code> and simulate
-are advisory and emit nothing.</p>
+the <strong>enforcement point</strong> — the decorator for pre-view endpoints, the
+post-credential check for <code>after_auth</code> endpoints (so cache hits still emit);
+<code>/api/geo/check</code> and simulate are advisory and emit nothing. Post-credential
+blocks additionally carry the <strong>verified user</strong>: <code>uid</code> on the event plus
+<code>username</code> in metadata — pre-view blocks are anonymous (<code>uid=None</code>) as
+before.</p>
 <table>
 <thead>
 <tr>
@@ -4558,7 +4628,7 @@ registered per-key via <code>Setting.register_validator</code> — see
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

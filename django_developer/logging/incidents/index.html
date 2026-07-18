@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -5843,7 +5843,7 @@ pushed into the fleet-wide firewall.</p>
 <tr>
 <td><code>feature_disabled</code></td>
 <td>403</td>
-<td><code>CAN_UPDATE/CAN_DELETE/CAN_CREATE/CAN_BATCH = False</code> on the model</td>
+<td><code>CAN_UPDATE/CAN_DELETE/CAN_CREATE/CAN_BATCH = False</code> on the model. Per-row batch drops (<code>CAN_UPDATE</code>/<code>CAN_CREATE</code> false on an individual batch row, branch <code>batch_can_update_false</code>/<code>batch_can_create_false</code>) are the n/a exception — no HTTP error, batch response still returns 200</td>
 </tr>
 <tr>
 <td><code>fk_attach_denied</code></td>
@@ -5860,6 +5860,7 @@ pushed into the fleet-wide firewall.</p>
 <p><strong>Recovery paths emit no events.</strong> When a list endpoint returns HTTP 200 with a scoped or empty result (Group list fallback, owner/group-filtered list, <code>MOJO_REST_LIST_PERM_DENY=False</code> branch), no denial event is recorded.</p>
 <p><strong><code>fk_attach_denied</code> metadata fields:</strong> <code>field_name</code>, <code>related_model</code>, <code>related_id</code>, <code>branch</code>. These can be matched by Rules to alert when users attempt to attach records they cannot view.</p>
 <p><strong><code>batch_row_denied</code> metadata fields:</strong> <code>branch</code> (<code>batch_update</code>/<code>batch_create</code>), <code>index</code>, <code>instance_id</code>, <code>model_name</code>, <code>request_path</code>. Emitted per dropped row from <code>on_rest_handle_batch</code> — see <a href="../../rest/permissions/#batch-save-permissions">Batch Save Permissions</a>.</p>
+<p><strong><code>feature_disabled</code> batch metadata fields:</strong> same shape as <code>batch_row_denied</code> — <code>branch</code> (<code>batch_can_update_false</code>/<code>batch_can_create_false</code>), <code>index</code>, <code>instance_id</code>, <code>model_name</code>, <code>request_path</code>. Emitted per row dropped from <code>on_rest_handle_batch</code> because <code>CAN_UPDATE</code>/<code>CAN_CREATE</code> is <code>False</code>, distinct from the whole-request <code>feature_disabled</code> raised for <code>CAN_BATCH=False</code> itself (which carries the standard <code>PermissionDeniedException</code> metadata instead).</p>
 <p>No extra code required — the dispatcher handles this automatically for all framework 401/403 paths.</p>
 <hr />
 <h2 id="event-fields">Event Fields<a class="headerlink" href="#event-fields" title="Permanent link">&para;</a></h2>
@@ -6250,6 +6251,10 @@ pushed into the fleet-wide firewall.</p>
 <tr>
 <td><code>assignee</code></td>
 <td>User ID to assign the ticket to</td>
+</tr>
+<tr>
+<td><code>board</code></td>
+<td>Optional MaestroBoard id — auto-push the created ticket to that remote maestro board (see <a href="../../security/maestro_board/">Maestro Board Link</a>)</td>
 </tr>
 </tbody>
 </table>
@@ -6687,7 +6692,7 @@ pushed into the fleet-wide firewall.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

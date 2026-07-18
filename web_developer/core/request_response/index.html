@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -4222,7 +4222,7 @@ still succeeds.</p>
 <p>Some list endpoints accept a <code>batched</code> array to create/update several rows in one POST — check the endpoint's docs for whether it supports this. Each item without an <code>id</code>/<code>pk</code> is created; each item with one is updated:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="nt">&quot;batched&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;New&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Updated&quot;</span><span class="p">}]}</span>
 </code></pre></div>
-<p>The response wraps successes under <code>data.items</code> (<code>data.count</code> = number saved) and any per-row failures — including a row you don't have permission to write — under <code>data.errors</code>, e.g. <code>{"index": 1, "error": "permission denied"}</code>. A denied or invalid row is skipped, not fatal to the rest of the batch. See the framework reference for the full permission model: <a href="../../../django_developer/rest/permissions/#batch-save-permissions">Batch Save Permissions</a>.</p>
+<p>The response wraps successes under <code>data.items</code> (<code>data.count</code> = number saved) and any per-row failures — including a row you don't have permission to write (<code>"error": "permission denied"</code>), or a row whose verb the model has disabled (<code>"error": "UPDATE not allowed"</code> / <code>"CREATE not allowed"</code>) — under <code>data.errors</code>, e.g. <code>{"index": 1, "error": "permission denied"}</code>. A denied, disabled, or invalid row is skipped, not fatal to the rest of the batch. See the framework reference for the full permission model: <a href="../../../django_developer/rest/permissions/#batch-save-permissions">Batch Save Permissions</a>.</p>
 <h2 id="owner-assignment-on-create">Owner Assignment on Create<a class="headerlink" href="#owner-assignment-on-create" title="Permanent link">&para;</a></h2>
 <p>When creating a record (POST without a pk), the framework automatically stamps the <code>user</code> field with the authenticated caller if the body omits it. If you include <code>user</code> in the body, that value is used instead — provided you have view access to the target user account. This lets callers with sufficient permissions create records on behalf of another user:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="nt">&quot;user&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;abc&quot;</span><span class="p">}</span>
@@ -4291,7 +4291,7 @@ forged <code>X-Forwarded-For</code> header has no effect on the IP the server se
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

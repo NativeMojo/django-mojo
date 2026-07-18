@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -4361,11 +4361,17 @@ resolves the group from the request hostname and applies that group's
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <p>The mapping is cached in Redis (<code>auth_domain:&lt;hostname&gt;</code> key, 24h TTL). The
-cache is automatically invalidated when <code>auth_domain</code> or <code>is_active</code> changes.</p>
+cache is automatically invalidated when the group's own <code>auth_domain</code> or
+<code>is_active</code> changes. It is keyed to the raw own-flag row, so it does <strong>not</strong>
+get invalidated by an ancestor's <code>is_active</code> flip (DM-048) — effective
+activeness is instead re-verified on every read, cache hit or miss, so a
+parent deactivation/reactivation is reflected immediately without a stale
+negative entry.</p>
 <h3 id="resolving-a-group-by-hostname">Resolving a group by hostname<a class="headerlink" href="#resolving-a-group-by-hostname" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">group</span> <span class="o">=</span> <span class="n">Group</span><span class="o">.</span><span class="n">resolve_by_auth_domain</span><span class="p">(</span><span class="s1">&#39;auth.clientbrand.com&#39;</span><span class="p">)</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># Returns the active Group with that auth_domain, or None.</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># Result is Redis-cached (24h for hits, 1h for misses).</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># Returns the effectively active Group with that auth_domain (it and every</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># ancestor — DM-048), or None.</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Result is Redis-cached (24h for hits, 1h for misses).</span>
 </code></pre></div>
 <p>The bouncer calls this automatically on every page request — no setup beyond
 setting <code>auth_domain</code> is required.</p>
@@ -4507,7 +4513,29 @@ group is detected. This preserves the default branding for the default flow.</p>
 <a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>
 <a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="c1"># Active direct member count (excludes inactive memberships and descendants)</span>
 <a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="n">n</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">member_count</span>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a><span class="c1"># A group is EFFECTIVELY active only if it and every ancestor is active</span>
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a><span class="n">alive</span> <span class="o">=</span> <span class="n">group</span><span class="o">.</span><span class="n">is_effectively_active</span><span class="p">()</span>
 </code></pre></div>
+<blockquote>
+<p><strong>Effective activeness — deactivating a parent disables the subtree (DM-048).</strong>
+<code>Group.is_effectively_active(max_depth=8)</code> is the single owner of this
+contract: a group counts as active only if it <strong>and every ancestor</strong> (up to 8
+levels, matching the membership walk) is <code>is_active</code>. It is enforced
+dynamically — no flag is cascaded onto children — so reactivating the parent
+instantly restores individually-active descendants (no one-way door).
+<code>get_member_for_user(..., is_active=True)</code> returns <code>None</code> for any group whose
+chain is dark — a membership in a deactivated ancestor never resolves, and
+even a <em>direct</em> membership in an active child of a deactivated parent is
+denied. Pass <code>is_active=False</code> for raw admin/introspection lookups.
+<code>Group.get_active</code>, the dispatcher's <code>group=</code>/<code>group_uuid</code> resolution, API-key
+group context (<a href="../api_keys/#group-scoping">API Keys — Group Scoping</a>),
+registration, OAuth state, geofence pre-flight, and <code>resolve_by_auth_domain</code>
+all route through the same check. List endpoints still filter on the group's
+<em>own</em> flag only (SQL-level) — a child of a deactivated parent may appear in a
+list to already-permitted callers, but every resolution/authorization gate
+denies it.</p>
+</blockquote>
 <p><code>member_count</code> is exposed via REST as an <code>extra</code> on the <code>default</code> graph (not <code>basic</code> — that stays minimal). List endpoints use <code>default</code> by, well, default, so the field appears in list payloads without an explicit <code>?graph=</code> parameter. Backed by <code>members.filter(is_active=True).count()</code> per record — at very large scale, consider an annotated queryset instead.</p>
 <blockquote>
 <p><strong>Non-<code>User</code> identities (e.g. API keys).</strong> <code>get_member_for_user</code> returns <code>None</code>
@@ -4552,7 +4580,7 @@ permission layer decides read-vs-write from the RestMeta keys of the call
 <a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="n">member</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <h2 id="requestgroup">request.group<a class="headerlink" href="#requestgroup" title="Permanent link">&para;</a></h2>
-<p>When a request includes <code>?group=&lt;id&gt;</code>, <code>MojoMiddleware</code> and auth decorators auto-populate <code>request.group</code> with the <code>Group</code> instance if the user is a member. Only <strong>active</strong> groups resolve (<code>Group.get_active</code>) — an inactive group's id behaves exactly like a nonexistent one (<code>request.group</code> stays <code>None</code>, no touch side effect), for both the <code>group=</code> and <code>group_uuid=</code> params. All permission checks and list queries are then scoped to that group — <strong>except</strong> endpoints gated with <code>@md.requires_global_perms</code>, which never consult <code>request.group</code> at all (global <code>User.permissions</code> or superuser only). See <a href="../../core/permissions/#global-vs-group-scoped-permission-checks">Global vs Group-Scoped Permission Checks</a>.</p>
+<p>When a request includes <code>?group=&lt;id&gt;</code>, <code>MojoMiddleware</code> and auth decorators auto-populate <code>request.group</code> with the <code>Group</code> instance if the user is a member. Only <strong>effectively active</strong> groups resolve (<code>Group.get_active</code> — see <a href="#membership">Effective activeness</a> above) — an inactive group's id, including an active child under a deactivated ancestor, behaves exactly like a nonexistent one (<code>request.group</code> stays <code>None</code>, no touch side effect), for both the <code>group=</code> and <code>group_uuid=</code> params. <code>GET /api/group/&lt;pk&gt;/member</code> follows the same contract: it resolves via <code>Group.get_active</code> and returns one indistinguishable <code>403</code> for every non-member outcome (nonexistent, inactive, or not a member), only <code>touch()</code>ing the group/member after membership in an effectively active group is confirmed. All permission checks and list queries are then scoped to that group — <strong>except</strong> endpoints gated with <code>@md.requires_global_perms</code>, which never consult <code>request.group</code> at all (global <code>User.permissions</code> or superuser only). See <a href="../../core/permissions/#global-vs-group-scoped-permission-checks">Global vs Group-Scoped Permission Checks</a>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># In a REST handler</span>
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="k">if</span> <span class="n">request</span><span class="o">.</span><span class="n">group</span><span class="p">:</span>
 <a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="n">queryset</span> <span class="o">=</span> <span class="n">queryset</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">group</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">group</span><span class="p">)</span>
@@ -4652,7 +4680,7 @@ permission layer decides read-vs-write from the RestMeta keys of the call
       <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>
