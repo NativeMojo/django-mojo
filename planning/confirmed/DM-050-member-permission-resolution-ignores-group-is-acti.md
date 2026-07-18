@@ -1,11 +1,11 @@
 ---
 # id is assigned by /scope on pickup — leave it blank
-id:
+id: DM-050
 type: bug
 title: Member-permission resolution ignores Group.is_active — deactivated-tenant grants still authorize lists, metrics, WS subscribe
 priority: P2
-effort:
-owner:
+effort: S
+owner: backend
 opened: 2026-07-10
 depends_on: []
 related: [DM-025]
