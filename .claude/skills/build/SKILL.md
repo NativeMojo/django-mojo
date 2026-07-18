@@ -32,6 +32,10 @@ Read `CLAUDE.md` for conventions. Read the item file in `planning/confirmed/`.
   failures in the item's `## Notes`. If the baseline is not all-green, STOP and tell
   the user — do not build on red unless they say to. A green baseline means every
   failure after your change is yours to fix.
+  **Ordering in a shared tree:** run the claim (`scripts/start.sh`, Workflow
+  step 1) BEFORE the baseline — the WIP lock doubles as the test-suite lock
+  against concurrent builder sessions; a baseline run outside the claim can
+  collide with another session's suite.
 - Work **in place** on the current branch. Do **not** create a branch or git
   worktree unless the user explicitly asked — the suite uses a dedicated port and a
   shared PostgreSQL DB, so parallel checkouts collide (see `.claude/rules/git.md`).
