@@ -49,14 +49,26 @@ context between them**, so a build session starts clean.
     │   • writes an un-ID'd item to  planning/inbox/<slug>.md
     ▼
   /scope  <inbox item>
+    │   • triage skim first — pushback (future/ | rejected/) is a valid outcome;
+    │       saying "no" is half of triage's value
     │   • scripts/intake.sh → allocates DM-###, stamps frontmatter,
     │       moves inbox/ → confirmed/, bumps planning/.next_id
-    │   • writes a self-contained ## Plan, deletes the PLAN PENDING marker
-    │   • gate: explicit user sign-off before the session ends
+    │   • a cheap DRAFTER sub-agent proposes a verdict + draft plan; the session
+    │       then VERIFIES its load-bearing claims first-hand (drafter proposes,
+    │       reviewer disposes)
+    │   • writes a self-contained ## Plan, stamps build routing
+    │       (build_strategy + build_model), deletes the PLAN PENDING marker
+    │   • gate: explicit user sign-off; "approved — build it" chains into /build
     ▼
   /build  <confirmed item | DM-###>
     │   • pre-flight: scripts/ready.sh (depends_on satisfied?) + not UNPLANNED
     │   • scripts/start.sh → claims confirmed/ → in_progress/ (WIP = 1)
+    │   • executes per build_strategy (default inline):
+    │       inline   — run in-session
+    │       delegate — ONE builder sub-agent runs it end-to-end on build_model;
+    │                  the session VERIFIES its output before close
+    │       fanout   — L/XL + disjoint file partitions only; builders write code,
+    │                  the orchestrator is the SOLE test-runner
     │   • establishes a GREEN test baseline, then implements
     │       (a failing regression test FIRST, for bugs)
     │   • runs tests, updates docs, commits (no push)
@@ -72,6 +84,32 @@ Two side-folders sit outside the main line — **`future/`** (parked ideas) and
 is allocated. `scripts/close.sh <file> future|rejected` moves an item there;
 move it back to `inbox/` by hand to revive it.
 
+### Two sub-agent seams
+
+`/scope` and `/build` each delegate the expensive middle to a sub-agent, then keep
+judgement in the driving session:
+
+- **Scope — drafter / review.** A cheap **drafter** (read-only; sees the item + the
+  tree) returns a *verdict* — `proceed` · `proceed-reduced` · `already-covered` ·
+  `not-now` · `needs-clarification` — and, only for a proceed verdict, a draft plan
+  with `file:line` evidence. The session then verifies the load-bearing claims
+  first-hand; it never rubber-stamps. Scoping runs at a cheap review tier, and the
+  model cost lands on verification, not recon. (Escalation: skip the drafter and
+  scope in-session for P0/P1 security-surface work or L/XL items.)
+- **Build — inline / delegate / fanout.** `/scope` stamps `build_strategy` and
+  `build_model` onto the item (rubric: risk biases the model *upward*, size only
+  sets the floor). `inline` runs in-session; `delegate` hands the whole build to one
+  builder on `build_model` and the session **verifies its output before close**
+  (Resolution, test report, `git log -p` spot-check); `fanout` (L/XL + disjoint file
+  partitions only) splits code across builders while the orchestrator stays the sole
+  test-runner.
+
+**One test-runner, always.** Whatever the strategy, exactly one entity ever runs
+the suite (shared port + Postgres DB). "approved — build it" lets a `/scope` session
+chain straight into a `delegate` build running in the background — freeing the
+session to `/scope` the next item, while `start.sh`'s WIP = 1 still serializes the
+actual builds.
+
 ---
 
 ## 3. Everyday commands
@@ -80,8 +118,8 @@ move it back to `inbox/` by hand to revive it.
 |---|---|
 | `scripts/board.sh` | The pipeline at a glance — one cheap line per item (`id · stage · type · priority · state · title`). Only the output costs tokens, not the files it scans. `board.sh confirmed` / `board.sh future` filters to a stage. |
 | `/request <desc>` | Chat front door. Captures new work as an un-ID'd `inbox/` item. Determines the type itself. |
-| `/scope <item>` | Intake + triage + planning. Allocates the ID and writes the `## Plan`. |
-| `/build <item>` | Implements a scoped item end-to-end: claim → baseline → code + tests → commit → post-build agents → close. |
+| `/scope <item>` | Triage/pushback + intake + planning. A cheap drafter proposes; the session verifies first-hand. Allocates the ID, writes the `## Plan`, stamps build routing. |
+| `/build <item>` | Implements a scoped item per its `build_strategy` (inline/delegate/fanout): claim → baseline → code + tests → commit → post-build agents → close. Verifies a delegate before close. |
 | `/memory` | Shows Claude Code's local project memory (read-only). |
 
 On the board, a `confirmed/` item shows `UNPLANNED` (intook but no plan yet — a
@@ -104,8 +142,8 @@ key for §6:
 | File | Purpose | Port |
 |---|---|---|
 | `skills/request/SKILL.md` | Turn a chat ask into one structured `inbox/` item; classify `type`; explore/clarify. Does **not** allocate an ID or implement. | ✏️ |
-| `skills/scope/SKILL.md` | Own intake (`intake.sh`), triage, and write the self-contained `## Plan`. Gates on user sign-off. | ✏️ |
-| `skills/build/SKILL.md` | Implement a scoped item one task at a time, with tests; commit; spawn post-build agents; close. | ✏️ |
+| `skills/scope/SKILL.md` | Triage/pushback + intake (`intake.sh`); spawn a cheap drafter, verify its load-bearing claims first-hand, write the self-contained `## Plan`, and stamp build routing. Gates on user sign-off. | ✏️ |
+| `skills/build/SKILL.md` | Implement a scoped item per its build routing (inline/delegate/fanout), with tests; commit; spawn post-build agents; close. Verifies a delegate before close. | ✏️ |
 | `skills/memory/SKILL.md` | Display Claude Code's local project memory. | ✏️ |
 
 > Skills embed a few project commands (`bin/run_tests --agent`,
@@ -137,6 +175,12 @@ Each runs in its own isolated context window.
 | `agents/test-runner.md` | sonnet | Run the full suite; fix trivial errors (syntax/imports); report complex failures without fixing | ✏️ |
 | `agents/docs-updater.md` | sonnet | Read the git diff; update both doc tracks to match | 🔧 |
 | `agents/security-review.md` | opus | Review the diff for permission gaps, data exposure, injection, auth bypasses | ✏️ |
+
+> **Not every sub-agent is an agent file.** Scope's **drafter** and build's
+> **delegate / fanout builders** are spawned ad-hoc via the `Task` tool with a
+> `model` override (`build_model`) — they run this repo's own skills, so they need
+> no `.claude/agents/*.md` file. Only the three persistent post-build reviewers
+> above live as agent files.
 
 ### Scripts — `scripts/*.sh` (the deterministic, must-be-exact machinery)
 
@@ -202,15 +246,21 @@ opened: 2026-06-05     # ISO date
 depends_on: []         # hard blockers: [DM-003, otherrepo#WA-007]
 related: []            # soft links
 links: []              # external URLs
+build_strategy: inline # inline (default) | delegate | fanout — stamped by /scope
+build_model: sonnet    # sonnet | opus | fable — builder model (default: session model)
 ---
 ```
+
+`build_strategy` / `build_model` are optional and blank in the template — `/scope`
+stamps them at plan time (the user can override at build approval). Absent = `inline`
++ the session model.
 
 **Sections, added by phase:**
 
 | Phase | Added by | Sections |
 |---|---|---|
 | Intake | `/request` | `## What & Why`, `## Acceptance Criteria`, `## Repro` (bugs) |
-| Plan | `/scope` | `## Plan` (Goal · Context · Changes · Design decisions · Edge cases · Tests · Docs · Open questions), and the `PLAN PENDING` marker is **deleted** |
+| Plan | `/scope` | `## Plan` (Goal · Context · Changes · Design decisions · Edge cases · Tests · Docs · Open questions · Build routing); stamps `build_strategy`/`build_model`; the `PLAN PENDING` marker is **deleted** |
 | Resolution | `/build` → `close.sh` | `## Resolution` (closed date · branch · files changed · tests added) |
 
 The `PLAN PENDING` HTML comment is the gate: while it's present the item is
@@ -291,7 +341,14 @@ deterministic pipeline runs anywhere.
 - **WIP = 1.** At most one item in `in_progress/`. `start.sh` refuses a second.
 - **One test runner at a time.** Tests share a dedicated port + a Postgres DB,
   so parallel runs corrupt each other. Never run the suite in two places at
-  once; `/build` keeps exactly one entity running tests.
+  once; **exactly one entity ever runs it** — the inline session, the delegate
+  builder, or the fanout orchestrator (fanout builders write code but never test).
+- **Never rubber-stamp the drafter.** `/scope` verifies the drafter's load-bearing
+  claims first-hand before presenting — a false `already-covered` costs as much as
+  a bad plan.
+- **Verify a delegate before close.** A `delegate` build's output is checked
+  first-hand (Resolution, test report, `git log -p` spot-check) before the session
+  relays it as done.
 - **No branches/worktrees without explicit permission** — same reason (parallel
   checkouts collide on the port + DB). Work in place on `main`.
 - **Green baseline before the first edit.** Capture it, record it in the item;
