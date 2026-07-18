@@ -116,6 +116,11 @@ its cost.
 6. **Commit the scoping** — explicit pathspec only (the item file +
    `planning/.next_id`), never bare `git commit` (shared tree — see
    `.claude/rules/git.md`).
+7. **Chain to build on request** — if the approval says so ("approved — build
+   it"), or the user confirms when you offer, invoke the `build` skill on the
+   item right away in this session; it reads the stamped routing. A `delegate`
+   build runs in the background, so this session can `/scope` the next inbox
+   item meanwhile (`start.sh` WIP=1 still serializes actual builds).
 
 **Escalation — skip the drafter** and scope directly in-session for P0/P1 items
 on security surfaces (auth, permissions, tenancy) or L/XL items. Risk biases
