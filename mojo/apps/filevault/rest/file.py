@@ -2,6 +2,7 @@ import mojo.decorators as md
 import mojo.errors as me
 from mojo.helpers import logit
 from mojo.helpers.request import get_remote_ip
+from mojo.helpers.crypto import vault as crypto_vault
 from mojo.apps.filevault.models import VaultFile
 from mojo.apps.filevault.services import vault as vault_service
 
@@ -48,14 +49,18 @@ def on_vault_file_upload(request):
 @md.requires_auth()
 def on_vault_file_unlock(request, pk=None):
     """Generate a signed, IP-bound download token."""
-    vault_file = VaultFile.objects.filter(pk=pk).first()
-    if not vault_file:
-        raise me.ValueException("File not found", code=404)
+    vault_file = VaultFile.get_instance_or_404(pk)
+    VaultFile.rest_check_permission_or_raise(request, "VIEW_PERMS", vault_file)
 
-    ttl = request.DATA.get("ttl", None)
-    if ttl:
-        ttl = int(ttl)
+    # A password-protected file requires proof of the password to mint a
+    # download capability — VIEW access alone must not let a caller who does
+    # not know the password initiate a share.
+    if vault_file.hashed_password:
+        password = request.DATA.get("password", None)
+        if not password or not crypto_vault.verify_password(password, vault_file.hashed_password):
+            raise me.ValueException("Invalid password", code=403)
 
+    ttl = crypto_vault.clamp_token_ttl(request.DATA.get("ttl", None))
     client_ip = get_remote_ip(request)
     token = vault_service.generate_download_token(vault_file, client_ip, ttl=ttl)
     download_url = f"/api/filevault/file/download/{token}"
@@ -66,7 +71,7 @@ def on_vault_file_unlock(request, pk=None):
     return dict(
         token=token,
         download_url=download_url,
-        ttl=ttl or 300,
+        ttl=ttl,
     )
 
 
@@ -75,11 +80,8 @@ def on_vault_file_unlock(request, pk=None):
 @md.requires_params("password")
 def on_vault_file_password(request, pk=None):
     """Verify a password without downloading."""
-    from mojo.helpers.crypto import vault as crypto_vault
-
-    vault_file = VaultFile.objects.filter(pk=pk).first()
-    if not vault_file:
-        raise me.ValueException("File not found", code=404)
+    vault_file = VaultFile.get_instance_or_404(pk)
+    VaultFile.rest_check_permission_or_raise(request, "VIEW_PERMS", vault_file)
 
     if not vault_file.hashed_password:
         return dict(valid=True, message="File is not password-protected")

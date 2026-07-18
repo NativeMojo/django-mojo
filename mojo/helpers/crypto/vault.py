@@ -30,6 +30,7 @@ VAULT_SALT_LENGTH = 32
 VAULT_NONCE_LENGTH = 12
 VAULT_TAG_LENGTH = 16
 VAULT_TOKEN_TTL = 300  # 5 minutes
+VAULT_TOKEN_MAX_TTL = 3600  # 1 hour — hard ceiling for any minted token
 
 
 # ---------------------------------------------------------------------------
@@ -210,14 +211,23 @@ def verify_password(password, stored_hash):
 # Access tokens (signed, IP-bound, stateless)
 # ---------------------------------------------------------------------------
 
+def clamp_token_ttl(ttl):
+    """Bound a requested token TTL. None -> the default VAULT_TOKEN_TTL;
+    otherwise the requested value capped at VAULT_TOKEN_MAX_TTL. Only the upper
+    bound is enforced — a caller may still request a short (or already-expired)
+    TTL. The single source of truth so no mint path can exceed the ceiling."""
+    if ttl is None:
+        return VAULT_TOKEN_TTL
+    return min(int(ttl), VAULT_TOKEN_MAX_TTL)
+
+
 def generate_access_token(file_id, client_ip, secret_key, ttl=None):
     """
     Generate a signed, IP-bound download token.
 
     Returns: base64url(payload).base64url(signature)
     """
-    if ttl is None:
-        ttl = VAULT_TOKEN_TTL
+    ttl = clamp_token_ttl(ttl)
     now = int(time.time())
     payload = json.dumps({
         "fid": file_id,

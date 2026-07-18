@@ -1452,7 +1452,7 @@ POST /api/filevault/file/<id>/unlock
 
 Then `GET /api/filevault/file/download/<token>`.
 
-See [FileVault docs](../../filevault/README.md) for the full reference.
+See [FileVault docs](../filevault/README.md) for the full reference.
 
 ---
 

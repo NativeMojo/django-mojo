@@ -45,9 +45,8 @@ def on_vault_data_store(request):
 @md.requires_auth()
 def on_vault_data_retrieve(request, pk=None):
     """Decrypt and return stored JSON data."""
-    vault_data = VaultData.objects.filter(pk=pk).first()
-    if not vault_data:
-        raise me.ValueException("Data not found", code=404)
+    vault_data = VaultData.get_instance_or_404(pk)
+    VaultData.rest_check_permission_or_raise(request, "VIEW_PERMS", vault_data)
 
     password = request.DATA.get("password", None)
 

@@ -146,11 +146,13 @@ vault_file = contract.document
 
 ## Sharing Download Access
 
-FileVault uses **signed, IP-bound, time-limited tokens** for download access. This means you can share a download URL that:
+FileVault uses **signed, IP-bound, time-limited tokens** for download access. A token is bound to the IP address of the caller that generated it, so it is a **same-network / same-session** convenience — a download URL:
 
-- Expires after a configurable TTL (default: 300 seconds)
-- Only works from the IP address it was generated for
-- Does not require the recipient to be authenticated (the download endpoint is public)
+- Expires after its TTL (default 300s, **hard-capped at 3600s** — see `VAULT_TOKEN_MAX_TTL`)
+- Only validates from the **same IP that generated it** (the unlocking caller's IP)
+- Does not itself require the recipient to authenticate — the token *is* the credential — but **minting one requires view access to the file** (and the file password, if the file has one)
+
+> ⚠️ Because the token is bound to the *generating* caller's IP, it is **not** a way to hand a link to an arbitrary third party on a **different** network — a recipient on a different IP is rejected. Cross-network sharing to an external party is a separate feature (e.g. recipient-scoped links) that the IP-bound token does not provide.
 
 ### Generating a download link for a related model
 
@@ -166,15 +168,21 @@ from mojo.apps.filevault.services import vault as vault_service
 @md.POST("contract/<int:pk>/download")
 @md.requires_auth()
 def on_contract_download(request, pk=None):
-    contract = Contract.objects.filter(pk=pk).first()
-    if not contract or not contract.document:
+    # Scope the fetch to the caller — NEVER mint a download token for a record
+    # the caller can't view. Fetching by bare pk and minting a token with only
+    # @requires_auth is a cross-tenant IDOR (any authenticated user could mint a
+    # token for any pk). rest_check_permission_or_raise re-verifies owner /
+    # group membership against this specific instance.
+    contract = Contract.get_instance_or_404(pk)
+    Contract.rest_check_permission_or_raise(request, "VIEW_PERMS", contract)
+    if not contract.document:
         raise me.ValueException("Document not found", code=404)
 
     client_ip = get_remote_ip(request)
     token = vault_service.generate_download_token(
         contract.document,
         client_ip,
-        ttl=600,  # 10-minute link
+        ttl=600,  # requested TTL; clamped to VAULT_TOKEN_MAX_TTL (3600s)
     )
 
     return {
@@ -204,6 +212,19 @@ This generates a token for the requesting user's IP and returns:
 }
 ```
 
+The caller must have **view access** to the file (its owner, or a member of the
+file's group holding `view_vault` / `manage_vault`) — a bare authenticated user
+cannot unlock an arbitrary file by pk. For a **password-protected** file the
+caller must also include the correct `password`, or no token is minted:
+
+```
+POST /api/filevault/file/<id>/unlock
+Body (password-protected files): {"password": "user-entered-password"}
+```
+
+A requested `ttl` above `VAULT_TOKEN_MAX_TTL` (3600s) is clamped; the returned
+`ttl` reflects the effective (clamped) value.
+
 ### Verifying a password without downloading
 
 If a file is password-protected, you can check the password first:
@@ -213,7 +234,7 @@ POST /api/filevault/file/<id>/password
 Body: {"password": "user-entered-password"}
 ```
 
-Returns `{"valid": true}` or `{"valid": false}`. This does **not** decrypt or download the file.
+Returns `{"valid": true}` or `{"valid": false}`. This does **not** decrypt or download the file. Like unlock and retrieve, the caller must have **view access** to the file — you cannot probe an arbitrary file's password by pk.
 
 ### Download flow summary
 
@@ -348,9 +369,10 @@ class Integration(models.Model, MojoModel):
 | **Key wrapping** | File encryption keys are wrapped using the Django `SECRET_KEY` + file UUID |
 | **Password protection** | Optional second layer — password is mixed into the KDF passphrase |
 | **Password storage** | Bcrypt hash stored separately; password verification does not decrypt the file |
-| **Download tokens** | HMAC-signed, bound to the requester's IP address, time-limited |
+| **Download tokens** | HMAC-signed, bound to the **generating caller's** IP address, time-limited (default 300s, **hard-capped at `VAULT_TOKEN_MAX_TTL` = 3600s**) |
 | **Token endpoint** | `/file/download/<token>` is public — authentication is the token itself |
-| **Permissions** | All other endpoints require `view_vault` or `manage_vault` permissions |
+| **Permissions** | Endpoints require vault permissions; the per-record action endpoints (**unlock / password / retrieve**) additionally re-verify the caller against **that specific record** (owner-id match or membership in the record's group, `VIEW_PERMS`) — fetching by pk grants no cross-tenant access |
+| **Unlock of protected files** | Minting a token for a password-protected file requires the correct password up front — view access alone does not create a download capability |
 | **Group scoping** | Every vault file/data record belongs to a group — no personal vault items |
 | **S3 storage** | FileManager backend is forced to `is_public=False` for filevault usage |
 | **Deletion** | Deleting a `VaultFile` record also deletes the S3 object |

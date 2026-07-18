@@ -6,7 +6,8 @@ FileVault stores files with AES-256-GCM encryption. Files are group-scoped and a
 
 ## Permissions
 
-- `file_vault` or `manage_files`
+- `view_vault` or `manage_vault` — list/view/update/delete vault files within your group
+- **Owner or group member, per file** — `unlock` and `password` additionally check that you own the specific file or belong to its group holding `view_vault`/`manage_vault`. Holding the permission alone does not let you reach another group's file by guessing its id — a mismatched id returns `403`.
 
 ## Endpoints
 
@@ -55,11 +56,22 @@ curl -X POST \
 
 ## Get a Download Token
 
+Requires **view access** to the file — you must be its owner or a member of its group holding `view_vault`/`manage_vault`. A file id you can't view returns `403` (no token is minted).
+
 **POST** `/api/filevault/file/42/unlock`
 
 ```json
 {
   "ttl": 300
+}
+```
+
+If the file is password-protected, `password` is required in the same request — a token is not minted without it (wrong or missing password returns `403`):
+
+```json
+{
+  "ttl": 300,
+  "password": "the-file-password"
 }
 ```
 
@@ -76,7 +88,7 @@ curl -X POST \
 }
 ```
 
-The token is bound to your IP address and expires after `ttl` seconds (default 300).
+The token is bound to the IP address of whoever called `unlock`, and expires after `ttl` seconds (default 300, **hard-capped at 3600** — a larger requested `ttl` is silently clamped and the response `ttl` reflects the clamped value). Because it's bound to the *generating* caller's IP, the resulting `download_url` is a same-network/same-session convenience, not a link you can hand to someone on a different network — their request will be rejected.
 
 ## Download a File
 
@@ -93,6 +105,8 @@ GET /api/filevault/file/download/<token>?password=mypassword
 Response is a binary file download with `Content-Disposition: attachment`.
 
 ## Verify a Password
+
+Requires the same **view access** as `unlock` (owner or group member holding `view_vault`/`manage_vault`) — you cannot probe an arbitrary file's password by id.
 
 **POST** `/api/filevault/file/42/password`
 

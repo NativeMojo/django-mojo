@@ -1,5 +1,25 @@
 ## v1.2.49 - July 12, 2026
 
+**security** — **filevault unlock / retrieve / password endpoints now scope by tenant (DM-047).**
+Three `filevault` action endpoints fetched a record by client-supplied pk with a
+bare `Model.objects.filter(pk=pk).first()` gated only by `@requires_auth`, so any
+authenticated user could pass any pk and reach another tenant's record:
+`POST file/<pk>/unlock` minted a cross-tenant download token (and wrote
+`unlocked_by`), `POST data/<pk>/retrieve` returned another tenant's decrypted
+`VaultData` plaintext, and `POST file/<pk>/password` was a cross-tenant password
+oracle. Each now resolves via `get_instance_or_404` and calls
+`rest_check_permission_or_raise(request, "VIEW_PERMS", instance)` — owner-id match
+or membership in the record's owning group — before any token mint, decrypt, or
+password check (the same model-security path the co-located CRUD routers already
+use; a *global* vault perm still legitimately bypasses group scoping, unchanged).
+Hardening shipped alongside: the download-token TTL is clamped to
+`VAULT_TOKEN_MAX_TTL` (3600s) at the mint chokepoint (`generate_access_token`), and
+`unlock` now requires the file password up front for password-protected files
+(view access alone no longer creates a download capability). The public
+token-download endpoint is unchanged. Docs corrected to state the token is bound
+to the *generating* caller's IP (same-network, not arbitrary external sharing).
+Regression tests in `tests/test_filevault/3_test_rest_scoping.py`.
+
 **bug** — **`enforced_endpoints` no longer under-reports geofenced endpoints (DM-044).**
 Ten decorators in `mojo/decorators/auth.py` (`requires_perms`, `public_endpoint`,
 `requires_auth`, ...) registered endpoints in `SECURITY_REGISTRY` with a
