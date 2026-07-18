@@ -154,6 +154,41 @@ The full client-facing contract — every parameter, every response
 shape, every error — is documented in
 [../../web_developer/core/aggregation.md](../../web_developer/core/aggregation.md).
 
+#### Batched named counts (`_mode=count` `_stats`)
+
+`_mode=count` additionally accepts `_stats` — a JSON object mapping
+caller-chosen bundle names to filter bundles, each counted **AND-ed
+onto the same scoped, filtered queryset** the base count runs on:
+
+```
+?_mode=count&_stats={"open":{"status":"open"},"high":{"priority__gt":7}}
+→ {"count": 151, "stats": {"open": 12, "high": 3}, "took_ms": 10}
+```
+
+Bundles are parsed by the very same helper as list query params —
+`MojoModel.build_rest_filters(request, params)` returns the
+`(filters, excludes)` a `queryset.filter/exclude` pair consumes — so a
+bundle's semantics are identical to the equivalent URL filter and a chip's
+count equals what clicking it would show. That helper is the extension
+point: it is shared by `on_rest_list_filter` (the `_mode=list` path) and
+`rest_aggregation._count_bundles`, and accepts JSON-native values
+(list / int / bool / null) as well as raw query strings.
+
+Design contract (see `mojo/models/rest_aggregation.py`):
+
+- Structural errors (`_stats` not an object, a bundle value that isn't an
+  object, a name over 64 chars, or more than `MOJO_REST_AGG_STATS_CAP`
+  bundles) raise `ValueException` → **400**.
+- A single bundle that fails to build or evaluate yields **`null`** for that
+  key (the others still count); the request stays **200**. One broken chip
+  never fails the strip.
+- No `_stats` → no `stats` key in the response (the capability signal the
+  frontend keys on). `_stats` is inert outside `_mode=count` — the
+  `_`-prefixed key is skipped by the field-filter parser like any other.
+- No per-model opt-in: `_stats` adds no field exposure the plain list path
+  (which already returns `count` for arbitrary filters) doesn't already have,
+  so it needs no `AGGREGATION_FIELDS`-style gate.
+
 #### Reserved query-param prefix
 
 The `_*` namespace is reserved by the framework. Any query
@@ -227,6 +262,7 @@ Three settings cap aggregation work to keep the database safe:
 | `MOJO_REST_AGG_TOP_CAP` | `100` | `top` `_size` clamps to this |
 | `MOJO_REST_AGG_DISTINCT_CAP` | `1000` | `distinct` cardinality > cap → 400 |
 | `MOJO_REST_AGG_HISTOGRAM_CAP` | `10000` | `histogram` bucket count > cap → 400 |
+| `MOJO_REST_AGG_STATS_CAP` | `12` | `count` `_stats` bundle count > cap → 400 |
 
 Override via Django settings if a deployment needs different
 ceilings.

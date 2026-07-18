@@ -1002,23 +1002,22 @@ class MojoModel:
         return value
 
     @classmethod
-    def on_rest_list_filter(cls, request, queryset):
+    def build_rest_filters(cls, request, params):
         """
-        Apply filtering logic based on request parameters, including foreign key fields.
+        Parse a query-param-shaped mapping into (filters, excludes) dicts.
 
-        Supports both inclusion and exclusion filters:
-        - Regular filters: ?category=ossec (include)
-        - __in filters: ?category__in=ossec,system (include multiple)
-        - __not filters: ?category__not=ossec (exclude single value)
-        - __not_in filters: ?category__not_in=ossec,system (exclude multiple)
-        - __isnull filters: ?category__isnull=true (NULL check)
-
-        Args:
-            request: Django HTTP request object.
-            queryset: The queryset to filter.
+        Shared by the list-filter path (``request.QUERY_PARAMS``) and the
+        aggregation ``_stats`` bundle counter, so a stat bundle's filter
+        semantics are identical to the equivalent list query params — same
+        operators (__in / __not / __not_in / __isnull), same value coercion,
+        same silent skip of reserved and ``_``-prefixed keys. Values may be
+        raw strings (query params) or JSON-native (bundles: list / int / bool
+        / None).
 
         Returns:
-            The filtered queryset.
+            (filters, excludes) — two dicts for ``queryset.filter(**filters)``
+            / ``queryset.exclude(**excludes)``. Search and application stay
+            with the caller.
         """
         reserved_keys = ["start", "size", "download_format", "dr_start", "dr_end", "limit", "offset"]
         filters = {}
@@ -1026,7 +1025,7 @@ class MojoModel:
         if not hasattr(cls, '__rest_field_names__'):
             cls.__rest_field_names__ = [f.name for f in cls._meta.get_fields()]
 
-        for key, value in request.QUERY_PARAMS.items():
+        for key, value in params.items():
             # Framework-reserved namespace: every `_`-prefixed key is
             # consumed by the aggregation surface (or other framework
             # features). Never confuse with a model field.
@@ -1052,11 +1051,11 @@ class MojoModel:
             if field_name in cls.__rest_field_names__ and cls._meta.get_field(field_name).is_relation:
                 # TODO Normalize relation field values
                 if key.endswith("__in"):
-                    value = value.split(",")
+                    value = value.split(",") if isinstance(value, str) else value
                 elif key.endswith("__not_in"):
                     # Convert __not_in to __in for exclude()
                     key = key.replace("__not_in", "__in")
-                    value = value.split(",")
+                    value = value.split(",") if isinstance(value, str) else value
                 elif key.endswith("__not"):
                     # Remove __not suffix for exclude()
                     key = key.replace("__not", "")
@@ -1087,11 +1086,11 @@ class MojoModel:
                             continue
 
                 if key.endswith("__in"):
-                    value = value.split(",")
+                    value = value.split(",") if isinstance(value, str) else value
                 elif key.endswith("__not_in"):
                     # Convert __not_in to __in for exclude()
                     key = key.replace("__not_in", "__in")
-                    value = value.split(",")
+                    value = value.split(",") if isinstance(value, str) else value
                 elif key.endswith("__not"):
                     # Remove __not suffix for exclude()
                     key = key.replace("__not", "")
@@ -1114,15 +1113,33 @@ class MojoModel:
                     request, field_name, value, lookup=normalized_lookup,
                 )
 
-        # logger.info("filters", filters)
-        # logger.info("excludes", excludes)
+        return filters, excludes
 
+    @classmethod
+    def on_rest_list_filter(cls, request, queryset):
+        """
+        Apply query-param filtering to the list queryset.
+
+        Parses ``request.QUERY_PARAMS`` via ``build_rest_filters`` then applies
+        search, inclusion filters, and exclusion filters. Supported operators:
+        - Regular filters: ?category=ossec (include)
+        - __in filters: ?category__in=ossec,system (include multiple)
+        - __not filters: ?category__not=ossec (exclude single value)
+        - __not_in filters: ?category__not_in=ossec,system (exclude multiple)
+        - __isnull filters: ?category__isnull=true (NULL check)
+
+        Args:
+            request: Django HTTP request object.
+            queryset: The queryset to filter.
+
+        Returns:
+            The filtered queryset.
+        """
+        filters, excludes = cls.build_rest_filters(request, request.QUERY_PARAMS)
         queryset = cls.on_rest_list_search(request, queryset)
         queryset = queryset.filter(**filters)
-
         if excludes:
             queryset = queryset.exclude(**excludes)
-
         return queryset
 
     @classmethod

@@ -1,5 +1,25 @@
 ## v1.2.49 - July 12, 2026
 
+**feature** — **`_mode=count` gains `_stats` for batched named counts (DM-051).**
+List endpoints in count mode now accept an optional `_stats` parameter — a JSON
+object mapping caller-chosen bundle names to filter bundles, e.g.
+`?_mode=count&_stats={"open":{"status":"open"},"high":{"priority__gt":7}}` →
+`{"count": 151, "stats": {"open": 12, "high": 3}, "took_ms": 10}`. Each bundle is
+counted AND-ed onto the request's already permission-, group-, and filter-scoped
+queryset, so a count always describes what the caller would see if that bundle
+were merged into the query — one round trip for a whole table stat strip
+(web-mojo WM-037). Bundles are parsed by the same helper as list query params
+(`MojoModel.build_rest_filters`, extracted from `on_rest_list_filter` in this
+change), so their filter semantics are identical to the equivalent URL filters
+and clicking a chip yields the count it showed. Structural problems (not a JSON
+object, non-object bundle value, name > 64 chars, or more than
+`MOJO_REST_AGG_STATS_CAP` bundles — default 12) are hard 400s; a single bundle
+that fails to evaluate yields `null` for that key while the rest still count
+(the request stays 200). No `_stats` → no `stats` key, the capability signal the
+frontend degrades on. Adds no field exposure the plain-list `count` doesn't
+already have, so no per-model gate. Docs in both tracks; regression tests in
+`tests/test_models/list_stats.py`.
+
 **security** — **filevault unlock / retrieve / password endpoints now scope by tenant (DM-047).**
 Three `filevault` action endpoints fetched a record by client-supplied pk with a
 bare `Model.objects.filter(pk=pk).first()` gated only by `@requires_auth`, so any

@@ -12,8 +12,10 @@ Reserved query-param prefix: every key starting with `_` is consumed by
 the aggregation layer; downstream apps must not invent their own.
 """
 import datetime
+import json
 import time
 
+from django.core.exceptions import FieldError, ValidationError
 from django.db import models as dm
 from django.db.models import Count, Sum, Avg, Min, Max
 from django.db.models.functions import (
@@ -71,6 +73,9 @@ def _cap(name, default):
 TOP_CAP = _cap("MOJO_REST_AGG_TOP_CAP", 100)
 DISTINCT_CAP = _cap("MOJO_REST_AGG_DISTINCT_CAP", 1000)
 HISTOGRAM_CAP = _cap("MOJO_REST_AGG_HISTOGRAM_CAP", 10000)
+# Max number of named filter bundles a single `_mode=count&_stats=...` request
+# may ask for. Each bundle is one extra COUNT query on the scoped queryset.
+STATS_CAP = _cap("MOJO_REST_AGG_STATS_CAP", 12)
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +113,83 @@ def on_rest_list_aggregate(cls, request, queryset):
 # ---------------------------------------------------------------------------
 
 def _agg_count(cls, request, queryset):
-    return {"count": queryset.count()}
+    body = {"count": queryset.count()}
+    bundles = _parse_stats_bundles(request)
+    if bundles is not None:
+        body["stats"] = _count_bundles(cls, request, queryset, bundles)
+    return body
+
+
+def _parse_stats_bundles(request):
+    """Parse + validate the optional ``_stats`` param (count mode only).
+
+    ``_stats`` maps chip names to filter-param bundles, e.g.
+    ``{"open": {"status": "open"}, "high": {"priority__gt": 7}}``. Each bundle's
+    count is evaluated AND-ed onto the already-scoped queryset by
+    ``_count_bundles``.
+
+    Returns the bundle dict, or ``None`` when ``_stats`` is absent. Structural
+    problems (bad JSON, wrong shape, too many bundles) raise ``ValueException``
+    (400) — a malformed request is a caller bug and should fail loud. A bad
+    *value* inside an otherwise well-formed bundle is NOT rejected here; it is
+    handled per-bundle as a null count in ``_count_bundles`` so one broken chip
+    never fails the whole strip.
+    """
+    raw = request.DATA.get("_stats")
+    if raw is None or raw == "":
+        return None
+    # A query param arrives as a JSON string; a JSON request body arrives as a
+    # dict already. Accept both. Never objict.from_json(..., ignore_errors) —
+    # that would mask a malformed payload as an empty object (see DM-023).
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raise me.ValueException(
+                "_stats must be a JSON object mapping bundle names to filter objects",
+            )
+    if not isinstance(raw, dict):
+        raise me.ValueException(
+            "_stats must be a JSON object mapping bundle names to filter objects",
+        )
+    if len(raw) > STATS_CAP:
+        raise me.ValueException(
+            f"_stats supports at most {STATS_CAP} bundles",
+        )
+    for name, params in raw.items():
+        if not isinstance(name, str) or not name or len(name) > 64:
+            raise me.ValueException(
+                "_stats bundle names must be non-empty strings of at most 64 characters",
+            )
+        if not isinstance(params, dict):
+            raise me.ValueException(
+                f"_stats bundle {name!r} must map to a filter object",
+            )
+    return raw
+
+
+def _count_bundles(cls, request, queryset, bundles):
+    """Evaluate each named bundle as a filtered count on the already-scoped,
+    already-filtered queryset.
+
+    Reuses the list-endpoint filter parser (``cls.build_rest_filters``) so a
+    bundle's semantics match the equivalent list query params exactly — the
+    count equals what the caller would see after clicking the chip. A bundle
+    that fails to build or evaluate yields ``null``: a single bad chip must
+    never fail the whole strip (the frontend renders that chip label-only).
+    """
+    stats = {}
+    for name, params in bundles.items():
+        try:
+            filters, excludes = cls.build_rest_filters(request, params)
+            qs = queryset.filter(**filters)
+            if excludes:
+                qs = qs.exclude(**excludes)
+            stats[name] = qs.count()
+        except (me.MojoException, FieldError, ValidationError,
+                ValueError, TypeError, AttributeError):
+            stats[name] = None
+    return stats
 
 
 def _agg_top(cls, request, queryset):

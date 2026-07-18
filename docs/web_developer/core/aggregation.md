@@ -41,6 +41,7 @@ single round-trip can pre-filter and aggregate at the same time.
 | `_bucket` | enum: `minute` / `hour` / `day` / `week` / `month` | `histogram` | Bucket size for time-series aggregation. |
 | `_size` | int (default 10, hard cap 100) | `top` | Max rows. Bare `size` stays for `_mode=list`. |
 | `_min_count` | int (default 1) | `top`, `distinct` | Drop rows whose `value` is below this. Filters long-tail noise. |
+| `_stats` | JSON object (default cap 12 bundles) | `count` | Named filter bundles → one count each, AND-ed onto the current filters. See [`_mode=count`](#mode_count) below. |
 
 ## Response shapes
 
@@ -48,6 +49,7 @@ Every aggregation response carries a `took_ms` field (rounded to the
 nearest 10ms) for performance budgets. Every response also carries
 `status: true` and the standard `code`/`server` envelope fields.
 
+<a name="mode_count"></a>
 ### `_mode=count`
 
 ```json
@@ -59,6 +61,50 @@ nearest 10ms) for performance budgets. Every response also carries
 ```
 
 No `data`, no `size`, no `start`. Pure scalar.
+
+#### Batched named counts: `_stats`
+
+`_mode=count` also accepts an optional `_stats` parameter: a JSON object
+mapping caller-chosen **bundle names** to **filter bundles**. Each bundle is
+counted *on top of the request's current filters* (AND-ed), so every count
+describes exactly what the caller would see if that bundle were merged into the
+query. This powers a stat strip above a table — "Open 12 · High 3 · Stale 5" —
+in a single round trip instead of one request per chip.
+
+```
+GET /api/incident/event?category=ossec&_mode=count
+      &_stats={"open":{"status":"open"},"high":{"priority__gt":7}}
+```
+
+```json
+{
+    "status": true,
+    "count": 151,
+    "stats": { "open": 12, "high": 3 },
+    "took_ms": 10
+}
+```
+
+- **`_stats` is JSON.** As a query parameter it must be a URL-encoded JSON
+  string; in a JSON request body it is a plain object. Both are accepted.
+- **Bundle filters use the exact same syntax as list filter params** — the same
+  field lookups and operators documented in [Filtering](filtering.md)
+  (`__in`, `__not`, `__isnull`, `__gt`, date components, …). Clicking a chip to
+  apply its bundle as real filters therefore yields the same count the chip
+  showed. Reserved / `_`-prefixed keys and `search` / `dr_*` inside a bundle are
+  ignored, exactly as they are on the URL.
+- **`count`** is the base total under the current filters (before any bundle) —
+  free, always present.
+- **An empty bundle** `{}` counts the base queryset (an "All" chip).
+- **Per-bundle failure is soft.** A bundle that references an unusable field or
+  value returns `null` for that key (the rest still count); the request stays
+  `200`. Render such chips label-only.
+- **Structural problems are hard `400`s** — `_stats` that isn't a JSON object,
+  a bundle whose value isn't an object, a bundle name over 64 characters, or
+  more than the cap (default **12**, server setting `MOJO_REST_AGG_STATS_CAP`).
+- **Capability detection.** If the response has **no `stats` key** at all
+  (an older server, or an endpoint without this support), treat aggregation as
+  unavailable and fall back to label-only chips — never an error.
 
 ### `_mode=top`
 
