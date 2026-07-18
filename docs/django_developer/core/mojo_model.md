@@ -177,8 +177,8 @@ point: it is shared by `on_rest_list_filter` (the `_mode=list` path) and
 Design contract (see `mojo/models/rest_aggregation.py`):
 
 - Structural errors (`_stats` not an object, a bundle value that isn't an
-  object, a name over 64 chars, or more than `MOJO_REST_AGG_STATS_CAP`
-  bundles) raise `ValueException` → **400**.
+  object, a name that's empty or over 64 chars, or more than
+  `MOJO_REST_AGG_STATS_CAP` bundles) raise `ValueException` → **400**.
 - A single bundle that fails to build or evaluate yields **`null`** for that
   key (the others still count); the request stays **200**. One broken chip
   never fails the strip.
@@ -255,7 +255,7 @@ timing oracle for filter-match counts.
 
 #### Server-side caps
 
-Three settings cap aggregation work to keep the database safe:
+Four settings cap aggregation work to keep the database safe:
 
 | Setting | Default | Mode |
 |---|---|---|

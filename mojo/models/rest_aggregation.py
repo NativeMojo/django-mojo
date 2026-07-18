@@ -16,12 +16,13 @@ import json
 import time
 
 from django.core.exceptions import FieldError, ValidationError
-from django.db import models as dm
+from django.db import Error as DBError, models as dm
 from django.db.models import Count, Sum, Avg, Min, Max
 from django.db.models.functions import (
     TruncMinute, TruncHour, TruncDay, TruncWeek, TruncMonth,
 )
 
+from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 from mojo import errors as me
@@ -186,8 +187,19 @@ def _count_bundles(cls, request, queryset, bundles):
             if excludes:
                 qs = qs.exclude(**excludes)
             stats[name] = qs.count()
-        except (me.MojoException, FieldError, ValidationError,
-                ValueError, TypeError, AttributeError):
+        except (me.ValueException, FieldError, ValidationError,
+                ValueError, TypeError, AttributeError, DBError) as err:
+            # Soft per-bundle failure: a single bad chip must never fail the
+            # whole strip. Covers build-time errors (bad value / field / type)
+            # AND DB-execution errors (invalid regex, numeric overflow,
+            # unsupported lookup) raised at .count() — those escape the
+            # Python-layer types, so DBError is required to honor the contract.
+            # Deliberately narrow to ValueException, NOT the MojoException base:
+            # a permission-class error from a model override must surface as a
+            # denial, never be silently converted to a null count. Logged at
+            # debug so a systemic breakage (e.g. a renamed field nulling every
+            # bundle) is observable rather than invisible.
+            logit.debug(f"_stats bundle {name!r} failed: {err!r}")
             stats[name] = None
     return stats
 

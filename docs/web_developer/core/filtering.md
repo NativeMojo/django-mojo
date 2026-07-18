@@ -2,7 +2,7 @@
 
 All list endpoints support these query parameters.
 
-> **Reserved prefix.** Query parameters starting with `_` are reserved for the framework (aggregation, pagination controls, etc.) and are silently skipped by the field-filter parser. Use the bare param name without `_` for field filters. See [Aggregation](aggregation.md) for the full `_mode` surface.
+> **Reserved prefix.** Query parameters starting with `_` are reserved for the framework (aggregation, pagination controls, etc.) and are silently skipped by the field-filter parser. Use the bare param name without `_` for field filters. See [Aggregation](aggregation.md) for the full `_mode` surface, including [`_stats` batched counts](aggregation.md#mode_count) — each named bundle is written using these same field-lookup operators.
 
 ## Field Filters
 

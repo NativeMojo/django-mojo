@@ -87,12 +87,17 @@ GET /api/incident/event?category=ossec&_mode=count
 
 - **`_stats` is JSON.** As a query parameter it must be a URL-encoded JSON
   string; in a JSON request body it is a plain object. Both are accepted.
-- **Bundle filters use the exact same syntax as list filter params** — the same
-  field lookups and operators documented in [Filtering](filtering.md)
-  (`__in`, `__not`, `__isnull`, `__gt`, date components, …). Clicking a chip to
-  apply its bundle as real filters therefore yields the same count the chip
-  showed. Reserved / `_`-prefixed keys and `search` / `dr_*` inside a bundle are
-  ignored, exactly as they are on the URL.
+- **Bundle filters use the exact same field-lookup syntax as list filter
+  params** — the same field lookups and operators documented in
+  [Filtering](filtering.md) (`__in`, `__not`, `__isnull`, `__gt`, date
+  components, …). Clicking a chip to apply its bundle as real filters
+  therefore yields the same count the chip showed. `search` and
+  `dr_start`/`dr_end` are **top-level-only** — placed inside a bundle they're
+  silently dropped (no search, no date-range effect), same as any reserved or
+  `_`-prefixed key. Put them on the request itself instead: a top-level
+  `search=`/`dr_start=`/`dr_end=` already scopes every bundle's count for
+  free, since bundles AND onto the base queryset *after* search and
+  date-range filtering have already run.
 - **`count`** is the base total under the current filters (before any bundle) —
   free, always present.
 - **An empty bundle** `{}` counts the base queryset (an "All" chip).
@@ -100,8 +105,9 @@ GET /api/incident/event?category=ossec&_mode=count
   value returns `null` for that key (the rest still count); the request stays
   `200`. Render such chips label-only.
 - **Structural problems are hard `400`s** — `_stats` that isn't a JSON object,
-  a bundle whose value isn't an object, a bundle name over 64 characters, or
-  more than the cap (default **12**, server setting `MOJO_REST_AGG_STATS_CAP`).
+  a bundle whose value isn't an object, a bundle name that's empty or over 64
+  characters, or more than the cap (default **12**, server setting
+  `MOJO_REST_AGG_STATS_CAP`).
 - **Capability detection.** If the response has **no `stats` key** at all
   (an older server, or an endpoint without this support), treat aggregation as
   unavailable and fall back to label-only chips — never an error.

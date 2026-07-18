@@ -348,6 +348,35 @@ def test_stats_ignored_without_count_mode(opts):
 
 
 @th.django_unit_test()
+def test_stats_db_execution_error_is_null_not_500(opts):
+    """A bundle that fails at DB-execution time (invalid regex) is soft-nulled.
+
+    `source__regex` builds fine (the parser validates the base field name, not
+    the lookup), then Postgres rejects the pattern at .count() with a DataError
+    — a django.db.Error subclass that escapes the Python-layer catch. It must
+    still yield null (not a 500 + level-12 incident), honoring the fail-soft
+    contract for the DB-error class too. Regression for the DM-051
+    security-review WARNING.
+    """
+    assert opts.client.login(opts.admin_user, opts.pword), "admin login failed"
+    resp = opts.client.get("/api/shortlink/link", params={
+        "code__startswith": CODE_PREFIX,
+        "_mode": "count",
+        "_stats": json.dumps({"good": {"source": S_EMAIL}, "bad_regex": {"source__regex": "("}}),
+    })
+    assert resp.status_code == 200, (
+        f"an invalid-regex bundle must not 500 the whole strip, got "
+        f"{resp.status_code}: {resp.body}"
+    )
+    body = resp.response
+    assert body["stats"]["good"] == 3, f"good bundle must still count, got {body['stats']}"
+    assert body["stats"]["bad_regex"] is None, (
+        f"invalid-regex bundle must be null (DB error soft-caught), got "
+        f"{body['stats']['bad_regex']}"
+    )
+
+
+@th.django_unit_test()
 def test_stats_respects_owner_scope(opts):
     """Owner-fallback caller: bundle counts cover only their own rows.
 
