@@ -666,7 +666,7 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
         UserLoginEvent.track(request, user, device=request.device, source=source)
     except Exception:
         from mojo.helpers import logit
-        logit.error("Failed to record login event", exc_info=True)
+        logit.exception("Failed to record login event")
     # auth_time stamps WHEN the user genuinely authenticated (this login). It is
     # carried forward unchanged across silent refreshes (see on_refresh_token) and
     # read by the step-up freshness gate (services.fresh_auth). Stamped always —

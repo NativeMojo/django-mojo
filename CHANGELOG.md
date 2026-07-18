@@ -1,5 +1,21 @@
 ## v1.2.49 - July 12, 2026
 
+**fix** — **`logit.error(..., exc_info=True)` raised TypeError inside "must never raise" handlers — a failing `UserLoginEvent.track` 500'd every login.**
+`mojo.helpers.logit`'s module-level `error(*args)` accepts positional args only, so
+passing `exc_info=True` raised `TypeError` *from inside* four `except Exception:`
+blocks whose whole point was to swallow failures. Worst case was the login-event
+recorder in `jwt_login` (`account/rest/user.py`): any `UserLoginEvent.track`
+failure (e.g. an unapplied migration) turned every login into
+`{"error": "error() got an unexpected keyword argument 'exc_info'", "code": 500}`
+instead of a logged warning — observed in mverify_api local dev during
+MVERIFY-API-028. Same pattern fixed in best-effort incident emission
+(`account/services/disable.py`) and both QR generation handlers
+(`fileman/rest/qrcode.py`). All four now use `logit.exception(...)`, which
+captures `sys.exc_info()` itself and logs message + traceback. Repo-wide sweep
+confirms no other module-level `logit` call passes `exc_info`; stdlib
+`logging.Logger` sites (`chat/handler.py`, `passkeys.py`) legitimately support
+the kwarg and are unchanged.
+
 **chore** — **`UserLoginEvent.track()` now snapshots `region_code` (ISO 3166-2) alongside the region name (DM-049).**
 New `region_code` column on `UserLoginEvent` (`CharField(10)`, nullable, indexed),
 populated at `track()` time from `GeoLocatedIP.region_code` (e.g. `"US-CA"`) next to

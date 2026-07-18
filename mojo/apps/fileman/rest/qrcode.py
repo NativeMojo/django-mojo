@@ -45,7 +45,7 @@ def on_qrcode(request):
         status_code = getattr(exc, "status", 400)
         return _error_response(str(exc), status_code)
     except Exception:  # pragma: no cover - unexpected failure
-        logit.error("mojo.apps.fileman.rest.qrcode", "QR code generation failed", exc_info=True)
+        logit.exception("mojo.apps.fileman.rest.qrcode", "QR code generation failed")
         return _error_response("Unable to generate QR code.", 500)
 
     return _build_response(request, payload, fmt)
@@ -94,7 +94,7 @@ def on_qrcode_vcard(request):
         status_code = getattr(exc, "status", 400)
         return _error_response(str(exc), status_code)
     except Exception:  # pragma: no cover - unexpected failure
-        logit.error("mojo.apps.fileman.rest.qrcode", "vCard QR code generation failed", exc_info=True)
+        logit.exception("mojo.apps.fileman.rest.qrcode", "vCard QR code generation failed")
         return _error_response("Unable to generate QR code.", 500)
 
     return _build_response(request, payload, fmt)

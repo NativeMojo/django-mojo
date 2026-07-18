@@ -437,8 +437,7 @@ def _emit_incident(entity, *, details, title, category, level, request=None):
             kwargs["request"] = request
         report_event(**kwargs)
     except Exception:
-        logit.error(
+        logit.exception(
             f"disable_service: failed to emit incident event for "
-            f"{type(entity).__name__} pk={entity.pk}",
-            exc_info=True,
+            f"{type(entity).__name__} pk={entity.pk}"
         )
