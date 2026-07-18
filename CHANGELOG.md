@@ -1,5 +1,9 @@
 ## v1.2.49 - July 12, 2026
 
+## v1.2.49 - July 18, 2026
+
+
+
 **fix** — **`logit.error(..., exc_info=True)` raised TypeError inside "must never raise" handlers — a failing `UserLoginEvent.track` 500'd every login.**
 `mojo.helpers.logit`'s module-level `error(*args)` accepts positional args only, so
 passing `exc_info=True` raised `TypeError` *from inside* four `except Exception:`
