@@ -38,6 +38,9 @@ dist/
 testproject/
 .hypothesis
 
+# Maestro scoping scratch copies (planning/built/ IS committed — see CLAUDE.md)
+planning/.cache/
+
 # Docs
 docs_site/
 

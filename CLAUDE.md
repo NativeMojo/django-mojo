@@ -10,27 +10,57 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
 
 1. Read this file in full.
 2. Read `memory.md`.
-3. Run `scripts/board.sh` — the pipeline at a glance (inbox/confirmed/done).
-4. Choose your mode:
-   - Filing new work (bug/feature/chore) → `/request` (writes an un-ID'd item to `planning/inbox/`)
-   - Triaging / planning an item → `/scope` (`.claude/skills/scope/SKILL.md`)
-   - Implementing a scoped item  → `/build` (`.claude/skills/build/SKILL.md`)
-5. Read the item:
-   - New, unscoped → `planning/inbox/`
-   - Scoped, active → `planning/confirmed/`
-6. Read `docs/django_developer/README.md` before building — do not reinvent existing features.
+3. Work is tracked on the **maestro board** (workspace `django-mojo` — see
+   `.claude/maestro.json` for the live workspace/board id). Choose your mode:
+   - Filing new work (bug/feature/chore) → `/maestro-task`
+   - Triaging / planning an item → `/maestro-scope`
+   - Implementing a scoped item  → `/maestro-build`
+4. If maestro is unreachable or unauthenticated, the `maestro-*` skills stop
+   with an explicit notice — fall back to the local flow (`/request` →
+   `/scope` → `/build`; see "Local Fallback Workflow" under Planning). Never
+   fall back silently.
+5. Read `docs/django_developer/README.md` before building — do not reinvent existing features.
 
 ## How to Work Here
 
 - **Rules** are in `.claude/rules/` and load automatically. Follow them.
-- **Skills** are in `.claude/skills/` — invoked with `/<name>` (`/request`, `/scope`, `/build`, `/memory`).
-- **Agents** are in `.claude/agents/` — spawned automatically by `/build`.
+- **Skills** are in `.claude/skills/` — invoked with `/<name>`. Primary:
+  `/maestro-task`, `/maestro-scope`, `/maestro-build`. Local fallback (maestro
+  down/unauthenticated only): `/request`, `/scope`, `/build`. Always
+  available: `/memory`.
+- **Agents** are in `.claude/agents/` — spawned automatically by
+  `/maestro-build` (and by the fallback `/build`).
 - See `AI_DEV.md` for the full developer workflow.
 
 ## Planning
 
-There is **one kind of work item**. Bugs, features, and chores differ only by a
-`type` field — not by folder, template, counter, or mode.
+Work items live on the **maestro board** (`django-mojo` workspace; see
+`.claude/maestro.json`). A board item's markdown description is the
+workspec; its `stage` column value is inbox → scoped → planned → building →
+review → done; priority is MoSCoW (must/should/could/won't). The
+`.claude/skills/maestro-*` skills (task/scope/build) read and write items
+there — see each `SKILL.md` for the exact protocol, and the workspace's own
+`django-mojo-build-conventions` rule doc (fetched via `get_workspace_context`)
+for repo-specific process on top of the generic skills: WIP = 1 (one item
+`building` at a time), the post-build agent trio (test-runner, docs-updater,
+security-review), and optional build routing.
+
+A work item is board-backed XOR file-backed — never both. `planning/` itself
+still holds:
+- `done/` — the pre-migration historical archive (183 items closed before the
+  2026-07-19 maestro move), plus any future fallback-mode closures. Browse
+  with `scripts/board.sh done` or `git log`.
+- `future/` / `rejected/` — pre-migration parked/declined items, kept for
+  rationale only.
+- `.cache/` (gitignored) — scratch working copy `/maestro-scope` and
+  `/maestro-build` pull an item's description into for the session.
+- `built/` — commit-time snapshots `/maestro-build` writes at claim time (the
+  board item remains the source of truth; these are a local paper trail).
+
+### Local Fallback Workflow
+
+If maestro is unreachable or unauthenticated, `/request` → `/scope` → `/build`
+still work exactly as before, entirely file-based:
 
 - **The folder is the stage.** `inbox/ → confirmed/ → in_progress/ → done/`.
   Advance an item only with the scripts — `scripts/intake.sh` (→ confirmed),
@@ -68,10 +98,10 @@ There is **one kind of work item**. Bugs, features, and chores differ only by a
 planning/
   .next_id       # next item number (single bare integer)
   _template.md   # the one item template
-  inbox/         # new, unscoped items (no id yet)
-  confirmed/     # scoped + planned items (have id + plan)
-  in_progress/   # actively being built (claimed by /build; WIP = 1)
-  done/          # closed items
+  inbox/         # new, unscoped items (no id yet) — fallback only
+  confirmed/     # scoped + planned items (have id + plan) — fallback only
+  in_progress/   # actively being built (claimed by /build; WIP = 1) — fallback only
+  done/          # closed items (pre-migration archive + any fallback closures)
   future/        # parked ideas — not ready to scope (just a folder)
   rejected/      # declined items, kept for rationale (just a folder)
 ```
