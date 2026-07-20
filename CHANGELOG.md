@@ -8,12 +8,17 @@ The realtime server pins one `User` instance per socket at auth
 that instance — hours-stale by tab close. Observed in prod as portal favorites
 vanishing when a tab closed: REST merged `metadata.portal` fine, then the
 disconnect hook wrote back the connect-time snapshot. All three sites now
-`refresh_from_db(fields=["metadata"])` (best-effort, non-raising — hooks must
-not blow up disconnect) before mutating, so every presence-flag write starts
-from current DB state — what the in-code comment ("should always
-self.refresh_from_db()") had flagged all along. Dev never reproduced it because
-`runserver` has no ASGI realtime server. Regression tests simulate the
-two-instance race for all three hooks in `tests/test_realtime/metadata.py`.
+`refresh_from_db()` (best-effort, non-raising — hooks must not blow up
+disconnect) before mutating: a full re-sync of the long-lived instance, so the
+metadata write starts from current DB state AND permission/active-flag state
+converges at every socket lifecycle event — what the in-code comment ("should
+always self.refresh_from_db()") had flagged all along. The write-back remains
+`update_fields=["metadata"]`, so the wider refresh adds no clobber surface on
+other fields. Nothing in `tests/` had ever exercised these hooks; the bug
+reproduces in any environment running the realtime server (`bin/asgi_local`
+included) given a socket held open across a metadata write. Regression tests
+simulate the two-instance race for all three hooks in
+`tests/test_realtime/metadata.py`.
 The residual microsecond race between refresh and save is accepted: an atomic
 per-key JSON update would be Postgres-specific for a window ~6 orders of
 magnitude smaller than the session-length one fixed here.

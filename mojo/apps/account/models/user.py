@@ -1404,10 +1404,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
     def on_realtime_connected(self):
         # The realtime server holds this instance for the lifetime of the
-        # socket — refresh so we never write back a stale metadata snapshot
-        # over concurrent (e.g. REST) writes. Best-effort: hooks must not raise.
+        # socket — re-sync the whole object so we never write back a stale
+        # metadata snapshot over concurrent (e.g. REST) writes, and so
+        # permission/active state converges too. Best-effort: hooks must not
+        # raise.
         try:
-            self.refresh_from_db(fields=["metadata"])
+            self.refresh_from_db()
         except Exception:
             pass
         meta = self.metadata or {}
@@ -1443,7 +1445,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             if key:
                 # same stale-instance hazard as the connect/disconnect hooks
                 try:
-                    self.refresh_from_db(fields=["metadata"])
+                    self.refresh_from_db()
                 except Exception:
                     pass
                 meta = self.metadata or {}
@@ -1473,9 +1475,9 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         return {"response": {"type": "ack"}}
 
     def on_realtime_disconnected(self):
-        # same stale-instance hazard as on_realtime_connected — refresh first
+        # same stale-instance hazard as on_realtime_connected — re-sync first
         try:
-            self.refresh_from_db(fields=["metadata"])
+            self.refresh_from_db()
         except Exception:
             pass
         meta = self.metadata or {}
