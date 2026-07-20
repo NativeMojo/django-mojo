@@ -456,13 +456,38 @@ def test_rest_bot_passthrough(opts):
     assert_eq(resp.status_code, 302, f"bot_passthrough should always 302, got {resp.status_code}")
 
 
-@th.django_unit_test("REST: /s/invalid returns 302 to fallback")
+# ---------------------------------------------------------------------------
+# REST: dead-link page
+#
+# Every unusable-link condition (unknown code, expired, inactive, no
+# destination) must answer 404 with an identical body — the response must
+# never reveal whether a given code was ever real.
+# ---------------------------------------------------------------------------
+
+def _body_of(resp):
+    """Extract the response body as a string (same convention as the OG tests)."""
+    return resp.response if isinstance(resp.response, str) else str(resp.response)
+
+
+def _dead_link_body(opts):
+    """Fetch the canonical dead-link page via an unknown code."""
+    resp = opts.client.get("/s/ZZZZZZZ", allow_redirects=False)
+    return _body_of(resp)
+
+
+@th.django_unit_test("REST: /s/<unknown> returns the 404 unavailable page, not a redirect")
 def test_rest_redirect_missing(opts):
     resp = opts.client.get("/s/ZZZZZZZ", allow_redirects=False)
-    assert_eq(resp.status_code, 302, f"missing code should return 302 to fallback, got {resp.status_code}")
+    assert_eq(resp.status_code, 404,
+              f"unknown code should return 404, got {resp.status_code}")
+    body = _body_of(resp)
+    assert_true("This link is no longer available" in body,
+                "unknown code should render the unavailable page")
+    assert_true("ZZZZZZZ" not in body,
+                "the page must not echo the requested code back to the visitor")
 
 
-@th.django_unit_test("REST: /s/<expired> returns 302 to fallback")
+@th.django_unit_test("REST: /s/<expired> returns 404 with a body identical to an unknown code")
 def test_rest_redirect_expired(opts):
     from mojo.apps.shortlink.models import ShortLink
     from mojo.helpers import dates
@@ -470,7 +495,86 @@ def test_rest_redirect_expired(opts):
     link = ShortLink.create(url=REAL_URL_B, source="test")
     ShortLink.objects.filter(pk=link.pk).update(expires_at=dates.utcnow() - timedelta(hours=1))
     resp = opts.client.get(f"/s/{link.code}", allow_redirects=False)
-    assert_eq(resp.status_code, 302, f"expired should return 302, got {resp.status_code}")
+    assert_eq(resp.status_code, 404,
+              f"expired code should return 404, got {resp.status_code}")
+    assert_eq(_body_of(resp), _dead_link_body(opts),
+              "expired and unknown codes must return byte-identical pages")
+
+
+@th.django_unit_test("REST: /s/<inactive> returns 404 with a body identical to an unknown code")
+def test_rest_redirect_inactive(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    link = ShortLink.create(url=REAL_URL_B, source="test")
+    ShortLink.objects.filter(pk=link.pk).update(is_active=False)
+    resp = opts.client.get(f"/s/{link.code}", allow_redirects=False)
+    assert_eq(resp.status_code, 404,
+              f"inactive code should return 404, got {resp.status_code}")
+    assert_eq(_body_of(resp), _dead_link_body(opts),
+              "inactive and unknown codes must return byte-identical pages")
+
+
+@th.django_unit_test("REST: /s/<code> resolving to no destination returns the 404 page")
+def test_rest_redirect_no_destination(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    # A row with no url and no file/rendition — resolve() returns `self.url or None`.
+    # This is the state a file-backed link lands in after its File is deleted
+    # (on_delete=SET_NULL).
+    link = ShortLink.create(url="", source="test")
+    resp = opts.client.get(f"/s/{link.code}", allow_redirects=False)
+    assert_eq(resp.status_code, 404,
+              f"link with no destination should return 404, got {resp.status_code}")
+    assert_eq(_body_of(resp), _dead_link_body(opts),
+              "a destination-less link must return the same page as an unknown code")
+
+
+@th.django_unit_test("REST: bots hitting a dead link get the 404 page, not an OG interstitial")
+def test_rest_dead_link_bot(opts):
+    from mojo.apps.shortlink.models import ShortLink
+    from mojo.helpers import dates
+
+    link = ShortLink.create(
+        url=REAL_URL_B,
+        source="test",
+        metadata={"og:title": "Should Not Appear"},
+    )
+    ShortLink.objects.filter(pk=link.pk).update(expires_at=dates.utcnow() - timedelta(hours=1))
+    opts.client.headers["User-Agent"] = "Slackbot-LinkExpanding 1.0"
+    opts.client.headers["HTTP_USER_AGENT"] = "Slackbot-LinkExpanding 1.0"
+    resp = opts.client.get(f"/s/{link.code}", allow_redirects=False)
+    opts.client.headers.pop("User-Agent", None)
+    opts.client.headers.pop("HTTP_USER_AGENT", None)
+
+    assert_eq(resp.status_code, 404,
+              f"bot on a dead link should return 404, got {resp.status_code}")
+    body = _body_of(resp)
+    assert_true("og:" not in body,
+                "dead-link page must not emit OG meta tags for bots")
+    assert_true("http-equiv=\"refresh\"" not in body,
+                "dead-link page must not emit a meta refresh redirect")
+    assert_true("Should Not Appear" not in body,
+                "dead-link page must not leak the link's stored OG metadata")
+
+
+@th.django_unit_test("REST: unavailable page shows site name and home link only when configured")
+def test_rest_unavailable_page_settings(opts):
+    # Unconfigured (the library default): no brand line, no button, no empty href.
+    body = _dead_link_body(opts)
+    assert_true("Acme Widgets" not in body,
+                "unconfigured page should not show a site name")
+    assert_true('href=""' not in body,
+                "unconfigured page must not emit an empty href")
+    assert_true("Back to" not in body,
+                "unconfigured page should not render a back-to-site button")
+
+    with th.server_settings(SHORTLINK_SITE_NAME="Acme Widgets",
+                            SHORTLINK_HOME_URL="https://acme.test"):
+        configured = _dead_link_body(opts)
+        assert_true("Acme Widgets" in configured,
+                    "configured page should show SHORTLINK_SITE_NAME")
+        assert_true("https://acme.test" in configured,
+                    "configured page should link to SHORTLINK_HOME_URL")
 
 
 @th.django_unit_test("REST: /api/shortlink/link/create creates a short URL from request.DATA")

@@ -398,7 +398,8 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 ### SHORTLINK
 
 - `SHORTLINK_BASE_URL`
-- `SHORTLINK_FALLBACK_URL`
+- `SHORTLINK_HOME_URL`
+- `SHORTLINK_SITE_NAME`
 
 ### SMS
 

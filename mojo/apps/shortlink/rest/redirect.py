@@ -1,11 +1,29 @@
 import mojo.decorators as md
 from django.http import HttpResponseRedirect, HttpResponse
+from django.shortcuts import render
 from mojo.helpers.settings import settings
 
 
-def _get_fallback_url():
-    return settings.get("SHORTLINK_FALLBACK_URL", None) or \
-           settings.get("BASE_URL", "/")
+def _render_unavailable(request):
+    """
+    Render the dead-link page.
+
+    Deliberately identical for every failure case (unknown code, expired,
+    inactive, no destination) so the response never reveals whether a code
+    was ever real. Context comes only from settings — nothing request- or
+    link-derived — which is what keeps the bodies byte-identical.
+    """
+    ctx = {
+        "site_name": settings.get("SHORTLINK_SITE_NAME", None),
+        "home_url": settings.get("SHORTLINK_HOME_URL", None),
+    }
+    resp = render(request, "shortlink/link_unavailable.html", ctx, status=404)
+    # Dead codes must never be cached against a /s/ path by a CDN or proxy.
+    resp["Cache-Control"] = "no-store"
+    # Keep the request log small — the logging middleware writes the full
+    # response body for any 4xx unless log_context is set (mojo/middleware/logging.py).
+    resp.log_context = {"endpoint": "shortlink_redirect", "result": "unavailable"}
+    return resp
 
 
 def _render_og_html(link, destination_url):
@@ -54,12 +72,12 @@ def on_shortlink_redirect(request, code):
 
     link = ShortLink.objects.filter(code=code, is_active=True).first()
     if not link:
-        return HttpResponseRedirect(_get_fallback_url())
+        return _render_unavailable(request)
 
     # Resolve destination (increments hit_count, records metric)
     destination = link.resolve()
     if not destination:
-        return HttpResponseRedirect(_get_fallback_url())
+        return _render_unavailable(request)
 
     # Log click if tracking enabled
     link.log_click(request)

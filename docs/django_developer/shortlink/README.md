@@ -325,8 +325,55 @@ The cleanup job is defined in `mojo/apps/shortlink/cronjobs.py` and the worker l
 | Setting | Default | Description |
 |---|---|---|
 | `SHORTLINK_BASE_URL` | `None` | Base URL for generated short links (e.g. `https://itf.io`). |
-| `SHORTLINK_FALLBACK_URL` | `None` | Where to redirect invalid/expired codes. |
-| `BASE_URL` | `"/"` | Fallback if neither shortlink-specific setting is configured. |
+| `SHORTLINK_SITE_NAME` | `None` | Product name shown on the "link unavailable" page. Unset = no brand line. |
+| `SHORTLINK_HOME_URL` | `None` | Target of the "back to site" button on that page. Unset = no button. |
+| `BASE_URL` | `"/"` | Fallback if no shortlink-specific base setting is configured. |
+
+`SHORTLINK_FALLBACK_URL` was removed in 1.2.51 — see below.
+
+---
+
+## The "link unavailable" page
+
+`GET /s/<code>` returns **HTTP 404** and renders `shortlink/link_unavailable.html`
+whenever a link cannot be used — unknown code, expired, `is_active=False`, or a
+row that resolves to no destination. All four render the **same body**, so the
+response never reveals whether a code was ever real. The response also carries
+`Cache-Control: no-store` and the page sets `<meta name="robots" content="noindex">`.
+
+Until 1.2.51 these cases issued a `302` to `SHORTLINK_FALLBACK_URL` (falling back
+to `BASE_URL`, then `/`), which dumped the visitor on the site root with no
+explanation. That setting is gone; the endpoint no longer redirects on failure.
+
+### Customizing it
+
+For small changes, set `SHORTLINK_SITE_NAME` and `SHORTLINK_HOME_URL`. The
+shipped page works with neither set — it just omits the brand line and the button.
+
+`SHORTLINK_HOME_URL` intentionally has **no fallback to `BASE_URL`**. A shortlink
+host is often a bare redirect domain with nothing served at `/`, and pointing a
+"back to site" button there would recreate the behavior this replaced. Set it
+only when there is a real destination.
+
+To replace the page entirely, override the template. The most reliable way is a
+directory in `TEMPLATES[0]["DIRS"]`, which always wins over app templates:
+
+```python
+TEMPLATES = [{
+    "BACKEND": "django.template.backends.django.DjangoTemplates",
+    "DIRS": [BASE_DIR / "templates"],   # put your copy at templates/shortlink/link_unavailable.html
+    "APP_DIRS": True,
+    ...
+}]
+```
+
+Alternatively, ship `templates/shortlink/link_unavailable.html` inside one of your
+own apps — but that only wins if the app is listed **before** `mojo.apps.shortlink`
+in `INSTALLED_APPS`, since `APP_DIRS` resolves in installed order.
+
+Your template receives `site_name` and `home_url` in its context. Keep it
+self-contained (inline CSS, no external asset requests) — it is served to
+visitors who may have no relationship with your app, and to link-preview bots.
 
 ---
 

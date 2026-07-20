@@ -332,7 +332,18 @@ Links expire based on `expire_days` and `expire_hours` (combined):
 | 1 | 6 | Expires in 30 hours |
 | 0 | 0 | Never expires |
 
-Expired links redirect to the fallback URL (configured via `SHORTLINK_FALLBACK_URL` or `BASE_URL`).
+### Unusable links
+
+`GET /s/<code>` returns **HTTP 404** with a plain HTML page ("This link is no longer available") for every unusable condition:
+
+- the code never existed, or has been removed by the cleanup job
+- the link has expired
+- the link is inactive (`is_active=False`)
+- the link resolves to no destination (e.g. its linked file was deleted)
+
+All four return an **identical body** — the response deliberately does not reveal whether a given code was ever real. The page is also sent with `Cache-Control: no-store` and `<meta name="robots" content="noindex">`.
+
+> **Changed in 1.2.51.** Previously these cases returned a `302` to `SHORTLINK_FALLBACK_URL` (or `BASE_URL`, or `/`), dropping the visitor on the site root with no explanation. That setting has been removed. If you have monitoring or client code that counts `3xx` responses on `/s/`, it needs updating to expect `404`.
 
 ---
 
@@ -343,8 +354,11 @@ Configure in your Django settings or via the MOJO settings system:
 | Setting | Default | Description |
 |---|---|---|
 | `SHORTLINK_BASE_URL` | `None` | Base URL for short links (e.g. `https://itf.io`). Falls back to `BASE_URL`. |
-| `SHORTLINK_FALLBACK_URL` | `None` | Redirect target for invalid/expired codes. Falls back to `BASE_URL`, then `"/"`. |
+| `SHORTLINK_SITE_NAME` | `None` | Product name shown on the "link unavailable" page. Unset = no brand line. |
+| `SHORTLINK_HOME_URL` | `None` | Target of the "back to site" button on that page. Unset = no button. |
 | `BASE_URL` | `"/"` | Default base URL if shortlink-specific settings are not configured. |
+
+`SHORTLINK_FALLBACK_URL` was removed in 1.2.51 — see [Unusable links](#unusable-links).
 
 ---
 

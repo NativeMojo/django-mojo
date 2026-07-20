@@ -1,3 +1,35 @@
+## v1.2.51 - July 20, 2026
+
+**fix** — **BREAKING: dead short links no longer `302` to the site root — `/s/<code>` now returns `404` with a "link unavailable" page, and `SHORTLINK_FALLBACK_URL` has been removed (maestro item 151).**
+Every unusable-link condition — unknown code, expired, `is_active=False`, or a row
+that resolves to no destination (e.g. its linked `fileman.File` was deleted) — used
+to fall through to `HttpResponseRedirect(SHORTLINK_FALLBACK_URL or BASE_URL or "/")`
+in `mojo/apps/shortlink/rest/redirect.py`. The visitor landed on the homepage with
+no explanation, which reads as a broken app rather than an expired link. Since
+`/s/` is the public entry point for transactional SMS/email links (magic login,
+password reset, invites, file shares — all of which expire by design, often within
+hours), this was a routine outcome, not an edge case.
+All four conditions now render the new overridable template
+`shortlink/link_unavailable.html` with **HTTP 404**, `Cache-Control: no-store`, and
+`<meta name="robots" content="noindex">`. The body is **identical** across all four
+so the response never reveals whether a code was ever real. Two new optional
+settings customize the shipped page — `SHORTLINK_SITE_NAME` (brand line) and
+`SHORTLINK_HOME_URL` (back-to-site button); with neither set the page renders
+correctly and simply omits both. `SHORTLINK_HOME_URL` deliberately does **not**
+fall back to `BASE_URL`: a shortlink host is often a bare redirect domain with
+nothing at `/`, and defaulting the button there would recreate the behavior being
+removed. Host projects can replace the page wholesale via `TEMPLATES[0]["DIRS"]`.
+**Breaking**: `SHORTLINK_FALLBACK_URL` is gone and no longer has any effect — if
+you set it, the redirect it configured no longer happens. Any monitoring or client
+code counting `3xx` on `/s/` must now expect `404`. Bots hitting a dead link get
+the same 404 page instead of an OG interstitial; healthy links are unchanged (302
+redirect, OG preview, and `bot_passthrough` all behave exactly as before).
+The 404 response sets `log_context` so the request logger records a short marker
+instead of the full HTML body, which it would otherwise write for every 4xx
+(`mojo/middleware/logging.py`). Regression coverage in
+`tests/test_shortlink/shortlink.py` asserts 404 for all four conditions, identical
+bodies across them, no OG leakage to bots, and correct settings on/off rendering.
+
 ## v1.2.50 - July 20, 2026
 
 **fix** — **Realtime connect/disconnect hooks clobbered `User.metadata` — a stale snapshot from the websocket's long-lived user instance was whole-field-saved, silently reverting any metadata written while the socket was open (maestro item 74).**
