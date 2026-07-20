@@ -1,4 +1,4 @@
-## v1.2.49 - July 12, 2026
+## v1.2.50 - July 20, 2026
 
 **fix** — **Realtime connect/disconnect hooks clobbered `User.metadata` — a stale snapshot from the websocket's long-lived user instance was whole-field-saved, silently reverting any metadata written while the socket was open (maestro item 74).**
 The realtime server pins one `User` instance per socket at auth
