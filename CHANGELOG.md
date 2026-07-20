@@ -1,5 +1,23 @@
 ## v1.2.49 - July 12, 2026
 
+**fix** — **Realtime connect/disconnect hooks clobbered `User.metadata` — a stale snapshot from the websocket's long-lived user instance was whole-field-saved, silently reverting any metadata written while the socket was open (maestro item 74).**
+The realtime server pins one `User` instance per socket at auth
+(`mojo/apps/realtime/handler.py`); `on_realtime_connected` /
+`on_realtime_disconnected` / the `set_meta` message handler then did
+`meta = self.metadata or {}` → mutate → `save(update_fields=["metadata"])` on
+that instance — hours-stale by tab close. Observed in prod as portal favorites
+vanishing when a tab closed: REST merged `metadata.portal` fine, then the
+disconnect hook wrote back the connect-time snapshot. All three sites now
+`refresh_from_db(fields=["metadata"])` (best-effort, non-raising — hooks must
+not blow up disconnect) before mutating, so every presence-flag write starts
+from current DB state — what the in-code comment ("should always
+self.refresh_from_db()") had flagged all along. Dev never reproduced it because
+`runserver` has no ASGI realtime server. Regression tests simulate the
+two-instance race for all three hooks in `tests/test_realtime/metadata.py`.
+The residual microsecond race between refresh and save is accepted: an atomic
+per-key JSON update would be Postgres-specific for a window ~6 orders of
+magnitude smaller than the session-length one fixed here.
+
 ## v1.2.49 - July 18, 2026
 
 
