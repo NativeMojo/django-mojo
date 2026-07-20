@@ -24,9 +24,17 @@ you set it, the redirect it configured no longer happens. Any monitoring or clie
 code counting `3xx` on `/s/` must now expect `404`. Bots hitting a dead link get
 the same 404 page instead of an OG interstitial; healthy links are unchanged (302
 redirect, OG preview, and `bot_passthrough` all behave exactly as before).
+`SHORTLINK_HOME_URL` is scheme-restricted to `http://`, `https://`, and
+site-relative paths. Since mojo settings are DB/Redis-backed (so runtime-writable
+by a global `manage_settings` holder) and the value lands in an `href` on a
+public page, a `javascript:` or `data:` value would otherwise survive Django's
+autoescaping — which prevents attribute breakout but not scheme-based payloads —
+and execute on click. Unsafe values are dropped and the button is omitted.
 The 404 response sets `log_context` so the request logger records a short marker
 instead of the full HTML body, which it would otherwise write for every 4xx
-(`mojo/middleware/logging.py`). Regression coverage in
+(`mojo/middleware/logging.py`). No `Cache-Control` is set on the response:
+`MojoMiddleware` already stamps a strictly stronger `no-store, no-cache,
+must-revalidate, max-age=0` onto everything. Regression coverage in
 `tests/test_shortlink/shortlink.py` asserts 404 for all four conditions, identical
 bodies across them, no OG leakage to bots, and correct settings on/off rendering.
 

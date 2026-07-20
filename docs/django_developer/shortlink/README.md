@@ -295,7 +295,7 @@ shorten("https://...", source="sms", expire_days=1, expire_hours=6)
 shorten("https://...", source="web", expire_days=0, expire_hours=0)
 ```
 
-Expired links return `None` from `resolve()` and redirect to the fallback URL.
+Expired links return `None` from `resolve()`. At the REST layer this makes `/s/<code>` render the "link unavailable" 404 page — see [The "link unavailable" page](#the-link-unavailable-page).
 
 ---
 
@@ -314,7 +314,7 @@ link.is_protected = True
 link.save(update_fields=["is_protected", "modified"])
 ```
 
-Protected links still expire normally (they stop redirecting), they just aren't removed from the database.
+Protected links still expire normally (they render the "link unavailable" page instead of redirecting), they just aren't removed from the database.
 
 The cleanup job is defined in `mojo/apps/shortlink/cronjobs.py` and the worker logic is in `mojo/apps/shortlink/asyncjobs.py`.
 
@@ -354,6 +354,14 @@ shipped page works with neither set — it just omits the brand line and the but
 host is often a bare redirect domain with nothing served at `/`, and pointing a
 "back to site" button there would recreate the behavior this replaced. Set it
 only when there is a real destination.
+
+Its value is also **scheme-restricted**: only `http://`, `https://`, and
+site-relative paths (`/home`) are accepted. Anything else — `javascript:`,
+`data:`, or a protocol-relative `//host` — is dropped and the button is simply
+omitted. This matters because mojo settings are DB/Redis-backed and therefore
+writable at runtime, and the value is interpolated into an `href` on a public,
+unauthenticated page; Django's autoescaping prevents attribute breakout but does
+not neutralize scheme-based payloads.
 
 To replace the page entirely, override the template. The most reliable way is a
 directory in `TEMPLATES[0]["DIRS"]`, which always wins over app templates:

@@ -577,6 +577,33 @@ def test_rest_unavailable_page_settings(opts):
                     "configured page should link to SHORTLINK_HOME_URL")
 
 
+@th.django_unit_test("REST: unavailable page drops unsafe SHORTLINK_HOME_URL schemes")
+def test_rest_unavailable_page_rejects_unsafe_home_url(opts):
+    # SHORTLINK_HOME_URL is DB/Redis-writable at runtime and lands in an href on
+    # a public page. Django autoescaping stops attribute breakout but not
+    # scheme-based payloads, so the view must drop anything that is not
+    # http(s):// or a site-relative path.
+    unsafe = [
+        "javascript:alert(document.domain)",
+        "JaVaScRiPt:alert(1)",
+        "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+        "//evil.test/phish",
+    ]
+    for value in unsafe:
+        with th.server_settings(SHORTLINK_HOME_URL=value):
+            body = _dead_link_body(opts)
+            assert_true(value not in body,
+                        f"unsafe SHORTLINK_HOME_URL should never reach the page: {value}")
+            assert_true("class=\"btn\"" not in body,
+                        f"no button should render for unsafe SHORTLINK_HOME_URL: {value}")
+
+    # A site-relative path is a legitimate target and must still work.
+    with th.server_settings(SHORTLINK_HOME_URL="/home"):
+        body = _dead_link_body(opts)
+        assert_true('href="/home"' in body,
+                    "site-relative SHORTLINK_HOME_URL should render normally")
+
+
 @th.django_unit_test("REST: /api/shortlink/link/create creates a short URL from request.DATA")
 def test_rest_link_create_endpoint(opts):
     from mojo.apps.shortlink.models import ShortLink

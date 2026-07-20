@@ -33,7 +33,7 @@ This is the short URL that users click. Behavior depends on the visitor:
 | Normal browser | 302 redirect to destination URL |
 | Bot/crawler (Slack, Facebook, Twitter, etc.) | Returns HTML page with OG meta tags, then auto-redirects via `<meta http-equiv="refresh">` |
 | Bot with `bot_passthrough=True` | 302 redirect (same as normal browser) |
-| Invalid/expired code | 302 redirect to fallback URL |
+| Invalid/expired/inactive/no-destination code | **HTTP 404** with the "link unavailable" page — see [Unusable links](#unusable-links) |
 
 ### Bot Preview HTML
 

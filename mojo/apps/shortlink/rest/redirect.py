@@ -4,6 +4,31 @@ from django.shortcuts import render
 from mojo.helpers.settings import settings
 
 
+def _safe_home_url():
+    """
+    Return SHORTLINK_HOME_URL only if it is a safe link target.
+
+    The value lands in an href on a public, unauthenticated page, and
+    settings.get() resolves DB/Redis-backed settings before the file-based
+    Django ones — so this is runtime-writable by anyone holding global
+    manage_settings. Django autoescaping stops attribute breakout but does
+    NOT neutralize scheme-based payloads, so `javascript:...` would survive
+    into the href and execute on click. Allow only absolute http(s) URLs and
+    site-relative paths; anything else is dropped and the button is omitted.
+    """
+    url = settings.get("SHORTLINK_HOME_URL", None)
+    if not url:
+        return None
+    url = str(url).strip()
+    if url.startswith(("http://", "https://")):
+        return url
+    # Site-relative, but not protocol-relative ("//evil.test") — that would
+    # be an off-site redirect target wearing a relative-looking prefix.
+    if url.startswith("/") and not url.startswith("//"):
+        return url
+    return None
+
+
 def _render_unavailable(request):
     """
     Render the dead-link page.
@@ -15,11 +40,13 @@ def _render_unavailable(request):
     """
     ctx = {
         "site_name": settings.get("SHORTLINK_SITE_NAME", None),
-        "home_url": settings.get("SHORTLINK_HOME_URL", None),
+        "home_url": _safe_home_url(),
     }
     resp = render(request, "shortlink/link_unavailable.html", ctx, status=404)
-    # Dead codes must never be cached against a /s/ path by a CDN or proxy.
-    resp["Cache-Control"] = "no-store"
+    # No Cache-Control set here on purpose: MojoMiddleware already stamps a
+    # strictly stronger "no-store, no-cache, must-revalidate, max-age=0" onto
+    # every response (mojo/middleware/mojo.py). Setting it here would be inert.
+    #
     # Keep the request log small — the logging middleware writes the full
     # response body for any 4xx unless log_context is set (mojo/middleware/logging.py).
     resp.log_context = {"endpoint": "shortlink_redirect", "result": "unavailable"}
