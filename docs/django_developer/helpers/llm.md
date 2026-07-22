@@ -30,9 +30,25 @@ Resolution order:
 2. Auto-detect from Anthropic `/v1/models` endpoint (cached 24h in Redis, in-memory fallback)
 3. Hardcoded fallback if API is unreachable
 
+### Tiers
+
+| Use case | Family |
+|---|---|
+| `"powerful"` | Opus |
+| `"general"` | Sonnet |
+| `"fast"` | Haiku |
+
+These three families are the only ones a use case can resolve to. To reach any other model, pass `model=` explicitly or pin `LLM_ADMIN_MODEL`. An unrecognized use case logs a warning and resolves as `"general"`.
+
+### How auto-detect ranks models
+
+Within the tier's family, the newest model wins, decided by the `created_at` timestamp the API returns — **not** by the shape of the model ID. A short alias (`claude-opus-4-8`) always beats a dated snapshot (`claude-opus-4-8-20260720`), even a newer one, because the alias follows the latest build. When a family has no alias, the newest snapshot is used.
+
+ID length is deliberately not part of the ranking. Every alias within a generation is the same width (`claude-opus-4-1`, `claude-opus-4-8`), so it says nothing about recency.
+
 ### Cache
 
-Model lists are cached in Redis (`mojo:llm:models`, 24h TTL). If Redis is unavailable, an in-memory cache is used. Call `get_models(force_refresh=True)` to bypass the cache.
+Model lists are cached in Redis (`mojo:llm:models`, 24h TTL) and shared across workers. If Redis is unavailable, a per-process in-memory cache is used instead. Call `get_models(force_refresh=True)` to bypass the cache.
 
 ```python
 models = llm.get_models()               # cached model list (list of dicts)
@@ -57,7 +73,7 @@ response = llm.call(
     messages=[{"role": "user", "content": "Hello"}],
     system="You are a helpful assistant.",
     tools=[...],           # optional tool definitions
-    model="claude-sonnet-4-6",  # optional, defaults to get_model("general")
+    model="claude-sonnet-5",  # optional, defaults to get_model("general")
     max_tokens=4096,       # optional
 )
 # Returns dict (response.model_dump() from anthropic SDK)

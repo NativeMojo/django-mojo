@@ -1,5 +1,36 @@
 ## v1.2.51 - July 20, 2026
 
+**fix** — **`llm.get_model()` picked the oldest model in a tier, `_FALLBACKS["powerful"]` named a Sonnet, and the shared model cache never wrote a single entry (maestro item 273).**
+`_pick_best_model` in `mojo/helpers/llm.py` ranked candidates by ID length and broke
+ties on `created_at` **ascending**, so the oldest alias won. Every Opus alias is
+exactly 15 characters (`claude-opus-4-0` … `claude-opus-4-8`), so `get_model("powerful")`
+returned a retired Opus. Sonnet was correct only by coincidence — `claude-sonnet-5`
+is shorter than `claude-sonnet-4-6`, so shortest-first happened to surface the
+newest. That coincidence ends at the next same-length generation: with a
+`claude-sonnet-6` present, every `llm.call()` / `llm.ask()` caller — assistant,
+incident handlers, async jobs — would have stayed pinned to Sonnet 5 indefinitely
+and silently. Ranking is now: alias beats dated snapshot, then newest `created_at`
+(the API's own recency signal), then version number and ID purely as a
+deterministic tiebreak. ID length is no longer consulted at all. A short alias
+still beats a dated snapshot even when the snapshot is newer, since the alias
+follows the latest build.
+`_FALLBACKS` (used only when the API is unreachable) now reads
+`powerful → claude-opus-4-8`, `general → claude-sonnet-5`, `fast → claude-haiku-4-5`
+— correct tiers, current models, and aliases rather than dated snapshots, which is
+how the old table went stale. The dead `_FAMILY_ORDER` constant is removed, and an
+unrecognized use case now logs a warning and resolves as `"general"` instead of
+silently returning a Sonnet.
+Separately, the 24h Redis model cache had **never** worked: the Anthropic SDK types
+`created_at` as a `datetime`, so `json.dumps()` in `_cache_set` raised `TypeError`
+inside a bare `except Exception: pass`. Every worker fell back to its own in-memory
+copy and re-fetched from the API on each process start. `_fetch_models_from_api`
+now uses `model_dump(mode="json")`, and `_cache_set` distinguishes a serialization
+failure (logged) from Redis simply being unavailable (expected, debug-level).
+The tier→family map is unchanged (`powerful`=Opus, `general`=Sonnet, `fast`=Haiku),
+so no existing caller's model changes apart from `"powerful"` now returning a
+current Opus. Models outside those three families remain reachable via an explicit
+`model=` argument or an `LLM_ADMIN_MODEL` pin.
+
 **fix** — **BREAKING: dead short links no longer `302` to the site root — `/s/<code>` now returns `404` with a "link unavailable" page, and `SHORTLINK_FALLBACK_URL` has been removed (maestro item 151).**
 Every unusable-link condition — unknown code, expired, `is_active=False`, or a row
 that resolves to no destination (e.g. its linked `fileman.File` was deleted) — used

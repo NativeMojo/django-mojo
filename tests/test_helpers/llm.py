@@ -48,6 +48,89 @@ SAMPLE_MODELS = [
 ]
 
 
+# Aliases that tie on ID length within a family. Every alias in a generation is
+# the same width (claude-opus-4-1 / claude-opus-4-8), so ID length carries no
+# recency information — ranking on it returns whichever one the tiebreak
+# happens to surface.
+SAME_LENGTH_ALIAS_MODELS = [
+    {
+        "id": "claude-opus-4-1",
+        "display_name": "Claude Opus 4.1",
+        "created_at": "2025-08-05T00:00:00Z",
+        "type": "model",
+    },
+    {
+        "id": "claude-opus-4-8",
+        "display_name": "Claude Opus 4.8",
+        "created_at": "2026-06-15T00:00:00Z",
+        "type": "model",
+    },
+    {
+        "id": "claude-opus-4-1-20250805",
+        "display_name": "Claude Opus 4.1 (2025-08-05)",
+        "created_at": "2025-08-05T00:00:00Z",
+        "type": "model",
+    },
+    {
+        "id": "claude-sonnet-5",
+        "display_name": "Claude Sonnet 5",
+        "created_at": "2026-05-01T00:00:00Z",
+        "type": "model",
+    },
+    {
+        "id": "claude-sonnet-6",
+        "display_name": "Claude Sonnet 6",
+        "created_at": "2026-11-01T00:00:00Z",
+        "type": "model",
+    },
+]
+
+
+# A dated snapshot newer than the alias it belongs to. The alias must still
+# win — it always points at the latest build of that model.
+ALIAS_VS_SNAPSHOT_MODELS = [
+    {
+        "id": "claude-opus-4-8",
+        "display_name": "Claude Opus 4.8",
+        "created_at": "2026-06-15T00:00:00Z",
+        "type": "model",
+    },
+    {
+        "id": "claude-opus-4-8-20260720",
+        "display_name": "Claude Opus 4.8 (2026-07-20)",
+        "created_at": "2026-07-20T00:00:00Z",
+        "type": "model",
+    },
+]
+
+
+# A family the API exposes only as dated snapshots, with no short alias.
+DATED_ONLY_MODELS = [
+    {
+        "id": "claude-haiku-4-0-20240307",
+        "display_name": "Claude Haiku 4 (2024-03-07)",
+        "created_at": "2024-03-07T00:00:00Z",
+        "type": "model",
+    },
+    {
+        "id": "claude-haiku-4-5-20251001",
+        "display_name": "Claude Haiku 4.5 (2025-10-01)",
+        "created_at": "2025-10-01T00:00:00Z",
+        "type": "model",
+    },
+]
+
+
+def _clear_redis_model_cache():
+    """Drop the shared model-list key; no-op when Redis is unavailable."""
+    try:
+        from mojo.helpers.redis import get_connection
+        from mojo.helpers.llm import CACHE_KEY
+        get_connection().delete(CACHE_KEY)
+    except Exception:
+        pass
+
+
 @th.django_unit_test()
 def test_pick_best_model_sonnet(opts):
     """_pick_best_model returns the short alias for sonnet"""
@@ -85,6 +168,92 @@ def test_pick_best_model_no_match(opts):
 
 
 @th.django_unit_test()
+def test_pick_best_model_newest_same_length_alias(opts):
+    """_pick_best_model returns the newest alias when aliases tie on ID length"""
+    from mojo.helpers.llm import _pick_best_model
+
+    result = _pick_best_model(SAME_LENGTH_ALIAS_MODELS, "opus")
+    assert result == "claude-opus-4-8", \
+        f"Expected the newest opus alias claude-opus-4-8, got {result}"
+
+
+@th.django_unit_test()
+def test_pick_best_model_next_generation_alias(opts):
+    """A same-length successor alias supersedes the incumbent"""
+    from mojo.helpers.llm import _pick_best_model
+
+    result = _pick_best_model(SAME_LENGTH_ALIAS_MODELS, "sonnet")
+    assert result == "claude-sonnet-6", \
+        f"Expected claude-sonnet-6 to supersede claude-sonnet-5, got {result}"
+
+
+@th.django_unit_test()
+def test_pick_best_model_alias_beats_dated_snapshot(opts):
+    """The alias wins even when a dated snapshot has a newer created_at"""
+    from mojo.helpers.llm import _pick_best_model
+
+    result = _pick_best_model(ALIAS_VS_SNAPSHOT_MODELS, "opus")
+    assert result == "claude-opus-4-8", \
+        f"Expected the alias claude-opus-4-8 to beat its dated snapshot, got {result}"
+
+
+@th.django_unit_test()
+def test_pick_best_model_only_dated_snapshots(opts):
+    """With no alias in the family, the newest dated snapshot wins"""
+    from mojo.helpers.llm import _pick_best_model
+
+    result = _pick_best_model(DATED_ONLY_MODELS, "haiku")
+    assert result == "claude-haiku-4-5-20251001", \
+        f"Expected the newest haiku snapshot, got {result}"
+
+
+@th.django_unit_test()
+def test_pick_best_model_ignores_input_order(opts):
+    """The result does not depend on the order the API listed models in"""
+    from mojo.helpers.llm import _pick_best_model
+
+    forward = _pick_best_model(SAME_LENGTH_ALIAS_MODELS, "opus")
+    reverse = _pick_best_model(list(reversed(SAME_LENGTH_ALIAS_MODELS)), "opus")
+    assert forward == reverse, \
+        f"Result changed with input order: {forward} forward vs {reverse} reversed"
+    assert forward == "claude-opus-4-8", \
+        f"Expected claude-opus-4-8 in both directions, got {forward}"
+
+
+@th.django_unit_test()
+def test_pick_best_model_datetime_created_at(opts):
+    """created_at is a datetime from the API and a string from the cache"""
+    from datetime import datetime
+    from mojo.helpers.llm import _pick_best_model
+
+    models = [
+        {
+            "id": m["id"],
+            "display_name": m["display_name"],
+            "created_at": datetime.fromisoformat(m["created_at"].replace("Z", "+00:00")),
+            "type": "model",
+        }
+        for m in SAME_LENGTH_ALIAS_MODELS
+    ]
+
+    result = _pick_best_model(models, "opus")
+    assert result == "claude-opus-4-8", \
+        f"Expected claude-opus-4-8 with datetime created_at values, got {result}"
+
+
+@th.django_unit_test()
+def test_fallbacks_are_in_the_right_tier(opts):
+    """Every hardcoded fallback names a model from its own tier's family"""
+    from mojo.helpers.llm import _FALLBACKS, _USE_TO_FAMILY
+
+    for use, family in _USE_TO_FAMILY.items():
+        fallback = _FALLBACKS.get(use)
+        assert fallback, f"No fallback configured for the '{use}' tier"
+        assert family in fallback, \
+            f"Fallback for '{use}' should be a {family} model, got {fallback}"
+
+
+@th.django_unit_test()
 def test_get_model_fallback(opts):
     """get_model returns a valid model for each use case"""
     from mojo.helpers import llm
@@ -100,8 +269,8 @@ def test_get_model_fallback(opts):
     assert "sonnet" in result, f"Expected sonnet for 'general', got {result}"
 
     result = llm.get_model("powerful")
-    # With API key: auto-detects opus. Without: falls back to sonnet.
-    assert "opus" in result or "sonnet" in result, f"Expected opus or sonnet for 'powerful', got {result}"
+    # Opus either way — auto-detected with an API key, hardcoded without one.
+    assert "opus" in result, f"Expected opus for 'powerful', got {result}"
 
 
 @th.django_unit_test()
@@ -109,6 +278,11 @@ def test_get_model_with_cache(opts):
     """get_model uses cached models when available"""
     import time
     from mojo.helpers import llm
+
+    # _cache_get checks Redis before the in-memory cache, so clear the shared
+    # key first — otherwise a real model list left there by an earlier run
+    # would be returned instead of the fixture seeded below.
+    _clear_redis_model_cache()
 
     # Seed the in-memory cache
     llm._mem_cache["models"] = SAMPLE_MODELS
@@ -163,6 +337,40 @@ def test_cache_expiry(opts):
     finally:
         llm._mem_cache["models"] = None
         llm._mem_cache["fetched_at"] = 0
+
+
+@th.django_unit_test()
+def test_fetch_models_is_json_serializable(opts):
+    """_fetch_models_from_api returns dicts the Redis cache can serialize"""
+    import json
+    from unittest import mock
+
+    import anthropic
+    from anthropic.types import ModelInfo
+    from mojo.helpers import llm
+
+    page = mock.Mock()
+    page.data = [ModelInfo(
+        id="claude-opus-4-8",
+        display_name="Claude Opus 4.8",
+        created_at="2026-06-15T00:00:00Z",
+        type="model",
+    )]
+    page.has_more = False
+    client = mock.Mock()
+    client.models.list.return_value = page
+
+    with mock.patch.object(anthropic, "Anthropic", return_value=client):
+        models = llm._fetch_models_from_api(api_key="test-key")
+
+    assert models, f"Expected a model list from the stubbed client, got {models}"
+    assert isinstance(models[0]["created_at"], str), \
+        f"created_at must be a string to survive JSON caching, got " \
+        f"{type(models[0]['created_at']).__name__}"
+    try:
+        json.dumps(models)
+    except TypeError as err:
+        assert False, f"Model list must be JSON-serializable for the Redis cache: {err}"
 
 
 @th.django_unit_test()

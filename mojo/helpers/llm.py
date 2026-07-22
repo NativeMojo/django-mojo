@@ -44,17 +44,18 @@ _zero_cache_warned = False
 CACHE_KEY = "mojo:llm:models"
 CACHE_TTL = 86400  # 24 hours
 
-# Model family prefixes in priority order (newest families first)
-_FAMILY_ORDER = ["claude-opus-4", "claude-sonnet-4", "claude-haiku-4"]
-
-# Hardcoded fallbacks if the API is unreachable
+# Hardcoded fallbacks if the API is unreachable. Aliases, not dated snapshots —
+# an alias follows the latest build and doesn't retire on a snapshot's schedule.
+# Revisit when a new generation ships.
 _FALLBACKS = {
-    "powerful": "claude-sonnet-4-20250514",
-    "general": "claude-sonnet-4-20250514",
-    "fast": "claude-haiku-4-5-20251001",
+    "powerful": "claude-opus-4-8",
+    "general": "claude-sonnet-5",
+    "fast": "claude-haiku-4-5",
 }
 
-# Map use-case to model family keyword
+# Map use-case to model family keyword. These three families are the only ones
+# a use-case can resolve to; anything else needs an explicit model= argument or
+# an LLM_ADMIN_MODEL pin.
 _USE_TO_FAMILY = {
     "powerful": "opus",
     "general": "sonnet",
@@ -110,17 +111,19 @@ def _fetch_models_from_api(api_key=None):
     try:
         client = anthropic.Anthropic(api_key=key)
         models = []
+        # mode="json" keeps created_at an ISO string instead of a datetime, so
+        # the list stays JSON-serializable for the Redis cache below.
         page = client.models.list(limit=100)
         for model in page.data:
-            models.append(model.model_dump())
+            models.append(model.model_dump(mode="json"))
         # Paginate if needed
         while page.has_more:
             page = client.models.list(limit=100, after_id=page.last_id)
             for model in page.data:
-                models.append(model.model_dump())
+                models.append(model.model_dump(mode="json"))
         return models
     except Exception as e:
-        logger.warning("Failed to fetch models from Anthropic API: %s", str(e)[:200])
+        logger.warning(f"Failed to fetch models from Anthropic API: {str(e)[:200]}")
         return None
 
 
@@ -145,11 +148,18 @@ def _cache_set(models):
     _mem_cache["models"] = models
     _mem_cache["fetched_at"] = time.time()
     try:
+        payload = json.dumps(models)
+    except TypeError as err:
+        # Would otherwise disable the shared cache silently — say so.
+        logger.warning(f"Model list is not JSON-serializable, skipping Redis cache: {err}")
+        return
+    try:
         from mojo.helpers.redis import get_connection
         r = get_connection()
-        r.setex(CACHE_KEY, CACHE_TTL, json.dumps(models))
-    except Exception:
-        pass
+        r.setex(CACHE_KEY, CACHE_TTL, payload)
+    except Exception as err:
+        # Redis being unavailable is expected — the in-memory cache covers it.
+        logger.debug(f"Redis model cache write skipped: {err}")
 
 
 def get_models(force_refresh=False):
@@ -176,37 +186,61 @@ def get_models(force_refresh=False):
     return None
 
 
+def _is_dated_snapshot(model_id):
+    """True for IDs ending in a YYYYMMDD build date (claude-opus-4-1-20250805)."""
+    tail = model_id.rsplit("-", 1)[-1]
+    return len(tail) == 8 and tail.isdigit()
+
+
+def _version_tuple(model_id):
+    """Numeric version parts of an ID: claude-opus-4-8 -> (4, 8)."""
+    return tuple(
+        int(part) for part in model_id.split("-")
+        if part.isdigit() and len(part) != 8
+    )
+
+
+def _created_at_key(model):
+    """created_at as a sortable string — the API sends a datetime, the cache a string."""
+    value = model.get("created_at") or ""
+    if hasattr(value, "isoformat"):
+        value = value.isoformat()
+    return str(value)
+
+
+def _rank_key(model):
+    """
+    Preference key for a model entry — bigger is better.
+
+    1. An alias beats a dated snapshot: the alias tracks the latest build.
+    2. Newest created_at wins. This is the API's own recency signal, and the
+       only one that survives Anthropic changing how models are named.
+    3. Version number, then the ID itself, purely so ties are deterministic.
+
+    Do NOT rank by ID length. Every alias within a generation is the same
+    length (claude-opus-4-1 / claude-opus-4-8), so length carries no recency
+    information — that assumption is what this function replaced.
+    """
+    model_id = model.get("id", "")
+    return (
+        0 if _is_dated_snapshot(model_id) else 1,
+        _created_at_key(model),
+        _version_tuple(model_id),
+        model_id,
+    )
+
+
 def _pick_best_model(models, family_keyword):
     """
     Pick the best model for a given family keyword (opus/sonnet/haiku).
 
-    Prefers models with shorter IDs (e.g. "claude-sonnet-4-6" over
-    "claude-sonnet-4-6-20260301") since the short alias always points
-    to the latest.
+    Returns the family's newest alias, or its newest dated snapshot when the
+    family has no alias. None when nothing matches.
     """
-    candidates = []
-    for m in models:
-        model_id = m.get("id", "")
-        if family_keyword in model_id:
-            candidates.append(m)
-
+    candidates = [m for m in models if family_keyword in m.get("id", "")]
     if not candidates:
         return None
-
-    # Prefer the shortest ID — that's the alias (e.g., "claude-sonnet-4-6")
-    # which Anthropic always points at the latest version.
-    # Among equal lengths, prefer the most recently created.
-    candidates.sort(key=lambda m: (len(m["id"]), m.get("created_at", "")))
-    # But if there's a short alias (no date suffix), strongly prefer it
-    for c in candidates:
-        mid = c["id"]
-        # Alias IDs don't have a date suffix like -20250514
-        if not any(ch.isdigit() and len(part) == 8 for part in mid.split("-") for ch in [part]):
-            return mid
-
-    # Fallback: pick the one with the newest created_at
-    candidates.sort(key=lambda m: m.get("created_at", ""), reverse=True)
-    return candidates[0]["id"]
+    return max(candidates, key=_rank_key)["id"]
 
 
 def get_model(use="general"):
@@ -231,7 +265,11 @@ def get_model(use="general"):
         return pinned
 
     # 2. Auto-detect from API
-    family_keyword = _USE_TO_FAMILY.get(use, "sonnet")
+    family_keyword = _USE_TO_FAMILY.get(use)
+    if not family_keyword:
+        logger.warning(f"Unknown model tier '{use}' — using 'general'")
+        use = "general"
+        family_keyword = _USE_TO_FAMILY[use]
     models = get_models()
     if models:
         best = _pick_best_model(models, family_keyword)
