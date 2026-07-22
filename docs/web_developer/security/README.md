@@ -593,7 +593,7 @@ See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-ana
 | `HEALTH_DISK_CRIT` | `85` | Disk % threshold |
 | `OSSEC_SECRET` | `None` | Optional secret for OSSEC endpoints |
 | `LLM_HANDLER_API_KEY` | `None` | Claude API key (enables LLM agent) |
-| `LLM_HANDLER_MODEL` | `claude-sonnet-4-20250514` | Claude model for LLM agent |
+| `LLM_HANDLER_MODEL` | (auto-detect) | Claude model for LLM agent. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
 | `INCIDENT_EMAIL_FROM` | `None` | SES mailbox for incident emails |
 | `ADMIN_PORTAL_URL` | `None` | URL for deep links in notifications |
 
