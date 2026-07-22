@@ -1,4 +1,4 @@
-## v1.2.51 - July 20, 2026
+## v1.2.51 - July 22, 2026
 
 **fix** — **`llm.get_model()` picked the oldest model in a tier, `_FALLBACKS["powerful"]` named a Sonnet, and the shared model cache never wrote a single entry (maestro item 273).**
 `_pick_best_model` in `mojo/helpers/llm.py` ranked candidates by ID length and broke
