@@ -193,10 +193,18 @@ def _is_dated_snapshot(model_id):
 
 
 def _version_tuple(model_id):
-    """Numeric version parts of an ID: claude-opus-4-8 -> (4, 8)."""
+    """
+    Numeric version parts of an ID: claude-opus-4-8 -> (4, 8).
+
+    The guard is deliberately narrower than isdigit(): that accepts characters
+    int() rejects (superscripts and the like), and int() also refuses segments
+    over 4300 digits. Model IDs are opaque strings from the API, so a segment
+    that isn't a plain short ASCII number is skipped rather than converted.
+    The length cap also drops the 8-digit date on a snapshot ID.
+    """
     return tuple(
         int(part) for part in model_id.split("-")
-        if part.isdigit() and len(part) != 8
+        if part.isascii() and part.isdigit() and len(part) <= 4
     )
 
 
@@ -236,8 +244,17 @@ def _pick_best_model(models, family_keyword):
 
     Returns the family's newest alias, or its newest dated snapshot when the
     family has no alias. None when nothing matches.
+
+    Entries that aren't a dict with a string id are skipped — the list may come
+    straight from the API or from the Redis cache, and one malformed row must
+    not take down every caller. Resolution stays fail-soft: no match falls
+    through to _FALLBACKS.
     """
-    candidates = [m for m in models if family_keyword in m.get("id", "")]
+    candidates = [
+        m for m in models
+        if isinstance(m, dict) and isinstance(m.get("id"), str)
+        and family_keyword in m["id"]
+    ]
     if not candidates:
         return None
     return max(candidates, key=_rank_key)["id"]

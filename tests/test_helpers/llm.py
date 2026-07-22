@@ -242,6 +242,31 @@ def test_pick_best_model_datetime_created_at(opts):
 
 
 @th.django_unit_test()
+def test_pick_best_model_survives_malformed_entries(opts):
+    """A malformed entry is skipped, not raised — resolution stays fail-soft"""
+    from mojo.helpers.llm import _pick_best_model
+
+    models = [
+        "not-a-dict",
+        {"no_id_at_all": True},
+        {"id": None},
+        {"id": 12345},
+        {"id": "claude-opus-²"},          # isdigit() is True, int() raises
+        {"id": "claude-opus-" + "9" * 5000},   # over int()'s 4300-digit limit
+        {
+            "id": "claude-opus-4-8",
+            "display_name": "Claude Opus 4.8",
+            "created_at": "2026-06-15T00:00:00Z",
+            "type": "model",
+        },
+    ]
+
+    result = _pick_best_model(models, "opus")
+    assert result == "claude-opus-4-8", \
+        f"Malformed entries must be skipped, expected claude-opus-4-8, got {result}"
+
+
+@th.django_unit_test()
 def test_fallbacks_are_in_the_right_tier(opts):
     """Every hardcoded fallback names a model from its own tier's family"""
     from mojo.helpers.llm import _FALLBACKS, _USE_TO_FAMILY
