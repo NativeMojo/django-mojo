@@ -3932,6 +3932,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-link-unavailable-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The "link unavailable" page
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The &#34;link unavailable&#34; page">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#customizing-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Customizing it
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#permissions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4368,7 +4396,7 @@
 <a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># Never expires</span>
 <a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="n">shorten</span><span class="p">(</span><span class="s2">&quot;https://...&quot;</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">&quot;web&quot;</span><span class="p">,</span> <span class="n">expire_days</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">expire_hours</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 </code></pre></div>
-<p>Expired links return <code>None</code> from <code>resolve()</code> and redirect to the fallback URL.</p>
+<p>Expired links return <code>None</code> from <code>resolve()</code>. At the REST layer this makes <code>/s/&lt;code&gt;</code> render the "link unavailable" 404 page — see <a href="#the-link-unavailable-page">The "link unavailable" page</a>.</p>
 <hr />
 <h2 id="automatic-cleanup">Automatic Cleanup<a class="headerlink" href="#automatic-cleanup" title="Permanent link">&para;</a></h2>
 <p>A cron job runs daily at 3:30 AM to delete expired shortlinks that have been expired for more than 7 days. This keeps the database clean without losing links that just expired.</p>
@@ -4380,7 +4408,7 @@
 <a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">link</span><span class="o">.</span><span class="n">is_protected</span> <span class="o">=</span> <span class="kc">True</span>
 <a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">link</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">update_fields</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;is_protected&quot;</span><span class="p">,</span> <span class="s2">&quot;modified&quot;</span><span class="p">])</span>
 </code></pre></div>
-<p>Protected links still expire normally (they stop redirecting), they just aren't removed from the database.</p>
+<p>Protected links still expire normally (they render the "link unavailable" page instead of redirecting), they just aren't removed from the database.</p>
 <p>The cleanup job is defined in <code>mojo/apps/shortlink/cronjobs.py</code> and the worker logic is in <code>mojo/apps/shortlink/asyncjobs.py</code>.</p>
 <hr />
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
@@ -4399,17 +4427,62 @@
 <td>Base URL for generated short links (e.g. <code>https://itf.io</code>).</td>
 </tr>
 <tr>
-<td><code>SHORTLINK_FALLBACK_URL</code></td>
+<td><code>SHORTLINK_SITE_NAME</code></td>
 <td><code>None</code></td>
-<td>Where to redirect invalid/expired codes.</td>
+<td>Product name shown on the "link unavailable" page. Unset = no brand line.</td>
+</tr>
+<tr>
+<td><code>SHORTLINK_HOME_URL</code></td>
+<td><code>None</code></td>
+<td>Target of the "back to site" button on that page. Unset = no button.</td>
 </tr>
 <tr>
 <td><code>BASE_URL</code></td>
 <td><code>"/"</code></td>
-<td>Fallback if neither shortlink-specific setting is configured.</td>
+<td>Fallback if no shortlink-specific base setting is configured.</td>
 </tr>
 </tbody>
 </table>
+<p><code>SHORTLINK_FALLBACK_URL</code> was removed in 1.2.51 — see below.</p>
+<hr />
+<h2 id="the-link-unavailable-page">The "link unavailable" page<a class="headerlink" href="#the-link-unavailable-page" title="Permanent link">&para;</a></h2>
+<p><code>GET /s/&lt;code&gt;</code> returns <strong>HTTP 404</strong> and renders <code>shortlink/link_unavailable.html</code>
+whenever a link cannot be used — unknown code, expired, <code>is_active=False</code>, or a
+row that resolves to no destination. All four render the <strong>same body</strong>, so the
+response never reveals whether a code was ever real. The response also carries
+<code>Cache-Control: no-store</code> and the page sets <code>&lt;meta name="robots" content="noindex"&gt;</code>.</p>
+<p>Until 1.2.51 these cases issued a <code>302</code> to <code>SHORTLINK_FALLBACK_URL</code> (falling back
+to <code>BASE_URL</code>, then <code>/</code>), which dumped the visitor on the site root with no
+explanation. That setting is gone; the endpoint no longer redirects on failure.</p>
+<h3 id="customizing-it">Customizing it<a class="headerlink" href="#customizing-it" title="Permanent link">&para;</a></h3>
+<p>For small changes, set <code>SHORTLINK_SITE_NAME</code> and <code>SHORTLINK_HOME_URL</code>. The
+shipped page works with neither set — it just omits the brand line and the button.</p>
+<p><code>SHORTLINK_HOME_URL</code> intentionally has <strong>no fallback to <code>BASE_URL</code></strong>. A shortlink
+host is often a bare redirect domain with nothing served at <code>/</code>, and pointing a
+"back to site" button there would recreate the behavior this replaced. Set it
+only when there is a real destination.</p>
+<p>Its value is also <strong>scheme-restricted</strong>: only <code>http://</code>, <code>https://</code>, and
+site-relative paths (<code>/home</code>) are accepted. Anything else — <code>javascript:</code>,
+<code>data:</code>, or a protocol-relative <code>//host</code> — is dropped and the button is simply
+omitted. This matters because mojo settings are DB/Redis-backed and therefore
+writable at runtime, and the value is interpolated into an <code>href</code> on a public,
+unauthenticated page; Django's autoescaping prevents attribute breakout but does
+not neutralize scheme-based payloads.</p>
+<p>To replace the page entirely, override the template. The most reliable way is a
+directory in <code>TEMPLATES[0]["DIRS"]</code>, which always wins over app templates:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">TEMPLATES</span> <span class="o">=</span> <span class="p">[{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="s2">&quot;BACKEND&quot;</span><span class="p">:</span> <span class="s2">&quot;django.template.backends.django.DjangoTemplates&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="s2">&quot;DIRS&quot;</span><span class="p">:</span> <span class="p">[</span><span class="n">BASE_DIR</span> <span class="o">/</span> <span class="s2">&quot;templates&quot;</span><span class="p">],</span>   <span class="c1"># put your copy at templates/shortlink/link_unavailable.html</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="s2">&quot;APP_DIRS&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="o">...</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="p">}]</span>
+</code></pre></div>
+<p>Alternatively, ship <code>templates/shortlink/link_unavailable.html</code> inside one of your
+own apps — but that only wins if the app is listed <strong>before</strong> <code>mojo.apps.shortlink</code>
+in <code>INSTALLED_APPS</code>, since <code>APP_DIRS</code> resolves in installed order.</p>
+<p>Your template receives <code>site_name</code> and <code>home_url</code> in its context. Keep it
+self-contained (inline CSS, no external asset requests) — it is served to
+visitors who may have no relationship with your app, and to link-preview bots.</p>
 <hr />
 <h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
 <ul>

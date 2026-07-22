@@ -4068,6 +4068,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Expiry">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unusable-links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unusable links
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4208,8 +4225,8 @@
 <td>302 redirect (same as normal browser)</td>
 </tr>
 <tr>
-<td>Invalid/expired code</td>
-<td>302 redirect to fallback URL</td>
+<td>Invalid/expired/inactive/no-destination code</td>
+<td><strong>HTTP 404</strong> with the "link unavailable" page — see <a href="#unusable-links">Unusable links</a></td>
 </tr>
 </tbody>
 </table>
@@ -4477,7 +4494,18 @@
 </tr>
 </tbody>
 </table>
-<p>Expired links redirect to the fallback URL (configured via <code>SHORTLINK_FALLBACK_URL</code> or <code>BASE_URL</code>).</p>
+<h3 id="unusable-links">Unusable links<a class="headerlink" href="#unusable-links" title="Permanent link">&para;</a></h3>
+<p><code>GET /s/&lt;code&gt;</code> returns <strong>HTTP 404</strong> with a plain HTML page ("This link is no longer available") for every unusable condition:</p>
+<ul>
+<li>the code never existed, or has been removed by the cleanup job</li>
+<li>the link has expired</li>
+<li>the link is inactive (<code>is_active=False</code>)</li>
+<li>the link resolves to no destination (e.g. its linked file was deleted)</li>
+</ul>
+<p>All four return an <strong>identical body</strong> — the response deliberately does not reveal whether a given code was ever real. The page is also sent with <code>Cache-Control: no-store</code> and <code>&lt;meta name="robots" content="noindex"&gt;</code>.</p>
+<blockquote>
+<p><strong>Changed in 1.2.51.</strong> Previously these cases returned a <code>302</code> to <code>SHORTLINK_FALLBACK_URL</code> (or <code>BASE_URL</code>, or <code>/</code>), dropping the visitor on the site root with no explanation. That setting has been removed. If you have monitoring or client code that counts <code>3xx</code> responses on <code>/s/</code>, it needs updating to expect <code>404</code>.</p>
+</blockquote>
 <hr />
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <p>Configure in your Django settings or via the MOJO settings system:</p>
@@ -4496,9 +4524,14 @@
 <td>Base URL for short links (e.g. <code>https://itf.io</code>). Falls back to <code>BASE_URL</code>.</td>
 </tr>
 <tr>
-<td><code>SHORTLINK_FALLBACK_URL</code></td>
+<td><code>SHORTLINK_SITE_NAME</code></td>
 <td><code>None</code></td>
-<td>Redirect target for invalid/expired codes. Falls back to <code>BASE_URL</code>, then <code>"/"</code>.</td>
+<td>Product name shown on the "link unavailable" page. Unset = no brand line.</td>
+</tr>
+<tr>
+<td><code>SHORTLINK_HOME_URL</code></td>
+<td><code>None</code></td>
+<td>Target of the "back to site" button on that page. Unset = no button.</td>
 </tr>
 <tr>
 <td><code>BASE_URL</code></td>
@@ -4507,6 +4540,7 @@
 </tr>
 </tbody>
 </table>
+<p><code>SHORTLINK_FALLBACK_URL</code> was removed in 1.2.51 — see <a href="#unusable-links">Unusable links</a>.</p>
 <hr />
 <h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
 <table>

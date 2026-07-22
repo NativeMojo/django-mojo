@@ -3756,6 +3756,28 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tiers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-auto-detect-ranks-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How auto-detect ranks models
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#cache" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3862,8 +3884,35 @@
 1. Explicit setting pin (<code>LLM_ADMIN_MODEL</code> or <code>LLM_HANDLER_MODEL</code>) — if set, returned as-is
 2. Auto-detect from Anthropic <code>/v1/models</code> endpoint (cached 24h in Redis, in-memory fallback)
 3. Hardcoded fallback if API is unreachable</p>
+<h3 id="tiers">Tiers<a class="headerlink" href="#tiers" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Use case</th>
+<th>Family</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>"powerful"</code></td>
+<td>Opus</td>
+</tr>
+<tr>
+<td><code>"general"</code></td>
+<td>Sonnet</td>
+</tr>
+<tr>
+<td><code>"fast"</code></td>
+<td>Haiku</td>
+</tr>
+</tbody>
+</table>
+<p>These three families are the only ones a use case can resolve to. To reach any other model, pass <code>model=</code> explicitly or pin <code>LLM_ADMIN_MODEL</code>. An unrecognized use case logs a warning and resolves as <code>"general"</code>.</p>
+<h3 id="how-auto-detect-ranks-models">How auto-detect ranks models<a class="headerlink" href="#how-auto-detect-ranks-models" title="Permanent link">&para;</a></h3>
+<p>Within the tier's family, the newest model wins, decided by the <code>created_at</code> timestamp the API returns — <strong>not</strong> by the shape of the model ID. A short alias (<code>claude-opus-4-8</code>) always beats a dated snapshot (<code>claude-opus-4-8-20260720</code>), even a newer one, because the alias follows the latest build. When a family has no alias, the newest snapshot is used.</p>
+<p>ID length is deliberately not part of the ranking. Every alias within a generation is the same width (<code>claude-opus-4-1</code>, <code>claude-opus-4-8</code>), so it says nothing about recency.</p>
 <h3 id="cache">Cache<a class="headerlink" href="#cache" title="Permanent link">&para;</a></h3>
-<p>Model lists are cached in Redis (<code>mojo:llm:models</code>, 24h TTL). If Redis is unavailable, an in-memory cache is used. Call <code>get_models(force_refresh=True)</code> to bypass the cache.</p>
+<p>Model lists are cached in Redis (<code>mojo:llm:models</code>, 24h TTL) and shared across workers. If Redis is unavailable, a per-process in-memory cache is used instead. Call <code>get_models(force_refresh=True)</code> to bypass the cache.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">models</span> <span class="o">=</span> <span class="n">llm</span><span class="o">.</span><span class="n">get_models</span><span class="p">()</span>               <span class="c1"># cached model list (list of dicts)</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">models</span> <span class="o">=</span> <span class="n">llm</span><span class="o">.</span><span class="n">get_models</span><span class="p">(</span><span class="n">force_refresh</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># force API call</span>
 </code></pre></div>
@@ -3878,7 +3927,7 @@
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">messages</span><span class="o">=</span><span class="p">[{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello&quot;</span><span class="p">}],</span>
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="n">system</span><span class="o">=</span><span class="s2">&quot;You are a helpful assistant.&quot;</span><span class="p">,</span>
 <a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">tools</span><span class="o">=</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>           <span class="c1"># optional tool definitions</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;claude-sonnet-4-6&quot;</span><span class="p">,</span>  <span class="c1"># optional, defaults to get_model(&quot;general&quot;)</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;claude-sonnet-5&quot;</span><span class="p">,</span>  <span class="c1"># optional, defaults to get_model(&quot;general&quot;)</span>
 <a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">max_tokens</span><span class="o">=</span><span class="mi">4096</span><span class="p">,</span>       <span class="c1"># optional</span>
 <a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="p">)</span>
 <a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="c1"># Returns dict (response.model_dump() from anthropic SDK)</span>
