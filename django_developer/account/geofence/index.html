@@ -3733,6 +3733,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#orientation-read-this-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Orientation — read this first
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#rule-dsl" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4021,17 +4032,102 @@
 <h1 id="geofencing-django-developer-reference">Geofencing — Django Developer Reference<a class="headerlink" href="#geofencing-django-developer-reference" title="Permanent link">&para;</a></h1>
 <p>Policy-based geographic access control. Rules are evaluated at the HTTP layer on every decorated endpoint and never reach downstream handlers if a request is blocked.</p>
 <hr />
+<h2 id="orientation-read-this-first">Orientation — read this first<a class="headerlink" href="#orientation-read-this-first" title="Permanent link">&para;</a></h2>
+<p>The framework ships the <strong>engine</strong>, not a policy. Out of the box
+<code>GEOFENCE_SYSTEM_RULES</code> is <code>{}</code> and every check returns <code>no_rules</code> (allow
+all) — geofencing does nothing until a deployment configures rules.</p>
+<p><strong>How a decision is made</strong>, in order (first match wins):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>bypass_geofence permission → allow (never cached)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>IP allowlist match         → allow (shadow-evaluates rules for evidence)
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>GEOFENCE_ENABLED = False   → allow
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>system rule ∧ group rule   → the actual verdict
+</code></pre></div>
+<p>Both rule levels must pass. <strong>System</strong> (<code>GEOFENCE_SYSTEM_RULES</code>) is the
+platform-wide floor; <strong>group</strong> (<code>Group.metadata['geofence']</code>) is the
+per-tenant addition. Each is a rule in the <a href="#rule-dsl">DSL</a> below —
+<code>country</code> / <code>region</code> / <code>abuse</code>, AND-ed, <code>{}</code> meaning no-op.</p>
+<p><strong>What you manage, and where:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Thing</th>
+<th>How</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>System rule</td>
+<td><code>POST /api/geo/rules</code> (validated, audited, cache-invalidating) — or the settings file as the deploy-time fallback</td>
+<td>DB row <strong>wins over</strong> the settings file</td>
+</tr>
+<tr>
+<td>Group rule</td>
+<td><code>Group.metadata['geofence']</code> via group REST (validated at save; JSON <strong>merges</strong> — send <code>null</code> to drop a key)</td>
+<td>Per tenant</td>
+</tr>
+<tr>
+<td>Fail posture</td>
+<td><code>GEOFENCE_FAIL_CLOSED</code> (global), <code>GEOFENCE_FAIL_CLOSED_SCOPES</code> (per decorator scope), or <code>GEOFENCE_STRICT_POSTURE</code> (bundled compliance posture)</td>
+<td>What a <em>failed geo lookup</em> does</td>
+</tr>
+<tr>
+<td>Exemptions</td>
+<td><code>POST /api/geo/allowlist</code> (CIDRs), geoip whitelist actions (per IP), <code>bypass_geofence</code> perm (per user)</td>
+<td>Full skip, evidence still recorded</td>
+</tr>
+<tr>
+<td>Enforcement points</td>
+<td><code>@md.requires_geofence(scope=...)</code> on your own views</td>
+<td>Where rules apply at all</td>
+</tr>
+</tbody>
+</table>
+<p>Every <code>GEOFENCE_*</code> key is a <strong>write-validated, global-only DB Setting</strong> with
+a settings-file fallback, and every write invalidates the decision cache —
+so an emergency rule change takes effect immediately, with no deploy and no
+ops step. See <a href="#settings-reference">Settings Reference</a>.</p>
+<p><strong>What you cannot do from the config plane:</strong></p>
+<ul>
+<li><strong>Grant geofence config access to a tenant.</strong> <code>/api/geo/*</code> checks
+  <strong>global</strong> <code>User.permissions</code> only — a GroupMember-scoped grant never
+  qualifies, because any group admin can assign one. Tenants get the
+  read-only <a href="#member-plane--group-scoped-visibility">member plane</a>
+  (<code>GET /api/geo/policy</code>) instead.</li>
+<li><strong>Store system rules or the allowlist per group.</strong> Those keys are
+  global-only; a group-scoped <code>Setting</code> row is rejected 400 at write time.</li>
+<li><strong>Opt a group out of a platform posture.</strong> Flipping
+  <code>Group.metadata["geofence_strict"]</code> needs global <code>manage_geofence</code> /
+  <code>security</code>, not group-admin rights.</li>
+<li><strong>Silence the evidence.</strong> Enforcement points emit
+  <code>geofence_block</code> / <code>geofence_exempt</code> incident events (cache hits
+  included) and every config write emits <code>geofence_config</code>. There is no
+  flag to turn that off.</li>
+<li><strong>Suppress a block reason from the response body.</strong> Blocked responses
+  deliberately carry no country/region/abuse detail; the full decision is
+  only available from the advisory <code>GET /api/geo/check</code>.</li>
+</ul>
+<p><strong>A deployment-level caution:</strong> if your product treats geofencing as a
+compliance control rather than a nicety, pin a non-empty rule in the
+settings file too. <code>DELETE /api/geo/rules</code> drops the DB row and falls back
+to the file — with an empty file value that silently becomes allow-all.
+(<code>GEOFENCE_STRICT_POSTURE</code> closes the same hole from the other side by
+denying when no rules are configured.)</p>
+<p>Products layering their own rules on top of this engine — see
+<code>mverify_api/docs/django_developer/payments/geofence.md</code> and
+<code>wmx_api/docs/django_docs/geofencing.md</code> for two worked examples.</p>
+<hr />
 <h2 id="rule-dsl">Rule DSL<a class="headerlink" href="#rule-dsl" title="Permanent link">&para;</a></h2>
 <p>Rules are JSON objects with up to three top-level keys. An empty object <code>{}</code> is always a no-op (allow everything).</p>
 <h3 id="country"><code>country</code><a class="headerlink" href="#country" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;CA&quot;</span><span class="p">]}}</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="p">{</span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;not_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;CN&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;RU&quot;</span><span class="p">]}}</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">{</span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;eq&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US&quot;</span><span class="p">}}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;CA&quot;</span><span class="p">]}}</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="p">{</span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;not_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;CN&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;RU&quot;</span><span class="p">]}}</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="p">{</span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;eq&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US&quot;</span><span class="p">}}</span>
 </code></pre></div>
 <p>Values are ISO 3166-1 alpha-2 codes. <code>in</code> / <code>not_in</code> take arrays; <code>eq</code> takes a string.</p>
 <h3 id="region"><code>region</code><a class="headerlink" href="#region" title="Permanent link">&para;</a></h3>
 <p>Same operators as <code>country</code>. Values are ISO 3166-2 subdivision codes.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="nt">&quot;region&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;not_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;US-FL&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;US-TX&quot;</span><span class="p">]}}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span><span class="nt">&quot;region&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;not_in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;US-FL&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;US-TX&quot;</span><span class="p">]}}</span>
 </code></pre></div>
 <h3 id="abuse"><code>abuse</code><a class="headerlink" href="#abuse" title="Permanent link">&para;</a></h3>
 <p>Controls blocking based on connection-type flags (<code>tor</code>, <code>vpn</code>, <code>datacenter</code>, <code>proxy</code>).</p>
@@ -4040,14 +4136,14 @@
 <li><code>true</code> — block when the flag is <code>False</code> (unusual; use with care)</li>
 <li><code>null</code> or absent — don't check this flag</li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span><span class="nt">&quot;abuse&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;tor&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;vpn&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span><span class="nt">&quot;abuse&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;tor&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;vpn&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}}</span>
 </code></pre></div>
 <h3 id="combined-rules">Combined rules<a class="headerlink" href="#combined-rules" title="Permanent link">&para;</a></h3>
 <p>All top-level keys must pass (AND logic).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;CA&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;GB&quot;</span><span class="p">]},</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;abuse&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;tor&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;datacenter&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;country&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;in&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;CA&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;GB&quot;</span><span class="p">]},</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;abuse&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;tor&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;datacenter&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="p">}</span>
 </code></pre></div>
 <hr />
 <h2 id="two-rule-levels">Two Rule Levels<a class="headerlink" href="#two-rule-levels" title="Permanent link">&para;</a></h2>
@@ -4061,20 +4157,20 @@
    <code>/api/settings</code> REST (also validated via <code>Setting.on_rest_pre_save</code>).</li>
 <li><strong>Django settings file</strong> — the deploy-time fallback:</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">GEOFENCE_SYSTEM_RULES</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="s2">&quot;country&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;in&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">,</span> <span class="s2">&quot;CA&quot;</span><span class="p">]},</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="s2">&quot;abuse&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;tor&quot;</span><span class="p">:</span> <span class="n">false</span><span class="p">}</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">GEOFENCE_SYSTEM_RULES</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s2">&quot;country&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;in&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">,</span> <span class="s2">&quot;CA&quot;</span><span class="p">]},</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s2">&quot;abuse&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;tor&quot;</span><span class="p">:</span> <span class="n">false</span><span class="p">}</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>The engine reads the setting with <code>kind="dict"</code>, so the DB-stored JSON string
 parses transparently.</p>
 <h3 id="group-rules-groupmetadatageofence">Group rules — <code>Group.metadata['geofence']</code><a class="headerlink" href="#group-rules-groupmetadatageofence" title="Permanent link">&para;</a></h3>
 <p>Per-tenant override stored in the group's metadata JSON. Evaluated after system rules pass.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s1">&#39;geofence&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s2">&quot;country&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;in&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">]},</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s2">&quot;abuse&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;vpn&quot;</span><span class="p">:</span> <span class="n">false</span><span class="p">}</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">}</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s1">&#39;geofence&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="s2">&quot;country&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;in&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;US&quot;</span><span class="p">]},</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="s2">&quot;abuse&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;vpn&quot;</span><span class="p">:</span> <span class="n">false</span><span class="p">}</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="p">}</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <p>REST writes to <code>metadata.geofence</code> are <strong>validated at save time</strong>
 (<code>Group.on_rest_pre_save</code> runs <code>validate_rule</code> on the merged metadata and
@@ -4204,11 +4300,11 @@ would have decided without the exemption). <code>simulate()</code> results also 
 <hr />
 <h2 id="decorator">Decorator<a class="headerlink" href="#decorator" title="Permanent link">&para;</a></h2>
 <p><code>@md.requires_geofence(scope="auth")</code> is applied to every built-in auth endpoint. Use it on your own views the same way:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;myapp/protected&#39;</span><span class="p">)</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_geofence</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;auth&quot;</span><span class="p">)</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span><span class="p">()</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_protected</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="o">...</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;myapp/protected&#39;</span><span class="p">)</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_geofence</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;auth&quot;</span><span class="p">)</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nd">@md</span><span class="o">.</span><span class="n">requires_auth</span><span class="p">()</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_protected</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="o">...</span>
 </code></pre></div>
 <p>The <code>scope</code> string is recorded in the security registry AND drives fail
 posture: scopes listed in <code>GEOFENCE_FAIL_CLOSED_SCOPES</code> fail <strong>closed</strong> on
@@ -4264,12 +4360,12 @@ credentials → the standard geofence 403 (body shape unchanged).</p>
 passkey/OAuth begin, phone-register) keep the default pre-view blocking mode —
 register in particular must block <strong>before</strong> account creation.</p>
 <p>When a request is blocked the decorator returns 403 immediately with only:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;geofence_blocked&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">403</span><span class="p">,</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;country_not_allowed&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Service is not available in your country.&quot;</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;geofence_blocked&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">403</span><span class="p">,</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;country_not_allowed&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">&quot;detail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Service is not available in your country.&quot;</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="p">}</span>
 </code></pre></div>
 <p>Country, region, and abuse details are intentionally omitted from the blocked response to prevent information leakage. Every block is also recorded by the evidence plane (below).</p>
 <h3 id="oauth-callback-is-not-decorated">OAuth <code>/callback</code> is not decorated<a class="headerlink" href="#oauth-callback-is-not-decorated" title="Permanent link">&para;</a></h3>
@@ -4555,14 +4651,14 @@ truthy-coerces at read time), <code>GEOFENCE_CACHE_TTL</code> a non-negative JSO
 registered per-key via <code>Setting.register_validator</code> — see
 <a href="../../helpers/settings/">settings helper</a> to register app-specific keys.</p>
 <h3 id="test-override-example">Test override example<a class="headerlink" href="#test-override-example" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">GEOFENCE_TEST_OVERRIDE</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="s2">&quot;country_code&quot;</span><span class="p">:</span> <span class="s2">&quot;CN&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="s2">&quot;region_code&quot;</span><span class="p">:</span> <span class="s2">&quot;CN-BJ&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="s2">&quot;tor&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="s2">&quot;vpn&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="s2">&quot;datacenter&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="s2">&quot;proxy&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">GEOFENCE_TEST_OVERRIDE</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="s2">&quot;country_code&quot;</span><span class="p">:</span> <span class="s2">&quot;CN&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="s2">&quot;region_code&quot;</span><span class="p">:</span> <span class="s2">&quot;CN-BJ&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="s2">&quot;tor&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="s2">&quot;vpn&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="s2">&quot;datacenter&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="s2">&quot;proxy&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="p">}</span>
 </code></pre></div>
 <hr />
 <h2 id="relationship-to-user_registered_handler-user_login_handler">Relationship to USER_REGISTERED_HANDLER / USER_LOGIN_HANDLER<a class="headerlink" href="#relationship-to-user_registered_handler-user_login_handler" title="Permanent link">&para;</a></h2>

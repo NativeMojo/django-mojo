@@ -3984,7 +3984,7 @@
 </ul>
 <h3 id="listing-a-files-share-links">Listing a file's share links<a class="headerlink" href="#listing-a-files-share-links" title="Permanent link">&para;</a></h3>
 <p>Use the existing ShortLink list endpoint filtered by <code>source</code> and <code>file</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/shortlink/shortlink?source=fileman-share&amp;file=123
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/shortlink/link?source=fileman-share&amp;file=123
 </code></pre></div>
 <p>Each row carries <code>user</code> (sharer), <code>hit_count</code>, <code>expires_at</code>, <code>track_clicks</code>, and <code>metadata.note</code>. Per-click detail lives in <code>ShortLinkClick</code>.</p>
 <h2 id="internal-api">Internal API<a class="headerlink" href="#internal-api" title="Permanent link">&para;</a></h2>

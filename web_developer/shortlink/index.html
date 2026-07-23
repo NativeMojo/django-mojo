@@ -4284,19 +4284,35 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/page&quot;</span><span class="p">,</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;email&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">&quot;og:title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;My Page&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">&quot;og:description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Custom preview text&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">&quot;og:image&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/preview.jpg&quot;</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;expire_days&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">&quot;expire_hours&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">&quot;og:title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;My Page&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nt">&quot;og:description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Custom preview text&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nt">&quot;og:image&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/preview.jpg&quot;</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="p">}</span>
 </code></pre></div>
+<p>One of <code>url</code>, <code>file</code>, or <code>rendition</code> is required — a create with none of them is
+rejected with a 400.</p>
+<ul>
+<li><code>code</code> is optional. Omitted or empty ⇒ a unique 7-char code is generated.
+  A custom (vanity) code of up to 10 chars is kept as-is; it must be unique.</li>
+<li><code>expire_days</code> / <code>expire_hours</code> are integers; expiry = now + days×24 + hours.
+  Omitting both defaults to <strong>3 days</strong> (same as <code>/link/create</code> and <code>shorten()</code>).
+  <code>0</code>/<code>0</code> ⇒ never expires. When either is present it takes precedence over a
+  passed <code>expires_at</code>; passing an ISO <code>expires_at</code> alone also works. A
+  non-integer value for either field is rejected with a 400.</li>
+</ul>
 <h3 id="update-shortlink">Update ShortLink<a class="headerlink" href="#update-shortlink" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/shortlink/link/&lt;id&gt;</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="p">}</span>
 </code></pre></div>
+<p>Updates never regenerate <code>code</code>. Passing <code>expire_days</code>/<code>expire_hours</code> on an
+update recomputes the expiry from <em>now</em> (rolling extension); omitting them
+leaves the current expiry untouched.</p>
 <h3 id="delete-shortlink">Delete ShortLink<a class="headerlink" href="#delete-shortlink" title="Permanent link">&para;</a></h3>
 <p><strong>DELETE</strong> <code>/api/shortlink/link/&lt;id&gt;</code></p>
 <hr />
@@ -4462,7 +4478,10 @@
 <p>Set <code>bot_passthrough=True</code> on the link to skip bot detection entirely. Bots will receive a plain 302 redirect like any other visitor. Use this for transactional links (password resets, verification emails) where preview content is not needed.</p>
 <hr />
 <h2 id="expiry">Expiry<a class="headerlink" href="#expiry" title="Permanent link">&para;</a></h2>
-<p>Links expire based on <code>expire_days</code> and <code>expire_hours</code> (combined):</p>
+<p>Links expire based on <code>expire_days</code> and <code>expire_hours</code> (combined). Both create
+endpoints (<code>POST /api/shortlink/link</code> and <code>POST /api/shortlink/link/create</code>)
+accept them with identical semantics; on a model update they recompute expiry
+from the moment of the request:</p>
 <table>
 <thead>
 <tr>

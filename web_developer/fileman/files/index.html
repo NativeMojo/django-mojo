@@ -4107,12 +4107,12 @@
 <p><code>expire_days</code> is clamped to 3650. <code>note</code> is truncated to 512 characters.</p>
 <p>Renditions support the same action at <code>POST /api/fileman/rendition/&lt;id&gt;</code> with <code>{"share": ...}</code>.</p>
 <h4 id="listing-existing-shares-for-a-file">Listing existing shares for a file<a class="headerlink" href="#listing-existing-shares-for-a-file" title="Permanent link">&para;</a></h4>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>GET /api/shortlink/shortlink?source=fileman-share&amp;file=123
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>GET /api/shortlink/link?source=fileman-share&amp;file=123
 </code></pre></div>
 <p>Each row carries <code>user</code> (the sharer), <code>hit_count</code>, <code>expires_at</code>, <code>track_clicks</code>, and <code>metadata.note</code>. Per-click detail lives in the <code>ShortLinkClick</code> table (when <code>track_clicks=True</code>).</p>
 <h4 id="revoking-a-share">Revoking a share<a class="headerlink" href="#revoking-a-share" title="Permanent link">&para;</a></h4>
 <p>Set <code>is_active=false</code> on the shortlink row:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>POST /api/shortlink/shortlink/&lt;id&gt;
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>POST /api/shortlink/link/&lt;id&gt;
 <a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>{ &quot;is_active&quot;: false }
 </code></pre></div>
 <p>Revoked short URLs return a 404/gone at the redirect endpoint. The share is audit-preserved — the row is not deleted.</p>
