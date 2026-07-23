@@ -1,5 +1,9 @@
 ## v1.2.52 - July 23, 2026
 
+## v1.2.52 - July 23, 2026
+
+
+
 **fix** — **`POST /api/shortlink/link` (RestMeta create) saved dead links: empty `code`, `expire_days`/`expire_hours` silently ignored — and after the first such row, every further create 500'd on the unique constraint (maestro item 284).**
 All creation logic — unique code generation and expiry computation — lived only in
 the `ShortLink.create()` classmethod and the `shorten()` service behind
