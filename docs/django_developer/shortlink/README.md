@@ -98,7 +98,8 @@ semantics —
   `set_expire_days` / `set_expire_hours` setters: expiry = now + days×24 + hours.
   Both omitted on create ⇒ default 3 days; total ≤ 0 ⇒ never expires. On update
   they recompute from now, and omitting them leaves expiry untouched. When
-  present they take precedence over a client-passed `expires_at`.
+  present they take precedence over a client-passed `expires_at`. A non-integer
+  value raises `ValueException` (400) from the setter.
 - A create with none of `url`, `file`, or `rendition` raises `ValueException`
   (400), matching `shorten()`.
 

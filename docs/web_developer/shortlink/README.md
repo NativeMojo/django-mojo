@@ -129,7 +129,8 @@ rejected with a 400.
 - `expire_days` / `expire_hours` are integers; expiry = now + days×24 + hours.
   Omitting both defaults to **3 days** (same as `/link/create` and `shorten()`).
   `0`/`0` ⇒ never expires. When either is present it takes precedence over a
-  passed `expires_at`; passing an ISO `expires_at` alone also works.
+  passed `expires_at`; passing an ISO `expires_at` alone also works. A
+  non-integer value for either field is rejected with a 400.
 
 ### Update ShortLink
 

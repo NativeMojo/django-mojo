@@ -180,7 +180,7 @@ Renditions support the same action at `POST /api/fileman/rendition/<id>` with `{
 #### Listing existing shares for a file
 
 ```
-GET /api/shortlink/shortlink?source=fileman-share&file=123
+GET /api/shortlink/link?source=fileman-share&file=123
 ```
 
 Each row carries `user` (the sharer), `hit_count`, `expires_at`, `track_clicks`, and `metadata.note`. Per-click detail lives in the `ShortLinkClick` table (when `track_clicks=True`).
@@ -190,7 +190,7 @@ Each row carries `user` (the sharer), `hit_count`, `expires_at`, `track_clicks`,
 Set `is_active=false` on the shortlink row:
 
 ```
-POST /api/shortlink/shortlink/<id>
+POST /api/shortlink/link/<id>
 { "is_active": false }
 ```
 

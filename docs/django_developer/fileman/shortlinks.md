@@ -83,7 +83,7 @@ Permissions: the share action is a POST_SAVE_ACTION, so it is gated by the insta
 Use the existing ShortLink list endpoint filtered by `source` and `file`:
 
 ```
-GET /api/shortlink/shortlink?source=fileman-share&file=123
+GET /api/shortlink/link?source=fileman-share&file=123
 ```
 
 Each row carries `user` (sharer), `hit_count`, `expires_at`, `track_clicks`, and `metadata.note`. Per-click detail lives in `ShortLinkClick`.
