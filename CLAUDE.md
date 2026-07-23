@@ -10,8 +10,9 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
 
 1. Read this file in full.
 2. Read `memory.md`.
-3. Work is tracked on the **maestro board** (workspace `django-mojo` — see
-   `.claude/maestro.json` for the live workspace/board id). Choose your mode:
+3. Work is tracked on the **maestro board** (workspace `NativeMojo`, shared
+   with web-mojo — see `.claude/maestro.json` for the live workspace/board
+   id). Choose your mode:
    - Filing new work (bug/feature/chore) → `/maestro-task`
    - Triaging / planning an item → `/maestro-scope`
    - Implementing a scoped item  → `/maestro-build`
@@ -34,16 +35,20 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
 
 ## Planning
 
-Work items live on the **maestro board** (`django-mojo` workspace; see
-`.claude/maestro.json`). A board item's markdown description is the
-workspec; its `stage` column value is inbox → scoped → planned → building →
-review → done; priority is MoSCoW (must/should/could/won't). The
+Work items live on the **maestro board** (`NativeMojo` workspace, a joint
+backlog shared with web-mojo; see `.claude/maestro.json`). A board item's
+markdown description is the workspec; its `stage` column value is inbox →
+scoped → planned → building → review → done; priority is MoSCoW
+(must/should/could/won't); its `project` column names the repo it belongs to
+— **django-mojo items only** are worked from this repo. The
 `.claude/skills/maestro-*` skills (task/scope/build) read and write items
-there — see each `SKILL.md` for the exact protocol, and the workspace's own
-`django-mojo-build-conventions` rule doc (fetched via `get_workspace_context`)
-for repo-specific process on top of the generic skills: WIP = 1 (one item
-`building` at a time), the post-build agent trio (test-runner, docs-updater,
-security-review), and optional build routing.
+there — see each `SKILL.md` for the exact protocol, plus the workspace's
+shared `nativemojo-board-conventions` rule doc (project stamping, repo match
+on claim, WIP = 1 per project) and the repo-specific
+`django-mojo-build-conventions` rule doc (both fetched via
+`get_workspace_context`): one django-mojo item `building` at a time, the
+post-build agent trio (test-runner, docs-updater, security-review), and
+optional build routing.
 
 A work item is board-backed XOR file-backed — never both. `planning/` itself
 still holds:
