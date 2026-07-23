@@ -4,6 +4,74 @@ Policy-based geographic access control. Rules are evaluated at the HTTP layer on
 
 ---
 
+## Orientation — read this first
+
+The framework ships the **engine**, not a policy. Out of the box
+`GEOFENCE_SYSTEM_RULES` is `{}` and every check returns `no_rules` (allow
+all) — geofencing does nothing until a deployment configures rules.
+
+**How a decision is made**, in order (first match wins):
+
+```
+bypass_geofence permission → allow (never cached)
+IP allowlist match         → allow (shadow-evaluates rules for evidence)
+GEOFENCE_ENABLED = False   → allow
+system rule ∧ group rule   → the actual verdict
+```
+
+Both rule levels must pass. **System** (`GEOFENCE_SYSTEM_RULES`) is the
+platform-wide floor; **group** (`Group.metadata['geofence']`) is the
+per-tenant addition. Each is a rule in the [DSL](#rule-dsl) below —
+`country` / `region` / `abuse`, AND-ed, `{}` meaning no-op.
+
+**What you manage, and where:**
+
+| Thing | How | Effect |
+|---|---|---|
+| System rule | `POST /api/geo/rules` (validated, audited, cache-invalidating) — or the settings file as the deploy-time fallback | DB row **wins over** the settings file |
+| Group rule | `Group.metadata['geofence']` via group REST (validated at save; JSON **merges** — send `null` to drop a key) | Per tenant |
+| Fail posture | `GEOFENCE_FAIL_CLOSED` (global), `GEOFENCE_FAIL_CLOSED_SCOPES` (per decorator scope), or `GEOFENCE_STRICT_POSTURE` (bundled compliance posture) | What a *failed geo lookup* does |
+| Exemptions | `POST /api/geo/allowlist` (CIDRs), geoip whitelist actions (per IP), `bypass_geofence` perm (per user) | Full skip, evidence still recorded |
+| Enforcement points | `@md.requires_geofence(scope=...)` on your own views | Where rules apply at all |
+
+Every `GEOFENCE_*` key is a **write-validated, global-only DB Setting** with
+a settings-file fallback, and every write invalidates the decision cache —
+so an emergency rule change takes effect immediately, with no deploy and no
+ops step. See [Settings Reference](#settings-reference).
+
+**What you cannot do from the config plane:**
+
+- **Grant geofence config access to a tenant.** `/api/geo/*` checks
+  **global** `User.permissions` only — a GroupMember-scoped grant never
+  qualifies, because any group admin can assign one. Tenants get the
+  read-only [member plane](#member-plane--group-scoped-visibility)
+  (`GET /api/geo/policy`) instead.
+- **Store system rules or the allowlist per group.** Those keys are
+  global-only; a group-scoped `Setting` row is rejected 400 at write time.
+- **Opt a group out of a platform posture.** Flipping
+  `Group.metadata["geofence_strict"]` needs global `manage_geofence` /
+  `security`, not group-admin rights.
+- **Silence the evidence.** Enforcement points emit
+  `geofence_block` / `geofence_exempt` incident events (cache hits
+  included) and every config write emits `geofence_config`. There is no
+  flag to turn that off.
+- **Suppress a block reason from the response body.** Blocked responses
+  deliberately carry no country/region/abuse detail; the full decision is
+  only available from the advisory `GET /api/geo/check`.
+
+**A deployment-level caution:** if your product treats geofencing as a
+compliance control rather than a nicety, pin a non-empty rule in the
+settings file too. `DELETE /api/geo/rules` drops the DB row and falls back
+to the file — with an empty file value that silently becomes allow-all.
+(`GEOFENCE_STRICT_POSTURE` closes the same hole from the other side by
+denying when no rules are configured.)
+
+Products layering their own rules on top of this engine — see
+`mverify_api/docs/django_developer/payments/geofence.md` and
+`wmx_api/docs/django_docs/geofencing.md` for two worked examples.
+
+---
+
 ## Rule DSL
 
 Rules are JSON objects with up to three top-level keys. An empty object `{}` is always a no-op (allow everything).
