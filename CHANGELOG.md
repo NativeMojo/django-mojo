@@ -1,3 +1,33 @@
+## v1.2.52 - July 23, 2026
+
+**fix** — **`POST /api/shortlink/link` (RestMeta create) saved dead links: empty `code`, `expire_days`/`expire_hours` silently ignored — and after the first such row, every further create 500'd on the unique constraint (maestro item 284).**
+All creation logic — unique code generation and expiry computation — lived only in
+the `ShortLink.create()` classmethod and the `shorten()` service behind
+`POST /api/shortlink/link/create`. The documented RestMeta create path stamped
+model fields straight from `request.DATA`, so `code` persisted as `""` (nothing
+can resolve `/s/`), and `expire_days`/`expire_hours` — not model fields — were
+dropped, leaving `expires_at` null. Because `code` is unique, the first broken
+row also made every subsequent RestMeta create collide on `""` and 500: the
+endpoint worked once per database, then hard-failed forever.
+`ShortLink` now implements the framework seams: `set_expire_days`/`set_expire_hours`
+virtual setters plus `on_rest_pre_save`, which generates the code on create
+(client-supplied vanity codes are kept; updates never regenerate), computes
+`expires_at` (now + days×24 + hours; both omitted on create ⇒ **3 days**, matching
+every other creation path; `0/0` ⇒ never; on update they recompute from now and
+omitting them leaves expiry untouched; when present they win over a passed
+`expires_at`), and rejects a create with none of `url`/`file`/`rendition` (400) —
+matching `shorten()`. Note the default is a behavior change for this endpoint:
+a bare RestMeta create used to imply "never expires" (on a dead link); it now
+expires in 3 days like everywhere else — pass `expire_days=0, expire_hours=0`
+for a permanent link. Non-integer expire values now 400 instead of being ignored.
+Migration `0004_backfill_empty_shortlink_codes` assigns a real code to any
+existing `code=""` row (repairing, not deleting, user-created links) — after it
+runs, previously-broken deployments accept creates again. The `on_link` and
+`on_history` endpoints also gained the `@md.uses_model_security` markers required
+by the repo's REST conventions (registry-only; no runtime change). Regression
+tests cover code generation, consecutive-create uniqueness, the 3-day default,
+`0/0` = never, destination rejection, and update preserving code + expiry.
+
 ## v1.2.51 - July 22, 2026
 
 **fix** — **`llm.get_model()` picked the oldest model in a tier, `_FALLBACKS["powerful"]` named a Sonnet, and the shared model cache never wrote a single entry (maestro item 273).**

@@ -111,6 +111,8 @@ Use `?graph=default` for full details including metadata, user, and group.
 {
   "url": "https://example.com/page",
   "source": "email",
+  "expire_days": 3,
+  "expire_hours": 0,
   "metadata": {
     "og:title": "My Page",
     "og:description": "Custom preview text",
@@ -118,6 +120,16 @@ Use `?graph=default` for full details including metadata, user, and group.
   }
 }
 ```
+
+One of `url`, `file`, or `rendition` is required — a create with none of them is
+rejected with a 400.
+
+- `code` is optional. Omitted or empty ⇒ a unique 7-char code is generated.
+  A custom (vanity) code of up to 10 chars is kept as-is; it must be unique.
+- `expire_days` / `expire_hours` are integers; expiry = now + days×24 + hours.
+  Omitting both defaults to **3 days** (same as `/link/create` and `shorten()`).
+  `0`/`0` ⇒ never expires. When either is present it takes precedence over a
+  passed `expires_at`; passing an ISO `expires_at` alone also works.
 
 ### Update ShortLink
 
@@ -128,6 +140,10 @@ Use `?graph=default` for full details including metadata, user, and group.
   "is_active": false
 }
 ```
+
+Updates never regenerate `code`. Passing `expire_days`/`expire_hours` on an
+update recomputes the expiry from *now* (rolling extension); omitting them
+leaves the current expiry untouched.
 
 ### Delete ShortLink
 
@@ -323,7 +339,10 @@ Set `bot_passthrough=True` on the link to skip bot detection entirely. Bots will
 
 ## Expiry
 
-Links expire based on `expire_days` and `expire_hours` (combined):
+Links expire based on `expire_days` and `expire_hours` (combined). Both create
+endpoints (`POST /api/shortlink/link` and `POST /api/shortlink/link/create`)
+accept them with identical semantics; on a model update they recompute expiry
+from the moment of the request:
 
 | expire_days | expire_hours | Result |
 |---|---|---|

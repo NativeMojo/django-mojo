@@ -4,6 +4,7 @@ from mojo.apps.shortlink.models import ShortLink, ShortLinkClick
 
 @md.URL('link')
 @md.URL('link/<int:pk>')
+@md.uses_model_security(ShortLink)
 def on_link(request, pk=None):
     return ShortLink.on_rest_request(request, pk)
 
@@ -46,5 +47,6 @@ def on_create_link(request):
 
 @md.URL('history')
 @md.URL('history/<int:pk>')
+@md.uses_model_security(ShortLinkClick)
 def on_history(request, pk=None):
     return ShortLinkClick.on_rest_request(request, pk)

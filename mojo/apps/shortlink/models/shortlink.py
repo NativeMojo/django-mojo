@@ -1,5 +1,6 @@
 from django.db import models
 from django.db.models import F
+from mojo import errors as merrors
 from mojo.models import MojoModel
 from mojo.helpers import crypto, dates
 from datetime import timedelta
@@ -194,6 +195,42 @@ class ShortLink(models.Model, MojoModel):
             if not cls.objects.filter(code=code).exists():
                 return code
         raise RuntimeError(f"Failed to generate unique short code after {max_attempts} attempts")
+
+    def set_expire_days(self, value):
+        # REST virtual field — consumed by on_rest_pre_save.
+        try:
+            self._pending_expire_days = int(value)
+        except (TypeError, ValueError):
+            raise merrors.ValueException("expire_days must be an integer")
+
+    def set_expire_hours(self, value):
+        # REST virtual field — consumed by on_rest_pre_save.
+        try:
+            self._pending_expire_hours = int(value)
+        except (TypeError, ValueError):
+            raise merrors.ValueException("expire_hours must be an integer")
+
+    def on_rest_pre_save(self, changed_fields, created):
+        """
+        Make RestMeta create/update match ShortLink.create() semantics:
+        generate the unique code, require a destination, and compute
+        expires_at from the expire_days/expire_hours virtual fields
+        (defaulting to 3 days on create, 0/0 = never).
+        """
+        if created and not self.code:
+            self.code = self._generate_code()
+        if created and not self.url and not self.file_id and not self.rendition_id:
+            raise merrors.ValueException("url, file, or rendition is required")
+        days = getattr(self, "_pending_expire_days", None)
+        hours = getattr(self, "_pending_expire_hours", None)
+        if days is not None or hours is not None:
+            total_hours = (days or 0) * 24 + (hours or 0)
+            if total_hours > 0:
+                self.expires_at = dates.utcnow() + timedelta(hours=total_hours)
+            else:
+                self.expires_at = None
+        elif created and "expires_at" not in changed_fields:
+            self.expires_at = dates.utcnow() + timedelta(days=3)
 
     def resolve(self):
         """

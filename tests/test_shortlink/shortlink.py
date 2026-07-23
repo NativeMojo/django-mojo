@@ -679,6 +679,129 @@ def test_rest_history_endpoints(opts):
 
 
 # ---------------------------------------------------------------------------
+# REST: model create via POST /api/shortlink/link (maestro item 284)
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("REST: POST /api/shortlink/link generates a code and honors expire_days")
+def test_rest_model_create_generates_code(opts):
+    from mojo.apps.shortlink.models import ShortLink
+    from mojo.helpers import dates
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    assert_true(opts.client.is_authenticated, "authentication failed")
+
+    resp = opts.client.post("/api/shortlink/link", {
+        "url": REAL_URL_A,
+        "source": "test",
+        "expire_days": 30,
+        "expire_hours": 0,
+    })
+    assert_eq(resp.status_code, 200, f"expected 200 from POST /api/shortlink/link, got {resp.status_code}")
+    assert_true(resp.response.status, "model create response status should be true")
+    code = resp.response.data.code
+    assert_true(bool(code), "model create must return a non-empty code")
+    assert_eq(len(code), 7, f"generated code should be 7 chars, got {code!r}")
+
+    link = ShortLink.objects.get(pk=resp.response.data.id)
+    assert_true(link.expires_at is not None, "expire_days=30 should set expires_at")
+    delta = link.expires_at - dates.utcnow()
+    assert_true(timedelta(days=29) < delta < timedelta(days=31),
+                f"expires_at should be ~30 days out, got {delta}")
+
+
+@th.django_unit_test("REST: consecutive model creates get distinct codes (no empty-code collision)")
+def test_rest_model_create_twice_unique_codes(opts):
+    opts.client.login(TEST_USER, TEST_PWORD)
+
+    codes = []
+    for attempt in (1, 2):
+        resp = opts.client.post("/api/shortlink/link", {"url": REAL_URL_B, "source": "test"})
+        assert_eq(resp.status_code, 200, f"model create #{attempt} should return 200, got {resp.status_code}")
+        code = resp.response.data.code
+        assert_true(bool(code), f"model create #{attempt} must return a non-empty code")
+        codes.append(code)
+    assert_true(codes[0] != codes[1], f"consecutive creates must get distinct codes, got {codes}")
+
+
+@th.django_unit_test("REST: model create without expire fields defaults to 3-day expiry")
+def test_rest_model_create_default_expiry(opts):
+    from mojo.apps.shortlink.models import ShortLink
+    from mojo.helpers import dates
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+
+    resp = opts.client.post("/api/shortlink/link", {"url": REAL_URL_A, "source": "test"})
+    assert_eq(resp.status_code, 200, f"expected 200 from model create, got {resp.status_code}")
+
+    link = ShortLink.objects.get(pk=resp.response.data.id)
+    assert_true(link.expires_at is not None, "bare model create should default to expiring (3 days)")
+    delta = link.expires_at - dates.utcnow()
+    assert_true(timedelta(days=2) < delta < timedelta(days=4),
+                f"default expiry should be ~3 days out, got {delta}")
+
+
+@th.django_unit_test("REST: model create with expire_days=0/expire_hours=0 never expires")
+def test_rest_model_create_never_expires(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+
+    resp = opts.client.post("/api/shortlink/link", {
+        "url": REAL_URL_A,
+        "source": "test",
+        "expire_days": 0,
+        "expire_hours": 0,
+    })
+    assert_eq(resp.status_code, 200, f"expected 200 from model create, got {resp.status_code}")
+
+    link = ShortLink.objects.get(pk=resp.response.data.id)
+    assert_true(link.expires_at is None,
+                f"expire_days=0/expire_hours=0 should mean never expires, got {link.expires_at}")
+
+
+@th.django_unit_test("REST: model create with no url/file/rendition is rejected")
+def test_rest_model_create_requires_destination(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+
+    before = ShortLink.objects.filter(source="test").count()
+    resp = opts.client.post("/api/shortlink/link", {"source": "test"})
+    assert_true(resp.response.status is not True,
+                f"create with no destination must not succeed, got {resp.status_code}: {resp.response}")
+    after = ShortLink.objects.filter(source="test").count()
+    assert_eq(after, before, "rejected create must not persist a row")
+
+
+@th.django_unit_test("REST: model update keeps code and expiry untouched")
+def test_rest_model_update_preserves_code(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+
+    resp = opts.client.post("/api/shortlink/link", {
+        "url": REAL_URL_B,
+        "source": "test",
+        "expire_days": 5,
+    })
+    assert_eq(resp.status_code, 200, f"expected 200 from model create, got {resp.status_code}")
+    link_id = resp.response.data.id
+    link = ShortLink.objects.get(pk=link_id)
+    original_code = link.code
+    original_expires_at = link.expires_at
+    assert_true(bool(original_code), "created link must have a code before update")
+
+    upd = opts.client.post(f"/api/shortlink/link/{link_id}", {"is_active": False})
+    assert_eq(upd.status_code, 200, f"expected 200 from model update, got {upd.status_code}")
+
+    link.refresh_from_db()
+    assert_eq(link.is_active, False, "update should persist is_active=False")
+    assert_eq(link.code, original_code, "update must not regenerate or clobber the code")
+    assert_eq(link.expires_at, original_expires_at,
+              "update without expire fields must not re-stamp expiry")
+
+
+# ---------------------------------------------------------------------------
 # Unit: shorten() public API
 # ---------------------------------------------------------------------------
 

@@ -88,6 +88,23 @@ The core model. Located at `mojo/apps/shortlink/models/shortlink.py`.
 
 This means users with owner access can operate on their own `ShortLink` records (where `shortlink.user == request.user`) without global `manage_shortlinks`.
 
+**REST create/update behavior**: the model's `on_rest_pre_save` hook makes the
+generic RestMeta path (`POST /api/shortlink/link`) match `ShortLink.create()`
+semantics —
+
+- `code` is auto-generated (unique, 7 chars) when not supplied; a client-supplied
+  vanity code (≤10 chars, unique) is kept. Updates never regenerate it.
+- `expire_days` / `expire_hours` arrive as virtual fields through the
+  `set_expire_days` / `set_expire_hours` setters: expiry = now + days×24 + hours.
+  Both omitted on create ⇒ default 3 days; total ≤ 0 ⇒ never expires. On update
+  they recompute from now, and omitting them leaves expiry untouched. When
+  present they take precedence over a client-passed `expires_at`.
+- A create with none of `url`, `file`, or `rendition` raises `ValueException`
+  (400), matching `shorten()`.
+
+Migration `0004_backfill_empty_shortlink_codes` repairs any rows saved with
+`code=""` by the pre-hook REST path, assigning them a real code.
+
 | Field | Type | Description |
 |---|---|---|
 | `code` | CharField(10) | Unique 7-char alphanumeric code. Auto-generated. |
