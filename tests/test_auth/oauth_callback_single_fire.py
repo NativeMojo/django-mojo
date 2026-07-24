@@ -22,11 +22,12 @@ def _render(template_name, group=None):
     from django.test import RequestFactory
     from django.shortcuts import render
     from mojo.apps.account.rest.bouncer.views import _auth_context
+    is_login = template_name.endswith('login.html')
     factory = RequestFactory()
-    request = factory.get('/register')
+    request = factory.get('/auth' if is_login else '/register')
     ctx = _auth_context(request, group=group)
-    ctx['page_mode'] = 'register'
-    ctx['page_title'] = 'Create Account'
+    ctx['page_mode'] = 'login' if is_login else 'register'
+    ctx['page_title'] = 'Sign In' if is_login else 'Create Account'
     return render(request, template_name, ctx).content.decode('utf-8')
 
 
