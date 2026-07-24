@@ -1,5 +1,27 @@
 ## v1.2.52 - July 23, 2026
 
+**fix** — **The hosted login page double-fired OAuth completion, POSTing the single-use authorization code twice — the second time to the `google` endpoint for Apple/GitHub sign-ins (maestro item 315).**
+`login.html` carried its own `?code&state` callback handler that duplicated the
+generic one already in `auth_base.html` (inherited by every hosted auth page).
+Both detected the callback params and each called
+`MojoAuth.completeOAuthLogin(provider)`, so the same single-use authorization
+code was POSTed twice. `auth_base`'s handler runs first and removes the
+`oauth_provider` value from `sessionStorage`, so `login.html`'s copy fell back to
+its `"google"` default — sending the second completion to the Google endpoint
+even for Apple/GitHub logins. Every hosted-page OAuth sign-in therefore produced
+a guaranteed spurious failed completion server-side (used code / wrong provider)
+— noise in auth-failure accounting and logs; and because request ordering is not
+guaranteed, a rare race where the wrong-provider call reached the server first
+could consume the single-use state record and fail the correct completion — a
+hard sign-in failure for that round-trip. The duplicate block in `login.html` is
+removed; the full-featured `auth_base` handler (provider-button spinner,
+`sessionStorage` cleanup, "Completing sign-in…" info message, provider-specific
+error copy) is now the single completion path — unchanged for every page that
+extends the base, including `register.html`. No user-visible UX change.
+Regression tests in `tests/test_auth/oauth_callback_single_fire.py` assert
+exactly one `completeOAuthLogin(` call site reaches a rendered login and register
+page, and that `login.html`'s template source carries none of its own.
+
 **fix** — **Passkey sign-in leaked the browser's raw WebAuthn error — including a W3C spec URL — to users, with no plain-language message and no way forward (maestro item 75).**
 `mojo-auth.js` invoked `navigator.credentials.get()` (both
 `loginWithPasskeyDiscoverable` and `loginWithPasskey`) and
