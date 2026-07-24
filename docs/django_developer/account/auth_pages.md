@@ -301,6 +301,23 @@ divider.
 When `password` is **not** a method but `sms` is (a passwordless config), the
 page opens directly on the SMS phone-entry form, with passkey/OAuth as
 secondary buttons — so SMS login is never buried.
+
+**Passkey failure UX.** WebAuthn collapses "no passkey on this device", "user
+cancelled", and "timed out" into a single `NotAllowedError` (a privacy
+guarantee), and the browser's raw `DOMException` message carries a W3C spec
+URL. `mojo-auth.js` maps every passkey rejection to one plain-language message
+before it reaches the page (the real error is still `console.error`-logged for
+QA), so a spec link or stack-trace string never renders. As defense in depth,
+`auth_base.html`'s `showMessage` helper runs `MojoAuth.sanitizeMessage()` on
+every **error**-type message at the render layer — so any page extending the
+base (login, register, contact, passkey enrollment) strips a stray URL even if
+an upstream error path was missed. On the hosted login page a passkey failure
+also offers an inline **"Sign in with a text code instead"** recovery action
+that switches to the SMS view — shown only when the group offers SMS login and
+the SMS view isn't already active. See
+[web_developer/account/auth_pages.md](../../web_developer/account/auth_pages.md)
+for the exact rejection contract consumed by custom front-ends.
+
 - Session check on load (auto-redirect if already authenticated)
 - OAuth callback handling (`?code=...&state=...`)
 - Magic link token handling (`?token=ml:...`)
@@ -363,6 +380,12 @@ Not bouncer-gated. Themed by the resolved auth config. Reads the JWT from
 localStorage and runs the WebAuthn registration round-trip client-side. Used
 post-registration (when `passkey_prompt != off`) and standalone from account
 settings.
+
+Enrollment rejections are mapped just like sign-in, but with
+enrollment-flavored copy (e.g. `InvalidStateError` → "This device may already
+have a passkey for this account.", cancel/timeout → "Passkey setup was
+cancelled or timed out. You can try again.") — the raw `DOMException` from
+`navigator.credentials.create()` never renders here either.
 
 ### When methods are disabled
 

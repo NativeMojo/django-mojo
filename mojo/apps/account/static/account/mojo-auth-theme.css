@@ -243,6 +243,21 @@ body {
     background: var(--mat-info-bg);
     color: var(--mat-info);
 }
+/* Recovery-action link-button appended inside a message (e.g. the SMS
+   fallback offered when passkey sign-in fails). Inherits the message's
+   colour — danger on an is-error message. */
+.mat-message-action {
+    display: block;
+    margin-top: .375rem;
+    padding: 0;
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+    cursor: pointer;
+}
 
 /* ---- Views ---- */
 

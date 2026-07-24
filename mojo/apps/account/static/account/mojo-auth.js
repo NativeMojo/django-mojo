@@ -143,12 +143,67 @@
         return d;
     }
 
+    // -------------------------------------------------------------------------
+    // WebAuthn friendly-error mapping
+    //
+    // The browser collapses no-passkey / user-cancelled / timed-out into a
+    // single NotAllowedError (a WebAuthn privacy guarantee), so one copy string
+    // has to cover all three. Raw DOMExceptions must NEVER reach the UI — they
+    // carry a W3C spec URL and read as a stack trace to a player.
+    // -------------------------------------------------------------------------
+
+    var WEBAUTHN_LOGIN_COPY = {
+        NotAllowedError:   'Passkey sign-in was cancelled, timed out, or no passkey was found on this device.',
+        AbortError:        'Passkey sign-in was cancelled, timed out, or no passkey was found on this device.',
+        TimeoutError:      'Passkey sign-in was cancelled, timed out, or no passkey was found on this device.',
+        SecurityError:     "Passkeys can't be used on this connection. Open the site at its normal secure address and try again.",
+        NotSupportedError: "This device or browser doesn't support passkeys.",
+        _default:          'Passkey sign-in failed. Please try again or use another sign-in method.'
+    };
+
+    var WEBAUTHN_ENROLL_COPY = Object.assign({}, WEBAUTHN_LOGIN_COPY, {
+        NotAllowedError:   'Passkey setup was cancelled or timed out. You can try again.',
+        AbortError:        'Passkey setup was cancelled or timed out. You can try again.',
+        TimeoutError:      'Passkey setup was cancelled or timed out. You can try again.',
+        InvalidStateError: 'This device may already have a passkey for this account.',
+        _default:          'Could not add a passkey. Please try again.'
+    });
+
+    // Map a WebAuthn DOMException to a plain Error carrying friendly copy. The
+    // real error is logged (QA needs it) and preserved on .cause; .name is kept
+    // so a caller can still branch on the DOMException name.
+    function friendlyWebAuthnError(err, copy) {
+        try { console.error('WebAuthn error:', err); } catch (e) { /* no console */ }
+        var friendly = new Error(copy[err && err.name || ''] || copy._default);
+        if (err && err.name) friendly.name = err.name;
+        friendly.cause = err;
+        return friendly;
+    }
+
+    // Strip spec URLs / "See: http…" fragments out of a message string so a raw
+    // browser error can never surface a W3C link in the UI. Non-strings pass
+    // through untouched.
+    function stripUrls(msg) {
+        if (typeof msg !== 'string') return msg;
+        return msg
+            .replace(/\s*\(?See:?\s+https?:\/\/[^\s)]+\)?/gi, '')
+            .replace(/https?:\/\/[^\s)]+/gi, '')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+    }
+
     function getError(err) {
         if (!err) return 'An error occurred';
-        if (typeof err === 'string') return err;
-        return err.message || err.error ||
+        if (typeof err === 'string') return stripUrls(err) || 'An error occurred';
+        // Backstop: any raw browser credential error that escaped a mapping
+        // layer is mapped here rather than leaking its spec-URL message.
+        if (typeof DOMException !== 'undefined' && err instanceof DOMException) {
+            return WEBAUTHN_LOGIN_COPY[err.name] || WEBAUTHN_LOGIN_COPY._default;
+        }
+        var msg = err.message || err.error ||
             (Array.isArray(err.errors) && err.errors[0] && err.errors[0].message) ||
-            'An error occurred';
+            '';
+        return stripUrls(msg) || 'An error occurred';
     }
 
     // -------------------------------------------------------------------------
@@ -435,6 +490,7 @@
                     }
 
                     return navigator.credentials.get({ publicKey: publicKey })
+                        .catch(function (err) { throw friendlyWebAuthnError(err, WEBAUTHN_LOGIN_COPY); })
                         .then(function (credential) {
                             if (!credential) throw new Error('No credential received from authenticator');
 
@@ -488,6 +544,7 @@
 
                     // Step 2: Browser authenticator prompt
                     return navigator.credentials.get({ publicKey: publicKey })
+                        .catch(function (err) { throw friendlyWebAuthnError(err, WEBAUTHN_LOGIN_COPY); })
                         .then(function (credential) {
                             if (!credential) throw new Error('No credential received from authenticator');
 
@@ -547,6 +604,7 @@
                     }
 
                     return navigator.credentials.create({ publicKey: publicKey })
+                        .catch(function (err) { throw friendlyWebAuthnError(err, WEBAUTHN_ENROLL_COPY); })
                         .then(function (credential) {
                             if (!credential) {
                                 throw new Error('No credential created by authenticator');
@@ -854,7 +912,15 @@
          * @param {any} err  - the caught error (object, string, etc.)
          * @returns {string}
          */
-        getError: getError
+        getError: getError,
+
+        /**
+         * Strip URLs and spec links (e.g. a raw WebAuthn "See: https://…"
+         * message) out of user-facing error text.
+         * @param {string} msg
+         * @returns {string}
+         */
+        sanitizeMessage: stripUrls
 
     };
 

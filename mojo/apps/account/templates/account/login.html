@@ -299,7 +299,20 @@
         var btn = $("btn-passkey"); m.setLoading(btn, true); m.hideMessage();
         MojoAuth.loginWithPasskeyDiscoverable()
             .then(m.onAuthSuccess)
-            .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Passkey authentication failed.", "error"); });
+            .catch(function (err) {
+                m.setLoading(btn, false);
+                // Offer the SMS-code fallback when this group has an SMS view
+                // that isn't already the active one (passkey-only groups have
+                // no sms view → message only; passwordless-primary configs
+                // where the passkey button lives on the sms view → no
+                // self-referential action).
+                var action = null;
+                if (views.sms && !views.sms.classList.contains("is-active")) {
+                    action = { label: "Sign in with a text code instead",
+                               onClick: function () { showView("sms"); } };
+                }
+                m.showMessage(MojoAuth.getError(err) || "Passkey sign-in failed.", "error", action);
+            });
     });
 
     on("link-forgot", "click", function () { showView("forgot"); });

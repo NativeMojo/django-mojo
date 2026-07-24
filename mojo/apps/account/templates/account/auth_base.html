@@ -104,10 +104,27 @@
 
         window._mat = {
             $: $,
-            showMessage: function (text, type) {
+            showMessage: function (text, type, action) {
                 var el = $("mat-message");
+                // Error-only sanitize backstop: strip any spec URL / raw
+                // WebAuthn message that reached the render layer. Guarded so
+                // _mat still works if MojoAuth failed to load; only "error"
+                // is stripped so intentional URLs in info/success copy survive.
+                if ((type || "") === "error" && window.MojoAuth && MojoAuth.sanitizeMessage) {
+                    text = MojoAuth.sanitizeMessage(text) || "Something went wrong. Please try again.";
+                }
+                // textContent both sets the message and wipes any prior action
+                // button, so repeated calls never stack duplicate actions.
                 el.textContent = text;
                 el.className = "mat-message is-visible is-" + (type || "info");
+                if (action && action.label && action.onClick) {
+                    var actionBtn = document.createElement("button");
+                    actionBtn.type = "button";
+                    actionBtn.className = "mat-message-action";
+                    actionBtn.textContent = action.label;
+                    actionBtn.addEventListener("click", action.onClick);
+                    el.appendChild(actionBtn);
+                }
             },
             hideMessage: function () {
                 var el = $("mat-message");

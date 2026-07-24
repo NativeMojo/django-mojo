@@ -158,6 +158,43 @@ and runs the WebAuthn registration round-trip.
 
 ---
 
+## Passkey Error Handling
+
+Passkey sign-in (`MojoAuth.loginWithPasskeyDiscoverable()` /
+`loginWithPasskey()`) and enrollment (`MojoAuth.registerPasskey()`) reject with
+a **plain `Error`** carrying user-safe, plain-language `message` text — never
+the browser's raw `DOMException`. WebAuthn collapses "no passkey found", "user
+cancelled", and "timed out" into a single `NotAllowedError` whose native
+message includes a W3C spec URL; the library maps all of that to friendly copy
+before rejecting, so you can surface `err.message` directly.
+
+The rejection still preserves diagnostics:
+
+- `err.message` — friendly, display-ready copy (sign-in vs enrollment flavored).
+- `err.name` — the original `DOMException` name (`NotAllowedError`,
+  `SecurityError`, `NotSupportedError`, `InvalidStateError`, …), so you can
+  still branch on it.
+- `err.cause` — the original `DOMException`, untouched.
+- The original error is also `console.error`-logged (`WebAuthn error:`) for
+  field debugging.
+
+Server-side failures from the begin/complete round-trip (method disabled,
+rate-limit, 4xx/5xx) are **not** remapped — only the browser prompt is wrapped —
+so a backend error still reaches you in the backend's own error shape.
+
+Two helpers back this and are safe to reuse in a custom UI:
+
+- `MojoAuth.getError(err)` — extract a display string from any caught error (an
+  `Error`, a string, a backend `{error}` / `{errors:[…]}` shape, or a raw
+  `DOMException` as a backstop). Strips spec URLs from the result.
+- `MojoAuth.sanitizeMessage(text)` — strip URLs and `See: https://…` fragments
+  out of an arbitrary message string (non-strings pass through unchanged). The
+  hosted pages also run this at the render layer on every error-type message,
+  and offer an inline "Sign in with a text code instead" fallback when a passkey
+  sign-in fails and the group also offers SMS login.
+
+---
+
 ## OAuth Flow
 
 1. User clicks "Google", "Apple", or "GitHub" button

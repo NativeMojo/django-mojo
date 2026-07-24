@@ -1,5 +1,34 @@
 ## v1.2.52 - July 23, 2026
 
+**fix** — **Passkey sign-in leaked the browser's raw WebAuthn error — including a W3C spec URL — to users, with no plain-language message and no way forward (maestro item 75).**
+`mojo-auth.js` invoked `navigator.credentials.get()` (both
+`loginWithPasskeyDiscoverable` and `loginWithPasskey`) and
+`navigator.credentials.create()` (`registerPasskey`) with only a `.then()`, so a
+rejected browser prompt propagated the raw `DOMException`, and `getError()` was a
+naive passthrough that rendered its message verbatim. On a cross-device QR
+sign-in with a phone that has no passkey for the account (a common first try),
+the page showed `The operation either timed out or was not allowed. See:
+https://www.w3.org/TR/webauthn-2/…` instead of a human message — engine-wide, so
+every white-label brand was affected. The three browser-prompt promises now
+`.catch` and remap the rejection through a shared `friendlyWebAuthnError()`: one
+plain-language message covering the no-passkey / cancelled / timed-out cases
+WebAuthn deliberately collapses into a single `NotAllowedError`, with
+enrollment-flavored copy for `create()`. The mapper rejects with a plain `Error`
+(friendly `message`, original `DOMException` `name` preserved, raw error on
+`.cause`) and `console.error`-logs the real error for QA. The `.catch` wraps only
+the browser prompt, so server errors from the begin/complete round-trip are not
+swallowed. Defense in depth: `getError()` now strips spec URLs (new `stripUrls`,
+exported as `MojoAuth.sanitizeMessage`) and maps any stray raw `DOMException`,
+and `auth_base.html`'s `showMessage` sanitizes every error-type message at the
+render layer — covering the Google/Apple/GitHub/credentials/magic error paths
+and every page that extends the base. On the hosted login page a passkey failure
+now also offers an inline "Sign in with a text code instead" recovery action
+that switches to the SMS view when the group offers SMS login (and the SMS view
+isn't already active). The fix is library-level, so custom front-ends pick up
+mapped rejections on the next release. Regression tests assert every
+browser-prompt call site is mapped, the URL-stripping + `DOMException` backstop,
+and the rendered recovery action / sanitize backstop / theme style.
+
 ## v1.2.52 - July 23, 2026
 
 
