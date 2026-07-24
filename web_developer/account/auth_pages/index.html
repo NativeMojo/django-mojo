@@ -3822,6 +3822,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#passkey-error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Passkey Error Handling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#oauth-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4111,6 +4122,39 @@ and runs the WebAuthn registration round-trip.</p>
    register page redirects here
 3. Can also be linked standalone from account settings</p>
 <p><strong>URL parameters:</strong> same as <code>/auth</code> (<code>group_uuid</code>, <code>redirect</code>, <code>back</code>).</p>
+<hr />
+<h2 id="passkey-error-handling">Passkey Error Handling<a class="headerlink" href="#passkey-error-handling" title="Permanent link">&para;</a></h2>
+<p>Passkey sign-in (<code>MojoAuth.loginWithPasskeyDiscoverable()</code> /
+<code>loginWithPasskey()</code>) and enrollment (<code>MojoAuth.registerPasskey()</code>) reject with
+a <strong>plain <code>Error</code></strong> carrying user-safe, plain-language <code>message</code> text — never
+the browser's raw <code>DOMException</code>. WebAuthn collapses "no passkey found", "user
+cancelled", and "timed out" into a single <code>NotAllowedError</code> whose native
+message includes a W3C spec URL; the library maps all of that to friendly copy
+before rejecting, so you can surface <code>err.message</code> directly.</p>
+<p>The rejection still preserves diagnostics:</p>
+<ul>
+<li><code>err.message</code> — friendly, display-ready copy (sign-in vs enrollment flavored).</li>
+<li><code>err.name</code> — the original <code>DOMException</code> name (<code>NotAllowedError</code>,
+  <code>SecurityError</code>, <code>NotSupportedError</code>, <code>InvalidStateError</code>, …), so you can
+  still branch on it.</li>
+<li><code>err.cause</code> — the original <code>DOMException</code>, untouched.</li>
+<li>The original error is also <code>console.error</code>-logged (<code>WebAuthn error:</code>) for
+  field debugging.</li>
+</ul>
+<p>Server-side failures from the begin/complete round-trip (method disabled,
+rate-limit, 4xx/5xx) are <strong>not</strong> remapped — only the browser prompt is wrapped —
+so a backend error still reaches you in the backend's own error shape.</p>
+<p>Two helpers back this and are safe to reuse in a custom UI:</p>
+<ul>
+<li><code>MojoAuth.getError(err)</code> — extract a display string from any caught error (an
+  <code>Error</code>, a string, a backend <code>{error}</code> / <code>{errors:[…]}</code> shape, or a raw
+  <code>DOMException</code> as a backstop). Strips spec URLs from the result.</li>
+<li><code>MojoAuth.sanitizeMessage(text)</code> — strip URLs and <code>See: https://…</code> fragments
+  out of an arbitrary message string (non-strings pass through unchanged). The
+  hosted pages also run this at the render layer on every error-type message,
+  and offer an inline "Sign in with a text code instead" fallback when a passkey
+  sign-in fails and the group also offers SMS login.</li>
+</ul>
 <hr />
 <h2 id="oauth-flow">OAuth Flow<a class="headerlink" href="#oauth-flow" title="Permanent link">&para;</a></h2>
 <ol>

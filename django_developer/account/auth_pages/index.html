@@ -4418,10 +4418,27 @@ guarantee depends on the uniform response.</p>
 divider.
 When <code>password</code> is <strong>not</strong> a method but <code>sms</code> is (a passwordless config), the
 page opens directly on the SMS phone-entry form, with passkey/OAuth as
-secondary buttons — so SMS login is never buried.
-- Session check on load (auto-redirect if already authenticated)
-- OAuth callback handling (<code>?code=...&amp;state=...</code>)
-- Magic link token handling (<code>?token=ml:...</code>)</p>
+secondary buttons — so SMS login is never buried.</p>
+<p><strong>Passkey failure UX.</strong> WebAuthn collapses "no passkey on this device", "user
+cancelled", and "timed out" into a single <code>NotAllowedError</code> (a privacy
+guarantee), and the browser's raw <code>DOMException</code> message carries a W3C spec
+URL. <code>mojo-auth.js</code> maps every passkey rejection to one plain-language message
+before it reaches the page (the real error is still <code>console.error</code>-logged for
+QA), so a spec link or stack-trace string never renders. As defense in depth,
+<code>auth_base.html</code>'s <code>showMessage</code> helper runs <code>MojoAuth.sanitizeMessage()</code> on
+every <strong>error</strong>-type message at the render layer — so any page extending the
+base (login, register, contact, passkey enrollment) strips a stray URL even if
+an upstream error path was missed. On the hosted login page a passkey failure
+also offers an inline <strong>"Sign in with a text code instead"</strong> recovery action
+that switches to the SMS view — shown only when the group offers SMS login and
+the SMS view isn't already active. See
+<a href="../../../web_developer/account/auth_pages/">web_developer/account/auth_pages.md</a>
+for the exact rejection contract consumed by custom front-ends.</p>
+<ul>
+<li>Session check on load (auto-redirect if already authenticated)</li>
+<li>OAuth callback handling (<code>?code=...&amp;state=...</code>)</li>
+<li>Magic link token handling (<code>?token=ml:...</code>)</li>
+</ul>
 <h3 id="registration-page-register">Registration page (<code>/register</code>)<a class="headerlink" href="#registration-page-register" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Fields and identity field driven by <code>registration.fields</code> / <code>registration.identity_field</code></li>
@@ -4473,6 +4490,11 @@ attribute. Both mechanisms require the page to be served over HTTPS.</p>
 localStorage and runs the WebAuthn registration round-trip client-side. Used
 post-registration (when <code>passkey_prompt != off</code>) and standalone from account
 settings.</p>
+<p>Enrollment rejections are mapped just like sign-in, but with
+enrollment-flavored copy (e.g. <code>InvalidStateError</code> → "This device may already
+have a passkey for this account.", cancel/timeout → "Passkey setup was
+cancelled or timed out. You can try again.") — the raw <code>DOMException</code> from
+<code>navigator.credentials.create()</code> never renders here either.</p>
 <h3 id="when-methods-are-disabled">When methods are disabled<a class="headerlink" href="#when-methods-are-disabled" title="Permanent link">&para;</a></h3>
 <p>Methods absent from <code>login.methods</code> / <code>registration.methods</code> are excluded from
 the rendered HTML server-side. When all OAuth providers and passkeys are
