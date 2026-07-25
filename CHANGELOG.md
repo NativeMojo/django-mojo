@@ -1,5 +1,36 @@
 ## v1.2.52 - July 23, 2026
 
+**fix** — **`RestMeta.LIST_DEFAULT_FILTERS` was declared on 11 models but never read by the list query path — the property did nothing (maestro item 389).**
+`on_rest_list()` built its queryset, applied group scoping, request-param
+filters, date-range and sort — and never once looked at
+`LIST_DEFAULT_FILTERS`. `git log -S` confirms the consumer was never written,
+not removed, even though `README.md` advertises the property in its headline
+"define a model" example. Surfaced downstream: the maestro notification bell
+listed `/api/account/notification` expecting only unread rows (the model's own
+declaration) and got read + unread, so "mark all read" appeared broken.
+`on_rest_list_default_filters()` now layers the declared filters in as a
+baseline the request can override — a request param naming the same **base
+field** replaces that default (including the exclusion forms `__not` /
+`__not_in`, which land in `excludes` rather than `filters`; a key-level check
+would have AND-ed `?is_unread__not=true` against the default into a
+guaranteed-empty list), and `?_no_defaults=1` drops every default for admin
+surfaces that must see the full set. Defaults AND onto the permission-scoped
+queryset, so they can only narrow a list, never widen it; detail-by-pk, save
+and delete are untouched, and the `_mode` aggregation surface inherits them so
+a count always matches the list it describes.
+**Behavior change, scoped deliberately:** with the property now live, all 11
+declarations were audited and 10 removed — each sat on the list endpoint that
+*is* the management surface for the flag it would hide (`User.is_active` and
+`Group.is_active` hide the very rows an admin needs to find and reactivate),
+filtered a flag nothing in `mojo/` ever sets `False` (`Passkey.is_enabled`,
+`GroupMember.is_active`, `RegisteredDevice.is_active`), or was outright wrong
+(`NotificationDelivery` defaulted to `status="sent"`, hiding both `delivered`
+and `failed` rows from a log that exists to surface them). Only
+`account.Notification` `{"is_unread": True}` survives, so
+**`/api/account/notification` is the single endpoint whose wire behavior
+changes** — to what its model already declared. Tests in
+`tests/test_models/list_default_filters.py`.
+
 **fix** — **The hosted login page double-fired OAuth completion, POSTing the single-use authorization code twice — the second time to the `google` endpoint for Apple/GitHub sign-ins (maestro item 315).**
 `login.html` carried its own `?code&state` callback handler that duplicated the
 generic one already in `auth_base.html` (inherited by every hosted auth page).

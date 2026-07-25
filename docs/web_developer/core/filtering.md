@@ -46,6 +46,30 @@ GET /api/myapp/book?author__id=5
 GET /api/myapp/book?author__username=alice
 ```
 
+## Default Filters
+
+Some endpoints filter their list by default, before your parameters are
+applied. `GET /api/account/notification` returns only **unread** notifications,
+for example.
+
+A default is a baseline you can override two ways:
+
+```
+GET /api/account/notification?is_unread=false     # name the field yourself
+GET /api/account/notification?_no_defaults=1      # drop every default
+```
+
+Naming the field in any form replaces the default for that field — the
+operator suffixes count too, so `?is_unread__not=true` and
+`?is_unread__in=true,false` both override it. `_no_defaults=1` clears all of
+them at once.
+
+Defaults never widen what you can see: they narrow an already
+permission-scoped list, so overriding one still only returns rows you have
+access to. They apply to list requests only — fetching a single record by id
+is never filtered. `_mode` aggregations use the same filtered set, so a count
+matches the list it describes.
+
 ## Date Range Filter
 
 ```

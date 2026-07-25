@@ -8,8 +8,9 @@ date-range filters applied — this module never re-implements any of that.
 
 Public entry point: `on_rest_list_aggregate(cls, request, queryset)`.
 
-Reserved query-param prefix: every key starting with `_` is consumed by
-the aggregation layer; downstream apps must not invent their own.
+Reserved query-param prefix: every key starting with `_` is framework-owned
+(this aggregation layer, plus `_no_defaults` on the list-default-filter path);
+downstream apps must not invent their own.
 """
 import datetime
 import json

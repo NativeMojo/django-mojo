@@ -58,6 +58,10 @@ class Article(models.Model, MojoModel):
         }
 ```
 
+`LIST_DEFAULT_FILTERS` is a baseline, not a cage — a caller naming the same
+field (`?is_published=false`) or passing `?_no_defaults=1` sees the rest. See
+[Default list filters](docs/django_developer/core/mojo_model.md#default-list-filters).
+
 **2. Expose it as a REST endpoint:**
 
 ```python

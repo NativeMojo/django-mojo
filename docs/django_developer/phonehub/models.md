@@ -43,7 +43,6 @@ VIEW_PERMS = ["view_phone_numbers", "manage_phone_numbers", "manage_users"]
 SAVE_PERMS = ["manage_phone_numbers", "manage_users"]
 DELETE_PERMS = ["manage_phone_numbers"]
 SEARCH_FIELDS = ["phone_number", "carrier", "registered_owner"]
-LIST_DEFAULT_FILTERS = {"is_valid": True}
 ```
 
 ### Graphs
@@ -200,7 +199,6 @@ VIEW_PERMS = ["manage_phone_config", "manage_groups"]
 SAVE_PERMS = ["manage_phone_config", "manage_groups"]
 DELETE_PERMS = ["manage_phone_config", "manage_groups"]
 SEARCH_FIELDS = ["name"]
-LIST_DEFAULT_FILTERS = {"is_active": True}
 ```
 
 ### Graphs

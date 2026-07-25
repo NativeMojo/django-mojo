@@ -59,6 +59,7 @@ class Book(models.Model, MojoModel):
 | `CAN_UPDATE` | bool | `True` | Set `False` to block PUT/POST against an existing instance (deprecated alias: `CAN_SAVE`) |
 | `CAN_BATCH` | bool | `False` | Allow batch create/update via `batched` param |
 | `SEARCH_FIELDS` | list | all CharField/TextField | Fields searched by `?search=` param |
+| `LIST_DEFAULT_FILTERS` | dict | `{}` | Baseline filters applied to **list** requests only, overridable per field by the caller (see [Default list filters](#default-list-filters)) |
 | `GRAPHS` | dict | `{}` | Serialization shapes (see [Graphs](graphs.md)) |
 | `NO_SAVE_FIELDS` | list | `["id","pk","created","uuid"]` | Fields ignored on save |
 | `NO_SHOW_FIELDS` | list | `[]` | Fields never included in responses |
@@ -132,6 +133,41 @@ Pagination request params (all optional):
 ```
 GET /api/myapp/book?start=20&size=10&graph=list
 ```
+
+### Default list filters
+
+`RestMeta.LIST_DEFAULT_FILTERS` narrows a list endpoint by default:
+
+```python
+class RestMeta:
+    LIST_DEFAULT_FILTERS = {"is_published": True}
+```
+
+It is a **baseline, not a cage**. Precedence, highest first:
+
+1. **`?_no_defaults=1`** — drops every default for that request. For admin
+   surfaces that must see the full set.
+2. **A request param naming the same base field** — replaces the default for
+   that field. `?is_published=false`, `?is_published__not=true`,
+   `?is_published__in=true,false` and `?author.id=3` all suppress a default
+   keyed on that field. Suppression is per *field*, not per key, so the
+   exclusion forms (`__not` / `__not_in`) count too.
+3. **The declared default** — applied when the request says nothing about
+   that field.
+
+Defaults AND onto the permission-scoped queryset, so they can only narrow a
+list, never widen it. They apply to **list requests only** — `GET /api/x/<pk>`
+is unaffected, and so are save and delete. The `_mode` aggregation surface
+reads the same filtered queryset, so a count always matches the list it
+describes.
+
+**When to declare one.** Only when the hidden rows are noise for the
+endpoint's primary consumer *and* the hidden state is managed somewhere else.
+Never on a list that is itself the management surface for the flag being
+filtered — hiding disabled users from `/api/user` is how an admin loses the
+ability to find one and re-enable it. Framework-wide there is exactly one
+declaration, `account.Notification` (`{"is_unread": True}`): read
+notifications are noise for the bell, and `mark_read` is a by-pk POST action.
 
 ### Aggregation modes
 
