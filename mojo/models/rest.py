@@ -1128,6 +1128,10 @@ class MojoModel:
         - __not_in filters: ?category__not_in=ossec,system (exclude multiple)
         - __isnull filters: ?category__isnull=true (NULL check)
 
+        Any ``RestMeta.LIST_DEFAULT_FILTERS`` the model declares are layered in
+        first as a baseline the request can override — see
+        ``on_rest_list_default_filters``.
+
         Args:
             request: Django HTTP request object.
             queryset: The queryset to filter.
@@ -1136,10 +1140,56 @@ class MojoModel:
             The filtered queryset.
         """
         filters, excludes = cls.build_rest_filters(request, request.QUERY_PARAMS)
+        queryset = cls.on_rest_list_default_filters(request, queryset, filters, excludes)
         queryset = cls.on_rest_list_search(request, queryset)
         queryset = queryset.filter(**filters)
         if excludes:
             queryset = queryset.exclude(**excludes)
+        return queryset
+
+    @classmethod
+    def on_rest_list_default_filters(cls, request, queryset, filters, excludes):
+        """
+        Apply RestMeta.LIST_DEFAULT_FILTERS as a baseline the request can override.
+
+        The declared filters narrow a list endpoint by default — a notification
+        list showing only unread rows, say. They are a baseline, not a cage:
+
+        - A request param naming the same BASE FIELD replaces that default
+          entirely. ``?is_unread=false``, ``?is_unread__not=true``,
+          ``?is_unread__in=true,false`` and ``?user.id=3`` all suppress a
+          default keyed on that field. Suppression is per field rather than per
+          key, and covers exclusion filters as well as inclusion ones — a
+          key-level check would leave an ``is_unread=True`` default sitting in
+          ``filters`` while the caller's ``__not`` landed in ``excludes``, and
+          AND the two into a guaranteed-empty list.
+        - ``?_no_defaults=1`` drops every default for the request, for admin
+          surfaces that must see the full set. Read via ``get_typed(..., bool)``
+          because the raw query-param value ``"0"`` is a truthy string.
+
+        Defaults AND onto whatever queryset the caller supplied, so the
+        permission-scoped querysets ``on_rest_handle_list`` passes in keep their
+        scoping — a default can only narrow a list, never widen it.
+
+        Args:
+            request: Django HTTP request object.
+            queryset: The queryset to narrow.
+            filters: Inclusion filters already parsed from the request.
+            excludes: Exclusion filters already parsed from the request.
+
+        Returns:
+            The queryset, narrowed by whichever defaults still apply.
+        """
+        defaults = cls.get_rest_meta_prop("LIST_DEFAULT_FILTERS", None)
+        if not defaults:
+            return queryset
+        if request.DATA.get_typed("_no_defaults", False, bool):
+            return queryset
+        named = {key.split("__")[0] for key in filters}
+        named.update(key.split("__")[0] for key in excludes)
+        applied = {k: v for k, v in defaults.items() if k.split("__")[0] not in named}
+        if applied:
+            queryset = queryset.filter(**applied)
         return queryset
 
     @classmethod
