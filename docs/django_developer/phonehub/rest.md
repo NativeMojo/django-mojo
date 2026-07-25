@@ -15,7 +15,7 @@ def on_phone_number(request, pk=None):
 
 | Method | Path | Action |
 |---|---|---|
-| GET | `/api/phonehub/number` | List phone numbers (filtered to `is_valid=True` by default) |
+| GET | `/api/phonehub/number` | List phone numbers |
 | GET | `/api/phonehub/number/<id>` | Get a single phone number |
 | POST | `/api/phonehub/number` | Create a phone number record |
 | POST/PUT | `/api/phonehub/number/<id>` | Update a phone number record |
@@ -193,7 +193,7 @@ def on_phone_config(request, pk=None):
 
 | Method | Path | Action |
 |---|---|---|
-| GET | `/api/phonehub/config` | List configs (filtered to `is_active=True` by default) |
+| GET | `/api/phonehub/config` | List configs |
 | GET | `/api/phonehub/config/<id>` | Get a single config |
 | POST | `/api/phonehub/config` | Create a config |
 | POST/PUT | `/api/phonehub/config/<id>` | Update a config |

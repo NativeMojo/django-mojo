@@ -225,7 +225,8 @@ Sends a test notification to all of the authenticated user's registered devices.
 
 **GET** `/api/account/devices/push/deliveries`
 
-Returns sent delivery records for the authenticated user. Filtered to `status=sent` by default.
+Returns delivery records for the authenticated user, across all statuses
+(`sent`, `delivered`, `failed`). Filter with `?status=failed`, etc.
 
 ```json
 {

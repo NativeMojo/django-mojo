@@ -306,9 +306,9 @@ All management endpoints require authentication.
 
 **GET** `/api/account/passkeys`
 
-Returns all **enabled** passkeys for the authenticated user across all portals.
-Disabled passkeys are excluded from the list by default — use
-`GET /api/account/passkeys?is_enabled=false` to include them.
+Returns all passkeys (enabled and disabled) for the authenticated user across
+all portals. Filter to one state with `?is_enabled=true` or
+`?is_enabled=false`.
 
 ```json
 {
