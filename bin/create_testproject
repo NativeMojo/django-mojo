@@ -114,6 +114,7 @@ INSTALLED_APPS = [
     "mojo.apps.fileman",
     "mojo.apps.incident",
     "mojo.apps.aws",
+    "mojo.apps.dnsman",
     "mojo.apps.jobs",
     "mojo.apps.docit",
     "mojo.apps.realtime",
