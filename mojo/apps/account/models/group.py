@@ -51,9 +51,6 @@ class Group(MojoSecrets, MojoModel):
         PROTECTED_JSON_PERMS = ["admin_compliance", "admin_verify"]
         NO_SAVE_FIELDS = ["id", "pk", "created"]
         POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate']
-        LIST_DEFAULT_FILTERS = {
-            "is_active": True
-        }
         GRAPHS = {
             "simple": {
                 "extra": ["timezone", "short_name", "thumbnail"],

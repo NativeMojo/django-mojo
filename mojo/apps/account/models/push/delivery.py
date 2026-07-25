@@ -46,7 +46,6 @@ class NotificationDelivery(models.Model, MojoModel):
         VIEW_PERMS = ["view_notifications", "manage_notifications", "comms", "owner", "manage_users"]
         SAVE_PERMS = ["manage_notifications", "comms"]
         SEARCH_FIELDS = ["title", "category"]
-        LIST_DEFAULT_FILTERS = {"status": "sent"}
         GRAPHS = {
             "basic": {
                 "fields": ["id", "title", "category", "status", "sent_at", "created"]

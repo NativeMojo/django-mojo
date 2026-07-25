@@ -42,7 +42,6 @@ class NotificationTemplate(models.Model, MojoModel):
         VIEW_PERMS = ["manage_notifications", "manage_groups", "comms", "owner", "manage_users"]
         SAVE_PERMS = ["manage_notifications", "manage_groups", "comms"]
         SEARCH_FIELDS = ["name", "category"]
-        LIST_DEFAULT_FILTERS = {"is_active": True}
         GRAPHS = {
             "basic": {
                 "fields": ["id", "name", "category", "priority", "is_active"]

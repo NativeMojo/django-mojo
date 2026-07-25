@@ -92,7 +92,6 @@ class SMS(models.Model, MojoModel):
         SAVE_PERMS = ["manage_sms", "comms", "manage_notifications"]  # Creating SMS via API requires manage permission
         DELETE_PERMS = ["manage_sms", "manage_notifications"]
         SEARCH_FIELDS = ["to_number", "from_number", "body"]
-        LIST_DEFAULT_FILTERS = {}
         GRAPHS = {
             "basic": {
                 "fields": ["id", "direction", "from_number", "to_number",

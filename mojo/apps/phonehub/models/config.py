@@ -64,7 +64,6 @@ class PhoneConfig(MojoSecrets, MojoModel):
         SAVE_PERMS = ["manage_phone_config", "manage_groups", "comms"]
         DELETE_PERMS = ["manage_phone_config", "manage_groups"]
         SEARCH_FIELDS = ["name"]
-        LIST_DEFAULT_FILTERS = {"is_active": True}
         # Per-instance actions invoked by POST /api/phonehub/config/<id>
         # with a body containing the action key (e.g. {"test_connection": 1}).
         # The standard auto-setter pattern handles secret writes — POST

@@ -48,7 +48,6 @@ class RegisteredDevice(models.Model, MojoModel):
         # notifications to an attacker-controlled token.
         NO_SAVE_FIELDS = ["user"]
         SEARCH_FIELDS = ["device_name", "device_id"]
-        LIST_DEFAULT_FILTERS = {"is_active": True}
         GRAPHS = {
             "basic": {
                 "fields": ["id", "device_id", "platform", "device_name", "push_enabled", "last_seen"]

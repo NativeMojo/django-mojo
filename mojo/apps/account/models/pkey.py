@@ -62,7 +62,6 @@ class Passkey(MojoModel, models.Model):
             "last_used",
             "user",
         ]
-        LIST_DEFAULT_FILTERS = {"is_enabled": True}
         SEARCH_FIELDS = ["friendly_name", "credential_id"]
         GRAPHS = {
             "basic": {

@@ -160,9 +160,6 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         VIEW_PERMS = ["view_users", "manage_users", "users", "owner"]
         SAVE_PERMS = ["manage_users", "users", "owner"]
         OWNER_FIELD = "self"
-        LIST_DEFAULT_FILTERS = {
-            "is_active": True
-        }
         UNIQUE_LOOKUP = ["username", "email"]
         GRAPHS = {
             "basic": {

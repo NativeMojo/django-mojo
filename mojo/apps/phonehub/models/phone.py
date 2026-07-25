@@ -71,7 +71,6 @@ class PhoneNumber(models.Model, MojoModel):
         SAVE_PERMS = ["manage_phone_numbers", "comms", "manage_users"]
         DELETE_PERMS = ["manage_phone_numbers"]
         SEARCH_FIELDS = ["phone_number", "carrier", "registered_owner"]
-        LIST_DEFAULT_FILTERS = {"is_valid": True}
         GRAPHS = {
             "basic": {
 

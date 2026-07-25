@@ -35,7 +35,6 @@ class PushConfig(MojoSecrets, MojoModel):
         VIEW_PERMS = ["manage_push_config", "manage_groups", "comms"]
         SAVE_PERMS = ["manage_push_config", "manage_groups", "comms"]
         SEARCH_FIELDS = ["name"]
-        LIST_DEFAULT_FILTERS = {"is_active": True}
         GRAPHS = {
             "basic": {
                 "fields": ["id", "name", "test_mode", "default_sound", "is_active", "fcm_project_id"]
