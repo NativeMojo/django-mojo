@@ -150,7 +150,11 @@ from this, not from probing `registrar/quote` and reading the refusal.
 is PII and is never returned here or anywhere else. `acme.staging` matters
 beyond purchasing: dnsman defaults to Let's Encrypt **staging**, and a
 staging-issued certificate is **not publicly trusted** — do not render a
-staging cert as "active" without surfacing that.
+staging cert as "active" without surfacing that. `search_batch_limit` mirrors
+`DNSMAN_SEARCH_BATCH_LIMIT`, the cap enforced on batch `registrar/search`
+calls. `suggestions_enabled` is always `true` today — there is no kill switch
+for it; the flag exists purely so a client can feature-detect batch search
+and `registrar/suggest` against an older backend that predates them.
 
 ## Buying a domain
 
@@ -180,6 +184,9 @@ object above:
 ```json
 { "domains": ["nativemojo.com", "nativemojo.dev"] }
 ```
+- Send one shape or the other. Mixing them — `tlds` together with `domains`,
+  or `domain` together with `domains` — is refused with `400` before
+  anything is checked.
 - The deduped list is capped at `config.search_batch_limit` (default 10);
   over the cap is a `400` and nothing is checked.
 - With `tlds` the base may carry its own TLD or not — `"nativemojo.com"`
@@ -202,10 +209,12 @@ registrar does not sell that TLD at all.
 ```
 Alternate-name ideas from the registrar, answered as `{ "results": [...] }`
 with rows in exactly the search shape — render one grid for both. `count`
-is clamped to 25 and `only_available` defaults `true`. The registry returns
-no price on suggestions, so `price` is filled from the server's per-TLD
-price cache; a TLD the registrar does not sell keeps its row with
-`tld_supported: false` and `price: null` rather than being dropped.
+defaults to `10` and is clamped to the range `1`–`25` rather than rejected
+(a non-numeric `count` is still a clean `400`); `only_available` defaults
+`true`. The registry returns no price on suggestions, so `price` is filled
+from the server's per-TLD price cache; a TLD the registrar does not sell
+keeps its row with `tld_supported: false` and `price: null` rather than
+being dropped.
 Requires `view_dns`, like search.
 
 ### `POST /api/dnsman/registrar/quote` → step 1 of 2
