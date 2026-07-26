@@ -107,6 +107,22 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `DEACTIVATE_TOKEN_TTL`
 
+### DNSMAN
+
+- `DNSMAN_ACME_CONTACT_EMAIL`
+- `DNSMAN_ACME_DIRECTORY_URL`
+- `DNSMAN_ALLOWED_RECORD_TYPES`
+- `DNSMAN_CERT_RENEW_DAYS`
+- `DNSMAN_CERT_SYNC_CHANNEL`
+- `DNSMAN_DNS_PROPAGATION_TIMEOUT`
+- `DNSMAN_MAX_DOMAIN_PRICE`
+- `DNSMAN_PURCHASE_ENABLED` — global kill switch for any real-money registrar
+  call (default `False`). Defaults and meanings for the whole family:
+  [dnsman README settings table](../dnsman/README.md#settings).
+- `DNSMAN_QUOTE_TTL_MINUTES`
+- `DNSMAN_REGISTRANT_CONTACT`
+- `DNSMAN_SEARCH_BATCH_LIMIT`
+
 ### DUID
 
 - `DUID_HEADER`
@@ -386,6 +402,12 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   a single platform-global endpoint, decorate it with
   `@md.requires_global_perms(...)` instead (see
   [permissions.md](../core/permissions.md#global-vs-group-scoped-permission-checks)).
+
+### ROUTE53
+
+- `ROUTE53_PRICE_CACHE_HOURS` — per-TLD registrar price cache in the route53
+  helper (default `24`; `<= 0` disables). The quote/money path always
+  bypasses it. See [Registrar.md](../dnsman/Registrar.md#the-price-cache).
 
 ### SECRET
 
