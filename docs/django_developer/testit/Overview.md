@@ -27,7 +27,7 @@ tests/
     __init__.py
     totp.py
     passkeys.py
-  test_oauth/        # OAuth flows — calls server_settings()     (serial)
+  test_oauth/        # OAuth flows — calls server_settings()   (parallel)
     __init__.py
     oauth.py
     oauth_apple.py
@@ -185,12 +185,16 @@ TESTIT = {
     "requires_apps": ["mojo.apps.account"],  # skip if app is not installed
 }
 
-# tests/test_oauth/__init__.py
-# NOTE: oauth.py calls th.server_settings(), which no longer requires serial —
-# testit/server_lock.py keeps its restarts away from open websockets on its own.
+# tests/test_job_engine/__init__.py  — serial for a reason OTHER than server_settings()
+TESTIT = {
+    "requires_apps": ["mojo.apps.jobs"],
+    "serial": True,                          # JobEngine/Scheduler use signal handlers (main thread only)
+}
+
+# tests/test_oauth/__init__.py  — calls th.server_settings() but stays parallel;
+# testit/server_lock.py keeps that restart away from open websockets on its own.
 TESTIT = {
     "requires_apps": ["mojo.apps.account"],
-    "serial": True,                          # do not run this module in parallel
     "server_settings": {},                   # dict of Django settings to apply before the module starts
 }
 

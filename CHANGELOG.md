@@ -19,7 +19,7 @@ on the default graph is tracked as maestro item 424.
 **fix** — **shortlink expiry is bounded; absurd and negative values return 400 (maestro item 296).**
 `expire_days` / `expire_hours` fed unbounded arithmetic into `timedelta`, so a
 large enough value raised `OverflowError` and surfaced as a **500** on every
-creation path. New `ShortLink.MAX_EXPIRE_TOTAL_HOURS` (876000, about 100 years)
+creation path. New module constant `MAX_EXPIRE_TOTAL_HOURS` (876000, about 100 years)
 bounds both fields through one shared validator, checked **per component and on
 the sum** — `expire_days=1, expire_hours=-24` sums to zero and would otherwise
 have collapsed into a permanent link. `0/0` still means never-expires, and the

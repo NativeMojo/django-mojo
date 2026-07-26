@@ -164,7 +164,9 @@ Configure a deployment to send SMS via another django-mojo instance:
        name="downstream-mojo",
        permissions={"send_sms": True},
    )
-   # Hand `raw_token` to the caller — it cannot be retrieved later.
+   # Hand `raw_token` to the caller. It is also stored encrypted on the row
+   # (api_key.get_token() and the default REST graph return it later) — see
+   # account/api_keys.md#security-notes — but treat it as a live credential.
    ```
 
 **On the calling (downstream) mojo:**
