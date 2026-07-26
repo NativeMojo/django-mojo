@@ -1,5 +1,53 @@
 ## v1.2.52 - July 23, 2026
 
+**security** — **`EmailDomain`'s default graph returned `aws_key` unmasked (maestro item 392).**
+The `default` graph listed `aws_key` among its `extra` fields, so every consumer
+fetching an email domain received the raw AWS access key id in the response body.
+It now exposes `aws_key_masked`, mirroring the `aws_secret_masked` property that
+was already beside it; the raw `aws_key` property remains for internal callers but
+appears in no graph. **Visible behavior change** for anything reading that field —
+nothing in this repo does. Previously logged in maestro's `docs/AttentionNeeded.md`.
+
+**feature** — **New `mojo.apps.dnsman` app: domains, DNS, WHOIS and TLS certificates in one place (maestro item 392).**
+The mechanism layer for domain-name management, so products stop rebuilding it:
+search and purchase domains through Route53 Domains; manage DNS records across
+Route53 **and** bring-your-own GoDaddy accounts behind a single dispatch; manage
+WHOIS contacts and privacy; apply SES email records through that same dispatch;
+and issue, renew and hold TLS certificates centrally over ACME DNS-01 with
+KMS-encrypted private keys. Five models (`Domain`, `DnsCredential`,
+`DomainPurchase`, `AcmeAccount`, `Certificate`), REST under `/api/dnsman`, two
+cron jobs, and 169 tests with every provider and CA edge mocked.
+
+Deliberately **not** included: purchase policy (spend caps, allowlists, credits,
+confirm UX), hosting, and certificate installation on serving boxes. Those are
+product concerns; this app is the mechanism they sit on.
+
+Notable behaviors worth knowing before enabling it:
+- **Purchasing ships disabled.** `DNSMAN_PURCHASE_ENABLED` defaults to `False`,
+  and there is no single-call purchase path — `registrar/quote` issues a
+  single-use confirm token (shown once, stored hashed) that `registrar/purchase`
+  redeems under a compare-and-swap, so a quote can be spent exactly once.
+- **ACME points at Let's Encrypt staging by default**, so an unconfigured
+  deployment cannot consume production rate limits. Going live is a deliberate
+  settings change.
+- **Domain availability is tri-state.** `PENDING`/`DONT_KNOW` surface as `null`,
+  not `false` — the registry declining to answer is not the same as a name being
+  taken, and collapsing them would tell a user a buyable domain is unavailable.
+- **Certificate key material** is in no graph and no job payload. It leaves only
+  through one `manage_dns`-gated, access-logged endpoint; the cert-updated
+  broadcast carries just an id, so serving hosts pull rather than being pushed to.
+- **Registrar operations are Route53-only.** GoDaddy-backed domains are
+  management-only and refuse purchase/WHOIS with an explicit message.
+
+Supporting framework additions: `mojo/helpers/aws/route53.py` (Route53 Domains +
+hosted-zone primitives), `mojo/helpers/acme/` (a dependency-free ACMEv2 DNS-01
+client built on `cryptography`/`requests`/PyJWT utils), `mojo/helpers/dns/probe.py`
+(authoritative TXT probe — queries the zone's own nameservers, because a cached
+recursive answer can be a false positive on a stale value), an opt-in
+`raise_on_error` flag on the existing GoDaddy `DNSManager` (default unchanged, so
+existing callers are unaffected), and `KSMSecrets` is now exported from
+`mojo.models` alongside `MojoSecrets`.
+
 **fix** — **`RestMeta.LIST_DEFAULT_FILTERS` was declared on 11 models but never read by the list query path — the property did nothing (maestro item 389).**
 `on_rest_list()` built its queryset, applied group scoping, request-param
 filters, date-range and sort — and never once looked at

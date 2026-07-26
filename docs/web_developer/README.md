@@ -35,6 +35,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | [phonehub/](phonehub/README.md) | Phone and device management |
 | [shortlink/](shortlink/README.md) | Short URL creation, redirect behavior, OG previews |
 | [aws/cloudwatch](aws/cloudwatch.md) | Live AWS infrastructure metrics (EC2, RDS, ElastiCache) |
+| [dnsman/](dnsman/README.md) | Domain search/purchase, DNS records, WHOIS/privacy, TLS certificates |
 | [filevault/](filevault/README.md) | Encrypted file vault |
 | [assistant/](assistant/README.md) | LLM admin assistant — natural language queries, conversations |
 | [github/](github/README.md) | GitHub App installations — list, create, update, delete |
