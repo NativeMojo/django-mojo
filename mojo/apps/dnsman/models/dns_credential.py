@@ -75,7 +75,13 @@ class DnsCredential(MojoSecrets, MojoModel):
         NO_SHOW_FIELDS = ["mojo_secrets"]
         NO_SAVE_FIELDS = [
             "id", "pk", "created", "provider", "group",
-            "verified", "verified_at", "domain_count",
+            "verified", "verified_at", "domain_count", "last_error",
+            # on_rest_save_field prefers a set_<key> method and MojoSecrets
+            # exposes set_secrets, so without these a POST carrying
+            # {"secrets": {...}} would store an unverified key/secret pair
+            # while `verified` (blocked above) stayed True — bypassing the
+            # whole verify-before-persist invariant of credential linking.
+            "secrets", "mojo_secrets",
         ]
         GRAPHS = {
             "basic": {

@@ -54,6 +54,16 @@ def on_certificate_material(request, pk=None):
     certificate = Certificate.get_instance_or_404(pk)
     Certificate.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"], certificate)
 
+    # Group scoping resolves through GROUP_FIELD = "domain__group". When the
+    # owning domain has NO group (a house/platform domain), that resolution
+    # yields None, request.group is never rebound to the instance, and the
+    # check degrades to the caller's own group — which any tenant admin with
+    # manage_dns would pass. For a house certificate that means handing over a
+    # private key, so require a platform superuser explicitly.
+    if certificate.domain.group_id is None and not getattr(request.user, "is_superuser", False):
+        raise me.PermissionDeniedException(
+            "House certificate material is restricted to platform administrators")
+
     if certificate.status != "active":
         raise me.ValueException(f"Certificate is {certificate.status}, not active")
 

@@ -16,8 +16,15 @@ def _get_domain(request, perms):
 @md.GET('whois')
 @md.requires_params("domain")
 def on_whois_get(request):
-    """Registrar-held WHOIS/ICANN contacts and privacy state."""
-    domain = _get_domain(request, "VIEW_PERMS")
+    """
+    Registrar-held WHOIS/ICANN contacts and privacy state.
+
+    Gated on SAVE_PERMS despite being a read: the registrar returns the real
+    registrant name, street address, phone and email to the account owner
+    regardless of WHOIS privacy. That is PII, and a read-only view_dns holder
+    has no reason to see it.
+    """
+    domain = _get_domain(request, ["SAVE_PERMS", "VIEW_PERMS"])
     return registrar.get_contacts(domain)
 
 

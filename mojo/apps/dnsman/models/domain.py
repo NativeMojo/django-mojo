@@ -110,7 +110,7 @@ class Domain(models.Model, MojoModel):
         NO_SAVE_FIELDS = [
             "id", "pk", "created", "name", "provider", "status",
             "hosted_zone_id", "registered_on", "expires", "verified",
-            "group", "user",
+            "group", "user", "last_error",
         ]
         GRAPHS = {
             "basic": {

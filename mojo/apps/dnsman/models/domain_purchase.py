@@ -87,9 +87,26 @@ class DomainPurchase(models.Model, MojoModel):
 
     class RestMeta:
         # Written only by the registrar service; REST exposes GET routes only.
+        #
+        # CAN_UPDATE=False is load-bearing, not decoration. It defaults to True,
+        # and the save gate checks ["SAVE_PERMS", "VIEW_PERMS"] as a FALLBACK
+        # CHAIN (first declared wins — mojo/models/rest.py get_rest_meta_prop),
+        # so a model with no SAVE_PERMS silently authorizes writes with its
+        # VIEW_PERMS. Without this, a read-only view_dns holder could POST to
+        # this row and rewrite the money ledger — including resurrecting a
+        # consumed quote by resetting status/quote_expires and planting a
+        # confirm_token hash of their choosing. SAVE_PERMS and NO_SAVE_FIELDS
+        # below are belt-and-braces for the same reason.
         CAN_CREATE = False
+        CAN_UPDATE = False
         CAN_DELETE = False
         VIEW_PERMS = ["view_dns", "manage_dns", "security"]
+        SAVE_PERMS = ["manage_dns", "security"]
+        NO_SAVE_FIELDS = [
+            "id", "pk", "created", "group", "user", "domain_name", "kind",
+            "status", "price", "cost", "currency", "years", "confirm_token",
+            "quote_expires", "operation_id", "error",
+        ]
         SEARCH_FIELDS = ["domain_name", "status"]
         # Belt and braces: the graphs below already list fields explicitly, so
         # confirm_token could not serialize anyway.

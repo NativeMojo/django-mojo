@@ -14,7 +14,7 @@ def on_credential(request, pk=None):
 
 
 @md.POST('credential/link')
-@md.requires_params("provider", "api_key", "api_secret")
+@md.requires_params("group", "provider", "api_key", "api_secret")
 def on_credential_link(request):
     """
     Link (or rotate) a provider credential.
@@ -24,6 +24,13 @@ def on_credential_link(request):
     nothing at all.
     """
     DnsCredential.rest_check_permission_or_raise(request, "SAVE_PERMS")
+
+    # requires_params only proves the key was PRESENT. If it did not resolve to
+    # an active group, request.group is None and the service would create a
+    # house-scope credential — which also escapes list scoping. Refuse instead
+    # of silently widening the credential's reach.
+    if request.group is None:
+        raise me.ValueException("A valid group is required to link a credential")
 
     credential = None
     pk = request.DATA.get("credential", None)

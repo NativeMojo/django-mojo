@@ -82,7 +82,13 @@ class Certificate(KSMSecrets, MojoModel):
         NO_SAVE_FIELDS = [
             "id", "pk", "created", "domain", "common_name", "sans", "status",
             "issuer", "serial", "not_before", "not_after", "renew_after",
-            "cert_pem", "chain_pem", "acme_order_url",
+            "cert_pem", "chain_pem", "acme_order_url", "last_error", "attempts",
+            # on_rest_save_field prefers a set_<key> method, and KSMSecrets
+            # exposes set_secrets — so without these a manage_dns holder could
+            # POST {"mojo_secrets": "junk"} and destroy the KMS blob. Decrypt
+            # failures are swallowed into an empty mapping, so the certificate
+            # would then report "material unavailable" forever.
+            "secrets", "mojo_secrets",
         ]
         GRAPHS = {
             "basic": {

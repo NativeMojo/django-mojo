@@ -37,6 +37,7 @@ manager's, and only the response parsing is ours.
 """
 
 import requests
+from urllib.parse import quote
 
 from mojo import errors as me
 from mojo.helpers import logit
@@ -55,7 +56,17 @@ MIN_TTL = 600
 
 
 def _url(*parts):
-    return "/".join([godaddy.BASE_URL] + [str(part) for part in parts])
+    # Percent-encode every segment, including "/" and ".". Record names reach
+    # here after charset validation in services/naming.py, so this is defence
+    # in depth — but it is the layer that actually makes traversal impossible:
+    # an unencoded segment containing dot-segments is normalized by the HTTP
+    # client into a request against a DIFFERENT domain in the same provider
+    # account, turning one managed domain into write access to all of them.
+    # "@" is left unencoded: it is GoDaddy's apex marker, is not special in a
+    # URL path, and cannot be used to escape a segment. "." is unreserved and
+    # so passes through untouched, which keeps domain segments readable.
+    encoded = [quote(str(part), safe="@") for part in parts]
+    return "/".join([godaddy.BASE_URL] + encoded)
 
 
 def _get_json(manager, url, params=None):
