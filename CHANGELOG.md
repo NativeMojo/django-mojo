@@ -1,4 +1,4 @@
-## v1.2.52 - July 23, 2026
+## v1.2.53 - July 26, 2026
 
 **fix** — **`DNSManager`'s array endpoints raised `ValueError` whenever they actually returned data (maestro item 392/397).**
 `mojo/helpers/dns/godaddy.py` wrapped every response body in `objict(...)`, but
