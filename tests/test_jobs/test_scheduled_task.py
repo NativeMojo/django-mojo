@@ -13,6 +13,33 @@ TEST_USER_B = "test_sched_user_b"
 TEST_PWORD = "testpass123"
 
 
+def _dispatch_anchor(base_now, user_tz):
+    """
+    Return (now_utc, run_time) for a dispatch test.
+
+    dispatch_scheduled_tasks() only matches run_times inside the *current*
+    user-local hour (ScheduledTask.get_run_times_for_hour) and skips any run_at
+    already in the past (cronjobs.py `run_at_utc < now`). Together those make it
+    impossible to pick a safe target minute off the real wall clock: at :59
+    every minute in the current hour is already gone, and rolling to the next
+    hour makes the dispatcher find nothing at all (and at hour 23,
+    user_now.replace(hour=0) lands ~24h in the past because .replace() never
+    advances the date).
+
+    So dispatch is simulated instead: anchor 'now' one day ahead at the top of a
+    UTC hour -- exactly where the production cron fires (@schedule(minutes="0"))
+    -- and target :59 local. Truncating a UTC instant to minute 0 leaves the
+    user-local minute at 0, 30 or 45 for every real timezone offset, so :59
+    local is always inside the anchor's hour and always in its future, whatever
+    the real wall-clock minute is.
+    """
+    base = base_now + timedelta(days=1)
+    now_utc = base - timedelta(minutes=base.minute,
+                               seconds=base.second,
+                               microseconds=base.microsecond)
+    return now_utc, f"{now_utc.astimezone(user_tz).hour:02d}:59"
+
+
 @th.django_unit_setup()
 def setup_scheduled_tasks(opts):
     """Setup test users and clean up old test data."""
@@ -364,16 +391,9 @@ def test_dispatch_scheduled_tasks(opts):
     user_tz_name = opts.user_a.org.timezone if opts.user_a.org else "America/Los_Angeles"
     user_tz = pytz.timezone(user_tz_name)
 
-    # Get current hour in user timezone
-    now = timezone.now()
-    user_now = now.astimezone(user_tz)
-    current_hour = user_now.hour
-    current_minute = user_now.minute
-
-    # Create a task that matches current hour but a future minute
-    # Use minute 59 to ensure it's in the future (unless we're at :59)
-    target_minute = 59 if current_minute < 59 else 58
-    run_time = f"{current_hour:02d}:{target_minute:02d}"
+    # Simulate the dispatch instant instead of reading the wall clock, so the
+    # target minute can never land in the past (maestro item 53).
+    now_utc, run_time = _dispatch_anchor(timezone.now(), user_tz)
 
     task = ScheduledTask(
         user=opts.user_a,
@@ -386,7 +406,7 @@ def test_dispatch_scheduled_tasks(opts):
     task.save()
 
     # Run dispatch
-    dispatch_scheduled_tasks()
+    dispatch_scheduled_tasks(now=now_utc)
 
     # Check a job was published
     published_jobs = Job.objects.filter(
@@ -417,12 +437,7 @@ def test_dispatch_idempotency(opts):
 
     user_tz_name = opts.user_a.org.timezone if opts.user_a.org else "America/Los_Angeles"
     user_tz = pytz.timezone(user_tz_name)
-    now = timezone.now()
-    user_now = now.astimezone(user_tz)
-    current_hour = user_now.hour
-    current_minute = user_now.minute
-    target_minute = 59 if current_minute < 59 else 58
-    run_time = f"{current_hour:02d}:{target_minute:02d}"
+    now_utc, run_time = _dispatch_anchor(timezone.now(), user_tz)
 
     task = ScheduledTask(
         user=opts.user_a,
@@ -433,9 +448,11 @@ def test_dispatch_idempotency(opts):
     )
     task.save()
 
-    # Run dispatch twice
-    dispatch_scheduled_tasks()
-    dispatch_scheduled_tasks()
+    # Run dispatch twice — the SAME instant both times. The idempotency key is
+    # schtask:<id>:<int(run_at_utc.timestamp())>, so two different anchors would
+    # legitimately produce two keys and two rows.
+    dispatch_scheduled_tasks(now=now_utc)
+    dispatch_scheduled_tasks(now=now_utc)
 
     # Should still only have 1 job (idempotency key prevents duplicates)
     count = Job.objects.filter(
@@ -483,3 +500,40 @@ def test_task_result_read_only(opts):
     })
     # Should fail — TaskResult has no SAVE_PERMS
     assert resp.status_code != 200, f"TaskResult should not be writable via REST, got {resp.status_code}"
+
+
+@th.django_unit_test("dispatch anchor never targets a minute the dispatcher would skip")
+def test_dispatch_anchor_is_minute_independent(opts):
+    """Regression for maestro item 53.
+
+    The old arithmetic was `target_minute = 59 if current_minute < 59 else 58`
+    with the hour left unchanged, so at :59 it aimed at :58 -- already past --
+    and the dispatcher's `run_at_utc < now` skip correctly dropped the publish.
+    Waiting for a real HH:59 is not a usable proof, so this walks every
+    minute-of-day through the anchor helper and re-checks the two gates the
+    dispatcher actually applies: get_run_times_for_hour (same local hour) and
+    run_at strictly in the future.
+    """
+    import pytz
+    user_tz = pytz.timezone("America/New_York")
+    base = datetime(2026, 6, 15, 0, 0, 0, tzinfo=pytz.utc)   # non-DST-boundary day
+
+    for hour in range(24):
+        for minute in range(60):
+            base_now = base + timedelta(hours=hour, minutes=minute, seconds=30)
+            now_utc, run_time = _dispatch_anchor(base_now, user_tz)
+            user_now = now_utc.astimezone(user_tz)
+            h, m = int(run_time[:2]), int(run_time[3:])
+
+            assert h == user_now.hour, (
+                f"run_time hour {h} must equal the anchor's user-local hour "
+                f"{user_now.hour} or get_run_times_for_hour() matches nothing "
+                f"(base_now={base_now.isoformat()}, run_time={run_time})"
+            )
+            run_at_utc = user_now.replace(hour=h, minute=m, second=0,
+                                          microsecond=0).astimezone(pytz.utc)
+            assert run_at_utc > now_utc, (
+                f"run_at {run_at_utc.isoformat()} is not in the future of the "
+                f"dispatch instant {now_utc.isoformat()} -- the dispatcher "
+                f"would skip it (base_now={base_now.isoformat()})"
+            )

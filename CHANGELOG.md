@@ -1,5 +1,20 @@
 ## Unreleased
 
+**fix** — **`dispatch_scheduled_tasks()` accepts an optional `now=`, de-flaking the `:59` dispatch tests (maestro item 53).**
+Two scheduled-task dispatch tests picked their target minute off the wall
+clock (`59 if current_minute < 59 else 58`), so a suite run crossing the `:59`
+minute aimed at a minute already in the past — which the dispatcher correctly
+skips, failing the tests. It could not be fixed in the test file alone: the
+dispatcher only matches run_times inside the *current* user-local hour, and
+its `.replace()`-based `run_at_local` never advances the date, so rolling to
+the next hour fails 100% of the time and a 23→00 wrap lands ~24h in the past.
+`dispatch_scheduled_tasks` therefore gains an optional `now=None` argument
+(the same shape `prune_jobs` in the same module already has); the cron runner
+calls it with no arguments, so the scheduled path is byte-for-byte unchanged,
+and the `run_at_utc < now` skip is untouched. Tests now simulate the dispatch
+instant, and a new regression test walks all 1440 minute-of-day positions
+through the anchor arithmetic asserting both dispatcher gates hold.
+
 **fix** — **testit: `server_settings()` no longer tears down other modules' websockets (maestro item 275).**
 `th.server_settings()` applies server-side overrides by writing
 `var/django.conf` and letting uvicorn reload — which kills the worker process

@@ -164,9 +164,11 @@ Notification failures are logged but do not affect the task result.
 ```python
 # mojo/apps/jobs/cronjobs.py
 @schedule(minutes="0")
-def dispatch_scheduled_tasks():
+def dispatch_scheduled_tasks(now=None):
     ...
 ```
+
+`now` defaults to `timezone.now()`. Pass an aware UTC datetime to dispatch as of a simulated instant — the cron runner always calls it with no arguments, so the scheduled path is unchanged. Tests use this to drive dispatch deterministically instead of racing the wall clock.
 
 Runs at the top of every hour. For each enabled `ScheduledTask`:
 

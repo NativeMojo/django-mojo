@@ -14,17 +14,22 @@ def prune_jobs(force=False, verbose=False, now=None):
 
 # Runs at the top of every hour to dispatch user-scheduled tasks
 @schedule(minutes="0")
-def dispatch_scheduled_tasks():
+def dispatch_scheduled_tasks(now=None):
     """
     Query enabled ScheduledTasks and publish jobs for any that match
     the current hour. Uses jobs.publish(run_at=...) so the existing
     scheduler handles delayed dispatch.
+
+    `now` defaults to timezone.now(). Pass an aware UTC datetime to dispatch as
+    of a simulated instant — the cron runner always calls this with no
+    arguments, so the default path is unchanged.
     """
     from django.utils import timezone
     from mojo.apps.jobs.models import ScheduledTask
     import pytz
 
-    now = timezone.now()
+    if now is None:
+        now = timezone.now()
     current_hour_utc = now.hour
     current_weekday = now.weekday()
 
