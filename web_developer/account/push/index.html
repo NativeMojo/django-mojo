@@ -4224,7 +4224,8 @@ group/member-scoped grant does not authorize it.</p>
 <hr />
 <h2 id="delivery-history">Delivery History<a class="headerlink" href="#delivery-history" title="Permanent link">&para;</a></h2>
 <p><strong>GET</strong> <code>/api/account/devices/push/deliveries</code></p>
-<p>Returns sent delivery records for the authenticated user. Filtered to <code>status=sent</code> by default.</p>
+<p>Returns delivery records for the authenticated user, across all statuses
+(<code>sent</code>, <code>delivered</code>, <code>failed</code>). Filter with <code>?status=failed</code>, etc.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span>
 <a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span>

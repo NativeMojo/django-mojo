@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/phonehub/rest/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/dnsman/Providers/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>PhoneHub REST Endpoints — Django Developer Reference - Django-MOJO</title>
+        <title>Providers — the dispatch layer - Django-MOJO</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#phonehub-rest-endpoints-django-developer-reference" class="md-skip">
+        <a href="#providers-the-dispatch-layer" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              PhoneHub REST Endpoints — Django Developer Reference
+              Providers — the dispatch layer
             
           </span>
         </div>
@@ -2169,7 +2169,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../../phonehub/" class="md-nav__link">
         
   
   
@@ -3733,22 +3733,33 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#phone-number-endpoints" class="md-nav__link">
+  <a href="#interface" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Phone Number Endpoints
+        Interface
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Phone Number Endpoints">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#provider-differences" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Provider differences
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Provider differences">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#crud-phonenumber" class="md-nav__link">
+  <a href="#txt-quoting" class="md-nav__link">
     <span class="md-ellipsis">
       
-        CRUD — PhoneNumber
+        TXT quoting
       
     </span>
   </a>
@@ -3756,10 +3767,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#normalize-post-apiphonehubnumbernormalize" class="md-nav__link">
+  <a href="#godaddy-replaces-it-does-not-merge" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Normalize — POST /api/phonehub/number/normalize
+        GoDaddy replaces, it does not merge
       
     </span>
   </a>
@@ -3767,10 +3778,32 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#lookup-post-apiphonehubnumberlookup" class="md-nav__link">
+  <a href="#godaddy-cannot-delete-the-last-record-of-a-type" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Lookup — POST /api/phonehub/number/lookup
+        GoDaddy cannot delete the last record of a type
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clear_record-for-callers-with-nowhere-to-put-that-refusal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        clear_record — for callers with nowhere to put that refusal
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-godaddy-transport-helper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The GoDaddy transport helper
       
     </span>
   </a>
@@ -3783,119 +3816,24 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#sms-endpoints" class="md-nav__link">
+  <a href="#credentials" class="md-nav__link">
     <span class="md-ellipsis">
       
-        SMS Endpoints
+        Credentials
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="SMS Endpoints">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#crud-sms" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        CRUD — SMS
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#send-post-apiphonehubsmssend" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Send — POST /api/phonehub/sms/send
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#twilio-inbound-webhook-post-apiphonehubsmswebhooktwilio" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Twilio Inbound Webhook — POST /api/phonehub/sms/webhook/twilio
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#twilio-status-webhook-post-apiphonehubsmswebhooktwiliostatus" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Twilio Status Webhook — POST /api/phonehub/sms/webhook/twilio/status
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#config-endpoints" class="md-nav__link">
+  <a href="#adding-a-third-provider" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Config Endpoints
+        Adding a third provider
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Config Endpoints">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#crud-phoneconfig" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        CRUD — PhoneConfig
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="CRUD — PhoneConfig">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#writing-encrypted-credentials-via-rest" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Writing encrypted credentials via REST
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#test-the-configured-provider-post-apiphonehubconfigid-with-test_connection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Test the configured provider — POST /api/phonehub/config/&lt;id&gt; with test_connection
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -3919,298 +3857,166 @@
   
 
 
-<h1 id="phonehub-rest-endpoints-django-developer-reference">PhoneHub REST Endpoints — Django Developer Reference<a class="headerlink" href="#phonehub-rest-endpoints-django-developer-reference" title="Permanent link">&para;</a></h1>
-<p>All endpoints are registered under the <code>/api/phonehub/</code> prefix.</p>
-<h2 id="phone-number-endpoints">Phone Number Endpoints<a class="headerlink" href="#phone-number-endpoints" title="Permanent link">&para;</a></h2>
-<h3 id="crud-phonenumber">CRUD — PhoneNumber<a class="headerlink" href="#crud-phonenumber" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;number&#39;</span><span class="p">)</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;number/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_phone_number</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="k">return</span> <span class="n">PhoneNumber</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
+<h1 id="providers-the-dispatch-layer">Providers — the dispatch layer<a class="headerlink" href="#providers-the-dispatch-layer" title="Permanent link">&para;</a></h1>
+<p><code>mojo/apps/dnsman/services/dns.py</code> plus <code>services/providers/</code>.</p>
+<p>One interface, two back-ends. Everything provider-specific is confined to an
+adapter, because the differences fail silently rather than loudly.</p>
+<h2 id="interface">Interface<a class="headerlink" href="#interface" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">list_records</span><span class="p">(</span><span class="n">domain</span><span class="p">)</span>                                          <span class="c1"># -&gt; [objict(type, name, record_values, ttl)]</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">upsert_record</span><span class="p">(</span><span class="n">domain</span><span class="p">,</span> <span class="n">rtype</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">record_values</span><span class="p">,</span> <span class="n">ttl</span><span class="o">=</span><span class="mi">300</span><span class="p">)</span>    <span class="c1"># -&gt; objict(change_id, provider)</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">delete_record</span><span class="p">(</span><span class="n">domain</span><span class="p">,</span> <span class="n">rtype</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">record_values</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>        <span class="c1"># -&gt; objict(change_id, provider)</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">clear_record</span><span class="p">(</span><span class="n">domain</span><span class="p">,</span> <span class="n">rtype</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">record_values</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>         <span class="c1"># -&gt; objict(change_id, provider)</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">wait_for_propagation</span><span class="p">(</span><span class="n">domain</span><span class="p">,</span> <span class="n">rtype</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">record_values</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">change_id</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>  <span class="c1"># -&gt; (ok, seen_values)</span>
 </code></pre></div>
-<table>
-<thead>
-<tr>
-<th>Method</th>
-<th>Path</th>
-<th>Action</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>GET</td>
-<td><code>/api/phonehub/number</code></td>
-<td>List phone numbers</td>
-</tr>
-<tr>
-<td>GET</td>
-<td><code>/api/phonehub/number/&lt;id&gt;</code></td>
-<td>Get a single phone number</td>
-</tr>
-<tr>
-<td>POST</td>
-<td><code>/api/phonehub/number</code></td>
-<td>Create a phone number record</td>
-</tr>
-<tr>
-<td>POST/PUT</td>
-<td><code>/api/phonehub/number/&lt;id&gt;</code></td>
-<td>Update a phone number record</td>
-</tr>
-<tr>
-<td>DELETE</td>
-<td><code>/api/phonehub/number/&lt;id&gt;</code></td>
-<td>Delete a phone number record</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Permissions:</strong> <code>view_phone_numbers</code>, <code>manage_phone_numbers</code>, or <code>manage_users</code></p>
-<hr />
-<h3 id="normalize-post-apiphonehubnumbernormalize">Normalize — <code>POST /api/phonehub/number/normalize</code><a class="headerlink" href="#normalize-post-apiphonehubnumbernormalize" title="Permanent link">&para;</a></h3>
-<p>Normalize any phone number input to E.164 format. Does not hit the carrier — pure string normalization.</p>
-<p><strong>Requires:</strong> <code>view_phone_numbers</code> or <code>manage_phone_numbers</code></p>
-<p><strong>Request:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;415-555-1234&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;country_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US&quot;</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">}</span>
-</code></pre></div></p>
-<p><code>country_code</code> is optional. Without it, 10-digit numbers are assumed NANP (US/CA).</p>
-<p><strong>Response:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">}</span>
-</code></pre></div></p>
-<p>Returns <code>{"status": false, "error": "..."}</code> if the number cannot be normalized.</p>
-<hr />
-<h3 id="lookup-post-apiphonehubnumberlookup">Lookup — <code>POST /api/phonehub/number/lookup</code><a class="headerlink" href="#lookup-post-apiphonehubnumberlookup" title="Permanent link">&para;</a></h3>
-<p>Look up carrier and line type data for a phone number. Results are cached; re-fetches automatically when expired.</p>
-<p><strong>Requires:</strong> <code>view_phone_numbers</code> or <code>manage_phone_numbers</code></p>
-<p><strong>Request:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;force_refresh&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
-</code></pre></div></p>
-<p>Pass <code>force_refresh: true</code> to bypass the cache and re-query the provider.</p>
-<p><strong>Response:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="nt">&quot;country_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;CA&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span><span class="nt">&quot;carrier&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;AT&amp;T&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="nt">&quot;line_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mobile&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">    </span><span class="nt">&quot;is_mobile&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">    </span><span class="nt">&quot;is_voip&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">    </span><span class="nt">&quot;is_valid&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">    </span><span class="nt">&quot;registered_owner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;John Smith&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">    </span><span class="nt">&quot;owner_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;CONSUMER&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">    </span><span class="nt">&quot;lookup_provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;twilio&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">    </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">    </span><span class="nt">&quot;modified&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span>
-<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="p">}</span>
-</code></pre></div></p>
-<hr />
-<h2 id="sms-endpoints">SMS Endpoints<a class="headerlink" href="#sms-endpoints" title="Permanent link">&para;</a></h2>
-<h3 id="crud-sms">CRUD — SMS<a class="headerlink" href="#crud-sms" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;sms&#39;</span><span class="p">)</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;sms/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_sms</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="k">return</span> <span class="n">SMS</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
-</code></pre></div>
-<table>
-<thead>
-<tr>
-<th>Method</th>
-<th>Path</th>
-<th>Action</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>GET</td>
-<td><code>/api/phonehub/sms</code></td>
-<td>List SMS records</td>
-</tr>
-<tr>
-<td>GET</td>
-<td><code>/api/phonehub/sms/&lt;id&gt;</code></td>
-<td>Get a single SMS</td>
-</tr>
-<tr>
-<td>POST/PUT</td>
-<td><code>/api/phonehub/sms/&lt;id&gt;</code></td>
-<td>Update an SMS record</td>
-</tr>
-<tr>
-<td>DELETE</td>
-<td><code>/api/phonehub/sms/&lt;id&gt;</code></td>
-<td>Delete an SMS record</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Permissions:</strong> <code>view_sms</code>, <code>manage_sms</code>, or <code>owner</code> (users can view their own)</p>
-<hr />
-<h3 id="send-post-apiphonehubsmssend">Send — <code>POST /api/phonehub/sms/send</code><a class="headerlink" href="#send-post-apiphonehubsmssend" title="Permanent link">&para;</a></h3>
-<p>Send an SMS message.</p>
-<p><strong>Requires:</strong> <code>send_sms</code> permission</p>
-<p><strong>Request:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;to_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Your verification code is 483921&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;from_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+18005551234&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;purpose&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;verification&quot;</span><span class="p">}</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">}</span>
-</code></pre></div></p>
-<p><code>from_number</code>, <code>group</code>, and <code>metadata</code> are optional.</p>
-<p><strong>Response:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nt">&quot;direction&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;outbound&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">&quot;to_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+14155551234&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="nt">&quot;from_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+18005551234&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="nt">&quot;body&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Your verification code is 483921&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sent&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;twilio&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">    </span><span class="nt">&quot;provider_message_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;SMxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">    </span><span class="nt">&quot;sent_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="w">    </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:30:00Z&quot;</span>
-<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="p">}</span>
-</code></pre></div></p>
-<p>On failure: <code>status</code> will be <code>"failed"</code> and <code>error_message</code> will contain the provider error.</p>
+<p><code>record_values</code> is <strong>always a list</strong>, even for a single value.</p>
 <blockquote>
-<p><strong>Provider-to-provider use:</strong> This same endpoint doubles as the integration surface for the <code>mojo</code> SMS provider. A downstream django-mojo instance configured with <code>PhoneConfig.provider="mojo"</code> authenticates here using an <code>account.ApiKey</code> (<code>Authorization: apikey &lt;token&gt;</code>) and forwards the user's send request. <code>requires_perms</code> uses OR logic, so the api key needs <strong>either <code>send_sms</code> or <code>comms</code></strong> — granting just <code>send_sms</code> is the least-privilege choice. See <a href="../#mojo-remote-sms-provider">README — Mojo Remote SMS Provider</a> for the full setup.</p>
-<p>When the caller authenticates with an API key, the resulting <code>SMS</code> row has a null <code>user</code> (an API key is not a <code>User</code>); the caller is identified by <code>SMS.group</code>, which is set from the API key's group. Session/JWT callers still populate <code>SMS.user</code> as before.</p>
+<p>The field is <code>record_values</code> and not <code>values</code> because <code>objict</code> subclasses
+<code>dict</code>: <code>record.values</code> resolves to the bound <code>dict.values</code> method and hands
+back a method object. Two independent implementations hit this during the
+original build, one as a live bug. A test pins the name.</p>
 </blockquote>
-<hr />
-<h3 id="twilio-inbound-webhook-post-apiphonehubsmswebhooktwilio">Twilio Inbound Webhook — <code>POST /api/phonehub/sms/webhook/twilio</code><a class="headerlink" href="#twilio-inbound-webhook-post-apiphonehubsmswebhooktwilio" title="Permanent link">&para;</a></h3>
-<p>Public endpoint. Receives inbound SMS from Twilio. Validates the Twilio webhook signature before processing.</p>
-<p>Saves the inbound message as an <code>SMS</code> record with <code>direction="inbound"</code>, then calls <code>SMS_INBOUND_HANDLER</code> if configured. Returns a TwiML response (may include a reply if the handler returns a string).</p>
-<p><strong>This endpoint is public (no auth).</strong> Twilio signature validation is the security mechanism.</p>
-<hr />
-<h3 id="twilio-status-webhook-post-apiphonehubsmswebhooktwiliostatus">Twilio Status Webhook — <code>POST /api/phonehub/sms/webhook/twilio/status</code><a class="headerlink" href="#twilio-status-webhook-post-apiphonehubsmswebhooktwiliostatus" title="Permanent link">&para;</a></h3>
-<p>Public endpoint. Receives SMS delivery status updates from Twilio. Updates the corresponding <code>SMS</code> record's <code>status</code> and <code>delivered_at</code> fields.</p>
-<hr />
-<h2 id="config-endpoints">Config Endpoints<a class="headerlink" href="#config-endpoints" title="Permanent link">&para;</a></h2>
-<h3 id="crud-phoneconfig">CRUD — PhoneConfig<a class="headerlink" href="#crud-phoneconfig" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;config&#39;</span><span class="p">)</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nd">@md</span><span class="o">.</span><span class="n">URL</span><span class="p">(</span><span class="s1">&#39;config/&lt;int:pk&gt;&#39;</span><span class="p">)</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">on_phone_config</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="k">return</span> <span class="n">PhoneConfig</span><span class="o">.</span><span class="n">on_rest_request</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">)</span>
-</code></pre></div>
+<p>Callers always speak <strong>FQDN</strong>. Converting to a provider's preferred form is the
+adapter's job and nowhere else's.</p>
+<p><code>dns.py</code> is <strong>ungated mechanism</strong> — no permission checks. That is what lets the
+certificate service plant challenge records with no user in scope. Gating lives
+in <code>rest/</code>.</p>
+<p>Validation performed before dispatch: domain must be <code>active</code>; record type must
+be in <code>DNSMAN_ALLOWED_RECORD_TYPES</code>; apex <code>NS</code>/<code>SOA</code> refused; out-of-zone names
+refused.</p>
+<h2 id="provider-differences">Provider differences<a class="headerlink" href="#provider-differences" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Method</th>
-<th>Path</th>
-<th>Action</th>
+<th></th>
+<th>Route53</th>
+<th>GoDaddy</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>GET</td>
-<td><code>/api/phonehub/config</code></td>
-<td>List configs</td>
+<td>Record name</td>
+<td>FQDN</td>
+<td>relative label; <code>@</code> at the apex</td>
 </tr>
 <tr>
-<td>GET</td>
-<td><code>/api/phonehub/config/&lt;id&gt;</code></td>
-<td>Get a single config</td>
+<td>TXT values</td>
+<td>quoted, chunked at 255 chars</td>
+<td>raw</td>
 </tr>
 <tr>
-<td>POST</td>
-<td><code>/api/phonehub/config</code></td>
-<td>Create a config</td>
+<td>Write</td>
+<td>true upsert of one record set</td>
+<td>PUT <strong>replaces every record</strong> of that (type, name)</td>
 </tr>
 <tr>
-<td>POST/PUT</td>
-<td><code>/api/phonehub/config/&lt;id&gt;</code></td>
-<td>Update a config</td>
+<td>Delete</td>
+<td>supported</td>
+<td>no true delete</td>
 </tr>
 <tr>
-<td>DELETE</td>
-<td><code>/api/phonehub/config/&lt;id&gt;</code></td>
-<td>Delete a config</td>
+<td>Record read shape</td>
+<td>one record <strong>set</strong> per entry</td>
+<td>one entry <strong>per value</strong> (JSON array)</td>
+</tr>
+<tr>
+<td>Propagation signal</td>
+<td><code>ChangeInfo</code> → <code>INSYNC</code>, then authoritative probe</td>
+<td>authoritative probe only</td>
+</tr>
+<tr>
+<td>Purchase</td>
+<td>yes</td>
+<td><strong>no</strong> — management only</td>
 </tr>
 </tbody>
 </table>
-<p><strong>Permissions:</strong> <code>manage_phone_config</code> or <code>manage_groups</code></p>
-<p><code>mojo_secrets</code> (encrypted credentials) is never returned in any response.</p>
-<h4 id="writing-encrypted-credentials-via-rest">Writing encrypted credentials via REST<a class="headerlink" href="#writing-encrypted-credentials-via-rest" title="Permanent link">&para;</a></h4>
-<p>Provider credentials are stored encrypted in <code>mojo_secrets</code> and are <strong>write-only over REST</strong>. The standard auto-setter pattern routes each credential field through its <code>set_&lt;field&gt;</code> helper transparently:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="err">POST /api/phonehub/config/&lt;id&gt;</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="err">Content-Type: application/json</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="err">{</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="err">  &quot;mojo_api_key&quot;: &quot;&lt;token shown once by /api/group/apikey&gt;&quot;</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="err">}</span>
-</code></pre></div>
-<p>Supported credential body keys:</p>
-<table>
-<thead>
-<tr>
-<th>Key</th>
-<th>Routes to</th>
-<th>Provider</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>twilio_account_sid</code></td>
-<td><code>set_twilio_account_sid</code></td>
-<td>twilio</td>
-</tr>
-<tr>
-<td><code>twilio_auth_token</code></td>
-<td><code>set_twilio_auth_token</code></td>
-<td>twilio</td>
-</tr>
-<tr>
-<td><code>aws_access_key_id</code></td>
-<td><code>set_aws_access_key_id</code></td>
-<td>aws</td>
-</tr>
-<tr>
-<td><code>aws_secret_access_key</code></td>
-<td><code>set_aws_secret_access_key</code></td>
-<td>aws</td>
-</tr>
-<tr>
-<td><code>mojo_api_key</code></td>
-<td><code>set_mojo_api_key</code></td>
-<td>mojo</td>
-</tr>
-</tbody>
-</table>
-<p>Leaving a credential key out of the body = no change. Setting any of these keys requires the same <code>SAVE_PERMS</code> as scalar updates. The response is the standard PhoneConfig payload (without secrets).</p>
-<h4 id="test-the-configured-provider-post-apiphonehubconfigid-with-test_connection">Test the configured provider — <code>POST /api/phonehub/config/&lt;id&gt;</code> with <code>test_connection</code><a class="headerlink" href="#test-the-configured-provider-post-apiphonehubconfigid-with-test_connection" title="Permanent link">&para;</a></h4>
-<p>Per-instance action that runs the per-provider connectivity check (<code>_test_twilio</code> / <code>_test_aws</code> / <code>_test_mojo</code>) and returns the result inline. Used by the admin portal's "Test connection" button. For the <code>mojo</code> provider the check GETs the remote's <code>/api/group/apikey/me</code> whoami endpoint — it validates the URL and api key and confirms the key carries a send permission, with no SMS row created on the remote.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="err">POST /api/phonehub/config/&lt;id&gt;</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="err">Content-Type: application/json</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="err">{</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="err">  &quot;test_connection&quot;: 1</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="err">}</span>
-</code></pre></div>
-<p><strong>Response:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;success&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Mojo provider reachable and API key valid&quot;</span><span class="p">,</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">&quot;remote_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://sms-hub.example.com&quot;</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="p">}</span>
-</code></pre></div>
-<p>On failure, <code>success</code> is <code>false</code> and <code>error</code> is one of <code>missing_credentials</code>, <code>invalid_credentials</code>, <code>insufficient_permission</code> (mojo provider — the key is valid but lacks <code>send_sms</code>/<code>comms</code>), <code>timeout</code>, <code>connection_failed</code>, <code>missing_library</code>, or <code>invalid_provider</code>. Operators get a non-throwing dict either way; the underlying exception (if any) is logged via <code>mojo.helpers.logit</code> and not echoed back.</p>
+<h3 id="txt-quoting">TXT quoting<a class="headerlink" href="#txt-quoting" title="Permanent link">&para;</a></h3>
+<p>Route53 requires each TXT string wrapped in quotes and split at 255 characters;
+GoDaddy stores the raw string. Send a raw value to Route53 and SES verification
+and ACME validation both fail with nothing in any log to explain it. Use
+<code>route53.format_txt_value()</code> / <code>parse_txt_value()</code>; the adapter tests assert the
+round trip in both directions.</p>
+<h3 id="godaddy-replaces-it-does-not-merge">GoDaddy replaces, it does not merge<a class="headerlink" href="#godaddy-replaces-it-does-not-merge" title="Permanent link">&para;</a></h3>
+<p><code>edit_record</code> is a PUT over the whole (type, name) pair. An upsert must
+therefore send the <strong>complete desired value list</strong>, not just the new value —
+otherwise writing a second TXT digest silently erases the first. This is exactly
+the shape ACME needs for a wildcard plus its apex.</p>
+<h3 id="godaddy-cannot-delete-the-last-record-of-a-type">GoDaddy cannot delete the last record of a type<a class="headerlink" href="#godaddy-cannot-delete-the-last-record-of-a-type" title="Permanent link">&para;</a></h3>
+<p>Deletion means rewriting the remaining values, and GoDaddy rejects the empty
+replacement. Where a true delete is impossible <code>delete_record</code> raises a clear
+error. It never silently no-ops — a caller that believes a record is gone when it
+is not is worse than a caller that sees a failure.</p>
+<h3 id="clear_record-for-callers-with-nowhere-to-put-that-refusal"><code>clear_record</code> — for callers with nowhere to put that refusal<a class="headerlink" href="#clear_record-for-callers-with-nowhere-to-put-that-refusal" title="Permanent link">&para;</a></h3>
+<p>Some callers cannot act on "this provider cannot delete that". Certificate
+cleanup is the case that matters: it runs inside a <code>finally</code> and swallows, so a
+raise there just leaves the <code>_acme-challenge</code> TXT live in the customer's zone,
+gaining another stale digest on every renewal.</p>
+<p><code>clear_record</code> is the same request with a different failure contract — retire
+these values, using the strongest removal the provider actually has:</p>
+<ul>
+<li><strong>Route53</strong> (<code>can_delete_last_record = True</code>, the interface default) does
+  exactly what <code>delete_record</code> does.</li>
+<li><strong>GoDaddy</strong> removes the named values when others survive, and when they are all
+  the set holds, overwrites the set with a <strong>single inert placeholder value</strong>
+  (<code>godaddy_provider.RETIRED_VALUE</code>) so nothing resolves and GoDaddy still gets
+  the non-empty replacement it insists on. A record that does not exist is
+  already clear: no placeholder is planted. Only character-string types
+  (<code>TXT</code>/<code>SPF</code>) get a placeholder — inventing an address for an <code>A</code> or a target
+  for a <code>CNAME</code> would point real traffic somewhere, so those still raise.</li>
+</ul>
+<p>Use <code>delete_record</code> everywhere else. It is the honest answer, and <code>clear_record</code>
+deliberately trades that honesty for "the data is gone".</p>
+<h3 id="the-godaddy-transport-helper">The GoDaddy transport helper<a class="headerlink" href="#the-godaddy-transport-helper" title="Permanent link">&para;</a></h3>
+<p><code>mojo/helpers/dns/godaddy.py</code> owns every GoDaddy HTTP call, including URL
+building. Two things about it are load-bearing:</p>
+<ul>
+<li><strong><code>build_url()</code> percent-encodes every path segment.</strong> A record name containing
+  path separators otherwise normalizes into a write against a <em>different domain
+  in the same account</em>. This has been exploitable once already; never assemble a
+  GoDaddy path by string interpolation.</li>
+<li><strong>Array vs object bodies.</strong> <code>get_domains()</code>, <code>get_records()</code> and
+  <code>get_record()</code> answer with JSON <strong>arrays</strong> and return a <strong>list of <code>objict</code></strong>;
+  <code>get_domain_info()</code> answers with an object and returns a single <code>objict</code>.
+  <code>objict</code> subclasses <code>dict</code>, so <code>objict([...])</code> raises <code>ValueError</code> — and
+  <code>objict([])</code> is merely <code>{}</code>, which is why wrapping arrays directly used to look
+  fine against an empty zone and fail against every real one. Everything goes
+  through <code>parse_body()</code>.</li>
+</ul>
+<p><code>edit_record(domain, rtype, name, data, ttl)</code> accepts a scalar <strong>or a list</strong> of
+values and builds one payload entry per value. <code>put_records()</code> is the raw door
+for the rare case where surviving values carry different TTLs.</p>
+<p><code>raise_on_error</code> defaults to <strong>False</strong> and must stay that way: a sibling repo
+consumes this helper and depends on the historical swallow-everything behaviour.
+dnsman always builds its managers with <code>raise_on_error=True</code>.</p>
+<h2 id="credentials">Credentials<a class="headerlink" href="#credentials" title="Permanent link">&para;</a></h2>
+<p>Route53 uses the process AWS credentials. Everything else must bring its own
+<code>DnsCredential</code>.</p>
+<p>The gate is central, in <code>get_adapter()</code>: a <code>godaddy</code> domain whose credential is
+null, <code>is_active=False</code>, or <code>verified=False</code> raises <strong>before any network call</strong>.
+Individual call sites do not repeat the check — one gate, one place to audit.</p>
+<p>A provider key is account-wide, which is the reason for two deliberate
+restrictions:</p>
+<ul>
+<li>No endpoint or service return value ever lists the domains in a linked
+  account.</li>
+<li>Ownership is proven <strong>per name</strong> at registration time, so a caller can only
+  confirm a domain they already knew to name.</li>
+</ul>
+<h2 id="adding-a-third-provider">Adding a third provider<a class="headerlink" href="#adding-a-third-provider" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Implement the four-method interface in <code>services/providers/&lt;name&gt;_provider.py</code>.</li>
+<li>Normalize names and record values at that boundary — nowhere else.</li>
+<li>Add the provider to <code>Domain.provider</code>'s accepted values and to
+   <code>get_adapter()</code>.</li>
+<li>If it needs credentials, it is automatically covered by the existing
+   fail-closed gate via <code>Domain.requires_credential</code>.</li>
+<li>Give it a propagation strategy. If it has no change-status API, the
+   authoritative probe (<code>mojo/helpers/dns/probe.py</code>) is the fallback.</li>
+<li>If it cannot delete the last value of a record set, set
+   <code>can_delete_last_record = False</code> and override <code>clear_record</code>. The default
+   implementation just forwards to <code>delete_record</code>, which is correct for anything
+   with a real delete.</li>
+</ol>
 
 
 

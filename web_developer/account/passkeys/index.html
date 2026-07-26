@@ -4210,9 +4210,9 @@
 <p>All management endpoints require authentication.</p>
 <h3 id="list-passkeys">List Passkeys<a class="headerlink" href="#list-passkeys" title="Permanent link">&para;</a></h3>
 <p><strong>GET</strong> <code>/api/account/passkeys</code></p>
-<p>Returns all <strong>enabled</strong> passkeys for the authenticated user across all portals.
-Disabled passkeys are excluded from the list by default — use
-<code>GET /api/account/passkeys?is_enabled=false</code> to include them.</p>
+<p>Returns all passkeys (enabled and disabled) for the authenticated user across
+all portals. Filter to one state with <code>?is_enabled=true</code> or
+<code>?is_enabled=false</code>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p">{</span>
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
