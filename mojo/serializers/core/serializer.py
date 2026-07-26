@@ -27,6 +27,16 @@ except ImportError:
     import json
 
 from django.db.models import ForeignKey, OneToOneField, ManyToOneRel, ManyToManyField
+from django.db.models.fields.reverse_related import OneToOneRel
+
+# Relation classifications. ORDER MATTERS at every use site: OneToOneRel
+# SUBCLASSES ManyToOneRel, so a reverse OneToOne matches MANY_RELATIONS too.
+# The single-object check must be tested FIRST — adding OneToOneRel to
+# MANY_RELATIONS instead would be a silent no-op, and reordering these two
+# checks would quietly re-break maestro item 52 (a reverse OneToOne serialized
+# as [] because it fell into the many branch and had no .all()).
+SINGLE_RELATIONS = (ForeignKey, OneToOneField, OneToOneRel)
+MANY_RELATIONS = (ManyToManyField, ManyToOneRel)
 from django.db.models import QuerySet, Model
 from django.core.exceptions import FieldDoesNotExist
 from django.http import HttpResponse
@@ -257,14 +267,16 @@ class OptimizedGraphSerializer:
 
                 field = self._get_model_field(obj, field_name)
 
-                if isinstance(field, (ForeignKey, OneToOneField)):
-                    # Single related object - share request cache for performance
+                if isinstance(field, SINGLE_RELATIONS):
+                    # Single related object (incl. a REVERSE OneToOne) - share
+                    # request cache for performance. Must precede the many
+                    # branch; see SINGLE_RELATIONS.
                     related_serializer = OptimizedGraphSerializer(related_obj, graph=sub_graph, bypass_cache=self.bypass_cache)
                     # Share the request cache to avoid re-serializing same objects
                     related_serializer._request_cache = self._request_cache
                     data[field_name] = related_serializer._serialize_instance_cached(related_obj)
 
-                elif isinstance(field, (ManyToManyField, ManyToOneRel)) or hasattr(related_obj, 'all'):
+                elif isinstance(field, MANY_RELATIONS) or hasattr(related_obj, 'all'):
                     # Many-to-many or reverse relationship - share request cache
                     if hasattr(related_obj, 'all'):
                         related_qset = related_obj.all()
@@ -312,9 +324,13 @@ class OptimizedGraphSerializer:
         for field_name in graph_config.get("graphs", {}).keys():
             try:
                 field = queryset.model._meta.get_field(field_name)
-                if isinstance(field, (ForeignKey, OneToOneField)):
+                # SINGLE_RELATIONS first — a reverse OneToOne is one object, so
+                # it belongs in select_related (a nullable one is a LEFT JOIN,
+                # which can neither duplicate nor drop parent rows because the
+                # backing column is unique).
+                if isinstance(field, SINGLE_RELATIONS):
                     select_related_fields.append(field_name)
-                elif isinstance(field, (ManyToManyField, ManyToOneRel)):
+                elif isinstance(field, MANY_RELATIONS):
                     prefetch_related_fields.append(field_name)
             except FieldDoesNotExist:
                 continue

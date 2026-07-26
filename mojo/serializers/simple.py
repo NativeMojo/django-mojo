@@ -1,11 +1,18 @@
 import ujson
 from django.db.models import ForeignKey, OneToOneField, ManyToOneRel
+from django.db.models.fields.reverse_related import OneToOneRel
+
+# See mojo/serializers/core/serializer.py — OneToOneRel subclasses ManyToOneRel,
+# so the single-object check MUST be tested first (maestro item 52). Here the
+# consequence of getting it wrong was worse than in the core serializer: this
+# module has no hasattr(.., 'all') guard and no try/except, so a reverse
+# OneToOne raised AttributeError instead of merely serializing as [].
+SINGLE_RELATIONS = (ForeignKey, OneToOneField, OneToOneRel)
 from django.db.models.query import QuerySet
 from django.core.exceptions import FieldDoesNotExist
 from django.http import HttpResponse
 import datetime
 from mojo.helpers import logit
-from distutils.log import info
 
 logger = logit.get_logger("serializer", "serializer.log")
 
@@ -83,8 +90,9 @@ class GraphSerializer:
             if related_obj is not None:
                 # Determine if the field is a ForeignKey, OneToOneField, or ManyToManyField
                 field_obj = obj._meta.get_field(related_field)
-                if isinstance(field_obj, (ForeignKey, OneToOneField)):
-                    # Serialize related model using its corresponding graph
+                if isinstance(field_obj, SINGLE_RELATIONS):
+                    # Single related object, incl. a REVERSE OneToOne. Must
+                    # precede the ManyToOneRel branch; see SINGLE_RELATIONS.
                     logger.warning(f"graph '{sub_graph}' for {related_obj.__class__.__name__}")
                     data[related_field] = GraphSerializer(related_obj, graph=sub_graph).serialize()
                 elif isinstance(field_obj, ManyToOneRel):

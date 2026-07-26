@@ -1,5 +1,20 @@
 ## Unreleased
 
+**fix** — **a reverse OneToOne in a graph's `graphs` serializes as an object, not `[]` (maestro item 52).**
+Django's `OneToOneRel` subclasses `ManyToOneRel`, so both serializers matched a
+reverse OneToOne against their many-relation branch, found no `.all()`, and
+emitted a literal `[]` — `mojo/serializers/simple.py` was worse, raising
+`AttributeError` because it has no `.all()` guard. Relation classification now
+runs through named `SINGLE_RELATIONS` / `MANY_RELATIONS` tuples with the
+single-object check tested first at every site (adding `OneToOneRel` to the
+many tuple would have been a silent no-op). The query optimizer routes a
+reverse OneToOne to `select_related` rather than `prefetch_related`; note that
+`_apply_query_optimizations` is not currently called from anywhere, so that
+half is a correctness fix to an unreachable method, not a live speedup.
+Also removes a dead `from distutils.log import info` from
+`mojo/serializers/simple.py` — `distutils` was removed in Python 3.12, so that
+import made the whole module unimportable on the supported runtime.
+
 **security** — **the REST dispatcher's 500 handler finally honors `LOGIT_RETURN_REAL_ERROR` (maestro item 51).**
 `mojo/middleware/logging.py` has always checked the flag before putting
 `str(e)` in a 500 body, but the dispatcher's `except Exception` branch returned
