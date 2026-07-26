@@ -11,6 +11,10 @@ that region and ignores the configured one.
 
 ```python
 search(name)                              # availability + live pricing; creates nothing
+search_batch(domain=None, domains=None,   # one grid call: base+tlds or full names;
+             tlds=None)                   #   rows share search()'s exact shape
+suggest(name, count=10,                   # GetDomainSuggestions + cached per-TLD prices
+        only_available=True)
 quote(group, user, name, years=1)         # -> price + single-use confirm token
 purchase(group, user, purchase_id, token) # the one irreversible money call
 poll_pending()                            # advance in-flight registrations; reconcile
@@ -31,6 +35,23 @@ and asks the caller to retry.
 
 `INVALID_NAME_FOR_TLD` is a validation error. A `list_prices` miss means the
 registrar does not sell that TLD (`tld_supported: false`) and never raises.
+
+Inside `search_batch`, a name that fails validation or errors becomes its own
+row with `available=None` and the explanation in `reason` — per-name
+isolation, never a failed batch, and `None` still never reads as "taken". The
+fan-out runs on a fixed 4-worker pool with the deduped list capped by
+`DNSMAN_SEARCH_BATCH_LIMIT` (default 10): `route53domains` throttles around
+5 TPS, and heavier concurrency mostly buys more `PENDING`/`DONT_KNOW`
+answers. `suggest` rows reuse the same shape, with prices filled per TLD.
+
+## The price cache
+
+Per-TLD pricing is cached in the route53 helper (`ROUTE53_PRICE_CACHE_HOURS`,
+default 24, `<= 0` disables): registry pricing is effectively static, and
+without the cache every availability check paid a second AWS round-trip just
+to re-fetch it. Only real AWS answers are cached — the failure path never is,
+so a transient error cannot pin a TLD `tld_supported=False` for a whole TTL —
+and both stores and hits are copies, so no caller can mutate a cached entry.
 
 ## Why the purchase ordering is what it is
 

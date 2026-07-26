@@ -137,6 +137,7 @@ from this, not from probing `registrar/quote` and reading the refusal.
 { "purchase_enabled": false, "registrant_contact_configured": true,
   "max_domain_price": "50.00", "currency": "USD", "quote_ttl_minutes": 15,
   "allowed_record_types": ["A","AAAA","CAA","CNAME","MX","NS","SRV","TXT"],
+  "search_batch_limit": 10, "suggestions_enabled": true,
   "providers": [
     { "name": "route53", "purchase": true,  "requires_credential": false },
     { "name": "godaddy", "purchase": false, "requires_credential": true }
@@ -159,18 +160,53 @@ Purchasing moves real money and is irreversible. It ships **disabled** — the
 purchase path**.
 
 ### `POST /api/dnsman/registrar/search`
+
+One name — the flat response, unchanged:
 ```json
 { "domain": "example.com" }
 ```
 ```json
 { "name": "example.com", "status": "AVAILABLE", "available": true,
-  "price": 12.00, "currency": "USD", "tld_supported": true,
-  "privacy_supported": true }
+  "price": 12.00, "currency": "USD", "tld": "com", "tld_supported": true,
+  "privacy_supported": true, "reason": null }
 ```
-`available` is **tri-state**. `true` and `false` mean what you expect;
-**`null` means the registry did not answer** (`PENDING`/`DONT_KNOW`) — retry,
-and do not present it to a user as unavailable. `tld_supported: false` means the
+
+Batch — either shape (never mixed), answered as `{ "results": [...] }` with
+one row per name **in request order**, each row exactly the single-name
+object above:
+```json
+{ "domain": "nativemojo", "tlds": ["com", "dev", "io", "app"] }
+```
+```json
+{ "domains": ["nativemojo.com", "nativemojo.dev"] }
+```
+- The deduped list is capped at `config.search_batch_limit` (default 10);
+  over the cap is a `400` and nothing is checked.
+- With `tlds` the base may carry its own TLD or not — `"nativemojo.com"`
+  and `"nativemojo"` produce the same grid.
+- **One bad name never fails the batch.** A name that fails validation
+  (e.g. invalid for its TLD) or errors comes back as its own row with
+  `available: null` and the explanation in `reason`; its siblings still get
+  real answers and the batch is a `200`. The single-name form keeps
+  answering `400` for an invalid name, unchanged.
+
+`available` is **tri-state** in every row. `true` and `false` mean what you
+expect; **`null` means there is no answer** (registry `PENDING`/`DONT_KNOW`,
+or a per-name failure inside a batch — `reason` says which) — retry, and do
+not present it to a user as unavailable. `tld_supported: false` means the
 registrar does not sell that TLD at all.
+
+### `POST /api/dnsman/registrar/suggest`
+```json
+{ "domain": "nativemojo.com", "count": 10, "only_available": true }
+```
+Alternate-name ideas from the registrar, answered as `{ "results": [...] }`
+with rows in exactly the search shape — render one grid for both. `count`
+is clamped to 25 and `only_available` defaults `true`. The registry returns
+no price on suggestions, so `price` is filled from the server's per-TLD
+price cache; a TLD the registrar does not sell keeps its row with
+`tld_supported: false` and `price: null` rather than being dropped.
+Requires `view_dns`, like search.
 
 ### `POST /api/dnsman/registrar/quote` → step 1 of 2
 ```json

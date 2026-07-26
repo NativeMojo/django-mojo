@@ -1,3 +1,25 @@
+## Unreleased
+
+**feature** — **dnsman: batch TLD availability, domain suggestions, and a per-TLD price cache (maestro item 412).**
+`POST /api/dnsman/registrar/search` now also accepts `{domain, tlds}` (one
+base name against a TLD grid) and `{domains}` (full names), answering
+`{"results": [...]}` with one row per name in request order — the
+single-name form's flat response is unchanged. The fan-out runs server-side
+on a bounded 4-worker pool with the deduped list capped by
+`DNSMAN_SEARCH_BATCH_LIMIT` (default 10, advertised at
+`config.search_batch_limit`), and a name that fails validation or errors
+becomes its own `available: null` row with the explanation in `reason` —
+one bad name never fails its siblings, and the tri-state contract holds in
+every row. New `POST /api/dnsman/registrar/suggest` wraps the registrar's
+GetDomainSuggestions: rows share the exact search shape (one grid renders
+both), with prices filled per TLD since the registry returns none on
+suggestions. Underneath, `route53.list_prices` now caches real answers per
+TLD for `ROUTE53_PRICE_CACHE_HOURS` (default 24, `<= 0` disables; failures
+are never cached) — previously every single availability check paid a
+second AWS round-trip to re-fetch pricing that changes approximately never.
+Both new surfaces are read-only discovery behind `view_dns`; `config` also
+gains `suggestions_enabled` as a feature-presence flag.
+
 ## v1.2.54 - July 26, 2026
 
 **feature** — **New `GET /api/dnsman/config` endpoint — capability discovery for dnsman consumers (maestro item 410).**

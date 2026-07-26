@@ -188,6 +188,8 @@ order, no rate-limit exposure, and hosts stay disposable.
 | `DNSMAN_PURCHASE_ENABLED` | `False` | Global kill switch for any real-money call |
 | `DNSMAN_MAX_DOMAIN_PRICE` | `50.00` | Refuse quotes above this |
 | `DNSMAN_QUOTE_TTL_MINUTES` | `15` | Quote/confirm-token lifetime |
+| `DNSMAN_SEARCH_BATCH_LIMIT` | `10` | Max names per batch search, after dedupe |
+| `ROUTE53_PRICE_CACHE_HOURS` | `24` | Per-TLD price cache in the route53 helper; `<= 0` disables |
 | `DNSMAN_REGISTRANT_CONTACT` | `{}` | ICANN contact; purchase refuses when incomplete |
 | `DNSMAN_ALLOWED_RECORD_TYPES` | A, AAAA, CNAME, TXT, MX, SRV, CAA, NS | Apex NS/SOA still refused |
 | `DNSMAN_ACME_DIRECTORY_URL` | Let's Encrypt **staging** | Deliberately not production |
