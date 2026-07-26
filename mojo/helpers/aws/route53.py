@@ -279,7 +279,7 @@ def _price_cache_ttl():
     return int(settings.get("ROUTE53_PRICE_CACHE_HOURS", 24, kind="int")) * 3600
 
 
-def list_prices(tld, access_key=None, secret_key=None):
+def list_prices(tld, access_key=None, secret_key=None, use_cache=True):
     """
     Return objict(tld, supported, registration_price, renewal_price, currency).
 
@@ -289,7 +289,10 @@ def list_prices(tld, access_key=None, secret_key=None):
 
     Real answers are cached per TLD for ROUTE53_PRICE_CACHE_HOURS (default 24,
     <= 0 disables); hits and stores are copies, so no caller can mutate the
-    cached entry.
+    cached entry. use_cache=False skips the read but the fresh answer still
+    refreshes the store — the quote path uses it so no money decision ever
+    rides a stale price. Explicit credentials bypass the cache entirely: it is
+    keyed on TLD alone and must only ever hold house-account answers.
     """
     tld = _clean_tld(tld)
     result = objict(
@@ -301,8 +304,9 @@ def list_prices(tld, access_key=None, secret_key=None):
     if not tld:
         return result
 
-    ttl = _price_cache_ttl()
-    if ttl > 0:
+    cacheable = access_key is None and secret_key is None
+    ttl = _price_cache_ttl() if cacheable else 0
+    if ttl > 0 and use_cache:
         entry = _price_cache.get(tld)
         if entry is not None and (time.time() - entry[0]) < ttl:
             return objict(entry[1])
@@ -336,7 +340,8 @@ def list_prices(tld, access_key=None, secret_key=None):
     return result
 
 
-def check_availability(name, access_key=None, secret_key=None, idn_lang_code=None):
+def check_availability(name, access_key=None, secret_key=None, idn_lang_code=None,
+                       use_cache=True):
     """
     Check whether a domain can be registered.
 
@@ -351,6 +356,9 @@ def check_availability(name, access_key=None, secret_key=None, idn_lang_code=Non
 
     INVALID_NAME_FOR_TLD raises a clean validation error rather than being
     reported as unavailable — it is a bad request, not a taken name.
+
+    use_cache is forwarded to list_prices — pass False when the price will
+    feed a money decision.
     """
     name = normalize_name(name)
     tld = get_tld(name)
@@ -366,7 +374,8 @@ def check_availability(name, access_key=None, secret_key=None, idn_lang_code=Non
 
     available = _tristate(status, name)
 
-    prices = list_prices(tld, access_key=access_key, secret_key=secret_key)
+    prices = list_prices(tld, access_key=access_key, secret_key=secret_key,
+                         use_cache=use_cache)
     return objict(
         name=name,
         status=status,

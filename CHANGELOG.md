@@ -17,8 +17,14 @@ suggestions. Underneath, `route53.list_prices` now caches real answers per
 TLD for `ROUTE53_PRICE_CACHE_HOURS` (default 24, `<= 0` disables; failures
 are never cached) — previously every single availability check paid a
 second AWS round-trip to re-fetch pricing that changes approximately never.
-Both new surfaces are read-only discovery behind `view_dns`; `config` also
-gains `suggestions_enabled` as a feature-presence flag.
+The quote path deliberately bypasses the cache (`use_cache=False`) — the
+quoted price is capped and written to the ledger, and no money decision may
+ride an answer up to a TTL stale — and credentialed lookups neither read nor
+store, since the cache is keyed on TLD alone and holds house-account answers
+only. Both new surfaces are read-only discovery behind `view_dns`; `config`
+also gains `suggestions_enabled` as a feature-presence flag. Note `suggest`
+needs the `route53domains:GetDomainSuggestions` IAM action; a failure there
+surfaces as a clean retry message, never raw provider text.
 
 ## v1.2.54 - July 26, 2026
 

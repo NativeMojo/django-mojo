@@ -300,6 +300,44 @@ def test_list_prices_never_caches_failures(opts):
 
 
 @th.django_unit_test()
+def test_list_prices_use_cache_false_fetches_fresh_and_refreshes(opts):
+    """The money path passes use_cache=False: always a live fetch, and the
+    fresh answer still refreshes the store for discovery callers."""
+    from mojo.helpers.aws import route53
+
+    route53._price_cache.clear()
+    client = _client(list_prices=_prices())
+
+    with patch(f"{MODULE}._domains_client", return_value=client):
+        route53.list_prices("com")                    # miss -> fetch + store
+        route53.list_prices("com", use_cache=False)   # bypass read -> fetch + refresh
+        route53.list_prices("com")                    # served from the refreshed store
+
+    assert client.list_prices.call_count == 2, (
+        "Expected use_cache=False to fetch fresh (2 AWS calls) and the final "
+        f"cached read to cost nothing, got {client.list_prices.call_count} calls")
+
+
+@th.django_unit_test()
+def test_list_prices_explicit_credentials_bypass_the_cache(opts):
+    """The cache is keyed on TLD alone, so it may only ever hold house-account
+    answers — a credentialed lookup must neither read nor store."""
+    from mojo.helpers.aws import route53
+
+    route53._price_cache.clear()
+    client = _client(list_prices=_prices())
+
+    with patch(f"{MODULE}._domains_client", return_value=client):
+        route53.list_prices("com", access_key="AK", secret_key="SK")
+        route53.list_prices("com", access_key="AK", secret_key="SK")
+
+    assert client.list_prices.call_count == 2, (
+        f"Expected credentialed lookups to skip the cache, got {client.list_prices.call_count} calls")
+    assert "com" not in route53._price_cache, (
+        "A credentialed answer must never be stored under the shared TLD key")
+
+
+@th.django_unit_test()
 def test_list_prices_cache_serves_copies(opts):
     """Mutating a returned result must not corrupt the cached entry."""
     from mojo.helpers.aws import route53

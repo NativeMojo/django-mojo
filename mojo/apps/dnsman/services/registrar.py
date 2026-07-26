@@ -35,7 +35,7 @@ import hmac
 import secrets as pysecrets
 from decimal import Decimal, InvalidOperation
 
-from django.db import transaction, IntegrityError
+from django.db import transaction, IntegrityError, close_old_connections
 
 from objict import objict
 
@@ -287,6 +287,11 @@ def _search_one(name):
         return _failed_row(
             cleaned,
             "The availability check failed for this name — try again in a moment.")
+    finally:
+        # Pool threads may touch the ORM through settings resolution; their
+        # thread-local connections are Django's to nobody. Same discipline as
+        # the job engine's executor workers.
+        close_old_connections()
 
 
 def _expand_tlds(domain, tlds):
@@ -388,8 +393,18 @@ def suggest(name, count=10, only_available=True):
         raise me.ValueException("Suggestion count must be a whole number")
     count = max(1, min(count, MAX_SUGGESTION_COUNT))
 
-    suggestions = route53.get_domain_suggestions(
-        name, count=count, only_available=bool(only_available))
+    try:
+        suggestions = route53.get_domain_suggestions(
+            name, count=count, only_available=bool(only_available))
+    except me.MojoException:
+        raise
+    except Exception as err:
+        # Raw botocore text carries the AWS account id and IAM principal
+        # (AccessDenied on a missing GetDomainSuggestions grant is the likely
+        # first-deploy failure) — log it, never echo it.
+        logger.error(f"dnsman: suggestions failed for '{name}': {err}")
+        raise me.ValueException(
+            "Suggestions are unavailable right now — try again in a moment.")
 
     tagged = []
     for suggestion in suggestions:
@@ -406,12 +421,18 @@ def suggest(name, count=10, only_available=True):
             seen.add(tld)
             unique_tlds.append(tld)
 
+    def _fetch_prices(tld):
+        try:
+            return route53.list_prices(tld)
+        finally:
+            close_old_connections()
+
     prices_by_tld = {}
     if unique_tlds:
         # list_prices never raises, so the map cannot blow up the request.
         with concurrent.futures.ThreadPoolExecutor(
                 max_workers=min(len(unique_tlds), SEARCH_POOL_WORKERS)) as pool:
-            for tld, prices in zip(unique_tlds, pool.map(route53.list_prices, unique_tlds)):
+            for tld, prices in zip(unique_tlds, pool.map(_fetch_prices, unique_tlds)):
                 prices_by_tld[tld] = prices
 
     results = []
@@ -468,7 +489,9 @@ def quote(group, user, name, years=1):
     if Domain.objects.filter(name=name).exists():
         raise me.ValueException(f"'{name}' is already managed by this system")
 
-    result = route53.check_availability(name)
+    # use_cache=False: this price is checked against the cap and written to
+    # the ledger — no money decision may ride a cached answer.
+    result = route53.check_availability(name, use_cache=False)
 
     if not result.tld_supported:
         raise me.ValueException(f".{tld} cannot be registered through this system")

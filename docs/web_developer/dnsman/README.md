@@ -214,8 +214,9 @@ defaults to `10` and is clamped to the range `1`–`25` rather than rejected
 `true`. The registry returns no price on suggestions, so `price` is filled
 from the server's per-TLD price cache; a TLD the registrar does not sell
 keeps its row with `tld_supported: false` and `price: null` rather than
-being dropped.
-Requires `view_dns`, like search.
+being dropped. If the registrar call itself fails (throttle, missing IAM
+grant), the endpoint answers a clean `400` asking to retry — never provider
+internals. Requires `view_dns`, like search.
 
 ### `POST /api/dnsman/registrar/quote` → step 1 of 2
 ```json

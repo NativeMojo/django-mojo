@@ -436,6 +436,52 @@ def test_suggest_fills_prices_and_keeps_unsupported_rows(opts):
 
 
 @th.django_unit_test()
+def test_quote_prices_fresh_never_from_the_cache(opts):
+    """The quoted price is capped and written to the ledger — quote must ask
+    for a live price (use_cache=False), never a cached one."""
+    from mojo.apps.dnsman.services import registrar
+
+    _clean()
+    name = f"{NAME_PREFIX}fresh-price.com"
+
+    with _enabled():
+        with mock.patch(f"{R53}.check_availability",
+                        return_value=_avail(name)) as check:
+            registrar.quote(opts.group, opts.user, name)
+
+    assert check.call_args.kwargs.get("use_cache") is False, (
+        "quote() must pass use_cache=False so no money decision rides a "
+        f"stale cached price, got kwargs {check.call_args.kwargs!r}")
+
+
+@th.django_unit_test()
+def test_suggest_failure_is_clean_and_leaks_no_aws_detail(opts):
+    """A registrar failure (missing IAM grant, throttle) must surface as a
+    clean retry message — botocore text carries the AWS account id."""
+    from mojo import errors as me
+    from mojo.apps.dnsman.services import registrar
+
+    boom = Exception(
+        "An error occurred (AccessDeniedException): User: "
+        "arn:aws:iam::123456789012:user/svc is not authorized to perform: "
+        "route53domains:GetDomainSuggestions")
+
+    raised = None
+    with mock.patch(f"{R53}.get_domain_suggestions", side_effect=boom):
+        try:
+            registrar.suggest("dnsman-test.com")
+        except me.ValueException as err:
+            raised = err
+
+    assert raised is not None, "Expected a helper failure to become a clean ValueException"
+    message = str(raised)
+    assert "arn:" not in message and "123456789012" not in message, (
+        f"AWS account detail leaked into the client-facing error: {message!r}")
+    assert "again" in message.lower(), (
+        f"Expected a retry-shaped message, got {message!r}")
+
+
+@th.django_unit_test()
 def test_suggest_clamps_count_and_validates_input(opts):
     from mojo import errors as me
     from mojo.apps.dnsman.services import registrar

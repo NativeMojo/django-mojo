@@ -53,6 +53,19 @@ to re-fetch it. Only real AWS answers are cached — the failure path never is,
 so a transient error cannot pin a TLD `tld_supported=False` for a whole TTL —
 and both stores and hits are copies, so no caller can mutate a cached entry.
 
+Two deliberate boundaries: **`quote()` passes `use_cache=False`** — the quoted
+price is checked against `DNSMAN_MAX_DOMAIN_PRICE` and written to the ledger,
+and no money decision may ride an answer up to a TTL stale (a registry
+repricing inside the window would otherwise quote under the cap and register
+over it). And a `list_prices` call carrying **explicit credentials** neither
+reads nor stores: the cache is keyed on TLD alone, so it may only ever hold
+house-account answers.
+
+`suggest` needs the `route53domains:GetDomainSuggestions` IAM action — a
+policy scoped to the check/list/register calls will fail it. The failure is
+logged in full and surfaced to the caller as a clean retry message, never the
+botocore text (which carries the AWS account id and principal).
+
 ## Why the purchase ordering is what it is
 
 ```
