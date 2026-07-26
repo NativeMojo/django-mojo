@@ -3915,13 +3915,41 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#testing-async-jobs-thrun_pending_jobs" class="md-nav__link">
+  <a href="#testing-async-jobs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Testing Async Jobs — th.run_pending_jobs()
+        Testing Async Jobs
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Testing Async Jobs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#thrun_jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        th.run_jobs()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#thrun_pending_jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        th.run_pending_jobs()
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -4328,8 +4356,101 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <li>Shared generator for generating deterministic-looking fixtures.</li>
 </ul>
 <hr />
-<h2 id="testing-async-jobs-thrun_pending_jobs">Testing Async Jobs — <code>th.run_pending_jobs()</code><a class="headerlink" href="#testing-async-jobs-thrun_pending_jobs" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">count</span> <span class="o">=</span> <span class="n">th</span><span class="o">.</span><span class="n">run_pending_jobs</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">status</span><span class="o">=</span><span class="s2">&quot;pending&quot;</span><span class="p">)</span>
+<h2 id="testing-async-jobs">Testing Async Jobs<a class="headerlink" href="#testing-async-jobs" title="Permanent link">&para;</a></h2>
+<p>Two helpers run jobs <strong>in the test process</strong>. Both exist because job handlers
+are exactly the code that talks to AWS, ACME and DNS providers, so a test has
+to be able to <code>mock.patch</code> them — and a job-engine daemon runs in a <em>separate</em>
+process that would never see those patches (the same trap that makes
+<code>override_settings()</code> useless against <code>opts.client</code>).</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>th.run_jobs()</code></th>
+<th><code>th.run_pending_jobs()</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Picks jobs from</td>
+<td>the real Redis queue</td>
+<td><code>Job.objects.filter(status=...)</code></td>
+</tr>
+<tr>
+<td>Verifies <code>publish()</code> actually enqueued</td>
+<td><strong>yes</strong></td>
+<td>no</td>
+</tr>
+<tr>
+<td>Honors <code>run_at</code> / <code>delay=</code></td>
+<td><strong>yes</strong> — future jobs are left alone</td>
+<td>no — runs them immediately</td>
+</tr>
+<tr>
+<td>State transitions</td>
+<td>the engine's own <code>execute_job</code> (JobEvents, attempts, <code>finished_at</code>, expiry)</td>
+<td>sets <code>completed</code>/<code>failed</code> directly</td>
+</tr>
+<tr>
+<td>Returns</td>
+<td><code>objict(count, job_ids, hit_limit)</code></td>
+<td><code>int</code></td>
+</tr>
+</tbody>
+</table>
+<p>Reach for <strong><code>run_jobs()</code></strong> when the dispatch itself is part of what you are
+testing, or when scheduling matters. <code>run_pending_jobs()</code> is the older, simpler
+helper and is fine when you only need the handler to run.</p>
+<blockquote>
+<p><strong>Never run a job-engine daemon during the suite.</strong> It would race these
+drains for the same queue, and any job it won would execute in the daemon's
+process, where the test's patches do not apply — producing failures that
+reproduce only under load.</p>
+</blockquote>
+<h3 id="thrun_jobs"><code>th.run_jobs()</code><a class="headerlink" href="#thrun_jobs" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="n">func</span><span class="o">=</span><span class="s2">&quot;myapp.asyncjobs.do_thing&quot;</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="n">row</span><span class="o">.</span><span class="n">pk</span><span class="p">})</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">result</span> <span class="o">=</span> <span class="n">th</span><span class="o">.</span><span class="n">run_jobs</span><span class="p">()</span>          <span class="c1"># explicit barrier: publish, drain, assert</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="k">assert</span> <span class="n">result</span><span class="o">.</span><span class="n">count</span> <span class="o">==</span> <span class="mi">1</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="n">row</span><span class="o">.</span><span class="n">refresh_from_db</span><span class="p">()</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>channel</code></td>
+<td><code>None</code></td>
+<td>One channel, a list, or <code>None</code> for <code>JOBS_CHANNELS</code>.</td>
+</tr>
+<tr>
+<td><code>max_jobs</code></td>
+<td><code>100</code></td>
+<td>Safety stop, so a handler that re-publishes itself cannot spin forever. <code>result.hit_limit</code> reports when it fires.</td>
+</tr>
+<tr>
+<td><code>include_scheduled</code></td>
+<td><code>True</code></td>
+<td>Promote due <code>delay=</code>/<code>run_at=</code> jobs first (what the Scheduler daemon does).</td>
+</tr>
+</tbody>
+</table>
+<p>Companions: <code>th.clear_jobs()</code> drops queued jobs so a module starts clean (worth
+calling in setup — the DB and Redis are long-lived), <code>th.pending_job_count()</code>
+asserts something <em>was</em> queued, and <code>th.promote_scheduled_jobs()</code> promotes due
+jobs without running them.</p>
+<p><strong>Addressing handlers:</strong> <code>publish()</code> stores a dotted <strong>path</strong> and re-imports it
+at execution time, so a handler defined inside a test module must be addressed
+by the name that module is actually loaded under. testit imports test files as
+<code>test_pkg.test_file</code> (tests/ is on <code>sys.path</code>), so use <code>f"{__name__}.handler"</code>
+rather than hardcoding <code>tests.test_pkg...</code> — the latter imports a <em>second copy</em>
+of the module with its own module-level state, immune to your patches.</p>
+<h3 id="thrun_pending_jobs"><code>th.run_pending_jobs()</code><a class="headerlink" href="#thrun_pending_jobs" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">count</span> <span class="o">=</span> <span class="n">th</span><span class="o">.</span><span class="n">run_pending_jobs</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">status</span><span class="o">=</span><span class="s2">&quot;pending&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>Executes pending jobs from the database using the same calling convention as the production job engine — <code>func(job)</code> where <code>job</code> is a <code>Job</code> model instance. No Redis or running engine process is required.</p>
 <p><strong>Parameters:</strong></p>
@@ -4361,26 +4482,26 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 - Returns the count of jobs executed</p>
 <p><strong>Why use this instead of calling job functions directly:</strong></p>
 <p>Job functions receive a <code>Job</code> model instance, not a plain dict. Calling a job function directly with a dict bypasses that calling convention and will not catch signature mismatches. Using <code>th.run_pending_jobs()</code> exercises the full pipeline — publish, DB row, function dispatch — exactly as production does.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_test</span><span class="p">()</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_handler_fires</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">jobs</span>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.jobs.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Job</span>
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>
-<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>    <span class="c1"># Clean up any leftover jobs from previous runs</span>
-<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>    <span class="n">Job</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">delete</span><span class="p">()</span>
-<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>
-<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>    <span class="c1"># Publish the job the same way production code does</span>
-<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a>    <span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span>
-<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a>        <span class="s2">&quot;myapp.tasks.send_notification&quot;</span><span class="p">,</span>
-<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>        <span class="p">{</span><span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="n">opts</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span> <span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;hello&quot;</span><span class="p">},</span>
-<a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a>        <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">,</span>
-<a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a>    <span class="p">)</span>
-<a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a>
-<a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a>    <span class="c1"># Run pending jobs using the real engine calling convention</span>
-<a id="__codelineno-13-17" name="__codelineno-13-17" href="#__codelineno-13-17"></a>    <span class="n">executed</span> <span class="o">=</span> <span class="n">th</span><span class="o">.</span><span class="n">run_pending_jobs</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">)</span>
-<a id="__codelineno-13-18" name="__codelineno-13-18" href="#__codelineno-13-18"></a>    <span class="k">assert</span> <span class="n">executed</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Expected at least 1 job executed, got </span><span class="si">{</span><span class="n">executed</span><span class="si">}</span><span class="s2">&quot;</span>
-<a id="__codelineno-13-19" name="__codelineno-13-19" href="#__codelineno-13-19"></a>
-<a id="__codelineno-13-20" name="__codelineno-13-20" href="#__codelineno-13-20"></a>    <span class="c1"># Assert side effects here</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nd">@th</span><span class="o">.</span><span class="n">django_unit_test</span><span class="p">()</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_handler_fires</span><span class="p">(</span><span class="n">opts</span><span class="p">):</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">jobs</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.jobs.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Job</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    <span class="c1"># Clean up any leftover jobs from previous runs</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>    <span class="n">Job</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">delete</span><span class="p">()</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>    <span class="c1"># Publish the job the same way production code does</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>    <span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>        <span class="s2">&quot;myapp.tasks.send_notification&quot;</span><span class="p">,</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>        <span class="p">{</span><span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="n">opts</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">pk</span><span class="p">,</span> <span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;hello&quot;</span><span class="p">},</span>
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a>        <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">,</span>
+<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a>    <span class="p">)</span>
+<a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a>
+<a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a>    <span class="c1"># Run pending jobs using the real engine calling convention</span>
+<a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a>    <span class="n">executed</span> <span class="o">=</span> <span class="n">th</span><span class="o">.</span><span class="n">run_pending_jobs</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">)</span>
+<a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a>    <span class="k">assert</span> <span class="n">executed</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Expected at least 1 job executed, got </span><span class="si">{</span><span class="n">executed</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a>
+<a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a>    <span class="c1"># Assert side effects here</span>
 </code></pre></div>
 <p><strong>Setup tip:</strong> delete relevant jobs at the top of your test to prevent leftover rows from previous runs from inflating counts or interfering with assertions.</p>
 <hr />
@@ -4513,13 +4634,13 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <p><code>MOJO_TEST_MODE</code> is read <strong>conf-file-only</strong> (<code>settings.get_static</code>) — a DB/Redis <code>Setting</code> row (writable via the generic <code>/api/settings</code> REST or Redis access) can NOT enable it. The same applies to the geofence <code>GEOFENCE_TEST_OVERRIDE</code> knob. Both are deploy-time settings-file values by design; the header plane and geo override can never be armed through the remotely-writable settings plane.</p>
 <h3 id="enabling-for-your-own-projects-tests">Enabling for your own project's tests<a class="headerlink" href="#enabling-for-your-own-projects-tests" title="Permanent link">&para;</a></h3>
 <p>If you're a consumer of django-mojo writing tests against these endpoints, add ONE line to your test environment settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># In your project&#39;s local/test settings module:</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="n">MOJO_TEST_MODE</span> <span class="o">=</span> <span class="kc">True</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># In your project&#39;s local/test settings module:</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="n">MOJO_TEST_MODE</span> <span class="o">=</span> <span class="kc">True</span>
 </code></pre></div>
 <p>Your tests then send the relevant <code>X-Mojo-Test-*</code> headers per-request via the testit client:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="n">resp</span> <span class="o">=</span> <span class="n">opts</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="s2">&quot;/api/auth/login&quot;</span><span class="p">,</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>                        <span class="p">{</span><span class="s2">&quot;username&quot;</span><span class="p">:</span> <span class="s2">&quot;u&quot;</span><span class="p">,</span> <span class="s2">&quot;password&quot;</span><span class="p">:</span> <span class="s2">&quot;p&quot;</span><span class="p">},</span>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>                        <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;X-Mojo-Test-Geo&quot;</span><span class="p">:</span> <span class="s1">&#39;{&quot;country_code&quot;: &quot;US&quot;}&#39;</span><span class="p">})</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">resp</span> <span class="o">=</span> <span class="n">opts</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="s2">&quot;/api/auth/login&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>                        <span class="p">{</span><span class="s2">&quot;username&quot;</span><span class="p">:</span> <span class="s2">&quot;u&quot;</span><span class="p">,</span> <span class="s2">&quot;password&quot;</span><span class="p">:</span> <span class="s2">&quot;p&quot;</span><span class="p">},</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>                        <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;X-Mojo-Test-Geo&quot;</span><span class="p">:</span> <span class="s1">&#39;{&quot;country_code&quot;: &quot;US&quot;}&#39;</span><span class="p">})</span>
 </code></pre></div>
 <p>The testit <code>RestClient</code> merges the <code>headers=</code> kwarg with its default auth headers — no extra setup needed beyond the env var.</p>
 <p>Most consumer projects don't need this at all — they configure handlers via settings and run tests against that fixed config. Only reach for the headers when you genuinely need per-test handler swapping (e.g. testing the asymmetric error contracts of <code>USER_REGISTERED_HANDLER</code> vs <code>USER_LOGIN_HANDLER</code>).</p>

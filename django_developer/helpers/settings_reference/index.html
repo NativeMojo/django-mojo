@@ -1039,6 +1039,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#dnsman" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DNSMAN
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#duid" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1461,6 +1472,17 @@
     <span class="md-ellipsis">
       
         REQUIRES
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#route53" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ROUTE53
       
     </span>
   </a>
@@ -4703,6 +4725,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#dnsman" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DNSMAN
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#duid" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5132,6 +5165,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#route53" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ROUTE53
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#secret" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5447,6 +5491,22 @@
 <ul>
 <li><code>DEACTIVATE_TOKEN_TTL</code></li>
 </ul>
+<h3 id="dnsman">DNSMAN<a class="headerlink" href="#dnsman" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>DNSMAN_ACME_CONTACT_EMAIL</code></li>
+<li><code>DNSMAN_ACME_DIRECTORY_URL</code></li>
+<li><code>DNSMAN_ALLOWED_RECORD_TYPES</code></li>
+<li><code>DNSMAN_CERT_RENEW_DAYS</code></li>
+<li><code>DNSMAN_CERT_SYNC_CHANNEL</code></li>
+<li><code>DNSMAN_DNS_PROPAGATION_TIMEOUT</code></li>
+<li><code>DNSMAN_MAX_DOMAIN_PRICE</code></li>
+<li><code>DNSMAN_PURCHASE_ENABLED</code> — global kill switch for any real-money registrar
+  call (default <code>False</code>). Defaults and meanings for the whole family:
+  <a href="../../dnsman/#settings">dnsman README settings table</a>.</li>
+<li><code>DNSMAN_QUOTE_TTL_MINUTES</code></li>
+<li><code>DNSMAN_REGISTRANT_CONTACT</code></li>
+<li><code>DNSMAN_SEARCH_BATCH_LIMIT</code></li>
+</ul>
 <h3 id="duid">DUID<a class="headerlink" href="#duid" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>DUID_HEADER</code></li>
@@ -5726,6 +5786,12 @@
   a single platform-global endpoint, decorate it with
   <code>@md.requires_global_perms(...)</code> instead (see
   <a href="../../core/permissions/#global-vs-group-scoped-permission-checks">permissions.md</a>).</li>
+</ul>
+<h3 id="route53">ROUTE53<a class="headerlink" href="#route53" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>ROUTE53_PRICE_CACHE_HOURS</code> — per-TLD registrar price cache in the route53
+  helper (default <code>24</code>; <code>&lt;= 0</code> disables). The quote/money path always
+  bypasses it. See <a href="../../dnsman/Registrar/#the-price-cache">Registrar.md</a>.</li>
 </ul>
 <h3 id="secret">SECRET<a class="headerlink" href="#secret" title="Permanent link">&para;</a></h3>
 <ul>

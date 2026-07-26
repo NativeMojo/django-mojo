@@ -3755,6 +3755,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-price-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The price cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#why-the-purchase-ordering-is-what-it-is" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3904,10 +3915,14 @@ an explicit message, not a generic denial.</p>
 that region and ignores the configured one.</p>
 <h2 id="surface">Surface<a class="headerlink" href="#surface" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">search</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>                              <span class="c1"># availability + live pricing; creates nothing</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">quote</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">user</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">years</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>         <span class="c1"># -&gt; price + single-use confirm token</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">purchase</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">user</span><span class="p">,</span> <span class="n">purchase_id</span><span class="p">,</span> <span class="n">token</span><span class="p">)</span> <span class="c1"># the one irreversible money call</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">poll_pending</span><span class="p">()</span>                            <span class="c1"># advance in-flight registrations; reconcile</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">get_contacts</span><span class="p">(</span><span class="n">domain</span><span class="p">)</span> <span class="o">/</span> <span class="n">update_contacts</span><span class="p">(</span><span class="n">domain</span><span class="p">,</span> <span class="n">contact</span><span class="p">)</span> <span class="o">/</span> <span class="n">set_privacy</span><span class="p">(</span><span class="n">domain</span><span class="p">,</span> <span class="n">enabled</span><span class="p">)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">search_batch</span><span class="p">(</span><span class="n">domain</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">domains</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>   <span class="c1"># one grid call: base+tlds or full names;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>             <span class="n">tlds</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>                   <span class="c1">#   rows share search()&#39;s exact shape</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">suggest</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>                   <span class="c1"># GetDomainSuggestions + cached per-TLD prices</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>        <span class="n">only_available</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">quote</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">user</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">years</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>         <span class="c1"># -&gt; price + single-use confirm token</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">purchase</span><span class="p">(</span><span class="n">group</span><span class="p">,</span> <span class="n">user</span><span class="p">,</span> <span class="n">purchase_id</span><span class="p">,</span> <span class="n">token</span><span class="p">)</span> <span class="c1"># the one irreversible money call</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">poll_pending</span><span class="p">()</span>                            <span class="c1"># advance in-flight registrations; reconcile</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">get_contacts</span><span class="p">(</span><span class="n">domain</span><span class="p">)</span> <span class="o">/</span> <span class="n">update_contacts</span><span class="p">(</span><span class="n">domain</span><span class="p">,</span> <span class="n">contact</span><span class="p">)</span> <span class="o">/</span> <span class="n">set_privacy</span><span class="p">(</span><span class="n">domain</span><span class="p">,</span> <span class="n">enabled</span><span class="p">)</span>
 </code></pre></div>
 <p>None of these check permissions — the REST layer gates every entry point, and
 <code>group</code>/<code>user</code> here are attribution, not authorization.</p>
@@ -3919,6 +3934,31 @@ could buy is taken. A quote on an indeterminate answer creates <strong>no row at
 and asks the caller to retry.</p>
 <p><code>INVALID_NAME_FOR_TLD</code> is a validation error. A <code>list_prices</code> miss means the
 registrar does not sell that TLD (<code>tld_supported: false</code>) and never raises.</p>
+<p>Inside <code>search_batch</code>, a name that fails validation or errors becomes its own
+row with <code>available=None</code> and the explanation in <code>reason</code> — per-name
+isolation, never a failed batch, and <code>None</code> still never reads as "taken". The
+fan-out runs on a fixed 4-worker pool with the deduped list capped by
+<code>DNSMAN_SEARCH_BATCH_LIMIT</code> (default 10): <code>route53domains</code> throttles around
+5 TPS, and heavier concurrency mostly buys more <code>PENDING</code>/<code>DONT_KNOW</code>
+answers. <code>suggest</code> rows reuse the same shape, with prices filled per TLD.</p>
+<h2 id="the-price-cache">The price cache<a class="headerlink" href="#the-price-cache" title="Permanent link">&para;</a></h2>
+<p>Per-TLD pricing is cached in the route53 helper (<code>ROUTE53_PRICE_CACHE_HOURS</code>,
+default 24, <code>&lt;= 0</code> disables): registry pricing is effectively static, and
+without the cache every availability check paid a second AWS round-trip just
+to re-fetch it. Only real AWS answers are cached — the failure path never is,
+so a transient error cannot pin a TLD <code>tld_supported=False</code> for a whole TTL —
+and both stores and hits are copies, so no caller can mutate a cached entry.</p>
+<p>Two deliberate boundaries: <strong><code>quote()</code> passes <code>use_cache=False</code></strong> — the quoted
+price is checked against <code>DNSMAN_MAX_DOMAIN_PRICE</code> and written to the ledger,
+and no money decision may ride an answer up to a TTL stale (a registry
+repricing inside the window would otherwise quote under the cap and register
+over it). And a <code>list_prices</code> call carrying <strong>explicit credentials</strong> neither
+reads nor stores: the cache is keyed on TLD alone, so it may only ever hold
+house-account answers.</p>
+<p><code>suggest</code> needs the <code>route53domains:GetDomainSuggestions</code> IAM action — a
+policy scoped to the check/list/register calls will fail it. The failure is
+logged in full and surfaced to the caller as a clean retry message, never the
+botocore text (which carries the AWS account id and principal).</p>
 <h2 id="why-the-purchase-ordering-is-what-it-is">Why the purchase ordering is what it is<a class="headerlink" href="#why-the-purchase-ordering-is-what-it-is" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>atomic + select_for_update on the purchase row
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    verify token hash, TTL, and status == &quot;quoted&quot;   &lt;- compare-and-swap
