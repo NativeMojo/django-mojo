@@ -61,12 +61,33 @@ offer the repo's local build skill if one exists.
    counts, or the blocker. If the plan itself changed during the build, push
    the updated scratch file back with `update_board_item(item,
    description=...)`.
-7. Update the repo's docs and changelog per its conventions.
-8. **Close.** PR opened → `update_board_item(item, values={"stage":
+7. **Discoveries become SUB-ITEMS of the item you are building** — not
+   top-level items. A build routinely turns up adjacent bugs, workarounds
+   worth removing, and follow-ups you correctly refuse to fold in. File each
+   with `create_board_item(board, title, values, description, parent=<this
+   item id>)`, stamped with the same `project`.
+   - Sub-items must be on the **same board** as the parent, and nesting is one
+     level only. If the parent lives on a different board than where you would
+     normally file, the parent's board wins.
+   - Write the description so it stands alone — file paths, the verification
+     you actually did, and why it was not fixed inline. The context that makes
+     it fixable is in your head right now and nowhere else.
+   - The counterpart repo of a cross-repo pair stays a **separate top-level
+     item** with its own `project` (see `nativemojo-board-conventions`), since
+     it is built from a different repo.
+   - Before closing the parent, either build the sub-items too (ask the user
+     first — it is scope they did not request) or list them explicitly in the
+     closing comment so none are left dangling.
+   Rationale: a discovery filed as a standalone micro-item loses the context of
+   the work that found it, and boards accumulate hundreds of orphans nobody can
+   triage. Attaching it to the parent keeps the "why" reachable.
+8. Update the repo's docs and changelog per its conventions.
+9. **Close.** PR opened → `update_board_item(item, values={"stage":
    "review"})`; committed straight to the main branch → `values={"stage":
-   "done"}`. Final comment: what changed + how to validate.
-9. **On failure/blocker**: post a blocker comment, leave `stage=building`
-   and the owner intact, and tell the user where it stands.
+   "done"}`. Final comment: what changed + how to validate, plus the state of
+   every sub-item filed during the build.
+10. **On failure/blocker**: post a blocker comment, leave `stage=building`
+    and the owner intact, and tell the user where it stands.
 
 ## Outage Mid-Build
 
