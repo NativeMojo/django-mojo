@@ -35,10 +35,14 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
 
 ## Planning
 
-Work items live on the **maestro board** (`NativeMojo` workspace, a joint
-backlog shared with web-mojo; see `.claude/maestro.json`). A board item's
-markdown description is the workspec; its `stage` column value is inbox →
-scoped → planned → building → review → done; priority is MoSCoW
+Work items live on the **maestro boards** (`NativeMojo` workspace, shared
+with web-mojo; see `.claude/maestro.json`): **Backlog** (the work queue —
+the only board scope/build operate on) plus two intake boards, **Bugs** and
+**Feature Requests** (new filings route there by kind; accepted items are
+promoted to the Backlog at scoping time). A board item's markdown
+description is the workspec; its `stage` column value is inbox → scoped →
+planned → building → review → done, plus **parked** (= on hold for now —
+distinct from MoSCoW `Won't`, which means never); priority is MoSCoW
 (must/should/could/won't); its `project` column names the repo it belongs to
 — **django-mojo items only** are worked from this repo. The
 `.claude/skills/maestro-*` skills (task/scope/build) read and write items
