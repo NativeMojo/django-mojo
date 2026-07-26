@@ -1103,3 +1103,62 @@ def apply_dns_records_godaddy(
             ttl=r.ttl,
         )
     return True
+
+
+def apply_dns_records_route53(
+    domain: str,
+    records: List[DnsRecord],
+    zone_id: Optional[str] = None,
+    access_key: Optional[str] = None,
+    secret_key: Optional[str] = None,
+):
+    """
+    Apply DNS records to a Route 53 hosted zone — the twin of
+    `apply_dns_records_godaddy`.
+
+    Differences from the GoDaddy path that matter:
+      - Route 53 speaks FQDNs, so record names are used exactly as
+        `build_required_dns_records` produced them (no relative-label rewrite).
+      - TXT values MUST be quoted (and 255-chunked). An unquoted SES
+        verification token or SPF string is silently invalid, so values are run
+        through `route53.format_txt_value` here. `route53.upsert_record` applies
+        the same formatting, and it passes already-quoted values through
+        untouched, so doing it explicitly is idempotent.
+      - MX values carry their priority in the value string
+        ("10 feedback-smtp.<region>.amazonses.com"); Route 53 stores the whole
+        string, so it is passed through verbatim.
+      - An UPSERT REPLACES the whole record set, so records that share a
+        (type, name) pair are collapsed into a single change carrying every
+        value. Writing them one at a time would leave only the last value.
+
+    Returns True. Raises when no hosted zone can be found for the domain.
+    """
+    from mojo.helpers.aws import route53
+
+    zone_id = zone_id or route53.find_zone_id(
+        domain, access_key=access_key, secret_key=secret_key)
+    if not zone_id:
+        raise ValueError(f"No Route 53 hosted zone found for {domain}")
+
+    grouped: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for r in records:
+        key = ((r.type or "").upper(), r.name)
+        entry = grouped.get(key)
+        value = route53.format_txt_value(r.value) if key[0] in ("TXT", "SPF") else r.value
+        if entry is None:
+            grouped[key] = {"ttl": r.ttl, "record_values": [value]}
+        elif value not in entry["record_values"]:
+            entry["record_values"].append(value)
+
+    for (rtype, name), entry in grouped.items():
+        route53.upsert_record(
+            zone_id,
+            rtype,
+            name,
+            entry["record_values"],
+            ttl=entry["ttl"],
+            zone_name=domain,
+            access_key=access_key,
+            secret_key=secret_key,
+        )
+    return True

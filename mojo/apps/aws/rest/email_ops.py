@@ -2,6 +2,7 @@ from typing import Dict, Any
 
 from mojo import decorators as md
 from mojo import JsonResponse
+from mojo.errors import MojoException
 from mojo.helpers import logit
 
 # Use the new email_ops service
@@ -21,6 +22,66 @@ def _get_json(request) -> Dict[str, Any]:
     return getattr(request, "DATA", {}) or {}
 
 
+def _dnsman_email():
+    """
+    Return the dnsman email service, or None when the app is not installed.
+
+    dnsman is an optional app; the aws app must keep working without it, so the
+    import is guarded rather than made a hard dependency.
+    """
+    try:
+        from mojo.apps.dnsman.services import email as dnsman_email
+    except ImportError:
+        return None
+    return dnsman_email
+
+
+def _onboard_via_dnsman(pk: int, payload: Dict[str, Any]):
+    """
+    Onboard through dnsman: SES computes the records, dnsman applies them to
+    whichever provider actually hosts the zone, using the domain's linked
+    DnsCredential. No provider API secret travels in the request body.
+    """
+    service = _dnsman_email()
+    if service is None:
+        return JsonResponse(
+            {"error": "use_dnsman requires the dnsman app to be installed"}, status=400)
+
+    result = service.onboard_email_domain(
+        pk,
+        region=payload.get("region"),
+        receiving_enabled=payload.get("receiving_enabled"),
+        s3_bucket=payload.get("s3_inbound_bucket"),
+        s3_prefix=payload.get("s3_inbound_prefix"),
+        ensure_mail_from=bool(payload.get("ensure_mail_from", False)),
+        mail_from_subdomain=payload.get("mail_from_subdomain", "feedback"),
+        endpoints=payload.get("endpoints") or {
+            "bounce": payload.get("bounce_endpoint"),
+            "complaint": payload.get("complaint_endpoint"),
+            "delivery": payload.get("delivery_endpoint"),
+            "inbound": payload.get("inbound_endpoint"),
+        },
+        access_key=payload.get("aws_access_key"),
+        secret_key=payload.get("aws_secret_key"),
+    )
+
+    return JsonResponse({
+        "status": True,
+        "data": {
+            "domain": result.domain,
+            "region": result.region,
+            "provider": result.provider,
+            "dns_records": result.dns_records,
+            "dkim_tokens": result.dkim_tokens,
+            "topic_arns": result.topic_arns,
+            "receipt_rule": result.receipt_rule,
+            "rule_set": result.rule_set,
+            "notes": result.notes,
+            "applied": result.applied,
+        }
+    })
+
+
 @md.URL("email/domain/<int:pk>/onboard")
 @md.requires_global_perms("manage_aws", "comms")
 def on_email_domain_onboard(request, pk: int):
@@ -31,6 +92,12 @@ def on_email_domain_onboard(request, pk: int):
       - Ensure SNS topics + notification mappings
       - Optionally enable receiving (catch-all → S3 + SNS)
       - Optionally enable MAIL FROM (returns DNS to add)
+
+    Pass `use_dnsman: true` to apply the records through dnsman instead: the
+    provider is chosen from the dnsman Domain row and the credential comes from
+    the linked DnsCredential. The `godaddy_key` / `godaddy_secret` parameters
+    are DEPRECATED (they put a provider API secret in the request body) but
+    still work.
     """
     if request.method != "POST":
         return JsonResponse({"error": "Method not allowed"}, status=405)
@@ -38,6 +105,9 @@ def on_email_domain_onboard(request, pk: int):
     payload = _get_json(request)
 
     try:
+        if payload.get("use_dnsman"):
+            return _onboard_via_dnsman(pk, payload)
+
         result = onboard_email_domain(
             domain_pk=pk,
             region=payload.get("region"),
@@ -76,6 +146,10 @@ def on_email_domain_onboard(request, pk: int):
         return JsonResponse({"error": "EmailDomain not found", "code": 404}, status=404)
     except InvalidConfiguration as e:
         return JsonResponse({"error": str(e)}, status=400)
+    except MojoException as e:
+        # dnsman speaks MojoException — carry its status through instead of
+        # flattening "this domain is not managed here" into a 500.
+        return JsonResponse({"error": e.reason, "code": e.code}, status=e.status)
     except Exception as e:
         logger.error(f"onboard error for domain pk={pk}: {e}")
         return JsonResponse({"error": str(e)}, status=500)

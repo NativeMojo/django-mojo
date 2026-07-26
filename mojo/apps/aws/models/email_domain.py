@@ -140,8 +140,12 @@ class EmailDomain(MojoSecrets, MojoModel):
                     "created",
                     "modified",
                 ],
+                # Masked only. The raw aws_key used to be returned here, which
+                # handed the full AWS access key id to every caller who could
+                # read a domain. Both halves of the credential stay masked in
+                # every graph; internal callers use the raw properties.
                 "extra": [
-                    "aws_key",
+                    "aws_key_masked",
                     "aws_secret_masked"
                 ]
             },
@@ -149,11 +153,19 @@ class EmailDomain(MojoSecrets, MojoModel):
 
     @property
     def aws_key(self):
+        """Raw AWS access key id. Internal callers only — never put this in a graph."""
         return self.get_secret('aws_key')
 
     @property
     def aws_secret(self):
         return self.get_secret('aws_secret')
+
+    @property
+    def aws_key_masked(self):
+        key = self.get_secret('aws_key', '') or ''
+        if len(key) > 4:
+            return '*' * (len(key) - 4) + key[-4:]
+        return key
 
     @property
     def aws_secret_masked(self):
