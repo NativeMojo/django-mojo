@@ -1,3 +1,22 @@
+## Unreleased
+
+**fix** — **shortlink: a resolve that serves nothing no longer counts a hit or records a click metric (maestro item 179).**
+`ShortLink.resolve()` used to increment `hit_count` and record the
+`shortlink:click` (and per-user `sl:click:<code>`) metrics *before* checking
+whether the row had a destination, so a live link whose file was deleted
+(`on_delete=SET_NULL`, empty `url`) counted engagement for a request that
+served the 404 page. Destination resolution now runs first via a new
+read-only `ShortLink.get_destination()` accessor (no hit, no metric, no
+expiry policy — `resolve()` remains the sole owner of usability), and a
+falsy destination returns `None` having written nothing to Postgres or
+Redis. This also closes the last sub-HTTP distinguisher among the four
+dead-link conditions (item 151's indistinguishability guarantee): a
+destination-less code now costs exactly what an unknown code costs.
+Healthy resolves are unchanged in every observable way. **Data-semantics
+note**: `hit_count` and click metrics stop counting dead-link hits, so
+historical values may read slightly higher than the new behavior would have
+produced; no backfill — the affected rows are links nobody could use.
+
 ## v1.2.55 - July 26, 2026
 
 **feature** — **dnsman: batch TLD availability, domain suggestions, and a per-TLD price cache (maestro item 412).**

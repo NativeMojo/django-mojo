@@ -207,6 +207,66 @@ def test_resolve_missing(opts):
     assert_eq(result, None, "inactive link should resolve to None")
 
 
+@th.django_unit_test("ShortLink: resolve with no destination writes no hit (item 179)")
+def test_resolve_no_destination_no_hit(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    # A live row that serves nothing — the state a file-backed link lands in
+    # after its File is deleted (on_delete=SET_NULL nulls the FK, url stays "").
+    link = ShortLink.create(url="", source="test")
+    result = link.resolve()
+    assert_eq(result, None, "destination-less link should resolve to None")
+    link.refresh_from_db()
+    assert_eq(link.hit_count, 0,
+              f"a resolve that serves nothing must not count a hit, got hit_count={link.hit_count}")
+
+
+@th.django_unit_test("ShortLink: resolve with no destination records no metric (item 179)")
+def test_resolve_no_destination_no_metric(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    link = ShortLink.create(url="", source="test")
+    with patch("mojo.apps.metrics.record") as record_mock:
+        result = link.resolve()
+        assert_eq(result, None, "destination-less link should resolve to None")
+        assert_eq(record_mock.call_count, 0,
+                  f"a resolve that serves nothing must record no metric, got {record_mock.call_count} call(s)")
+
+
+@th.django_unit_test("ShortLink: expired resolve counts no hit")
+def test_resolve_expired_no_hit(opts):
+    from mojo.apps.shortlink.models import ShortLink
+    from mojo.helpers import dates
+
+    link = ShortLink.create(url="https://example.com/expired-no-hit", source="test")
+    ShortLink.objects.filter(pk=link.pk).update(expires_at=dates.utcnow() - timedelta(hours=1))
+    link.refresh_from_db()
+    result = link.resolve()
+    assert_eq(result, None, "expired link should resolve to None")
+    link.refresh_from_db()
+    assert_eq(link.hit_count, 0,
+              f"an expired resolve must not count a hit, got hit_count={link.hit_count}")
+
+
+@th.django_unit_test("ShortLink: get_destination is read-only")
+def test_get_destination_is_read_only(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    link = ShortLink.create(url="https://example.com/peek", source="test")
+    with patch("mojo.apps.metrics.record") as record_mock:
+        dest = link.get_destination()
+        assert_eq(dest, "https://example.com/peek", "get_destination should return the stored url")
+        assert_eq(record_mock.call_count, 0,
+                  "get_destination must record no metric")
+    link.refresh_from_db()
+    assert_eq(link.hit_count, 0,
+              f"get_destination must not touch hit_count, got {link.hit_count}")
+
+    empty = ShortLink.create(url="", source="test")
+    assert_eq(empty.get_destination(), None,
+              "get_destination should return None when the link points nowhere")
+
+
 # ---------------------------------------------------------------------------
 # Unit: metadata and OG
 # ---------------------------------------------------------------------------
@@ -527,6 +587,19 @@ def test_rest_redirect_no_destination(opts):
               f"link with no destination should return 404, got {resp.status_code}")
     assert_eq(_body_of(resp), _dead_link_body(opts),
               "a destination-less link must return the same page as an unknown code")
+
+
+@th.django_unit_test("REST: /s/<code> with no destination records no hit (item 179)")
+def test_rest_no_destination_records_no_hit(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    link = ShortLink.create(url="", source="test")
+    resp = opts.client.get(f"/s/{link.code}", allow_redirects=False)
+    assert_eq(resp.status_code, 404,
+              f"link with no destination should return 404, got {resp.status_code}")
+    link.refresh_from_db()
+    assert_eq(link.hit_count, 0,
+              f"a 404'd dead link must not count a hit through the view, got hit_count={link.hit_count}")
 
 
 @th.django_unit_test("REST: bots hitting a dead link get the 404 page, not an OG interstitial")

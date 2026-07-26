@@ -131,8 +131,14 @@ link = ShortLink.create(url="...", source="sms", expire_days=3)
 link = ShortLink.create(file=file_obj, source="fileman", resolve_file=True)
 link = ShortLink.create(rendition=rendition_obj, source="fileman", resolve_file=True)
 
-# Resolve: returns URL, increments hit_count, records metric. None if expired/inactive.
+# Resolve: returns URL, increments hit_count, records metric. Returns None —
+# and writes NOTHING (no hit, no metric) — if the link is inactive, expired,
+# or has no destination to serve.
 destination = link.resolve()
+
+# Read-only peek: where does this link point? No hit counted, no metric
+# recorded, no expiry/is_active policy applied — resolve() owns usability.
+destination = link.get_destination()
 
 # Log a click (only if track_clicks=True)
 click = link.log_click(request)
@@ -279,7 +285,7 @@ bot_clicks = link.clicks.filter(is_bot=True).count()
 
 ## Metrics Integration
 
-Every `resolve()` call records Redis time-series metrics via `mojo.apps.metrics`:
+Every **successful** `resolve()` call records Redis time-series metrics via `mojo.apps.metrics`. A resolve that serves nothing — inactive, expired, or no destination (e.g. the linked file was deleted) — records no metric and does not increment `hit_count`, so analytics count only served redirects:
 
 - `shortlink:click` — global click counter
 - If `track_clicks=True` and `link.user` exists:
@@ -313,7 +319,7 @@ shorten("https://...", source="sms", expire_days=1, expire_hours=6)
 shorten("https://...", source="web", expire_days=0, expire_hours=0)
 ```
 
-Expired links return `None` from `resolve()`. At the REST layer this makes `/s/<code>` render the "link unavailable" 404 page — see [The "link unavailable" page](#the-link-unavailable-page).
+Expired links return `None` from `resolve()` and count no hit. At the REST layer this makes `/s/<code>` render the "link unavailable" 404 page — see [The "link unavailable" page](#the-link-unavailable-page).
 
 ---
 

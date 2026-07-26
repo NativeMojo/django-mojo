@@ -241,7 +241,7 @@ Use the metrics API for time-series analytics on shortlinks.
 
 ### What is recorded
 
-- Global clicks (always): slug `shortlink:click` in account `global`
+- Global clicks (always, on a successful redirect): slug `shortlink:click` in account `global`
 - Per-link user analytics (only when `track_clicks=true` and link has a `user`):
   - slug `sl:click:<code>`
   - account `user-<user_id>`
@@ -360,6 +360,8 @@ from the moment of the request:
 - the link has expired
 - the link is inactive (`is_active=False`)
 - the link resolves to no destination (e.g. its linked file was deleted)
+
+None of these conditions increments `hit_count` or records a click metric — analytics count only served redirects.
 
 All four return an **identical body** — the response deliberately does not reveal whether a given code was ever real. The page is also sent with `Cache-Control: no-store` and `<meta name="robots" content="noindex">`.
 

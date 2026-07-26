@@ -232,12 +232,42 @@ class ShortLink(models.Model, MojoModel):
         elif created and "expires_at" not in changed_fields:
             self.expires_at = dates.utcnow() + timedelta(days=3)
 
+    def get_destination(self):
+        """
+        Return where this link points, without touching hit_count or metrics.
+
+        Prefer rendition over file when both are set. Both file-linked and
+        rendition-linked shortlinks call the model's `get_direct_download_url()`
+        so we never re-enter the shortlink-aware `generate_download_url()` path
+        (which would recurse). Returns None when there is nothing to serve —
+        e.g. a file-backed link whose File was deleted (on_delete=SET_NULL).
+
+        This is the read-only half of resolve(); it applies no expiry or
+        is_active policy. Callers deciding whether to serve a link want
+        resolve().
+        """
+        if self.resolve_file:
+            if self.rendition_id and self.rendition:
+                return self.rendition.get_direct_download_url()
+            if self.file_id and self.file:
+                return self.file.get_direct_download_url()
+        return self.url or None
+
     def resolve(self):
         """
         Resolve destination URL, increment hit_count, record metric.
-        Returns the destination URL or None if expired/inactive.
+        Returns the destination URL, or None if inactive, expired, or the
+        link has no destination.
+
+        Nothing is written unless a destination is being returned: a link that
+        serves nothing must not count a hit, must not record a click metric,
+        and must cost the same as an unknown code from the outside (item 179).
         """
         if not self.is_active or self.is_expired:
+            return None
+
+        destination = self.get_destination()
+        if not destination:
             return None
 
         # Atomic hit_count increment
@@ -262,17 +292,7 @@ class ShortLink(models.Model, MojoModel):
         except Exception:
             pass  # metrics are best-effort
 
-        # Resolve destination. Prefer rendition over file when both are set.
-        # Both file-linked and rendition-linked shortlinks call the model's
-        # `get_direct_download_url()` so we never re-enter the shortlink-aware
-        # `generate_download_url()` path (which would recurse).
-        if self.resolve_file:
-            if self.rendition_id and self.rendition:
-                return self.rendition.get_direct_download_url()
-            if self.file_id and self.file:
-                return self.file.get_direct_download_url()
-
-        return self.url or None
+        return destination
 
     def log_click(self, request):
         """Log a click if track_clicks is enabled."""
