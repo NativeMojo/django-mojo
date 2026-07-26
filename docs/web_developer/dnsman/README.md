@@ -22,14 +22,24 @@ Rows carrying a `group` are tenant-scoped automatically: pass `?group=<id>`.
 A caller never sees another group's rows, and `?group=` can only narrow what
 they may already see — it never widens it.
 
-Two endpoints are deliberately stricter than `manage_dns`:
+Three surfaces are deliberately stricter than a plain read. **Anything building
+UI must gate on these, or it renders controls that 403.**
 
-- `registrar/adopt` — **platform superuser only**. Adoption hands a group
-  control of a hosted zone in the house AWS account; open to any `manage_dns`
-  holder it would be a cross-tenant zone-claim primitive.
+- `registrar/adopt` — **platform superuser only**. This is checked as the
+  literal `is_superuser` attribute on the user, **not** as a permission string:
+  there is no `admin` permission that opens it, and gating a button on one would
+  render a control that fails. Adoption hands a group control of a hosted zone
+  in the house AWS account; open to any `manage_dns` holder it would be a
+  cross-tenant zone-claim primitive.
 - `certificate/material/<pk>` — requires `manage_dns`, not `view_dns`. Being
   allowed to see that a certificate exists is not the same as being allowed to
-  hold its private key.
+  hold its private key. For a domain with **no group** (a house/platform
+  domain) it additionally requires a superuser.
+- **`GET /api/dnsman/whois`** — requires `manage_dns` despite being a read. The
+  registrar returns the real registrant name, street address, phone and email to
+  the account owner *regardless of WHOIS privacy*, so this is PII and a
+  read-only `view_dns` operator has no business seeing it. **Hide the WHOIS
+  section entirely from read-only operators** rather than letting it 403.
 
 ## Domains
 
@@ -122,6 +132,12 @@ Purchasing moves real money and is irreversible. It ships **disabled** — the
 `DNSMAN_PURCHASE_ENABLED` kill switch defaults to off — and there is
 deliberately **no single-call purchase path**.
 
+> **Known gap (as of v1.2.53):** no endpoint reports whether purchasing is
+> enabled, so a client can only discover it is off by calling
+> `registrar/quote` and reading the refusal. Until a capability endpoint exists,
+> treat the quote refusal as the signal, and do not present purchase UI as
+> definitely-available before a successful quote.
+
 ### `POST /api/dnsman/registrar/search`
 ```json
 { "domain": "example.com" }
@@ -173,6 +189,11 @@ with no purchase and no money — the path by which DNS management is useful on
 day one, before anything has been bought.
 
 ## WHOIS and privacy
+
+**All three of these require `manage_dns` — including the GET.** See the
+permissions section above: the registrar hands back real registrant PII to the
+account owner whether or not privacy is enabled, so there is no read-only tier
+here.
 
 Route53-backed domains only. A GoDaddy-backed domain gets an explicit
 "management-only" error, not a generic denial.
