@@ -21,9 +21,26 @@ class ApiKey(MojoSecrets, MojoModel):
 
     Keys authenticate via:  Authorization: apikey <token>
 
-    The raw token is generated on creation, returned once in the REST response
-    or via create_for_group(), and never stored — only its SHA-256 hash is kept
-    in token_hash for fast indexed lookup.
+    The raw token is generated on creation and returned in the REST response
+    or by create_for_group(). It is retained TWO ways:
+
+      - token_hash — SHA-256 of the raw token; indexed and unique, used by
+        validate_token() for the fast lookup.
+      - mojo_secrets — the raw token itself, stored ENCRYPTED via MojoSecrets
+        (AES-256-GCM, key derived with PBKDF2). get_token() decrypts and
+        returns it, and the "default" REST graph exports it as `token` on
+        EVERY read (list and detail), not just at creation — any caller
+        holding this model's VIEW_PERMS (manage_group / manage_groups /
+        groups) sees the live raw token. The "me" graph omits it deliberately.
+
+    Encryption caveat: MojoSecrets derives its key from
+    `{created}{pk}{ClassName}` — every input is a plaintext column on this
+    same row, with no server-side secret mixed in. It therefore protects
+    against exfiltration of the mojo_secrets column alone, NOT against a row
+    or full-table dump. Treat this table as holding live credentials.
+
+    Whether `token` should stay on the default graph is a separate open
+    question — see maestro item 424; deliberately not decided here.
 
     Permissions are explicit (JSON dict, same shape as GroupMember.permissions).
     System-level permissions (sys.*) are always denied regardless of what is in
@@ -287,8 +304,16 @@ class ApiKey(MojoSecrets, MojoModel):
 
     def generate_token(self):
         """
-        Generate a new raw token, store its hash, and return the raw token.
-        The raw token is never stored and cannot be recovered after this call.
+        Generate a new raw token, persist it, and return it.
+
+        Two writes happen: token_hash gets the SHA-256 (for validate_token's
+        indexed lookup) and set_secret("token", ...) puts the RAW token into
+        mojo_secrets, encrypted on save. The raw token stays recoverable
+        afterwards via get_token() and is exported by the default REST graph.
+
+        What this call destroys is the PREVIOUS token — both the old hash and
+        the old encrypted copy are overwritten, so any token issued before
+        this call stops authenticating and cannot be recovered.
         """
         token = crypto.random_string(48, allow_special=False)
         self.token_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -300,8 +325,11 @@ class ApiKey(MojoSecrets, MojoModel):
         """
         Create a new ApiKey for a group programmatically.
 
-        Returns (api_key, raw_token). The raw_token must be stored by the caller
-        — it cannot be recovered after this call.
+        Returns (api_key, raw_token). The caller does NOT have to persist
+        raw_token in order to see it again — it is stored encrypted on the row
+        and api_key.get_token() returns it (as does the default REST graph).
+        It is still a live credential: hand it to the client over a secure
+        channel and treat the stored copy accordingly.
 
         Args:
             group:       account.Group instance
@@ -378,11 +406,16 @@ class ApiKey(MojoSecrets, MojoModel):
         """Rotate this key's secret in place: same id / name / permissions /
         limits, a brand-new token.
 
-        ``generate_token`` overwrites ``token_hash`` and the encrypted secret,
+        ``generate_token`` overwrites ``token_hash`` AND the encrypted secret,
         so the previous token stops authenticating the instant this saves
-        (``validate_token`` looks up by hash). The new raw token is returned and
-        must be persisted by the caller — like creation, it cannot be recovered
-        after the next rotation. No new row, so existing references stay valid.
+        (``validate_token`` looks up by hash) and is gone for good — its
+        encrypted copy is replaced, not kept.
+
+        The NEW token is not write-once: like any ApiKey token it remains
+        readable through ``get_token()`` and the default REST graph until the
+        next rotation. It is returned here for convenience, not because this
+        is the only chance to see it. No new row, so existing references stay
+        valid.
         """
         token = self.generate_token()
         self.save()

@@ -77,7 +77,9 @@ api_key, raw_token = ApiKey.create_for_group(
     name="Mobile App v2",
     permissions={"view_orders": True, "create_orders": True},
 )
-# raw_token is a 48-char alphanumeric string — store it now, it cannot be recovered
+# raw_token is a 48-char alphanumeric string. It is also stored encrypted on the
+# row, so api_key.get_token() returns it later — you do not have to persist it to
+# recover it. Treat it as a live credential regardless.
 ```
 
 ### Via REST
@@ -94,7 +96,7 @@ POST /api/group/apikey
 }
 ```
 
-The raw token is included in the creation response under `data.token` and is stored encrypted via `MojoSecrets` so it can be retrieved at any time.
+The raw token is included in the creation response under `data.token`. It is **also stored encrypted** via `MojoSecrets`, so it can be retrieved at any time — `ApiKey.get_token()` server-side, and the `default` graph re-serializes it as `token` on **every** read (`GET /api/group/apikey` and `/api/group/apikey/<id>`), to any caller holding `manage_group` / `manage_groups` / `groups`. This is not a "shown once" credential. See [Security Notes](#security-notes).
 
 ```json
 {
@@ -130,7 +132,7 @@ See [Rate Limiting](../core/rate_limiting.md) for full details.
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/group/apikey` | List keys for a group |
-| `POST` | `/api/group/apikey` | Create a key (returns token once) |
+| `POST` | `/api/group/apikey` | Create a key (response includes the raw token) |
 | `GET` | `/api/group/apikey/<id>` | Get key details |
 | `POST` | `/api/group/apikey/<id>` | Update name, permissions, limits, is_active |
 | `DELETE` | `/api/group/apikey/<id>` | Delete key |
@@ -178,10 +180,11 @@ SMS-provider configuration without sending a real message.
 ### `POST /api/group/apikey/rotate` — rotate self
 
 Rotates the **calling** key's secret **in place**: same key id, name,
-permissions, and limits — a brand-new token. The previous token is invalidated
-immediately (its hash is overwritten), so the new token must be persisted by
-the caller; like creation, it is returned **exactly once** and cannot be
-recovered afterward.
+permissions, and limits — a brand-new token. The **previous** token is
+invalidated immediately (its hash *and* its encrypted copy are overwritten)
+and cannot be recovered. The **new** token is returned in this response; it is
+not write-once — like any ApiKey token it stays readable afterwards via
+`ApiKey.get_token()` and the default graph until the next rotation.
 
 - Authenticate with `Authorization: apikey <token>` (the key being rotated).
 - Self-service: no management permission — the caller already holds the secret
@@ -226,8 +229,10 @@ old_key.delete()
 
 ## Security Notes
 
-- The raw token is stored encrypted via `MojoSecrets` (AES encryption, key derived from the record's pk + created timestamp)
+- **The raw token is stored, not just hashed.** `token_hash` (SHA-256) is for indexed lookup; the raw token itself lives in `mojo_secrets`, encrypted via `MojoSecrets` (AES-256-GCM, key via PBKDF2). `ApiKey.get_token()` recovers it.
+- **Key-derivation caveat.** `MojoSecrets._get_secrets_password()` derives the key from `{created}{pk}{ClassName}` — all plaintext columns on the same row, with no server-side secret mixed in. This protects against exfiltration of the `mojo_secrets` column on its own; it does **not** protect against a row-level or full-table dump. Treat `account_apikey` as a table of live credentials and protect it like one. (`KSMSecrets` — the KMS-backed base in the same module — is a stronger option; `ApiKey` does not use it today.)
+- **The default graph returns the live token on every read.** `GRAPHS["default"]` carries `("get_token", "token")`, so any caller with `manage_group` / `manage_groups` / `groups` gets the raw token back on list and detail, not only at creation. The `me` graph omits it, and `/rotate` uses the forced `me` graph plus an explicit token field. Whether the default graph *should* expose it is an open question tracked as maestro item 424 — the behavior described here is the current one.
 - `sys.*` permissions are unconditionally denied
 - Expired or inactive keys return 401
 - Group scope is enforced at the dispatcher level — keys cannot access groups outside their hierarchy
-- `token_hash` and `mojo_secrets` are never included in API responses
+- The raw `token_hash` and `mojo_secrets` **columns** are never serialized — but note that the decrypted token is exposed via the `token` extra above, so "the secret columns are hidden" is not the same as "the secret is hidden"

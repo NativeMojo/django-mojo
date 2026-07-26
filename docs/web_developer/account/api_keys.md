@@ -57,6 +57,8 @@ Requires `manage_group`, `manage_groups`, or the combined `groups` permission (g
 }
 ```
 
+> **The token is not "shown once."** It is stored encrypted server-side and re-serialized on every read of the key: `GET /api/group/apikey` and `GET /api/group/apikey/<id>` both return `token` to callers holding `manage_group` / `manage_groups` / `groups`. Anyone who can list a group's API keys can read their live secrets — grant that permission accordingly. (`GET /api/group/apikey/me` is the exception and never returns a token.)
+
 ### Using an API Key
 
 ```
@@ -109,7 +111,7 @@ Authorization: apikey <token>
 
 ### Rotate a Key — `POST /api/group/apikey/rotate`
 
-Rotates the **calling** API key's secret **in place** — same key, same permissions, a new token. Authenticate with the key being rotated; the previous token stops working immediately, so save the new one (it is returned only once, like creation). No management permission needed (you already hold the secret); a user/JWT session gets `401`.
+Rotates the **calling** API key's secret **in place** — same key, same permissions, a new token. Authenticate with the key being rotated; the previous token stops working immediately and cannot be recovered. Save the new one — though note it is **not** write-once: a caller with `manage_group` / `manage_groups` / `groups` can read it back from `GET /api/group/apikey/<id>` (see Security Notes). No management permission needed to rotate (you already hold the secret); a user/JWT session gets `401`.
 
 ```json
 POST /api/group/apikey/rotate
@@ -209,6 +211,7 @@ The request runs with the user's full permissions. If `allowed_ips` was set, req
 ## Security Notes
 
 - Store all tokens securely — treat them like passwords
+- **API key tokens are recoverable, not write-once.** The raw token is stored encrypted on the record and returned by the default graph on every read (`GET /api/group/apikey`, `GET /api/group/apikey/<id>`). Read access to a group's API keys is equivalent to holding those keys. Rotation does invalidate the *previous* token permanently.
 - **API Keys**: scoped to one group, explicit permissions, `sys.*` always denied
 - **User Auth Tokens**: carry full user permissions including `sys.*` — use with caution
 - Set short expiry periods for temporary integrations

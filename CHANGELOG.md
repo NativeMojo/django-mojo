@@ -1,5 +1,21 @@
 ## Unreleased
 
+**docs** — **ApiKey token-storage docs corrected: the raw token IS stored (maestro item 61).**
+Four `ApiKey` docstrings, two REST-handler docstrings, and both API-key doc
+pages claimed the raw token was "never stored" and "cannot be recovered." That
+was wrong and security-relevant: `generate_token()` writes the raw token to
+`mojo_secrets` via `MojoSecrets` (AES-256-GCM, PBKDF2), `ApiKey.get_token()`
+decrypts it, and the `default` REST graph serializes it as `token` on every
+list/detail read to any caller with `manage_group` / `manage_groups` /
+`groups` — not just at creation. The docs now say so, and record the
+key-derivation caveat: `MojoSecrets` keys off `{created}{pk}{ClassName}`, all
+plaintext columns on the same row, so it resists loss of the `mojo_secrets`
+column but not a full row dump — treat `account_apikey` as holding live
+credentials. Rotation genuinely does destroy the previous token (hash and
+encrypted copy both overwritten); only the "the new one is write-once" half of
+the old claim was false. **No behavior change** — whether `get_token` belongs
+on the default graph is tracked as maestro item 424.
+
 **fix** — **shortlink expiry is bounded; absurd and negative values return 400 (maestro item 296).**
 `expire_days` / `expire_hours` fed unbounded arithmetic into `timedelta`, so a
 large enough value raised `OverflowError` and surfaced as a **500** on every

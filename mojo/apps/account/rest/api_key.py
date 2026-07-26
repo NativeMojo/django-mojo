@@ -40,8 +40,11 @@ def on_group_apikey_rotate(request):
     """Rotate the authenticating API key in place and return the new token.
 
     Same key id / name / permissions / limits, a new secret. The previous
-    token is invalidated immediately (its hash is overwritten), so the caller
-    MUST persist the returned token — it cannot be retrieved again.
+    token is invalidated immediately — its hash and its encrypted copy are
+    both overwritten — and cannot be recovered. The new token is returned
+    here, and it also stays readable afterwards through the default graph
+    (`GET /api/group/apikey/<id>`) for callers holding manage_group /
+    manage_groups / groups; this endpoint is not the only way to see it.
 
     Self-service by design: the key rotates itself, identified by the auth
     header, so no management permission is required (the caller already holds
@@ -49,8 +52,9 @@ def on_group_apikey_rotate(request):
     authentication (`Authorization: apikey <token>`); a user/JWT request has no
     api_key and gets 401.
 
-    The new token is surfaced on the forced "me" graph (which omits the `token`
-    extra) so it is returned exactly once, here, and never echoed by whoami.
+    The response uses the forced "me" graph (which omits the `token` extra)
+    with the new token attached explicitly — so whoami never echoes a token,
+    while this endpoint still returns the one it just minted.
     """
     api_key = getattr(request, "api_key", None)
     if api_key is None:

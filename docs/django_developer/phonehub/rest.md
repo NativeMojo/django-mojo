@@ -212,7 +212,7 @@ POST /api/phonehub/config/<id>
 Content-Type: application/json
 
 {
-  "mojo_api_key": "<token shown once by /api/group/apikey>"
+  "mojo_api_key": "<api key token from /api/group/apikey>"
 }
 ```
 

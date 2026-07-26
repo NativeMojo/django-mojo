@@ -53,7 +53,7 @@ def setup_api_key_testing(opts):
 
 @th.unit_test("apikey_create_for_group")
 def test_apikey_create_for_group(opts):
-    """create_for_group() returns an api_key and a raw token; hash is stored, raw token is not."""
+    """create_for_group() returns an api_key and a raw token; token_hash holds the SHA-256, and the raw token is also kept encrypted in mojo_secrets."""
     from mojo.apps.account.models import Group, ApiKey
 
     group = Group.objects.get(pk=opts.parent_id)
@@ -65,7 +65,7 @@ def test_apikey_create_for_group(opts):
     assert api_key.pk is not None, "api_key was not saved"
     assert raw_token is not None and len(raw_token) == 48, f"unexpected token length: {len(raw_token)}"
     assert api_key.token_hash is not None, "token_hash not set"
-    assert api_key.token_hash != raw_token, "raw token must not be stored"
+    assert api_key.token_hash != raw_token, "token_hash must hold the SHA-256 digest, not the raw token"
     assert api_key.permissions.get("view_data") is True, "permission not stored"
     opts.raw_token = raw_token
     opts.api_key_id = api_key.pk
