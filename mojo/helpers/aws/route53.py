@@ -18,6 +18,7 @@ Two client factories exist on purpose:
 """
 
 import re
+import time
 import uuid
 
 import botocore.exceptions
@@ -247,6 +248,37 @@ def supports_privacy(tld):
     return _clean_tld(tld) not in TLDS_WITHOUT_PRIVACY
 
 
+def _tristate(status, name=None):
+    """
+    Map a raw AWS availability enum onto the tri-state answer.
+
+    INVALID_NAME_FOR_TLD maps to None here; `check_availability` raises for it
+    BEFORE calling this — a bad request must stay a validation error on the
+    direct path, but a suggestion row must never blow up the whole list.
+    """
+    if status in AVAILABLE_STATUSES:
+        return True
+    if status in UNAVAILABLE_STATUSES:
+        return False
+    if status in INDETERMINATE_STATUSES or status == INVALID_NAME_STATUS:
+        return None
+    logger.warning(f"route53 returned unknown availability '{status}' for {name}")
+    return None
+
+
+# Per-TLD price cache: tld -> (fetched_at, result). Registry pricing is
+# effectively static, and without this every availability check pays a second
+# AWS round-trip just to re-fetch it. Only real AWS answers are stored —
+# including "not sold here" — while the exception path below never caches, so
+# a transient failure cannot pin a TLD unsupported for a whole TTL.
+_price_cache = {}
+
+
+def _price_cache_ttl():
+    """Cache lifetime in seconds. ROUTE53_PRICE_CACHE_HOURS <= 0 disables."""
+    return int(settings.get("ROUTE53_PRICE_CACHE_HOURS", 24, kind="int")) * 3600
+
+
 def list_prices(tld, access_key=None, secret_key=None):
     """
     Return objict(tld, supported, registration_price, renewal_price, currency).
@@ -254,6 +286,10 @@ def list_prices(tld, access_key=None, secret_key=None):
     NEVER raises. An unsupported or unknown TLD comes back with
     supported=False and null prices — availability search must not blow up
     because someone typed a TLD Route53 does not sell.
+
+    Real answers are cached per TLD for ROUTE53_PRICE_CACHE_HOURS (default 24,
+    <= 0 disables); hits and stores are copies, so no caller can mutate the
+    cached entry.
     """
     tld = _clean_tld(tld)
     result = objict(
@@ -264,6 +300,13 @@ def list_prices(tld, access_key=None, secret_key=None):
         currency=None)
     if not tld:
         return result
+
+    ttl = _price_cache_ttl()
+    if ttl > 0:
+        entry = _price_cache.get(tld)
+        if entry is not None and (time.time() - entry[0]) < ttl:
+            return objict(entry[1])
+
     try:
         client = _domains_client(access_key, secret_key)
         resp = client.list_prices(Tld=tld)
@@ -279,15 +322,17 @@ def list_prices(tld, access_key=None, secret_key=None):
             break
     if match is None and entries:
         match = entries[0]
-    if match is None:
-        return result
 
-    registration = match.get("RegistrationPrice") or {}
-    renewal = match.get("RenewalPrice") or {}
-    result.supported = True
-    result.registration_price = registration.get("Price")
-    result.renewal_price = renewal.get("Price")
-    result.currency = registration.get("Currency") or renewal.get("Currency")
+    if match is not None:
+        registration = match.get("RegistrationPrice") or {}
+        renewal = match.get("RenewalPrice") or {}
+        result.supported = True
+        result.registration_price = registration.get("Price")
+        result.renewal_price = renewal.get("Price")
+        result.currency = registration.get("Currency") or renewal.get("Currency")
+
+    if ttl > 0:
+        _price_cache[tld] = (time.time(), objict(result))
     return result
 
 
@@ -319,15 +364,7 @@ def check_availability(name, access_key=None, secret_key=None, idn_lang_code=Non
     if status == INVALID_NAME_STATUS:
         raise me.ValueException(f"'{name}' is not a valid domain name for the .{tld} registry")
 
-    if status in AVAILABLE_STATUSES:
-        available = True
-    elif status in UNAVAILABLE_STATUSES:
-        available = False
-    elif status in INDETERMINATE_STATUSES:
-        available = None
-    else:
-        logger.warning(f"route53 returned unknown availability '{status}' for {name}")
-        available = None
+    available = _tristate(status, name)
 
     prices = list_prices(tld, access_key=access_key, secret_key=secret_key)
     return objict(
@@ -339,6 +376,40 @@ def check_availability(name, access_key=None, secret_key=None, idn_lang_code=Non
         tld=tld,
         tld_supported=prices.supported,
         privacy_supported=supports_privacy(tld))
+
+
+def get_domain_suggestions(name, count=10, only_available=True,
+                           access_key=None, secret_key=None):
+    """
+    Ask Route53 Domains for alternate-name suggestions.
+
+    Returns a list of objict(name, status, available) — `available` is the
+    same tri-state as `check_availability`. AWS returns NO price on
+    suggestions, and none is filled here; the dnsman registrar service fills
+    prices per TLD from `list_prices` (cached). An unusable suggestion row is
+    skipped with a warning rather than failing the list.
+    """
+    name = normalize_name(name)
+    client = _domains_client(access_key, secret_key)
+    resp = client.get_domain_suggestions(
+        DomainName=name,
+        SuggestionCount=int(count),
+        OnlyAvailable=bool(only_available))
+
+    suggestions = []
+    for entry in resp.get("SuggestionsList") or []:
+        raw = entry.get("DomainName")
+        try:
+            suggestion_name = normalize_name(raw)
+        except me.ValueException:
+            logger.warning(f"route53 returned an unusable suggestion {raw!r} for {name}")
+            continue
+        status = entry.get("Availability")
+        suggestions.append(objict(
+            name=suggestion_name,
+            status=status,
+            available=_tristate(status, suggestion_name)))
+    return suggestions
 
 
 def _is_privacy_rejection(err):

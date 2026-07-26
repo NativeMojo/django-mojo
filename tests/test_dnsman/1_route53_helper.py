@@ -31,6 +31,21 @@ def _prices(tld="com", price=13.0, currency="USD"):
     }
 
 
+def _settings(**overrides):
+    """Patch settings.get in-process (th.server_settings is for the separate
+    server process and does nothing for these direct module calls)."""
+    from mojo.helpers.settings import settings as settings_obj
+
+    real_get = settings_obj.get
+
+    def patched_get(name, *args, **kwargs):
+        if name in overrides:
+            return overrides[name]
+        return real_get(name, *args, **kwargs)
+
+    return patch.object(settings_obj, "get", side_effect=patched_get)
+
+
 # ---------------------------------------------------------------------------
 # client factories
 # ---------------------------------------------------------------------------
@@ -78,6 +93,7 @@ def test_dns_client_uses_the_requested_region(opts):
 def test_check_availability_available(opts):
     from mojo.helpers.aws import route53
 
+    route53._price_cache.clear()
     client = _client(
         check_domain_availability={"Availability": "AVAILABLE"},
         list_prices=_prices())
@@ -105,6 +121,7 @@ def test_check_availability_available(opts):
 def test_check_availability_unavailable(opts):
     from mojo.helpers.aws import route53
 
+    route53._price_cache.clear()
     for status in ("UNAVAILABLE", "UNAVAILABLE_PREMIUM", "UNAVAILABLE_RESTRICTED", "RESERVED"):
         client = _client(
             check_domain_availability={"Availability": status},
@@ -122,6 +139,7 @@ def test_check_availability_indeterminate_is_none(opts):
     """PENDING / DONT_KNOW mean the registry did not answer — never False."""
     from mojo.helpers.aws import route53
 
+    route53._price_cache.clear()
     for status in ("PENDING", "DONT_KNOW"):
         client = _client(
             check_domain_availability={"Availability": status},
@@ -139,6 +157,7 @@ def test_check_availability_invalid_name_raises(opts):
     from mojo.helpers.aws import route53
     from mojo import errors as me
 
+    route53._price_cache.clear()
     client = _client(
         check_domain_availability={"Availability": "INVALID_NAME_FOR_TLD"},
         list_prices=_prices())
@@ -160,6 +179,7 @@ def test_check_availability_unsupported_tld_never_raises(opts):
     """A list_prices miss must degrade to tld_supported=False, not an exception."""
     from mojo.helpers.aws import route53
 
+    route53._price_cache.clear()
     client = MagicMock()
     client.check_domain_availability.return_value = {"Availability": "AVAILABLE"}
     client.list_prices.side_effect = Exception("UnsupportedTLD: pizza")
@@ -179,12 +199,183 @@ def test_check_availability_unsupported_tld_never_raises(opts):
 def test_list_prices_empty_response_is_unsupported(opts):
     from mojo.helpers.aws import route53
 
+    route53._price_cache.clear()
     client = _client(list_prices={"Prices": []})
     with patch(f"{MODULE}._domains_client", return_value=client):
         result = route53.list_prices("pizza")
 
     assert result.supported is False, "Expected an empty Prices list to mean unsupported"
     assert result.registration_price is None, "Expected no price for an unsupported TLD"
+
+
+# ---------------------------------------------------------------------------
+# price cache
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_list_prices_caches_per_tld(opts):
+    """The second lookup for a TLD must be served without an AWS call."""
+    from mojo.helpers.aws import route53
+
+    route53._price_cache.clear()
+    client = _client(list_prices=_prices())
+
+    with patch(f"{MODULE}._domains_client", return_value=client):
+        first = route53.list_prices("com")
+        second = route53.list_prices("com")
+        route53.list_prices("net")
+
+    assert first.registration_price == 13.0, (
+        f"Expected the fetched price on the first call, got {first.registration_price}")
+    assert second.registration_price == 13.0, (
+        f"Expected the cached price on the second call, got {second.registration_price}")
+    assert client.list_prices.call_count == 2, (
+        "Expected one AWS call for 'com' (second served from cache) plus one "
+        f"for 'net', got {client.list_prices.call_count}")
+
+
+@th.django_unit_test()
+def test_list_prices_cache_expires(opts):
+    """An entry older than the TTL must be refetched, not served."""
+    from mojo.helpers.aws import route53
+
+    route53._price_cache.clear()
+    client = _client(list_prices=_prices())
+
+    with patch(f"{MODULE}._domains_client", return_value=client):
+        route53.list_prices("com")
+        fetched_at, cached = route53._price_cache["com"]
+        # Rewind the stored timestamp far past any sane TTL — no sleeping.
+        route53._price_cache["com"] = (fetched_at - 10 * 366 * 86400, cached)
+        route53.list_prices("com")
+
+    assert client.list_prices.call_count == 2, (
+        f"Expected an expired entry to refetch, got {client.list_prices.call_count} calls")
+
+
+@th.django_unit_test()
+def test_list_prices_ttl_zero_disables_cache(opts):
+    """ROUTE53_PRICE_CACHE_HOURS <= 0 is the escape hatch: no hits, no stores."""
+    from mojo.helpers.aws import route53
+
+    route53._price_cache.clear()
+    client = _client(list_prices=_prices())
+
+    with _settings(ROUTE53_PRICE_CACHE_HOURS=0):
+        with patch(f"{MODULE}._domains_client", return_value=client):
+            route53.list_prices("com")
+            route53.list_prices("com")
+
+    assert client.list_prices.call_count == 2, (
+        f"Expected TTL<=0 to disable caching, got {client.list_prices.call_count} calls")
+    assert "com" not in route53._price_cache, (
+        "Expected TTL<=0 to store nothing in the cache")
+
+
+@th.django_unit_test()
+def test_list_prices_never_caches_failures(opts):
+    """A transient AWS failure must not pin a TLD unsupported for the TTL."""
+    from mojo.helpers.aws import route53
+
+    route53._price_cache.clear()
+    client = MagicMock()
+    client.list_prices.side_effect = Exception("throttled")
+
+    with patch(f"{MODULE}._domains_client", return_value=client):
+        first = route53.list_prices("com")
+        second = route53.list_prices("com")
+        # AWS recovers: the very next call must see the real answer.
+        client.list_prices.side_effect = None
+        client.list_prices.return_value = _prices()
+        third = route53.list_prices("com")
+
+    assert first.supported is False and second.supported is False, (
+        "Expected the failure path to keep reporting unsupported")
+    assert client.list_prices.call_count == 3, (
+        f"Expected every call to retry after failures, got {client.list_prices.call_count}")
+    assert third.supported is True, (
+        "Expected the first successful answer after a failure to come through")
+    assert third.registration_price == 13.0, (
+        f"Expected the recovered price, got {third.registration_price}")
+
+
+@th.django_unit_test()
+def test_list_prices_cache_serves_copies(opts):
+    """Mutating a returned result must not corrupt the cached entry."""
+    from mojo.helpers.aws import route53
+
+    route53._price_cache.clear()
+    client = _client(list_prices=_prices())
+
+    with patch(f"{MODULE}._domains_client", return_value=client):
+        first = route53.list_prices("com")
+        first.registration_price = 999.0
+        second = route53.list_prices("com")
+
+    assert second.registration_price == 13.0, (
+        "Expected the cache to serve copies — a caller's mutation leaked into "
+        f"the cached entry (got {second.registration_price})")
+
+
+# ---------------------------------------------------------------------------
+# domain suggestions
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_get_domain_suggestions_maps_the_tristate(opts):
+    from mojo.helpers.aws import route53
+
+    client = _client(get_domain_suggestions={"SuggestionsList": [
+        {"DomainName": "Example-One.COM.", "Availability": "AVAILABLE"},
+        {"DomainName": "example-two.net", "Availability": "UNAVAILABLE"},
+        {"DomainName": "example-three.io", "Availability": "PENDING"},
+    ]})
+
+    with patch(f"{MODULE}._domains_client", return_value=client):
+        rows = route53.get_domain_suggestions("Example.COM", count="5", only_available=False)
+
+    sent = client.get_domain_suggestions.call_args.kwargs
+    assert sent["DomainName"] == "example.com", (
+        f"Expected the normalized name to reach AWS, got {sent.get('DomainName')}")
+    assert sent["SuggestionCount"] == 5 and isinstance(sent["SuggestionCount"], int), (
+        f"Expected the count to be coerced to int, got {sent.get('SuggestionCount')!r}")
+    assert sent["OnlyAvailable"] is False, (
+        f"Expected only_available to pass through as a bool, got {sent.get('OnlyAvailable')!r}")
+
+    assert [r.name for r in rows] == [
+        "example-one.com", "example-two.net", "example-three.io"], (
+        f"Expected normalized suggestion names in AWS order, got {[r.name for r in rows]}")
+    assert rows[0].available is True, (
+        f"Expected AVAILABLE to map to True, got {rows[0].available!r}")
+    assert rows[1].available is False, (
+        f"Expected UNAVAILABLE to map to False, got {rows[1].available!r}")
+    assert rows[2].available is None, (
+        f"Expected PENDING to map to None, got {rows[2].available!r}")
+    assert rows[0].status == "AVAILABLE", (
+        f"Expected the raw AWS enum to be preserved, got {rows[0].status}")
+
+
+@th.django_unit_test()
+def test_get_domain_suggestions_skips_garbage_and_never_raises_per_row(opts):
+    """A bad row is dropped; INVALID_NAME_FOR_TLD maps to None, not a raise."""
+    from mojo.helpers.aws import route53
+
+    client = _client(get_domain_suggestions={"SuggestionsList": [
+        {"DomainName": "bad name/slash.com", "Availability": "AVAILABLE"},
+        {"DomainName": "good-one.com", "Availability": "INVALID_NAME_FOR_TLD"},
+        {"DomainName": "good-two.com", "Availability": "AVAILABLE"},
+    ]})
+
+    with patch(f"{MODULE}._domains_client", return_value=client):
+        rows = route53.get_domain_suggestions("example.com")
+
+    assert [r.name for r in rows] == ["good-one.com", "good-two.com"], (
+        f"Expected the unusable row to be skipped, got {[r.name for r in rows]}")
+    assert rows[0].available is None, (
+        "Expected INVALID_NAME_FOR_TLD to map to None on a suggestion row "
+        f"(never a raise), got {rows[0].available!r}")
+    assert rows[1].available is True, (
+        f"Expected the good row to survive, got {rows[1].available!r}")
 
 
 # ---------------------------------------------------------------------------
