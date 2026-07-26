@@ -1,3 +1,26 @@
+## v1.2.54 - July 26, 2026
+
+**feature** — **New `GET /api/dnsman/config` endpoint — capability discovery for dnsman consumers (maestro item 410).**
+Nothing in dnsman reported its own configuration, so a client could only
+discover the `DNSMAN_PURCHASE_ENABLED` kill switch was off by calling
+`registrar/quote` and reading the refusal — the wrong shape for a kill switch a
+UI needs to check before rendering purchase controls. The new endpoint reports
+`purchase_enabled`, `registrant_contact_configured` (a boolean only — the
+registrant contact itself is PII and is never echoed by any dnsman endpoint),
+`max_domain_price`, `quote_ttl_minutes`, `allowed_record_types`, per-provider
+purchase/credential support, and `acme.staging`. The last one matters beyond
+purchasing: dnsman defaults to Let's Encrypt staging, and a staging-issued
+certificate is not publicly trusted — a consumer needs this to avoid rendering
+such a certificate as generally trusted. Gated on `view_dns`, no group
+required, since this is operator configuration rather than tenant data.
+
+Also corrected the web-developer reference doc, which under-documented the
+permission surface added in `v1.2.53`'s security fixes: `GET
+/api/dnsman/whois` requires `manage_dns`, not `view_dns` (the registrar returns
+real registrant PII regardless of WHOIS privacy), and `registrar/adopt` is
+gated on the literal `is_superuser` attribute rather than any permission
+string, so no permission grant can open it.
+
 ## v1.2.53 - July 26, 2026
 
 **fix** — **`DNSManager`'s array endpoints raised `ValueError` whenever they actually returned data (maestro item 392/397).**
