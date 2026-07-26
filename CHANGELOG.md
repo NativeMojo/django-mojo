@@ -1,5 +1,24 @@
 ## Unreleased
 
+**fix** — **testit: `server_settings()` no longer tears down other modules' websockets (maestro item 275).**
+`th.server_settings()` applies server-side overrides by writing
+`var/django.conf` and letting uvicorn reload — which kills the worker process
+and every in-flight websocket with it. With 28 modules calling it and
+`test_realtime` holding live sockets, full-suite runs failed intermittently
+with `Connection is already closed` (observed three times in one afternoon).
+New `testit/server_lock.py` is a writer-preferring reader/writer lock: a
+`WsClient` connection holds it **shared** for its lifetime, and
+`server_settings()` holds it **exclusively** across both of its reloads.
+Modules still run in parallel — only the actual restart windows are excluded,
+which is far cheaper than the documented-but-widely-unobserved alternative of
+marking every caller `"serial": True` (that would serialize `test_assistant`'s
+589 tests among others). Acquisition always degrades on timeout rather than
+deadlocking, so a leaked connection can delay an override but never hang the
+suite. `WsClient.send_text` now also raises a diagnostic naming the likely
+cause instead of a bare `WebSocketConnectionClosedException`. `"serial": True`
+remains correct for main-thread signal handlers; it is no longer needed merely
+because a module calls `server_settings()`.
+
 **docs** — **ticket action system + LLM approval workflow documented (maestro item 48).**
 The structured-approval system that shipped in v1.2.8 (TicketNote
 `metadata.action` / `action_response` blocks, `dispatch_action` handler

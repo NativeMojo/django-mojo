@@ -116,6 +116,8 @@ class WsClient:
         self._closed_event = threading.Event()
         self._messages: "queue.Queue[WsMessage]" = queue.Queue()
         self._last_error: Optional[BaseException] = None
+        # True while this client holds the SHARED server hold (see connect()).
+        self._holds_server_lock: bool = False
 
     # ----------------------------------------------------------------------------------
     # Static helpers
@@ -156,6 +158,17 @@ class WsClient:
 
         if self._ws_app is not None:
             return
+
+        # Hold the server SHARED for this connection's lifetime so a concurrent
+        # th.server_settings() cannot reload uvicorn out from under the socket
+        # (see testit/server_lock.py). Released in close().
+        from testit import server_lock
+        self._holds_server_lock = server_lock.acquire_shared()
+        if not self._holds_server_lock and self.logger:
+            self.logger.warning(
+                "[ws] proceeding without the shared server hold — a settings "
+                "override may tear this connection down mid-test"
+            )
 
         def _on_open(ws):
             if self.logger:
@@ -209,7 +222,17 @@ class WsClient:
         self._thread.start()
 
         if not self._open_event.wait(timeout=timeout):
+            # Never leak the shared hold when the connection never opened —
+            # a stuck reader would stall every server_settings() caller.
+            self._release_server_lock()
             raise TimeoutError(f"WebSocket did not open within {timeout}s")
+
+    def _release_server_lock(self) -> None:
+        """Drop the shared server hold, if this client is holding one. Idempotent."""
+        if getattr(self, "_holds_server_lock", False):
+            from testit import server_lock
+            server_lock.release_shared()
+            self._holds_server_lock = False
 
     def close(self, wait: float = 2.0) -> None:
         """Close the connection and join the thread."""
@@ -220,6 +243,7 @@ class WsClient:
                 pass
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=wait)
+        self._release_server_lock()
 
     # ----------------------------------------------------------------------------------
     # Send helpers
@@ -227,6 +251,17 @@ class WsClient:
     def send_text(self, text: str) -> None:
         if not self._ws_app:
             raise RuntimeError("WebSocket not connected")
+        if self._closed_event.is_set():
+            # Distinguish "the socket died under us" from a plain send error.
+            # The usual cause is the uvicorn worker restarting mid-test; the
+            # shared/exclusive hold in testit/server_lock.py exists to prevent
+            # exactly that, so seeing this means the hold was not honored
+            # (timed out, or a WsClient that never called close() leaked one).
+            raise RuntimeError(
+                "WebSocket was closed before send — the server connection was torn "
+                f"down mid-test (last_error={self._last_error!r}). If a settings "
+                "override ran concurrently, the server_lock hold was not honored."
+            )
         self._ws_app.send(text)  # type: ignore[union-attr]
         if self.logger:
             self.logger.info(f"[ws] send text: {text[:160]}")

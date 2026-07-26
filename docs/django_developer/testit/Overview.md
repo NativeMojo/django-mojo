@@ -185,7 +185,9 @@ TESTIT = {
     "requires_apps": ["mojo.apps.account"],  # skip if app is not installed
 }
 
-# tests/test_oauth/__init__.py  — serial because oauth.py calls th.server_settings()
+# tests/test_oauth/__init__.py
+# NOTE: oauth.py calls th.server_settings(), which no longer requires serial —
+# testit/server_lock.py keeps its restarts away from open websockets on its own.
 TESTIT = {
     "requires_apps": ["mojo.apps.account"],
     "serial": True,                          # do not run this module in parallel
@@ -200,13 +202,24 @@ TESTIT = {
 }
 ```
 
-When a large app has many tests, split it into domain-focused packages (`test_auth`, `test_mfa`, `test_user_mgmt`, etc.) rather than one monolithic `test_accounts`. Each package runs in parallel by default; only packages that call `th.server_settings()` mid-run need `"serial": True`.
+When a large app has many tests, split it into domain-focused packages (`test_auth`, `test_mfa`, `test_user_mgmt`, etc.) rather than one monolithic `test_accounts`. Each package runs in parallel by default.
+
+> **`th.server_settings()` no longer requires `"serial": True`.** It restarts the
+> server (writing `var/django.conf` for uvicorn to reload), which used to tear
+> down any websocket another module had open — the cause of intermittent
+> "Connection is already closed" failures in `test_realtime` during full-suite
+> runs. `testit/server_lock.py` now serializes just that hazard: a `WsClient`
+> connection holds a **shared** lock for its lifetime, and `server_settings()`
+> takes it **exclusively** for both of its reloads. Modules stay parallel and
+> only the actual restart windows are excluded — much cheaper than marking every
+> caller serial. Use `"serial": True` for the *other* reasons (signal handlers
+> bound to the main thread, as in `test_job_engine`).
 
 Supported keys:
 
 | Key | Default | Description |
 |---|---|---|
-| `serial` | `False` | Force this module to run sequentially, after all parallel modules complete. Use for modules that call `th.server_settings()` mid-run, or that rely on signals bound to the main thread. |
+| `serial` | `False` | Force this module to run sequentially, after all parallel modules complete. Use for modules that rely on signals bound to the main thread. **Not** needed merely because a module calls `th.server_settings()` — `testit/server_lock.py` handles that hazard without giving up parallelism. |
 | `requires_apps` | `[]` | List of Django app labels. The module is skipped entirely if any listed app is not in `INSTALLED_APPS`. |
 | `server_settings` | `{}` | Django settings dict applied before the module starts (same mechanism as `th.server_settings()`). |
 | `requires_extra` | `[]` | List of `--extra` flags. The module is skipped unless at least one flag is present. Use `["slow"]` for opt-in modules included by `--full`. |

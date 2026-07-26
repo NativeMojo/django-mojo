@@ -670,33 +670,40 @@ def server_settings(**overrides):
     original = conf_path.read_text()
     host, port = _read_dev_server_conf()
 
-    conf_path.write_text(_apply_conf_overrides(original, overrides))
-    # Give uvicorn's watchdog time to detect the change and begin reloading,
-    # then wait for the server to come back up.
-    time.sleep(1.5)
-    if not _poll_server_up(host, port, timeout=10):
-        conf_path.write_text(original)
-        raise RuntimeError(
-            f"server_settings: server at {host}:{port} did not come back up "
-            f"after writing overrides {overrides!r}"
-        )
+    # Both reloads below kill the uvicorn worker, and with it every in-flight
+    # websocket. Hold the server exclusively so no WsClient has a socket open
+    # across either restart (see testit/server_lock.py). Degrades to the old
+    # unsynchronized behavior on timeout rather than hanging the suite.
+    from testit import server_lock
 
-    try:
-        yield
-    finally:
-        conf_path.write_text(original)
-        # Wait long enough for uvicorn to detect the conf change, kill the old
-        # worker, start and warm up the new worker.  The initial sleep must be
-        # long enough that the OLD worker (still running with the overrides) has
-        # exited before _poll_server_up gets a response — otherwise the poll
-        # returns True against the stale worker and subsequent tests see the
-        # overrides still in effect.
-        time.sleep(3)
+    with server_lock.exclusive():
+        conf_path.write_text(_apply_conf_overrides(original, overrides))
+        # Give uvicorn's watchdog time to detect the change and begin reloading,
+        # then wait for the server to come back up.
+        time.sleep(1.5)
         if not _poll_server_up(host, port, timeout=10):
+            conf_path.write_text(original)
             raise RuntimeError(
                 f"server_settings: server at {host}:{port} did not come back up "
-                f"after restoring original django.conf"
+                f"after writing overrides {overrides!r}"
             )
+
+        try:
+            yield
+        finally:
+            conf_path.write_text(original)
+            # Wait long enough for uvicorn to detect the conf change, kill the old
+            # worker, start and warm up the new worker.  The initial sleep must be
+            # long enough that the OLD worker (still running with the overrides) has
+            # exited before _poll_server_up gets a response — otherwise the poll
+            # returns True against the stale worker and subsequent tests see the
+            # overrides still in effect.
+            time.sleep(3)
+            if not _poll_server_up(host, port, timeout=10):
+                raise RuntimeError(
+                    f"server_settings: server at {host}:{port} did not come back up "
+                    f"after restoring original django.conf"
+                )
 
 
 class assert_raises:
