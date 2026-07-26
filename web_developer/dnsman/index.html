@@ -4080,14 +4080,24 @@ domain category:</p>
 <p>Rows carrying a <code>group</code> are tenant-scoped automatically: pass <code>?group=&lt;id&gt;</code>.
 A caller never sees another group's rows, and <code>?group=</code> can only narrow what
 they may already see — it never widens it.</p>
-<p>Two endpoints are deliberately stricter than <code>manage_dns</code>:</p>
+<p>Three surfaces are deliberately stricter than a plain read. <strong>Anything building
+UI must gate on these, or it renders controls that 403.</strong></p>
 <ul>
-<li><code>registrar/adopt</code> — <strong>platform superuser only</strong>. Adoption hands a group
-  control of a hosted zone in the house AWS account; open to any <code>manage_dns</code>
-  holder it would be a cross-tenant zone-claim primitive.</li>
+<li><code>registrar/adopt</code> — <strong>platform superuser only</strong>. This is checked as the
+  literal <code>is_superuser</code> attribute on the user, <strong>not</strong> as a permission string:
+  there is no <code>admin</code> permission that opens it, and gating a button on one would
+  render a control that fails. Adoption hands a group control of a hosted zone
+  in the house AWS account; open to any <code>manage_dns</code> holder it would be a
+  cross-tenant zone-claim primitive.</li>
 <li><code>certificate/material/&lt;pk&gt;</code> — requires <code>manage_dns</code>, not <code>view_dns</code>. Being
   allowed to see that a certificate exists is not the same as being allowed to
-  hold its private key.</li>
+  hold its private key. For a domain with <strong>no group</strong> (a house/platform
+  domain) it additionally requires a superuser.</li>
+<li><strong><code>GET /api/dnsman/whois</code></strong> — requires <code>manage_dns</code> despite being a read. The
+  registrar returns the real registrant name, street address, phone and email to
+  the account owner <em>regardless of WHOIS privacy</em>, so this is PII and a
+  read-only <code>view_dns</code> operator has no business seeing it. <strong>Hide the WHOIS
+  section entirely from read-only operators</strong> rather than letting it 403.</li>
 </ul>
 <h2 id="domains">Domains<a class="headerlink" href="#domains" title="Permanent link">&para;</a></h2>
 <h3 id="get-apidnsmandomain-get-apidnsmandomainpk"><code>GET /api/dnsman/domain</code> · <code>GET /api/dnsman/domain/&lt;pk&gt;</code><a class="headerlink" href="#get-apidnsmandomain-get-apidnsmandomainpk" title="Permanent link">&para;</a></h3>
@@ -4158,6 +4168,13 @@ specific domain and that it is active.</p>
 <p>Purchasing moves real money and is irreversible. It ships <strong>disabled</strong> — the
 <code>DNSMAN_PURCHASE_ENABLED</code> kill switch defaults to off — and there is
 deliberately <strong>no single-call purchase path</strong>.</p>
+<blockquote>
+<p><strong>Known gap (as of v1.2.53):</strong> no endpoint reports whether purchasing is
+enabled, so a client can only discover it is off by calling
+<code>registrar/quote</code> and reading the refusal. Until a capability endpoint exists,
+treat the quote refusal as the signal, and do not present purchase UI as
+definitely-available before a successful quote.</p>
+</blockquote>
 <h3 id="post-apidnsmanregistrarsearch"><code>POST /api/dnsman/registrar/search</code><a class="headerlink" href="#post-apidnsmanregistrarsearch" title="Permanent link">&para;</a></h3>
 <p><div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
@@ -4197,6 +4214,10 @@ operation id, and any error. Read-only. <code>confirm_token</code> is never retu
 with no purchase and no money — the path by which DNS management is useful on
 day one, before anything has been bought.</p>
 <h2 id="whois-and-privacy">WHOIS and privacy<a class="headerlink" href="#whois-and-privacy" title="Permanent link">&para;</a></h2>
+<p><strong>All three of these require <code>manage_dns</code> — including the GET.</strong> See the
+permissions section above: the registrar hands back real registrant PII to the
+account owner whether or not privacy is enabled, so there is no read-only tier
+here.</p>
 <p>Route53-backed domains only. A GoDaddy-backed domain gets an explicit
 "management-only" error, not a generic denial.</p>
 <ul>
