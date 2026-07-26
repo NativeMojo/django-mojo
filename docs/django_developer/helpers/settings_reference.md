@@ -279,7 +279,7 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `LOGIT_NO_LOG_PREFIX`
 - `LOGIT_PRUNE_DAYS`
 - `LOGIT_REQUEST_BODY`
-- `LOGIT_RETURN_REAL_ERROR`
+- `LOGIT_RETURN_REAL_ERROR` — default `True`. When `False`, an unhandled 500 returns the generic body `{"error": "system error", ...}` instead of the exception text. **File-only** (`settings.get_static`), so a `Setting` row cannot re-enable leakage on a deployment that turned it off. Honored by both 500 handlers — the logging middleware and the REST dispatcher (`mojo/decorators/http.py`). Deliberate 4xx messages (`ValueException`, permission denials) are *not* affected; they remain client feedback.
 
 ### MAESTRO
 

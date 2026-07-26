@@ -1,5 +1,19 @@
 ## Unreleased
 
+**security** — **the REST dispatcher's 500 handler finally honors `LOGIT_RETURN_REAL_ERROR` (maestro item 51).**
+`mojo/middleware/logging.py` has always checked the flag before putting
+`str(e)` in a 500 body, but the dispatcher's `except Exception` branch returned
+it unconditionally — so a deployment that set the flag to `False` still leaked
+exception text (connection strings, internal paths, whatever a message
+happened to carry) through every decorator-routed endpoint. The two handlers
+now share one predicate. **The default stays `True`**: this makes the flag work
+at all, it does not change framework behavior for anyone who never set it —
+flipping the default is a separate, deliberate decision. The flag is read with
+`settings.get_static` rather than `settings.get`, matching the middleware and
+item 50's posture, so a DB/Redis `Setting` row cannot re-enable leakage at
+runtime. Deliberate 4xx text (`ValueException` messages, permission denials) is
+untouched — that is client feedback, not an internals leak.
+
 **security** — **`AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` is now file-only — a DB row can no longer arm a phone-verification bypass (maestro item 50).**
 The key makes `verify_code()` accept a fixed code in place of the real SMS
 code. It was read with `settings.get`, which resolves the `Setting` model

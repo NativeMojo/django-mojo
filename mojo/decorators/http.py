@@ -43,6 +43,21 @@ def _status_200_on_error():
     return settings.get("MOJO_APP_STATUS_200_ON_ERROR", False)
 
 
+def _return_real_error():
+    """Whether an unhandled 500 may return the exception text to the client.
+
+    Read with get_static (conf-file/env only), NOT settings.get: this gates how
+    much internal detail reaches an unauthenticated caller, and a DB/Redis
+    Setting row must not be able to re-enable leakage on a deployment that
+    turned it off in its settings file (maestro items 50/51).
+
+    mojo/middleware/logging.py reads the same key the same way, so the two 500
+    handlers cannot disagree. Default stays True — this is a bug fix making the
+    flag work at all, not a change to the framework default.
+    """
+    return settings.get_static("LOGIT_RETURN_REAL_ERROR", True)
+
+
 _PERMISSION_DENIED_LEVELS = {
     "unauthenticated": 3,
     "feature_disabled": 3,
@@ -224,7 +239,12 @@ def dispatch_error_handler(func):
                     stack_trace=traceback.format_exc(),
                     request_path=getattr(request, "path", None),
                 )
-            return JsonResponse({"error": str(err), "code": 500, "status": False  }, status=500)
+            # Honor LOGIT_RETURN_REAL_ERROR like the middleware does — this
+            # handler used to leak str(err) regardless of the flag. "system
+            # error" matches mojo/middleware/logging.py verbatim; the envelope
+            # (error/code/status) is unchanged.
+            error = str(err) if _return_real_error() else "system error"
+            return JsonResponse({"error": error, "code": 500, "status": False  }, status=500)
 
     return wrapper
 
