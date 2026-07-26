@@ -33,6 +33,11 @@ authorizing, and the children's API keys are suspended, even though the
 children's own `is_active` flags are untouched. Reactivating the parent
 restores all of it instantly.
 
+This holds with **no** `group=` param too: list endpoints derive your
+permitted groups from your member grants, and a deactivated tenant (or one
+under a deactivated ancestor) contributes no rows — its data simply
+disappears from your lists until the group is reactivated.
+
 ## Get Group
 
 **GET** `/api/group/7`

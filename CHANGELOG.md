@@ -1,5 +1,24 @@
 ## Unreleased
 
+**security** — **member-grant group derivation excludes deactivated tenants (maestro item 56).**
+`User.get_groups()`, `User.get_group_ids()`, and
+`User.get_groups_with_permission()` now yield only **effectively active**
+groups (DM-048 subtree semantics — a group under a deactivated ancestor is
+dark) when called with the default `is_active=True`. This closes the last
+member-side surfaces where a grant in a deactivated group still authorized:
+the RestMeta list fallback (`on_rest_handle_list` derives permitted groups
+from member grants when the primary check fails — a deactivated tenant's
+rows no longer appear, with or without a `group=` param) and `Group`'s own
+list endpoint; the assistant model/metrics tools inherit the fix through the
+shared derivation. The other three surfaces the originating item named
+(metrics group-account gate, WS `group:<id>` subscribe, detail instance
+re-bind) were already closed by DM-048's `get_member_for_user` gate and are
+now pinned by regression tests
+(`tests/test_global_perms/member_group_inactive.py`). `is_active=None`
+remains the raw admin/introspection derivation. Implementation mirrors the
+ApiKey batched subtree walk — one `(id, parent_id)` query plus an in-memory
+walk, no N+1.
+
 **fix** — **shortlink: a resolve that serves nothing no longer counts a hit or records a click metric (maestro item 179).**
 `ShortLink.resolve()` used to increment `hit_count` and record the
 `shortlink:click` (and per-user `sl:click:<code>`) metrics *before* checking

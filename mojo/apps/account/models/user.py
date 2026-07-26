@@ -328,12 +328,58 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if req:
             req.device = UserDevice.track(request=req, user=self)
 
+    def _effectively_active_group_ids(self, direct_group_ids, include_children=True):
+        """
+        Filter directly-held group ids down to the EFFECTIVELY ACTIVE ones
+        (DM-048: a group under a deactivated ancestor is dark), optionally
+        expanding to their active-subtree descendants.
+
+        Each root carries its own ancestor burden (one bounded parent walk);
+        descendants are resolved with ONE (id, parent_id) query over the raw
+        subtree filtered is_active=True, then an in-memory walk from the
+        verified roots — an inactive node is never expanded, so its whole
+        subtree darkens with no per-group queries (same shape as
+        ApiKey.get_groups). Maestro item 56.
+        """
+        from mojo.apps.account.models import Group
+
+        roots = [
+            g for g in Group.objects.filter(id__in=set(direct_group_ids), is_active=True)
+            if g.is_effectively_active()
+        ]
+        root_ids = [g.id for g in roots]
+        if not include_children or not root_ids:
+            return root_ids
+
+        all_ids = set(root_ids)
+        for group in roots:
+            all_ids.update(group._get_all_child_ids())
+        children_of = {}
+        for gid, pid in Group.objects.filter(
+                id__in=all_ids, is_active=True).values_list("id", "parent_id"):
+            children_of.setdefault(pid, []).append(gid)
+        kept = []
+        seen = set()
+        stack = list(root_ids)
+        while stack:
+            gid = stack.pop()
+            if gid in seen:
+                continue
+            seen.add(gid)
+            kept.append(gid)
+            stack.extend(children_of.get(gid, []))
+        return kept
+
     def get_groups(self, is_active=True, include_children=True):
         """
         Returns a QuerySet of all groups the user is a member of.
 
         Args:
-            is_active: Filter by active members (default True). Set to None to get all.
+            is_active: Truthy (default) filters by active members AND
+                       effectively-active groups (DM-048: a group that is
+                       inactive, or under a deactivated ancestor, is
+                       excluded). Set to None for the raw derivation —
+                       the admin/introspection escape hatch.
             include_children: Include child groups down the parent chain (default True).
                              Set to False to get only direct memberships.
 
@@ -347,7 +393,16 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if is_active is not None:
             queryset = queryset.filter(members__is_active=is_active)
 
-        # If not including children, return direct memberships only
+        if is_active:
+            kept = self._effectively_active_group_ids(
+                queryset.values_list("id", flat=True),
+                include_children=include_children,
+            )
+            return Group.objects.filter(id__in=kept)
+
+        # Raw path (is_active None/falsy) — legacy behavior, no group-level
+        # activeness policy. If not including children, return direct
+        # memberships only.
         if not include_children:
             return queryset.distinct()
 
@@ -387,7 +442,13 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             queryset = queryset.filter(is_active=is_active)
         direct_group_ids = list(queryset.values_list('group_id', flat=True))
 
-        # If not including children, return direct memberships only
+        if is_active:
+            # Effectively-active groups only (DM-048 / maestro item 56).
+            return self._effectively_active_group_ids(
+                direct_group_ids, include_children=include_children)
+
+        # Raw path (is_active None/falsy) — legacy behavior. If not including
+        # children, return direct memberships only.
         if not include_children:
             return direct_group_ids
 
@@ -422,7 +483,6 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             return self.get_groups(is_active=is_active)
 
         # Get all groups where user is directly a member with permissions
-        group_ids = set()
         members_queryset = self.members.select_related('group')
         if is_active is not None:
             members_queryset = members_queryset.filter(is_active=is_active)
@@ -431,9 +491,20 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         parent_group_ids = []
         for member in members_queryset:
             if member.has_permission(perms):
-                group_ids.add(member.group_id)
                 parent_group_ids.append(member.group_id)
 
+        if is_active:
+            # Effectively-active groups only (DM-048 / maestro item 56): a
+            # grant in a deactivated tenant — or one under a deactivated
+            # ancestor — authorizes nothing, and inactive children never
+            # inherit the parent grant.
+            kept = self._effectively_active_group_ids(
+                parent_group_ids, include_children=True)
+            return Group.objects.filter(id__in=kept)
+
+        # Raw path (is_active None/falsy) — legacy expansion, no group-level
+        # activeness policy.
+        group_ids = set(parent_group_ids)
         # Bulk fetch all child groups for parents with permissions (optimized)
         if parent_group_ids:
             parent_groups = Group.objects.filter(id__in=parent_group_ids)

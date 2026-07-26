@@ -237,6 +237,17 @@ alive = group.is_effectively_active()
 > *own* flag only (SQL-level) — a child of a deactivated parent may appear in a
 > list to already-permitted callers, but every resolution/authorization gate
 > denies it.
+>
+> The **member-side derivations honor it too** (maestro item 56):
+> `User.get_groups()`, `User.get_group_ids()`, and
+> `User.get_groups_with_permission()` exclude effectively-inactive groups when
+> called with the default `is_active=True` — a deactivated tenant (or one under
+> a deactivated ancestor) contributes nothing to the RestMeta list fallback or
+> `Group`'s own list endpoint, and an inactive child never inherits a parent
+> grant. Pass `is_active=None` for the raw derivation (admin/introspection
+> escape hatch — no admin flow needs member-grant resolution against inactive
+> groups; system-perm admins pass the primary permission check and never reach
+> these fallbacks).
 
 `member_count` is exposed via REST as an `extra` on the `default` graph (not `basic` — that stays minimal). List endpoints use `default` by, well, default, so the field appears in list payloads without an explicit `?graph=` parameter. Backed by `members.filter(is_active=True).count()` per record — at very large scale, consider an annotated queryset instead.
 
