@@ -432,11 +432,24 @@ Tickets are actionable work items created by `ticket://` handlers or the LLM age
 | `category` | Optional grouping |
 | `incident` | FK to related incident |
 | `assignee` | FK to assigned user |
-| `llm_linked` | Boolean — if True, human replies trigger LLM re-invocation |
+| `metadata.llm_enabled` | Boolean — if True, human replies trigger LLM re-invocation (legacy `llm_linked` honored as an alias) |
+| `metadata.requires_approval` | Boolean — set on tickets carrying a pending action note, for UI filtering |
+
+The LLM is **opt-in per ticket** via two `POST_SAVE_ACTIONS`: `enable_llm`
+(sets the flag and immediately invokes the agent with the full thread) and
+`disable_llm`. Tickets the agent creates itself arrive with `llm_enabled`
+already set.
 
 ### Ticket Notes
 
-Notes are threaded comments on a ticket. When a ticket is `llm_linked`, adding a note (that doesn't start with `[LLM Agent]`) triggers the LLM agent to review and respond.
+Notes are threaded comments on a ticket. When a ticket is LLM-enabled, adding a note (that doesn't start with `[LLM Agent]`) triggers the LLM agent to review and respond.
+
+A note may instead carry **structured action metadata** — an `action` block
+proposing something (rendered as Approve/Deny buttons) or an
+`action_response` answering it, which dispatches a registered handler
+deterministically (activate the proposed rule, execute the block, …) with no
+LLM round-trip. See [Ticket Actions](ticket_actions.md) for the schema,
+dispatch guards, and built-in handlers.
 
 ## 6. LLM Security Agent
 
@@ -465,7 +478,7 @@ Both settings are read at invocation time (not at startup), so changes take effe
 
 ### Available Tools
 
-The standard triage agent (`execute_llm_handler`) has 12 tools. The analysis agent (`execute_llm_analysis`) has all 14 — the 12 base tools plus 2 analysis-only tools.
+The standard triage agent (`execute_llm_handler`) has 16 tools. The analysis agent (`execute_llm_analysis`) has all 18 — the 16 base tools plus 2 analysis-only tools.
 
 **Investigation:**
 
@@ -485,15 +498,19 @@ The standard triage agent (`execute_llm_handler`) has 12 tools. The analysis age
 | `update_incident` | Change status to investigating/resolved/ignored + add note | Yes | Yes |
 | `block_ip` | Block IP fleet-wide with TTL and reason | Yes | Yes |
 | `create_ticket` | Create ticket for human review with priority | Yes | Yes |
+| `update_ticket` | Update an existing ticket's status/priority/assignee | Yes | Yes |
 | `add_note` | Add investigation note to incident history | Yes | Yes |
+| `add_ticket_note` | Append a note (with optional incident reference card) to an existing ticket | Yes | Yes |
 | `send_alert` | Send email/SMS/notify to specific targets | Yes | Yes |
+| `request_approval` | Post a structured Approve/Deny action note instead of acting directly — see [Ticket Actions](ticket_actions.md) | Yes | Yes |
 | `merge_incidents` | Merge related incidents into a target incident | No | Yes |
 
 **Configuration:**
 
 | Tool | Description | Triage | Analysis |
 |------|-------------|--------|----------|
-| `create_rule` | Create a new RuleSet (created disabled, requires human approval) | Yes | Yes |
+| `create_rule` | Create a new RuleSet (created `is_active=False`; its review ticket carries an `incident.rule_approval` action note) | Yes | Yes |
+| `suggest_rule_update` | Propose widening an existing active rule instead of duplicating it — opens an `incident.rule_update` approval ticket with a rule diff | Yes | Yes |
 | `update_rule_memory` | Persist learnings to RuleSet metadata for future invocations | Yes | Yes |
 
 **Analysis-only tool details:**
@@ -892,6 +909,7 @@ Health rules **never** use `block://` — infrastructure issues should not block
 
 - [Authenticated-Abuse Hardening](abuse_hardening.md) — global per-identity API throttle, traffic-concentration detection, account kill switch, websocket connection limits, deployment hardening
 - [Maestro Board Link](maestro_board.md) — push tickets into a remote maestro board and sync both directions (registration, status_map, signed webhooks, echo suppression)
+- [Ticket Actions](ticket_actions.md) — structured Approve/Deny action notes on tickets: schema, dispatch guards, built-in handlers (rule approval/update, block confirm, escalate), handler registration, LLM opt-in contract
 - [Bouncer Architecture](../account/bouncer.md) — bot detection, scoring, tokens, signatures
 - [GeoIP System](../account/geoip.md) — IP geolocation, blocking, threat escalation
 - [Permissions](../core/permissions.md) — `security` category permission for admin access

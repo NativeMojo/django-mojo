@@ -274,17 +274,74 @@ Tickets are how the LLM agent communicates with humans:
 GET /api/incident/ticket?status=open&sort=-priority
 ```
 
-Tickets with `metadata.llm_linked=true` are part of an LLM conversation. When you post a note, the LLM reads it and responds:
+Tickets with `metadata.llm_enabled=true` (legacy `llm_linked` also honored) are part of an LLM conversation. When you post a note, the LLM reads it and responds:
 
 ```
 POST /api/incident/ticket/note
 {
   "parent": 10,
-  "note": "Approved. Enable the rule with threshold 10."
+  "note": "What would this rule match besides the scanner traffic?"
 }
 ```
 
 The LLM will post a follow-up note automatically. Check `ticketnote?parent=10&sort=created` to see the conversation.
+
+Toggle the LLM per ticket with the `enable_llm` / `disable_llm` actions —
+`enable_llm` immediately invokes the agent on the full thread:
+
+```
+POST /api/incident/ticket/10
+{"enable_llm": 1}
+```
+
+#### Action notes (structured approvals)
+
+Some notes carry a `metadata.action` block — a structured proposal ("Approve
+rule proposal?", "Block 10.0.0.1?") that should render as **Approve/Deny
+buttons**, not free text. Tickets with a pending action are flagged
+`metadata.requires_approval=true` for queue filtering.
+
+```json
+{
+  "action": {
+    "type": "approval",
+    "handler": "incident.rule_approval",
+    "label": "Approve rule proposal?",
+    "context": {"target": {"model": "incident.RuleSet", "pk": 42, "label": "SSH brute force blocker"}}
+  }
+}
+```
+
+Render `label` as the question, and resolve `context.target` to a link/card
+generically: `model` `"incident.RuleSet"` + `pk` 42 → `/api/incident/ruleset/42`.
+Once `action.resolved` is `true`, disable the buttons.
+
+To answer, create a new note whose `metadata.action_response` copies
+`handler` and `context` from the action, with `action` set to `"approve"` or
+`"deny"`:
+
+```
+POST /api/incident/ticket/note
+{
+  "parent": 10,
+  "note": "Approved",
+  "metadata": {
+    "action_response": {
+      "handler": "incident.rule_approval",
+      "action": "approve",
+      "context": {"target": {"model": "incident.RuleSet", "pk": 42}}
+    }
+  }
+}
+```
+
+The backend dispatches the handler deterministically — approving a rule
+proposal activates the rule and resolves the ticket; denying deletes the
+proposal and closes it. A structured response never triggers an LLM reply;
+plain notes on an LLM-enabled ticket do. The outcome is posted back to the
+thread as an `[LLM Agent]` system note. Disable the buttons after the first
+click — the backend also guards against double-dispatch (resolved stamp +
+terminal-status skip), so a repeat is a safe no-op.
 
 ### 8. Event Reporting (Client-Side)
 

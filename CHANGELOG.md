@@ -1,5 +1,17 @@
 ## Unreleased
 
+**docs** — **ticket action system + LLM approval workflow documented (maestro item 48).**
+The structured-approval system that shipped in v1.2.8 (TicketNote
+`metadata.action` / `action_response` blocks, `dispatch_action` handler
+registry, `incident.rule_approval` / `rule_update` / `block_confirm` /
+`escalate` handlers, whitelisted model references, the `request_approval` +
+`suggest_rule_update` LLM tools, and the `enable_llm`/`disable_llm` opt-in
+contract) finally has docs: new
+`docs/django_developer/security/ticket_actions.md`, LLM-agent section
+updates in both security READMEs (tool table now lists all 16 triage / 18
+analysis tools), and web-side guidance for rendering action notes and
+submitting responses. No code changes.
+
 **security** — **member-grant group derivation excludes deactivated tenants (maestro item 56).**
 `User.get_groups()`, `User.get_group_ids()`, and
 `User.get_groups_with_permission()` now yield only **effectively active**
