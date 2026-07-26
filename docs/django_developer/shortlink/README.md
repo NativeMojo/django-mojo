@@ -58,8 +58,10 @@ shorten(url="", file=None, rendition=None, source="", expire_days=3, expire_hour
 | `file` | `None` | `fileman.File` instance for file-sharing shortlinks. |
 | `rendition` | `None` | `fileman.FileRendition` instance for rendition-sharing shortlinks. Pass instead of (or alongside) `file`. |
 | `source` | `""` | Traceability tag: `"sms"`, `"email"`, `"fileman"`, etc. Used in metrics. |
-| `expire_days` | `3` | Days until expiry. Set both `expire_days=0` and `expire_hours=0` for no expiry. |
-| `expire_hours` | `0` | Additional hours until expiry. Combined with `expire_days`. |
+| `expire_days` | `3` | Days until expiry. Set both `expire_days=0` and `expire_hours=0` for no expiry. Must be `0..MAX_EXPIRE_TOTAL_HOURS`; negative values raise `ValueException`. |
+| `expire_hours` | `0` | Additional hours until expiry. Combined with `expire_days`. Same bounds. |
+
+Both values are bounded by `ShortLink.MAX_EXPIRE_TOTAL_HOURS` (876000 — roughly 100 years), checked **per component and on the sum**, so `expire_days=1, expire_hours=-24` is rejected rather than quietly collapsing to "never expires". Out-of-range and negative values raise `ValueException`, which the dispatcher turns into a `400`; previously they either overflowed `timedelta` into a `500` or were silently accepted.
 | `metadata` | `None` | Dict of OG/Twitter Card tags, e.g. `{"og:title": "My Page", "og:image": "https://..."}`. |
 | `track_clicks` | `False` | Log each visit with IP, user-agent, referer, and bot detection. |
 | `resolve_file` | `True` | When `file` is set: `True` = generate fresh download URL per click, `False` = snapshot URL at creation. |

@@ -127,6 +127,7 @@ rejected with a 400.
 - `code` is optional. Omitted or empty ⇒ a unique 7-char code is generated.
   A custom (vanity) code of up to 10 chars is kept as-is; it must be unique.
 - `expire_days` / `expire_hours` are integers; expiry = now + days×24 + hours.
+- Both must be **0 or greater** and no larger than 876000 hours (~100 years), checked per field *and* on the combined total. Anything outside that returns **400**. Note that a negative value used to be accepted and silently meant "never expires" — it is now rejected.
   Omitting both defaults to **3 days** (same as `/link/create` and `shorten()`).
   `0`/`0` ⇒ never expires. When either is present it takes precedence over a
   passed `expires_at`; passing an ISO `expires_at` alone also works. A

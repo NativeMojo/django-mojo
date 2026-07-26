@@ -986,3 +986,115 @@ def cleanup_shortlink(opts):
 
     ShortLinkClick.objects.filter(shortlink__source="test").delete()
     ShortLink.objects.filter(source="test").delete()
+
+
+# ---------------------------------------------------------------------------
+# Expiry bounds (maestro item 296)
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("ShortLink.create rejects an absurd expire_days with 400, not a 500")
+def test_create_absurd_expire_days_rejected(opts):
+    from mojo.apps.shortlink.models import ShortLink
+    import mojo.errors as merrors
+
+    try:
+        ShortLink.create(url="https://example.com/overflow", source="test",
+                         expire_days=10**12, expire_hours=0)
+        assert False, "an absurd expire_days must be rejected, not accepted"
+    except merrors.ValueException as e:
+        assert_true("expire_days" in str(e),
+                    f"the error should name the offending field, got {e}")
+    except OverflowError:
+        assert False, "expire_days overflowed timedelta — should be a clean 400, not a 500"
+
+
+@th.django_unit_test("ShortLink.create rejects a negative expire_days")
+def test_create_negative_expire_days_rejected(opts):
+    from mojo.apps.shortlink.models import ShortLink
+    import mojo.errors as merrors
+
+    try:
+        link = ShortLink.create(url="https://example.com/neg", source="test",
+                                expire_days=-5, expire_hours=0)
+        assert False, (
+            "a negative expire_days must be rejected — it previously fell through "
+            f"to 'never expires', got expires_at={link.expires_at!r}"
+        )
+    except merrors.ValueException as e:
+        assert_true("negative" in str(e).lower(),
+                    f"the error should explain the negative value, got {e}")
+
+
+@th.django_unit_test("ShortLink.create rejects days+hours that only overflow in sum")
+def test_create_components_overflow_in_sum(opts):
+    from mojo.apps.shortlink.models import ShortLink
+    from mojo.apps.shortlink.models import MAX_EXPIRE_TOTAL_HOURS
+    import mojo.errors as merrors
+
+    # Each component is individually under the cap; together they exceed it.
+    days = MAX_EXPIRE_TOTAL_HOURS // 24
+    try:
+        ShortLink.create(url="https://example.com/sum", source="test",
+                         expire_days=days, expire_hours=MAX_EXPIRE_TOTAL_HOURS)
+        assert False, "days+hours exceeding the cap in sum must be rejected"
+    except merrors.ValueException as e:
+        assert_true("combine" in str(e) or "maximum" in str(e),
+                    f"the error should explain the combined overflow, got {e}")
+
+
+@th.django_unit_test("ShortLink.create accepts a value exactly at the ceiling")
+def test_create_at_ceiling_accepted(opts):
+    from mojo.apps.shortlink.models import ShortLink, MAX_EXPIRE_TOTAL_HOURS
+
+    link = ShortLink.create(url="https://example.com/ceiling", source="test",
+                            expire_days=0, expire_hours=MAX_EXPIRE_TOTAL_HOURS)
+    assert_true(link.expires_at is not None,
+                "a value exactly at the ceiling must be accepted and set an expiry")
+
+
+@th.django_unit_test("ShortLink.create still treats 0/0 as never-expires")
+def test_create_zero_zero_never_expires(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    link = ShortLink.create(url="https://example.com/forever", source="test",
+                            expire_days=0, expire_hours=0)
+    assert_eq(link.expires_at, None,
+              f"0/0 must still mean never-expires, got expires_at={link.expires_at!r}")
+
+
+@th.django_unit_test("ShortLink.create still honors a normal expiry")
+def test_create_normal_expiry_unchanged(opts):
+    from mojo.apps.shortlink.models import ShortLink
+
+    link = ShortLink.create(url="https://example.com/normal", source="test",
+                            expire_days=3, expire_hours=0)
+    assert_true(link.expires_at is not None,
+                "a normal 3-day expiry must still set expires_at")
+
+
+@th.django_unit_test("REST create: absurd expire_days returns 400, not 500")
+def test_rest_create_absurd_expire_days(opts):
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/shortlink/link", {
+        "url": "https://example.com/rest-overflow",
+        "source": "test",
+        "expire_days": 10**12,
+    })
+    opts.client.logout()
+    assert_true(resp.status_code != 500,
+                f"an absurd expire_days must not 500, got {resp.status_code}: {resp.body}")
+    assert_eq(resp.status_code, 400,
+              f"an absurd expire_days should be a 400, got {resp.status_code}: {resp.body}")
+
+
+@th.django_unit_test("REST create: negative expire_days returns 400")
+def test_rest_create_negative_expire_days(opts):
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.post("/api/shortlink/link", {
+        "url": "https://example.com/rest-neg",
+        "source": "test",
+        "expire_days": -5,
+    })
+    opts.client.logout()
+    assert_eq(resp.status_code, 400,
+              f"a negative expire_days should be a 400, got {resp.status_code}: {resp.body}")

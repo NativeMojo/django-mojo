@@ -6,6 +6,43 @@ from mojo.helpers import crypto, dates
 from datetime import timedelta
 
 
+# ~100 years. A domain guard on timedelta, not a deployment knob — hence a
+# module constant rather than a setting (same shape as
+# fileman.File.MAX_SHARE_EXPIRE_DAYS). Past roughly this magnitude
+# `dates.utcnow() + timedelta(hours=n)` raises OverflowError, which surfaced as
+# a 500 instead of a 400 (maestro item 296).
+MAX_EXPIRE_TOTAL_HOURS = 876000
+
+
+def _validated_total_hours(days, hours):
+    """Combine days+hours into a bounded total, or raise ValueException (-> 400).
+
+    Rejects per COMPONENT, never on the sum: expire_days=1 with
+    expire_hours=-24 sums to 0, which the callers read as "never expires" —
+    silently turning a nonsense request into a permanent link, worse than the
+    OverflowError being fixed. 0/0 (and any all-zero combination) still means
+    never-expires; that contract lives in the callers' `if total_hours > 0`
+    branches and is deliberately preserved here.
+    """
+    for name, value in (("expire_days", days), ("expire_hours", hours)):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            raise merrors.ValueException(f"{name} must be an integer")
+        if value < 0:
+            raise merrors.ValueException(f"{name} must not be negative")
+        if value > MAX_EXPIRE_TOTAL_HOURS:
+            raise merrors.ValueException(
+                f"{name} exceeds the maximum expiry of {MAX_EXPIRE_TOTAL_HOURS} hours")
+
+    total = (int(days) * 24) + int(hours)
+    if total > MAX_EXPIRE_TOTAL_HOURS:
+        raise merrors.ValueException(
+            f"expire_days and expire_hours combine to {total} hours, over the "
+            f"maximum of {MAX_EXPIRE_TOTAL_HOURS}")
+    return total
+
+
 class ShortLink(models.Model, MojoModel):
     """
     Shortened URL with optional OG metadata, file linking, and click tracking.
@@ -167,7 +204,7 @@ class ShortLink(models.Model, MojoModel):
         code = cls._generate_code()
 
         expires_at = None
-        total_hours = (expire_days * 24) + expire_hours
+        total_hours = _validated_total_hours(expire_days, expire_hours)
         if total_hours > 0:
             expires_at = dates.utcnow() + timedelta(hours=total_hours)
 
@@ -224,7 +261,7 @@ class ShortLink(models.Model, MojoModel):
         days = getattr(self, "_pending_expire_days", None)
         hours = getattr(self, "_pending_expire_hours", None)
         if days is not None or hours is not None:
-            total_hours = (days or 0) * 24 + (hours or 0)
+            total_hours = _validated_total_hours(days or 0, hours or 0)
             if total_hours > 0:
                 self.expires_at = dates.utcnow() + timedelta(hours=total_hours)
             else:

@@ -1,5 +1,16 @@
 ## Unreleased
 
+**fix** — **shortlink expiry is bounded; absurd and negative values return 400 (maestro item 296).**
+`expire_days` / `expire_hours` fed unbounded arithmetic into `timedelta`, so a
+large enough value raised `OverflowError` and surfaced as a **500** on every
+creation path. New `ShortLink.MAX_EXPIRE_TOTAL_HOURS` (876000, about 100 years)
+bounds both fields through one shared validator, checked **per component and on
+the sum** — `expire_days=1, expire_hours=-24` sums to zero and would otherwise
+have collapsed into a permanent link. `0/0` still means never-expires, and the
+REST path needed no change: the raised `ValueException` already becomes a 400.
+**Client-visible break**: a negative value used to be accepted and silently
+meant "never expires"; it now returns 400.
+
 **fix** — **a reverse OneToOne in a graph's `graphs` serializes as an object, not `[]` (maestro item 52).**
 Django's `OneToOneRel` subclasses `ManyToOneRel`, so both serializers matched a
 reverse OneToOne against their many-relation branch, found no `.all()`, and
