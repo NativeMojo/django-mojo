@@ -440,6 +440,14 @@ AUTH_CONFIG = {
 AUTH_PHONE_VERIFY_DEV_BYPASS_CODE = "000000"   # DO NOT SET IN PROD
 ```
 
+> **File-only setting.** This key is read with `settings.get_static`, so it can
+> only be armed from process-static config (env or the Django settings file) —
+> a `Setting` row in the DB/Redis plane is ignored. That is deliberate: it
+> accepts a fixed code in place of the real SMS code, so a DB-settable version
+> would let anyone able to write a global setting arm an authentication bypass
+> at runtime. It also keeps the startup warning in `AppConfig.ready` honest —
+> the warning and the enforcement read the same source.
+
 Two endpoints back the phone-verify flow:
 
 | Method | Path | Purpose |

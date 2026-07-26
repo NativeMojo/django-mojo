@@ -1,5 +1,20 @@
 ## Unreleased
 
+**security** — **`AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` is now file-only — a DB row can no longer arm a phone-verification bypass (maestro item 50).**
+The key makes `verify_code()` accept a fixed code in place of the real SMS
+code. It was read with `settings.get`, which resolves the `Setting` model
+(Redis → DB) *before* the django.conf fallback — so a single global setting
+row, writable through the settings REST surface or a direct Redis `HSET`,
+armed a full authentication bypass on a running deployment. The startup
+warning in `AppConfig.ready` already used `get_static`, so a DB-armed bypass
+also produced no boot warning: the one operator signal was blind to the actual
+vector. Now read with `settings.get_static`, so only process-static config
+(env / settings file) can arm it, and the warning and the enforcement share
+one source. Dev ergonomics are unchanged — a file-configured bypass still
+works, as does the loopback-gated test header path. This completes the DM-031
+sweep, which moved `GEOFENCE_TEST_OVERRIDE` and `MOJO_TEST_MODE` for the same
+reason and flagged this key as the known live sibling.
+
 **security** — **a deactivated membership no longer resolves its group for the holder (maestro item 418).**
 `User.get_groups()` built its direct-membership queryset as
 `.filter(members__user=self).filter(members__is_active=True)` — two chained

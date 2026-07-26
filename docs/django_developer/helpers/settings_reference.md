@@ -64,6 +64,7 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `AUTH_BEARER_HANDLERS`
 - `AUTH_BEARER_NAME_MAP`
+- `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` — **file-only** (`settings.get_static`). A fixed code accepted in place of the real SMS code during phone verification; never set it in production. Deliberately not readable from the DB/Redis settings plane, so a `Setting` row cannot arm an authentication bypass at runtime.
 
 ### AWS
 

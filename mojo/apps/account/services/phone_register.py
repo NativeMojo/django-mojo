@@ -90,6 +90,16 @@ def _dev_bypass_code(request=None):
     leave it unset (mojo.apps.account.apps.AppConfig.ready emits a
     server-startup warning when it's non-empty).
 
+    FILE-ONLY (maestro item 50). Read with settings.get_static, so only
+    process-static config (env / the Django settings file) can arm it. It was
+    previously read with settings.get, which is DB/Redis-first — meaning a
+    single global Setting row, writable through the generic settings REST or a
+    direct Redis HSET, could arm a full phone-verification bypass at runtime.
+    The startup warning in AppConfig.ready reads the same key via get_static,
+    so a DB-armed bypass was also invisible at boot; making this read static
+    closes both halves at once — the warning and the enforcement now share one
+    source of truth.
+
     Honors a per-request X-Mojo-Test-Phone-Verify-Bypass-Code header
     when the test-mode gate passes (loopback + MOJO_TEST_MODE + no proxy
     chain). Used by tests so they don't require th.server_settings
@@ -99,7 +109,7 @@ def _dev_bypass_code(request=None):
         hdr = request.META.get("HTTP_X_MOJO_TEST_PHONE_VERIFY_BYPASS_CODE")
         if hdr is not None:
             return hdr if hdr else None
-    raw = settings.get("AUTH_PHONE_VERIFY_DEV_BYPASS_CODE", "")
+    raw = settings.get_static("AUTH_PHONE_VERIFY_DEV_BYPASS_CODE", "")
     return raw if raw else None
 
 
@@ -114,7 +124,9 @@ def verify_code(session_token, code, request=None):
     by the endpoint rate limit (phone_register_verify, 10/60s) plus the TTL.
 
     Honors the AUTH_PHONE_VERIFY_DEV_BYPASS_CODE setting: when configured,
-    the bypass code is accepted in addition to the real generated code.
+    the bypass code is accepted in addition to the real generated code. That
+    setting is read FILE-ONLY (see _dev_bypass_code) — a DB/Redis Setting row
+    cannot arm it.
     """
     if not _valid_token_hex(session_token):
         raise merrors.ValueException("Invalid or expired verification session")

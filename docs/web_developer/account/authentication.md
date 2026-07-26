@@ -449,7 +449,7 @@ The returned `verified_phone_token` is single-use on a successful registration. 
 
 **Retry behavior on failure:** if `/api/auth/register` fails (e.g. a server-side registration handler raises an error), the token is automatically restored and remains valid. You can retry the same `/api/auth/register` call with the same `verified_phone_token` — there is no need to re-verify the phone. The token is consumed for good only when registration succeeds.
 
-**Dev bypass** — when the server has `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` set (development environments only), that fixed code is accepted in place of the real SMS code. This setting must never be set in production.
+**Dev bypass** — when the server has `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` set (development environments only), that fixed code is accepted in place of the real SMS code. This setting must never be set in production. It is file-only: it can only be armed from the server's static config, never through the settings API.
 
 From JavaScript:
 
