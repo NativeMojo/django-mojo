@@ -1,5 +1,42 @@
 ## v1.2.52 - July 23, 2026
 
+**fix** — **`DNSManager`'s array endpoints raised `ValueError` whenever they actually returned data (maestro item 392/397).**
+`mojo/helpers/dns/godaddy.py` wrapped every response body in `objict(...)`, but
+`get_domains()`, `get_records()` and `get_record()` all answer with a JSON
+**array** — and `objict` subclasses `dict`, so `objict([...])` goes through
+`dict(sequence)` and raises. The failure was data-dependent in the worst
+direction: `objict([])` is just `{}`, so an empty zone looked healthy and only
+zones with records broke. Those three methods now return a **list of `objict`**
+for an array body and a single `objict` for a mapping. `edit_record()` also
+accepts a **list** of values (one payload entry per value) instead of hardcoding
+a single-element payload, which is what a multi-value record set — a wildcard
+plus its apex sharing one `_acme-challenge` TXT name — requires. Scalar callers
+including `add_record()` are unchanged, and `raise_on_error` still defaults to
+`False` on purpose. With both bugs fixed, the GoDaddy adapter's local
+`requests`/URL-building workaround is deleted and all reads and writes route
+through `DNSManager` again; the URL builder moved into the helper **keeping its
+per-segment percent-encoding**, which is the control that stops a record name
+containing path separators from normalizing into a write against a different
+domain in the same provider account. Tests in `tests/test_dnsman/11_godaddy_helper.py`.
+
+**fix** — **GoDaddy zones kept a stale `_acme-challenge` TXT after every issuance (maestro item 392/398).**
+Certificate cleanup deleted the digests it planted. On Route53 that removes the
+record set; on GoDaddy there is no true delete, so removing the last value of the
+set raised (by design) and cleanup — which runs in a `finally` and swallows —
+logged it and moved on, leaving the challenge TXT live in the customer's zone and
+one digest richer on every renewal. Adapters now expose `clear_record()`
+alongside `delete_record()`: same request, different failure contract, for callers
+that cannot act on "this provider cannot delete that". Route53 implements it as a
+real delete (byte-identical to the previous behavior); GoDaddy removes the named
+values when others survive and otherwise overwrites the set with a **single inert
+placeholder value**, so nothing resolves and GoDaddy still gets the non-empty
+replacement it insists on. A missing record is already clear and gets no
+placeholder, and non-character-string types still refuse rather than invent an
+address. `certs.cleanup_challenges` uses it, and still never fails an issuance
+that otherwise succeeded. **Visible behavior change:** listing records on a
+GoDaddy domain may show an `_acme-challenge` TXT holding the single value
+`retired` — spent and inert, not a live challenge.
+
 **security** — **`EmailDomain`'s default graph returned `aws_key` unmasked (maestro item 392).**
 The `default` graph listed `aws_key` among its `extra` fields, so every consumer
 fetching an email domain received the raw AWS access key id in the response body.

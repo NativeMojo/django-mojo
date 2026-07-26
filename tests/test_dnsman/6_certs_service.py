@@ -53,13 +53,16 @@ class FakeDns(object):
     dict method instead of the data.
     """
 
-    def __init__(self, propagated=True, seen=None, delete_error=None):
+    def __init__(self, propagated=True, seen=None, delete_error=None,
+                 clear_error=None):
         self.upserts = []
         self.deletes = []
+        self.clears = []
         self.waits = []
         self.propagated = propagated
         self.seen = seen
         self.delete_error = delete_error
+        self.clear_error = clear_error
 
     def upsert_record(self, domain, rtype, name, record_values, ttl=300):
         self.upserts.append(objict(
@@ -74,6 +77,14 @@ class FakeDns(object):
         if self.delete_error:
             raise RuntimeError(self.delete_error)
         return objict(change_id="C-delete", provider=domain.provider)
+
+    def clear_record(self, domain, rtype, name, record_values=None):
+        self.clears.append(objict(
+            domain=domain.name, rtype=rtype, name=name,
+            record_values=list(record_values) if record_values else None))
+        if self.clear_error:
+            raise RuntimeError(self.clear_error)
+        return objict(change_id="C-clear", provider=domain.provider)
 
     def wait_for_propagation(self, domain, rtype, name, record_values, timeout=None):
         self.waits.append(objict(
@@ -275,6 +286,7 @@ def _issuance_env(client=None, dns_stub=None):
             mock.patch.object(certs, "_get_account", return_value=(None, client)), \
             mock.patch.object(dns, "upsert_record", dns_stub.upsert_record), \
             mock.patch.object(dns, "delete_record", dns_stub.delete_record), \
+            mock.patch.object(dns, "clear_record", dns_stub.clear_record), \
             mock.patch.object(dns, "wait_for_propagation", dns_stub.wait_for_propagation), \
             mock.patch.object(jobs_module, "publish", jobs_stub.publish):
         yield objict(dns=dns_stub, jobs=jobs_stub, acme=client, kms=kms)
@@ -362,14 +374,47 @@ def test_certs_issue_success_stores_and_cleans_up(opts):
             f"renew_after should be not_after minus DNSMAN_CERT_RENEW_DAYS "
             f"({certs.renew_days()}), expected {expected_renew}, got {stored.renew_after}")
 
-    assert len(env.dns.deletes) == 1, (
-        f"the challenge record must be removed on success; got "
-        f"{len(env.dns.deletes)} delete calls")
-    delete = env.dns.deletes[0]
-    assert delete.name == _challenge_name(domain), (
-        f"cleanup should remove {_challenge_name(domain)}, got {delete.name}")
-    assert set(delete.record_values or []) == {"digest-tok-0", "digest-tok-1"}, (
-        f"cleanup should remove exactly the digests it planted, got {delete.record_values}")
+    # Cleanup goes through clear_record, not delete_record: "delete this record"
+    # is not something GoDaddy can do, and a raise inside the finally would have
+    # left the challenge TXT live in the zone.
+    assert len(env.dns.clears) == 1, (
+        f"the challenge record must be retired on success; got "
+        f"{len(env.dns.clears)} clear calls (deletes: {len(env.dns.deletes)})")
+    cleared = env.dns.clears[0]
+    assert cleared.name == _challenge_name(domain), (
+        f"cleanup should retire {_challenge_name(domain)}, got {cleared.name}")
+    assert set(cleared.record_values or []) == {"digest-tok-0", "digest-tok-1"}, (
+        f"cleanup should name exactly the digests it planted, got {cleared.record_values}")
+
+
+@th.django_unit_test("dnsman certs: a cleanup failure never fails an issuance that worked")
+def test_certs_cleanup_failure_does_not_fail_issuance(opts):
+    """Cleanup runs in a ``finally`` and swallows -- the cert is already issued."""
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.services import certs
+
+    domain = _reset_domain("cleanupfail-certs.test")
+    names = [domain.name]
+    cert = _pending_certificate(domain, names)
+    chain, _leaf = _make_chain(names)
+    client = FakeAcmeClient([domain.name], chain=chain)
+
+    dns_stub = FakeDns(clear_error="the provider refused the retirement")
+
+    with _issuance_env(client, dns_stub=dns_stub) as env:
+        result = certs.issue(cert)
+
+    assert result.ok, (
+        f"a cleanup failure must not fail an issuance that succeeded, error was: "
+        f"{result.get('error')}")
+    assert len(env.dns.clears) == 1, (
+        f"cleanup should still have been attempted, got {len(env.dns.clears)} clear calls")
+
+    stored = Certificate.objects.get(pk=cert.pk)
+    assert stored.status == "active", (
+        f"the certificate should stay active despite the cleanup failure, got {stored.status}")
+    assert stored.last_error is None, (
+        f"a cleanup failure must not be recorded as an issuance error, got {stored.last_error!r}")
 
 
 @th.django_unit_test("dnsman certs: a propagation timeout fails cleanly and still cleans up")
@@ -400,11 +445,11 @@ def test_certs_propagation_timeout_fails_cleanly(opts):
     assert "digest-tok-0" in (stored.last_error or ""), (
         f"last_error should report what was actually seen, got: {stored.last_error}")
 
-    assert len(env.dns.deletes) == 1, (
+    assert len(env.dns.clears) == 1, (
         f"challenge records must be cleaned up on failure too; got "
-        f"{len(env.dns.deletes)} delete calls")
-    assert env.dns.deletes[0].name == _challenge_name(domain), (
-        f"the planted record should be the one removed, got {env.dns.deletes[0].name}")
+        f"{len(env.dns.clears)} clear calls")
+    assert env.dns.clears[0].name == _challenge_name(domain), (
+        f"the planted record should be the one retired, got {env.dns.clears[0].name}")
     assert not client.finalized, (
         "the CSR must never be submitted when the challenge never propagated")
 
@@ -440,9 +485,13 @@ def test_certs_invalid_order_records_ca_error(opts):
         f"the CA's problem type should be preserved too, got: {stored.last_error}")
     assert not client.finalized, (
         "an invalid order must not be finalized")
-    assert len(env.dns.deletes) == 1, (
+    # Cleanup routes through clear_record (see cleanup_challenges) — a plain
+    # delete is not something every provider can do. The point of the assertion
+    # is unchanged: a FAILED order must still retire what it planted, or the
+    # zone keeps a live challenge digest.
+    assert len(env.dns.clears) == 1, (
         f"challenge records must be cleaned up after an invalid order; got "
-        f"{len(env.dns.deletes)} delete calls")
+        f"{len(env.dns.clears)} clear calls (deletes: {len(env.dns.deletes)})")
 
 
 @th.django_unit_test("dnsman certs: the sync broadcast carries identifiers and no key material")

@@ -158,14 +158,50 @@ def test_wildcard_position(opts):
 
 @th.django_unit_test("the GoDaddy URL builder percent-encodes every segment")
 def test_godaddy_url_encoding(opts):
-    from mojo.apps.dnsman.services.providers import godaddy_provider
+    # Every GoDaddy URL is built here — the adapter no longer assembles paths of
+    # its own, so this is the single layer that makes traversal impossible.
+    from mojo.helpers.dns import godaddy
 
-    url = godaddy_provider._url("domains", "example.com", "records", "TXT",
-                                "a/../../../victim.com/records/A/@")
+    url = godaddy.build_url("domains", "example.com", "records", "TXT",
+                            "a/../../../victim.com/records/A/@")
     assert "victim.com/records" not in url, \
         f"unencoded path separators survived into the provider URL: {url}"
     assert "%2F" in url.upper(), \
         f"path separators were not percent-encoded: {url}"
+    assert url.startswith(godaddy.BASE_URL + "/"), \
+        f"the built URL escaped the GoDaddy API base: {url}"
+
+
+@th.django_unit_test("every GoDaddy record call routes through the encoding URL builder")
+def test_godaddy_record_calls_use_the_url_builder(opts):
+    """
+    The adapter used to build its own percent-encoded paths. Now that it does
+    not, prove the traversal defence is still on the live write path: a hostile
+    relative label must reach `requests` already encoded.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from mojo.helpers.dns.godaddy import DNSManager
+
+    hostile = "a/../../../victim.com/records/A/@"
+    resp = MagicMock()
+    resp.content = b""
+    resp.status_code = 200
+
+    manager = DNSManager("key", "secret", raise_on_error=True)
+    with patch("mojo.helpers.dns.godaddy.requests") as requests_mock:
+        requests_mock.get.return_value = resp
+        requests_mock.put.return_value = resp
+        manager.get_record("example.com", "TXT", hostile)
+        manager.edit_record("example.com", "TXT", hostile, "value", 600)
+
+    for label, call in (("GET", requests_mock.get.call_args),
+                        ("PUT", requests_mock.put.call_args)):
+        url = call.args[0]
+        assert "victim.com/records" not in url, \
+            f"the {label} reached a different domain in the account: {url}"
+        assert url.startswith("https://api.godaddy.com/v1/domains/example.com/records/TXT/"), \
+            f"the {label} URL left the requested domain's record path: {url}"
 
 
 # ---------------------------------------------------------------------------

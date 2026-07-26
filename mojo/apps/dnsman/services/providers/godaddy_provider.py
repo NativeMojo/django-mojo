@@ -1,6 +1,10 @@
 """
 GoDaddy adapter — BYO domains managed through a linked DnsCredential.
 
+Transport, auth headers and the `raise_on_error` policy all belong to
+`mojo.helpers.dns.godaddy.DNSManager`; this module only translates between the
+uniform record surface and GoDaddy's idea of one.
+
 GoDaddy semantics this adapter has to encode explicitly:
 
   - **Relative names.** Record names are labels relative to the zone, and the
@@ -8,36 +12,18 @@ GoDaddy semantics this adapter has to encode explicitly:
   - **Raw TXT.** GoDaddy stores TXT text as-is, so a Route53-shaped (quoted,
     255-chunked) value must be unquoted before it is written, and read back as
     raw text.
+  - **One entry PER VALUE on read.** `get_records` returns a flat list of
+    entries, not record sets, so `list_records` regroups them.
   - **PUT replaces the whole (type, name) set.** An upsert therefore has to send
     the COMPLETE desired value list, never just the new value.
   - **There is no true delete.** Deleting means PUTting the values that remain;
-    when none remain GoDaddy rejects the empty replace, so this adapter raises a
-    clear "cannot delete the last record of this type" error rather than
-    silently no-opping.
+    when none remain GoDaddy rejects the empty replace, so `delete_record`
+    raises a clear "cannot delete the last record of this type" error rather
+    than silently no-opping. `clear_record` is the escape hatch for callers that
+    need the data gone and cannot act on that refusal — see its docstring.
   - **There is no ChangeInfo API**, so propagation is the authoritative DNS
     probe only.
-
-WHY THIS MODULE TALKS HTTP DIRECTLY
------------------------------------
-Transport, auth headers and the raise_on_error policy all come from
-`DNSManager`, but two of its methods cannot express what this adapter needs:
-
-  * `get_records()` / `get_record()` wrap the response in `objict(...)`, and the
-    GoDaddy record endpoints return a JSON **array** — objict subclasses dict,
-    so wrapping an array raises `ValueError` for any zone that actually has
-    records; and
-  * `edit_record()` hardcodes a single-element payload
-    (`[{"data": ..., "ttl": ...}]`), so it cannot write a multi-value record set
-    — which is exactly what a wildcard + apex `_acme-challenge` needs.
-
-Until those are fixed in `mojo/helpers/dns/godaddy.py`, the record reads and
-writes below issue their own request using the manager's own `_headers()` and
-`_check()` — so the credential and the strictness policy are still the
-manager's, and only the response parsing is ours.
 """
-
-import requests
-from urllib.parse import quote
 
 from mojo import errors as me
 from mojo.helpers import logit
@@ -51,36 +37,15 @@ from .base import (
 
 logger = logit.get_logger("dnsman", "dnsman.log")
 
-# GoDaddy's minimum accepted TTL.
+# GoDaddy's minimum accepted TTL — it 422s below this.
 MIN_TTL = 600
 
-
-def _url(*parts):
-    # Percent-encode every segment, including "/" and ".". Record names reach
-    # here after charset validation in services/naming.py, so this is defence
-    # in depth — but it is the layer that actually makes traversal impossible:
-    # an unencoded segment containing dot-segments is normalized by the HTTP
-    # client into a request against a DIFFERENT domain in the same provider
-    # account, turning one managed domain into write access to all of them.
-    # "@" is left unencoded: it is GoDaddy's apex marker, is not special in a
-    # URL path, and cannot be used to escape a segment. "." is unreserved and
-    # so passes through untouched, which keeps domain segments readable.
-    encoded = [quote(str(part), safe="@") for part in parts]
-    return "/".join([godaddy.BASE_URL] + encoded)
-
-
-def _get_json(manager, url, params=None):
-    resp = requests.get(url, headers=manager._headers(), params=params)
-    manager._check(resp)
-    if not resp.content:
-        return None
-    return resp.json()
-
-
-def _put_json(manager, url, payload):
-    resp = requests.put(url, headers=manager._headers(), json=payload)
-    manager._check(resp)
-    return True
+# The single value a RETIRED character-string record is left holding, because
+# GoDaddy cannot delete the last record of a set. It is deliberately nothing:
+# not a digest, not a policy token, not anything a resolver could act on — and
+# it names no product, since a leftover value in a customer's zone should not
+# advertise what wrote it.
+RETIRED_VALUE = "retired"
 
 
 def build_manager_from_pair(api_key, api_secret):
@@ -111,26 +76,27 @@ def account_domain_count(manager, status="ACTIVE"):
     "list everything in this account" surface is exactly the blast radius BYO
     onboarding is designed to avoid.
     """
-    params = {"statuses": status} if status else None
-    data = _get_json(manager, _url("domains"), params=params)
+    data = manager.get_domains(status=status)
     if isinstance(data, dict):
+        # An error body (raise_on_error is on, so this is belt and braces) or a
+        # wrapped list — either way, only the count leaves this function.
         data = data.get("domains") or []
     return len(data or [])
 
 
 def domain_info(manager, name):
-    """
-    Per-name ownership probe. Returns the provider's domain object.
-
-    Goes through `DNSManager.get_domain_info` — that endpoint returns a JSON
-    object, so objict wrapping is safe there.
-    """
+    """Per-name ownership probe. Returns the provider's domain object."""
     return manager.get_domain_info(name)
 
 
 class GoDaddyProvider(DnsProvider):
 
     name = "godaddy"
+
+    # GoDaddy rejects an empty record-set replacement, so the LAST value of a
+    # (type, name) set can never be removed. `clear_record` below is what a
+    # caller uses when the data must stop resolving regardless.
+    can_delete_last_record = False
 
     def __init__(self, domain):
         super().__init__(domain)
@@ -149,10 +115,9 @@ class GoDaddyProvider(DnsProvider):
     def _entries(self, rtype=None, relative=None):
         """Raw GoDaddy record entries, optionally scoped to one (type, name)."""
         if rtype and relative:
-            url = _url("domains", self.zone_name, "records", rtype, relative)
+            data = self.manager.get_record(self.zone_name, rtype, relative)
         else:
-            url = _url("domains", self.zone_name, "records")
-        data = _get_json(self.manager, url)
+            data = self.manager.get_records(self.zone_name)
         if isinstance(data, dict):
             data = [data]
         return list(data or [])
@@ -191,19 +156,36 @@ class GoDaddyProvider(DnsProvider):
             values = [unquote_txt(value) for value in values]
         return rtype, values
 
+    def _surviving(self, rtype, entries, requested):
+        """The entries that would remain once `requested` is taken out."""
+        if not requested:
+            return []
+        remaining = []
+        for entry in entries:
+            value = entry.get("data")
+            if rtype in TXT_TYPES:
+                value = unquote_txt(value)
+            if value not in requested:
+                remaining.append(entry)
+        return remaining
+
+    def _payload(self, entries):
+        """GoDaddy's PUT body for a list of existing entries, TTL floor applied."""
+        return [
+            {"data": entry.get("data"),
+             "ttl": max(int(entry.get("ttl") or 0), MIN_TTL)}
+            for entry in entries
+        ]
+
     def upsert_record(self, rtype, name, record_values, ttl=300):
         rtype, values = self._prepare(rtype, record_values)
         if not values:
             raise me.ValueException("At least one record value is required")
         relative = to_relative(name, self.zone_name)
         ttl = max(int(ttl or 0), MIN_TTL)
-        # PUT replaces every record of this (type, name), so the payload is the
-        # COMPLETE desired value list.
-        payload = [{"data": value, "ttl": ttl} for value in values]
-        _put_json(
-            self.manager,
-            _url("domains", self.zone_name, "records", rtype, relative),
-            payload)
+        # PUT replaces every record of this (type, name), so the value list is
+        # handed over COMPLETE — the manager builds one payload entry per value.
+        self.manager.edit_record(self.zone_name, rtype, relative, values, ttl)
         # GoDaddy issues no change id.
         return None
 
@@ -215,31 +197,60 @@ class GoDaddyProvider(DnsProvider):
             raise me.ValueException(
                 f"No {rtype} record named '{name}' exists for '{self.zone_name}'")
 
-        if requested:
-            remaining = []
-            for entry in entries:
-                value = entry.get("data")
-                if rtype in TXT_TYPES:
-                    value = unquote_txt(value)
-                if value not in requested:
-                    remaining.append(entry)
-        else:
-            remaining = []
-
+        remaining = self._surviving(rtype, entries, requested)
         if not remaining:
             raise me.ValueException(
                 f"GoDaddy cannot delete the last record of this type: removing the final "
                 f"{rtype} value(s) for '{name}' would leave an empty record set, which the "
                 f"GoDaddy API rejects. Replace the record with a new value instead.")
 
-        payload = [
-            {"data": entry.get("data"), "ttl": max(int(entry.get("ttl") or 0), MIN_TTL)}
-            for entry in remaining
-        ]
-        _put_json(
-            self.manager,
-            _url("domains", self.zone_name, "records", rtype, relative),
-            payload)
+        self.manager.put_records(
+            self.zone_name, rtype, relative, self._payload(remaining))
+        return None
+
+    def clear_record(self, rtype, name, record_values=None):
+        """
+        Retire values so none of them resolve any more, placeholder if need be.
+
+        `delete_record` REFUSES to remove the last value of a set — GoDaddy
+        rejects an empty replacement and a silent no-op would be worse. That
+        refusal is right for a caller that asked to delete a record. It is wrong
+        for certificate cleanup, which only needs the `_acme-challenge` digests
+        to stop resolving and has nowhere to put the error: left to raise, the
+        zone keeps its challenge TXT and gains another stale digest on EVERY
+        renewal.
+
+        So when the requested values are all the set holds, the set is
+        overwritten with ONE inert placeholder: no digest is answered any more,
+        and GoDaddy gets the non-empty replacement it insists on. Only
+        character-string types get a placeholder — inventing an address for an A
+        record or a target for a CNAME would point real traffic somewhere, which
+        is worse than leaving the record alone.
+        """
+        rtype, requested = self._prepare(rtype, record_values)
+        relative = to_relative(name, self.zone_name)
+        entries = self._entries(rtype, relative)
+        if not entries:
+            # Already gone. Nothing to retire and nothing to complain about.
+            return None
+
+        remaining = self._surviving(rtype, entries, requested)
+        if remaining:
+            self.manager.put_records(
+                self.zone_name, rtype, relative, self._payload(remaining))
+            return None
+
+        if rtype not in TXT_TYPES:
+            raise me.ValueException(
+                f"GoDaddy cannot remove the last {rtype} record for '{name}', and a "
+                f"placeholder {rtype} value would point real traffic somewhere — "
+                f"replace the record with a real value instead.")
+
+        self.manager.edit_record(
+            self.zone_name, rtype, relative, [RETIRED_VALUE], MIN_TTL)
+        logger.info(
+            f"dnsman: GoDaddy has no delete for the last {rtype} value, so "
+            f"'{name}' on {self.zone_name} was retired to a placeholder instead")
         return None
 
     # -- propagation ---------------------------------------------------------

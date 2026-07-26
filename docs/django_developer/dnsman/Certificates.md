@@ -54,7 +54,7 @@ new order
   store cert + chain + key (KMS), set validity and renew_after
   broadcast "certificate updated"
 finally:
-  delete every challenge record we planted
+  clear every challenge record we planted
 ```
 
 ### The wildcard trap
@@ -73,8 +73,19 @@ propagation wait, so both digests are live before either is checked.
 
 On success *and* on failure. Otherwise orphaned `_acme-challenge` TXT records
 accumulate in customer zones, which is both untidy and confusing to anyone
-debugging their own DNS. Cleanup passes the exact digest list, so it removes
-only what this issuance planted.
+debugging their own DNS. Cleanup passes the exact digest list, so it touches only
+what this issuance planted.
+
+It calls `dns.clear_record`, **not** `dns.delete_record`. GoDaddy has no true
+delete and refuses to remove the last value of a record set, so a delete raised —
+and cleanup, running in a `finally`, logged and swallowed it, leaving the
+challenge TXT live and one digest richer after every renewal. `clear_record` lets
+the adapter pick the strongest retirement it has: a real delete on Route53, an
+inert placeholder overwrite on GoDaddy. See
+[Providers](Providers.md#clear_record--for-callers-with-nowhere-to-put-that-refusal).
+
+A cleanup failure still **never** fails an issuance that otherwise succeeded —
+that is the whole point of the `finally` and it is asserted by a test.
 
 ### Propagation
 

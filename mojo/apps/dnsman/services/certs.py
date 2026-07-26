@@ -375,16 +375,27 @@ def _collect_challenges(client, order):
 
 def cleanup_challenges(domain, planted):
     """
-    Remove the challenge records issuance planted.
+    Retire the challenge records issuance planted.
 
-    Deliberately swallows its own errors: this runs in a ``finally``, and a
-    cleanup problem must never replace the real reason issuance failed.
+    Goes through ``dns.clear_record``, not ``dns.delete_record``, because "delete
+    this record" is not something every provider can do. Route53 removes the
+    values and that is the end of it. GoDaddy has no delete at all — its only
+    write is a PUT that replaces a whole record set, and it rejects an empty
+    replacement, so removing the LAST value of a set is impossible and
+    ``delete_record`` says so by raising. Cleanup cannot act on that: it runs in
+    a ``finally`` and swallows, so the raise just left the `_acme-challenge` TXT
+    live in the customer's zone, collecting another stale digest on every
+    renewal. ``clear_record`` lets the adapter pick the strongest retirement it
+    has — a real delete, or an overwrite with a single inert placeholder.
+
+    Still deliberately swallows its own errors: a cleanup problem must never
+    replace the real reason issuance failed, nor fail an issuance that succeeded.
     """
     from mojo.apps.dnsman.services import dns
 
     for record_name, digests in planted:
         try:
-            dns.delete_record(domain, "TXT", record_name, list(digests))
+            dns.clear_record(domain, "TXT", record_name, list(digests))
         except Exception as err:
             logit.error(
                 f"dnsman: could not remove challenge record {record_name} "

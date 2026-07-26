@@ -3,9 +3,9 @@ BYO credential linking, domain onboarding, and the fail-closed credential gate.
 
 (`mojo/apps/dnsman/services/onboarding.py` + `services/dns.get_adapter`)
 
-Everything runs in-process with `mojo.helpers.dns.godaddy.DNSManager`, the
-GoDaddy adapter's `requests` module, and the Route53 helper patched — no
-GoDaddy call and no AWS call is ever made.
+Everything runs in-process with `mojo.helpers.dns.godaddy.DNSManager`, that
+helper's `requests` module, and the Route53 helper patched — no GoDaddy call and
+no AWS call is ever made.
 
 Two properties matter most here and both are security properties:
 
@@ -23,7 +23,7 @@ from objict import objict
 from testit import helpers as th
 
 
-GD_MODULE = "mojo.apps.dnsman.services.providers.godaddy_provider"
+GD_HELPER = "mojo.helpers.dns.godaddy"
 R53 = "mojo.helpers.aws.route53"
 
 CRED_LINK = "dnsman-cred-test link"
@@ -111,8 +111,8 @@ def test_missing_credential_fails_closed(opts):
     opts.gate_domain.credential = None
 
     raised = None
-    with patch("mojo.helpers.dns.godaddy.DNSManager") as manager_cls, \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls, \
+            patch(f"{GD_HELPER}.requests") as requests_mock:
         try:
             dns.upsert_record(opts.gate_domain, "TXT", "_acme-challenge", ["digest"])
         except me.ValueException as err:
@@ -136,8 +136,8 @@ def test_inactive_credential_fails_closed(opts):
     opts.gate_domain.credential = opts.inactive_credential
 
     raised = None
-    with patch("mojo.helpers.dns.godaddy.DNSManager") as manager_cls, \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls, \
+            patch(f"{GD_HELPER}.requests") as requests_mock:
         try:
             dns.upsert_record(opts.gate_domain, "TXT", "_acme-challenge", ["digest"])
         except me.ValueException as err:
@@ -160,8 +160,8 @@ def test_unverified_credential_fails_closed(opts):
     opts.gate_domain.credential = opts.unverified_credential
 
     raised = None
-    with patch("mojo.helpers.dns.godaddy.DNSManager") as manager_cls, \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls, \
+            patch(f"{GD_HELPER}.requests") as requests_mock:
         try:
             dns.list_records(opts.gate_domain)
         except me.ValueException as err:
@@ -199,9 +199,9 @@ def test_link_credential_verifies_then_stores(opts):
     from mojo.apps.dnsman.models import DnsCredential
     from mojo.apps.dnsman.services import onboarding
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager") as manager_cls, \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
-        requests_mock.get.return_value = _response(ACCOUNT_DOMAINS)
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls, \
+            patch(f"{GD_HELPER}.requests") as requests_mock:
+        manager_cls.return_value.get_domains.return_value = list(ACCOUNT_DOMAINS)
         credential = onboarding.link_credential(
             None, "godaddy", "live-key", "live-secret", name=CRED_LINK)
         strict = manager_cls.call_args.kwargs.get("raise_on_error")
@@ -224,6 +224,35 @@ def test_link_credential_verifies_then_stores(opts):
 
 
 @th.django_unit_test()
+def test_link_credential_counts_a_real_array_response(opts):
+    """
+    The same link, but through the REAL DNSManager with only the socket mocked.
+
+    GoDaddy's account list is a JSON **array**, and the helper used to wrap every
+    body in an `objict` — which raises for a non-empty array. The count could
+    therefore never be taken from an account that actually held domains, so this
+    scripts a non-empty body deliberately.
+    """
+    from mojo.apps.dnsman.models import DnsCredential
+    from mojo.apps.dnsman.services import onboarding
+
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
+        requests_mock.get.return_value = _response(ACCOUNT_DOMAINS)
+        credential = onboarding.link_credential(
+            None, "godaddy", "live-key", "live-secret", name=CRED_LINK)
+        get_calls = requests_mock.get.call_count
+        url = requests_mock.get.call_args.args[0]
+
+    stored = DnsCredential.objects.get(pk=credential.pk)
+    assert stored.domain_count == len(ACCOUNT_DOMAINS), (
+        f"Expected the count to be read off the array body, got {stored.domain_count}")
+    assert get_calls == 1, (
+        f"Expected exactly one account read for verification, got {get_calls}")
+    assert url.endswith("/domains"), (
+        f"Expected the verification probe to hit the account domain list, got {url}")
+
+
+@th.django_unit_test()
 def test_link_credential_never_exposes_the_account_domain_list(opts):
     """
     A provider key is account-wide. Only the count is kept — the list itself is
@@ -232,9 +261,9 @@ def test_link_credential_never_exposes_the_account_domain_list(opts):
     from mojo.apps.dnsman.models import DnsCredential
     from mojo.apps.dnsman.services import onboarding
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
-        requests_mock.get.return_value = _response(ACCOUNT_DOMAINS)
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls, \
+            patch(f"{GD_HELPER}.requests") as requests_mock:
+        manager_cls.return_value.get_domains.return_value = list(ACCOUNT_DOMAINS)
         credential = onboarding.link_credential(
             None, "godaddy", "live-key", "live-secret", name=CRED_LINK)
 
@@ -270,9 +299,10 @@ def test_a_failed_first_link_persists_nothing(opts):
     before = DnsCredential.objects.filter(name=CRED_ROTATE).count()
 
     raised = None
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
-        requests_mock.get.side_effect = _http_error(401, "Invalid credentials")
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls, \
+            patch(f"{GD_HELPER}.requests") as requests_mock:
+        manager_cls.return_value.get_domains.side_effect = _http_error(
+            401, "Invalid credentials")
         try:
             onboarding.link_credential(
                 None, "godaddy", "bad-key", "bad-secret", name=CRED_ROTATE)
@@ -298,9 +328,9 @@ def test_rotation_replaces_the_secrets_only_after_verification(opts):
 
     credential = _usable_credential(CRED_ROTATE)
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
-        requests_mock.get.return_value = _response(ACCOUNT_DOMAINS)
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls, \
+            patch(f"{GD_HELPER}.requests") as requests_mock:
+        manager_cls.return_value.get_domains.return_value = list(ACCOUNT_DOMAINS)
         rotated = onboarding.link_credential(
             None, "godaddy", "new-key", "new-secret", credential=credential)
 
@@ -325,9 +355,10 @@ def test_a_failed_rotation_leaves_the_working_secrets_alone(opts):
     credential = DnsCredential.objects.get(name=CRED_ROTATE)
 
     raised = None
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
-        requests_mock.get.side_effect = _http_error(403, "Key revoked")
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls, \
+            patch(f"{GD_HELPER}.requests") as requests_mock:
+        manager_cls.return_value.get_domains.side_effect = _http_error(
+            403, "Key revoked")
         try:
             onboarding.link_credential(
                 None, "godaddy", "broken-key", "broken-secret", credential=credential)
@@ -353,7 +384,7 @@ def test_only_byo_providers_can_be_linked(opts):
     from mojo import errors as me
 
     raised = None
-    with patch("mojo.helpers.dns.godaddy.DNSManager") as manager_cls:
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls:
         try:
             onboarding.link_credential(None, "route53", "key", "secret", name=CRED_LINK)
         except me.ValueException as err:
@@ -373,7 +404,7 @@ def test_register_existing_requires_an_active_held_domain(opts):
     from mojo.apps.dnsman.models import Domain
     from mojo.apps.dnsman.services import onboarding
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager") as manager_cls:
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls:
         manager = manager_cls.return_value
         manager.get_domain_info.return_value = objict(domain=BYO_DOMAIN, status="ACTIVE")
         domain = onboarding.register_existing(
@@ -406,7 +437,7 @@ def test_register_existing_refuses_an_already_tracked_name(opts):
     from mojo import errors as me
 
     raised = None
-    with patch("mojo.helpers.dns.godaddy.DNSManager") as manager_cls:
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls:
         try:
             onboarding.register_existing(None, None, TAKEN_DOMAIN, opts.gate_credential)
         except me.ValueException as err:
@@ -428,7 +459,7 @@ def test_register_existing_refuses_a_non_active_domain(opts):
     Domain.objects.filter(name=ADOPT_DOMAIN).delete()
 
     raised = None
-    with patch("mojo.helpers.dns.godaddy.DNSManager") as manager_cls:
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls:
         manager_cls.return_value.get_domain_info.return_value = objict(
             domain=ADOPT_DOMAIN, status="CANCELLED")
         try:
@@ -452,7 +483,7 @@ def test_register_existing_refuses_a_domain_the_account_does_not_hold(opts):
     Domain.objects.filter(name=ADOPT_DOMAIN).delete()
 
     raised = None
-    with patch("mojo.helpers.dns.godaddy.DNSManager") as manager_cls:
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls:
         manager_cls.return_value.get_domain_info.side_effect = _http_error(
             404, "Domain not found")
         try:
@@ -478,7 +509,7 @@ def test_register_existing_refuses_an_unusable_credential(opts):
 
     for credential in (None, opts.inactive_credential, opts.unverified_credential):
         raised = None
-        with patch("mojo.helpers.dns.godaddy.DNSManager") as manager_cls:
+        with patch(f"{GD_HELPER}.DNSManager") as manager_cls:
             try:
                 onboarding.register_existing(None, None, ADOPT_DOMAIN, credential)
             except me.ValueException as err:

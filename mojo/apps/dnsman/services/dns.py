@@ -182,6 +182,24 @@ def delete_record(domain, rtype, name, record_values=None):
     return objict(change_id=change_id, provider=adapter.name, type=rtype, name=fqdn)
 
 
+def clear_record(domain, rtype, name, record_values=None):
+    """
+    Retire a record's values — the strongest removal the provider can express.
+
+    Returns objict(change_id, provider, type, name). Same intent as
+    `delete_record`, different failure contract: a provider that cannot express
+    a true delete of the last value in a set retires the record to an inert
+    placeholder here instead of raising. Reach for this only when the caller
+    genuinely cannot act on a refusal (certificate challenge cleanup, which runs
+    in a `finally`); `delete_record` stays the honest answer everywhere else.
+    """
+    rtype, fqdn = _validate(domain, rtype, name)
+    adapter = get_adapter(domain)
+    values = base.as_value_list(record_values) or None
+    change_id = adapter.clear_record(rtype, fqdn, record_values=values)
+    return objict(change_id=change_id, provider=adapter.name, type=rtype, name=fqdn)
+
+
 def wait_for_propagation(domain, rtype, name, record_values, timeout=None, change_id=None):
     """
     Block until the record is authoritatively visible. Returns (ok, seen_values).

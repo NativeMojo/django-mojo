@@ -108,6 +108,12 @@ class DnsProvider:
     # Provider key, matching Domain.provider.
     name = None
 
+    # Whether the provider can remove the LAST value of a record set. True for
+    # anything with a real delete API; False for GoDaddy, whose only write is a
+    # PUT that replaces a whole set and rejects an empty replacement. A provider
+    # that answers False must override `clear_record`.
+    can_delete_last_record = True
+
     def __init__(self, domain):
         self.domain = domain
         self.zone_name = domain.name
@@ -132,6 +138,24 @@ class DnsProvider:
         Returns a provider change id, or None.
         """
         raise NotImplementedError("delete_record")
+
+    def clear_record(self, rtype, name, record_values=None):
+        """
+        Retire `record_values` (or the whole set) so none of it resolves any more.
+
+        The difference from `delete_record` is what the caller can be told.
+        `delete_record` may refuse — GoDaddy cannot remove the last value of a
+        set, and saying so out loud beats a silent no-op. `clear_record` is for
+        callers with nowhere to put that refusal: challenge cleanup runs in a
+        `finally` and swallows, so a raise there just leaves the record live.
+
+        A provider with a real delete does exactly what `delete_record` does. A
+        provider whose `can_delete_last_record` is False overrides this to leave
+        the record holding a single inert placeholder value instead.
+
+        Returns a provider change id, or None.
+        """
+        return self.delete_record(rtype, name, record_values=record_values)
 
     def wait_for_propagation(self, rtype, name, record_values, timeout=None, change_id=None):
         """Return (ok, seen_values) once the record is authoritatively visible."""

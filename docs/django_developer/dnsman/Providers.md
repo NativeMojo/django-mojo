@@ -11,6 +11,7 @@ adapter, because the differences fail silently rather than loudly.
 list_records(domain)                                          # -> [objict(type, name, record_values, ttl)]
 upsert_record(domain, rtype, name, record_values, ttl=300)    # -> objict(change_id, provider)
 delete_record(domain, rtype, name, record_values=None)        # -> objict(change_id, provider)
+clear_record(domain, rtype, name, record_values=None)         # -> objict(change_id, provider)
 wait_for_propagation(domain, rtype, name, record_values, timeout=None, change_id=None)  # -> (ok, seen_values)
 ```
 
@@ -40,6 +41,7 @@ refused.
 | TXT values | quoted, chunked at 255 chars | raw |
 | Write | true upsert of one record set | PUT **replaces every record** of that (type, name) |
 | Delete | supported | no true delete |
+| Record read shape | one record **set** per entry | one entry **per value** (JSON array) |
 | Propagation signal | `ChangeInfo` → `INSYNC`, then authoritative probe | authoritative probe only |
 | Purchase | yes | **no** — management only |
 
@@ -61,9 +63,57 @@ the shape ACME needs for a wildcard plus its apex.
 ### GoDaddy cannot delete the last record of a type
 
 Deletion means rewriting the remaining values, and GoDaddy rejects the empty
-replacement for some types. Where a true delete is impossible the adapter raises
-a clear error. It never silently no-ops — a caller that believes a record is
-gone when it is not is worse than a caller that sees a failure.
+replacement. Where a true delete is impossible `delete_record` raises a clear
+error. It never silently no-ops — a caller that believes a record is gone when it
+is not is worse than a caller that sees a failure.
+
+### `clear_record` — for callers with nowhere to put that refusal
+
+Some callers cannot act on "this provider cannot delete that". Certificate
+cleanup is the case that matters: it runs inside a `finally` and swallows, so a
+raise there just leaves the `_acme-challenge` TXT live in the customer's zone,
+gaining another stale digest on every renewal.
+
+`clear_record` is the same request with a different failure contract — retire
+these values, using the strongest removal the provider actually has:
+
+- **Route53** (`can_delete_last_record = True`, the interface default) does
+  exactly what `delete_record` does.
+- **GoDaddy** removes the named values when others survive, and when they are all
+  the set holds, overwrites the set with a **single inert placeholder value**
+  (`godaddy_provider.RETIRED_VALUE`) so nothing resolves and GoDaddy still gets
+  the non-empty replacement it insists on. A record that does not exist is
+  already clear: no placeholder is planted. Only character-string types
+  (`TXT`/`SPF`) get a placeholder — inventing an address for an `A` or a target
+  for a `CNAME` would point real traffic somewhere, so those still raise.
+
+Use `delete_record` everywhere else. It is the honest answer, and `clear_record`
+deliberately trades that honesty for "the data is gone".
+
+### The GoDaddy transport helper
+
+`mojo/helpers/dns/godaddy.py` owns every GoDaddy HTTP call, including URL
+building. Two things about it are load-bearing:
+
+- **`build_url()` percent-encodes every path segment.** A record name containing
+  path separators otherwise normalizes into a write against a *different domain
+  in the same account*. This has been exploitable once already; never assemble a
+  GoDaddy path by string interpolation.
+- **Array vs object bodies.** `get_domains()`, `get_records()` and
+  `get_record()` answer with JSON **arrays** and return a **list of `objict`**;
+  `get_domain_info()` answers with an object and returns a single `objict`.
+  `objict` subclasses `dict`, so `objict([...])` raises `ValueError` — and
+  `objict([])` is merely `{}`, which is why wrapping arrays directly used to look
+  fine against an empty zone and fail against every real one. Everything goes
+  through `parse_body()`.
+
+`edit_record(domain, rtype, name, data, ttl)` accepts a scalar **or a list** of
+values and builds one payload entry per value. `put_records()` is the raw door
+for the rare case where surviving values carry different TTLs.
+
+`raise_on_error` defaults to **False** and must stay that way: a sibling repo
+consumes this helper and depends on the historical swallow-everything behaviour.
+dnsman always builds its managers with `raise_on_error=True`.
 
 ## Credentials
 
@@ -92,3 +142,7 @@ restrictions:
    fail-closed gate via `Domain.requires_credential`.
 5. Give it a propagation strategy. If it has no change-status API, the
    authoritative probe (`mojo/helpers/dns/probe.py`) is the fallback.
+6. If it cannot delete the last value of a record set, set
+   `can_delete_last_record = False` and override `clear_record`. The default
+   implementation just forwards to `delete_record`, which is correct for anything
+   with a real delete.

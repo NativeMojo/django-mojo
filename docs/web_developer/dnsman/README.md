@@ -83,6 +83,13 @@ Same addressing. Omit `record_values` to remove the whole record set.
 > means rewriting the remaining ones. Deleting the *last* record of a type is
 > rejected by GoDaddy, and you will get an explicit error saying so rather than
 > a silent no-op.
+>
+> One consequence is visible when you list records on a GoDaddy domain. Because
+> the last record of a type cannot be removed, certificate issuance cannot delete
+> the `_acme-challenge` TXT it planted — it overwrites it with a single
+> placeholder value (`retired`) instead. A `_acme-challenge` TXT holding exactly
+> that one value is spent and inert; it is not a live challenge and needs no
+> action. Route53 domains have the record removed outright.
 
 ## Credentials (bring your own provider account)
 

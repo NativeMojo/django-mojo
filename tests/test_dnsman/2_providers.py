@@ -3,8 +3,9 @@ Provider dispatch + adapter parity (mojo/apps/dnsman/services/dns.py).
 
 Everything runs in-process with the provider transports patched:
   - Route53 -> the functions in `mojo.helpers.aws.route53`
-  - GoDaddy -> `mojo.helpers.dns.godaddy.DNSManager` plus the `requests` module
-    the GoDaddy adapter uses for record reads/writes.
+  - GoDaddy -> the `requests` module inside `mojo.helpers.dns.godaddy`. The REAL
+    `DNSManager` runs, so its URL building and payload shaping are what these
+    tests observe; only the socket is mocked.
 
 No AWS call and no GoDaddy call is ever made.
 
@@ -20,7 +21,7 @@ from objict import objict
 from testit import helpers as th
 
 
-GD_MODULE = "mojo.apps.dnsman.services.providers.godaddy_provider"
+GD_HELPER = "mojo.helpers.dns.godaddy"
 R53 = "mojo.helpers.aws.route53"
 PROBE = "mojo.helpers.dns.probe"
 
@@ -86,7 +87,7 @@ def setup_providers(opts):
 def test_get_adapter_picks_the_provider(opts):
     from mojo.apps.dnsman.services import dns
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager"):
+    with patch(f"{GD_HELPER}.requests"):
         assert dns.get_adapter(opts.r53_domain).name == "route53", (
             "Expected a route53 Domain to resolve to the Route53 adapter")
         assert dns.get_adapter(opts.gd_domain).name == "godaddy", (
@@ -154,8 +155,7 @@ def test_godaddy_upsert_sends_the_relative_label(opts):
     """
     from mojo.apps.dnsman.services import dns
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
         result = dns.upsert_record(
             opts.gd_domain, "txt", "_acme-challenge", ["digest-one"], ttl=60)
 
@@ -185,8 +185,7 @@ def test_apex_becomes_at_sign_on_godaddy_and_fqdn_on_route53(opts):
         f"Expected the apex to reach Route53 as the bare zone name, "
         f"got {upsert.call_args.args[2]}")
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
         dns.upsert_record(opts.gd_domain, "A", GD_DOMAIN, ["1.2.3.4"])
     url = requests_mock.put.call_args.args[0]
     assert url.endswith("/records/A/@"), (
@@ -211,8 +210,7 @@ def test_multi_value_txt_is_one_record_set_with_two_values(opts):
     assert upsert.call_args.args[3] == values, (
         f"Expected both digests in a single Route53 write, got {upsert.call_args.args[3]}")
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
         dns.upsert_record(opts.gd_domain, "TXT", "_acme-challenge", values)
     assert requests_mock.put.call_count == 1, (
         f"Expected ONE GoDaddy PUT, got {requests_mock.put.call_count}")
@@ -255,15 +253,13 @@ def test_godaddy_txt_values_are_written_and_read_raw(opts):
     """GoDaddy stores TXT raw — a Route53-shaped value must be unquoted first."""
     from mojo.apps.dnsman.services import dns
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
         dns.upsert_record(opts.gd_domain, "TXT", "_acme-challenge", ['"abc" "def"'])
     payload = requests_mock.put.call_args.kwargs["json"]
     assert payload[0]["data"] == "abcdef", (
         f"Expected the quoted/chunked value to be unquoted for GoDaddy, got {payload}")
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
         requests_mock.get.return_value = _response([
             _entry("TXT", "_acme-challenge", "abcdef"),
         ])
@@ -281,8 +277,7 @@ def test_godaddy_list_records_groups_entries_into_record_sets(opts):
     """
     from mojo.apps.dnsman.services import dns
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
         requests_mock.get.return_value = _response([
             _entry("TXT", "_acme-challenge", "digest-apex"),
             _entry("TXT", "_acme-challenge", "digest-wildcard"),
@@ -309,8 +304,7 @@ def test_godaddy_delete_puts_back_the_remaining_values(opts):
     """GoDaddy has no delete API — removing a value means PUTting what is left."""
     from mojo.apps.dnsman.services import dns
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
         requests_mock.get.return_value = _response([
             _entry("TXT", "_acme-challenge", "digest-apex"),
             _entry("TXT", "_acme-challenge", "digest-wildcard"),
@@ -334,8 +328,7 @@ def test_godaddy_delete_of_the_last_record_raises(opts):
     from mojo import errors as me
 
     raised = None
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
         requests_mock.get.return_value = _response([
             _entry("TXT", "_acme-challenge", "digest-apex"),
         ])
@@ -359,8 +352,7 @@ def test_godaddy_delete_of_a_missing_record_raises(opts):
     from mojo import errors as me
 
     raised = None
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
         requests_mock.get.return_value = _response([])
         try:
             dns.delete_record(opts.gd_domain, "TXT", "_gone")
@@ -390,6 +382,118 @@ def test_route53_delete_passes_the_values_through(opts):
 
 
 # ---------------------------------------------------------------------------
+# clears — the same logical retirement on both providers
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_route53_clear_is_a_real_delete(opts):
+    """
+    Route53 CAN delete, so a clear is exactly a delete — no placeholder, no
+    difference from the precise removal callers already got.
+    """
+    from mojo.apps.dnsman.services import dns
+
+    with patch(f"{R53}.delete_record", return_value="C7") as delete:
+        result = dns.clear_record(
+            opts.r53_domain, "TXT", "_acme-challenge", ["digest-one"])
+
+    assert result.change_id == "C7", f"Expected the change id, got {result.change_id}"
+    assert delete.call_count == 1, (
+        f"Expected a clear on Route53 to be one real delete, got {delete.call_count}")
+    assert delete.call_args.kwargs["values"] == ["digest-one"], (
+        f"Expected only the named values to be removed, "
+        f"got {delete.call_args.kwargs.get('values')}")
+
+
+@th.django_unit_test()
+def test_godaddy_clear_of_the_last_record_writes_a_placeholder(opts):
+    """
+    GoDaddy cannot delete a last record — `delete_record` says so. A CLEAR must
+    still leave nothing live, so the set is overwritten with one inert value.
+    Otherwise an `_acme-challenge` TXT survives issuance and gains a stale
+    digest on every renewal.
+    """
+    from mojo.apps.dnsman.services import dns
+    from mojo.apps.dnsman.services.providers.godaddy_provider import RETIRED_VALUE
+
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
+        requests_mock.get.return_value = _response([
+            _entry("TXT", "_acme-challenge", "digest-apex"),
+        ])
+        result = dns.clear_record(
+            opts.gd_domain, "TXT", "_acme-challenge", ["digest-apex"])
+
+    assert result.provider == "godaddy", (
+        f"Expected the provider to be reported, got {result.provider}")
+    assert requests_mock.put.call_count == 1, (
+        f"Expected the record to be overwritten, got {requests_mock.put.call_count} PUT(s)")
+    payload = requests_mock.put.call_args.kwargs["json"]
+    assert [entry["data"] for entry in payload] == [RETIRED_VALUE], (
+        f"Expected exactly one inert placeholder value, got {payload}")
+    assert "digest-apex" not in str(payload), (
+        f"The planted digest must not survive the clear, got {payload}")
+
+
+@th.django_unit_test()
+def test_godaddy_clear_keeps_the_values_it_was_not_asked_about(opts):
+    """A clear is not a purge: values nobody named stay live."""
+    from mojo.apps.dnsman.services import dns
+
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
+        requests_mock.get.return_value = _response([
+            _entry("TXT", "_acme-challenge", "digest-apex"),
+            _entry("TXT", "_acme-challenge", "someone-elses-value"),
+        ])
+        dns.clear_record(opts.gd_domain, "TXT", "_acme-challenge", ["digest-apex"])
+
+    payload = requests_mock.put.call_args.kwargs["json"]
+    assert [entry["data"] for entry in payload] == ["someone-elses-value"], (
+        f"Expected the unnamed value to survive and no placeholder, got {payload}")
+
+
+@th.django_unit_test()
+def test_godaddy_clear_of_a_missing_record_does_nothing(opts):
+    """Already gone is success — a clear must never CREATE a placeholder record."""
+    from mojo.apps.dnsman.services import dns
+
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
+        requests_mock.get.return_value = _response([])
+        result = dns.clear_record(opts.gd_domain, "TXT", "_gone", ["digest-apex"])
+
+    assert result.change_id is None, (
+        f"GoDaddy issues no change id, so None is expected, got {result.change_id}")
+    assert requests_mock.put.call_count == 0, (
+        "Expected no write for a record that does not exist — a clear must not "
+        "plant a placeholder where there was nothing")
+
+
+@th.django_unit_test()
+def test_godaddy_clear_refuses_to_placeholder_a_non_text_record(opts):
+    """
+    A placeholder is only safe for character-string types. Inventing an address
+    for an A record would point real traffic somewhere.
+    """
+    from mojo.apps.dnsman.services import dns
+    from mojo import errors as me
+
+    raised = None
+    with patch(f"{GD_HELPER}.requests") as requests_mock:
+        requests_mock.get.return_value = _response([
+            _entry("A", "www", "1.2.3.4"),
+        ])
+        try:
+            dns.clear_record(opts.gd_domain, "A", "www", ["1.2.3.4"])
+        except me.ValueException as err:
+            raised = err
+        put_calls = requests_mock.put.call_count
+
+    assert raised is not None, (
+        "Expected clearing the last A record on GoDaddy to raise rather than "
+        "invent an address")
+    assert put_calls == 0, "Expected no placeholder A record to be written"
+
+
+# ---------------------------------------------------------------------------
 # validation — refused before any provider call
 # ---------------------------------------------------------------------------
 
@@ -412,13 +516,14 @@ def test_out_of_zone_names_are_refused(opts):
     assert calls == 0, "Expected a refused name to never reach the provider"
 
     raised = None
-    with patch("mojo.helpers.dns.godaddy.DNSManager") as manager_cls, \
-            patch(f"{GD_MODULE}.requests") as requests_mock:
+    with patch(f"{GD_HELPER}.DNSManager") as manager_cls, \
+            patch(f"{GD_HELPER}.requests") as requests_mock:
         try:
             dns.upsert_record(opts.gd_domain, "A", "www.attacker.com", ["1.2.3.4"])
         except me.ValueException as err:
             raised = err
-        gd_calls = manager_cls.call_count + requests_mock.put.call_count
+        gd_calls = (manager_cls.call_count + requests_mock.get.call_count
+                    + requests_mock.put.call_count)
 
     assert raised is not None, (
         "Expected an out-of-zone record name to be refused on GoDaddy too")
@@ -558,8 +663,7 @@ def test_godaddy_propagation_is_the_probe_only(opts):
     """GoDaddy has no ChangeInfo API, so the authoritative probe is the only gate."""
     from mojo.apps.dnsman.services import dns
 
-    with patch("mojo.helpers.dns.godaddy.DNSManager"), \
-            patch(f"{GD_MODULE}.requests"), \
+    with patch(f"{GD_HELPER}.requests"), \
             patch(f"{R53}.get_change") as change, \
             patch(f"{PROBE}.wait_for_txt", return_value=(True, ["digest-one"])) as wait:
         ok, seen = dns.wait_for_propagation(
