@@ -29,6 +29,7 @@ DomainPurchase ledger is the audit trail, so the unique `name` constraint only
 ever guards live registrations.
 """
 
+import concurrent.futures
 import hashlib
 import hmac
 import secrets as pysecrets
@@ -93,6 +94,15 @@ RECONCILE_TIMEOUT_MINUTES = 30
 
 MAX_YEARS = 10
 
+# Batch-search fan-out. route53domains throttles around 5 TPS steady-state,
+# and CheckDomainAvailability is the call that answers PENDING/DONT_KNOW
+# under load — a modest pool is deliberate, not shy.
+SEARCH_POOL_WORKERS = 4
+
+# AWS caps GetDomainSuggestions at 50; 25 bounds the worst-case cold-cache
+# price fill (one list_prices per distinct TLD in the suggestion list).
+MAX_SUGGESTION_COUNT = 25
+
 
 # ---------------------------------------------------------------------------
 # settings + token helpers
@@ -147,6 +157,10 @@ def _quote_ttl_minutes():
     return int(settings.get("DNSMAN_QUOTE_TTL_MINUTES", 15, kind="int"))
 
 
+def _search_batch_limit():
+    return int(settings.get("DNSMAN_SEARCH_BATCH_LIMIT", 10, kind="int"))
+
+
 def _new_token():
     return pysecrets.token_urlsafe(CONFIRM_TOKEN_BYTES)
 
@@ -198,6 +212,33 @@ def _require_route53(domain):
 # search
 # ---------------------------------------------------------------------------
 
+def _reason_for(available, tld_supported, tld):
+    """The one reason vocabulary shared by search, batch rows, and suggest rows."""
+    if available is None:
+        return ("The registry did not answer for this name yet — "
+                "try the search again in a moment.")
+    if not tld_supported:
+        return f".{tld} cannot be registered through this system."
+    if available is False:
+        return "This domain is already registered."
+    return None
+
+
+def _search_row(result):
+    """One result row. Single search, batch rows, and suggest rows all share
+    this shape so a UI can render one grid for any of them."""
+    return objict(
+        name=result.name,
+        available=result.available,
+        status=result.status,
+        price=result.price,
+        currency=result.currency,
+        tld=result.tld,
+        tld_supported=result.tld_supported,
+        privacy_supported=result.privacy_supported,
+        reason=_reason_for(result.available, result.tld_supported, result.tld))
+
+
 def search(name):
     """
     Look up one domain's availability and price. Creates nothing.
@@ -211,26 +252,183 @@ def search(name):
     """
     name = naming.normalize_domain(name)
     result = route53.check_availability(name)
+    return _search_row(result)
 
-    reason = None
-    if result.available is None:
-        reason = ("The registry did not answer for this name yet — "
-                  "try the search again in a moment.")
-    elif not result.tld_supported:
-        reason = f".{result.tld} cannot be registered through this system."
-    elif result.available is False:
-        reason = "This domain is already registered."
 
+def _failed_row(name, reason):
+    """A per-name failure inside a batch: available stays None (never False —
+    'could not check' must not read as 'taken') and `reason` says why."""
+    tld = None
+    try:
+        tld = naming.split_tld(name)
+    except me.MojoException:
+        pass
     return objict(
-        name=result.name,
-        available=result.available,
-        status=result.status,
-        price=result.price,
-        currency=result.currency,
-        tld=result.tld,
-        tld_supported=result.tld_supported,
-        privacy_supported=result.privacy_supported,
+        name=name,
+        available=None,
+        status=None,
+        price=None,
+        currency=None,
+        tld=tld,
+        tld_supported=None,
+        privacy_supported=None,
         reason=reason)
+
+
+def _search_one(name):
+    """search() with per-name failure isolation, for use inside a batch."""
+    cleaned = str(name or "").strip().lower().rstrip(".")
+    try:
+        return search(cleaned)
+    except me.MojoException as err:
+        return _failed_row(cleaned, err.reason)
+    except Exception as err:
+        logger.error(f"dnsman: availability check failed for '{cleaned}': {err}")
+        return _failed_row(
+            cleaned,
+            "The availability check failed for this name — try again in a moment.")
+
+
+def _expand_tlds(domain, tlds):
+    """
+    Build '<base>.<tld>' candidates for the domain+tlds shape.
+
+    The base may arrive with or without its own TLD — 'nativemojo.com' and
+    'nativemojo' produce the same grid, since a wizard passes whatever the
+    user typed. A dotted base that is not a valid domain fails the whole
+    batch here: no per-name answer is meaningful when the base is garbage.
+    """
+    if not domain or not isinstance(domain, str):
+        raise me.ValueException("'tlds' requires a base 'domain' name")
+    if not isinstance(tlds, (list, tuple)):
+        raise me.ValueException("'tlds' must be a list of TLDs")
+
+    base = domain.strip().lower().rstrip(".")
+    if "." in base:
+        normalized = naming.normalize_domain(base)
+        tld = naming.split_tld(normalized)
+        base = normalized[:-(len(tld) + 1)]
+    if not base:
+        raise me.ValueException("'tlds' requires a base 'domain' name")
+
+    cleaned = []
+    seen = set()
+    for tld in tlds:
+        value = str(tld or "").strip().lower().lstrip(".").rstrip(".")
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        cleaned.append(value)
+    if not cleaned:
+        raise me.ValueException("At least one TLD is required")
+    return [f"{base}.{tld}" for tld in cleaned]
+
+
+def search_batch(domain=None, domains=None, tlds=None):
+    """
+    Batch availability. Returns objict(results=[...]) — every row the same
+    shape as search(), in request order.
+
+    Two input shapes, never mixed: domain+tlds (one base against a TLD grid)
+    or domains (full names). A name that fails validation or blows up becomes
+    its own row with available=None and a reason — one bad name never fails
+    its siblings, and the batch itself returns normally. The deduped list
+    length is capped by DNSMAN_SEARCH_BATCH_LIMIT.
+    """
+    if tlds is not None and domains is not None:
+        raise me.ValueException("Send either 'domain' + 'tlds' or 'domains', not both")
+    if tlds is not None:
+        names = _expand_tlds(domain, tlds)
+    elif domains is not None:
+        if domain:
+            raise me.ValueException("Send either 'domain' + 'tlds' or 'domains', not both")
+        if not isinstance(domains, (list, tuple)):
+            raise me.ValueException("'domains' must be a list of domain names")
+        names = list(domains)
+    else:
+        raise me.ValueException("A domain name is required")
+
+    deduped = []
+    seen = set()
+    for name in names:
+        key = str(name or "").strip().lower().rstrip(".")
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(name)
+    if not deduped:
+        raise me.ValueException("At least one domain name is required")
+
+    limit = _search_batch_limit()
+    if len(deduped) > limit:
+        raise me.ValueException(
+            f"A batch search is limited to {limit} names; {len(deduped)} were given")
+
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(len(deduped), SEARCH_POOL_WORKERS)) as pool:
+        results = list(pool.map(_search_one, deduped))
+    return objict(results=results)
+
+
+def suggest(name, count=10, only_available=True):
+    """
+    Alternate-name suggestions. Returns objict(results=[...]) — every row the
+    same shape as search(), so a UI renders one grid for both.
+
+    AWS returns availability but NO price on suggestions; prices come from
+    the per-TLD price lookup (cached in the route53 helper), warmed
+    concurrently so a cold cache costs ceil(n/POOL) round-trips instead of n
+    sequential ones. A TLD the registrar does not sell keeps its row with
+    tld_supported=False rather than being dropped.
+    """
+    name = naming.normalize_domain(name)
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        raise me.ValueException("Suggestion count must be a whole number")
+    count = max(1, min(count, MAX_SUGGESTION_COUNT))
+
+    suggestions = route53.get_domain_suggestions(
+        name, count=count, only_available=bool(only_available))
+
+    tagged = []
+    for suggestion in suggestions:
+        try:
+            tld = naming.split_tld(suggestion.name)
+        except me.MojoException:
+            tld = None
+        tagged.append((suggestion, tld))
+
+    unique_tlds = []
+    seen = set()
+    for _, tld in tagged:
+        if tld and tld not in seen:
+            seen.add(tld)
+            unique_tlds.append(tld)
+
+    prices_by_tld = {}
+    if unique_tlds:
+        # list_prices never raises, so the map cannot blow up the request.
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(len(unique_tlds), SEARCH_POOL_WORKERS)) as pool:
+            for tld, prices in zip(unique_tlds, pool.map(route53.list_prices, unique_tlds)):
+                prices_by_tld[tld] = prices
+
+    results = []
+    for suggestion, tld in tagged:
+        prices = prices_by_tld.get(tld) or objict(
+            supported=False, registration_price=None, currency=None)
+        results.append(objict(
+            name=suggestion.name,
+            available=suggestion.available,
+            status=suggestion.status,
+            price=prices.registration_price,
+            currency=prices.currency,
+            tld=tld,
+            tld_supported=prices.supported,
+            privacy_supported=route53.supports_privacy(tld) if tld else None,
+            reason=_reason_for(suggestion.available, prices.supported, tld)))
+    return objict(results=results)
 
 
 # ---------------------------------------------------------------------------

@@ -214,6 +214,263 @@ def test_search_indeterminate_is_null_with_retry_reason(opts):
 
 
 # ---------------------------------------------------------------------------
+# batch search
+# ---------------------------------------------------------------------------
+
+def _check_by_name(name):
+    """A stand-in check_availability that answers for whatever name it is asked."""
+    return _avail(name, tld=name.rsplit(".", 1)[1])
+
+
+@th.django_unit_test()
+def test_search_batch_tlds_shape_builds_the_grid(opts):
+    """domain+tlds expands to base.tld candidates: cleaned, deduped, in order."""
+    from mojo.apps.dnsman.services import registrar
+
+    with mock.patch(f"{R53}.check_availability", side_effect=_check_by_name) as check:
+        result = registrar.search_batch(
+            domain="dnsman-test-grid", tlds=["com", ".DEV", "com", "io"])
+
+    names = [row.name for row in result.results]
+    assert names == ["dnsman-test-grid.com", "dnsman-test-grid.dev", "dnsman-test-grid.io"], (
+        f"Expected cleaned, deduped candidates in request order, got {names}")
+    assert check.call_count == 3, (
+        f"Expected one AWS check per unique candidate, got {check.call_count}")
+
+    with mock.patch(f"{R53}.check_availability",
+                    return_value=_avail("dnsman-test-grid.com")):
+        single = registrar.search("dnsman-test-grid.com")
+    assert set(result.results[0].keys()) == set(single.keys()), (
+        "Batch rows must have exactly the single-search row shape, got "
+        f"{sorted(result.results[0].keys())} vs {sorted(single.keys())}")
+
+
+@th.django_unit_test()
+def test_search_batch_dotted_base_matches_bare_base(opts):
+    """'nativemojo.com'+tlds and 'nativemojo'+tlds must produce the same grid."""
+    from mojo.apps.dnsman.services import registrar
+
+    with mock.patch(f"{R53}.check_availability", side_effect=_check_by_name):
+        dotted = registrar.search_batch(domain="dnsman-test-base.com", tlds=["com", "dev"])
+        bare = registrar.search_batch(domain="dnsman-test-base", tlds=["com", "dev"])
+
+    dotted_names = [row.name for row in dotted.results]
+    bare_names = [row.name for row in bare.results]
+    assert dotted_names == bare_names == ["dnsman-test-base.com", "dnsman-test-base.dev"], (
+        f"Expected identical grids for dotted and bare bases, got {dotted_names} vs {bare_names}")
+
+
+@th.django_unit_test()
+def test_search_batch_domains_shape_normalizes_and_dedupes(opts):
+    from mojo.apps.dnsman.services import registrar
+
+    with mock.patch(f"{R53}.check_availability", side_effect=_check_by_name):
+        result = registrar.search_batch(domains=[
+            "DNSMAN-Test-One.COM.", "dnsman-test-two.dev", "dnsman-test-one.com"])
+
+    names = [row.name for row in result.results]
+    assert names == ["dnsman-test-one.com", "dnsman-test-two.dev"], (
+        f"Expected normalized, deduped names in request order, got {names}")
+
+
+@th.django_unit_test()
+def test_search_batch_enforces_the_limit_before_aws(opts):
+    from mojo import errors as me
+    from mojo.apps.dnsman.services import registrar
+
+    names = [f"dnsman-test-{i}.com" for i in range(11)]
+    raised = None
+    with mock.patch(f"{R53}.check_availability") as check:
+        try:
+            registrar.search_batch(domains=names)
+        except me.ValueException as err:
+            raised = err
+    assert raised is not None, "Expected an over-limit batch to be refused"
+    assert "10" in str(raised) and "11" in str(raised), (
+        f"Expected the refusal to name the limit and the given count, got {raised}")
+    assert check.call_count == 0, (
+        "An over-limit batch must be refused before any AWS call")
+
+    # Dupes collapse before the cap: 11 raw entries, 2 unique -> allowed.
+    dupes = ["dnsman-test-a.com"] * 10 + ["dnsman-test-b.com"]
+    with mock.patch(f"{R53}.check_availability", side_effect=_check_by_name):
+        result = registrar.search_batch(domains=dupes)
+    assert len(result.results) == 2, (
+        f"Expected dedupe to run before the cap, got {len(result.results)} rows")
+
+
+@th.django_unit_test()
+def test_search_batch_rejects_ambiguous_and_empty_shapes(opts):
+    from mojo import errors as me
+    from mojo.apps.dnsman.services import registrar
+
+    bad_shapes = [
+        dict(domains=["a.com"], tlds=["com"]),          # both list shapes
+        dict(domain="a.com", domains=["b.com"]),        # single + list
+        dict(tlds=["com"]),                             # tlds without a base
+        dict(domains=[]),                               # nothing to check
+        dict(domain="a", tlds=[]),                      # no usable tlds
+        dict(domains="a.com"),                          # not a list
+        dict(),                                         # nothing at all
+    ]
+    with mock.patch(f"{R53}.check_availability") as check:
+        for shape in bad_shapes:
+            raised = None
+            try:
+                registrar.search_batch(**shape)
+            except me.ValueException as err:
+                raised = err
+            assert raised is not None, f"Expected shape {shape!r} to be refused"
+    assert check.call_count == 0, (
+        "A refused shape must never reach AWS")
+
+
+@th.django_unit_test()
+def test_search_batch_isolates_per_name_failures(opts):
+    """One bad name gets a reason row; its siblings still get real answers."""
+    from mojo import errors as me
+    from mojo.apps.dnsman.services import registrar
+
+    def flaky_check(name):
+        if name == "dnsman-test-bad.com":
+            raise me.ValueException(
+                f"'{name}' is not a valid domain name for the .com registry")
+        if name == "dnsman-test-boom.com":
+            raise RuntimeError("socket exploded")
+        return _avail(name)
+
+    with mock.patch(f"{R53}.check_availability", side_effect=flaky_check):
+        result = registrar.search_batch(domains=[
+            "dnsman-test-good.com", "dnsman-test-bad.com", "dnsman-test-boom.com"])
+
+    rows = result.results
+    assert len(rows) == 3, f"Expected every name to get a row, got {len(rows)}"
+    assert rows[0].available is True and rows[0].reason is None, (
+        f"Expected the good name to answer normally, got {rows[0]}")
+    assert rows[1].available is None, (
+        "A validation failure must stay tri-state None — never False "
+        f"(got {rows[1].available!r})")
+    assert "not a valid domain name" in rows[1].reason, (
+        f"Expected the validation message in the row's reason, got {rows[1].reason!r}")
+    assert rows[2].available is None, (
+        f"An unexpected error must stay tri-state None, got {rows[2].available!r}")
+    assert "again" in rows[2].reason.lower(), (
+        f"Expected a retry reason on an unexpected error, got {rows[2].reason!r}")
+    assert "socket exploded" not in str(rows[2].reason), (
+        "Raw internal error text must not leak into a row reason")
+
+
+@th.django_unit_test()
+def test_search_batch_preserves_request_order_across_the_pool(opts):
+    """More names than pool workers: results still come back in request order."""
+    from mojo.apps.dnsman.services import registrar
+
+    names = [f"dnsman-test-order-{i}.com" for i in range(7)]
+    with mock.patch(f"{R53}.check_availability", side_effect=_check_by_name):
+        result = registrar.search_batch(domains=names)
+
+    assert [row.name for row in result.results] == names, (
+        f"Expected request order to survive the worker pool, got "
+        f"{[row.name for row in result.results]}")
+
+
+# ---------------------------------------------------------------------------
+# suggestions
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_suggest_fills_prices_and_keeps_unsupported_rows(opts):
+    from objict import objict as _objict
+    from mojo.apps.dnsman.services import registrar
+
+    suggestions = [
+        _objict(name="dnsman-test-alpha.com", status="AVAILABLE", available=True),
+        _objict(name="dnsman-test-beta.pizza", status="AVAILABLE", available=True),
+        _objict(name="dnsman-test-gamma.dev", status="PENDING", available=None),
+        _objict(name="dnsman-test-delta.com", status="UNAVAILABLE", available=False),
+    ]
+
+    def fake_prices(tld, **kwargs):
+        if tld == "pizza":
+            return _objict(tld=tld, supported=False, registration_price=None,
+                           renewal_price=None, currency=None)
+        return _objict(tld=tld, supported=True, registration_price=13.0,
+                       renewal_price=13.0, currency="USD")
+
+    with mock.patch(f"{R53}.get_domain_suggestions", return_value=suggestions) as sug, \
+         mock.patch(f"{R53}.list_prices", side_effect=fake_prices):
+        result = registrar.suggest("  DNSMAN-Test.COM.  ", count=4, only_available=False)
+
+    assert sug.call_args.args[0] == "dnsman-test.com", (
+        f"Expected the normalized name to reach the helper, got {sug.call_args.args[0]}")
+    assert sug.call_args.kwargs["only_available"] is False, (
+        "Expected only_available to pass through")
+
+    rows = result.results
+    assert [r.name for r in rows] == [s.name for s in suggestions], (
+        f"Expected every suggestion to keep its row in order, got {[r.name for r in rows]}")
+
+    assert rows[0].price == 13.0 and rows[0].currency == "USD", (
+        f"Expected the price fill from list_prices, got {rows[0].price} {rows[0].currency}")
+    assert rows[0].tld_supported is True and rows[0].reason is None, (
+        f"Expected a clean available row, got {rows[0]}")
+
+    assert rows[1].tld_supported is False, (
+        "An unsupported TLD must keep its row with tld_supported=False, not be dropped")
+    assert rows[1].price is None, (
+        f"Expected no price for an unsupported TLD, got {rows[1].price}")
+    assert rows[1].reason and "cannot be registered" in rows[1].reason, (
+        f"Expected the unsupported-TLD reason, got {rows[1].reason!r}")
+
+    assert rows[2].available is None and "again" in rows[2].reason.lower(), (
+        f"Expected the indeterminate row to keep None + retry reason, got {rows[2]}")
+    assert rows[3].available is False and "already registered" in rows[3].reason, (
+        f"Expected the unavailable row to carry the taken reason, got {rows[3]}")
+
+    with mock.patch(f"{R53}.check_availability",
+                    return_value=_avail("dnsman-test.com")):
+        single = registrar.search("dnsman-test.com")
+    assert set(rows[0].keys()) == set(single.keys()), (
+        "Suggest rows must have exactly the single-search row shape, got "
+        f"{sorted(rows[0].keys())} vs {sorted(single.keys())}")
+
+
+@th.django_unit_test()
+def test_suggest_clamps_count_and_validates_input(opts):
+    from mojo import errors as me
+    from mojo.apps.dnsman.services import registrar
+
+    with mock.patch(f"{R53}.get_domain_suggestions", return_value=[]) as sug:
+        registrar.suggest("dnsman-test.com", count=500)
+    assert sug.call_args.kwargs["count"] == registrar.MAX_SUGGESTION_COUNT, (
+        f"Expected the count clamped to {registrar.MAX_SUGGESTION_COUNT}, "
+        f"got {sug.call_args.kwargs['count']}")
+
+    with mock.patch(f"{R53}.get_domain_suggestions", return_value=[]) as sug:
+        registrar.suggest("dnsman-test.com", count=0)
+    assert sug.call_args.kwargs["count"] == 1, (
+        f"Expected the count clamped up to 1, got {sug.call_args.kwargs['count']}")
+
+    raised = None
+    with mock.patch(f"{R53}.get_domain_suggestions", return_value=[]) as sug:
+        try:
+            registrar.suggest("dnsman-test.com", count="lots")
+        except me.ValueException as err:
+            raised = err
+    assert raised is not None and "whole number" in str(raised), (
+        f"Expected a clean validation error for a non-numeric count, got {raised}")
+    assert sug.call_count == 0, "A bad count must be refused before any AWS call"
+
+    raised = None
+    try:
+        registrar.suggest("not_a_domain")
+    except me.ValueException as err:
+        raised = err
+    assert raised is not None, (
+        "Expected a TLD-less input to fail normalization before any AWS call")
+
+
+# ---------------------------------------------------------------------------
 # quote
 # ---------------------------------------------------------------------------
 
