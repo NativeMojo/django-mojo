@@ -1,5 +1,19 @@
+"""
+dnsman scheduled work.
+
+Every function here is a THIN DISPATCHER: it publishes a job and returns. The
+real work belongs on a job runner, which is where retries, timeouts and job
+visibility live — a cron function runs synchronously on whatever process the
+cron matcher fires on, so anything slow or network-bound occupies that process
+for its whole duration. Same shape as every other app's cronjobs module.
+"""
+
 from mojo.decorators.cron import schedule
+from mojo.apps import jobs
 from mojo.helpers import logit
+
+
+POLL_JOB = "mojo.apps.dnsman.asyncjobs.poll_domain_operations"
 
 
 # The cron field values MUST be strings. `minutes=5` raises a TypeError inside
@@ -8,17 +22,14 @@ from mojo.helpers import logit
 @schedule(minutes="*/5")
 def poll_domain_operations():
     """
-    Advance in-flight domain registrations.
+    Queue the sweep that advances in-flight domain registrations.
 
-    Also reconciles the crash window: a purchase row that is `submitted` with
-    no operation id is one where we may have spent money without recording
-    where it went, so the poller probes the registrar's operation list for it.
+    The sweep also reconciles the crash window: a purchase row that is
+    `submitted` with no operation id is one where we may have spent money
+    without recording where it went, so it probes the registrar's operation
+    list for the real operation.
     """
-    from mojo.apps.dnsman.services import registrar
-
-    result = registrar.poll_pending()
-    logit.info(f"dnsman: poll_pending {result}")
-    return result
+    return jobs.publish(func=POLL_JOB, payload={})
 
 
 @schedule(minutes="0", hours="*/6")

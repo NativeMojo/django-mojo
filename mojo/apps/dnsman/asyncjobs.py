@@ -60,6 +60,31 @@ def renew_certificate(job):
     return _run(job, "renew_certificate")
 
 
+def poll_domain_operations(job):
+    """
+    Advance every in-flight domain registration.
+
+    Runs here rather than inline in the cron function because the sweep makes
+    a registrar round trip PER open purchase row (operation detail, and for the
+    crash window a `list_operations` probe plus zone/expiry lookups) and takes
+    a row lock to settle each one. That is unbounded by row count and must not
+    occupy whatever thread the cron matcher happens to fire on.
+
+    `registrar.poll_pending()` is idempotent and status-guarded, so a retry —
+    or an overlapping run if a sweep outlives its five-minute interval — settles
+    each row at most once.
+    """
+    from mojo.apps.dnsman.services import registrar
+
+    result = registrar.poll_pending()
+    if result.errors:
+        logit.error(f"dnsman: poll_pending finished with errors {result}")
+    else:
+        logit.info(f"dnsman: poll_pending {result}")
+    return (f"completed:completed={result.completed},failed={result.failed},"
+            f"adopted={result.adopted},expired={result.expired},errors={result.errors}")
+
+
 def certificate_updated(job):
     """
     Broadcast handler for the certificate sync channel.
