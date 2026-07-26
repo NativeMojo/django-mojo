@@ -359,6 +359,7 @@ def test_users_perm_can_force_verify_phone_on_other_user(opts):
         email="user_actions_phone_admin@test.com",
         password="bare_pw_99")
     bare_admin.is_active = True
+    bare_admin.is_email_verified = True
     bare_admin.save()
     bare_admin.add_permission("users")
 
@@ -387,7 +388,12 @@ def test_owner_only_cannot_force_verify_email(opts):
         email="user_actions_owner_verify@test.com",
         password="plain_pw_99")
     plain_user.is_active = True
+    # is_email_verified stays False on purpose — this test asserts it is NOT
+    # flipped by an owner-only caller. Verify by PHONE instead so the login
+    # gate is satisfied without touching the flag under test: the gate
+    # short-circuits on (is_email_verified or is_phone_verified).
     plain_user.is_email_verified = False
+    plain_user.is_phone_verified = True
     plain_user.save()
 
     assert opts.client.login("user_actions_owner_verify@test.com", "plain_pw_99"), "plain user login failed"
@@ -454,6 +460,7 @@ def test_users_perm_can_set_password_on_other_user(opts):
         email="user_actions_pw_admin@test.com",
         password="bare_pw_99")
     bare_admin.is_active = True
+    bare_admin.is_email_verified = True
     bare_admin.save()
     bare_admin.add_permission("users")
 
@@ -492,6 +499,7 @@ def test_users_perm_can_disable_other_user(opts):
         email="user_actions_disable_admin@test.com",
         password="bare_pw_99")
     bare_admin.is_active = True
+    bare_admin.is_email_verified = True
     bare_admin.save()
     bare_admin.add_permission("users")
 
