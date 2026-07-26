@@ -37,7 +37,7 @@ def test_config_reports_purchase_state(opts):
 
     for key in ("registrant_contact_configured", "max_domain_price", "currency",
                 "quote_ttl_minutes", "allowed_record_types", "providers", "acme",
-                "cert_renew_days"):
+                "cert_renew_days", "search_batch_limit", "suggestions_enabled"):
         assert key in body, f"config response is missing {key!r}"
 
     assert isinstance(body["registrant_contact_configured"], bool), \
@@ -46,6 +46,10 @@ def test_config_reports_purchase_state(opts):
         "allowed_record_types must be a list"
     assert "TXT" in body["allowed_record_types"], \
         "TXT must be an allowed record type"
+    assert body["search_batch_limit"] == 10, \
+        f"search_batch_limit should reflect the default cap, got {body['search_batch_limit']}"
+    assert body["suggestions_enabled"] is True, \
+        "suggestions_enabled is the feature-presence flag and must be True"
 
     providers = {p["name"]: p for p in body["providers"]}
     assert providers["route53"]["purchase"] is True, "route53 must report purchase support"

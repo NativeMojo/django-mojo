@@ -33,6 +33,11 @@ def get_config():
         currency="USD",
         quote_ttl_minutes=registrar._quote_ttl_minutes(),
         allowed_record_types=sorted(dns_service.allowed_record_types()),
+        search_batch_limit=registrar._search_batch_limit(),
+        # Static on purpose: suggestions have no kill switch. The flag exists
+        # so a client can feature-detect batch search + suggest by presence
+        # against an older backend.
+        suggestions_enabled=True,
         providers=[
             dict(name=PROVIDER_ROUTE53, purchase=True, requires_credential=False),
             dict(name=PROVIDER_GODADDY, purchase=False, requires_credential=True),

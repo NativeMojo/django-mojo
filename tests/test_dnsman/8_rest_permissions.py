@@ -71,6 +71,21 @@ def test_viewer_cannot_write(opts):
         f"view_dns must not write DNS records (status {resp.status_code})"
 
 
+@th.django_unit_test("registrar search and suggest require view_dns")
+def test_search_and_suggest_require_perm(opts):
+    login(opts, opts.nobody_email, opts.nobody_pw)
+
+    resp = opts.client.post("/api/dnsman/registrar/suggest", json=dict(
+        domain="never-checked-example.com"))
+    assert resp.status_code in (401, 403), \
+        f"a user with no dns permission ran registrar/suggest (status {resp.status_code})"
+
+    resp = opts.client.post("/api/dnsman/registrar/search", json=dict(
+        domains=["never-checked-example.com"]))
+    assert resp.status_code in (401, 403), \
+        f"a user with no dns permission ran a batch search (status {resp.status_code})"
+
+
 # ---------------------------------------------------------------------------
 # The two endpoints deliberately stricter than manage_dns
 # ---------------------------------------------------------------------------
@@ -144,6 +159,26 @@ def test_dns_requires_domain(opts):
     resp = opts.client.get("/api/dnsman/dns")
     assert resp.status_code == 400, \
         f"missing domain param should be a 400, got {resp.status_code}"
+
+
+@th.django_unit_test("registrar search refuses bad shapes before any AWS call")
+def test_search_shape_validation(opts):
+    # Every one of these refusals happens in shape validation, pre-network —
+    # safe against the live server.
+    login(opts, opts.viewer_email, opts.viewer_pw)
+
+    resp = opts.client.post("/api/dnsman/registrar/search", json=dict())
+    assert resp.status_code == 400, \
+        f"search with no input must keep answering 400, got {resp.status_code}"
+
+    resp = opts.client.post("/api/dnsman/registrar/search", json=dict(domains=[]))
+    assert resp.status_code == 400, \
+        f"an empty batch must be a 400, got {resp.status_code}"
+
+    resp = opts.client.post("/api/dnsman/registrar/search", json=dict(
+        domains=["a-example.com"], tlds=["com"]))
+    assert resp.status_code == 400, \
+        f"mixing 'domains' with 'tlds' must be a 400, got {resp.status_code}"
 
 
 @th.django_unit_test("a domain with no usable credential fails closed")

@@ -14,11 +14,37 @@ def on_purchase(request, pk=None):
 
 
 @md.POST('registrar/search')
-@md.requires_params("domain")
 def on_registrar_search(request):
-    """Availability + live pricing. Creates nothing and spends nothing."""
+    """
+    Availability + live pricing. Creates nothing and spends nothing.
+
+    Three input shapes: {domain} answers with today's flat single-name object
+    unchanged; {domain, tlds} and {domains} answer {"results": [...]} with one
+    same-shaped row per name. No requires_params — the batch shapes have no
+    'domain' key, so the missing-parameter refusal is raised by hand with the
+    decorator's exact message.
+    """
     Domain.rest_check_permission_or_raise(request, "VIEW_PERMS")
-    return registrar.search(request.DATA.get("domain"))
+    domain = request.DATA.get("domain")
+    domains = request.DATA.get("domains")
+    tlds = request.DATA.get("tlds")
+    if domains is not None or tlds is not None:
+        return registrar.search_batch(domain=domain, domains=domains, tlds=tlds)
+    if not domain:
+        raise me.ValueException("missing required parameters: domain")
+    return registrar.search(domain)
+
+
+@md.POST('registrar/suggest')
+@md.requires_params("domain")
+def on_registrar_suggest(request):
+    """Alternate-name suggestions with availability and cached pricing.
+    Read-only discovery, same gate as search."""
+    Domain.rest_check_permission_or_raise(request, "VIEW_PERMS")
+    return registrar.suggest(
+        request.DATA.get("domain"),
+        count=request.DATA.get("count", 10),
+        only_available=bool(request.DATA.get("only_available", True)))
 
 
 @md.POST('registrar/quote')
