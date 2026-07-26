@@ -715,3 +715,174 @@ class assert_raises:
 
         self.exception = exc_val
         return True  # suppresses the exception
+
+
+# ---------------------------------------------------------------------------
+# Job execution
+# ---------------------------------------------------------------------------
+#
+# WHY A SYNCHRONOUS DRAIN — and why tests must NOT rely on a job daemon:
+# ---------------------------------------------------------------------
+# Job handlers are exactly the code that talks to AWS, ACME and DNS providers,
+# so a test has to be able to `mock.patch` them. A real job engine daemon runs
+# in a SEPARATE process and would never see those patches — the same trap that
+# makes `override_settings()` useless against `opts.client` (see
+# `server_settings` above). It would also execute a snapshot of the code it
+# imported at startup, and force every test into poll-and-sleep.
+#
+# So `run_jobs()` executes pending jobs INLINE, in the test process:
+#   - `mock.patch` works, because it is the same interpreter
+#   - it runs the code you are editing right now, not a daemon's stale copy
+#   - it is an explicit barrier: publish, drain, assert. No sleeps, no races.
+#
+# The real `jobs.publish()` path is still exercised end to end — a Job row is
+# written, the payload round-trips through JSON, and the id is popped off the
+# real Redis queue — so serialization and channel-routing bugs still surface.
+#
+# NOTE: do not run a job-engine daemon during the suite. It would race this
+# drain for the same queue, and any job it won would execute in the daemon's
+# process where the test's patches do not apply.
+
+
+def _drain_engine(channels):
+    """A JobEngine used only for its synchronous `execute_job`, never started."""
+    from mojo.apps.jobs.job_engine import JobEngine
+
+    engine = getattr(_thread_local, "drain_engine", None)
+    if engine is None:
+        engine = JobEngine(channels=list(channels), runner_id="testit-drain")
+        _thread_local.drain_engine = engine
+    return engine
+
+
+def _job_channels(channel=None):
+    from mojo.helpers.settings import settings
+
+    if channel:
+        return [channel] if isinstance(channel, str) else list(channel)
+    channels = settings.get("JOBS_CHANNELS", ["default"])
+    if isinstance(channels, str):
+        channels = [channels]
+    return list(channels)
+
+
+def promote_scheduled_jobs(channel=None, now=None):
+    """
+    Move due jobs out of the scheduled ZSET into their queue.
+
+    This is the one thing the Scheduler daemon does that matters for a test:
+    a job published with `delay=`/`run_at=` lands in a ZSET and is invisible to
+    the queue until promoted. Returns how many were promoted.
+    """
+    from mojo.apps.jobs.adapters import get_adapter
+    from mojo.apps.jobs.keys import JobKeys
+    from mojo.helpers import dates
+
+    redis = get_adapter()
+    keys = JobKeys()
+    now = now or dates.utcnow()
+    cutoff = now.timestamp() * 1000
+    promoted = 0
+
+    for ch in _job_channels(channel):
+        for zset in (keys.sched(ch), keys.sched_broadcast(ch)):
+            due = redis.zrangebyscore(zset, 0, cutoff) or []
+            for job_id in due:
+                redis.rpush(keys.queue(ch), job_id)
+                redis.zrem(zset, job_id)
+                promoted += 1
+    return promoted
+
+
+def run_jobs(channel=None, max_jobs=100, include_scheduled=True):
+    """
+    Execute every pending job synchronously, in THIS process, then return.
+
+    The explicit barrier between publishing and asserting:
+
+        jobs.publish(func="app.asyncjobs.do_thing", payload={...})
+        th.run_jobs()
+        assert row.status == "done"
+
+    Args:
+        channel: one channel, a list of them, or None for JOBS_CHANNELS.
+        max_jobs: safety stop, so a handler that re-publishes itself cannot
+            spin forever.
+        include_scheduled: also promote due `delay=`/`run_at=` jobs first.
+
+    Returns:
+        objict(count, job_ids, hit_limit)
+    """
+    from mojo.apps.jobs.adapters import get_adapter
+    from mojo.apps.jobs.keys import JobKeys
+
+    channels = _job_channels(channel)
+    redis = get_adapter()
+    keys = JobKeys()
+
+    if include_scheduled:
+        promote_scheduled_jobs(channel=channels)
+
+    engine = _drain_engine(channels)
+    executed = []
+    hit_limit = False
+
+    while True:
+        if len(executed) >= max_jobs:
+            hit_limit = True
+            break
+
+        # llen first so an empty queue costs nothing — brpop would block for
+        # its full timeout on every drain that finds nothing left.
+        target = None
+        for ch in channels:
+            if redis.llen(keys.queue(ch)) > 0:
+                target = ch
+                break
+        if target is None:
+            break
+
+        popped = redis.brpop([keys.queue(target)], timeout=1)
+        if not popped:
+            break
+        _queue_key, job_id = popped
+
+        engine.execute_job(target, job_id)
+        executed.append(job_id)
+
+    return objict(count=len(executed), job_ids=executed, hit_limit=hit_limit)
+
+
+def clear_jobs(channel=None, delete_rows=True):
+    """
+    Drop pending jobs so a module starts from a known state.
+
+    Tests run against a long-lived database and a shared Redis, so a job left
+    queued by an earlier module would otherwise be picked up by the first
+    `run_jobs()` that happens to run after it.
+    """
+    from mojo.apps.jobs.adapters import get_adapter
+    from mojo.apps.jobs.keys import JobKeys
+
+    redis = get_adapter()
+    keys = JobKeys()
+
+    for ch in _job_channels(channel):
+        redis.delete(keys.queue(ch))
+        redis.delete(keys.sched(ch))
+        redis.delete(keys.sched_broadcast(ch))
+        redis.delete(keys.processing(ch))
+
+    if delete_rows:
+        from mojo.apps.jobs.models import Job
+        Job.objects.filter(status__in=["pending", "running"]).delete()
+
+
+def pending_job_count(channel=None):
+    """How many jobs are sitting in the immediate queues right now."""
+    from mojo.apps.jobs.adapters import get_adapter
+    from mojo.apps.jobs.keys import JobKeys
+
+    redis = get_adapter()
+    keys = JobKeys()
+    return sum(redis.llen(keys.queue(ch)) for ch in _job_channels(channel))

@@ -270,8 +270,16 @@ def _make_chain(names, days=90, serial=0xABC123):
 
 
 @contextlib.contextmanager
-def _issuance_env(client=None, dns_stub=None):
-    """Patch the ACME client, services/dns.py and the KMS layer for one test."""
+def _issuance_env(client=None, dns_stub=None, real_jobs=False):
+    """
+    Patch the ACME client, services/dns.py and the KMS layer for one test.
+
+    `real_jobs=True` leaves `jobs.publish` ALONE so the genuine publish path
+    runs — a Job row is written and queued — and the test drives execution with
+    `th.run_jobs()`. Every patch below still applies to the handler, because
+    the drain executes it in THIS process; that is the entire reason the drain
+    exists rather than a job daemon.
+    """
     from unittest import mock
 
     from mojo.apps import jobs as jobs_module
@@ -282,13 +290,20 @@ def _issuance_env(client=None, dns_stub=None):
     jobs_stub = FakeJobs()
     kms = FakeKMS()
 
-    with mock.patch.object(KSMSecrets, "_get_kms", return_value=kms), \
-            mock.patch.object(certs, "_get_account", return_value=(None, client)), \
-            mock.patch.object(dns, "upsert_record", dns_stub.upsert_record), \
-            mock.patch.object(dns, "delete_record", dns_stub.delete_record), \
-            mock.patch.object(dns, "clear_record", dns_stub.clear_record), \
-            mock.patch.object(dns, "wait_for_propagation", dns_stub.wait_for_propagation), \
-            mock.patch.object(jobs_module, "publish", jobs_stub.publish):
+    patches = [
+        mock.patch.object(KSMSecrets, "_get_kms", return_value=kms),
+        mock.patch.object(certs, "_get_account", return_value=(None, client)),
+        mock.patch.object(dns, "upsert_record", dns_stub.upsert_record),
+        mock.patch.object(dns, "delete_record", dns_stub.delete_record),
+        mock.patch.object(dns, "clear_record", dns_stub.clear_record),
+        mock.patch.object(dns, "wait_for_propagation", dns_stub.wait_for_propagation),
+    ]
+    if not real_jobs:
+        patches.append(mock.patch.object(jobs_module, "publish", jobs_stub.publish))
+
+    with contextlib.ExitStack() as stack:
+        for patch in patches:
+            stack.enter_context(patch)
         yield objict(dns=dns_stub, jobs=jobs_stub, acme=client, kms=kms)
 
 
@@ -666,3 +681,146 @@ def test_certs_revoke(opts):
         f"{client.revocations[0].reason}")
     assert Certificate.objects.get(pk=cert.pk).status == "revoked", (
         "a revoked certificate's row should be marked revoked, not deleted")
+
+
+# ----------------------------------------------------------------------
+# The real publish -> execute path
+#
+# The tests above call certs.issue() directly, which is right for exercising
+# issuance internals. These exercise the contract BETWEEN the service and the
+# job engine — that a published job actually resolves to its handler, carries
+# a payload the handler can use, and drives the Certificate row to its end
+# state. Nothing verified that before: the job layer was always stubbed out.
+# ----------------------------------------------------------------------
+
+@th.django_unit_test("dnsman certs: request_certificate -> job -> issued, through the real queue")
+def test_certs_request_runs_through_the_job_engine(opts):
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.services import certs
+
+    th.clear_jobs()
+    domain = _reset_domain("jobflow-certs.test")
+    names = [domain.name, f"*.{domain.name}"]
+    chain, _leaf = _make_chain(names, days=90, serial=0xB0B1)
+    # Two authorizations naming the SAME identifier — the wildcard case.
+    client = FakeAcmeClient([domain.name, domain.name], chain=chain)
+
+    with _issuance_env(client=client, real_jobs=True) as env:
+        cert = certs.request_certificate(domain)
+
+        # Nothing has been issued yet — request_certificate only queues.
+        assert cert.status == "pending", \
+            f"a freshly requested certificate should be pending, got {cert.status}"
+        assert th.pending_job_count() >= 1, \
+            "request_certificate should have left a real job on the queue"
+
+        drained = th.run_jobs()
+
+    assert drained.count >= 1, f"the issuance job should have run, drained {drained.count}"
+
+    cert.refresh_from_db()
+    assert cert.status == "active", (
+        f"the job handler should have carried the certificate to active, got "
+        f"{cert.status} (last_error={cert.last_error})")
+    assert cert.cert_pem, "an issued certificate should have stored its PEM"
+    assert cert.not_after is not None, "issuance should record the validity window"
+
+    # The handler ran in-process, so the ACME and DNS stubs above applied to it.
+    assert client.finalized, "the patched ACME client should have been driven by the handler"
+    assert len(env.dns.clears) == 1, \
+        f"the handler should have retired its challenge record, got {len(env.dns.clears)}"
+
+
+@th.django_unit_test("dnsman certs: the job payload names the certificate the handler resolves")
+def test_certs_job_payload_resolves(opts):
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.dnsman.services import certs
+
+    th.clear_jobs()
+    domain = _reset_domain("payload-certs.test")
+    names = [domain.name, f"*.{domain.name}"]
+    chain, _leaf = _make_chain(names, days=90, serial=0xB0B2)
+    client = FakeAcmeClient([domain.name, domain.name], chain=chain)
+
+    with _issuance_env(client=client, real_jobs=True):
+        cert = certs.request_certificate(domain)
+
+        job = Job.objects.filter(func=certs.ISSUE_JOB).order_by("-created").first()
+        assert job is not None, "request_certificate should have written a real Job row"
+        # The payload survives a JSON round-trip through the queue; a stubbed
+        # publish would have handed the handler the original Python object and
+        # hidden any serialization problem.
+        assert job.payload == {"certificate": cert.pk}, \
+            f"the job payload should carry the certificate id, got {job.payload}"
+
+        th.run_jobs()
+
+    cert.refresh_from_db()
+    assert cert.status == "active", f"the resolved handler should have issued, got {cert.status}"
+
+
+@th.django_unit_test("dnsman certs: a failed issuance marks the certificate AND fails the job")
+def test_certs_job_failure_surfaces_both_places(opts):
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.dnsman.services import certs
+
+    th.clear_jobs()
+    domain = _reset_domain("jobfail-certs.test")
+    # A propagation timeout is the realistic failure: the record never went live.
+    dns_stub = FakeDns(propagated=False, seen=[])
+    client = FakeAcmeClient([domain.name, domain.name], chain="")
+
+    with _issuance_env(client=client, dns_stub=dns_stub, real_jobs=True):
+        cert = certs.request_certificate(domain)
+        th.run_jobs()
+
+    cert.refresh_from_db()
+    assert cert.status == "failed", \
+        f"the certificate row is the durable record of failure, got {cert.status}"
+    assert cert.last_error, "a failed issuance should record why"
+
+    job = Job.objects.filter(func=certs.ISSUE_JOB).order_by("-created").first()
+    assert job.status in ("failed", "retrying"), (
+        "the handler re-raises after recording the row, so the failure is visible "
+        f"in the jobs surface too; got {job.status}")
+
+
+@th.django_unit_test("dnsman certs: renew_due queues real jobs that reissue when drained")
+def test_certs_renew_due_runs_through_the_job_engine(opts):
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.services import certs
+    from mojo.helpers import dates
+
+    th.clear_jobs()
+    domain = _reset_domain("renewflow-certs.test")
+    now = dates.utcnow()
+    chain, _leaf = _make_chain([domain.name], days=90, serial=0xB0B3)
+    client = FakeAcmeClient([domain.name], chain=chain)
+
+    # renew_due() scans every certificate on the platform, and earlier tests in
+    # this module leave due rows behind on the long-lived database. Clear them
+    # so the drain handles exactly the one this test is about.
+    Certificate.objects.filter(renew_after__lte=now).delete()
+
+    due = Certificate.objects.create(
+        domain=domain, common_name=domain.name, sans=[domain.name],
+        status="active", cert_pem="stale",
+        not_after=now + timedelta(days=20), renew_after=now - timedelta(days=1))
+
+    with _issuance_env(client=client, real_jobs=True):
+        result = certs.renew_due()
+        assert result.certificates == [due.pk], (
+            f"only the certificate past renew_after should be queued, got "
+            f"{result.certificates}")
+        assert th.pending_job_count() >= 1, "renew_due should have queued a real job"
+
+        drained = th.run_jobs()
+
+    assert drained.count >= 1, f"the renewal job should have run, drained {drained.count}"
+
+    due.refresh_from_db()
+    assert due.status == "active", f"a renewed certificate stays active, got {due.status}"
+    assert due.cert_pem != "stale", \
+        "renewal should have replaced the stored certificate material"
+    assert due.renew_after > now, \
+        f"renewal should push renew_after forward, got {due.renew_after}"

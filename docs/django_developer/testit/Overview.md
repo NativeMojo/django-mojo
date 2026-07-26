@@ -351,7 +351,59 @@ All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to acce
 
 ---
 
-## Testing Async Jobs — `th.run_pending_jobs()`
+## Testing Async Jobs
+
+Two helpers run jobs **in the test process**. Both exist because job handlers
+are exactly the code that talks to AWS, ACME and DNS providers, so a test has
+to be able to `mock.patch` them — and a job-engine daemon runs in a *separate*
+process that would never see those patches (the same trap that makes
+`override_settings()` useless against `opts.client`).
+
+| | `th.run_jobs()` | `th.run_pending_jobs()` |
+|---|---|---|
+| Picks jobs from | the real Redis queue | `Job.objects.filter(status=...)` |
+| Verifies `publish()` actually enqueued | **yes** | no |
+| Honors `run_at` / `delay=` | **yes** — future jobs are left alone | no — runs them immediately |
+| State transitions | the engine's own `execute_job` (JobEvents, attempts, `finished_at`, expiry) | sets `completed`/`failed` directly |
+| Returns | `objict(count, job_ids, hit_limit)` | `int` |
+
+Reach for **`run_jobs()`** when the dispatch itself is part of what you are
+testing, or when scheduling matters. `run_pending_jobs()` is the older, simpler
+helper and is fine when you only need the handler to run.
+
+> **Never run a job-engine daemon during the suite.** It would race these
+> drains for the same queue, and any job it won would execute in the daemon's
+> process, where the test's patches do not apply — producing failures that
+> reproduce only under load.
+
+### `th.run_jobs()`
+
+```python
+jobs.publish(func="myapp.asyncjobs.do_thing", payload={"id": row.pk})
+result = th.run_jobs()          # explicit barrier: publish, drain, assert
+assert result.count == 1
+row.refresh_from_db()
+```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `channel` | `None` | One channel, a list, or `None` for `JOBS_CHANNELS`. |
+| `max_jobs` | `100` | Safety stop, so a handler that re-publishes itself cannot spin forever. `result.hit_limit` reports when it fires. |
+| `include_scheduled` | `True` | Promote due `delay=`/`run_at=` jobs first (what the Scheduler daemon does). |
+
+Companions: `th.clear_jobs()` drops queued jobs so a module starts clean (worth
+calling in setup — the DB and Redis are long-lived), `th.pending_job_count()`
+asserts something *was* queued, and `th.promote_scheduled_jobs()` promotes due
+jobs without running them.
+
+**Addressing handlers:** `publish()` stores a dotted **path** and re-imports it
+at execution time, so a handler defined inside a test module must be addressed
+by the name that module is actually loaded under. testit imports test files as
+`test_pkg.test_file` (tests/ is on `sys.path`), so use `f"{__name__}.handler"`
+rather than hardcoding `tests.test_pkg...` — the latter imports a *second copy*
+of the module with its own module-level state, immune to your patches.
+
+### `th.run_pending_jobs()`
 
 ```python
 count = th.run_pending_jobs(channel=None, status="pending")
