@@ -197,16 +197,6 @@ class WsClient:
                 self.logger.info(f"[ws] close: code={status_code} msg={msg}")
             self._closed_event.set()
 
-        self._ws_app = websocket.WebSocketApp(  # type: ignore[attr-defined]
-            self.url,
-            header=[f"{k}: {v}" for k, v in self.headers.items()],
-            subprotocols=self.subprotocols,
-            on_open=_on_open,
-            on_message=_on_message,
-            on_error=_on_error,
-            on_close=_on_close,
-        )
-
         def _runner():
             try:
                 self._ws_app.run_forever(  # type: ignore[union-attr]
@@ -218,14 +208,29 @@ class WsClient:
             finally:
                 self._closed_event.set()
 
-        self._thread = threading.Thread(target=_runner, name="WsClientThread", daemon=True)
-        self._thread.start()
+        # Everything below runs under a guard: a raise anywhere between
+        # acquiring the shared hold and a successful open would otherwise leak
+        # it for the process lifetime, and every later server_settings() would
+        # pay the full writer timeout before degrading (maestro item 275).
+        try:
+            self._ws_app = websocket.WebSocketApp(  # type: ignore[attr-defined]
+                self.url,
+                header=[f"{k}: {v}" for k, v in self.headers.items()],
+                subprotocols=self.subprotocols,
+                on_open=_on_open,
+                on_message=_on_message,
+                on_error=_on_error,
+                on_close=_on_close,
+            )
 
-        if not self._open_event.wait(timeout=timeout):
-            # Never leak the shared hold when the connection never opened —
-            # a stuck reader would stall every server_settings() caller.
+            self._thread = threading.Thread(target=_runner, name="WsClientThread", daemon=True)
+            self._thread.start()
+
+            if not self._open_event.wait(timeout=timeout):
+                raise TimeoutError(f"WebSocket did not open within {timeout}s")
+        except BaseException:
             self._release_server_lock()
-            raise TimeoutError(f"WebSocket did not open within {timeout}s")
+            raise
 
     def _release_server_lock(self) -> None:
         """Drop the shared server hold, if this client is holding one. Idempotent."""

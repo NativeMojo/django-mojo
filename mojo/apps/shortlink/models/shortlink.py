@@ -27,7 +27,12 @@ def _validated_total_hours(days, hours):
     for name, value in (("expire_days", days), ("expire_hours", hours)):
         try:
             value = int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError matters: ujson (the request.DATA parser) accepts the
+            # non-standard `Infinity` literal AND silently promotes overflowing
+            # exponents like 1e400, both arriving as float('inf'). int(inf)
+            # raises OverflowError, which would otherwise escape to the
+            # dispatcher as a 500 — the exact symptom this bound exists to fix.
             raise merrors.ValueException(f"{name} must be an integer")
         if value < 0:
             raise merrors.ValueException(f"{name} must not be negative")
@@ -237,14 +242,14 @@ class ShortLink(models.Model, MojoModel):
         # REST virtual field — consumed by on_rest_pre_save.
         try:
             self._pending_expire_days = int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             raise merrors.ValueException("expire_days must be an integer")
 
     def set_expire_hours(self, value):
         # REST virtual field — consumed by on_rest_pre_save.
         try:
             self._pending_expire_hours = int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             raise merrors.ValueException("expire_hours must be an integer")
 
     def on_rest_pre_save(self, changed_fields, created):

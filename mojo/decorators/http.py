@@ -55,7 +55,7 @@ def _return_real_error():
     handlers cannot disagree. Default stays True — this is a bug fix making the
     flag work at all, not a change to the framework default.
     """
-    return settings.get_static("LOGIT_RETURN_REAL_ERROR", True)
+    return settings.get_static("LOGIT_RETURN_REAL_ERROR", True, kind="bool")
 
 
 _PERMISSION_DENIED_LEVELS = {

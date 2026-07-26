@@ -161,3 +161,34 @@ def test_4xx_still_returns_real_text_when_flag_false(opts):
     body = json.loads(resp.content.decode("utf-8"))
     assert_true("Invalid code" in body.get("error", ""),
                 f"4xx client feedback must survive the flag being False, got {body.get('error')!r}")
+
+
+@th.django_unit_test("incident reporting keeps the REAL error even when the client sees the generic one")
+def test_incident_still_records_real_error(opts):
+    """The flag must gate only what reaches the CLIENT. Losing server-side
+    detail would be a worse regression than the leak being fixed — an operator
+    would be left with 'system error' and nothing to debug from.
+
+    The other tests in this module patch _events_on_errors to False, so without
+    this one nothing pins that the incident keeps the real text; a refactor
+    that moved the generic string upstream would silently gut reporting.
+    """
+    from unittest.mock import patch
+    from mojo.decorators import http as http_decorators
+    from mojo.models import rest as rest_models
+
+    with patch.object(http_decorators, "_return_real_error", return_value=False), \
+            patch.object(http_decorators, "_events_on_errors", return_value=True), \
+            patch.object(rest_models.MojoModel, "class_report_incident_for_user") as report:
+        resp = _invoke_500()
+
+    body = _body(resp)
+    assert_eq(body.get("error"), "system error",
+              f"the client must still see the generic message, got {body.get('error')!r}")
+    assert_true(report.called,
+                "an incident must still be reported when _events_on_errors is on")
+    details = report.call_args.kwargs.get("details", "")
+    assert_true(SECRET_TEXT in details,
+                f"the incident must record the REAL error for the operator, got details={details!r}")
+    assert_true(report.call_args.kwargs.get("stack_trace"),
+                "the incident must still carry a stack trace")

@@ -1098,3 +1098,46 @@ def test_rest_create_negative_expire_days(opts):
     opts.client.logout()
     assert_eq(resp.status_code, 400,
               f"a negative expire_days should be a 400, got {resp.status_code}: {resp.body}")
+
+
+@th.django_unit_test("the REST setters reject a non-finite value with 400, not 500")
+def test_rest_setters_reject_non_finite(opts):
+    """ujson — the request.DATA parser — accepts the non-standard `Infinity`
+    literal and silently promotes 1e400, both arriving as float('inf'). int(inf)
+    raises OverflowError, which is NOT a ValueError, so it escaped the setters'
+    guard and reached the dispatcher as a 500 (found by the item 296 security
+    review).
+
+    Driven against the setters directly rather than over HTTP: the `requests`
+    client refuses to serialize inf (allow_nan=False), so the wire shape is not
+    reachable from the test client — but the setters are exactly what receives
+    the parsed value on the real request path.
+    """
+    from mojo.apps.shortlink.models import ShortLink
+    import mojo.errors as merrors
+
+    link = ShortLink(url="https://example.com/nonfinite", source="test")
+    for setter, name in ((link.set_expire_days, "expire_days"),
+                         (link.set_expire_hours, "expire_hours")):
+        for bad in (float("inf"), float("-inf"), float("nan")):
+            try:
+                setter(bad)
+                assert False, (
+                    f"{name} setter accepted {bad!r} — OverflowError/ValueError must "
+                    f"become a ValueException (400), not escape as a 500"
+                )
+            except merrors.ValueException:
+                pass
+
+
+@th.django_unit_test("non-finite expire values are rejected at the model layer too")
+def test_validator_rejects_non_finite(opts):
+    from mojo.apps.shortlink.models.shortlink import _validated_total_hours
+    import mojo.errors as merrors
+
+    for bad in (float("inf"), float("-inf"), float("nan")):
+        try:
+            _validated_total_hours(bad, 0)
+            assert False, f"_validated_total_hours accepted {bad!r} — must raise ValueException"
+        except merrors.ValueException:
+            pass
