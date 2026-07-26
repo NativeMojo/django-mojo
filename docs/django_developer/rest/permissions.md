@@ -203,6 +203,12 @@ group_field = cls.get_rest_meta_prop("GROUP_FIELD", "group")   # may be a relate
 queryset.filter(**{f"{group_field}__in": groups_with_perms})
 ```
 
+`get_groups_with_permission` (like `get_groups`/`get_group_ids`) only yields
+**effectively active** groups by default — a member grant in a deactivated
+group, or one under a deactivated ancestor, contributes no rows to the
+narrowed queryset (maestro item 56). See
+[Core → Permissions](../core/permissions.md#instance-level-permission-hooks).
+
 This governs **all three** access paths consistently — the bare-list member
 fallback (above), the `?group=` narrower (`on_rest_list`), and detail
 permission checks. For detail (GET/POST/DELETE on a pk), the framework resolves

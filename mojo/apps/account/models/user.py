@@ -334,12 +334,14 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         (DM-048: a group under a deactivated ancestor is dark), optionally
         expanding to their active-subtree descendants.
 
-        Each root carries its own ancestor burden (one bounded parent walk);
-        descendants are resolved with ONE (id, parent_id) query over the raw
-        subtree filtered is_active=True, then an in-memory walk from the
-        verified roots — an inactive node is never expanded, so its whole
-        subtree darkens with no per-group queries (same shape as
-        ApiKey.get_groups). Maestro item 56.
+        Each root carries its own ancestor burden (one bounded parent walk
+        per root); raw descendant ids are gathered via _get_all_child_ids
+        (recursive, one query per node — pre-existing cost, users hold few
+        memberships), then a single (id, parent_id) query filtered
+        is_active=True feeds an in-memory walk from the verified roots — an
+        inactive node is never expanded, so its whole subtree darkens without
+        any per-group activeness queries (same shape as ApiKey.get_groups).
+        Maestro item 56.
         """
         from mojo.apps.account.models import Group
 

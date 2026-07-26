@@ -67,13 +67,24 @@ POST /api/incident/ticket/note
 `action_response` and dispatches it **instead of** invoking the LLM — a
 structured response never triggers a conversational reply.
 
+Note the trust boundary: the dispatcher validates the **handler name**
+against a pending action note, but the `context` it executes is the one on
+the **response** note — it does not re-read the context stored on the action
+note. The responder (an admin holding `manage_security`) is trusted to copy
+it verbatim; UIs must copy the action note's `context` unchanged, never
+compose their own.
+
 ## Dispatch flow and guards
 
 `dispatch_action(ticket, note, response_meta)`:
 
 1. **Handler must be registered** — unknown names are logged and rejected.
 2. **A matching unresolved action note must exist** on the ticket for that
-   handler — a response cannot conjure an action that was never proposed.
+   handler — a response cannot invoke a handler that has no pending proposal
+   on the ticket. Only the handler **name** is bound by this check; the
+   executed `context` comes from the response note (see the trust boundary
+   above), so approval authority rests on the `manage_security` gate, not on
+   the dispatcher comparing contexts.
 3. **Terminal tickets are skipped** — a ticket already `closed`/`resolved`
    dispatches nothing (double-click / replay guard, alongside the
    `resolved` stamp on the action note).
@@ -169,8 +180,11 @@ LLM; a structured `action_response` always dispatches instead.
 
 - Creating notes requires `manage_security`/`security` (`TicketNote`
   `SAVE_PERMS`) — the approval surface is admin-gated.
-- Model resolution is whitelist-only; `incident.rule_approval` additionally
-  refuses any RuleSet not flagged `llm_proposed`, so the approval path
-  cannot flip arbitrary rulesets.
+- Model resolution is whitelist-only. `incident.rule_approval` additionally
+  refuses any RuleSet not flagged `metadata.llm_proposed`, so *that* handler
+  cannot activate an arbitrary ruleset. `incident.rule_update` has **no**
+  `llm_proposed` guard — it applies the responder-supplied
+  `context.proposed_rules` to whichever whitelisted RuleSet the response
+  targets; the `manage_security` gate is the effective control there.
 - Approvals are idempotent at three layers: the `resolved` stamp, the
   terminal-status skip, and per-handler no-ops ("already active").

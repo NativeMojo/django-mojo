@@ -308,13 +308,13 @@ Tickets are the bridge between automated systems and human operators.
       "priority": 5,
       "category": "llm_review",
       "incident": { "id": 301 },
-      "metadata": { "llm_linked": true }
+      "metadata": { "llm_enabled": true }
     }
   ]
 }
 ```
 
-Tickets with `metadata.llm_linked=true` are managed by the LLM agent. When you post a note to these tickets, the LLM is automatically re-invoked to continue the conversation.
+Tickets with `metadata.llm_enabled=true` (legacy `llm_linked` also honored) are managed by the LLM agent. When you post a note to these tickets, the LLM is automatically re-invoked to continue the conversation. See [Security README](../security/README.md#7-ticket-management) for the full ticket-action schema (structured Approve/Deny action notes).
 
 **POST** `/api/incident/ticket/note`
 

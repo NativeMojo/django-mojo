@@ -550,7 +550,7 @@ ruleset.save()
 
 ### Ticket Re-Invocation
 
-When a ticket is `llm_linked` and a human adds a note, the full conversation history is sent back to the agent. This allows humans to:
+When a ticket is LLM-enabled (`metadata.llm_enabled`, legacy `llm_linked` alias honored) and a human adds a note, the full conversation history is sent back to the agent. This allows humans to:
 - Ask the agent to investigate further
 - Approve actions the agent proposed
 - Give the agent new instructions
@@ -571,7 +571,7 @@ In addition to the real-time triage agent, there is a separate **analysis job** 
 |--------|-------------------------------|-----------------------------------|
 | Trigger | Automatic — `llm://` handler on rule match | Manual — admin POST `{"analyze": 1}` |
 | Prompt | `TRIAGE_PROMPT` — classify, triage, act fast | `ANALYSIS_PROMPT` — deep pattern analysis |
-| Tools | 12 base tools | 14 tools (includes `merge_incidents`, `query_open_incidents`) |
+| Tools | 16 base tools | 18 tools (includes `merge_incidents`, `query_open_incidents`) |
 | Pre-loaded context | Event + incident metadata | Full event list (up to 50) + related open incidents (up to 20) |
 | Result | Ticket + history note | `incident.metadata["llm_analysis"]["summary"]` + history note |
 

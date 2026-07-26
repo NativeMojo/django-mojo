@@ -317,8 +317,9 @@ generically: `model` `"incident.RuleSet"` + `pk` 42 → `/api/incident/ruleset/4
 Once `action.resolved` is `true`, disable the buttons.
 
 To answer, create a new note whose `metadata.action_response` copies
-`handler` and `context` from the action, with `action` set to `"approve"` or
-`"deny"`:
+`handler` and `context` **verbatim** from the action note (the backend
+executes the context you submit — never compose or edit it client-side),
+with `action` set to `"approve"` or `"deny"`:
 
 ```
 POST /api/incident/ticket/note
