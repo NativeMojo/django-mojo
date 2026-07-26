@@ -47,7 +47,7 @@ to an adapter and calls one uniform interface:
 list_records(domain)                                          # -> [objict(type, name, record_values, ttl)]
 upsert_record(domain, rtype, name, record_values, ttl=300)
 delete_record(domain, rtype, name, record_values=None)
-wait_for_propagation(domain, rtype, name, record_values, timeout=None)
+wait_for_propagation(domain, rtype, name, record_values, timeout=None, change_id=None)
 ```
 
 > **`record_values`, never `values`.** `objict` subclasses `dict`, so an

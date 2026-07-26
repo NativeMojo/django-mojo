@@ -11,7 +11,7 @@ adapter, because the differences fail silently rather than loudly.
 list_records(domain)                                          # -> [objict(type, name, record_values, ttl)]
 upsert_record(domain, rtype, name, record_values, ttl=300)    # -> objict(change_id, provider)
 delete_record(domain, rtype, name, record_values=None)        # -> objict(change_id, provider)
-wait_for_propagation(domain, rtype, name, record_values, timeout=None)  # -> (ok, seen_values)
+wait_for_propagation(domain, rtype, name, record_values, timeout=None, change_id=None)  # -> (ok, seen_values)
 ```
 
 `record_values` is **always a list**, even for a single value.
