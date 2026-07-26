@@ -126,17 +126,37 @@ Claims a domain you already hold at the provider. The linked credential is the
 proof of control: we ask the provider whether that account actually holds this
 specific domain and that it is active.
 
+## Capability discovery
+
+### `GET /api/dnsman/config`
+Requires `view_dns`, no group. Report what's currently turned on before
+attempting a gated action — a client should render its purchase and cert UI
+from this, not from probing `registrar/quote` and reading the refusal.
+
+```json
+{ "purchase_enabled": false, "registrant_contact_configured": true,
+  "max_domain_price": "50.00", "currency": "USD", "quote_ttl_minutes": 15,
+  "allowed_record_types": ["A","AAAA","CAA","CNAME","MX","NS","SRV","TXT"],
+  "providers": [
+    { "name": "route53", "purchase": true,  "requires_credential": false },
+    { "name": "godaddy", "purchase": false, "requires_credential": true }
+  ],
+  "acme": { "configured": true, "staging": true },
+  "cert_renew_days": 30 }
+```
+
+`registrant_contact_configured` is a boolean — the registrant contact itself
+is PII and is never returned here or anywhere else. `acme.staging` matters
+beyond purchasing: dnsman defaults to Let's Encrypt **staging**, and a
+staging-issued certificate is **not publicly trusted** — do not render a
+staging cert as "active" without surfacing that.
+
 ## Buying a domain
 
 Purchasing moves real money and is irreversible. It ships **disabled** — the
-`DNSMAN_PURCHASE_ENABLED` kill switch defaults to off — and there is
-deliberately **no single-call purchase path**.
-
-> **Known gap (as of v1.2.53):** no endpoint reports whether purchasing is
-> enabled, so a client can only discover it is off by calling
-> `registrar/quote` and reading the refusal. Until a capability endpoint exists,
-> treat the quote refusal as the signal, and do not present purchase UI as
-> definitely-available before a successful quote.
+`DNSMAN_PURCHASE_ENABLED` kill switch defaults to off, reported at
+`config.purchase_enabled` — and there is deliberately **no single-call
+purchase path**.
 
 ### `POST /api/dnsman/registrar/search`
 ```json
