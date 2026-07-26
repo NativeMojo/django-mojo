@@ -124,7 +124,11 @@ not let it read as ownership.
 ### Routine checks
 
 - `poll_domain_operations` (every 5 min) must be running, or registrations never
-  leave `submitted`.
+  leave `submitted`. It is a **dispatcher**: the cron function publishes
+  `asyncjobs.poll_domain_operations` and returns, so the sweep needs a **job
+  runner on the `default` channel** as well as the cron trigger. If the cron
+  fires but no runner is consuming, jobs pile up and registrations still never
+  settle — check both.
 - Purchases stuck `submitted` with no `operation_id` past 30 minutes are logged
   as errors — that is the crash-window alarm and it deserves a human.
 - Domains have `auto_renew=True` by default; expiries accrue on the house

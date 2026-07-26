@@ -30,7 +30,7 @@ mojo/apps/dnsman/
     certs.py       ACME DNS-01 issuance, renewal, revocation, sync broadcast
     email.py       provider-dispatched SES record application
   rest/          thin handlers — this is where permissions are enforced
-  cronjobs.py    poll registrations (5m), renew certificates (6h)
+  cronjobs.py    thin dispatchers — poll registrations (5m), renew certs (6h)
   asyncjobs.py   issue/renew certificate job handlers
 ```
 
