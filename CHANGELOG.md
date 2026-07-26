@@ -1,4 +1,4 @@
-## Unreleased
+## v1.2.55 - July 26, 2026
 
 **feature** — **dnsman: batch TLD availability, domain suggestions, and a per-TLD price cache (maestro item 412).**
 `POST /api/dnsman/registrar/search` now also accepts `{domain, tlds}` (one
@@ -25,6 +25,13 @@ only. Both new surfaces are read-only discovery behind `view_dns`; `config`
 also gains `suggestions_enabled` as a feature-presence flag. Note `suggest`
 needs the `route53domains:GetDomainSuggestions` IAM action; a failure there
 surfaces as a clean retry message, never raw provider text.
+
+**feature** — **testit: `th.run_jobs()` — a synchronous, patchable job drain.**
+Job handlers are exactly the code that talks to AWS, ACME and DNS providers,
+so tests must be able to `mock.patch` them — but a job-engine daemon runs in
+a separate process that never sees those patches. The drain executes queued
+jobs inline in the test process instead, so handler mocks apply and tests
+need no poll-and-sleep. Documented in `docs/django_developer/testit/Overview.md`.
 
 ## v1.2.54 - July 26, 2026
 
