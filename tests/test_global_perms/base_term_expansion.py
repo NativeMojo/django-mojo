@@ -15,6 +15,18 @@ from tests.test_global_perms._helpers import (
 
 TOGGLE_PERM = "gp_bt_toggle_perm"
 
+# Maestro item 274 — this module's geoip fixture used a FIXED 203.0.113.235,
+# which sits inside the band tests/test_geofence/evidence_plane.py draws from
+# at random (.210-.249) and then DELETES. Roughly 1 run in 40 deleted this live
+# fixture mid-test. Claim a block above every generator's ceiling instead, and
+# draw within it per-run so two concurrent runs cannot collide either.
+#
+# Known generators sharing 203.0.113.0/24 (verify before widening this block):
+#   tests/test_geofence/config_plane.py   -> .10 -.209
+#   tests/test_global_perms/apikey_gate.py-> .20 -.219
+#   tests/test_geofence/evidence_plane.py -> .210-.249
+GEO_IP_BLOCK = [f"203.0.113.{n}" for n in range(250, 255)]
+
 
 @th.django_unit_setup()
 def setup_base_term_expansion(opts):
@@ -51,10 +63,16 @@ def setup_base_term_expansion(opts):
     opts.users_email = users_email
     opts.users_pw = users_pw
 
-    # Whitelisted geoip row for the SAVE_PERMS gate test.
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.235").delete()
+    # Whitelisted geoip row for the SAVE_PERMS gate test. Sweep the whole
+    # claimed block first (setup cleans up before creating — the DB is
+    # long-lived), then draw this run's address from it. An explicit __in list,
+    # never a "203.0.113." prefix delete: a prefix sweep would race the other
+    # modules that own the lower bands (see GEO_IP_BLOCK above, and the same
+    # warning in tests/test_account/test_geolocated_ip_aggregation.py).
+    GeoLocatedIP.objects.filter(ip_address__in=GEO_IP_BLOCK).delete()
+    geo_ip = GEO_IP_BLOCK[int(_uuid.uuid4().hex[:4], 16) % len(GEO_IP_BLOCK)]
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.235",
+        ip_address=geo_ip,
         provider="test",
         is_whitelisted=True,
         whitelisted_reason="ITEM-035 fixture",
@@ -175,13 +193,49 @@ def test_geoip_action_with_bare_users(opts):
     clear + geofence cache invalidation; no firewall broadcast)."""
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    login(opts, opts.users_email, opts.users_pw)
-    resp = opts.client.post(f"/api/system/geoip/{opts.geo_id}", {"unwhitelist": True})
-    opts.client.logout()
-    assert resp.status_code == 200, (
-        f"bare-'users' admin must pass the geoip SAVE gate, "
-        f"got {resp.status_code}: {opts.client.last_response.body}"
-    )
-    geo = GeoLocatedIP.objects.get(pk=opts.geo_id)
-    assert geo.is_whitelisted is False, \
-        f"unwhitelist action must have run, got is_whitelisted={geo.is_whitelisted!r}"
+    try:
+        login(opts, opts.users_email, opts.users_pw)
+        resp = opts.client.post(f"/api/system/geoip/{opts.geo_id}", {"unwhitelist": True})
+        opts.client.logout()
+        assert resp.status_code == 200, (
+            f"bare-'users' admin must pass the geoip SAVE gate, "
+            f"got {resp.status_code}: {opts.client.last_response.body}"
+        )
+        geo = GeoLocatedIP.objects.get(pk=opts.geo_id)
+        assert geo.is_whitelisted is False, \
+            f"unwhitelist action must have run, got is_whitelisted={geo.is_whitelisted!r}"
+    finally:
+        # testit has no teardown decorator, so setup-cleans-first is the durable
+        # half — but delete by pk here too so this row does not linger in the
+        # claimed block between runs (maestro item 274).
+        GeoLocatedIP.objects.filter(pk=opts.geo_id).delete()
+
+
+@th.django_unit_test("geoip fixture block does not overlap the other generators' bands")
+def test_geo_ip_block_does_not_overlap(opts):
+    """Regression guard for maestro item 274.
+
+    The race (another module randomly drawing this module's fixed address and
+    deleting it) is not reproducible on demand, so pin the invariant that makes
+    it impossible: this module's claimed block must sit outside every other
+    generator's range.
+
+    The bounds below hand-mirror three other files and can drift. That is an
+    accepted tradeoff — drift can only cause a false FAILURE here, never a false
+    pass, so it surfaces as a prompt to re-check rather than as silent rot.
+    Fail-when-broken: set GEO_IP_BLOCK back to ["203.0.113.235"].
+    """
+    other_bands = {
+        "tests/test_geofence/config_plane.py": (10, 209),
+        "tests/test_global_perms/apikey_gate.py": (20, 219),
+        "tests/test_geofence/evidence_plane.py": (210, 249),
+    }
+    ours = [int(ip.rsplit(".", 1)[1]) for ip in GEO_IP_BLOCK]
+    assert ours, "GEO_IP_BLOCK must not be empty"
+    for path, (low, high) in other_bands.items():
+        clashing = [n for n in ours if low <= n <= high]
+        assert not clashing, (
+            f"GEO_IP_BLOCK octets {clashing} collide with the band owned by "
+            f"{path} ({low}-{high}) — another module may delete this module's "
+            f"fixture mid-test"
+        )
