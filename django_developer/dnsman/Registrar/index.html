@@ -3991,7 +3991,11 @@ not let it read as ownership.</p>
 <h3 id="routine-checks">Routine checks<a class="headerlink" href="#routine-checks" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>poll_domain_operations</code> (every 5 min) must be running, or registrations never
-  leave <code>submitted</code>.</li>
+  leave <code>submitted</code>. It is a <strong>dispatcher</strong>: the cron function publishes
+  <code>asyncjobs.poll_domain_operations</code> and returns, so the sweep needs a <strong>job
+  runner on the <code>default</code> channel</strong> as well as the cron trigger. If the cron
+  fires but no runner is consuming, jobs pile up and registrations still never
+  settle — check both.</li>
 <li>Purchases stuck <code>submitted</code> with no <code>operation_id</code> past 30 minutes are logged
   as errors — that is the crash-window alarm and it deserves a human.</li>
 <li>Domains have <code>auto_renew=True</code> by default; expiries accrue on the house

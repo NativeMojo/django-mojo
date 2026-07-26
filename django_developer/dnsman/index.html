@@ -3917,7 +3917,7 @@ on top. What lives here is the part every product would otherwise rebuild.</p>
 <a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    certs.py       ACME DNS-01 issuance, renewal, revocation, sync broadcast
 <a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    email.py       provider-dispatched SES record application
 <a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>  rest/          thin handlers — this is where permissions are enforced
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>  cronjobs.py    poll registrations (5m), renew certificates (6h)
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>  cronjobs.py    thin dispatchers — poll registrations (5m), renew certs (6h)
 <a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>  asyncjobs.py   issue/renew certificate job handlers
 </code></pre></div>
 <p>The helpers are model-free and Django-free on purpose: <code>ses_domain.py</code> can call
