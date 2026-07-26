@@ -1,5 +1,20 @@
 ## Unreleased
 
+**security** — **a deactivated membership no longer resolves its group for the holder (maestro item 418).**
+`User.get_groups()` built its direct-membership queryset as
+`.filter(members__user=self).filter(members__is_active=True)` — two chained
+filters over a multi-valued relation, which Django compiles into two separate
+joins. The conditions therefore bound to *different* `GroupMember` rows, so a
+group in which the caller's own membership had been deactivated still resolved
+whenever any other member was still active. Collapsed into a single
+`filter(members__user=self, members__is_active=...)`. `get_group_ids()` was
+already correct (it filters `self.members` directly), and
+`get_groups_with_permission()` loops per-row, so the leak was confined to
+`Group.on_rest_handle_list` — `GET /api/group` could list a tenant whose
+membership you no longer hold. Detail reads were never affected: they go
+through `get_member_for_user`, which always bound per-row. The `is_active=None`
+raw path is unchanged.
+
 **fix** — **`dispatch_scheduled_tasks()` accepts an optional `now=`, de-flaking the `:59` dispatch tests (maestro item 53).**
 Two scheduled-task dispatch tests picked their target minute off the wall
 clock (`59 if current_minute < 59 else 58`), so a suite run crossing the `:59`

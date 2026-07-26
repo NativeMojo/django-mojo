@@ -24,7 +24,12 @@ ACTIVE_GROUP = "m56-active"
 INACTIVE_GROUP = "m56-inactive"
 INACTIVE_PARENT = "m56-inactive-parent"
 ACTIVE_CHILD = "m56-active-child"
-ALL_GROUPS = [ACTIVE_GROUP, INACTIVE_GROUP, INACTIVE_PARENT, ACTIVE_CHILD]
+# Maestro item 418: a group where the CALLER's membership is inactive but some
+# OTHER member is still active — the case the chained-filter double join let
+# through.
+SHARED_GROUP = "m56-shared"
+OTHER_USERNAME = "m56_other@example.com"
+ALL_GROUPS = [ACTIVE_GROUP, INACTIVE_GROUP, INACTIVE_PARENT, ACTIVE_CHILD, SHARED_GROUP]
 
 
 def _login(opts):
@@ -47,7 +52,7 @@ def setup_member_group_inactive(opts):
     from mojo.apps.account.models import User, Group, GroupMember
 
     # Long-lived DB: clean before creating.
-    User.objects.filter(email=MEMBER_USERNAME).delete()
+    User.objects.filter(email__in=[MEMBER_USERNAME, OTHER_USERNAME]).delete()
     Group.objects.filter(name__in=ALL_GROUPS).delete()
 
     member = User.objects.create_user(
@@ -85,6 +90,28 @@ def setup_member_group_inactive(opts):
             opts.inactive_member_row_id = ms.pk
         if group.pk == active_group.pk:
             opts.active_member_row_id = ms.pk
+
+    # Item 418 fixture: an ACTIVE group in which the member's OWN membership is
+    # inactive, while a second member stays active. Pre-fix, the chained-filter
+    # double join let this group resolve for `member` anyway — the two
+    # conditions bound to different GroupMember rows.
+    shared_group = Group.objects.create(name=SHARED_GROUP, kind="organization")
+    opts.shared_group_id = shared_group.pk
+
+    other = User.objects.create_user(
+        username=OTHER_USERNAME, email=OTHER_USERNAME, password=MEMBER_PASSWORD)
+    other.is_active = True
+    other.save()
+
+    stale = GroupMember(user=member, group=shared_group)
+    stale.save()
+    stale.add_permission("view_members")
+    stale.is_active = False          # the caller's own membership is revoked
+    stale.save()
+
+    live = GroupMember(user=other, group=shared_group)
+    live.save()
+    live.add_permission("view_members")   # someone else is still active here
 
 
 # ---------------------------------------------------------------------------
@@ -227,3 +254,59 @@ def test_metrics_gate_inactive_group_denied(opts):
             "a member view_metrics grant in a deactivated group must not authorize its metrics account (DM-048 pin)"
     except mojo.errors.PermissionDeniedException:
         pass  # fail-closed deny is the correct outcome
+
+
+# ---------------------------------------------------------------------------
+# Item 418 — the caller's OWN membership must be the one that counts
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("get_groups drops a group where MY membership is inactive, even if others are active")
+def test_get_groups_binds_membership_to_caller(opts):
+    from mojo.apps.account.models import User
+
+    member = User.objects.get(pk=opts.member_id)
+    ids = set(g.id for g in member.get_groups())
+    assert opts.shared_group_id not in ids, (
+        "a group where the caller's own membership is inactive must not resolve, "
+        f"even though another member is still active — got {ids}"
+    )
+    assert opts.active_group_id in ids, \
+        f"the genuinely active membership must be unaffected, got {ids}"
+
+
+@th.django_unit_test("get_groups and get_group_ids agree on the caller's memberships")
+def test_get_groups_matches_get_group_ids(opts):
+    from mojo.apps.account.models import User
+
+    member = User.objects.get(pk=opts.member_id)
+    from_groups = set(g.id for g in member.get_groups())
+    from_ids = set(member.get_group_ids())
+    assert from_groups == from_ids, (
+        "get_groups and get_group_ids must derive the same set — they disagreed "
+        f"because only one bound both conditions to the same membership row: "
+        f"get_groups={sorted(from_groups)} get_group_ids={sorted(from_ids)}"
+    )
+
+
+@th.django_unit_test("GET /api/group omits a group where MY membership is inactive")
+def test_group_list_inactive_own_membership(opts):
+    """Must hit /api/group, NOT /api/group/member.
+
+    GroupMember's list fallback (mojo/models/rest.py on_rest_handle_list) derives
+    from get_groups_with_permission, which already bound per-row and was never
+    affected. Group.on_rest_handle_list (account/models/group.py) is the endpoint
+    that consumes get_groups(is_active=True), so it is the one that leaked.
+    """
+    _login(opts)
+    resp = opts.client.get("/api/group", params={"size": 200})
+    opts.client.logout()
+
+    assert resp.status_code == 200, \
+        f"member with active memberships should still list groups, got {resp.status_code}: {resp.body}"
+    group_ids = set(dict(r).get("id") for r in resp.response.data)
+    assert opts.shared_group_id not in group_ids, (
+        "a group where the caller's own membership is inactive leaked into the "
+        f"group list because another member is active — got {group_ids}"
+    )
+    assert opts.active_group_id in group_ids, \
+        f"the genuinely active membership must still list, got {group_ids}"

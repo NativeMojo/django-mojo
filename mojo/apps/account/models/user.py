@@ -390,10 +390,18 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         """
         from mojo.apps.account.models import Group
 
-        # Get direct groups the user is a member of
-        queryset = Group.objects.filter(members__user=self)
+        # Get direct groups the user is a member of.
+        # Both conditions MUST bind to the same GroupMember row — chaining
+        # .filter(members__user=...).filter(members__is_active=...) makes Django
+        # emit two joins over the multi-valued relation, so a group where MY
+        # membership is inactive still matched whenever ANY other member was
+        # active (maestro item 418). Keep the `is not None` guard: passing
+        # members__is_active=None compiles to IS NULL on a non-null column and
+        # would match nothing.
         if is_active is not None:
-            queryset = queryset.filter(members__is_active=is_active)
+            queryset = Group.objects.filter(members__user=self, members__is_active=is_active)
+        else:
+            queryset = Group.objects.filter(members__user=self)
 
         if is_active:
             kept = self._effectively_active_group_ids(

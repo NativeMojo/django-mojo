@@ -238,6 +238,12 @@ alive = group.is_effectively_active()
 > list to already-permitted callers, but every resolution/authorization gate
 > denies it.
 >
+> **A membership only counts for its own holder** (maestro item 418):
+> `get_groups()` binds "is a member" and "membership is active" to the *same*
+> `GroupMember` row. Chaining them as two `.filter()` calls made Django join
+> the relation twice, so a group in which *your* membership had been
+> deactivated still resolved as long as *someone else's* was active.
+>
 > The **member-side derivations honor it too** (maestro item 56):
 > `User.get_groups()`, `User.get_group_ids()`, and
 > `User.get_groups_with_permission()` exclude effectively-inactive groups when
