@@ -3872,6 +3872,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#capability-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Capability discovery
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Capability discovery">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#get-apidnsmanconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET /api/dnsman/config
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#buying-a-domain" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4164,30 +4192,44 @@ can only ever confirm a domain you already knew to name.</p>
 Claims a domain you already hold at the provider. The linked credential is the
 proof of control: we ask the provider whether that account actually holds this
 specific domain and that it is active.</p>
+<h2 id="capability-discovery">Capability discovery<a class="headerlink" href="#capability-discovery" title="Permanent link">&para;</a></h2>
+<h3 id="get-apidnsmanconfig"><code>GET /api/dnsman/config</code><a class="headerlink" href="#get-apidnsmanconfig" title="Permanent link">&para;</a></h3>
+<p>Requires <code>view_dns</code>, no group. Report what's currently turned on before
+attempting a gated action — a client should render its purchase and cert UI
+from this, not from probing <code>registrar/quote</code> and reading the refusal.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;purchase_enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;registrant_contact_configured&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;max_domain_price&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;50.00&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;currency&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;USD&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;quote_ttl_minutes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;allowed_record_types&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;A&quot;</span><span class="p">,</span><span class="s2">&quot;AAAA&quot;</span><span class="p">,</span><span class="s2">&quot;CAA&quot;</span><span class="p">,</span><span class="s2">&quot;CNAME&quot;</span><span class="p">,</span><span class="s2">&quot;MX&quot;</span><span class="p">,</span><span class="s2">&quot;NS&quot;</span><span class="p">,</span><span class="s2">&quot;SRV&quot;</span><span class="p">,</span><span class="s2">&quot;TXT&quot;</span><span class="p">],</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;providers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;route53&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;purchase&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w">  </span><span class="nt">&quot;requires_credential&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;godaddy&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;purchase&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;requires_credential&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="nt">&quot;acme&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;configured&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;staging&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="nt">&quot;cert_renew_days&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p><code>registrant_contact_configured</code> is a boolean — the registrant contact itself
+is PII and is never returned here or anywhere else. <code>acme.staging</code> matters
+beyond purchasing: dnsman defaults to Let's Encrypt <strong>staging</strong>, and a
+staging-issued certificate is <strong>not publicly trusted</strong> — do not render a
+staging cert as "active" without surfacing that.</p>
 <h2 id="buying-a-domain">Buying a domain<a class="headerlink" href="#buying-a-domain" title="Permanent link">&para;</a></h2>
 <p>Purchasing moves real money and is irreversible. It ships <strong>disabled</strong> — the
-<code>DNSMAN_PURCHASE_ENABLED</code> kill switch defaults to off — and there is
-deliberately <strong>no single-call purchase path</strong>.</p>
-<blockquote>
-<p><strong>Known gap (as of v1.2.53):</strong> no endpoint reports whether purchasing is
-enabled, so a client can only discover it is off by calling
-<code>registrar/quote</code> and reading the refusal. Until a capability endpoint exists,
-treat the quote refusal as the signal, and do not present purchase UI as
-definitely-available before a successful quote.</p>
-</blockquote>
+<code>DNSMAN_PURCHASE_ENABLED</code> kill switch defaults to off, reported at
+<code>config.purchase_enabled</code> — and there is deliberately <strong>no single-call
+purchase path</strong>.</p>
 <h3 id="post-apidnsmanregistrarsearch"><code>POST /api/dnsman/registrar/search</code><a class="headerlink" href="#post-apidnsmanregistrarsearch" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;AVAILABLE&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;available&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;price&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">12.00</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;currency&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;USD&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tld_supported&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;privacy_supported&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;AVAILABLE&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;available&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;price&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">12.00</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;currency&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;USD&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tld_supported&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;privacy_supported&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <code>available</code> is <strong>tri-state</strong>. <code>true</code> and <code>false</code> mean what you expect;
 <strong><code>null</code> means the registry did not answer</strong> (<code>PENDING</code>/<code>DONT_KNOW</code>) — retry,
 and do not present it to a user as unavailable. <code>tld_supported: false</code> means the
 registrar does not sell that TLD at all.</p>
 <h3 id="post-apidnsmanregistrarquote-step-1-of-2"><code>POST /api/dnsman/registrar/quote</code> → step 1 of 2<a class="headerlink" href="#post-apidnsmanregistrarquote-step-1-of-2" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;years&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;years&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 Returns the price and a single-use <code>confirm_token</code> with a short expiry. <strong>The
 raw token is shown exactly once and is never retrievable again</strong> — we store only
@@ -4197,7 +4239,7 @@ registrant contact is not configured, the TLD is unsupported, the name is
 already tracked, availability is not a definite yes, or the price exceeds the
 configured cap.</p>
 <h3 id="post-apidnsmanregistrarpurchase-step-2-of-2"><code>POST /api/dnsman/registrar/purchase</code> → step 2 of 2<a class="headerlink" href="#post-apidnsmanregistrarpurchase-step-2-of-2" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;purchase&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">31</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;confirm_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;purchase&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">31</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;confirm_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 Spends money. A quote can be redeemed exactly once — a second attempt gets a
 uniform <code>400</code> that deliberately does not say which check failed.</p>
@@ -4231,7 +4273,7 @@ refused up front with a reason naming the TLD, rather than appearing to succeed.
 <p>Certificates are issued centrally over ACME DNS-01 and held here. Because
 DNS-01 only needs a TXT record, this works for <strong>both</strong> providers.</p>
 <h3 id="post-apidnsmancertificaterequest"><code>POST /api/dnsman/certificate/request</code><a class="headerlink" href="#post-apidnsmancertificaterequest" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;names&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;*.example.com&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;names&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;*.example.com&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 Defaults to the apex plus its wildcard. Issuance runs as a background job and
 takes minutes — this returns immediately with a <code>pending</code> certificate.</p>
@@ -4243,8 +4285,8 @@ takes minutes — this returns immediately with a <code>pending</code> certifica
 <h3 id="get-apidnsmancertificatematerialpk"><code>GET /api/dnsman/certificate/material/&lt;pk&gt;</code><a class="headerlink" href="#get-apidnsmancertificatematerialpk" title="Permanent link">&para;</a></h3>
 <p>The only way to obtain key material. Requires <code>manage_dns</code>; every release is
 logged.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;common_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;sans&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;*.example.com&quot;</span><span class="p">],</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;not_after&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cert_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;chain_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;private_key_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;common_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;sans&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;*.example.com&quot;</span><span class="p">],</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;not_after&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cert_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;chain_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;private_key_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p>A <code>503</code> here means the custody layer (KMS) is temporarily unavailable — <strong>not</strong>
 that the certificate has no key. Retry; do not reissue.</p>
