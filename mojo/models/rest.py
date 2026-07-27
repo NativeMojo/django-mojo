@@ -10,7 +10,8 @@ import json
 import objict
 import datetime
 from mojo.helpers import dates, logit
-from mojo.helpers.request import is_request_user, is_key_backed_session
+from mojo.helpers.request import (
+    is_request_user, is_key_backed_session, is_override_user_session)
 from contextvars import ContextVar
 
 
@@ -467,7 +468,16 @@ class MojoModel:
                         event_type="group_member_permission_denied",
                         status=403,
                     )
-            allowed = request.group.user_has_permission(request.user, perms)
+            # check_user=False for a key session: Group.user_has_permission
+            # short-circuits on the member's GLOBAL permission dict, which has
+            # no tenant bound. An override key must be authorized by what its
+            # member holds IN THIS GROUP — otherwise the key inherits
+            # platform-wide grants, survives removal of the GroupMember row,
+            # and (since User.has_permission returns True for everything when
+            # is_superuser) would silently become a superuser key the moment
+            # the linked member is promoted.
+            allowed = request.group.user_has_permission(
+                request.user, perms, not is_override_user_session(request))
             if allowed:
                 return True, None
             return False, objict.objict(
@@ -687,8 +697,21 @@ class MojoModel:
         # Advanced permission checks if basic check fails
         perms = cls.get_rest_meta_prop("VIEW_PERMS", [])
 
-        # Check for owner permission
-        if perms and "owner" in perms and request.user.is_authenticated and hasattr(request.user, "is_request_user"):
+        # Check for owner permission.
+        #
+        # The `not is_key_backed_session` clause is the LIST-path twin of the
+        # detail-path guard in _evaluate_permission. Both must be present: a key
+        # that assumes a member (ApiKey.override_user) puts a real User in
+        # request.user, so the marker test alone becomes True and every
+        # owner-scoped model opens up — GET /api/user would return the member's
+        # own row (email, phone, dob, permissions, is_superuser) to a caller
+        # that /api/user/<pk> correctly refuses, and /api/account/api_keys,
+        # /passkeys, /oauth_connection would return their credential records.
+        # Neither model defines an instance hook and none are group-scoped, so
+        # nothing downstream catches it.
+        if (perms and "owner" in perms and request.user.is_authenticated
+                and is_request_user(request)
+                and not is_key_backed_session(request)):
             owner_field = cls.get_rest_meta_prop("OWNER_FIELD", "user")
             if owner_field == "self":
                 q = {"pk": request.user.pk}
@@ -701,8 +724,22 @@ class MojoModel:
         # permissions on some tenant even without a system-level grant.
         group_field = cls.get_rest_meta_prop("GROUP_FIELD", None)
         if request.user.is_authenticated and (group_field or hasattr(cls, "group")):
-            # User doesn't have system-level permissions, but might have group-level permissions
-            groups_with_perms = request.user.get_groups_with_permission(perms)
+            # User doesn't have system-level permissions, but might have group-level permissions.
+            #
+            # Derive from the KEY for a key-backed session, never from the
+            # member it acts as. ApiKey.get_groups_with_permission returns
+            # none() for an effectively-inactive chain, which is what makes
+            # tenant suspension (DM-037/DM-048) actually suspend. Reading
+            # request.user here would return every tenant the member belongs
+            # to — and when the key's own group is deactivated,
+            # validate_token leaves request.group None, so on_rest_list applies
+            # NO group filter and those other tenants' rows would be served.
+            # Suspension would become a cross-tenant reader.
+            identity = request.user
+            api_key = getattr(request, "api_key", None)
+            if api_key is not None:
+                identity = api_key
+            groups_with_perms = identity.get_groups_with_permission(perms)
             if groups_with_perms.exists():
                 # Filter queryset to only include objects from groups where user has permission
                 q = {f"{group_field or 'group'}__in": groups_with_perms}
@@ -1672,7 +1709,15 @@ class MojoModel:
                     # Models that want strict self-ownership must opt out with
                     # CREATED_BY_OWNER_FIELD = None and re-stamp in on_rest_pre_save.
                     actor = getattr(request, "acting_user", None)
-                    if actor is None and is_request_user(request):
+                    if actor is None and request.user.is_authenticated and is_request_user(request):
+                        # is_authenticated is load-bearing, not redundant:
+                        # ANONYMOUS_USER is an objict, and objict.__getattr__
+                        # returns None for any missing key, so
+                        # hasattr(user, "is_request_user") — and therefore
+                        # is_request_user() — is True for anonymous requests
+                        # (see board item 46). Without this guard an anonymous
+                        # create on a model with a user FK would assign the
+                        # objict and raise ValueError -> 500.
                         actor = request.user
                     if actor is not None and getattr(self, owner_field, None) is None:
                         setattr(self, owner_field, actor)
@@ -1692,8 +1737,18 @@ class MojoModel:
                             self.group = request.group
             else:
                 owner_field = self.get_rest_meta_prop("UPDATED_BY_OWNER_FIELD", "modified_by")
-                if request.user.is_authenticated and self.get_model_field(owner_field):
-                    setattr(self, owner_field, request.user)
+                if self.get_model_field(owner_field):
+                    # Same resolution as the create branch above: prefer the
+                    # member an ApiKey acts as, and never assign a non-User.
+                    # Without the type guard an api-key UPDATE of any model with
+                    # a modified_by FK raises the same ValueError the create
+                    # branch used to — and reference-mode attribution, the
+                    # whole point of ApiKey.user, would be missing on updates.
+                    actor = getattr(request, "acting_user", None)
+                    if actor is None and request.user.is_authenticated and is_request_user(request):
+                        actor = request.user
+                    if actor is not None:
+                        setattr(self, owner_field, actor)
             self.on_rest_pre_save(self.__changed_fields__, created)
             if "files" in data_dict:
                 self.on_rest_save_files(data_dict["files"])

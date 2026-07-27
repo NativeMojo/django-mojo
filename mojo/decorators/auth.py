@@ -1,7 +1,8 @@
 from functools import wraps
 import mojo.errors
 from mojo.helpers import logit
-from mojo.helpers.request import is_request_user, is_key_backed_session
+from mojo.helpers.request import (
+    is_request_user, is_key_backed_session, is_override_user_session)
 from mojo.helpers.settings import settings
 
 logger = logit.get_logger("error", "error.log")
@@ -138,16 +139,16 @@ def requires_perms(*required_perms):
 
             # First check user-based permissions.
             #
-            # Skipped for key-backed sessions. User.has_permission reads the
-            # member's GLOBAL (platform-wide) permission dict, which has no
-            # tenant bound — so an ApiKey with override_user=True would
-            # otherwise inherit authority far outside the group it was issued
-            # for. Falling through to the group check below resolves the same
+            # Skipped ONLY for an override_user session. For an unlinked or
+            # reference-mode key request.user IS the ApiKey, so this reads the
+            # KEY's own permissions dict — correct, and already bounded to the
+            # key's group. Under override_user it would instead read the
+            # member's GLOBAL platform-wide dict, which has no tenant bound. Falling through to the group check below resolves the same
             # member's permissions AS A MEMBER OF THE KEY'S GROUP, which is
             # both the intent of override_user and the boundary it must
             # respect. _deny_machine_identity_without_active_group above has
             # already guaranteed an active group context here.
-            if not is_key_backed_session(request) and request.user.has_permission(perms):
+            if not is_override_user_session(request) and request.user.has_permission(perms):
                 return func(request, *args, **kwargs)
 
             # If user doesn't have permissions, fallback to group-based checking
@@ -161,7 +162,13 @@ def requires_perms(*required_perms):
                     except (TypeError, ValueError):
                         # Unusable group param -> no group context (fail closed)
                         request.group = None
-                if not request.group or not request.group.user_has_permission(request.user, perms, True):
+                # check_user is the SAME untenanted global lookup skipped
+                # above — Group.user_has_permission starts with
+                # `if check_user and user.has_permission(perms)`. Leaving
+                # it True for a key session re-enables it one line later
+                # and makes the skip inert.
+                _check_user = not is_override_user_session(request)
+                if not request.group or not request.group.user_has_permission(request.user, perms, _check_user):
                     logger.error(f"{request.user.username} is missing {perms}")
                     raise mojo.errors.PermissionDeniedException()
             else:
@@ -203,7 +210,7 @@ def requires_group_perms(*required_perms):
             # sessions for the same reason as requires_perms: the global
             # permission dict has no tenant bound, so an override_user key
             # must be resolved as a MEMBER of the key's group instead.
-            if not is_key_backed_session(request) and request.user.has_permission(perms):
+            if not is_override_user_session(request) and request.user.has_permission(perms):
                 return func(request, *args, **kwargs)
 
             # If user doesn't have permissions, fallback to group-based checking
@@ -216,7 +223,13 @@ def requires_group_perms(*required_perms):
                 except (TypeError, ValueError):
                     # Unusable group param -> no group context (fail closed)
                     request.group = None
-            if not request.group or not request.group.user_has_permission(request.user, perms, True):
+            # check_user is the SAME untenanted global lookup skipped above —
+            # Group.user_has_permission starts with
+            # `if check_user and user.has_permission(perms)`. Leaving it True
+            # for a key session re-enables it one line later and makes the
+            # skip inert.
+            _check_user = not is_override_user_session(request)
+            if not request.group or not request.group.user_has_permission(request.user, perms, _check_user):
                 logger.error(f"{request.user.username} is missing {perms}")
                 raise mojo.errors.PermissionDeniedException()
             return func(request, *args, **kwargs)

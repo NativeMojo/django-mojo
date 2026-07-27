@@ -54,6 +54,20 @@ def is_key_backed_session(request):
     return getattr(request, "api_key", None) is not None
 
 
+def is_override_user_session(request):
+    # True only for an ApiKey that ASSUMES a member (ApiKey.override_user), i.e.
+    # the case where request.user is a real User whose GLOBAL permission dict
+    # would otherwise be consulted.
+    #
+    # The distinction from is_key_backed_session matters: for an unlinked or
+    # reference-mode key, request.user IS the ApiKey, so `request.user.
+    # has_permission(...)` reads the KEY's own dict — which is correct and
+    # already bounded to the key's group. Only in override mode does that read
+    # resolve to a member's untenanted platform-wide grants.
+    api_key = getattr(request, "api_key", None)
+    return api_key is not None and bool(getattr(api_key, "override_user", False))
+
+
 def is_request_user(request):
     # The framework's ONE predicate for "request.user is a real User instance".
     # User defines the `is_request_user` marker

@@ -248,6 +248,18 @@ class ApiKey(MojoSecrets, MojoModel):
         APIKEY_PERMS_PROTECTION — that setting gates keys of the `permissions`
         dict and has no relationship to model fields.
         """
+        if request is None:
+            return False
+        # A key-backed session may never establish or change an acting-as
+        # link — not on itself, not on a sibling key it creates. Otherwise an
+        # override key acting as a group admin could mint a successor key,
+        # point it at any member, enable override on it, and read its raw token
+        # out of the create response: a credential that outlives revocation of
+        # the original, which is precisely what the credential rules exist to
+        # prevent. Linking is an interactive administrative act.
+        from mojo.helpers.request import is_key_backed_session
+        if is_key_backed_session(request):
+            return False
         user = getattr(request, "user", None)
         if user is None:
             return False
@@ -578,6 +590,17 @@ class ApiKey(MojoSecrets, MojoModel):
         # distinct message would turn this into an account-state oracle for
         # anyone holding the token (same reasoning as User.validate_jwt).
         if api_key.user_id and not api_key.user.is_active:
+            return None, "API key is inactive"
+
+        # Re-assert the superuser bar at AUTH time, not only at link time.
+        # validate_acting_user blocks a superuser target when the link is made,
+        # but a member can be promoted afterwards — and User.has_permission
+        # returns True for everything once is_superuser is set, so a key linked
+        # before the promotion would silently become a superuser key.
+        if api_key.user_id and api_key.user.is_superuser:
+            logit.error(
+                f"api key {api_key.pk} is linked to superuser "
+                f"{api_key.user_id}; refusing to authenticate")
             return None, "API key is inactive"
 
         # Group context is granted only for an EFFECTIVELY ACTIVE group — the

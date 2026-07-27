@@ -110,6 +110,7 @@ def on_totp_disable(request):
 # -----------------------------------------------------------------
 
 @md.GET("account/totp/recovery-codes")
+@md.denies_key_backed_session()
 @md.requires_auth()
 def on_totp_recovery_codes_get(request):
     """Return masked recovery codes and remaining count."""

@@ -839,6 +839,137 @@ def test_apikey_cannot_mutate_credentials(opts):
         opts.client.logout()
 
 
+@th.unit_test("apikey_override_cannot_list_owner_scoped_models")
+def test_apikey_override_cannot_list_owner_scoped_models(opts):
+    """Security-review regression (CRITICAL).
+
+    The owner branch in _evaluate_permission was guarded, but the LIST path has
+    a SECOND, hand-rolled owner check. Under override_user it went True and
+    returned the member's own rows — `GET /api/user` handed back the member's
+    email, phone, dob, permissions and is_superuser to a caller that
+    `GET /api/user/<pk>` correctly refuses, and the api_keys / passkeys /
+    oauth_connection lists returned their credential records.
+    """
+    from mojo.apps.account.models import Group, ApiKey, User
+
+    group = Group.objects.get(pk=opts.parent_id)
+    actor = User.objects.get(pk=opts.actor_id)
+    key, raw = ApiKey.create_for_group(
+        group=group, name="test_ownerlist", permissions={},
+        user=actor, override_user=True)
+
+    opts.client.logout()
+    opts.client.bearer = "apikey"
+    opts.client.access_token = raw
+    opts.client.is_authenticated = True
+    try:
+        for path in ("/api/user", "/api/account/api_keys",
+                     "/api/account/passkeys", "/api/account/oauth_connection"):
+            resp = opts.client.get(path)
+            if resp.status_code == 200:
+                rows = resp.response.data or []
+                ids = [r.get("id") for r in rows]
+                assert actor.id not in ids, (
+                    f"{path} leaked the acting member's own row to a key-backed "
+                    f"session via the owner branch: {ids}")
+                assert not rows, (
+                    f"{path} must not serve owner-scoped rows to a key session, "
+                    f"got {len(rows)}")
+    finally:
+        opts.client.logout()
+
+
+@th.unit_test("apikey_override_global_perm_does_not_escape_group")
+def test_apikey_override_global_perm_does_not_escape_group(opts):
+    """Security-review regression.
+
+    Group.user_has_permission short-circuits on the member's GLOBAL permission
+    dict when check_user is True, which re-enabled the exact untenanted lookup
+    the decorators had just skipped. An override key must be authorized by what
+    its member holds IN THE KEY'S GROUP, not platform-wide.
+    """
+    from mojo.apps.account.models import Group, User
+
+    group = Group.objects.get(pk=opts.parent_id)
+    actor = User.objects.get(pk=opts.actor_id)
+
+    # Global grant that the member does NOT hold as a member of this group.
+    actor.add_permission("manage_incidents")
+    actor.save()
+    try:
+        assert actor.has_permission("manage_incidents") is True, \
+            "fixture is wrong: the global grant did not take"
+        assert group.user_has_permission(actor, ["manage_incidents"], False) is False, (
+            "with check_user=False the member must NOT satisfy a permission they "
+            "only hold globally — this is what bounds an override key to its group")
+    finally:
+        actor.remove_permission("manage_incidents")
+        actor.save()
+
+
+@th.unit_test("apikey_session_cannot_set_acting_user")
+def test_apikey_session_cannot_set_acting_user(opts):
+    """Security-review regression.
+
+    An override key acting as a group admin could otherwise mint a successor
+    key, link it, enable override on it, and read its raw token from the create
+    response — a credential that outlives revocation of the original.
+    """
+    from mojo.apps.account.models import Group, ApiKey, User
+    from mojo.models import rest as mojo_rest
+    from testit.helpers import get_mock_request
+
+    group = Group.objects.get(pk=opts.parent_id)
+    actor = User.objects.get(pk=opts.actor_id)
+    key, _raw = ApiKey.create_for_group(group=group, name="test_successor")
+
+    request = get_mock_request()
+    request.user = actor
+    request.group = group
+    request.api_key = key          # marks this a key-backed session
+    token = mojo_rest.ACTIVE_REQUEST.set(request)
+    try:
+        try:
+            key.set_user(actor.id)
+        except Exception:
+            return
+        assert False, (
+            "a key-backed session must not be able to establish an acting-as "
+            "link — linking is an interactive administrative act")
+    finally:
+        mojo_rest.ACTIVE_REQUEST.reset(token)
+
+
+@th.unit_test("apikey_superuser_promotion_kills_the_key")
+def test_apikey_superuser_promotion_kills_the_key(opts):
+    """Security-review regression.
+
+    validate_acting_user blocks superuser targets at LINK time, but a member
+    can be promoted afterwards — and User.has_permission returns True for
+    everything once is_superuser is set.
+    """
+    from mojo.apps.account.models import Group, ApiKey, User
+    from testit.helpers import get_mock_request
+
+    group = Group.objects.get(pk=opts.parent_id)
+    actor = User.objects.get(pk=opts.actor_id)
+    key, raw = ApiKey.create_for_group(
+        group=group, name="test_promoted", user=actor, override_user=True)
+
+    actor.is_superuser = True
+    actor.save()
+    try:
+        request = get_mock_request()
+        identity, error = ApiKey.validate_token(raw, request)
+        assert identity is None, (
+            "a key linked to a member who was LATER promoted to superuser must "
+            "stop authenticating — the link check alone is point-in-time")
+        assert error is not None, "an error string must be returned"
+    finally:
+        actor.is_superuser = False
+        actor.save()
+
+
 @th.unit_test("apikey_cleanup")
 def test_apikey_cleanup(opts):
     """Remove test groups and keys."""
