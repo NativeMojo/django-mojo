@@ -10,7 +10,7 @@ import json
 import objict
 import datetime
 from mojo.helpers import dates, logit
-from mojo.helpers.request import is_request_user
+from mojo.helpers.request import is_request_user, is_key_backed_session
 from contextvars import ContextVar
 
 
@@ -323,7 +323,24 @@ class MojoModel:
             if "owner" in perms:
                 owner_field = instance.get_rest_meta_prop("OWNER_FIELD", "user")
                 owner = getattr(instance, owner_field, None)
-                if hasattr(request.user, "is_request_user"):
+                # A key-backed session never satisfies "owner", even when it
+                # carries the owner's identity (ApiKey.override_user). This is
+                # the single choke point that keeps API keys away from the
+                # owner-scoped models holding a member's CREDENTIALS — Passkey,
+                # UserAPIKey, UserTOTP, OAuthConnection, RegisteredDevice — and
+                # it covers any such model added later, with nothing to
+                # enumerate.
+                #
+                # Before override_user existed this was accidental: an ApiKey
+                # simply lacked the is_request_user marker and fell through to
+                # the groupless-deny branch below. Binding a real User to
+                # request.user removes that accident, so the intent has to be
+                # stated explicitly here.
+                #
+                # The rule is about REVOCABILITY, not power: a key that can
+                # register a passkey or mint a long-lived token as the member
+                # turns a credential you can delete into access you cannot.
+                if is_request_user(request) and not is_key_backed_session(request):
                     if owner is not None and owner.id == request.user.id:
                         return True, None
             # Bind request.group to the INSTANCE's owning group so the
@@ -338,7 +355,24 @@ class MojoModel:
                 request.group = getattr(instance, "group", None)
 
         if request.group and is_group_scoped:
-            if hasattr(request, 'api_key') and request.api_key:
+            if is_key_backed_session(request):
+                # TENANT BOUND. The instance re-bind above sets request.group
+                # from the ROW's group, which is what stops a caller-supplied
+                # ?group= from widening access. For a key that assumes a member
+                # (ApiKey.override_user) that is no longer sufficient on its
+                # own: the member may belong to other tenants, so a row in one
+                # of those would rebind request.group there and then pass the
+                # membership check below. The key's own group tree is the
+                # boundary in BOTH modes — a key issued for one tenant must
+                # never become a cross-tenant credential because of who it acts
+                # as. is_group_allowed covers "the key's group or a descendant,
+                # and effectively active".
+                if not request.api_key.is_group_allowed(request.group):
+                    return False, objict.objict(
+                        branch="api_key.cross_tenant_denied",
+                        event_type="user_permission_denied",
+                        status=403,
+                    )
                 if not request.group.is_effectively_active():
                     # The instance re-bind above can repopulate request.group
                     # from a detail instance owned by a now-inactive group; gate
@@ -355,14 +389,19 @@ class MojoModel:
                         event_type="user_permission_denied",
                         status=403,
                     )
-                allowed = request.api_key.has_permission(perms)
-                if allowed:
-                    return True, None
-                return False, objict.objict(
-                    branch="api_key.has_permission",
-                    event_type="group_member_permission_denied",
-                    status=403,
-                )
+                # A key that ASSUMES a member falls through to the normal
+                # GroupMember check below — that is the whole point of
+                # override_user: one place to manage access. A reference-mode
+                # or unlinked key keeps using its own permissions dict.
+                if not request.api_key.override_user:
+                    allowed = request.api_key.has_permission(perms)
+                    if allowed:
+                        return True, None
+                    return False, objict.objict(
+                        branch="api_key.has_permission",
+                        event_type="group_member_permission_denied",
+                        status=403,
+                    )
             allowed = request.group.user_has_permission(request.user, perms)
             if allowed:
                 return True, None
@@ -1475,13 +1514,32 @@ class MojoModel:
         if not actions_only or created:
             if created:
                 owner_field = self.get_rest_meta_prop("CREATED_BY_OWNER_FIELD", "user")
-                if request.user.is_authenticated and self.get_model_field(owner_field):
+                if self.get_model_field(owner_field):
+                    # Resolve the actor to stamp. request.acting_user is the
+                    # member an ApiKey acts as (account.ApiKey.user) and wins
+                    # when present, in BOTH key modes — attributing a key's
+                    # writes to a real member is the point of the link, and it
+                    # is independent of whether the key also assumes that
+                    # member's authority.
+                    #
+                    # The is_request_user guard is load-bearing, not defensive:
+                    # this used to stamp request.user unconditionally, so an
+                    # api-key create of any model with a user FK assigned an
+                    # ApiKey to it and Django raised
+                    # ValueError: Cannot assign "<ApiKey>" ... must be a "User"
+                    # instance — a 500. Unlinked keys now simply leave the
+                    # field null, which is what the per-app shims were doing by
+                    # hand (see phonehub/rest/sms.py).
+                    #
                     # Only auto-stamp when the body did not provide a value.
                     # Mirrors the "group" behavior directly below: body wins.
                     # Models that want strict self-ownership must opt out with
                     # CREATED_BY_OWNER_FIELD = None and re-stamp in on_rest_pre_save.
-                    if getattr(self, owner_field, None) is None:
-                        setattr(self, owner_field, request.user)
+                    actor = getattr(request, "acting_user", None)
+                    if actor is None and is_request_user(request):
+                        actor = request.user
+                    if actor is not None and getattr(self, owner_field, None) is None:
+                        setattr(self, owner_field, actor)
                 if request.group:
                     # Auto-assign the group-scoping FK on create when the body
                     # omitted it (body wins), mirroring the historical `group`

@@ -133,13 +133,27 @@ def _get_dimension(request, dimension):
         if api_key:
             return str(api_key.pk)
     if dimension == "user":
+        # A key-backed session buckets on the KEY, not on the member it acts
+        # as (ApiKey.override_user) — otherwise several keys linked to the same
+        # member would share one budget, and a key's traffic would eat the
+        # human's. The "api_key" dimension above is per-key by pk; this keeps
+        # the "user" dimension consistent with it rather than merging the two.
+        api_key = getattr(request, "api_key", None)
+        if api_key is not None:
+            return f"apikey-{api_key.pk}"
         user = getattr(request, "user", None)
         if user and getattr(user, "is_authenticated", False):
             return str(user.id)
     if dimension == "group":
         group = request.group
-        if request.group is None and request.user:
-            group = request.user.org
+        if group is None:
+            # Same reasoning: fall back to the key's OWN group before the
+            # acting member's default org, which may be a different tenant.
+            api_key = getattr(request, "api_key", None)
+            if api_key is not None:
+                group = getattr(api_key, "group", None)
+            elif request.user:
+                group = request.user.org
         return str(group.id) if group else None
     return None
 
@@ -678,7 +692,14 @@ def endpoint_metrics(slug, by=None, min_granularity="hours", category="endpoint_
                 metrics.record(slug, category=category, min_granularity=min_granularity)
                 group = request.group
                 if not group:
-                    group = request.user.org if request.user and request.user.org else None
+                    # Prefer the key's own group over the acting member's org
+                    # (ApiKey.override_user) so metrics land in the tenant the
+                    # key belongs to, not the member's default one.
+                    api_key = getattr(request, "api_key", None)
+                    if api_key is not None:
+                        group = getattr(api_key, "group", None)
+                    elif request.user and request.user.org:
+                        group = request.user.org
                 account = f"group-{group.pk}" if group else "global"
                 for dimension in by_list:
                     value = _get_dimension(request, dimension)

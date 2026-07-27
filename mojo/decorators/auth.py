@@ -1,7 +1,7 @@
 from functools import wraps
 import mojo.errors
 from mojo.helpers import logit
-from mojo.helpers.request import is_request_user
+from mojo.helpers.request import is_request_user, is_key_backed_session
 from mojo.helpers.settings import settings
 
 logger = logit.get_logger("error", "error.log")
@@ -46,7 +46,12 @@ def _deny_machine_identity_without_active_group(request, perms):
     future group-context source that forgets the active filter still fails
     closed here. Effective = the group AND every ancestor (DM-048).
     """
-    if is_request_user(request):
+    # is_key_backed_session, not is_request_user: an ApiKey with
+    # override_user=True puts a real User in request.user, so the marker test
+    # would let a key skip this gate entirely and a suspended tenant's key
+    # would keep working. The question here is "is this a machine identity",
+    # and request.api_key is what still answers it truthfully.
+    if is_request_user(request) and not is_key_backed_session(request):
         return
     group = getattr(request, "group", None)
     if group is None or not group.is_effectively_active():
@@ -81,8 +86,18 @@ def requires_perms(*required_perms):
             # _deny_machine_identity_without_active_group.
             _deny_machine_identity_without_active_group(request, perms)
 
-            # First check user-based permissions
-            if request.user.has_permission(perms):
+            # First check user-based permissions.
+            #
+            # Skipped for key-backed sessions. User.has_permission reads the
+            # member's GLOBAL (platform-wide) permission dict, which has no
+            # tenant bound — so an ApiKey with override_user=True would
+            # otherwise inherit authority far outside the group it was issued
+            # for. Falling through to the group check below resolves the same
+            # member's permissions AS A MEMBER OF THE KEY'S GROUP, which is
+            # both the intent of override_user and the boundary it must
+            # respect. _deny_machine_identity_without_active_group above has
+            # already guaranteed an active group context here.
+            if not is_key_backed_session(request) and request.user.has_permission(perms):
                 return func(request, *args, **kwargs)
 
             # If user doesn't have permissions, fallback to group-based checking
@@ -134,8 +149,11 @@ def requires_group_perms(*required_perms):
             # Same machine-identity active-group gate as requires_perms (ITEM-037).
             _deny_machine_identity_without_active_group(request, perms)
 
-            # First check user-based permissions
-            if request.user.has_permission(perms):
+            # First check user-based permissions. Skipped for key-backed
+            # sessions for the same reason as requires_perms: the global
+            # permission dict has no tenant bound, so an override_user key
+            # must be resolved as a MEMBER of the key's group instead.
+            if not is_key_backed_session(request) and request.user.has_permission(perms):
                 return func(request, *args, **kwargs)
 
             # If user doesn't have permissions, fallback to group-based checking
@@ -200,9 +218,16 @@ def requires_global_perms(*required_perms, allow_api_keys=False):
             user = getattr(request, "user", None)
             if user is None or not getattr(user, "is_authenticated", False):
                 raise mojo.errors.PermissionDeniedException()
+            if not allow_api_keys and is_key_backed_session(request):
+                # A group-scoped ApiKey must not satisfy a platform-global
+                # gate — including one that assumes a member
+                # (ApiKey.override_user), where request.user IS a real User and
+                # the old is_request_user test would have passed. The key's
+                # tenant scope is exactly what a global gate has no bound on.
+                raise mojo.errors.PermissionDeniedException()
             if not allow_api_keys and not is_request_user(request):
-                # A group-scoped ApiKey (or any non-User identity) must not
-                # satisfy a platform-global gate.
+                # Any other non-User identity (custom AUTH_BEARER_HANDLERS)
+                # is likewise refused. Fail-closed on an unknown identity.
                 raise mojo.errors.PermissionDeniedException()
             if not user.has_permission(perm_set):
                 logger.error(f"{getattr(user, 'username', user)} is missing global {perm_set}")

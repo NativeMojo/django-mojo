@@ -846,11 +846,25 @@ class Group(MojoSecrets, MojoModel):
         # Check if user has group-level permissions (includes parent chain and children)
         if request.user.is_authenticated:
             perms = cls.get_rest_meta_prop("VIEW_PERMS", [])
-            groups_with_perms = request.user.get_groups_with_permission(perms)
+            identity = request.user
+            # Group is groupless (platform-global) and has no
+            # ALLOW_API_KEY_GLOBAL, so rest_check_permission above denies every
+            # key and execution lands here. This block is a SECOND copy of the
+            # derivation in on_rest_handle_list (mojo/models/rest.py) and has
+            # to be scoped the same way: derive from the KEY, not from the
+            # member it acts as. Otherwise a key whose member belongs to
+            # several tenants would list all of them — request.user is a real
+            # User under ApiKey.override_user, so reading it here would leak
+            # straight across the tenant boundary.
+            api_key = getattr(request, "api_key", None)
+            if api_key is not None:
+                identity = api_key
+
+            groups_with_perms = identity.get_groups_with_permission(perms)
 
             # Also include all groups where user is a member (even without specific perms)
             # This matches the behavior of check_view_permission which allows members to view
-            all_user_groups = request.user.get_groups(is_active=True)
+            all_user_groups = identity.get_groups(is_active=True)
 
             # Combine both querysets
             combined_ids = set(groups_with_perms.values_list('id', flat=True)) | set(all_user_groups.values_list('id', flat=True))
