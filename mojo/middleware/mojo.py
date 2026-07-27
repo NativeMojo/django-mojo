@@ -29,6 +29,10 @@ class MojoMiddleware:
         request.bearer = None
         request.user = ANONYMOUS_USER
         request.group = None
+        # The member an ApiKey acts as, when one is linked (see
+        # account.ApiKey.user). None for every other caller. Set here so
+        # framework code can read it unconditionally rather than via getattr.
+        request.acting_user = None
         request.device = None
         request.request_log = None
         request.ip = rhelper.get_remote_ip(request)

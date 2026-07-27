@@ -39,15 +39,34 @@ def get_referer(request):
     return request.META.get('HTTP_REFERER')
 
 
+def is_key_backed_session(request):
+    # True when this request authenticated with an ApiKey — REGARDLESS of whose
+    # identity that key acts as. An ApiKey with override_user=True puts a real
+    # User in request.user, so the type of request.user stops being a reliable
+    # "is a human driving this" signal; request.api_key is the one that keeps
+    # telling the truth. The credential is a bearer token sitting in a config
+    # file, not a person at a keyboard.
+    #
+    # Use this — never is_request_user() — for any check that means "this is a
+    # machine" (machine-identity gates, credential-mutation blocks). Use
+    # is_request_user() only where the question is genuinely "is request.user a
+    # User model instance" (attribution).
+    return getattr(request, "api_key", None) is not None
+
+
 def is_request_user(request):
-    # The framework's ONE predicate for "a real logged-in User is driving this
-    # request" vs a machine identity (an ApiKey, or a custom
-    # AUTH_BEARER_HANDLERS identity — see mojo/middleware/auth.py). User defines
-    # the `is_request_user` marker (mojo/apps/account/models/user.py); machine
-    # identities must not. Absence of the marker is the fail-closed direction:
-    # an unknown identity is treated as a machine. Both the auth decorators
-    # (mojo/decorators/auth.py) and model security (mojo/models/rest.py) key on
-    # this — keep them aligned here, not on hand-rolled hasattr checks (DM-045).
+    # The framework's ONE predicate for "request.user is a real User instance".
+    # User defines the `is_request_user` marker
+    # (mojo/apps/account/models/user.py); machine identities must not. Absence
+    # of the marker is the fail-closed direction: an unknown identity is
+    # treated as a machine. Both the auth decorators (mojo/decorators/auth.py)
+    # and model security (mojo/models/rest.py) key on this — keep them aligned
+    # here, not on hand-rolled hasattr checks (DM-045).
+    #
+    # CAUTION: this returns True for an ApiKey with override_user=True, because
+    # request.user really IS a User there. That is correct for attribution and
+    # WRONG for any machine-identity or authorization gate — those must use
+    # is_key_backed_session(request) above.
     user = getattr(request, "user", None)
     return user is not None and hasattr(user, "is_request_user")
 

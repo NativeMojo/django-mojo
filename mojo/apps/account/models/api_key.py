@@ -3,7 +3,7 @@ import json
 from django.db import models
 from mojo.models import MojoModel
 from mojo.models.secrets import MojoSecrets
-from mojo.helpers import crypto, dates
+from mojo.helpers import crypto, dates, logit
 from mojo.helpers.perms import implied_perms
 from mojo.helpers.settings import settings
 from mojo import errors as merrors
@@ -66,6 +66,22 @@ class ApiKey(MojoSecrets, MojoModel):
     last_used = models.DateTimeField(null=True, default=None)
     expires_at = models.DateTimeField(null=True, default=None, blank=True)
 
+    # The member this key acts as. Two modes, controlled by override_user:
+    #   override_user=False (default) — REFERENCE ONLY. request.user stays the
+    #     ApiKey and authorization is unchanged; the linked user is exposed as
+    #     request.acting_user and is what lands in FK(User) attribution sites
+    #     (see CREATED_BY_OWNER_FIELD handling in mojo/models/rest.py).
+    #   override_user=True — the key ASSUMES the member: request.user is this
+    #     User and permissions resolve through their GroupMember. Opt-in per
+    #     key so every existing key keeps today's behavior bit-for-bit.
+    # In BOTH modes the key's group remains the tenant boundary, and a
+    # key-backed session can never mutate the member's credentials
+    # (see is_key_backed_session in mojo/helpers/request.py).
+    user = models.ForeignKey(
+        "account.User", null=True, blank=True, default=None,
+        on_delete=models.SET_NULL, related_name="api_keys")
+    override_user = models.BooleanField(default=False)
+
     class Meta:
         ordering = ["-created"]
 
@@ -73,28 +89,39 @@ class ApiKey(MojoSecrets, MojoModel):
         VIEW_PERMS = ["manage_group", "manage_groups", "groups"]
         SAVE_PERMS = ["manage_group", "manage_groups", "groups"]
         CAN_DELETE = True
+        # This model HAS a `user` field, but it means "the member this key acts
+        # as" — not "who created this key". Without this opt-out,
+        # on_rest_save's create branch (mojo/models/rest.py) would auto-stamp
+        # the CREATING ADMIN into it on every REST create, silently linking
+        # every new key to whoever made it.
+        CREATED_BY_OWNER_FIELD = None
         GRAPHS = {
             "default": {
                 "fields": [
                     "id", "created", "modified", "name",
                     "is_active", "permissions", "limits",
-                    "last_used", "expires_at", "metadata"
+                    "last_used", "expires_at", "metadata", "override_user"
                 ],
                 "extra": [("get_token", "token")],
                 "graphs": {
                     "group": "basic",
+                    "user": "basic",
                 }
             },
             # Safe self-introspection graph for the `group/apikey/me` whoami
             # endpoint. Deliberately omits the `token` extra — the caller
             # already holds the token; echoing it back is a needless exposure.
+            # `user` IS included: "who am I acting as" is the fact that lets a
+            # consumer stop parsing the key's name to find out.
             "me": {
                 "fields": [
                     "id", "created", "name", "is_active",
-                    "permissions", "limits", "last_used", "expires_at"
+                    "permissions", "limits", "last_used", "expires_at",
+                    "override_user"
                 ],
                 "graphs": {
                     "group": "basic",
+                    "user": "basic",
                 }
             }
         }
@@ -135,8 +162,14 @@ class ApiKey(MojoSecrets, MojoModel):
         Check if this API key grants the given permission.
 
         Mirrors GroupMember.has_permission — sys.* permissions escalate to the
-        user's system-level permissions in GroupMember, but API keys have no
-        backing user so sys.* is always denied.
+        user's system-level permissions in GroupMember. Here they are ALWAYS
+        denied, including when this key is linked to a member: a key may carry
+        a member's identity (see the `user` field) but must never become a
+        route to platform-level authority. This method evaluates the KEY's own
+        permissions dict; an override_user key does not reach it at all,
+        because request.user is the member and the normal GroupMember path
+        runs instead — where sys.* is likewise gated on the member's own
+        system permissions, not on the key.
 
         - sys.* always returns False (no system-level escalation)
         - "all" returns True
@@ -204,6 +237,160 @@ class ApiKey(MojoSecrets, MojoModel):
                 self.permissions[perm] = perm_value
             else:
                 self.permissions.pop(perm, None)
+
+    def _can_manage_acting_user(self, request):
+        """Whether `request.user` may link/unlink this key's acting member.
+
+        Same bar as can_change_permission's fallback: a global manage_groups/
+        manage_users holder, or a member of THIS KEY's group holding a
+        key-management perm. Deliberately NOT routed through
+        APIKEY_PERMS_PROTECTION — that setting gates keys of the `permissions`
+        dict and has no relationship to model fields.
+        """
+        user = getattr(request, "user", None)
+        if user is None:
+            return False
+        if user.has_permission(["manage_groups", "manage_users"]):
+            return True
+        group = self._acting_group(request)
+        if group is None:
+            return False
+        req_member = group.get_member_for_user(user, check_parents=True)
+        if req_member is None:
+            return False
+        return req_member.has_permission(
+            ["manage_group", "manage_members", "manage_users", "manage_groups"])
+
+    def _acting_group(self, request):
+        """This key's group, resolved explicitly.
+
+        On REST create the group FK is auto-stamped AFTER the field loop, so
+        self.group may still be None while set_user runs (same trap
+        set_permissions documents). Fall back to the request's group. Returns
+        None when neither is available — callers MUST fail closed, never
+        default to "no group means no check".
+
+        Resolving the group here rather than reading self.group at each call
+        site also makes validation independent of the client's JSON key order:
+        on_rest_save iterates data_dict as given, so {"group":G,"user":M} and
+        {"user":M,"group":G} would otherwise validate against different groups.
+        """
+        if self.group_id:
+            return self.group
+        return getattr(request, "group", None)
+
+    def validate_acting_user(self, user, request):
+        """Gate for linking this key to a member. Raises on refusal.
+
+        Two rules, in order:
+          1. Never a superuser. A bright line with no legitimate use — a key is
+             a bearer token in a config file, and platform-wide authority must
+             not be reachable through one. This is a hard block, not a warning:
+             an incident nobody reads is not a control.
+          2. Only an ACTIVE member of this key's own group, check_parents=False.
+             Delegation must not exceed the delegator. check_parents=True walks
+             UP the tree, which would let an admin of a child group link a key
+             to a more-privileged ancestor member — the exact escalation this
+             rule exists to stop.
+        """
+        if user is None:
+            return
+        if getattr(user, "is_superuser", False):
+            raise merrors.PermissionDeniedException()
+        group = self._acting_group(request)
+        if group is None:
+            raise merrors.PermissionDeniedException()
+        if group.get_member_for_user(user, check_parents=False) is None:
+            raise merrors.PermissionDeniedException()
+
+    def _report_acting_user_event(self, details, title, level):
+        """Best-effort incident on a NOTEWORTHY link change.
+
+        Fired on the LINK (a discrete admin action), never on use — a linked
+        key serving 10k requests must not write 10k incidents. Never let a
+        reporting failure break the write itself.
+        """
+        try:
+            from mojo.apps.incident import reporter
+            reporter.report_event(
+                details, title=title, category="api_key_acting_user",
+                level=level, request=self.active_request)
+        except Exception:
+            logit.exception("failed to report api_key acting-user event")
+
+    def _elevated_perms_for(self, user):
+        """Permission keys held by `user` that make a link worth recording."""
+        if user is None:
+            return []
+        watched = ["manage_users", "manage_groups"]
+        found = [p for p in watched if user.has_permission(p)]
+        # sys.* is the system-level namespace (see has_permission above). A key
+        # can never exercise it, but linking to someone who holds it is still
+        # the kind of thing an operator should be able to find later.
+        perms = getattr(user, "permissions", None)
+        if isinstance(perms, dict):
+            found += [p for p in perms if isinstance(p, str) and p.startswith("sys.")]
+        return found
+
+    def set_user(self, value):
+        """REST setter for the acting member.
+
+        Falsy clears the link (and override_user with it — see below).
+        """
+        from mojo.apps.account.models.user import User
+
+        request = self.active_request
+        if not self._can_manage_acting_user(request):
+            raise merrors.PermissionDeniedException()
+
+        if not value:
+            self.user = None
+            # An override_user=True key with no member is a meaningless state
+            # that reads as "assume nobody" — clear both together so the row
+            # can never sit in it.
+            self.override_user = False
+            return
+
+        pk = value.get("id") if isinstance(value, dict) else value
+        try:
+            target = User.objects.get(pk=int(pk))
+        except (User.DoesNotExist, TypeError, ValueError):
+            raise merrors.ValueException("user must be a valid user id")
+
+        self.validate_acting_user(target, request)
+        self.user = target
+
+        elevated = self._elevated_perms_for(target)
+        if elevated:
+            self._report_acting_user_event(
+                f"ApiKey '{self.name}' linked to {target.username}, who holds "
+                f"elevated permissions: {', '.join(sorted(elevated))}",
+                "API key linked to an elevated member", 4)
+
+    def set_override_user(self, value):
+        """REST setter for override_user — the switch from reference to assume.
+
+        Same requester bar as set_user. Always reported: this is the moment a
+        key stops being a scoped credential and starts carrying a member's
+        identity.
+        """
+        request = self.active_request
+        if not self._can_manage_acting_user(request):
+            raise merrors.PermissionDeniedException()
+
+        enabled = bool(value)
+        if enabled and self.user_id is None:
+            raise merrors.ValueException(
+                "override_user requires a linked user")
+
+        was = self.override_user
+        self.override_user = enabled
+        if enabled and not was:
+            self._report_acting_user_event(
+                f"ApiKey '{self.name}' now assumes the identity of "
+                f"{self.user.username} — permissions resolve through that "
+                f"member, bounded by the key's group",
+                "API key override_user enabled", 5)
 
     def is_group_allowed(self, group):
         """
@@ -321,7 +508,8 @@ class ApiKey(MojoSecrets, MojoModel):
         return token
 
     @classmethod
-    def create_for_group(cls, group, name, permissions=None, limits=None):
+    def create_for_group(cls, group, name, permissions=None, limits=None,
+                         user=None, override_user=False):
         """
         Create a new ApiKey for a group programmatically.
 
@@ -336,6 +524,10 @@ class ApiKey(MojoSecrets, MojoModel):
             name:        Human-readable label (e.g. "Mobile App v2")
             permissions: Dict of {perm_key: True/False}
             limits:      Dict of {endpoint_key: {limit, window}} (window in minutes)
+            user:        Optional account.User this key acts as
+            override_user: When True the key ASSUMES that user's identity and
+                         permissions; when False (default) the link is a
+                         reference used only for attribution.
         """
         api_key = cls(
             group=group,
@@ -343,6 +535,18 @@ class ApiKey(MojoSecrets, MojoModel):
             permissions=permissions or {},
             limits=limits or {},
         )
+        if user is not None:
+            # Trusted internal path (no request), but the invariants are
+            # properties of the DATA, not of who is writing it — a superuser or
+            # non-member link is wrong however it is created.
+            if getattr(user, "is_superuser", False):
+                raise merrors.PermissionDeniedException()
+            if group.get_member_for_user(user, check_parents=False) is None:
+                raise merrors.PermissionDeniedException()
+            api_key.user = user
+            api_key.override_user = bool(override_user)
+        elif override_user:
+            raise merrors.ValueException("override_user requires a user")
         token = api_key.generate_token()
         api_key.save()
         return api_key, token
@@ -358,7 +562,7 @@ class ApiKey(MojoSecrets, MojoModel):
         """
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         try:
-            api_key = cls.objects.select_related("group").get(token_hash=token_hash)
+            api_key = cls.objects.select_related("group", "user").get(token_hash=token_hash)
         except cls.DoesNotExist:
             return None, "Invalid API key"
 
@@ -367,6 +571,13 @@ class ApiKey(MojoSecrets, MojoModel):
 
         if api_key.expires_at and dates.utcnow() > api_key.expires_at:
             return None, "API key has expired"
+
+        # A linked member who has been deactivated takes their keys with them.
+        # Reuses the EXISTING inactive string rather than a new one — a
+        # distinct message would turn this into an account-state oracle for
+        # anyone holding the token (same reasoning as User.validate_jwt).
+        if api_key.user_id and not api_key.user.is_active:
+            return None, "API key is inactive"
 
         # Group context is granted only for an EFFECTIVELY ACTIVE group — the
         # group AND every ancestor (DM-048). Deactivating a tenant (or any of
@@ -382,10 +593,30 @@ class ApiKey(MojoSecrets, MojoModel):
         request.group = api_key.group if api_key.group.is_effectively_active() else None
         request.api_key = api_key
 
+        # Set in BOTH modes. This is the attribution identity — what lands in
+        # FK(User) columns — and it is deliberately independent of whether the
+        # key also assumes the member's authority. request.api_key stays set
+        # either way and remains the machine-identity signal every guard keys
+        # on (mojo/helpers/request.py is_key_backed_session).
+        request.acting_user = api_key.user
+
         try:
             cls.objects.filter(pk=api_key.pk).update(last_used=dates.utcnow())
         except Exception:
             pass
+
+        # NOTE for anyone fixing WebSocket api-key auth: it is dead today —
+        # realtime/handler.py calls async_validate_bearer_token with
+        # request=None, so the request.group write above raises and is
+        # swallowed as "handler error". If you make it work, you MUST also put
+        # the key on the scope, or an override key binds a real User with no
+        # machine-identity marker anywhere and every guard below opens.
+        if api_key.override_user and api_key.user_id:
+            # The key ASSUMES the member: authorization now resolves through
+            # their GroupMember. Bounded by the key's group — request.group is
+            # already pinned above and mojo/models/rest.py refuses to rebind it
+            # outside the key's tree for a key-backed session.
+            return api_key.user, None
 
         api_key.is_authenticated = True
         api_key.username = f"apikey:{api_key.id}"
