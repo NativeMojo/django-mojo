@@ -42,6 +42,7 @@ class UserAPIKey(MojoSecrets, MojoModel):
         ordering = ["-created"]
 
     class RestMeta:
+        SENSITIVE_FIELDS = ['jti']
         VIEW_PERMS = ["owner", "manage_users", "users"]
         SAVE_PERMS = ["owner", "manage_users", "users"]
         OWNER_FIELD = "user"

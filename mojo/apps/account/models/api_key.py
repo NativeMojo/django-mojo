@@ -95,6 +95,7 @@ class ApiKey(MojoSecrets, MojoModel):
         # the CREATING ADMIN into it on every REST create, silently linking
         # every new key to whoever made it.
         CREATED_BY_OWNER_FIELD = None
+        SENSITIVE_FIELDS = ["token_hash"]
         GRAPHS = {
             "default": {
                 "fields": [

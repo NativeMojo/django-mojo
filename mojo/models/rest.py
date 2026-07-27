@@ -47,6 +47,71 @@ SYSTEM_REQUEST.DATA = objict.objict()
 _DEPRECATED_CAN_SAVE_WARNED = set()
 
 
+# Columns no model may ever be filtered, searched or sorted on, whatever it
+# declares. `mojo_secrets` is the MojoSecrets/KSMSecrets encrypted blob and it
+# lives on an ABSTRACT base shared by ~16 concrete models — several of which
+# have no list endpoint of their own but are still reachable through a related
+# model's filter. Listing it per subclass would be a standing invitation to
+# forget one.
+_ALWAYS_SENSITIVE_FIELDS = frozenset(["mojo_secrets"])
+
+
+def _model_sensitive_fields(model):
+    """RestMeta.SENSITIVE_FIELDS for `model`, unioned with the baseline.
+
+    Read pattern deliberately matches rest_aggregation._validate_field: a plain
+    getattr, tolerant of a model with no RestMeta at all — a related model
+    reached by traversal is not necessarily a MojoModel subclass.
+    """
+    rest_meta = getattr(model, "RestMeta", None)
+    declared = getattr(rest_meta, "SENSITIVE_FIELDS", None) if rest_meta else None
+    if not declared:
+        return _ALWAYS_SENSITIVE_FIELDS
+    return _ALWAYS_SENSITIVE_FIELDS.union(declared)
+
+
+def is_sensitive_filter_path(model, key):
+    """True when any segment of an ORM lookup path names a sensitive field.
+
+    Why a WALK and not a check on key.split("__")[0]: the filter path passes
+    relation lookups through untouched, so `?user__auth_key__startswith=a`
+    reaches User.auth_key from a model that declares nothing. Reverse relations
+    are reachable too, because __rest_field_names__ is built from
+    _meta.get_fields() whose ForeignObjectRel.name is the related query name —
+    so `?api_keys__token_hash__startswith=a` works from Group. Hopping to the
+    related model at each segment is what makes the guard hold on both.
+
+    Sensitivity is tested BEFORE resolving the field, which is the fail-closed
+    order. A trailing lookup token (startswith / in / isnull / month) is not a
+    field, so the previous iteration leaves `current` None and the next one
+    returns False before any sensitivity test — a lookup token can therefore
+    never collide with a field name to produce a false positive.
+
+    JSON columns terminate the walk as SENSITIVE rather than as unknown:
+    `?metadata__client_secret=x` is a JSON-path extraction the ORM applies
+    verbatim, and rest_aggregation._validate_field already refuses exactly this
+    shape on the aggregation surface. A model storing secrets in a JSON column
+    must name the column itself in SENSITIVE_FIELDS.
+    """
+    current = model
+    for part in key.split("__"):
+        if current is None:
+            return False
+        if part in _model_sensitive_fields(current):
+            return True
+        try:
+            field = current._meta.get_field(part)
+        except Exception:
+            return False
+        if field.is_relation:
+            current = getattr(field, "related_model", None)
+        elif field.get_internal_type() == "JSONField":
+            return True
+        else:
+            current = None
+    return False
+
+
 def _warn_can_save_deprecated(cls_name):
     if cls_name in _DEPRECATED_CAN_SAVE_WARNED:
         return
@@ -1041,6 +1106,31 @@ class MojoModel:
         return value
 
     @classmethod
+    def _report_sensitive_probe(cls, request, key):
+        """Raise a security event for a dropped sensitive filter.
+
+        The drop itself is silent to the CALLER by design, but it must not be
+        silent to the operator: filtering on a secret column is, by definition,
+        a credential-enumeration attempt, and it is the highest-signal event on
+        the whole list surface. Mirrors the assistant tool layer, which reports
+        the same probe class at severity 7.
+
+        Best-effort — a reporting failure must never break a list request. Only
+        the KEY is reported, never the value: the key is attacker-supplied but
+        reaching here means a segment matched a name the model itself declares.
+        """
+        try:
+            from mojo.apps.incident import reporter
+            reporter.report_event(
+                f"Sensitive field filter attempt: {key} on {cls.__name__}",
+                title="Sensitive field filter blocked",
+                category="sensitive_field_probe",
+                level=7,
+                request=request)
+        except Exception:
+            logit.exception("failed to report sensitive-field probe")
+
+    @classmethod
     def build_rest_filters(cls, request, params):
         """
         Parse a query-param-shaped mapping into (filters, excludes) dicts.
@@ -1076,6 +1166,28 @@ class MojoModel:
             key_parts = key.split('__')
             field_name = key_parts[0]
             if field_name in reserved_keys:
+                continue
+
+            # Sensitive columns are not filterable. The COUNT a filter produces
+            # is itself the leak: ?auth_key__startswith=a vs =ab recovers the
+            # stored value one character at a time from the list envelope's
+            # `count` alone, with no need to ever read the field.
+            #
+            # This sits at the shared parser rather than at on_rest_list_filter
+            # because rest_aggregation._count_bundles calls build_rest_filters
+            # directly — guarding the wrapper would leave `_stats` open. One
+            # placement here covers the plain list path, _mode=count and _stats,
+            # and it runs BEFORE the __not/__not_in rewrites below so every
+            # operator form of a sensitive key is dropped, not just the bare one.
+            #
+            # DROP-SILENT, not 400: _count_bundles catches ValueException by
+            # design and turns the bundle null, so a raise could not behave
+            # identically across the three surfaces. Dropping makes all three
+            # act as if the key were never sent, which is also how this parser
+            # already treats unknown and reserved keys.
+            if is_sensitive_filter_path(cls, key):
+                logit.warn(f"dropped sensitive filter on {cls.__name__}: {key}")
+                cls._report_sensitive_probe(request, key)
                 continue
 
             # Determine if this is an exclusion filter
@@ -1271,6 +1383,24 @@ class MojoModel:
                 if field.get_internal_type() in ["CharField", "TextField"]
             ]
 
+        # Same oracle as the filter path, different door. With no SEARCH_FIELDS
+        # declared the fallback above is EVERY CharField/TextField, which on
+        # ApiKey means token_hash and mojo_secrets — so `?search=<prefix>` (and
+        # the targeted `?search=token_hash:<prefix>` form) recovers a secret by
+        # icontains. An explicitly declared SEARCH_FIELDS naming a sensitive
+        # column is filtered too: SENSITIVE_FIELDS wins, mirroring how
+        # AGGREGATION_FIELDS cannot widen past the sensitive gate.
+        search_fields = [
+            f for f in search_fields if not is_sensitive_filter_path(cls, f)
+        ]
+        if not search_fields:
+            # Nothing left to match against. Returning `queryset` unchanged
+            # would hand back the FULL list for a search that can match
+            # nothing — the query below builds Q() per term, and `Q() & Q()` is
+            # a no-op, so queryset.filter(Q()) returns everything. A search
+            # that cannot match must return nothing.
+            return queryset.none()
+
         # Parse search query to extract different term types
         # Pattern matches: quoted strings, field:value pairs, or words with optional - prefix
         pattern = r'"([^"]+)"|(-?)(\w+):(\S+)|(-?)(\S+)'
@@ -1360,6 +1490,12 @@ class MojoModel:
         sort_field = request.DATA.pop("sort", "-id")
         bare = sort_field.lstrip('-')
         if bare not in cls.__rest_field_names__:
+            return queryset
+        # Ordering by a secret column is a weaker but real oracle — the caller
+        # learns the relative order of values they cannot read. Ignored rather
+        # than rejected, matching how this method already treats an unknown
+        # sort field one line above.
+        if is_sensitive_filter_path(cls, bare):
             return queryset
         descending = sort_field.startswith('-')
         field = cls.get_model_field(bare)

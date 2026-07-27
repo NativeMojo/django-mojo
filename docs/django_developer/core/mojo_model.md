@@ -63,6 +63,7 @@ class Book(models.Model, MojoModel):
 | `GRAPHS` | dict | `{}` | Serialization shapes (see [Graphs](graphs.md)) |
 | `NO_SAVE_FIELDS` | list | `["id","pk","created","uuid"]` | Fields ignored on save |
 | `NO_SHOW_FIELDS` | list | `[]` | Fields never included in responses |
+| `SENSITIVE_FIELDS` | list | `[]` | Columns that may never be filtered, searched, sorted or aggregated on (see [Sensitive fields](#sensitive-fields)) |
 | `LOG_CHANGES` | bool | `False` | Auto-log field changes via logit |
 | `LOG_META_CHANGES` | bool | `False` | Auto-log key-level changes to all JSONFields via logit |
 | `PROTECTED_JSON_PERMS` | list | `[]` | Permissions required to modify the `"protected"` root key in any JSONField |
@@ -258,6 +259,63 @@ or break the database (HTTP 400):
 | `TextField`, `JSONField`, `EmailField` | Unbounded cardinality / PII risk. |
 | Field listed in `RestMeta.SENSITIVE_FIELDS` | Honors the model author's existing convention. |
 | Field outside `RestMeta.AGGREGATION_FIELDS` (when defined) | Opt-in stricter allow-list per model. |
+
+#### Sensitive fields
+
+`RestMeta.SENSITIVE_FIELDS` names columns that must never be reachable through
+a query surface — credentials, tokens, hashes, and encrypted blobs. It is a
+**two-surface** declaration, and the two surfaces deliberately behave
+differently:
+
+| Surface | Behavior |
+|---|---|
+| Aggregation (`_field=`) | **400, loud.** The caller asked for values directly; there is nothing to hide by being quiet. |
+| Filter / search / sort | **Silently dropped.** |
+
+The filter path drops rather than rejects for two reasons. First, the parser
+already skips unknown and reserved keys silently, so a sensitive field and a
+nonexistent one stay indistinguishable — rejecting would convert a value oracle
+into a (weaker) schema oracle. Second, `_stats` bundles catch `ValueException`
+by design and null the bundle, so a raise could not behave identically across
+the plain list, `_mode=count`, and `_stats`; dropping makes all three act as if
+the key were never sent.
+
+The guard lives in `MojoModel.build_rest_filters`, the single parser all three
+surfaces share, and it **walks the whole lookup path** rather than checking the
+first segment:
+
+```python
+class RestMeta:
+    SENSITIVE_FIELDS = ["auth_key", "password", "onetime_code"]
+```
+
+- Relation traversal is covered at every hop — `?author__auth_key__startswith=x`
+  is caught on the *related* model's declaration, so a model that declares
+  nothing itself cannot be used as a route to one that does. Reverse relations
+  count too (`?api_keys__token_hash__startswith=`), because
+  `__rest_field_names__` is built from `_meta.get_fields()`.
+- `__` drilling into a `JSONField` terminates the walk as sensitive, matching
+  the aggregation layer. A model storing secrets in a JSON column must name the
+  column itself.
+- Lookup suffixes (`startswith`, `in`, `isnull`, `month`) can never produce a
+  false positive: sensitivity is tested before the field is resolved, so a
+  suffix that happens to share a field's name is already past the walk.
+
+**`mojo_secrets` is always sensitive on every model**, with no declaration
+needed. It lives on an abstract base shared by ~16 concrete models, several of
+which have no list endpoint of their own but are still reachable through a
+related model's filter — listing it per subclass would be an invitation to
+forget one.
+
+A dropped filter raises a security event: filtering on a secret column is by
+definition a credential-enumeration attempt, and it is the highest-signal event
+on the list surface.
+
+**Caveat.** For anything other than `mojo_secrets` the guard is opt-in, so a
+new model with a secret column is unprotected until it declares one. A
+name-substring heuristic was considered and rejected — it produces false
+positives on legitimate columns like `token_expires_at`, silently breaking
+working filters.
 
 Models can opt into a stricter allow-list by setting
 `AGGREGATION_FIELDS` on `RestMeta`:

@@ -249,6 +249,7 @@ class File(models.Model, MojoModel):
     """
 
     class RestMeta:
+        SENSITIVE_FIELDS = ['upload_token']
         CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-created"

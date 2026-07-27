@@ -43,6 +43,7 @@ class Passkey(MojoModel, models.Model):
         ]
 
     class RestMeta:
+        SENSITIVE_FIELDS = ['token']
         VIEW_PERMS = ["owner", "manage_users", "users"]
         SAVE_PERMS = ["owner", "manage_users", "users"]
         DELETE_PERMS = ["owner", "manage_users", "users"]

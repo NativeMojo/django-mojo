@@ -41,6 +41,7 @@ class RegisteredDevice(models.Model, MojoModel):
         ordering = ['-last_seen']
 
     class RestMeta:
+        SENSITIVE_FIELDS = ['device_token']
         VIEW_PERMS = ["view_devices", "manage_devices", "comms", "owner", "manage_users"]
         SAVE_PERMS = ["manage_devices", "comms", "owner"]
         # user pinned — a push-device token must bind to the registering

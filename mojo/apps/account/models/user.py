@@ -146,6 +146,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             'confirm_totp', 'regenerate_totp_codes', 'disable_totp',
         ]
         NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
+        SENSITIVE_FIELDS = ["password", "auth_key", "onetime_code"]
         # auth_key and last_activity must never be writable via REST by anyone.
         # auth_key is the JWT signing secret — writing it is a session-invalidation
         # attack vector. last_activity is a server-managed audit timestamp.

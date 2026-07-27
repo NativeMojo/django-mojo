@@ -86,6 +86,7 @@ class DomainPurchase(models.Model, MojoModel):
         ordering = ["-created"]
 
     class RestMeta:
+        SENSITIVE_FIELDS = ['confirm_token']
         # Written only by the registrar service; REST exposes GET routes only.
         #
         # CAN_UPDATE=False is load-bearing, not decoration. It defaults to True,

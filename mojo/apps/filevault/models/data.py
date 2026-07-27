@@ -6,6 +6,7 @@ class VaultData(models.Model, MojoModel):
     """Encrypted structured JSON stored in the database."""
 
     class RestMeta:
+        SENSITIVE_FIELDS = ['ekey', 'edata', 'hashed_password']
         CAN_CREATE = True
         CAN_DELETE = True
         DEFAULT_SORT = "-created"

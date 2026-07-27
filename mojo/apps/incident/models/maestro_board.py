@@ -25,6 +25,7 @@ class MaestroBoard(MojoSecrets, MojoModel):
         ordering = ['-created']
 
     class RestMeta:
+        SENSITIVE_FIELDS = ['callback_token']
         VIEW_PERMS = ["manage_security", "security"]
         SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security"]

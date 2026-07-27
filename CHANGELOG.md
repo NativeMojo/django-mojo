@@ -1,5 +1,31 @@
 ## Unreleased
 
+**security (breaking)** — **list filters can no longer probe secret columns.**
+The RestMeta filter path applied `queryset.filter(**f)` over any model field
+with no guard, and nothing protected the **count** a filter produced — so any
+caller with plain list permission could recover a secret one character at a
+time by watching the row count change (`?auth_key__startswith=a`, then `ab`,
+…). The oracle also reached related models (`?user__auth_key__startswith=`),
+reverse relations, and — through the untyped `?search=` fallback — every
+`CharField`/`TextField` on models with no `SEARCH_FIELDS`. A guard now sits in
+`MojoModel.build_rest_filters`, the parser shared by the plain list,
+`_mode=count`, and `_stats`, and walks the whole lookup path so each hop is
+checked against its own model. Sensitive fields are also excluded from
+`?search=` and ignored by `?sort=`, and `__` drilling into a `JSONField` is
+refused. `mojo_secrets` is protected on every model with no declaration needed.
+`RestMeta.SENSITIVE_FIELDS` is now set on `User`, `ApiKey`, `UserAPIKey`,
+`Passkey`, `RegisteredDevice`, `BouncerSignal`, `DomainPurchase`,
+`MaestroBoard`, fileman `File`, `VaultFile`, and `VaultData`.
+**Breaking:** a filter on one of those fields is now *silently dropped*, so an
+external caller doing e.g. `?upload_token=<t>` to fetch one row will receive
+the full permitted list instead of one row — check for callers that index
+`items[0]`. Aggregating on those columns now returns 400 where it previously
+returned 200, and `?search=` narrows differently on models without
+`SEARCH_FIELDS` (chiefly `/api/account/apikey`, whose fallback previously
+scanned `token_hash` and `mojo_secrets`). Drop-silent was chosen over a 400
+because `_stats` bundles catch `ValueException` by design, so a raise could not
+behave identically across the three surfaces. No schema change.
+
 **feat** — **an API key can act as a member (`ApiKey.user` +
 `ApiKey.override_user`).** A key may now name the `account.User` it acts as.
 With `override_user=False` (the default) the link is a **reference**: the key

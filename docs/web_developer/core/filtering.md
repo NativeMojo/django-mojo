@@ -46,6 +46,42 @@ GET /api/myapp/book?author__id=5
 GET /api/myapp/book?author__username=alice
 ```
 
+### Protected Fields
+
+Some columns are marked sensitive by the model — credentials, tokens, hashes,
+and encrypted blobs. **A filter naming one of them is silently ignored, not
+rejected.** You get a `200` and a result set as if you had never sent that
+parameter.
+
+```
+GET /api/user?username__startswith=a                      → count: 12
+GET /api/user?username__startswith=a&auth_key__startswith=x → count: 12   (unchanged)
+```
+
+This is deliberate. The row *count* a filter produces is itself a leak: by
+varying a guessed prefix and watching the count change, a caller could recover
+a secret value one character at a time without ever reading the field. Dropping
+the filter removes the signal entirely.
+
+The rule applies:
+
+- to **every operator form** — `=`, `__not`, `__in`, `__isnull`,
+  `__startswith`, and the rest;
+- at **every hop of a relation path** — `?author__auth_key__startswith=x` is
+  caught on the related model, even if the model you are querying declares
+  nothing itself;
+- to **JSON drilling** — `?metadata__client_secret=x` is refused;
+- identically on the plain list, `_mode=count`, and `_stats` bundles, which all
+  share one parser.
+
+The same fields are also excluded from `?search=` and ignored by `?sort=`. If
+*every* field a model would search is sensitive, `?search=` returns an empty
+list rather than an unfiltered one.
+
+Filtering on a sensitive field raises a server-side security event. There is no
+way to discover which fields are protected by probing — a sensitive field and a
+nonexistent one behave identically.
+
 ## Default Filters
 
 Some endpoints filter their list by default, before your parameters are
