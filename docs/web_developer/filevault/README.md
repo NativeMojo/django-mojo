@@ -122,6 +122,50 @@ Check if a password is correct without downloading.
 {"status": true, "data": {"valid": true}}
 ```
 
+## Access Audit Trail
+
+`GET /api/filevault/accesslog` — who reached a vault secret, when, and from
+where. Requires `manage_vault` or `files`; scoped to your group.
+
+| Param | Notes |
+|---|---|
+| `vault_file` / `vault_data` | Filter to one secret's history |
+| `action` | `unlock`, `download`, `retrieve`, `password` |
+| `result` | `granted`, `denied` |
+| `ip`, `search`, `sort` | Standard list params; default sort `-created` |
+
+```json
+{
+  "id": 812,
+  "created": "2026-07-27T18:04:11Z",
+  "target_name": "prod-credentials.txt",
+  "action": "unlock",
+  "result": "denied",
+  "reason": "permission_denied",
+  "ip": "203.0.113.9",
+  "user": { "id": 44, "display_name": "Dana Reed" }
+}
+```
+
+`user` is `null` for downloads — that endpoint is token-authenticated and has no
+logged-in caller. Rows are **append-only**: `POST`, `PUT` and `DELETE` are
+refused. Denied attempts are recorded against the tenant that owns the
+*targeted* secret, so you can see attempts against your data by people outside
+your group.
+
+Rows never contain secret material — no file contents, no stored data, no
+password, no token.
+
+## Download links are network-bound
+
+The `download_url` from `GET /api/filevault/file/<id>/unlock` is bound to the IP
+of the caller who requested it. **It is not a link you can send to someone
+else** — a recipient on a different network gets a 403. It is a
+same-session/same-network download mechanism.
+
+Tokens expire within an hour at most, and there is no revoke endpoint because
+there is nothing long-lived to revoke.
+
 ## List Vault Files
 
 **GET** `/api/filevault/file?group=7`

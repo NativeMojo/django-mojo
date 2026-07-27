@@ -1,6 +1,6 @@
 import mojo.decorators as md
 import mojo.errors as me
-from mojo.apps.filevault.models import VaultData
+from mojo.apps.filevault.models import VaultData, VaultAccessLog
 from mojo.apps.filevault.services import vault as vault_service
 
 
@@ -46,12 +46,33 @@ def on_vault_data_store(request):
 def on_vault_data_retrieve(request, pk=None):
     """Decrypt and return stored JSON data."""
     vault_data = VaultData.get_instance_or_404(pk)
-    VaultData.rest_check_permission_or_raise(request, "VIEW_PERMS", vault_data)
+    try:
+        VaultData.rest_check_permission_or_raise(request, "VIEW_PERMS", vault_data)
+    except Exception:
+        VaultAccessLog.record(
+            VaultAccessLog.ACTION_RETRIEVE, VaultAccessLog.RESULT_DENIED,
+            vault_data=vault_data, request=request,
+            reason=VaultAccessLog.REASON_PERMISSION_DENIED)
+        raise
 
     password = request.DATA.get("password", None)
 
     try:
         decrypted = vault_service.retrieve_data(vault_data, password=password)
-        return dict(data=decrypted)
     except ValueError as e:
-        raise me.ValueException(str(e), code=403)
+        msg = str(e)
+        reason = (VaultAccessLog.REASON_PASSWORD_REQUIRED
+                  if "required" in msg.lower()
+                  else VaultAccessLog.REASON_INVALID_PASSWORD)
+        VaultAccessLog.record(
+            VaultAccessLog.ACTION_RETRIEVE, VaultAccessLog.RESULT_DENIED,
+            vault_data=vault_data, request=request, reason=reason)
+        raise me.ValueException(msg, code=403)
+
+    # Logged only after a successful decrypt, and the row never carries the
+    # plaintext — the whole point is a trail you can read without it being a
+    # second copy of the secret.
+    VaultAccessLog.record(
+        VaultAccessLog.ACTION_RETRIEVE, VaultAccessLog.RESULT_GRANTED,
+        vault_data=vault_data, request=request)
+    return dict(data=decrypted)

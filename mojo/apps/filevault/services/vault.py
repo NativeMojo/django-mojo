@@ -135,14 +135,26 @@ def download_file(vault_file, password=None):
 
 def download_file_streaming(vault_file, password=None):
     """
-    Generator that yields decrypted chunks for StreamingHttpResponse.
+    Return an iterable of decrypted chunks for StreamingHttpResponse.
+
+    NOT a generator function. Everything that can FAIL — the password check,
+    the ekey unwrap, the FileManager lookup, opening the object, and parsing
+    the header — runs eagerly at call time, and only the chunk loop is
+    deferred to the returned generator.
+
+    This used to contain the `yield` directly, which made the whole function a
+    generator: calling it executed none of the body, so the caller's
+    `except ValueError` never saw a bad password. Worse, the response headers
+    (including a full Content-Length from vault_file.size) were already sent by
+    the time the raise happened mid-iteration, so a wrong password produced a
+    SILENTLY TRUNCATED file rather than a 403. Keep the eager/lazy split.
 
     Args:
         vault_file: VaultFile instance
         password: password if file is password-protected
 
-    Yields:
-        bytes chunks of decrypted plaintext
+    Returns:
+        An iterator of decrypted plaintext chunks.
     """
     from mojo.apps.fileman.models import FileManager
 
@@ -158,6 +170,8 @@ def download_file_streaming(vault_file, password=None):
 
     # fetch encrypted blob from S3
     fm = FileManager.get_for_group(vault_file.group, use="filevault")
+    if fm is None:
+        raise ValueError("Storage unavailable for this file")
     storage_path = f"{fm.root_path}/{vault_file.uuid}"
     s3_body = fm.backend.open(storage_path)
 
@@ -171,14 +185,17 @@ def download_file_streaming(vault_file, password=None):
     passphrase = (password + ekey) if password else ekey
     aes_key = crypto_vault.derive_aes_key(passphrase, kdf_salt)
 
-    # stream decrypted chunks
     enc_chunk_size = crypto_vault.VAULT_NONCE_LENGTH + chunk_size + crypto_vault.VAULT_TAG_LENGTH
-    for i in range(total_chunks):
-        if i < total_chunks - 1:
-            chunk_data = s3_body.read(enc_chunk_size)
-        else:
-            chunk_data = s3_body.read()  # last chunk may be smaller
-        yield crypto_vault.decrypt_chunk(aes_key, i, chunk_data)
+
+    def _chunks():
+        for i in range(total_chunks):
+            if i < total_chunks - 1:
+                chunk_data = s3_body.read(enc_chunk_size)
+            else:
+                chunk_data = s3_body.read()  # last chunk may be smaller
+            yield crypto_vault.decrypt_chunk(aes_key, i, chunk_data)
+
+    return _chunks()
 
 
 def delete_s3_object(vault_file):

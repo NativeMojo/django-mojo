@@ -379,12 +379,76 @@ class Integration(models.Model, MojoModel):
 
 ---
 
+## Access Audit Trail
+
+Every attempt to reach a vault secret is recorded in `VaultAccessLog`
+(`GET /api/filevault/accesslog`). `VaultFile.unlocked_by` is not an audit trail
+— it holds only the *last* unlocker and is overwritten on each unlock.
+
+**Recorded:** `unlock`, `download`, `retrieve`, `password`, each `granted` or
+`denied`, with the accessor, the accessor's IP and user agent, the target's
+name (denormalized, so the row stays readable after the secret is deleted), and
+a fixed-vocabulary `reason` on denials.
+
+**Denials are recorded in the TARGET's tenant**, not the caller's — the owner's
+question is "who tried to get at my secret". This matters most for the
+password-failure paths (`unlock` with a bad password, `data/retrieve`,
+`file/password`): those raise a plain `ValueException` and take the generic
+error branch, so unlike a permission denial they emit **no** incident. Without
+this trail, a password brute-force against a vault file left no trace anywhere.
+
+**Never recorded:** any secret material — no plaintext, no `ekey`, no password,
+no token. The row records *that* access happened, never *what* was accessed.
+
+Deliberate design points:
+
+- `vault_file` / `vault_data` use `SET_NULL`, not `CASCADE`. Deleting the secret
+  must not erase the record of who read it, which is exactly when the trail
+  matters. `target_name` keeps the row meaningful afterwards.
+- Read tier is `manage_vault` / `files` — an audit question, not a reader one.
+  `"owner"` is deliberately absent: `OWNER_FIELD` defaults to `user`, which here
+  is the *accessor*, so `"owner"` would let a cross-tenant prober read back the
+  denial row they just generated, including the victim's `target_name`.
+- A token that fails its signature, or whose file id does not resolve, is **not**
+  logged. The download endpoint is public, so logging garbage would make it an
+  unauthenticated way to flood an arbitrary tenant's trail — burying the real
+  entries is the classic way to defeat an audit log.
+- Writes are never rejected upward: an audit-write failure logs loudly via
+  `logit.error` but must not take down a legitimate vault read.
+- No prune job. An audit trail should not silently expire.
+
+## Sharing Model — deliberately IP-bound
+
+The download token is bound to the IP of the caller who **generated** it, so a
+recipient on a different network is always rejected. **This is the intended
+product behavior, not a limitation to work around**: `download_url` is a
+same-network / same-session download mechanism, not a link you can send someone.
+
+There is deliberately no token revocation, because there is nothing to revoke
+late — `VAULT_TOKEN_MAX_TTL` caps every token at one hour and `clamp_token_ttl`
+is enforced at every mint path.
+
+If external sharing is ever wanted it is a separate feature (recipient-scoped
+share rows with their own expiry, download cap and revocation), not a loosening
+of this binding.
+
+The binding **fails closed**: a token is refused when either the minted IP or
+the presenting IP is missing. `get_remote_ip` returns `None` when neither
+`X-Real-IP` nor `REMOTE_ADDR` yields a parseable address, and a plain
+`payload["ip"] != client_ip` comparison would have let two such callers through
+(`None != None` is `False`), silently turning the token into a bearer
+credential.
+
 ## Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `FILEVAULT_DEFAULT_TTL` | `300` | Default download token TTL in seconds |
-| `FILEVAULT_S3_BUCKET` | — | S3 bucket for encrypted file storage |
+| `VAULT_TOKEN_TTL` | `300` | Default download token TTL in seconds |
+| `VAULT_TOKEN_MAX_TTL` | `3600` | Hard ceiling for any minted token |
+
+Both are module constants in `mojo/helpers/crypto/vault.py`, not settings keys.
+(The previous table listed `FILEVAULT_DEFAULT_TTL` and `FILEVAULT_S3_BUCKET`;
+neither exists.)
 
 ---
 

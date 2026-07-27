@@ -263,7 +263,17 @@ def validate_access_token(token, client_ip, secret_key):
         if not hmac.compare_digest(expected_sig, actual_sig):
             return None
         payload = json.loads(urlsafe_b64decode(payload_b64).decode("utf-8"))
-        if payload.get("ip") != client_ip:
+        # Fail closed when EITHER side has no IP. `payload.get("ip") != client_ip`
+        # alone is not enough: get_remote_ip returns None when neither
+        # X-Real-IP nor REMOTE_ADDR yields a parseable address, so a token
+        # minted with client_ip=None stores {"ip": null} and, at redemption by
+        # another IP-less caller, `None != None` is False — the binding
+        # silently evaporates and the token becomes bearer-only. An unbindable
+        # token must not validate at all.
+        token_ip = payload.get("ip")
+        if not token_ip or not client_ip:
+            return None
+        if token_ip != client_ip:
             return None
         if payload.get("exp", 0) < int(time.time()):
             return None

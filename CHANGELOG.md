@@ -1,5 +1,43 @@
 ## Unreleased
 
+**feat** — **filevault access audit trail (`VaultAccessLog`).** Every attempt to
+reach a vault secret — `unlock`, `download`, `retrieve`, `password`, granted or
+denied — is now recorded with the accessor, IP, user agent, and a denormalized
+target name, readable at `GET /api/filevault/accesslog` (requires `manage_vault`
+or `files`, scoped to the group). `VaultFile.unlocked_by` was never an audit
+trail: it holds only the *last* unlocker and is overwritten each time, and a
+successful download left no trace at all. Denials are recorded against the
+**target's** tenant, which matters most for the password-failure paths — those
+raise a plain `ValueException` and so, unlike permission denials, emit no
+incident, meaning a password brute-force previously left no trace anywhere. Rows
+never contain secret material, are append-only over REST, and use `SET_NULL` on
+the secret FKs so deleting the file does not erase who read it. A token that
+fails its signature is deliberately *not* logged — the download endpoint is
+public, and logging garbage would make it an unauthenticated way to flood a
+tenant's trail. Migration `filevault/0002`.
+
+**Also recorded:** external sharing stays **IP-bound by design**. The download
+token binds to the generating caller's IP and is not a link that can be sent to
+someone else; there is no revocation because `VAULT_TOKEN_MAX_TTL` already caps
+every token at one hour.
+
+**fix (security)** — **the vault download token's IP binding failed open.**
+`validate_access_token` compared `payload["ip"] != client_ip`, and
+`get_remote_ip` returns `None` when neither `X-Real-IP` nor `REMOTE_ADDR` yields
+a parseable address — so a token minted without an IP stored `{"ip": null}` and,
+presented by another IP-less caller, `None != None` was `False` and the binding
+silently evaporated, leaving a pure bearer token. Now fails closed when either
+side is missing.
+
+**fix** — **a wrong password on a vault download returned a truncated file, not
+a 403.** `download_file_streaming` contained a `yield`, making it a generator
+function, so calling it executed none of its body: the password check, ekey
+unwrap, storage lookup and header parse were all deferred past the caller's
+`except ValueError`, which was therefore dead code. The failure surfaced during
+response streaming, after `Content-Length` had already been sent, so the client
+received a silently truncated body. The fallible work is now eager and only the
+chunk loop is deferred.
+
 **security (breaking)** — **list filters can no longer probe secret columns.**
 The RestMeta filter path applied `queryset.filter(**f)` over any model field
 with no guard, and nothing protected the **count** a filter produced — so any
