@@ -1,4 +1,4 @@
-## Unreleased
+## v1.2.56 - July 27, 2026
 
 **feat** — **filevault access audit trail (`VaultAccessLog`).** Every attempt to
 reach a vault secret — `unlock`, `download`, `retrieve`, `password`, granted or
