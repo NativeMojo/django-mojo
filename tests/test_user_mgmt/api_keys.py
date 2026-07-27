@@ -511,10 +511,339 @@ def test_apikey_rest_create_bare_groups_member(opts):
     opts.client.logout()
 
 
+# -----------------------------------------------------------------
+# Acting as a member — ApiKey.user + ApiKey.override_user
+#
+# Two modes. override_user=False (default) makes `user` a REFERENCE used for
+# attribution only; override_user=True makes the key ASSUME the member, so
+# permissions resolve through their GroupMember. In both modes the key's group
+# stays the tenant boundary and the key can never mutate the member's
+# credentials.
+# -----------------------------------------------------------------
+
+ACTOR_USER = "apikey_actor"
+ACTOR_PWORD = "apikey##mojo99"
+OUTSIDER_USER = "apikey_outsider"
+SUPER_USER = "apikey_super"
+
+
+@th.django_unit_setup()
+def setup_apikey_acting_user(opts):
+    """Members used by the acting-as tests.
+
+    Deletes before creating — these run against a long-lived database.
+    """
+    from mojo.apps.account.models import User, Group, GroupMember
+
+    User.objects.filter(username__in=[ACTOR_USER, OUTSIDER_USER, SUPER_USER]).delete()
+
+    parent = Group.objects.get(pk=opts.parent_id)
+
+    # The member a key will act as. Holds manage_tickets AT THE MEMBER LEVEL
+    # only — no global permission — so a passing override test proves the
+    # permission really resolved through GroupMember.
+    actor = User(username=ACTOR_USER, email=f"{ACTOR_USER}@test.com")
+    actor.save()
+    actor.is_active = True
+    actor.is_email_verified = True
+    actor.save_password(ACTOR_PWORD)
+    actor.save()
+    GroupMember.objects.get_or_create(
+        user=actor, group=parent, defaults={"permissions": {"manage_tickets": True}})
+
+    # Belongs to no group in this tree at all.
+    outsider = User(username=OUTSIDER_USER, email=f"{OUTSIDER_USER}@test.com")
+    outsider.save()
+    outsider.is_active = True
+    outsider.save()
+
+    su = User(username=SUPER_USER, email=f"{SUPER_USER}@test.com")
+    su.save()
+    su.is_active = True
+    su.is_superuser = True
+    su.save()
+
+    opts.actor_id = actor.id
+    opts.outsider_id = outsider.id
+    opts.super_id = su.id
+
+
+@th.unit_test("apikey_unlinked_returns_key_itself")
+def test_apikey_unlinked_returns_key_itself(opts):
+    """An unlinked key is bit-for-bit unchanged: validate_token returns the ApiKey OBJECT, not a User, and acting_user is None."""
+    from mojo.apps.account.models import Group, ApiKey
+    from testit.helpers import get_mock_request
+
+    group = Group.objects.get(pk=opts.parent_id)
+    key, raw = ApiKey.create_for_group(group=group, name="test_unlinked", permissions={"view_data": True})
+
+    request = get_mock_request()
+    identity, error = ApiKey.validate_token(raw, request)
+    assert error is None, f"unexpected error: {error}"
+    assert isinstance(identity, ApiKey), \
+        f"an unlinked key must still authenticate AS the key, got {type(identity).__name__}"
+    assert identity.pk == key.pk, "validate_token returned a different key"
+    assert getattr(request, "acting_user", None) is None, \
+        "acting_user must be None when no member is linked"
+    assert request.api_key.pk == key.pk, "request.api_key not set"
+
+
+@th.unit_test("apikey_reference_mode_does_not_bind")
+def test_apikey_reference_mode_does_not_bind(opts):
+    """override_user=False: the link is a REFERENCE. request.user stays the ApiKey; the member is exposed only as request.acting_user."""
+    from mojo.apps.account.models import Group, ApiKey, User
+    from testit.helpers import get_mock_request
+
+    group = Group.objects.get(pk=opts.parent_id)
+    actor = User.objects.get(pk=opts.actor_id)
+    key, raw = ApiKey.create_for_group(
+        group=group, name="test_reference", permissions={"view_data": True}, user=actor)
+    assert key.override_user is False, "override_user must default to False"
+
+    request = get_mock_request()
+    identity, error = ApiKey.validate_token(raw, request)
+    assert error is None, f"unexpected error: {error}"
+    assert isinstance(identity, ApiKey), \
+        f"reference mode must NOT bind the member, got {type(identity).__name__}"
+    assert request.acting_user is not None, "acting_user must be set in reference mode"
+    assert request.acting_user.id == actor.id, "acting_user is the wrong member"
+
+
+@th.unit_test("apikey_reference_mode_grants_no_authority")
+def test_apikey_reference_mode_grants_no_authority(opts):
+    """Linking alone grants nothing: a reference-mode key with an empty permissions dict does NOT inherit the member's manage_tickets."""
+    from mojo.apps.account.models import Group, ApiKey, User
+
+    group = Group.objects.get(pk=opts.parent_id)
+    actor = User.objects.get(pk=opts.actor_id)
+    key, _raw = ApiKey.create_for_group(
+        group=group, name="test_ref_noauth", permissions={}, user=actor)
+
+    assert key.has_permission("manage_tickets") is False, \
+        "reference mode must not grant the member's permissions — that is what override_user is for"
+
+
+@th.unit_test("apikey_override_binds_member")
+def test_apikey_override_binds_member(opts):
+    """override_user=True: validate_token returns the linked User, so permissions resolve through their GroupMember."""
+    from mojo.apps.account.models import Group, ApiKey, User
+    from testit.helpers import get_mock_request
+
+    group = Group.objects.get(pk=opts.parent_id)
+    actor = User.objects.get(pk=opts.actor_id)
+    key, raw = ApiKey.create_for_group(
+        group=group, name="test_override", permissions={}, user=actor, override_user=True)
+
+    request = get_mock_request()
+    identity, error = ApiKey.validate_token(raw, request)
+    assert error is None, f"unexpected error: {error}"
+    assert isinstance(identity, User), \
+        f"override_user must bind the member, got {type(identity).__name__}"
+    assert identity.id == actor.id, "bound the wrong member"
+    # The key must remain visible as the machine identity — every containment
+    # guard keys on request.api_key, not on the type of request.user.
+    assert request.api_key.pk == key.pk, \
+        "request.api_key must stay set under override_user or every machine-identity guard opens"
+    assert request.group.id == opts.parent_id, \
+        "request.group must stay the KEY's group, not the member's default org"
+
+
+@th.unit_test("apikey_override_resolves_member_permission")
+def test_apikey_override_resolves_member_permission(opts):
+    """The feature: an override key with NO permissions of its own is authorized by the member's group membership."""
+    from mojo.apps.account.models import Group, User
+
+    group = Group.objects.get(pk=opts.parent_id)
+    actor = User.objects.get(pk=opts.actor_id)
+
+    # manage_tickets exists only on the GroupMember row, never on the key and
+    # never as a global permission on the user.
+    assert actor.has_permission("manage_tickets") is False, \
+        "fixture is wrong: manage_tickets must NOT be a global permission"
+    assert group.user_has_permission(actor, ["manage_tickets"]) is True, \
+        "the member must hold manage_tickets within the key's group"
+
+
+@th.unit_test("apikey_link_rejects_superuser")
+def test_apikey_link_rejects_superuser(opts):
+    """A key may never act as a superuser — hard block, not a warning."""
+    from mojo.apps.account.models import Group, ApiKey, User
+    import mojo.errors as merrors
+
+    group = Group.objects.get(pk=opts.parent_id)
+    su = User.objects.get(pk=opts.super_id)
+    try:
+        ApiKey.create_for_group(group=group, name="test_su_link", user=su)
+    except merrors.PermissionDeniedException:
+        return
+    assert False, "linking a key to a superuser must be refused"
+
+
+@th.unit_test("apikey_link_rejects_non_member")
+def test_apikey_link_rejects_non_member(opts):
+    """A key may only act as a member of its OWN group."""
+    from mojo.apps.account.models import Group, ApiKey, User
+    import mojo.errors as merrors
+
+    group = Group.objects.get(pk=opts.parent_id)
+    outsider = User.objects.get(pk=opts.outsider_id)
+    try:
+        ApiKey.create_for_group(group=group, name="test_outsider_link", user=outsider)
+    except merrors.PermissionDeniedException:
+        return
+    assert False, "linking a key to a non-member must be refused"
+
+
+@th.unit_test("apikey_link_rejects_ancestor_member")
+def test_apikey_link_rejects_ancestor_member(opts):
+    """Delegation must not climb: a CHILD-group key cannot act as a member of the parent, who is typically more privileged."""
+    from mojo.apps.account.models import Group, ApiKey, User
+    import mojo.errors as merrors
+
+    child = Group.objects.get(pk=opts.child_id)
+    actor = User.objects.get(pk=opts.actor_id)   # member of the PARENT only
+    assert child.get_member_for_user(actor, check_parents=False) is None, \
+        "fixture is wrong: the actor must not be a direct member of the child group"
+    try:
+        ApiKey.create_for_group(group=child, name="test_ancestor_link", user=actor)
+    except merrors.PermissionDeniedException:
+        return
+    assert False, (
+        "a child-group key must not be linkable to an ancestor-group member — "
+        "check_parents must be False on the membership check")
+
+
+@th.unit_test("apikey_override_requires_a_member")
+def test_apikey_override_requires_a_member(opts):
+    """override_user with nobody to act as is a meaningless state and is refused."""
+    from mojo.apps.account.models import Group, ApiKey
+    import mojo.errors as merrors
+
+    group = Group.objects.get(pk=opts.parent_id)
+    try:
+        ApiKey.create_for_group(group=group, name="test_override_nouser", override_user=True)
+    except merrors.ValueException:
+        return
+    assert False, "override_user without a linked user must be refused"
+
+
+@th.unit_test("apikey_inactive_member_rejects_token")
+def test_apikey_inactive_member_rejects_token(opts):
+    """Deactivating the member takes their keys with them — and reuses the existing error string, so it is not an account-state oracle."""
+    from mojo.apps.account.models import Group, ApiKey, User
+    from testit.helpers import get_mock_request
+
+    group = Group.objects.get(pk=opts.parent_id)
+    actor = User.objects.get(pk=opts.actor_id)
+    key, raw = ApiKey.create_for_group(
+        group=group, name="test_inactive_member", user=actor, override_user=True)
+
+    actor.is_active = False
+    actor.save()
+    try:
+        request = get_mock_request()
+        identity, error = ApiKey.validate_token(raw, request)
+        assert identity is None, "a key linked to a deactivated member must not authenticate"
+        assert error == "API key is inactive", \
+            f"must reuse the existing inactive string, got {error!r}"
+    finally:
+        actor.is_active = True
+        actor.save()
+
+
+@th.unit_test("apikey_sys_denied_when_linked")
+def test_apikey_sys_denied_when_linked(opts):
+    """sys.* stays denied on the key regardless of who it acts as."""
+    from mojo.apps.account.models import Group, ApiKey, User
+
+    group = Group.objects.get(pk=opts.parent_id)
+    actor = User.objects.get(pk=opts.actor_id)
+    key, _raw = ApiKey.create_for_group(
+        group=group, name="test_sys_linked",
+        permissions={"sys.manage_users": True}, user=actor, override_user=True)
+
+    assert key.has_permission("sys.manage_users") is False, \
+        "sys.* must never be grantable through an api key, linked or not"
+
+
+@th.unit_test("apikey_clearing_member_clears_override")
+def test_apikey_clearing_member_clears_override(opts):
+    """Unlinking the member also turns override off, so the row can never sit in the 'assume nobody' state."""
+    from mojo.apps.account.models import Group, ApiKey, User
+    from mojo.models import rest as mojo_rest
+    from testit.helpers import get_mock_request
+
+    group = Group.objects.get(pk=opts.parent_id)
+    actor = User.objects.get(pk=opts.actor_id)
+    admin = User.objects.get(username=ADMIN_USER)
+    key, _raw = ApiKey.create_for_group(
+        group=group, name="test_clear_override", user=actor, override_user=True)
+
+    # set_user reads self.active_request, which is the ACTIVE_REQUEST
+    # contextvar the middleware normally populates.
+    request = get_mock_request()
+    request.user = admin
+    request.group = group
+    token = mojo_rest.ACTIVE_REQUEST.set(request)
+    try:
+        key.set_user(None)
+    finally:
+        mojo_rest.ACTIVE_REQUEST.reset(token)
+
+    assert key.user is None, "user must be cleared"
+    assert key.override_user is False, \
+        "clearing the member must also clear override_user — 'assume nobody' is not a valid state"
+
+
+@th.unit_test("apikey_cannot_mutate_credentials")
+def test_apikey_cannot_mutate_credentials(opts):
+    """THE guarantee: revoking a key revokes the access.
+
+    An override key carries a member's identity and does that member's work,
+    but must never be able to hand itself a credential that OUTLIVES the key —
+    a passkey, a 360-day token, or an MFA enrolment. Each of these is refused
+    even though the member could perform it interactively.
+    """
+    from mojo.apps.account.models import Group, ApiKey, User
+
+    group = Group.objects.get(pk=opts.parent_id)
+    actor = User.objects.get(pk=opts.actor_id)
+    key, raw = ApiKey.create_for_group(
+        group=group, name="test_credblock",
+        permissions={"manage_users": True, "users": True},
+        user=actor, override_user=True)
+
+    opts.client.logout()
+    opts.client.bearer = "apikey"
+    opts.client.access_token = raw
+    opts.client.is_authenticated = True
+    try:
+        blocked = [
+            ("/api/account/totp/setup", {}),
+            ("/api/auth/generate_api_key", {"label": "escalation"}),
+            ("/api/account/passkeys/register/begin", {}),
+            ("/api/auth/username/change", {"username": "hijacked_name"}),
+            ("/api/auth/sessions/revoke", {}),
+        ]
+        for path, payload in blocked:
+            resp = opts.client.post(path, payload)
+            assert resp.status_code in (401, 403), (
+                f"{path} must refuse a key-backed session — a key that can do this "
+                f"survives its own revocation; got {resp.status_code}: {resp.response}")
+
+        # The member's username must be untouched by the attempt above.
+        actor.refresh_from_db()
+        assert actor.username == ACTOR_USER, \
+            f"the member's username was changed by a key-backed session: {actor.username}"
+    finally:
+        opts.client.logout()
+
+
 @th.unit_test("apikey_cleanup")
 def test_apikey_cleanup(opts):
     """Remove test groups and keys."""
-    from mojo.apps.account.models import Group, ApiKey
+    from mojo.apps.account.models import Group, ApiKey, User
 
     ApiKey.objects.filter(name__startswith="test_").delete()
     Group.objects.filter(name__in=["test_apikey_parent", "test_apikey_child", "test_apikey_other", "test_apikey_unrelated"]).delete()
+    User.objects.filter(username__in=[ACTOR_USER, OUTSIDER_USER, SUPER_USER]).delete()
