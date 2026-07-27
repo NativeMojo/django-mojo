@@ -16,6 +16,8 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
    - Filing new work (bug/feature/chore) → `/maestro-task`
    - Triaging / planning an item → `/maestro-scope`
    - Implementing a scoped item  → `/maestro-build`
+   - A batch of items, mostly autonomous (one approval gate) → `/maestro-auto`
+   - Too small to track — one-file fix, typo, config tweak → `/maestro-vibe`
 4. If maestro is unreachable or unauthenticated, the `maestro-*` skills stop
    with an explicit notice — fall back to the local flow (`/request` →
    `/scope` → `/build`; see "Local Fallback Workflow" under Planning). Never
@@ -26,7 +28,14 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
 
 - **Rules** are in `.claude/rules/` and load automatically. Follow them.
 - **Skills** are in `.claude/skills/` — invoked with `/<name>`. Primary:
-  `/maestro-task`, `/maestro-scope`, `/maestro-build`. Local fallback (maestro
+  `/maestro-task`, `/maestro-scope`, `/maestro-build`, plus `/maestro-auto`
+  (batch scope+build behind one approval gate) and `/maestro-vibe` (small
+  single-session change, no board ceremony). The `maestro-*` skills are
+  upstream-managed: they are installed verbatim from `get_dev_skills()` and
+  carry a `maestro-skill-version` — never hand-edit them, or the next sync
+  clobbers the edit. Repo-specific build rules belong in `.claude/rules/` or
+  the workspace rule docs (`django-mojo-build-conventions`,
+  `nativemojo-board-conventions`) instead. Local fallback (maestro
   down/unauthenticated only): `/request`, `/scope`, `/build`. Always
   available: `/memory`.
 - **Agents** are in `.claude/agents/` — spawned automatically by
