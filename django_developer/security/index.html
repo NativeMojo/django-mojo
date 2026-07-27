@@ -5435,13 +5435,27 @@
 <td>FK to assigned user</td>
 </tr>
 <tr>
-<td><code>llm_linked</code></td>
-<td>Boolean — if True, human replies trigger LLM re-invocation</td>
+<td><code>metadata.llm_enabled</code></td>
+<td>Boolean — if True, human replies trigger LLM re-invocation (legacy <code>llm_linked</code> honored as an alias)</td>
+</tr>
+<tr>
+<td><code>metadata.requires_approval</code></td>
+<td>Boolean — set on tickets carrying a pending action note, for UI filtering</td>
 </tr>
 </tbody>
 </table>
+<p>The LLM is <strong>opt-in per ticket</strong> via two <code>POST_SAVE_ACTIONS</code>: <code>enable_llm</code>
+(sets the flag and immediately invokes the agent with the full thread) and
+<code>disable_llm</code>. Tickets the agent creates itself arrive with <code>llm_enabled</code>
+already set.</p>
 <h3 id="ticket-notes">Ticket Notes<a class="headerlink" href="#ticket-notes" title="Permanent link">&para;</a></h3>
-<p>Notes are threaded comments on a ticket. When a ticket is <code>llm_linked</code>, adding a note (that doesn't start with <code>[LLM Agent]</code>) triggers the LLM agent to review and respond.</p>
+<p>Notes are threaded comments on a ticket. When a ticket is LLM-enabled, adding a note (that doesn't start with <code>[LLM Agent]</code>) triggers the LLM agent to review and respond.</p>
+<p>A note may instead carry <strong>structured action metadata</strong> — an <code>action</code> block
+proposing something (rendered as Approve/Deny buttons) or an
+<code>action_response</code> answering it, which dispatches a registered handler
+deterministically (activate the proposed rule, execute the block, …) with no
+LLM round-trip. See <a href="ticket_actions/">Ticket Actions</a> for the schema,
+dispatch guards, and built-in handlers.</p>
 <h2 id="6-llm-security-agent">6. LLM Security Agent<a class="headerlink" href="#6-llm-security-agent" title="Permanent link">&para;</a></h2>
 <p>The LLM agent provides autonomous security triage. When invoked via the <code>llm://</code> handler, it investigates the event, takes action, and communicates findings via tickets.</p>
 <h3 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h3>
@@ -5478,7 +5492,7 @@
 <p>Both settings are read at invocation time (not at startup), so changes take effect on the next LLM job without a server restart.</p>
 <p><strong>Dependency:</strong> The LLM agent requires the <code>anthropic</code> Python package (<code>anthropic&gt;=0.52.0</code>), which is included as a framework dependency.</p>
 <h3 id="available-tools">Available Tools<a class="headerlink" href="#available-tools" title="Permanent link">&para;</a></h3>
-<p>The standard triage agent (<code>execute_llm_handler</code>) has 12 tools. The analysis agent (<code>execute_llm_analysis</code>) has all 14 — the 12 base tools plus 2 analysis-only tools.</p>
+<p>The standard triage agent (<code>execute_llm_handler</code>) has 16 tools. The analysis agent (<code>execute_llm_analysis</code>) has all 18 — the 16 base tools plus 2 analysis-only tools.</p>
 <p><strong>Investigation:</strong></p>
 <table>
 <thead>
@@ -5558,14 +5572,32 @@
 <td>Yes</td>
 </tr>
 <tr>
+<td><code>update_ticket</code></td>
+<td>Update an existing ticket's status/priority/assignee</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
 <td><code>add_note</code></td>
 <td>Add investigation note to incident history</td>
 <td>Yes</td>
 <td>Yes</td>
 </tr>
 <tr>
+<td><code>add_ticket_note</code></td>
+<td>Append a note (with optional incident reference card) to an existing ticket</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
 <td><code>send_alert</code></td>
 <td>Send email/SMS/notify to specific targets</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>request_approval</code></td>
+<td>Post a structured Approve/Deny action note instead of acting directly — see <a href="ticket_actions/">Ticket Actions</a></td>
 <td>Yes</td>
 <td>Yes</td>
 </tr>
@@ -5590,7 +5622,13 @@
 <tbody>
 <tr>
 <td><code>create_rule</code></td>
-<td>Create a new RuleSet (created disabled, requires human approval)</td>
+<td>Create a new RuleSet (created <code>is_active=False</code>; its review ticket carries an <code>incident.rule_approval</code> action note)</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>suggest_rule_update</code></td>
+<td>Propose widening an existing active rule instead of duplicating it — opens an <code>incident.rule_update</code> approval ticket with a rule diff</td>
 <td>Yes</td>
 <td>Yes</td>
 </tr>
@@ -5625,7 +5663,7 @@
 <a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">ruleset</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <h3 id="ticket-re-invocation">Ticket Re-Invocation<a class="headerlink" href="#ticket-re-invocation" title="Permanent link">&para;</a></h3>
-<p>When a ticket is <code>llm_linked</code> and a human adds a note, the full conversation history is sent back to the agent. This allows humans to:
+<p>When a ticket is LLM-enabled (<code>metadata.llm_enabled</code>, legacy <code>llm_linked</code> alias honored) and a human adds a note, the full conversation history is sent back to the agent. This allows humans to:
 - Ask the agent to investigate further
 - Approve actions the agent proposed
 - Give the agent new instructions</p>
@@ -5656,8 +5694,8 @@
 </tr>
 <tr>
 <td>Tools</td>
-<td>12 base tools</td>
-<td>14 tools (includes <code>merge_incidents</code>, <code>query_open_incidents</code>)</td>
+<td>16 base tools</td>
+<td>18 tools (includes <code>merge_incidents</code>, <code>query_open_incidents</code>)</td>
 </tr>
 <tr>
 <td>Pre-loaded context</td>
@@ -6412,6 +6450,7 @@ into the kernel firewall fleet-wide.</p>
 <ul>
 <li><a href="abuse_hardening/">Authenticated-Abuse Hardening</a> — global per-identity API throttle, traffic-concentration detection, account kill switch, websocket connection limits, deployment hardening</li>
 <li><a href="maestro_board/">Maestro Board Link</a> — push tickets into a remote maestro board and sync both directions (registration, status_map, signed webhooks, echo suppression)</li>
+<li><a href="ticket_actions/">Ticket Actions</a> — structured Approve/Deny action notes on tickets: schema, dispatch guards, built-in handlers (rule approval/update, block confirm, escalate), handler registration, LLM opt-in contract</li>
 <li><a href="../account/bouncer/">Bouncer Architecture</a> — bot detection, scoring, tokens, signatures</li>
 <li><a href="../account/geoip/">GeoIP System</a> — IP geolocation, blocking, threat escalation</li>
 <li><a href="../core/permissions/">Permissions</a> — <code>security</code> category permission for admin access</li>

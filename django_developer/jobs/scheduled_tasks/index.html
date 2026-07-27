@@ -4248,9 +4248,10 @@
 <h2 id="cron-dispatch_scheduled_tasks">Cron: dispatch_scheduled_tasks<a class="headerlink" href="#cron-dispatch_scheduled_tasks" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># mojo/apps/jobs/cronjobs.py</span>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nd">@schedule</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="s2">&quot;0&quot;</span><span class="p">)</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">dispatch_scheduled_tasks</span><span class="p">():</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">dispatch_scheduled_tasks</span><span class="p">(</span><span class="n">now</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="o">...</span>
 </code></pre></div>
+<p><code>now</code> defaults to <code>timezone.now()</code>. Pass an aware UTC datetime to dispatch as of a simulated instant — the cron runner always calls it with no arguments, so the scheduled path is unchanged. Tests use this to drive dispatch deterministically instead of racing the wall clock.</p>
 <p>Runs at the top of every hour. For each enabled <code>ScheduledTask</code>:</p>
 <ol>
 <li>Checks <code>task.matches_day(weekday)</code> — skips if the task does not run today.</li>

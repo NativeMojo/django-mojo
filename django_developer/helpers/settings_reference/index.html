@@ -5448,6 +5448,7 @@
 <ul>
 <li><code>AUTH_BEARER_HANDLERS</code></li>
 <li><code>AUTH_BEARER_NAME_MAP</code></li>
+<li><code>AUTH_PHONE_VERIFY_DEV_BYPASS_CODE</code> — <strong>file-only</strong> (<code>settings.get_static</code>). A fixed code accepted in place of the real SMS code during phone verification; never set it in production. Deliberately not readable from the DB/Redis settings plane, so a <code>Setting</code> row cannot arm an authentication bypass at runtime.</li>
 </ul>
 <h3 id="aws">AWS<a class="headerlink" href="#aws" title="Permanent link">&para;</a></h3>
 <ul>
@@ -5662,7 +5663,7 @@
 <li><code>LOGIT_NO_LOG_PREFIX</code></li>
 <li><code>LOGIT_PRUNE_DAYS</code></li>
 <li><code>LOGIT_REQUEST_BODY</code></li>
-<li><code>LOGIT_RETURN_REAL_ERROR</code></li>
+<li><code>LOGIT_RETURN_REAL_ERROR</code> — default <code>True</code>. When <code>False</code>, an unhandled 500 returns the generic body <code>{"error": "system error", ...}</code> instead of the exception text. <strong>File-only</strong> (<code>settings.get_static</code>), so a <code>Setting</code> row cannot re-enable leakage on a deployment that turned it off. Honored by both 500 handlers — the logging middleware and the REST dispatcher (<code>mojo/decorators/http.py</code>). Deliberate 4xx messages (<code>ValueException</code>, permission denials) are <em>not</em> affected; they remain client feedback.</li>
 </ul>
 <h3 id="maestro">MAESTRO<a class="headerlink" href="#maestro" title="Permanent link">&para;</a></h3>
 <ul>

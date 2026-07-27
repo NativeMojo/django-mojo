@@ -2593,6 +2593,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#access-audit-trail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Access Audit Trail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sharing-model-deliberately-ip-bound" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sharing Model — deliberately IP-bound
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4488,6 +4510,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#access-audit-trail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Access Audit Trail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sharing-model-deliberately-ip-bound" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sharing Model — deliberately IP-bound
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5089,6 +5133,56 @@ caller must also include the correct <code>password</code>, or no token is minte
 </tbody>
 </table>
 <hr />
+<h2 id="access-audit-trail">Access Audit Trail<a class="headerlink" href="#access-audit-trail" title="Permanent link">&para;</a></h2>
+<p>Every attempt to reach a vault secret is recorded in <code>VaultAccessLog</code>
+(<code>GET /api/filevault/accesslog</code>). <code>VaultFile.unlocked_by</code> is not an audit trail
+— it holds only the <em>last</em> unlocker and is overwritten on each unlock.</p>
+<p><strong>Recorded:</strong> <code>unlock</code>, <code>download</code>, <code>retrieve</code>, <code>password</code>, each <code>granted</code> or
+<code>denied</code>, with the accessor, the accessor's IP and user agent, the target's
+name (denormalized, so the row stays readable after the secret is deleted), and
+a fixed-vocabulary <code>reason</code> on denials.</p>
+<p><strong>Denials are recorded in the TARGET's tenant</strong>, not the caller's — the owner's
+question is "who tried to get at my secret". This matters most for the
+password-failure paths (<code>unlock</code> with a bad password, <code>data/retrieve</code>,
+<code>file/password</code>): those raise a plain <code>ValueException</code> and take the generic
+error branch, so unlike a permission denial they emit <strong>no</strong> incident. Without
+this trail, a password brute-force against a vault file left no trace anywhere.</p>
+<p><strong>Never recorded:</strong> any secret material — no plaintext, no <code>ekey</code>, no password,
+no token. The row records <em>that</em> access happened, never <em>what</em> was accessed.</p>
+<p>Deliberate design points:</p>
+<ul>
+<li><code>vault_file</code> / <code>vault_data</code> use <code>SET_NULL</code>, not <code>CASCADE</code>. Deleting the secret
+  must not erase the record of who read it, which is exactly when the trail
+  matters. <code>target_name</code> keeps the row meaningful afterwards.</li>
+<li>Read tier is <code>manage_vault</code> / <code>files</code> — an audit question, not a reader one.
+  <code>"owner"</code> is deliberately absent: <code>OWNER_FIELD</code> defaults to <code>user</code>, which here
+  is the <em>accessor</em>, so <code>"owner"</code> would let a cross-tenant prober read back the
+  denial row they just generated, including the victim's <code>target_name</code>.</li>
+<li>A token that fails its signature, or whose file id does not resolve, is <strong>not</strong>
+  logged. The download endpoint is public, so logging garbage would make it an
+  unauthenticated way to flood an arbitrary tenant's trail — burying the real
+  entries is the classic way to defeat an audit log.</li>
+<li>Writes are never rejected upward: an audit-write failure logs loudly via
+  <code>logit.error</code> but must not take down a legitimate vault read.</li>
+<li>No prune job. An audit trail should not silently expire.</li>
+</ul>
+<h2 id="sharing-model-deliberately-ip-bound">Sharing Model — deliberately IP-bound<a class="headerlink" href="#sharing-model-deliberately-ip-bound" title="Permanent link">&para;</a></h2>
+<p>The download token is bound to the IP of the caller who <strong>generated</strong> it, so a
+recipient on a different network is always rejected. <strong>This is the intended
+product behavior, not a limitation to work around</strong>: <code>download_url</code> is a
+same-network / same-session download mechanism, not a link you can send someone.</p>
+<p>There is deliberately no token revocation, because there is nothing to revoke
+late — <code>VAULT_TOKEN_MAX_TTL</code> caps every token at one hour and <code>clamp_token_ttl</code>
+is enforced at every mint path.</p>
+<p>If external sharing is ever wanted it is a separate feature (recipient-scoped
+share rows with their own expiry, download cap and revocation), not a loosening
+of this binding.</p>
+<p>The binding <strong>fails closed</strong>: a token is refused when either the minted IP or
+the presenting IP is missing. <code>get_remote_ip</code> returns <code>None</code> when neither
+<code>X-Real-IP</code> nor <code>REMOTE_ADDR</code> yields a parseable address, and a plain
+<code>payload["ip"] != client_ip</code> comparison would have let two such callers through
+(<code>None != None</code> is <code>False</code>), silently turning the token into a bearer
+credential.</p>
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -5100,17 +5194,20 @@ caller must also include the correct <code>password</code>, or no token is minte
 </thead>
 <tbody>
 <tr>
-<td><code>FILEVAULT_DEFAULT_TTL</code></td>
+<td><code>VAULT_TOKEN_TTL</code></td>
 <td><code>300</code></td>
 <td>Default download token TTL in seconds</td>
 </tr>
 <tr>
-<td><code>FILEVAULT_S3_BUCKET</code></td>
-<td>—</td>
-<td>S3 bucket for encrypted file storage</td>
+<td><code>VAULT_TOKEN_MAX_TTL</code></td>
+<td><code>3600</code></td>
+<td>Hard ceiling for any minted token</td>
 </tr>
 </tbody>
 </table>
+<p>Both are module constants in <code>mojo/helpers/crypto/vault.py</code>, not settings keys.
+(The previous table listed <code>FILEVAULT_DEFAULT_TTL</code> and <code>FILEVAULT_S3_BUCKET</code>;
+neither exists.)</p>
 <hr />
 <h2 id="common-patterns">Common Patterns<a class="headerlink" href="#common-patterns" title="Permanent link">&para;</a></h2>
 <h3 id="checking-if-a-file-requires-a-password">Checking if a file requires a password<a class="headerlink" href="#checking-if-a-file-requires-a-password" title="Permanent link">&para;</a></h3>

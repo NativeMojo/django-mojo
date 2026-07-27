@@ -4181,6 +4181,15 @@ read their group with a downgraded (<code>basic</code>) graph, while <code>check
 requires an actual <code>SAVE_PERMS</code> grant (global <code>manage_groups</code>/<code>groups</code>, or
 member-level <code>manage_group</code>; an ApiKey must be confined to its own group tree
 <strong>and</strong> hold the perm). See <a href="../../account/group/">Account → Group</a>.</p>
+<p><strong>The list fallback excludes deactivated tenants for users too (maestro
+item 56).</strong> When the primary list check fails, <code>on_rest_handle_list</code>
+authorizes via <code>request.user.get_groups_with_permission(perms)</code> and narrows
+the queryset to those groups. That derivation — like <code>get_groups</code> and
+<code>get_group_ids</code> — now yields only <strong>effectively active</strong> groups (DM-048
+subtree semantics): a member grant in a deactivated group, or in any group
+under a deactivated ancestor, contributes no rows. This is the user-side
+parity of the ApiKey derivation (<code>ApiKey.get_groups</code>), which has excluded
+inactive groups since ITEM-037/DM-048.</p>
 <p><strong>API keys.</strong> An <code>ApiKey</code> (<code>Authorization: apikey &lt;token&gt;</code>) is a <em>group-scoped</em>
 credential, so <code>requires_global_perms</code> <strong>rejects it by default</strong> — letting a key
 satisfy a platform-global gate would recreate the escalation through a machine

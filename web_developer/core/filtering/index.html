@@ -2596,6 +2596,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#protected-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protected Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4035,6 +4046,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#protected-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Protected Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4248,13 +4270,42 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/myapp/book?author__id=5
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>GET /api/myapp/book?author__username=alice
 </code></pre></div>
+<h3 id="protected-fields">Protected Fields<a class="headerlink" href="#protected-fields" title="Permanent link">&para;</a></h3>
+<p>Some columns are marked sensitive by the model — credentials, tokens, hashes,
+and encrypted blobs. <strong>A filter naming one of them is silently ignored, not
+rejected.</strong> You get a <code>200</code> and a result set as if you had never sent that
+parameter.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/user?username__startswith=a                      → count: 12
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>GET /api/user?username__startswith=a&amp;auth_key__startswith=x → count: 12   (unchanged)
+</code></pre></div>
+<p>This is deliberate. The row <em>count</em> a filter produces is itself a leak: by
+varying a guessed prefix and watching the count change, a caller could recover
+a secret value one character at a time without ever reading the field. Dropping
+the filter removes the signal entirely.</p>
+<p>The rule applies:</p>
+<ul>
+<li>to <strong>every operator form</strong> — <code>=</code>, <code>__not</code>, <code>__in</code>, <code>__isnull</code>,
+  <code>__startswith</code>, and the rest;</li>
+<li>at <strong>every hop of a relation path</strong> — <code>?author__auth_key__startswith=x</code> is
+  caught on the related model, even if the model you are querying declares
+  nothing itself;</li>
+<li>to <strong>JSON drilling</strong> — <code>?metadata__client_secret=x</code> is refused;</li>
+<li>identically on the plain list, <code>_mode=count</code>, and <code>_stats</code> bundles, which all
+  share one parser.</li>
+</ul>
+<p>The same fields are also excluded from <code>?search=</code> and ignored by <code>?sort=</code>. If
+<em>every</em> field a model would search is sensitive, <code>?search=</code> returns an empty
+list rather than an unfiltered one.</p>
+<p>Filtering on a sensitive field raises a server-side security event. There is no
+way to discover which fields are protected by probing — a sensitive field and a
+nonexistent one behave identically.</p>
 <h2 id="default-filters">Default Filters<a class="headerlink" href="#default-filters" title="Permanent link">&para;</a></h2>
 <p>Some endpoints filter their list by default, before your parameters are
 applied. <code>GET /api/account/notification</code> returns only <strong>unread</strong> notifications,
 for example.</p>
 <p>A default is a baseline you can override two ways:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/account/notification?is_unread=false     # name the field yourself
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>GET /api/account/notification?_no_defaults=1      # drop every default
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/account/notification?is_unread=false     # name the field yourself
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>GET /api/account/notification?_no_defaults=1      # drop every default
 </code></pre></div>
 <p>Naming the field in any form replaces the default for that field — the
 operator suffixes count too, so <code>?is_unread__not=true</code> and
@@ -4266,8 +4317,8 @@ access to. They apply to list requests only — fetching a single record by id
 is never filtered. <code>_mode</code> aggregations use the same filtered set, so a count
 matches the list it describes.</p>
 <h2 id="date-range-filter">Date Range Filter<a class="headerlink" href="#date-range-filter" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/myapp/book?dr_start=2024-01-01&amp;dr_end=2024-12-31
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>GET /api/myapp/book?dr_field=modified&amp;dr_start=2024-06-01
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/myapp/book?dr_start=2024-01-01&amp;dr_end=2024-12-31
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>GET /api/myapp/book?dr_field=modified&amp;dr_start=2024-06-01
 </code></pre></div>
 <table>
 <thead>
@@ -4294,9 +4345,9 @@ matches the list it describes.</p>
 <p>Dates accept ISO 8601: <code>2024-01-01</code> or <code>2024-01-01T00:00:00Z</code>.</p>
 <h3 id="partial-dates-in-dr_start-dr_end">Partial Dates in <code>dr_start</code> / <code>dr_end</code><a class="headerlink" href="#partial-dates-in-dr_start-dr_end" title="Permanent link">&para;</a></h3>
 <p><code>dr_start</code> and <code>dr_end</code> also accept partial dates — <code>YYYY</code>, <code>YYYY-MM</code>, or <code>YYYY-MM-DD</code> — and expand them to the start / end of the period:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/myapp/book?dr_start=2026-04&amp;dr_end=2026-04   # all of April 2026
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>GET /api/myapp/book?dr_start=2026                     # from 2026-01-01 onward
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>GET /api/myapp/book?dr_start=2026-04-02&amp;dr_end=2026-04-02   # that whole day
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/myapp/book?dr_start=2026-04&amp;dr_end=2026-04   # all of April 2026
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>GET /api/myapp/book?dr_start=2026                     # from 2026-01-01 onward
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>GET /api/myapp/book?dr_start=2026-04-02&amp;dr_end=2026-04-02   # that whole day
 </code></pre></div>
 <table>
 <thead>
@@ -4327,11 +4378,11 @@ matches the list it describes.</p>
 <p>Bounds are anchored in the request's timezone (see <a href="#timezone">Timezone</a> below). Out-of-range months / days return <code>400</code>.</p>
 <h2 id="date-component-filters">Date-Component Filters<a class="headerlink" href="#date-component-filters" title="Permanent link">&para;</a></h2>
 <p>Filter by individual components of a <code>DateField</code> or <code>DateTimeField</code> using Django's standard component lookups:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/myapp/book?created__year=2026
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>GET /api/myapp/book?created__month=4
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>GET /api/myapp/book?created__year=2026&amp;created__month=4   # AND
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>GET /api/myapp/book?created__quarter=2
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>GET /api/myapp/book?created__day=15
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/myapp/book?created__year=2026
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>GET /api/myapp/book?created__month=4
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>GET /api/myapp/book?created__year=2026&amp;created__month=4   # AND
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>GET /api/myapp/book?created__quarter=2
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>GET /api/myapp/book?created__day=15
 </code></pre></div>
 <p>Supported lookup suffixes:</p>
 <table>
@@ -4401,8 +4452,8 @@ matches the list it describes.</p>
 </tbody>
 </table>
 <p>Component lookups compose with <code>__in</code> and <code>__not</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/myapp/book?created__month__in=4,5,6   # April, May, OR June
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>GET /api/myapp/book?created__month__not=12     # exclude December
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>GET /api/myapp/book?created__month__in=4,5,6   # April, May, OR June
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>GET /api/myapp/book?created__month__not=12     # exclude December
 </code></pre></div>
 <p>Invalid values (<code>?created__month=foo</code>) return <code>400</code>.</p>
 <blockquote>
@@ -4410,9 +4461,9 @@ matches the list it describes.</p>
 </blockquote>
 <h3 id="partial-date-shorthand">Partial-Date Shorthand<a class="headerlink" href="#partial-date-shorthand" title="Permanent link">&para;</a></h3>
 <p>On a <code>DateField</code> / <code>DateTimeField</code>, the bare exact-match operator accepts a partial date and expands to a tz-aware range:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>GET /api/myapp/book?created=2026-04        # all of April 2026 (in request tz)
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>GET /api/myapp/book?created=2026           # all of 2026
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>GET /api/myapp/book?created=2026-04-02     # that whole day
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>GET /api/myapp/book?created=2026-04        # all of April 2026 (in request tz)
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>GET /api/myapp/book?created=2026           # all of 2026
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>GET /api/myapp/book?created=2026-04-02     # that whole day
 </code></pre></div>
 <p>Internally this becomes <code>created__gte=...&amp;created__lte=...</code> with the bounds anchored to the request timezone, so a user in <code>America/Los_Angeles</code> filtering <code>created=2026-04</code> gets PT-April, not UTC-April.</p>
 <p>The shorthand only applies to the bare exact-match key. Composing with <code>__in</code> / <code>__not</code> is not supported in v1 — use component lookups for those cases.</p>
@@ -4426,7 +4477,7 @@ matches the list it describes.</p>
 </ol>
 <p>The <code>timezone</code> param uses the same key already used for CSV download localization.</p>
 <h2 id="text-search">Text Search<a class="headerlink" href="#text-search" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>GET /api/myapp/book?search=django
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>GET /api/myapp/book?search=django
 </code></pre></div>
 <h3 id="advanced-search-syntax">Advanced Search Syntax<a class="headerlink" href="#advanced-search-syntax" title="Permanent link">&para;</a></h3>
 <table>
@@ -4465,15 +4516,15 @@ matches the list it describes.</p>
 </tr>
 </tbody>
 </table>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>GET /api/myapp/book?search=&quot;machine learning&quot; -python author:alice
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>GET /api/myapp/book?search=&quot;machine learning&quot; -python author:alice
 </code></pre></div>
 <h2 id="sorting">Sorting<a class="headerlink" href="#sorting" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>GET /api/myapp/book?sort=title
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>GET /api/myapp/book?sort=-created    # descending (prefix with -)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>GET /api/myapp/book?sort=title
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>GET /api/myapp/book?sort=-created    # descending (prefix with -)
 </code></pre></div>
 <p>Default sort is <code>-id</code> (newest first) unless the model specifies otherwise.</p>
 <h2 id="combining-parameters">Combining Parameters<a class="headerlink" href="#combining-parameters" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>GET /api/myapp/book?status=published&amp;sort=-created&amp;search=django&amp;dr_start=2024-01-01&amp;start=0&amp;size=20
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>GET /api/myapp/book?status=published&amp;sort=-created&amp;search=django&amp;dr_start=2024-01-01&amp;start=0&amp;size=20
 </code></pre></div>
 
 

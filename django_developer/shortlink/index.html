@@ -4075,12 +4075,12 @@
 <tr>
 <td><code>expire_days</code></td>
 <td><code>3</code></td>
-<td>Days until expiry. Set both <code>expire_days=0</code> and <code>expire_hours=0</code> for no expiry.</td>
+<td>Days until expiry. Set both <code>expire_days=0</code> and <code>expire_hours=0</code> for no expiry. Must be <code>0..MAX_EXPIRE_TOTAL_HOURS</code>; negative values raise <code>ValueException</code>.</td>
 </tr>
 <tr>
 <td><code>expire_hours</code></td>
 <td><code>0</code></td>
-<td>Additional hours until expiry. Combined with <code>expire_days</code>.</td>
+<td>Additional hours until expiry. Combined with <code>expire_days</code>. Same bounds.</td>
 </tr>
 <tr>
 <td><code>metadata</code></td>
@@ -4124,6 +4124,7 @@
 </tr>
 </tbody>
 </table>
+<p>Both <code>expire_days</code> and <code>expire_hours</code> are bounded by <code>mojo.apps.shortlink.models.MAX_EXPIRE_TOTAL_HOURS</code> (876000 — roughly 100 years, a module constant, not a <code>ShortLink</code> attribute), checked <strong>per component and on the sum</strong>, so <code>expire_days=1, expire_hours=-24</code> is rejected rather than quietly collapsing to "never expires". Out-of-range and negative values raise <code>ValueException</code>, which the dispatcher turns into a <code>400</code>; previously they either overflowed <code>timedelta</code> into a <code>500</code> or were silently accepted.</p>
 <p><strong>Returns:</strong> Full short URL string, e.g. <code>"https://itf.io/s/Xk9mR2p"</code></p>
 <p><strong>Raises:</strong> <code>ValueError</code> if none of <code>url</code>, <code>file</code>, or <code>rendition</code> is provided.</p>
 <hr />
@@ -4244,17 +4245,23 @@ semantics —</p>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">link</span> <span class="o">=</span> <span class="n">ShortLink</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">file</span><span class="o">=</span><span class="n">file_obj</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">&quot;fileman&quot;</span><span class="p">,</span> <span class="n">resolve_file</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">link</span> <span class="o">=</span> <span class="n">ShortLink</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">rendition</span><span class="o">=</span><span class="n">rendition_obj</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">&quot;fileman&quot;</span><span class="p">,</span> <span class="n">resolve_file</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Resolve: returns URL, increments hit_count, records metric. None if expired/inactive.</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">destination</span> <span class="o">=</span> <span class="n">link</span><span class="o">.</span><span class="n">resolve</span><span class="p">()</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># Log a click (only if track_clicks=True)</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">click</span> <span class="o">=</span> <span class="n">link</span><span class="o">.</span><span class="n">log_click</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="c1"># Get merged OG metadata (custom keys override scraped keys)</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="n">og</span> <span class="o">=</span> <span class="n">link</span><span class="o">.</span><span class="n">get_og_metadata</span><span class="p">()</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Resolve: returns URL, increments hit_count, records metric. Returns None —</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="c1"># and writes NOTHING (no hit, no metric) — if the link is inactive, expired,</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># or has no destination to serve.</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="n">destination</span> <span class="o">=</span> <span class="n">link</span><span class="o">.</span><span class="n">resolve</span><span class="p">()</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="c1"># Read-only peek: where does this link point? No hit counted, no metric</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="c1"># recorded, no expiry/is_active policy applied — resolve() owns usability.</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="n">destination</span> <span class="o">=</span> <span class="n">link</span><span class="o">.</span><span class="n">get_destination</span><span class="p">()</span>
 <a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="c1"># Check expiry</span>
-<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="n">link</span><span class="o">.</span><span class="n">is_expired</span>  <span class="c1"># property</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="c1"># Log a click (only if track_clicks=True)</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="n">click</span> <span class="o">=</span> <span class="n">link</span><span class="o">.</span><span class="n">log_click</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="c1"># Get merged OG metadata (custom keys override scraped keys)</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="n">og</span> <span class="o">=</span> <span class="n">link</span><span class="o">.</span><span class="n">get_og_metadata</span><span class="p">()</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="c1"># Check expiry</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="n">link</span><span class="o">.</span><span class="n">is_expired</span>  <span class="c1"># property</span>
 </code></pre></div>
 <h3 id="shortlinkclick">ShortLinkClick<a class="headerlink" href="#shortlinkclick" title="Permanent link">&para;</a></h3>
 <p>Per-click record. Only created when <code>track_clicks=True</code>. Located at <code>mojo/apps/shortlink/models/click.py</code>.</p>
@@ -4385,7 +4392,7 @@ semantics —</p>
 </code></pre></div>
 <hr />
 <h2 id="metrics-integration">Metrics Integration<a class="headerlink" href="#metrics-integration" title="Permanent link">&para;</a></h2>
-<p>Every <code>resolve()</code> call records Redis time-series metrics via <code>mojo.apps.metrics</code>:</p>
+<p>Every <strong>successful</strong> <code>resolve()</code> call records Redis time-series metrics via <code>mojo.apps.metrics</code>. A resolve that serves nothing — inactive, expired, or no destination (e.g. the linked file was deleted) — records no metric and does not increment <code>hit_count</code>, so analytics count only served redirects:</p>
 <ul>
 <li><code>shortlink:click</code> — global click counter</li>
 <li>If <code>track_clicks=True</code> and <code>link.user</code> exists:</li>
@@ -4413,7 +4420,7 @@ semantics —</p>
 <a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># Never expires</span>
 <a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="n">shorten</span><span class="p">(</span><span class="s2">&quot;https://...&quot;</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">&quot;web&quot;</span><span class="p">,</span> <span class="n">expire_days</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">expire_hours</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 </code></pre></div>
-<p>Expired links return <code>None</code> from <code>resolve()</code>. At the REST layer this makes <code>/s/&lt;code&gt;</code> render the "link unavailable" 404 page — see <a href="#the-link-unavailable-page">The "link unavailable" page</a>.</p>
+<p>Expired links return <code>None</code> from <code>resolve()</code> and count no hit. At the REST layer this makes <code>/s/&lt;code&gt;</code> render the "link unavailable" 404 page — see <a href="#the-link-unavailable-page">The "link unavailable" page</a>.</p>
 <hr />
 <h2 id="automatic-cleanup">Automatic Cleanup<a class="headerlink" href="#automatic-cleanup" title="Permanent link">&para;</a></h2>
 <p>A cron job runs daily at 3:30 AM to delete expired shortlinks that have been expired for more than 7 days. This keeps the database clean without losing links that just expired.</p>

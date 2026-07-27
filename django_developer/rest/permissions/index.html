@@ -4320,6 +4320,11 @@ filters to those tenants:</p>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">group_field</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">get_rest_meta_prop</span><span class="p">(</span><span class="s2">&quot;GROUP_FIELD&quot;</span><span class="p">,</span> <span class="s2">&quot;group&quot;</span><span class="p">)</span>   <span class="c1"># may be a related path</span>
 <a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">queryset</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="o">**</span><span class="p">{</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">group_field</span><span class="si">}</span><span class="s2">__in&quot;</span><span class="p">:</span> <span class="n">groups_with_perms</span><span class="p">})</span>
 </code></pre></div>
+<p><code>get_groups_with_permission</code> (like <code>get_groups</code>/<code>get_group_ids</code>) only yields
+<strong>effectively active</strong> groups by default — a member grant in a deactivated
+group, or one under a deactivated ancestor, contributes no rows to the
+narrowed queryset (maestro item 56). See
+<a href="../../core/permissions/#instance-level-permission-hooks">Core → Permissions</a>.</p>
 <p>This governs <strong>all three</strong> access paths consistently — the bare-list member
 fallback (above), the <code>?group=</code> narrower (<code>on_rest_list</code>), and detail
 permission checks. For detail (GET/POST/DELETE on a pk), the framework resolves

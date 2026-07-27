@@ -4058,7 +4058,7 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    __init__.py
 <a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    totp.py
 <a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    passkeys.py
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>  test_oauth/        # OAuth flows — calls server_settings()     (serial)
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>  test_oauth/        # OAuth flows — calls server_settings()   (parallel)
 <a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    __init__.py
 <a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    oauth.py
 <a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    oauth_apple.py
@@ -4191,21 +4191,39 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="s2">&quot;requires_apps&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;mojo.apps.account&quot;</span><span class="p">],</span>  <span class="c1"># skip if app is not installed</span>
 <a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="p">}</span>
 <a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="c1"># tests/test_oauth/__init__.py  — serial because oauth.py calls th.server_settings()</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="c1"># tests/test_job_engine/__init__.py  — serial for a reason OTHER than server_settings()</span>
 <a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="n">TESTIT</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="s2">&quot;requires_apps&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;mojo.apps.account&quot;</span><span class="p">],</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    <span class="s2">&quot;serial&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>                          <span class="c1"># do not run this module in parallel</span>
-<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    <span class="s2">&quot;server_settings&quot;</span><span class="p">:</span> <span class="p">{},</span>                   <span class="c1"># dict of Django settings to apply before the module starts</span>
-<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="p">}</span>
-<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>
-<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="c1"># tests/test_security/__init__.py  — opt-in slow module</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="s2">&quot;requires_apps&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;mojo.apps.jobs&quot;</span><span class="p">],</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    <span class="s2">&quot;serial&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>                          <span class="c1"># JobEngine/Scheduler use signal handlers (main thread only)</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="p">}</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="c1"># tests/test_oauth/__init__.py  — calls th.server_settings() but stays parallel;</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="c1"># testit/server_lock.py keeps that restart away from open websockets on its own.</span>
 <a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="n">TESTIT</span> <span class="o">=</span> <span class="p">{</span>
 <a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>    <span class="s2">&quot;requires_apps&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;mojo.apps.account&quot;</span><span class="p">],</span>
-<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>    <span class="s2">&quot;serial&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
-<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>    <span class="s2">&quot;requires_extra&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;slow&quot;</span><span class="p">],</span>              <span class="c1"># skipped unless --full or --extra slow</span>
-<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="p">}</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>    <span class="s2">&quot;server_settings&quot;</span><span class="p">:</span> <span class="p">{},</span>                   <span class="c1"># dict of Django settings to apply before the module starts</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="p">}</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="c1"># tests/test_security/__init__.py  — opt-in slow module</span>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="n">TESTIT</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>    <span class="s2">&quot;requires_apps&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;mojo.apps.account&quot;</span><span class="p">],</span>
+<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>    <span class="s2">&quot;serial&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>    <span class="s2">&quot;requires_extra&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;slow&quot;</span><span class="p">],</span>              <span class="c1"># skipped unless --full or --extra slow</span>
+<a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="p">}</span>
 </code></pre></div>
-<p>When a large app has many tests, split it into domain-focused packages (<code>test_auth</code>, <code>test_mfa</code>, <code>test_user_mgmt</code>, etc.) rather than one monolithic <code>test_accounts</code>. Each package runs in parallel by default; only packages that call <code>th.server_settings()</code> mid-run need <code>"serial": True</code>.</p>
+<p>When a large app has many tests, split it into domain-focused packages (<code>test_auth</code>, <code>test_mfa</code>, <code>test_user_mgmt</code>, etc.) rather than one monolithic <code>test_accounts</code>. Each package runs in parallel by default.</p>
+<blockquote>
+<p><strong><code>th.server_settings()</code> no longer requires <code>"serial": True</code>.</strong> It restarts the
+server (writing <code>var/django.conf</code> for uvicorn to reload), which used to tear
+down any websocket another module had open — the cause of intermittent
+"Connection is already closed" failures in <code>test_realtime</code> during full-suite
+runs. <code>testit/server_lock.py</code> now serializes just that hazard: a <code>WsClient</code>
+connection holds a <strong>shared</strong> lock for its lifetime, and <code>server_settings()</code>
+takes it <strong>exclusively</strong> for both of its reloads. Modules stay parallel and
+only the actual restart windows are excluded — much cheaper than marking every
+caller serial. Use <code>"serial": True</code> for the <em>other</em> reasons (signal handlers
+bound to the main thread, as in <code>test_job_engine</code>).</p>
+</blockquote>
 <p>Supported keys:</p>
 <table>
 <thead>
@@ -4219,7 +4237,7 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <tr>
 <td><code>serial</code></td>
 <td><code>False</code></td>
-<td>Force this module to run sequentially, after all parallel modules complete. Use for modules that call <code>th.server_settings()</code> mid-run, or that rely on signals bound to the main thread.</td>
+<td>Force this module to run sequentially, after all parallel modules complete. Use for modules that rely on signals bound to the main thread. <strong>Not</strong> needed merely because a module calls <code>th.server_settings()</code> — <code>testit/server_lock.py</code> handles that hazard without giving up parallelism.</td>
 </tr>
 <tr>
 <td><code>requires_apps</code></td>

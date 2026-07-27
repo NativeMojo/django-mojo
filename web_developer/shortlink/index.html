@@ -4298,7 +4298,8 @@ rejected with a 400.</p>
 <ul>
 <li><code>code</code> is optional. Omitted or empty ⇒ a unique 7-char code is generated.
   A custom (vanity) code of up to 10 chars is kept as-is; it must be unique.</li>
-<li><code>expire_days</code> / <code>expire_hours</code> are integers; expiry = now + days×24 + hours.
+<li><code>expire_days</code> / <code>expire_hours</code> are integers; expiry = now + days×24 + hours.</li>
+<li>Both must be <strong>0 or greater</strong> and no larger than 876000 hours (~100 years), checked per field <em>and</em> on the combined total. Anything outside that returns <strong>400</strong>. Note that a negative value used to be accepted and silently meant "never expires" — it is now rejected.
   Omitting both defaults to <strong>3 days</strong> (same as <code>/link/create</code> and <code>shorten()</code>).
   <code>0</code>/<code>0</code> ⇒ never expires. When either is present it takes precedence over a
   passed <code>expires_at</code>; passing an ISO <code>expires_at</code> alone also works. A
@@ -4383,7 +4384,7 @@ leaves the current expiry untouched.</p>
 <p>Use the metrics API for time-series analytics on shortlinks.</p>
 <h3 id="what-is-recorded">What is recorded<a class="headerlink" href="#what-is-recorded" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Global clicks (always): slug <code>shortlink:click</code> in account <code>global</code></li>
+<li>Global clicks (always, on a successful redirect): slug <code>shortlink:click</code> in account <code>global</code></li>
 <li>Per-link user analytics (only when <code>track_clicks=true</code> and link has a <code>user</code>):</li>
 <li>slug <code>sl:click:&lt;code&gt;</code></li>
 <li>account <code>user-&lt;user_id&gt;</code></li>
@@ -4521,6 +4522,7 @@ from the moment of the request:</p>
 <li>the link is inactive (<code>is_active=False</code>)</li>
 <li>the link resolves to no destination (e.g. its linked file was deleted)</li>
 </ul>
+<p>None of these conditions increments <code>hit_count</code> or records a click metric — analytics count only served redirects.</p>
 <p>All four return an <strong>identical body</strong> — the response deliberately does not reveal whether a given code was ever real. The page is also sent with <code>Cache-Control: no-store</code> and <code>&lt;meta name="robots" content="noindex"&gt;</code>.</p>
 <blockquote>
 <p><strong>Changed in 1.2.51.</strong> Previously these cases returned a <code>302</code> to <code>SHORTLINK_FALLBACK_URL</code> (or <code>BASE_URL</code>, or <code>/</code>), dropping the visitor on the site root with no explanation. That setting has been removed. If you have monitoring or client code that counts <code>3xx</code> responses on <code>/s/</code>, it needs updating to expect <code>404</code>.</p>

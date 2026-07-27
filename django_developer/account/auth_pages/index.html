@@ -4535,6 +4535,15 @@ for the schema and <code>register_schema.py</code> for the field resolution logi
 <p><strong>Dev-mode SMS bypass:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">AUTH_PHONE_VERIFY_DEV_BYPASS_CODE</span> <span class="o">=</span> <span class="s2">&quot;000000&quot;</span>   <span class="c1"># DO NOT SET IN PROD</span>
 </code></pre></div>
+<blockquote>
+<p><strong>File-only setting.</strong> This key is read with <code>settings.get_static</code>, so it can
+only be armed from process-static config (env or the Django settings file) —
+a <code>Setting</code> row in the DB/Redis plane is ignored. That is deliberate: it
+accepts a fixed code in place of the real SMS code, so a DB-settable version
+would let anyone able to write a global setting arm an authentication bypass
+at runtime. It also keeps the startup warning in <code>AppConfig.ready</code> honest —
+the warning and the enforcement read the same source.</p>
+</blockquote>
 <p>Two endpoints back the phone-verify flow:</p>
 <table>
 <thead>

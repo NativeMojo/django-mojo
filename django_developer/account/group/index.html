@@ -4535,6 +4535,21 @@ all route through the same check. List endpoints still filter on the group's
 <em>own</em> flag only (SQL-level) — a child of a deactivated parent may appear in a
 list to already-permitted callers, but every resolution/authorization gate
 denies it.</p>
+<p><strong>A membership only counts for its own holder</strong> (maestro item 418):
+<code>get_groups()</code> binds "is a member" and "membership is active" to the <em>same</em>
+<code>GroupMember</code> row. Chaining them as two <code>.filter()</code> calls made Django join
+the relation twice, so a group in which <em>your</em> membership had been
+deactivated still resolved as long as <em>someone else's</em> was active.</p>
+<p>The <strong>member-side derivations honor it too</strong> (maestro item 56):
+<code>User.get_groups()</code>, <code>User.get_group_ids()</code>, and
+<code>User.get_groups_with_permission()</code> exclude effectively-inactive groups when
+called with the default <code>is_active=True</code> — a deactivated tenant (or one under
+a deactivated ancestor) contributes nothing to the RestMeta list fallback or
+<code>Group</code>'s own list endpoint, and an inactive child never inherits a parent
+grant. Pass <code>is_active=None</code> for the raw derivation (admin/introspection
+escape hatch — no admin flow needs member-grant resolution against inactive
+groups; system-perm admins pass the primary permission check and never reach
+these fallbacks).</p>
 </blockquote>
 <p><code>member_count</code> is exposed via REST as an <code>extra</code> on the <code>default</code> graph (not <code>basic</code> — that stays minimal). List endpoints use <code>default</code> by, well, default, so the field appears in list payloads without an explicit <code>?graph=</code> parameter. Backed by <code>members.filter(is_active=True).count()</code> per record — at very large scale, consider an annotated queryset instead.</p>
 <blockquote>

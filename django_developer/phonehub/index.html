@@ -4324,7 +4324,9 @@
 <a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;downstream-mojo&quot;</span><span class="p">,</span>
 <a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">permissions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;send_sms&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
 <a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="p">)</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="c1"># Hand `raw_token` to the caller — it cannot be retrieved later.</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="c1"># Hand `raw_token` to the caller. It is also stored encrypted on the row</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="c1"># (api_key.get_token() and the default REST graph return it later) — see</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="c1"># account/api_keys.md#security-notes — but treat it as a live credential.</span>
 </code></pre></div>
 <p><strong>On the calling (downstream) mojo:</strong>
 1. Create a <code>PhoneConfig</code> with <code>provider="mojo"</code>, point <code>mojo_remote_url</code> at the upstream, and store the api key:</p>

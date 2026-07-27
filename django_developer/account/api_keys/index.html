@@ -3766,6 +3766,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#acting-as-a-member-user-override_user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Acting as a Member (user + override_user)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Acting as a Member (user + override_user)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#who-can-be-linked" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Who can be linked
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-an-override-key-still-cannot-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What an override key still cannot do
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deactivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deactivation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#creating-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3944,6 +3994,106 @@
 <li><strong>(DM-045)</strong> For a group-scoped model, the model-security layer denies an inactive-group instance to an ApiKey identity <em>before</em> <code>check_view_permission</code>/<code>check_edit_permission</code> run — a future hook that naively grants via bare <code>request.api_key.has_permission(perms)</code> cannot reopen a suspended tenant's rows. See <a href="../../core/permissions/#instance-level-permission-hooks">Core → Instance-Level Permission Hooks</a>.</li>
 </ul>
 <p>Not a hard token reject: an inactive-group key still <strong>authenticates</strong> (it returns <code>request.group = None</code>, not a 401). This preserves the group-independent federation path (<code>requires_global_perms(..., allow_api_keys=True)</code>, e.g. the geoip <code>/sync</code> receiver), which authorizes on the key's <code>has_permission</code> and ignores <code>request.group</code>. An <strong>active child under an inactive parent is NOT reachable</strong> (DM-048 overturned the old per-group carve-out): the child is effectively inactive, so <code>group=&lt;child id&gt;</code> resolves like a nonexistent id and the child's own keys go dark too. No flag is written to the child — reactivating the parent restores the entire subtree instantly.</p>
+<h2 id="acting-as-a-member-user-override_user">Acting as a Member (<code>user</code> + <code>override_user</code>)<a class="headerlink" href="#acting-as-a-member-user-override_user" title="Permanent link">&para;</a></h2>
+<p>A key can name the member it acts as. <code>ApiKey.user</code> is an optional FK to
+<code>account.User</code>; <code>ApiKey.override_user</code> (default <code>False</code>) decides what that link
+actually does.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>override_user=False</code> (default)</th>
+<th><code>override_user=True</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>request.user</code></td>
+<td>the <code>ApiKey</code> — unchanged</td>
+<td>the linked <code>User</code></td>
+</tr>
+<tr>
+<td><code>request.acting_user</code></td>
+<td>the linked <code>User</code></td>
+<td>the linked <code>User</code></td>
+</tr>
+<tr>
+<td>Authorization</td>
+<td>the key's <code>permissions</code> dict</td>
+<td>the member's, via <code>GroupMember</code></td>
+</tr>
+<tr>
+<td>Attribution (<code>FK(User)</code> columns)</td>
+<td>the linked member</td>
+<td>the linked member</td>
+</tr>
+<tr>
+<td>Tenant boundary</td>
+<td>the key's group</td>
+<td>the key's group</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Reference mode</strong> (the default) exists because most consumers only need
+attribution: before this, an <code>ApiKey</code> could not be stored in any
+<code>ForeignKey("account.User")</code>, so apps hand-rolled resolvers that guessed a user
+from the key's <em>name</em>. With a link set, <code>request.acting_user</code> is what the REST
+layer stamps into <code>CREATED_BY_OWNER_FIELD</code>, so <code>created_by</code> / <code>note.user</code> and
+friends record a real member with no per-app code. It grants <strong>no authority</strong> —
+a reference-mode key with an empty <code>permissions</code> dict can still do nothing.</p>
+<p><strong>Override mode</strong> is the opt-in: the key <em>becomes</em> the member, and permissions
+resolve through their <code>GroupMember</code> exactly as they would for a human. That is
+the point — one place to manage access instead of maintaining the member's
+permissions and a parallel key permissions dict.</p>
+<h3 id="who-can-be-linked">Who can be linked<a class="headerlink" href="#who-can-be-linked" title="Permanent link">&para;</a></h3>
+<p>Enforced by <code>validate_acting_user</code>, on both the REST setter and
+<code>create_for_group</code>:</p>
+<ul>
+<li><strong>Never a superuser.</strong> A hard block, not a warning — a key is a bearer token
+  in a config file and must not be a route to platform-wide authority.</li>
+<li><strong>Only an active member of the key's own group</strong>, with <code>check_parents=False</code>.
+  Delegation must not climb: without this, an admin of a child group could link
+  a key to a more privileged <em>parent</em>-group member.</li>
+<li><strong>The requester needs key-management perms</strong> — global <code>manage_groups</code>/
+  <code>manage_users</code>, or <code>manage_group</code>/<code>manage_members</code>/<code>manage_users</code>/
+  <code>manage_groups</code> within the key's group.</li>
+</ul>
+<p>Two incidents are raised on the <strong>link</strong> (never on use — a linked key serving
+10k requests must not write 10k incidents): linking to a member holding
+<code>manage_users</code>, <code>manage_groups</code>, or any <code>sys.*</code>; and enabling <code>override_user</code>
+at all.</p>
+<h3 id="what-an-override-key-still-cannot-do">What an override key still cannot do<a class="headerlink" href="#what-an-override-key-still-cannot-do" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>sys.*</code> is always denied</strong>, regardless of who the key acts as.</li>
+<li><strong>The tenant boundary is the key's group.</strong> If the member also belongs to
+  other groups, the key does <strong>not</strong> reach them — model security refuses to
+  rebind <code>request.group</code> outside the key's own tree for a key-backed session.</li>
+<li><strong>It cannot change the member's credentials.</strong> This is the guarantee that
+  makes the feature safe: <em>revoking the key revokes the access</em>. Registering a
+  passkey, minting a user auth token, enrolling or disabling MFA, or moving the
+  email/phone used for recovery would all outlive the key, so
+  <code>@md.denies_key_backed_session()</code> refuses them. See
+  <a href="../../core/permissions/">Core → Permissions</a>.</li>
+<li><strong>It cannot edit <code>User</code> rows.</strong> <code>User.check_edit_permission</code> denies whenever
+  <code>request.api_key</code> is set, which covers the password, username, email, phone
+  and MFA setters and actions.</li>
+<li><strong>It cannot satisfy <code>requires_global_perms(allow_api_keys=False)</code></strong>, and it
+  does not inherit the member's <em>global</em> permission dict — <code>requires_perms</code>
+  resolves a key-backed session through the group instead, because the global
+  dict has no tenant bound.</li>
+</ul>
+<p><strong>Residual risk, stated plainly:</strong> an override key linked to a privileged
+member <em>is</em> privileged, within its group. That is inherent to what the feature
+does. The link rules control who can create it, the incident makes it
+discoverable, the credential block stops it becoming permanent, and deleting
+the key ends the access — but choosing whom to link is a real decision.</p>
+<h3 id="deactivation">Deactivation<a class="headerlink" href="#deactivation" title="Permanent link">&para;</a></h3>
+<p>If the linked member is deactivated, the key stops authenticating and returns
+the <strong>existing</strong> <code>"API key is inactive"</code> message — deliberately not a distinct
+string, which would turn the endpoint into an account-state oracle for anyone
+holding the token.</p>
+<p>Clearing <code>user</code> also clears <code>override_user</code>; a key set to assume nobody is not
+a valid state.</p>
 <h2 id="creating-keys">Creating Keys<a class="headerlink" href="#creating-keys" title="Permanent link">&para;</a></h2>
 <h3 id="programmatically">Programmatically<a class="headerlink" href="#programmatically" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">ApiKey</span>
@@ -3953,7 +4103,9 @@
 <a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Mobile App v2&quot;</span><span class="p">,</span>
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="n">permissions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;view_orders&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;create_orders&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
 <a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="p">)</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># raw_token is a 48-char alphanumeric string — store it now, it cannot be recovered</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># raw_token is a 48-char alphanumeric string. It is also stored encrypted on the</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># row, so api_key.get_token() returns it later — you do not have to persist it to</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="c1"># recover it. Treat it as a live credential regardless.</span>
 </code></pre></div>
 <h3 id="via-rest">Via REST<a class="headerlink" href="#via-rest" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>POST /api/group/apikey
@@ -3964,7 +4116,7 @@
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;view_orders&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;create_orders&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
 <a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="p">}</span>
 </code></pre></div>
-<p>The raw token is included in the creation response under <code>data.token</code> and is stored encrypted via <code>MojoSecrets</code> so it can be retrieved at any time.</p>
+<p>The raw token is included in the creation response under <code>data.token</code>. It is <strong>also stored encrypted</strong> via <code>MojoSecrets</code>, so it can be retrieved at any time — <code>ApiKey.get_token()</code> server-side, and the <code>default</code> graph re-serializes it as <code>token</code> on <strong>every</strong> read (<code>GET /api/group/apikey</code> and <code>/api/group/apikey/&lt;id&gt;</code>), to any caller holding <code>manage_group</code> / <code>manage_groups</code> / <code>groups</code>. This is not a "shown once" credential. See <a href="#security-notes">Security Notes</a>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
@@ -4005,7 +4157,7 @@
 <tr>
 <td><code>POST</code></td>
 <td><code>/api/group/apikey</code></td>
-<td>Create a key (returns token once)</td>
+<td>Create a key (response includes the raw token)</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
@@ -4069,10 +4221,11 @@ management permission.</p>
 SMS-provider configuration without sending a real message.</p>
 <h3 id="post-apigroupapikeyrotate-rotate-self"><code>POST /api/group/apikey/rotate</code> — rotate self<a class="headerlink" href="#post-apigroupapikeyrotate-rotate-self" title="Permanent link">&para;</a></h3>
 <p>Rotates the <strong>calling</strong> key's secret <strong>in place</strong>: same key id, name,
-permissions, and limits — a brand-new token. The previous token is invalidated
-immediately (its hash is overwritten), so the new token must be persisted by
-the caller; like creation, it is returned <strong>exactly once</strong> and cannot be
-recovered afterward.</p>
+permissions, and limits — a brand-new token. The <strong>previous</strong> token is
+invalidated immediately (its hash <em>and</em> its encrypted copy are overwritten)
+and cannot be recovered. The <strong>new</strong> token is returned in this response; it is
+not write-once — like any ApiKey token it stays readable afterwards via
+<code>ApiKey.get_token()</code> and the default graph until the next rotation.</p>
 <ul>
 <li>Authenticate with <code>Authorization: apikey &lt;token&gt;</code> (the key being rotated).</li>
 <li>Self-service: no management permission — the caller already holds the secret
@@ -4111,11 +4264,13 @@ equivalent.)</p>
 </code></pre></div>
 <h2 id="security-notes">Security Notes<a class="headerlink" href="#security-notes" title="Permanent link">&para;</a></h2>
 <ul>
-<li>The raw token is stored encrypted via <code>MojoSecrets</code> (AES encryption, key derived from the record's pk + created timestamp)</li>
+<li><strong>The raw token is stored, not just hashed.</strong> <code>token_hash</code> (SHA-256) is for indexed lookup; the raw token itself lives in <code>mojo_secrets</code>, encrypted via <code>MojoSecrets</code> (AES-256-GCM, key via PBKDF2). <code>ApiKey.get_token()</code> recovers it.</li>
+<li><strong>Key-derivation caveat.</strong> <code>MojoSecrets._get_secrets_password()</code> derives the key from <code>{created}{pk}{ClassName}</code> — all plaintext columns on the same row, with no server-side secret mixed in. This protects against exfiltration of the <code>mojo_secrets</code> column on its own; it does <strong>not</strong> protect against a row-level or full-table dump. Treat <code>account_apikey</code> as a table of live credentials and protect it like one. (<code>KSMSecrets</code> — the KMS-backed base in the same module — is a stronger option; <code>ApiKey</code> does not use it today.)</li>
+<li><strong>The default graph returns the live token on every read.</strong> <code>GRAPHS["default"]</code> carries <code>("get_token", "token")</code>, so any caller with <code>manage_group</code> / <code>manage_groups</code> / <code>groups</code> gets the raw token back on list and detail, not only at creation. The <code>me</code> graph omits it, and <code>/rotate</code> uses the forced <code>me</code> graph plus an explicit token field. Whether the default graph <em>should</em> expose it is an open question tracked as maestro item 424 — the behavior described here is the current one.</li>
 <li><code>sys.*</code> permissions are unconditionally denied</li>
 <li>Expired or inactive keys return 401</li>
 <li>Group scope is enforced at the dispatcher level — keys cannot access groups outside their hierarchy</li>
-<li><code>token_hash</code> and <code>mojo_secrets</code> are never included in API responses</li>
+<li>The raw <code>token_hash</code> and <code>mojo_secrets</code> <strong>columns</strong> are never serialized — but note that the decrypted token is exposed via the <code>token</code> extra above, so "the secret columns are hidden" is not the same as "the secret is hidden"</li>
 </ul>
 
 
