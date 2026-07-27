@@ -11,10 +11,8 @@ Usage:
     json_str = to_json(queryset, graph="list")
     response = to_response(instance, request, graph="default")
 
-For direct serializer access, import from full paths:
-    from mojo.serializers.simple import GraphSerializer
+For direct serializer access, import from the full path:
     from mojo.serializers.core.serializer import OptimizedGraphSerializer
-    from mojo.serializers.advanced import AdvancedGraphSerializer
 """
 
 # Import only manager functions - serializer classes are lazy-loaded by the manager

@@ -1,15 +1,18 @@
 """Maestro item 52 — a reverse OneToOne in a graph's "graphs" serializes as an
 object, not [].
 
-Django's OneToOneRel SUBCLASSES ManyToOneRel. Both serializers tested the many
+Django's OneToOneRel SUBCLASSES ManyToOneRel. The serializer tested the many
 branch with `isinstance(field, (ManyToManyField, ManyToOneRel))`, so a reverse
-OneToOne matched it, had no `.all()`, and fell through to a literal `[]` in
-core/serializer.py. simple.py was worse: it has no `.all()` guard and no
-try/except, so it raised AttributeError.
+OneToOne matched it, had no `.all()`, and fell through to a literal `[]`.
 
 The fix classifies relations through named SINGLE_RELATIONS / MANY_RELATIONS
 tuples with the single-object check tested FIRST at every site. Adding
 OneToOneRel to the many tuple would have been a silent no-op.
+
+(mojo/serializers/simple.py carried the same bug in a worse form — no `.all()`
+guard and no try/except, so it raised AttributeError — but that module has
+since been removed: it was unimportable on Python 3.12 and nothing
+referenced it.)
 
 Fixtures are in-tree: User.totp is a reverse OneToOne (account.UserTOTP has
 OneToOneField(User, related_name="totp")); User.devices is a reverse FK, used
@@ -104,26 +107,6 @@ def test_reverse_fk_still_list(opts):
     data = _serialize(user, GRAPH_FK)
     assert_true(isinstance(data.get("devices"), list),
                 f"a reverse FK must still serialize as a list, got {data.get('devices')!r}")
-
-
-@th.django_unit_test("simple.GraphSerializer also handles a reverse OneToOne")
-def test_simple_serializer_reverse_o2o(opts):
-    from mojo.apps.account.models import User
-    from mojo.apps.account.models.totp import UserTOTP
-    from mojo.serializers.simple import GraphSerializer
-
-    user = User.objects.get(pk=opts.user_id)
-    UserTOTP.objects.filter(user=user).delete()
-    totp = UserTOTP(user=user)
-    totp.save()
-
-    # Pre-fix this raised AttributeError (no .all() guard, no try/except).
-    data = GraphSerializer(user, graph=GRAPH_O2O).serialize()
-    got = data.get("totp")
-    assert_true(isinstance(got, dict),
-                f"simple.GraphSerializer must serialize a reverse OneToOne as an object, got {got!r}")
-    assert_eq(got.get("id"), totp.pk,
-              f"the serialized object must be the related row, got id={got.get('id')!r} want {totp.pk}")
 
 
 @th.django_unit_test("query optimizer routes a reverse OneToOne to select_related, not prefetch")

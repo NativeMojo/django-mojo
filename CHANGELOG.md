@@ -1,5 +1,18 @@
 ## Unreleased
 
+**chore** — **removed `mojo/serializers/simple.py` (dead module).**
+`GraphSerializer` had been **unimportable on Python 3.12** — it carried a
+`from distutils.log import info` that never used the imported name, and
+`distutils` was removed in 3.12 — so any consumer that tried to use it got an
+`ImportError`. Nothing in the framework referenced it: the only mentions were a
+usage example inside `mojo/serializers/__init__.py`'s docstring and a
+commented-out entry in `core/manager.py`'s serializer registry. Both cleaned
+up; that docstring also advertised `mojo.serializers.advanced`, which has never
+existed. `OptimizedGraphSerializer` (`mojo/serializers/core/serializer.py`) is
+and remains the wired default. Anyone importing `mojo.serializers.simple`
+directly on 3.12 was already broken; on older runtimes, switch to
+`OptimizedGraphSerializer`, which is a drop-in replacement.
+
 **docs** — **ApiKey token-storage docs corrected: the raw token IS stored (maestro item 61).**
 Four `ApiKey` docstrings, two REST-handler docstrings, and both API-key doc
 pages claimed the raw token was "never stored" and "cannot be recovered." That

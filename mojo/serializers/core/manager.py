@@ -4,7 +4,7 @@ Serializer Manager for Django-MOJO
 Provides a unified interface for switching between different serializers and managing
 serialization strategies across the application. Supports:
 
-- Multiple serializer backends (simple, advanced, optimized, custom)
+- Multiple serializer backends (optimized, custom)
 - Runtime serializer switching
 - Performance monitoring and comparison
 - Configuration via Django settings
@@ -39,13 +39,10 @@ logger = logit.get_logger("serializer_manager", "serializer_manager.log")
 # Thread-safe lock for serializer registry operations
 _registry_lock = RLock()
 
-# Default serializer configurations
-# DEFAULT_SERIALIZERS = {
-#     'simple': 'mojo.serializers.simple.GraphSerializer',
-#     'optimized': 'mojo.serializers.core.serializer.OptimizedGraphSerializer',
-#     'advanced': 'mojo.serializers.advanced.AdvancedGraphSerializer',
-# }
-
+# Default serializer configurations.
+# The 'simple' and 'advanced' entries this block used to carry are gone:
+# advanced.py never existed, and simple.py was removed (it had been
+# unimportable on Python 3.12 and nothing referenced it).
 DEFAULT_SERIALIZERS = {
     'optimized': 'mojo.serializers.core.serializer.OptimizedGraphSerializer'
 }
@@ -262,10 +259,14 @@ class SerializerManager:
             return serializer_class(instance, graph=graph, many=many, **kwargs)
         except Exception as e:
             logger.error(f"Failed to create serializer '{serializer_type}': {e}")
-            # Fallback to simple serializer
+            # Fall back to a serializer registered under 'simple', if a consumer
+            # registered one. There is no built-in one any more — the bundled
+            # mojo/serializers/simple.py was removed (unimportable on Python
+            # 3.12, unreferenced), and it was never in DEFAULT_SERIALIZERS, so
+            # this has always been a no-op for default installs and re-raised.
             fallback_class = self.registry.get('simple')
             if fallback_class and fallback_class != serializer_class:
-                logger.info("Falling back to simple serializer")
+                logger.info("Falling back to the registered 'simple' serializer")
                 return fallback_class(instance, graph=graph, many=many)
             raise
 
