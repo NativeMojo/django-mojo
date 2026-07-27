@@ -59,6 +59,51 @@ Requires `manage_group`, `manage_groups`, or the combined `groups` permission (g
 
 > **The token is not "shown once."** It is stored encrypted server-side and re-serialized on every read of the key: `GET /api/group/apikey` and `GET /api/group/apikey/<id>` both return `token` to callers holding `manage_group` / `manage_groups` / `groups`. Anyone who can list a group's API keys can read their live secrets — grant that permission accordingly. (`GET /api/group/apikey/me` is the exception and never returns a token.)
 
+### Acting as a Member — `user` and `override_user`
+
+A key can name the member it acts as. Both fields are writable on
+`POST /api/group/apikey` and `POST /api/group/apikey/<id>`, and both appear in
+the `default` and `me` graphs (`user` is nested using the User `basic` graph —
+id, display name, username, activity flags and avatar; no email, phone,
+permissions, or superuser flag).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `user` | user id, or `null` to clear | The member this key acts as |
+| `override_user` | bool, default `false` | `false`: the link is a **reference** — it changes who your writes are attributed to, nothing else. `true`: the key **assumes** that member, and permissions come from their group membership. |
+
+```http
+POST /api/group/apikey/42
+Content-Type: application/json
+
+{"user": 137, "override_user": true}
+```
+
+**Constraints** (403 if violated):
+
+- The target must be an **active member of the key's own group** — not a parent
+  group, not another tenant.
+- The target must **not** be a superuser.
+- You need key-management permissions (`manage_group` / `manage_members` /
+  `manage_users` / `manage_groups`, or the global equivalents).
+- `override_user: true` requires a linked `user`. Clearing `user` also clears
+  `override_user`.
+
+**What an override key can and cannot do.** It can do the member's ordinary
+work, bounded by the key's group. It **cannot**:
+
+- reach any group the key itself doesn't belong to, even if the member does;
+- use `sys.*` permissions;
+- change the member's credentials — registering a passkey, generating a user
+  auth token, setting up or disabling TOTP, changing the email, phone,
+  username, or revoking sessions all return **403** for a key-authenticated
+  request. This is deliberate: it keeps *deleting the key* sufficient to end
+  the access.
+- edit `User` records via `/api/user/<id>`.
+
+If the linked member is deactivated, the key stops working and returns the same
+`"API key is inactive"` error as a disabled key.
+
 ### Using an API Key
 
 ```

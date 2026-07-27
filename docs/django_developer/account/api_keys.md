@@ -65,6 +65,88 @@ Every API key belongs to one group. The key can access that group and any of its
 
 Not a hard token reject: an inactive-group key still **authenticates** (it returns `request.group = None`, not a 401). This preserves the group-independent federation path (`requires_global_perms(..., allow_api_keys=True)`, e.g. the geoip `/sync` receiver), which authorizes on the key's `has_permission` and ignores `request.group`. An **active child under an inactive parent is NOT reachable** (DM-048 overturned the old per-group carve-out): the child is effectively inactive, so `group=<child id>` resolves like a nonexistent id and the child's own keys go dark too. No flag is written to the child — reactivating the parent restores the entire subtree instantly.
 
+## Acting as a Member (`user` + `override_user`)
+
+A key can name the member it acts as. `ApiKey.user` is an optional FK to
+`account.User`; `ApiKey.override_user` (default `False`) decides what that link
+actually does.
+
+| | `override_user=False` (default) | `override_user=True` |
+|---|---|---|
+| `request.user` | the `ApiKey` — unchanged | the linked `User` |
+| `request.acting_user` | the linked `User` | the linked `User` |
+| Authorization | the key's `permissions` dict | the member's, via `GroupMember` |
+| Attribution (`FK(User)` columns) | the linked member | the linked member |
+| Tenant boundary | the key's group | the key's group |
+
+**Reference mode** (the default) exists because most consumers only need
+attribution: before this, an `ApiKey` could not be stored in any
+`ForeignKey("account.User")`, so apps hand-rolled resolvers that guessed a user
+from the key's *name*. With a link set, `request.acting_user` is what the REST
+layer stamps into `CREATED_BY_OWNER_FIELD`, so `created_by` / `note.user` and
+friends record a real member with no per-app code. It grants **no authority** —
+a reference-mode key with an empty `permissions` dict can still do nothing.
+
+**Override mode** is the opt-in: the key *becomes* the member, and permissions
+resolve through their `GroupMember` exactly as they would for a human. That is
+the point — one place to manage access instead of maintaining the member's
+permissions and a parallel key permissions dict.
+
+### Who can be linked
+
+Enforced by `validate_acting_user`, on both the REST setter and
+`create_for_group`:
+
+- **Never a superuser.** A hard block, not a warning — a key is a bearer token
+  in a config file and must not be a route to platform-wide authority.
+- **Only an active member of the key's own group**, with `check_parents=False`.
+  Delegation must not climb: without this, an admin of a child group could link
+  a key to a more privileged *parent*-group member.
+- **The requester needs key-management perms** — global `manage_groups`/
+  `manage_users`, or `manage_group`/`manage_members`/`manage_users`/
+  `manage_groups` within the key's group.
+
+Two incidents are raised on the **link** (never on use — a linked key serving
+10k requests must not write 10k incidents): linking to a member holding
+`manage_users`, `manage_groups`, or any `sys.*`; and enabling `override_user`
+at all.
+
+### What an override key still cannot do
+
+- **`sys.*` is always denied**, regardless of who the key acts as.
+- **The tenant boundary is the key's group.** If the member also belongs to
+  other groups, the key does **not** reach them — model security refuses to
+  rebind `request.group` outside the key's own tree for a key-backed session.
+- **It cannot change the member's credentials.** This is the guarantee that
+  makes the feature safe: *revoking the key revokes the access*. Registering a
+  passkey, minting a user auth token, enrolling or disabling MFA, or moving the
+  email/phone used for recovery would all outlive the key, so
+  `@md.denies_key_backed_session()` refuses them. See
+  [Core → Permissions](../core/permissions.md).
+- **It cannot edit `User` rows.** `User.check_edit_permission` denies whenever
+  `request.api_key` is set, which covers the password, username, email, phone
+  and MFA setters and actions.
+- **It cannot satisfy `requires_global_perms(allow_api_keys=False)`**, and it
+  does not inherit the member's *global* permission dict — `requires_perms`
+  resolves a key-backed session through the group instead, because the global
+  dict has no tenant bound.
+
+**Residual risk, stated plainly:** an override key linked to a privileged
+member *is* privileged, within its group. That is inherent to what the feature
+does. The link rules control who can create it, the incident makes it
+discoverable, the credential block stops it becoming permanent, and deleting
+the key ends the access — but choosing whom to link is a real decision.
+
+### Deactivation
+
+If the linked member is deactivated, the key stops authenticating and returns
+the **existing** `"API key is inactive"` message — deliberately not a distinct
+string, which would turn the endpoint into an account-state oracle for anyone
+holding the token.
+
+Clearing `user` also clears `override_user`; a key set to assume nobody is not
+a valid state.
+
 ## Creating Keys
 
 ### Programmatically

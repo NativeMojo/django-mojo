@@ -1,5 +1,60 @@
 ## Unreleased
 
+**feat** — **an API key can act as a member (`ApiKey.user` +
+`ApiKey.override_user`).** A key may now name the `account.User` it acts as.
+With `override_user=False` (the default) the link is a **reference**: the key
+authenticates exactly as before, but the member is exposed as
+`request.acting_user` and is what the REST layer stamps into
+`CREATED_BY_OWNER_FIELD`, so `created_by` / `note.user` and equivalents finally
+record a real member. With `override_user=True` the key **assumes** the member —
+`request.user` is that `User` and permissions resolve through their
+`GroupMember`, so access is managed in one place instead of maintaining a
+parallel key permissions dict. Default-off, so **every existing key behaves
+bit-for-bit as before**. Linking requires key-management perms, refuses
+superusers outright, and requires an active member of the key's *own* group
+(`check_parents=False`, so a child-group admin cannot link to a more privileged
+ancestor member). An incident is raised when linking to a member holding
+`manage_users`/`manage_groups`/`sys.*`, and whenever `override_user` is
+enabled. In both modes the key's group stays the tenant boundary, `sys.*` stays
+denied, and `User` rows stay unreachable. Migration `account/0048`.
+
+**fix** — **api-key creates of any model with a `user` FK no longer 500.** The
+create branch of `on_rest_save` stamped `request.user` into
+`CREATED_BY_OWNER_FIELD` with no type guard, so an api-key request assigned an
+`ApiKey` to a `ForeignKey("account.User")` and Django raised
+`ValueError: Cannot assign … must be a "User" instance`. It now stamps
+`request.acting_user` when present and otherwise only a real `User`; unlinked
+keys leave the field null, which is what per-app shims (e.g.
+`phonehub/rest/sms.py`) were doing by hand.
+
+**fix** — **`GET /api/group` could list another tenant's groups for a key
+acting as a member.** `Group.on_rest_handle_list` carries its own copy of the
+group-list derivation, and `Group` has no `ALLOW_API_KEY_GLOBAL`, so key
+requests land in it; it now derives from the key rather than from the member,
+who may belong to several tenants.
+
+**security** — **new `@md.denies_key_backed_session()`; credential-changing
+endpoints now refuse API-key authentication.** A key-backed session can do a
+member's work but must never hand itself a credential that outlives the key —
+otherwise revoking the key stops revoking the access. Refused for **all** API
+keys, linked or not: `auth/generate_api_key`, `auth/handoff`,
+`auth/sessions/revoke`, passkey registration and passkey mutations,
+`account/totp` setup/confirm/regenerate/delete, `auth/email|phone/change`
+request+confirm, `auth/username/change`, and mutations on
+`account/oauth_connection` and `account/api_keys`. These previously passed
+`requires_auth` and failed later on a type error; they now return a clean 403.
+Note `requires_fresh_auth` is **not** a substitute — it returns `True` for every
+non-bearer caller, so it has always been a no-op for key sessions.
+
+**security** — **`is_key_backed_session(request)` is the new machine-identity
+predicate.** `is_request_user()` answers "is `request.user` a `User` instance",
+which is correct for attribution and now returns `True` under `override_user` —
+so authorization and machine-identity gates must use the new predicate instead.
+`requires_global_perms`, the machine-identity active-group gate, the model
+`owner` branch, and `requires_perms`/`requires_group_perms` have been moved
+over. Downstream code that hand-rolled `hasattr(request.user, "is_request_user")`
+as a machine test should switch to `is_key_backed_session()`.
+
 **chore** — **removed `mojo/serializers/simple.py` (dead module).**
 `GraphSerializer` had been **unimportable on Python 3.12** — it carried a
 `from distutils.log import info` that never used the imported name, and
