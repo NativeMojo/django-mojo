@@ -409,6 +409,7 @@ def on_oauth_complete(request, provider):
 
 @md.URL("account/oauth_connection")
 @md.URL("account/oauth_connection/<int:pk>")
+@md.denies_key_backed_session(methods=("POST", "PUT", "PATCH", "DELETE"))
 @md.requires_auth()
 def on_oauth_connection(request, pk=None):
     """Standard CRUD for OAuth connections (GET list, GET detail, POST update).

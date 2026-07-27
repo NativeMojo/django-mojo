@@ -39,6 +39,7 @@ from mojo.helpers.response import JsonResponse
 # -----------------------------------------------------------------
 
 @md.POST("account/totp/setup")
+@md.denies_key_backed_session()
 @md.requires_auth()
 @md.requires_fresh_auth()
 def on_totp_setup(request):
@@ -65,6 +66,7 @@ def on_totp_setup(request):
 
 
 @md.POST("account/totp/confirm")
+@md.denies_key_backed_session()
 @md.requires_auth()
 @md.requires_fresh_auth()
 @md.requires_params("code")
@@ -93,6 +95,7 @@ def on_totp_confirm(request):
 
 
 @md.DELETE("account/totp")
+@md.denies_key_backed_session()
 @md.requires_auth()
 @md.requires_fresh_auth()
 def on_totp_disable(request):
@@ -118,6 +121,7 @@ def on_totp_recovery_codes_get(request):
 
 
 @md.POST("account/totp/recovery-codes/regenerate")
+@md.denies_key_backed_session()
 @md.requires_auth()
 @md.requires_fresh_auth()
 @md.requires_params("code")

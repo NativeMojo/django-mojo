@@ -41,6 +41,7 @@ from mojo.helpers.response import JsonResponse
 
 @md.URL("account/passkeys")
 @md.URL("account/passkeys/<int:pk>")
+@md.denies_key_backed_session(methods=("POST", "PUT", "PATCH", "DELETE"))
 @md.requires_auth()
 def on_account_passkey(request, pk=None):
     """Standard REST endpoint for managing passkeys."""
@@ -58,6 +59,7 @@ def on_account_passkey(request, pk=None):
 # -----------------------------------------------------------------
 
 @md.POST("account/passkeys/register/begin")
+@md.denies_key_backed_session()
 @md.requires_auth()
 @md.requires_fresh_auth()
 def on_passkeys_register_begin(request):
@@ -81,6 +83,7 @@ def on_passkeys_register_begin(request):
 
 
 @md.POST("account/passkeys/register/complete")
+@md.denies_key_backed_session()
 @md.requires_auth()
 @md.requires_fresh_auth()
 @md.requires_params("challenge_id", "credential")

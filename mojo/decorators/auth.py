@@ -60,6 +60,56 @@ def _deny_machine_identity_without_active_group(request, perms):
         raise mojo.errors.PermissionDeniedException()
 
 
+def denies_key_backed_session(methods=None):
+    """Refuse any request authenticated with an ApiKey, linked or not.
+
+    `methods` restricts the refusal to the listed HTTP methods — use it on
+    combined CRUD endpoints where only the mutating verbs change credentials
+    and the reads are ordinary. Omit it (the default) to refuse every method,
+    which is right for the dedicated credential endpoints.
+
+    For endpoints that change how a user AUTHENTICATES — registering a passkey,
+    minting a long-lived token, enrolling or disabling MFA, moving the email or
+    phone used for recovery. An ApiKey may act as a member
+    (account.ApiKey.user) and do that member's work; it must never be able to
+    hand itself a credential that OUTLIVES the key. Otherwise revoking the key
+    stops revoking the access, which is the one guarantee that makes the
+    acting-as feature safe to offer at all.
+
+    Applies in both key modes. A reference-mode or unlinked key has no business
+    on these endpoints either — it simply used to fail later, messily, on a
+    type error instead of cleanly here.
+
+    NOT interchangeable with requires_fresh_auth(): fresh_auth deliberately
+    returns True for every non-bearer caller
+    (mojo/apps/account/services/fresh_auth.py), so it is a no-op for key
+    sessions and provides none of this protection.
+    """
+    blocked = None if methods is None else {m.upper() for m in methods}
+
+    def decorator(func):
+        func._mojo_denies_key_backed_session = True
+        func._mojo_denies_key_backed_methods = blocked
+        _register_security(
+            func,
+            denies_key_backed_session=True,
+            denies_key_backed_methods=sorted(blocked) if blocked else "all",
+            function=func,
+        )
+
+        @wraps(func)
+        def wrapper(request, *args, **kwargs):
+            if is_key_backed_session(request):
+                if blocked is None or request.method.upper() in blocked:
+                    logger.error(
+                        "api key denied on credential endpoint "
+                        f"{func.__module__}.{func.__name__} ({request.method})")
+                    raise mojo.errors.PermissionDeniedException()
+            return func(request, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
 def requires_perms(*required_perms):
     def decorator(func):
         # Add metadata for security detection
