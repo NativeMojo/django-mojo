@@ -18,7 +18,7 @@ if not user.check_password(password):
 token_package = JWToken(user.get_auth_key()).create(uid=user.id, ip=request.ip)
 ```
 
-Returns `access_token`, `refresh_token`, `expires_in`, and `user` dict.
+Returns `access_token`, `refresh_token`, and a `user` dict. Token lifetimes are carried in each JWT's `exp` claim — they are not returned as a separate field.
 
 ## `jwt_login` Helper
 
@@ -92,7 +92,7 @@ The client must detect `mfa_required: true` and route the user to the appropriat
 - SMS: `POST /api/auth/sms/verify` with `mfa_token` + `code`
 - TOTP: `POST /api/auth/totp/verify` with `mfa_token` + `code`
 
-Both return the standard JWT response (`access_token`, `refresh_token`, `expires_in`, `user`) on success.
+Both return the standard JWT response (`access_token`, `refresh_token`, `user`) on success.
 
 The `mfa_token` is single-use and expires in `expires_in` seconds (default 300).
 

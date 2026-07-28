@@ -101,7 +101,6 @@ The user authenticates with Google and is redirected back to your `redirect_uri`
   "data": {
     "access_token": "eyJhbGci...",
     "refresh_token": "eyJhbGci...",
-    "expires_in": 21600,
     "user": {
       "id": 42,
       "username": "alice",
@@ -123,7 +122,6 @@ When a brand-new account is created (auto-link path 3), the response includes an
   "data": {
     "access_token": "eyJhbGci...",
     "refresh_token": "eyJhbGci...",
-    "expires_in": 21600,
     "user": { ... },
     "is_new_user": true
   }

@@ -767,7 +767,6 @@ POST /api/auth/totp/recover
   "data": {
     "access_token": "eyJhbGci...",
     "refresh_token": "eyJhbGci...",
-    "expires_in": 21600,
     "user": { "id": 42, "username": "alice", "display_name": "Alice" }
   }
 }
@@ -839,8 +838,7 @@ is required (see [Step-Up Auth](step_up_auth.md)).
   "status": true,
   "data": {
     "access_token": "eyJhbGci...",
-    "refresh_token": "eyJhbGci...",
-    "expires_in": 21600
+    "refresh_token": "eyJhbGci..."
   }
 }
 ```

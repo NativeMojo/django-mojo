@@ -209,7 +209,8 @@ from mojo.apps.account.utils.jwtoken import JWToken
 
 # Create token pair
 token_package = JWToken(user.get_auth_key()).create(uid=user.id)
-# Returns: {"access_token": "...", "refresh_token": "...", "expires_in": 21600}
+# Returns: {"access_token": "...", "refresh_token": "..."}
+# Expiry is baked into each token's `exp` claim, not returned alongside it.
 
 # Validate token
 user, error = User.validate_jwt(token_string)

@@ -294,7 +294,6 @@ the password check; the `code` proves they have the authenticator app.
   "data": {
     "access_token": "eyJhbGci...",
     "refresh_token": "eyJhbGci...",
-    "expires_in": 21600,
     "user": { "id": 42, "username": "alice", "display_name": "Alice" }
   }
 }
@@ -331,7 +330,6 @@ regeneration.
   "data": {
     "access_token": "eyJhbGci...",
     "refresh_token": "eyJhbGci...",
-    "expires_in": 21600,
     "user": { "id": 42, "username": "alice", "display_name": "Alice" }
   }
 }

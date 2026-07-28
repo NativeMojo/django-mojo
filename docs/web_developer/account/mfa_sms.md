@@ -82,7 +82,6 @@ Sends a 6-digit code to the user's phone number. Returns a fresh `mfa_token` (th
   "data": {
     "access_token": "eyJhbGci...",
     "refresh_token": "eyJhbGci...",
-    "expires_in": 21600,
     "user": { "id": 42, "username": "alice", "display_name": "Alice" }
   }
 }

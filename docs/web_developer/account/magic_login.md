@@ -65,7 +65,6 @@ For `method=sms`, the token is sent as a text message to the user's verified pho
   "data": {
     "access_token": "eyJhbGci...",
     "refresh_token": "eyJhbGci...",
-    "expires_in": 21600,
     "user": {
       "id": 42,
       "username": "alice",

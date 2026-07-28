@@ -1,3 +1,20 @@
+## Unreleased
+
+**docs (fix)** — **the documented login response was wrong in twelve places.**
+`docs/web_developer/core/authentication.md` told clients the JWT arrives as
+`data.token` and to "use the `token` value in all subsequent requests" — there
+is no `token` key. `jwt_login` returns `access_token`, `refresh_token` and
+`user`, so anyone following the primary auth reference got a `KeyError` on their
+first call. Separately, `"expires_in": 21600` appeared in **every** JWT-login
+example across both doc tracks (login, refresh, OAuth, magic link, passkeys,
+SMS/TOTP MFA, email verify, email change, registration); `JWToken.create()`
+builds a two-key package and no caller adds an expiry field — `21600` is the
+`JWT_TOKEN_EXPIRY` *setting*, which reaches clients only inside the token's
+`exp` claim. Both claims are corrected everywhere, and the Token Expiry section
+now documents `POST /api/refresh_token` instead of telling clients to log in
+again. Legitimate `expires_in` responses (`mfa_token` 300s, phone-verify
+`session_token` 600s, notifications, jobs) are untouched.
+
 ## v1.2.56 - July 27, 2026
 
 **feat** — **filevault access audit trail (`VaultAccessLog`).** Every attempt to

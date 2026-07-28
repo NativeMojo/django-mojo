@@ -35,7 +35,6 @@ Two-arg `MojoAuth.login(username, password)` callers omit the key entirely and b
   "data": {
     "access_token": "eyJhbGci...",
     "refresh_token": "eyJhbGci...",
-    "expires_in": 21600,
     "user": {
       "id": 42,
       "username": "alice@example.com",
@@ -116,8 +115,7 @@ Authorization: Bearer <access_token>
   "status": true,
   "data": {
     "access_token": "eyJhbGci...",
-    "refresh_token": "eyJhbGci...",
-    "expires_in": 21600
+    "refresh_token": "eyJhbGci..."
   }
 }
 ```
@@ -473,7 +471,6 @@ When `REQUIRE_VERIFIED_EMAIL` is `False` (default), the user is logged in immedi
   "data": {
     "access_token": "eyJhbGci...",
     "refresh_token": "eyJhbGci...",
-    "expires_in": 21600,
     "user": {
       "id": 43,
       "username": "alice@example.com",

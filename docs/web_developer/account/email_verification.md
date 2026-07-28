@@ -153,7 +153,6 @@ On success, the server marks `is_email_verified = true` and **logs the user in**
   "data": {
     "access_token": "eyJhbGci...",
     "refresh_token": "eyJhbGci...",
-    "expires_in": 21600,
     "user": {
       "id": 42,
       "username": "alice@example.com",
@@ -213,7 +212,6 @@ The response is identical to the email verify response — a full JWT on success
   "data": {
     "access_token": "eyJhbGci...",
     "refresh_token": "eyJhbGci...",
-    "expires_in": 21600,
     "user": {
       "id": 17,
       "username": "bob@example.com",

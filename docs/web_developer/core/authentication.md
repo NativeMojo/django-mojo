@@ -27,7 +27,8 @@ Authorization: Bearer <your-jwt-token>
 {
   "status": true,
   "data": {
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
     "user": {
       "id": 42,
       "username": "alice@example.com",
@@ -37,7 +38,7 @@ Authorization: Bearer <your-jwt-token>
 }
 ```
 
-Use the `token` value in all subsequent requests.
+Store both tokens. Use `access_token` in the `Authorization` header on all subsequent requests; `refresh_token` is only sent to the refresh endpoint below.
 
 ## Authenticated Request Example
 
@@ -48,7 +49,21 @@ curl -H "Authorization: Bearer eyJhbGci..." \
 
 ## Token Expiry
 
-Tokens expire. When a request returns `401`, obtain a new token by logging in again.
+The access token expires — default 6 hours, configured server-side by `JWT_TOKEN_EXPIRY`. The lifetime is **not** returned in the login response; decode the JWT's `exp` claim if you need it client-side.
+
+When a request returns `401`, exchange the refresh token for a fresh pair rather than sending the user back through login:
+
+**POST** `/api/refresh_token`
+
+```json
+{
+  "refresh_token": "eyJhbGci..."
+}
+```
+
+The response carries a new `access_token` and `refresh_token`. The refresh token has its own longer TTL (default 7 days, `JWT_REFRESH_TOKEN_EXPIRY`); once that expires, the user must log in again.
+
+See [Account Authentication](../account/authentication.md) for the full token lifecycle, storage guidance, and MFA flows.
 
 ## Group Context
 

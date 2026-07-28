@@ -106,7 +106,6 @@ On success:
   "data": {
     "access_token": "eyJhbGci...",
     "refresh_token": "eyJhbGci...",
-    "expires_in": 21600,
     "user": {
       "id": 42,
       "username": "newemail@example.com",
