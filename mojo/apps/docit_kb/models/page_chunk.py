@@ -71,6 +71,9 @@ class PageChunk(models.Model, MojoModel):
     class RestMeta:
         VIEW_PERMS = ['manage_docit', 'docs']
         SAVE_PERMS = ['manage_docit', 'docs']
+        # Chunks are derived data written only by the embed pipeline — keep
+        # the assistant's generic model tools away from them entirely.
+        DENY_AI = True
         GRAPHS = {
             'default': {
                 "fields": [

@@ -74,8 +74,10 @@ def _embed_missing(page):
             f"EMBEDDINGS_DIM {dim} does not match the PageChunk column "
             f"dimension {EMBEDDING_DIM}; skipping vectors (re-embed migration required)")
         return 0
+    # embed_texts (not provider.embed) so MAX_INPUT_CHARS truncation applies —
+    # a single oversized paragraph passes through the chunker whole by design.
     provider = embeddings.get_provider()
-    vectors = provider.embed([_embed_input(row) for row in rows])
+    vectors = embeddings.embed_texts([_embed_input(row) for row in rows])
     for row, vector in zip(rows, vectors):
         row.embedding = vector
         row.embed_model = provider.model_id
@@ -119,11 +121,20 @@ def search(query, book=None, limit=10):
 
 
 def reindex_book(book):
-    """Queue an embed job for every page of a book. Returns the count queued."""
+    """Queue an embed job for every page of a book. Returns the count queued.
+
+    The idempotency key is (page id, page modified) — repeat reindexes of an
+    unchanged page dedupe against the earlier job instead of flooding the
+    queue; editing the page mints a new key. A permanently-failed job for an
+    unchanged page therefore won't re-run until the page is touched (the
+    reconciliation follow-up, board item 544, covers that gap).
+    """
     from mojo.apps import jobs
     count = 0
-    for page_id in book.pages.values_list("id", flat=True):
-        jobs.publish(EMBED_JOB, {"page_id": page_id}, max_retries=2)
+    for page_id, modified in book.pages.values_list("id", "modified"):
+        jobs.publish(
+            EMBED_JOB, {"page_id": page_id}, max_retries=2,
+            idempotency_key=f"docit_kb.embed:{page_id}:{int(modified.timestamp())}")
         count += 1
     logger.info(f"reindex_book book={book.pk} queued={count}")
     return count

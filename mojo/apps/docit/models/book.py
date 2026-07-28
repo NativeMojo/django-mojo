@@ -222,12 +222,14 @@ class Book(models.Model, MojoModel):
     def on_action_reindex(self, value):
         """Queue knowledge-base embed jobs for every page of this book.
 
-        Triggered by {"reindex": true} on save. No-op unless
-        mojo.apps.docit_kb is installed.
+        Triggered by {"reindex": true} on save — a falsy value is a no-op
+        (POST_SAVE_ACTIONS dispatches on key presence, not truthiness).
+        No-op unless mojo.apps.docit_kb is installed.
         """
         from django.apps import apps
-        if not apps.is_installed("mojo.apps.docit_kb"):
-            return {"status": True, "data": {"queued": 0, "enabled": False}}
+        enabled = apps.is_installed("mojo.apps.docit_kb")
+        if not value or not enabled:
+            return {"status": True, "data": {"queued": 0, "enabled": enabled}}
         from mojo.apps.docit_kb.services import knowledge
         queued = knowledge.reindex_book(self)
         return {"status": True, "data": {"queued": queued, "enabled": True}}

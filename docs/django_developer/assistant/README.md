@@ -57,7 +57,7 @@ Core tools are sent to the LLM on every turn regardless of domain. They handle u
 
 ### Domain Tools (loaded on demand)
 
-All other tools (security, jobs, users, groups, metrics, full discovery) start unloaded. The LLM calls `load_tools` to activate them.
+All other tools (security, jobs, users, groups, metrics, docit, full discovery) start unloaded. The LLM calls `load_tools` to activate them.
 
 **Domains and their tool counts:**
 
@@ -68,6 +68,7 @@ All other tools (security, jobs, users, groups, metrics, full discovery) start u
 | `users` | Query and manage users, permissions, rate limits, and activity |
 | `groups` | Query and manage groups, members, and group activity |
 | `metrics` | Fetch time-series metrics, system health, and incident trends |
+| `docit` | Search the documentation knowledge base (docit books and pages) |
 | `discovery` | Full tool listing (`list_tools`) |
 
 ### `load_tools` — the primary gateway
@@ -237,6 +238,14 @@ Every read tool calls `mojo.apps.metrics.rest.helpers.check_view_permissions(req
 | Tool | Permission | Mutates | Description |
 |---|---|---|---|
 | `read_docs` | `view_admin` | No | Fetch django-mojo framework documentation by path or topic keyword search. Use `path` for a specific doc (e.g. `django_developer/account/push.md`) or `topic` for keyword search (e.g. `push notifications`, `rate limiting`). Returns raw markdown content. Falls back to the index when no topic match is found. |
+
+### Docit Domain (`all`)
+
+| Tool | Permission | Mutates | Description |
+|---|---|---|---|
+| `search_docs` | `all` | No | Search the documentation knowledge base (docit books and pages). Returns ranked excerpts with page and book references. Use `book` to scope the search to one book by id or slug. |
+
+`permission: "all"` is satisfied by any authenticated user (see `mojo.apps.account.models.User.has_permission`) — it mirrors docit's own `Book`/`Page` `VIEW_PERMS = ['all']`. `search_docs` calls the same `search_any()` dispatch as `GET/POST /api/docit/search`: hybrid pgvector + full-text search when `mojo.apps.docit_kb` is installed, page-level full-text fallback otherwise. See [docit/knowledge.md](../docit/knowledge.md).
 
 ### Models Domain (`view_admin`)
 

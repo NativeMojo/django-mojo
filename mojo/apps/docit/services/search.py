@@ -38,9 +38,12 @@ def search_pages(query, book=None, limit=10):
             qs = qs.filter(book__slug=book)
     sq = SearchQuery(query, search_type="websearch")
     vector = SearchVector("title", weight="A") + SearchVector("content", weight="B")
+    # Non-HTML highlight sentinels — Postgres defaults are <b></b>, which
+    # invites rendering the snippet as HTML; page content is untrusted.
     qs = (qs.annotate(
             rank=SearchRank(vector, sq),
-            snippet=SearchHeadline("content", sq, max_words=60))
+            snippet=SearchHeadline("content", sq, max_words=60,
+                                   start_sel="**", stop_sel="**"))
           .filter(rank__gt=0)
           .order_by("-rank")[:limit])
     results = []

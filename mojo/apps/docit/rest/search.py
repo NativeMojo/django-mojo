@@ -3,10 +3,12 @@ from mojo.helpers.response import JsonResponse
 
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 50
+MAX_QUERY_CHARS = 512
 
 
 @md.URL('search')
 @md.requires_auth()
+@md.rate_limit("docit_search", ip_limit=120, duid_limit=60)
 def on_search(request):
     """
     Knowledge-base search over docit content.
@@ -21,6 +23,8 @@ def on_search(request):
     query = request.DATA.get("q", None) or request.DATA.get("search", None)
     if not query or not str(query).strip():
         return JsonResponse({"error": "q is required"}, status=400)
+    if len(str(query)) > MAX_QUERY_CHARS:
+        return JsonResponse({"error": f"q too long (max {MAX_QUERY_CHARS} chars)"}, status=400)
     try:
         limit = int(request.DATA.get("limit", DEFAULT_LIMIT))
     except (TypeError, ValueError):

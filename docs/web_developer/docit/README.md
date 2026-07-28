@@ -147,9 +147,14 @@ published pages of active books.
 
 | Param | Required | Description |
 |---|---|---|
-| `q` | yes | Search terms (`search` accepted as an alias). Websearch syntax: `"exact phrase"`, `-excluded`, `or` |
+| `q` | yes | Search terms, max 512 chars (`search` accepted as an alias). Websearch syntax: `"exact phrase"`, `-excluded`, `or` |
 | `book` | no | Scope to one book by id or slug |
 | `limit` | no | Max results — default 10, clamped to 1–50 |
+
+The endpoint is rate-limited (120/min per IP, 60/min per device).
+`snippet` is **untrusted text** — page authors control it; never render it
+as HTML. In `pages` mode, matched terms are wrapped in `**` (markdown
+emphasis), not HTML tags.
 
 ```json
 {
@@ -185,17 +190,29 @@ Error responses:
 
 | Status | Condition |
 |---|---|
-| 400 | `q` missing or empty |
+| 400 | `q` missing, empty, or over 512 chars |
 | 403 | Not authenticated |
+| 429 | Rate limit exceeded |
 
 ## Reindex a Book
 
 **POST** `/api/docit/book/<id>` with `{"reindex": true}` — requires book
 save permission (`manage_docit`, `docs`, or owner). Queues a background
 re-embed job for every page of the book; use it to backfill after enabling
-the knowledge base or after changing embedding settings. The response's
-`action` data reports `{"queued": N, "enabled": true|false}` (`enabled`
-false means the knowledge-base app is not installed).
+the knowledge base or after changing embedding settings.
+
+```json
+{
+  "status": true,
+  "data": {"queued": 12, "enabled": true}
+}
+```
+
+`data.enabled` false means the knowledge-base app is not installed (no jobs
+queued, `queued` is 0). A falsy action value (`{"reindex": false}`) is a
+no-op. Repeat reindexes of unchanged pages are deduplicated by the jobs
+system (idempotency keyed on page id + last-modified), so calling this in a
+loop cannot flood the queue.
 
 ## Assistant Tool
 

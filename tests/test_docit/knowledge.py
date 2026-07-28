@@ -368,6 +368,20 @@ def test_book_reindex_action(opts):
     assert reindexed >= page_count, \
         f"Every page must have chunks after reindex, got {reindexed} chunks for {page_count} pages"
 
+    # A falsy action value must be a no-op (dispatch fires on key presence).
+    resp = opts.client.post(f"/api/docit/book/{opts.kb_book_id}", json={"reindex": False})
+    assert resp.status_code == 200, f"Falsy reindex must still return 200, got {resp.status_code}"
+    pending = Job.objects.filter(func=EMBED_JOB, status="pending").count()
+    assert pending == 0, f"Falsy reindex must queue nothing, got {pending} pending jobs"
+
+    # Repeat reindex of unchanged pages dedupes via idempotency keys —
+    # a reindex loop cannot flood the queue.
+    resp = opts.client.post(f"/api/docit/book/{opts.kb_book_id}", json={"reindex": True})
+    assert resp.status_code == 200, f"Second reindex must return 200, got {resp.status_code}"
+    pending = Job.objects.filter(func=EMBED_JOB, status="pending").count()
+    assert pending == 0, \
+        f"Unchanged pages must dedupe against prior jobs (idempotency), got {pending} new pending"
+
 
 @th.django_unit_test()
 def test_rest_search_endpoint(opts):
@@ -392,6 +406,9 @@ def test_rest_search_endpoint(opts):
     resp = opts.client.get("/api/docit/search")
     assert resp.status_code == 400, f"Missing q must return 400, got {resp.status_code}"
 
+    resp = opts.client.get("/api/docit/search", params={"q": "x" * 600})
+    assert resp.status_code == 400, f"q over 512 chars must return 400, got {resp.status_code}"
+
     resp = opts.client.get("/api/docit/search", params={"q": "alpha", "limit": 9999})
     assert resp.status_code == 200, f"Oversized limit must clamp, not error — got {resp.status_code}"
     assert resp.response.data.count <= 50, \
@@ -404,16 +421,27 @@ def test_rest_search_endpoint(opts):
 
 
 @th.django_unit_test()
-def test_rest_search_provider_off_degrades(opts):
-    """With no usable provider on the server, search degrades to FTS mode."""
-    ok = opts.client.login(KB_USER, KB_PWORD)
-    assert ok, "Login must succeed before searching"
-    with th.server_settings(EMBEDDINGS_PROVIDER="bedrock"):
-        resp = opts.client.get("/api/docit/search", params={"q": "ZXQTOKEN99"})
-        assert resp.status_code == 200, f"Provider-off search must not 500, got {resp.status_code}"
-        data = resp.response.data
-        assert data.mode == "fts", f"Bedrock without creds must degrade to fts, got {data.mode}"
-        assert data.count >= 1, "FTS-only search must still find the exact identifier"
+def test_search_mode_degrades_without_provider(opts):
+    """Without a usable provider, search degrades to FTS mode instead of erroring.
+
+    Tested in-process (not via th.server_settings) — a server_settings
+    override of EMBEDDINGS_PROVIDER can leak into var/django.conf under
+    parallel full-suite runs and poison the next run's baseline (item 543).
+    The REST dispatch layer is covered by test_rest_search_endpoint.
+    """
+    from django.conf import settings as dj_settings
+    from mojo.apps.docit_kb.services import knowledge
+
+    original = getattr(dj_settings, "EMBEDDINGS_PROVIDER", "mock")
+    dj_settings.EMBEDDINGS_PROVIDER = "bedrock"  # no AWS creds in the test env
+    try:
+        found = knowledge.search("ZXQTOKEN99")
+        assert found.mode == "fts", f"Bedrock without creds must degrade to fts, got {found.mode}"
+        assert len(found.results) >= 1, "FTS-only search must still find the exact identifier"
+        assert found.results[0].page_id == opts.kb_page_beta_id, \
+            f"Degraded search must still rank the beta page first, got {found.results[0].page_id}"
+    finally:
+        dj_settings.EMBEDDINGS_PROVIDER = original
 
 
 @th.django_unit_test()

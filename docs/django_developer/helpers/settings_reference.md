@@ -77,6 +77,11 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `BASE_URL`
 
+### BEDROCK
+
+- `BEDROCK_EMBED_MODEL`
+- `BEDROCK_REGION` — falls back to `AWS_REGION`
+
 ### BOUNCER
 
 - `BOUNCER_ACCENT_COLOR`
@@ -103,11 +108,6 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `BOUNCER_THRESHOLDS`
 - `BOUNCER_THRESHOLDS_OVERRIDES`
 - `BOUNCER_TOKEN_TTL`
-
-### BEDROCK
-
-- `BEDROCK_EMBED_MODEL`
-- `BEDROCK_REGION` — falls back to `AWS_REGION`
 
 ### DEACTIVATE
 

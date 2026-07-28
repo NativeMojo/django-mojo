@@ -98,6 +98,24 @@ test suite via `EMBEDDINGS_PROVIDER = "mock"`).
 - Unpublishing a page or deactivating a book hides its chunks from search
   immediately (query-time filters); the rows remain and reappear on
   republish. Deleting a page cascades to its chunks.
+- The embed publish on `Page.save` is fire-and-forget: if the job queue is
+  down, the save still succeeds and the miss is only logged. Until the
+  reconciliation cron ships (board item 544), a page edited during a queue
+  outage keeps serving its **pre-edit** chunks in search — including
+  content the edit removed. A book `{"reindex": true}` clears it manually.
+- Repeat `reindex` calls dedupe per unchanged page via job idempotency
+  keys (page id + modified timestamp) — a reindex loop cannot flood the
+  queue. The flip side: a permanently-failed embed of an unchanged page
+  won't re-run until the page is touched (also item 544's territory).
+- `snippet` is untrusted text in every mode — page authors control it;
+  never render it as HTML. `pages` mode wraps matches in `**` (markdown),
+  not HTML tags.
+- Search enforces the same visibility docit's own RestMeta enforces:
+  authenticated user + published page + active book. Per-book ACLs
+  (`Book.permissions` / `can_user_view`) are not consulted — docit itself
+  never wired them into REST. If a consumer later adds
+  `check_view_permission` to Book, extend the base queryset in
+  `knowledge.search` (single choke point) to match.
 - The test suite pins the pipeline, hybrid ranking, visibility filters,
   and REST contract in `tests/test_docit/knowledge.py`; the test Postgres
   gets the extension via `bin/create_testproject`.
