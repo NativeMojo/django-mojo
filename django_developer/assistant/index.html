@@ -5691,7 +5691,7 @@
 </tr>
 </tbody>
 </table>
-<p><code>permission: "all"</code> is satisfied by any authenticated user (see <code>mojo.apps.account.models.User.has_permission</code>) — it mirrors docit's own <code>Book</code>/<code>Page</code> <code>VIEW_PERMS = ['all']</code>. <code>search_docs</code> calls the same <code>search_any()</code> dispatch as <code>GET/POST /api/docit/search</code>: hybrid pgvector + full-text search when <code>mojo.apps.docit_kb</code> is installed, page-level full-text fallback otherwise. See <a href="../docit/knowledge/">docit/knowledge.md</a>.</p>
+<p><code>permission: "all"</code> is satisfied by any authenticated user (see <code>mojo.apps.account.models.User.has_permission</code>) — it gates only whether the <strong>tool itself</strong> is offered, not what it returns. <code>search_docs</code> calls the same <code>search_any()</code> dispatch as <code>GET/POST /api/docit/search</code>, passing <code>visible_groups(user=user)</code> — so results are confined to the asking user's own tenants exactly as the REST endpoint's are, even though the tool is visible to everyone: hybrid pgvector + full-text search when <code>mojo.apps.docit_kb</code> is installed, page-level full-text fallback otherwise. See <a href="../docit/#permissions-and-tenant-scoping">docit/README.md</a> and <a href="../docit/knowledge/">docit/knowledge.md</a>.</p>
 <h3 id="models-domain-view_admin">Models Domain (<code>view_admin</code>)<a class="headerlink" href="#models-domain-view_admin" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

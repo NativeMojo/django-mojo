@@ -4388,9 +4388,14 @@ by definition.</p>
 <td>Write vault files and data</td>
 </tr>
 <tr>
+<td><code>view_docit</code></td>
+<td>Docs</td>
+<td>Read-only access to documentation books, pages, assets — across all tenants</td>
+</tr>
+<tr>
 <td><code>manage_docit</code></td>
 <td>Docs</td>
-<td>Manage documentation books, pages, assets</td>
+<td>Manage documentation books, pages, assets — across all tenants</td>
 </tr>
 <tr>
 <td><code>view_logs</code></td>
@@ -4914,27 +4919,27 @@ by definition.</p>
 </tr>
 <tr>
 <td>Book</td>
-<td>all</td>
+<td>view_docit, manage_docit, docs, member</td>
 <td>manage_docit, docs, owner</td>
-<td>Public read</td>
+<td>GROUP_FIELD=<code>group</code>; <code>member</code>=any member of the owning group; anonymous reading is a separate opt-in — see <a href="../../docit/#public-documentation-opt-in">docit/README.md</a></td>
 </tr>
 <tr>
 <td>Asset</td>
-<td>all</td>
+<td>view_docit, manage_docit, docs, member</td>
 <td>manage_docit, docs, owner</td>
-<td></td>
+<td>GROUP_FIELD=<code>book__group</code></td>
 </tr>
 <tr>
 <td>Page</td>
-<td>all</td>
+<td>view_docit, manage_docit, docs, member</td>
 <td>manage_docit, docs, owner</td>
-<td></td>
+<td>GROUP_FIELD=<code>book__group</code></td>
 </tr>
 <tr>
 <td>PageRevision</td>
-<td>all</td>
+<td>view_docit, manage_docit, docs, member</td>
 <td>manage_docit, docs, owner</td>
-<td></td>
+<td>GROUP_FIELD=<code>page__book__group</code></td>
 </tr>
 </tbody>
 </table>

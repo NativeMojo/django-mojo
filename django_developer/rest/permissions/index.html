@@ -4267,11 +4267,28 @@
 <td>The instance's <code>OWNER_FIELD</code> matches <code>request.user</code></td>
 </tr>
 <tr>
+<td><code>"member"</code></td>
+<td>Any member of the row's owning group (via <code>GROUP_FIELD</code>) — no per-member grant needed</td>
+</tr>
+<tr>
 <td>Any other string</td>
 <td>Checked via <code>request.user.has_permission(perm)</code></td>
 </tr>
 </tbody>
 </table>
+<p><code>"member"</code> is meaningful only on a group-scoped model (a direct <code>group</code> FK or
+<code>RestMeta.GROUP_FIELD</code>) — <code>GROUP_FIELD</code> is what resolves "the row's owning
+group" to check membership against. It is honored by <code>GroupMember.has_permission</code>
+and <code>ApiKey.has_permission</code> (both always return <code>True</code> for it — a group-scoped
+API key of the tenant satisfies it too), but <strong>not</strong> by <code>User.has_permission</code>,
+which has no <code>"member"</code> case. That asymmetry is the point: it is not a global
+grant, so it only ever widens access within the group-membership check that
+<code>GROUP_FIELD</code> confinement already applies — a user with no membership in the
+row's group still reads nothing. Reserve the literal string <code>member</code> as a
+<em>global</em> <code>User</code> permission for nothing else; granting it platform-wide would
+defeat the group confinement. See <code>mojo.apps.docit.models.book.Book.RestMeta</code>
+for a real usage — <code>VIEW_PERMS</code> includes <code>"member"</code> so any member of a book's
+group can read that group's docs without an explicit per-user grant.</p>
 <h2 id="the-owner-permission">The "owner" Permission<a class="headerlink" href="#the-owner-permission" title="Permanent link">&para;</a></h2>
 <p><code>"owner"</code> is a special string in permission lists. It enables user-scoped access:</p>
 <h3 id="for-detail-getputdelete-with-pk">For detail (GET/PUT/DELETE with pk):<a class="headerlink" href="#for-detail-getputdelete-with-pk" title="Permanent link">&para;</a></h3>

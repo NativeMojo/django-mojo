@@ -4824,7 +4824,7 @@
 </tr>
 <tr>
 <td><em>(any authenticated user)</em></td>
-<td><code>search_docs</code> — search the documentation knowledge base (docit domain, <code>permission: "all"</code>). Load it with <code>load_tools(domain="docit")</code>, which itself requires <code>view_admin</code>.</td>
+<td><code>search_docs</code> — search the documentation knowledge base (docit domain, <code>permission: "all"</code>). Load it with <code>load_tools(domain="docit")</code>, which itself requires <code>view_admin</code>. Every authenticated user may <strong>call</strong> it, but results are scoped to the asking user's own groups — same rule as <code>GET /api/docit/search</code> (see <a href="../docit/#knowledge-base-search">docit/README.md</a>).</td>
 </tr>
 </tbody>
 </table>

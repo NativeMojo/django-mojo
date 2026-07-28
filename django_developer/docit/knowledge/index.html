@@ -3926,12 +3926,15 @@ search degrades to full-text only — nothing errors.</p>
   <strong>Operator prerequisite:</strong> the deployment's cron runner must call
   <code>mojo.helpers.cron.load_app_cron()</code> and then <code>run_now()</code> on a schedule —
   nothing sweeps if cron is not wired up.
-- <strong>Search</strong> — <code>knowledge.search(query, book=None, limit=10)</code> runs two
-  legs over published pages of active books: pgvector <code>CosineDistance</code>
-  (when a provider is available) and Postgres FTS
+- <strong>Search</strong> — <code>knowledge.search(query, book=None, limit=10, groups=None)</code>
+  runs two legs over published pages of active books: pgvector
+  <code>CosineDistance</code> (when a provider is available) and Postgres FTS
   (<code>SearchVector('heading','content')</code>, websearch syntax), fused with
-  reciprocal-rank fusion (k=60). Returns <code>objict(mode, results)</code> — mode
-  <code>"hybrid"</code> or <code>"fts"</code>.
+  reciprocal-rank fusion (k=60). <code>groups</code> confines results to those tenants
+  (<code>None</code> is unrestricted — internal/system callers only); see
+  <a href="../#knowledge-base-search">docit/README.md</a> for
+  <code>visible_groups()</code>, which request-facing callers must pass. Returns
+  <code>objict(mode, results)</code> — mode <code>"hybrid"</code> or <code>"fts"</code>.
 - <strong>Fallback dispatch</strong> — <code>mojo/apps/docit/services/search.py::search_any</code>
   routes to the KB when the app is installed, else to page-level FTS
   (<code>search_pages</code>, mode <code>"pages"</code>). The REST endpoint and assistant tool
@@ -3985,10 +3988,12 @@ test suite via <code>EMBEDDINGS_PROVIDER = "mock"</code>).</p>
   never render it as HTML. <code>pages</code> mode wraps matches in <code>**</code> (markdown),
   not HTML tags.</li>
 <li>Search enforces the same visibility docit's own RestMeta enforces:
-  authenticated user + published page + active book. Per-book ACLs
-  (<code>Book.permissions</code> / <code>can_user_view</code>) are not consulted — docit itself
-  never wired them into REST. If a consumer later adds
-  <code>check_view_permission</code> to Book, extend the base queryset in
+  published page + active book, confined to the caller's own tenants via the
+  <code>groups</code> argument (a global <code>view_docit</code>/<code>manage_docit</code>/<code>docs</code> holder is
+  unrestricted; an <code>ApiKey</code> is never unrestricted; an anonymous caller gets
+  nothing — see <a href="../#knowledge-base-search">docit/README.md</a>).
+  <code>Book.permissions</code> remains an unused free-text field — no code reads it.
+  If a consumer later wires it into a view hook, extend the base queryset in
   <code>knowledge.search</code> (single choke point) to match.</li>
 <li>The test suite pins the pipeline, hybrid ranking, visibility filters,
   REST contract, and every reconciliation arm (including the watermark

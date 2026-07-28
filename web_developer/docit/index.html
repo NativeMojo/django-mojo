@@ -3824,6 +3824,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#public-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Public Documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#available-graphs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4009,6 +4020,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#public-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Public Documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#available-graphs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4119,11 +4141,21 @@
 <h1 id="docit-rest-api-reference">DocIt — REST API Reference<a class="headerlink" href="#docit-rest-api-reference" title="Permanent link">&para;</a></h1>
 <p>Documentation/wiki system with hierarchical pages and Markdown rendering.</p>
 <h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
+<p>Every endpoint below except <code>/api/docit/public/*</code> requires authentication, and
+returns only content belonging to <strong>your own groups</strong>.</p>
 <ul>
-<li>Reading: <code>all</code> (public, no auth required by default)</li>
-<li>Writing: <code>manage_docit</code> or <code>owner</code></li>
-<li>Deleting: <code>manage_docit</code></li>
+<li>Reading: any member of the owning group, or <code>view_docit</code> / <code>manage_docit</code> /
+  <code>docs</code>. A member sees their own tenant's unpublished drafts too.</li>
+<li>Writing: <code>manage_docit</code>, <code>docs</code>, or ownership</li>
+<li>Deleting: <code>manage_docit</code> or ownership</li>
 </ul>
+<p>Requesting another tenant's book or page by id or slug returns <strong>403</strong>, and it
+will not appear in any list. Anonymous requests get <strong>401</strong>.</p>
+<blockquote>
+<p><strong>Changed:</strong> these endpoints used to read as public. They are authenticated
+and tenant-scoped now; anonymous documentation lives under
+<code>/api/docit/public/*</code> and serves only books that opted in.</p>
+</blockquote>
 <h2 id="endpoints">Endpoints<a class="headerlink" href="#endpoints" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -4137,7 +4169,7 @@
 <tr>
 <td>GET</td>
 <td><code>/api/docit/page</code></td>
-<td>List pages</td>
+<td>List pages (your tenants only)</td>
 </tr>
 <tr>
 <td>POST</td>
@@ -4161,13 +4193,33 @@
 </tr>
 <tr>
 <td>GET</td>
-<td><code>/api/docit/page/slug/&lt;slug&gt;</code></td>
-<td>Get page by slug</td>
+<td><code>/api/docit/page/slug/&lt;slug&gt;?book=&lt;id\|slug&gt;</code></td>
+<td>Get page by slug — <code>book</code> is <strong>required</strong></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/docit/book/slug/&lt;slug&gt;</code></td>
+<td>Get book by slug</td>
 </tr>
 <tr>
 <td>POST</td>
 <td><code>/api/docit/render</code></td>
 <td>Render Markdown to HTML</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/docit/public/book/&lt;slug&gt;</code></td>
+<td><strong>No auth</strong> — an opted-in public book</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/docit/public/pages?book=&lt;slug&gt;</code></td>
+<td><strong>No auth</strong> — its published pages</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/docit/public/page?book=&lt;slug&gt;&amp;slug=&lt;slug&gt;</code></td>
+<td><strong>No auth</strong> — one published page</td>
 </tr>
 </tbody>
 </table>
@@ -4200,8 +4252,72 @@
 <a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
 </code></pre></div>
 <h2 id="get-page-by-slug">Get Page by Slug<a class="headerlink" href="#get-page-by-slug" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/docit/page/slug/getting-started
+<p><code>book</code> is required — page slugs are unique <strong>within a book</strong>, not globally, so
+<code>getting-started</code> typically exists in several books. Pass the book id or its
+slug:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/docit/page/slug/getting-started?book=install-guide
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>GET /api/docit/page/slug/getting-started?book=3
 </code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>400</td>
+<td><code>book</code> missing</td>
+</tr>
+<tr>
+<td>401</td>
+<td>Not authenticated</td>
+</tr>
+<tr>
+<td>403</td>
+<td>The page belongs to a group you are not a member of</td>
+</tr>
+<tr>
+<td>404</td>
+<td>No page with that slug in that book (or no such book)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="public-documentation">Public Documentation<a class="headerlink" href="#public-documentation" title="Permanent link">&para;</a></h2>
+<p>Books with <code>is_public</code> set are readable with no authentication. Nothing else
+is: these endpoints serve only opted-in, active books belonging to an active
+group, only their <strong>published</strong> pages, and a fixed response shape — <code>?graph=</code>
+is ignored.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/docit/public/book/install-guide
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>GET /api/docit/public/pages?book=install-guide
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>GET /api/docit/public/page?book=install-guide&amp;slug=getting-started
+</code></pre></div>
+<p><code>public/pages</code> returns a flat list ordered by <code>order_priority</code> (capped at 500
+pages); build the tree client-side from each row's <code>parent</code>. Anything not
+publicly readable — a book that did not opt in, an inactive book, a suspended
+tenant, an unpublished page — returns <strong>404</strong> rather than distinguishing the
+cases. These endpoints are rate-limited per IP.</p>
+<p>The rendered field is <strong><code>html_safe</code></strong>, not <code>html</code>: raw HTML in a page's
+markdown is escaped before it reaches an anonymous reader. (<code>html</code>, which
+preserves raw HTML, stays on the authenticated graphs only.)</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Getting Started&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="nt">&quot;slug&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;getting-started&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;# Getting Started\n\nWelcome...&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="nt">&quot;html_safe&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;h1&gt;Getting Started&lt;/h1&gt;...&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span><span class="nt">&quot;parent&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span><span class="nt">&quot;order_priority&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">    </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">    </span><span class="nt">&quot;modified&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2024-01-15T10:00:00Z&quot;</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="p">}</span>
+</code></pre></div>
+<p>Publishing a book (setting <code>is_public</code>) requires <code>manage_docit</code> or <code>docs</code> —
+being the book's owner is not enough.</p>
 <h2 id="available-graphs">Available Graphs<a class="headerlink" href="#available-graphs" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -4231,41 +4347,41 @@
 </table>
 <h2 id="create-a-page">Create a Page<a class="headerlink" href="#create-a-page" title="Permanent link">&para;</a></h2>
 <p><strong>POST</strong> <code>/api/docit/page</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;book&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Authentication&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;## Authentication\n\nUse Bearer tokens...&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">&quot;parent&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nt">&quot;is_published&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="nt">&quot;order_priority&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;book&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Authentication&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;## Authentication\n\nUse Bearer tokens...&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">&quot;parent&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">&quot;is_published&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">&quot;order_priority&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="p">}</span>
 </code></pre></div>
 <p>The <code>slug</code> is auto-generated from <code>title</code> (unique within the book).</p>
 <h2 id="list-pages">List Pages<a class="headerlink" href="#list-pages" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/docit/page?book=1&amp;is_published=true&amp;sort=order_priority
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>GET /api/docit/page?parent=5   # children of page 5
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>GET /api/docit/page?search=authentication
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/docit/page?book=1&amp;is_published=true&amp;sort=order_priority
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>GET /api/docit/page?parent=5   # children of page 5
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>GET /api/docit/page?search=authentication
 </code></pre></div>
 <h2 id="update-a-page">Update a Page<a class="headerlink" href="#update-a-page" title="Permanent link">&para;</a></h2>
 <p><strong>POST</strong> <code>/api/docit/page/1</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;## Authentication\n\nUpdated content...&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;is_published&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;## Authentication\n\nUpdated content...&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;is_published&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="p">}</span>
 </code></pre></div>
 <h2 id="render-markdown">Render Markdown<a class="headerlink" href="#render-markdown" title="Permanent link">&para;</a></h2>
 <p><strong>POST</strong> <code>/api/docit/render</code></p>
 <p>Permission required: authenticated (any logged-in user).</p>
 <p>Request:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;markdown&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;# Hello World\n\n```python\nprint(&#39;hi&#39;)\n```&quot;</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;markdown&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;# Hello World\n\n```python\nprint(&#39;hi&#39;)\n```&quot;</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="p">}</span>
 </code></pre></div>
 <p>Response:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;html&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;h1&gt;Hello World&lt;/h1&gt;\n&lt;div class=\&quot;highlight\&quot;&gt;...&lt;/div&gt;\n&quot;</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;html&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;h1&gt;Hello World&lt;/h1&gt;\n&lt;div class=\&quot;highlight\&quot;&gt;...&lt;/div&gt;\n&quot;</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>Code blocks are syntax-highlighted using Pygments (<code>monokai</code> theme). The <code>highlight</code> CSS class is applied to the wrapper <code>&lt;div&gt;</code>. If an unrecognized language name is used, the block renders as a plain <code>&lt;pre&gt;</code> element with no highlighting.</p>
 <p>Error responses:</p>
@@ -4289,7 +4405,10 @@
 </table>
 <h2 id="knowledge-base-search">Knowledge-Base Search<a class="headerlink" href="#knowledge-base-search" title="Permanent link">&para;</a></h2>
 <p><strong>GET/POST</strong> <code>/api/docit/search</code> — authenticated. Ranked search over
-published pages of active books.</p>
+published pages of active books <strong>in your own groups</strong>. A global <code>view_docit</code>
+/ <code>manage_docit</code> / <code>docs</code> holder searches across all tenants; everyone else,
+including API keys, is confined to their own. Content you cannot read through
+the list endpoints will not appear here either.</p>
 <table>
 <thead>
 <tr>
@@ -4320,26 +4439,26 @@ published pages of active books.</p>
 <code>snippet</code> is <strong>untrusted text</strong> — page authors control it; never render it
 as HTML. In <code>pages</code> mode, matched terms are wrapped in <code>**</code> (markdown
 emphasis), not HTML tags.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">200</span><span class="p">,</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="nt">&quot;mode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;hybrid&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="nt">&quot;results&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">      </span><span class="p">{</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">        </span><span class="nt">&quot;page_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">        </span><span class="nt">&quot;page_slug&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;quickstart&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">        </span><span class="nt">&quot;page_title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Quickstart&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">        </span><span class="nt">&quot;book_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
-<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">        </span><span class="nt">&quot;book_slug&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;install-guide&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="w">        </span><span class="nt">&quot;heading&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Install &gt; Quickstart&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">        </span><span class="nt">&quot;snippet&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;## Quickstart\n\nRun the installer...&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">        </span><span class="nt">&quot;score&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.032787</span>
-<a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="w">      </span><span class="p">}</span>
-<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="w">    </span><span class="p">]</span>
-<a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">200</span><span class="p">,</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">    </span><span class="nt">&quot;mode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;hybrid&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">    </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">    </span><span class="nt">&quot;results&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">      </span><span class="p">{</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">        </span><span class="nt">&quot;page_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">        </span><span class="nt">&quot;page_slug&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;quickstart&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">        </span><span class="nt">&quot;page_title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Quickstart&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="w">        </span><span class="nt">&quot;book_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="w">        </span><span class="nt">&quot;book_slug&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;install-guide&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="w">        </span><span class="nt">&quot;heading&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Install &gt; Quickstart&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a><span class="w">        </span><span class="nt">&quot;snippet&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;## Quickstart\n\nRun the installer...&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a><span class="w">        </span><span class="nt">&quot;score&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.032787</span>
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a><span class="w">      </span><span class="p">}</span>
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a><span class="w">    </span><span class="p">]</span>
+<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-11-20" name="__codelineno-11-20" href="#__codelineno-11-20"></a><span class="p">}</span>
 </code></pre></div>
 <p><code>mode</code> reports how the search ran: <code>hybrid</code> (vector + full-text — the
 knowledge-base app with an embeddings provider), <code>fts</code> (knowledge-base app
@@ -4375,10 +4494,10 @@ knowledge-base app is not installed). Results are chunk-level excerpts in
 save permission (<code>manage_docit</code>, <code>docs</code>, or owner). Queues a background
 re-embed job for every page of the book; use it to backfill after enabling
 the knowledge base or after changing embedding settings.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;queued&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;queued&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="p">}</span>
 </code></pre></div>
 <p><code>data.enabled</code> false means the knowledge-base app is not installed (no jobs
 queued, <code>queued</code> is 0). A falsy action value (<code>{"reindex": false}</code>) is a
@@ -4395,7 +4514,9 @@ not as a routine step after saving a page.</p>
 <h2 id="assistant-tool">Assistant Tool<a class="headerlink" href="#assistant-tool" title="Permanent link">&para;</a></h2>
 <p>When <code>mojo.apps.assistant</code> is installed, the <code>docit</code> tool domain provides
 <code>search_docs</code> (same parameters and results as the search endpoint) so the
-assistant can ground answers in your documentation.</p>
+assistant can ground answers in your documentation. The tool is offered to
+every authenticated user, but its results are scoped to the asking user's own
+groups exactly as the endpoint is.</p>
 
 
 
