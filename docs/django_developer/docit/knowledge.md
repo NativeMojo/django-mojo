@@ -87,12 +87,15 @@ search degrades to full-text only — nothing errors.
   **Operator prerequisite:** the deployment's cron runner must call
   `mojo.helpers.cron.load_app_cron()` and then `run_now()` on a schedule —
   nothing sweeps if cron is not wired up.
-- **Search** — `knowledge.search(query, book=None, limit=10)` runs two
-  legs over published pages of active books: pgvector `CosineDistance`
-  (when a provider is available) and Postgres FTS
+- **Search** — `knowledge.search(query, book=None, limit=10, groups=None)`
+  runs two legs over published pages of active books: pgvector
+  `CosineDistance` (when a provider is available) and Postgres FTS
   (`SearchVector('heading','content')`, websearch syntax), fused with
-  reciprocal-rank fusion (k=60). Returns `objict(mode, results)` — mode
-  `"hybrid"` or `"fts"`.
+  reciprocal-rank fusion (k=60). `groups` confines results to those tenants
+  (`None` is unrestricted — internal/system callers only); see
+  [docit/README.md](README.md#knowledge-base-search) for
+  `visible_groups()`, which request-facing callers must pass. Returns
+  `objict(mode, results)` — mode `"hybrid"` or `"fts"`.
 - **Fallback dispatch** — `mojo/apps/docit/services/search.py::search_any`
   routes to the KB when the app is installed, else to page-level FTS
   (`search_pages`, mode `"pages"`). The REST endpoint and assistant tool
@@ -152,10 +155,12 @@ test suite via `EMBEDDINGS_PROVIDER = "mock"`).
   never render it as HTML. `pages` mode wraps matches in `**` (markdown),
   not HTML tags.
 - Search enforces the same visibility docit's own RestMeta enforces:
-  authenticated user + published page + active book. Per-book ACLs
-  (`Book.permissions` / `can_user_view`) are not consulted — docit itself
-  never wired them into REST. If a consumer later adds
-  `check_view_permission` to Book, extend the base queryset in
+  published page + active book, confined to the caller's own tenants via the
+  `groups` argument (a global `view_docit`/`manage_docit`/`docs` holder is
+  unrestricted; an `ApiKey` is never unrestricted; an anonymous caller gets
+  nothing — see [docit/README.md](README.md#knowledge-base-search)).
+  `Book.permissions` remains an unused free-text field — no code reads it.
+  If a consumer later wires it into a view hook, extend the base queryset in
   `knowledge.search` (single choke point) to match.
 - The test suite pins the pipeline, hybrid ranking, visibility filters,
   REST contract, and every reconciliation arm (including the watermark

@@ -221,7 +221,8 @@ Use these when you need read-only access or scoped access within a domain:
 | `manage_files` | Files | Upload and manage files |
 | `view_vault` | Files | Read vault files and data |
 | `manage_vault` | Files | Write vault files and data |
-| `manage_docit` | Docs | Manage documentation books, pages, assets |
+| `view_docit` | Docs | Read-only access to documentation books, pages, assets — across all tenants |
+| `manage_docit` | Docs | Manage documentation books, pages, assets — across all tenants |
 | `view_logs` | Security | Read logit entries |
 | `manage_logs` | Security | Write/delete logit entries |
 | `admin` | Security | Full admin access to logit |
@@ -343,10 +344,10 @@ The `metrics` category grants full read+write access to all metrics operations. 
 |-------|-----------|-----------|-------|
 | ShortLink | manage_shortlinks, owner | manage_shortlinks, owner | |
 | ShortLinkClick | manage_shortlinks | (read-only) | Analytics |
-| Book | all | manage_docit, docs, owner | Public read |
-| Asset | all | manage_docit, docs, owner | |
-| Page | all | manage_docit, docs, owner | |
-| PageRevision | all | manage_docit, docs, owner | |
+| Book | view_docit, manage_docit, docs, member | manage_docit, docs, owner | GROUP_FIELD=`group`; `member`=any member of the owning group; anonymous reading is a separate opt-in — see [docit/README.md](../docit/README.md#public-documentation-opt-in) |
+| Asset | view_docit, manage_docit, docs, member | manage_docit, docs, owner | GROUP_FIELD=`book__group` |
+| Page | view_docit, manage_docit, docs, member | manage_docit, docs, owner | GROUP_FIELD=`book__group` |
+| PageRevision | view_docit, manage_docit, docs, member | manage_docit, docs, owner | GROUP_FIELD=`page__book__group` |
 
 ## Resolved Issues
 

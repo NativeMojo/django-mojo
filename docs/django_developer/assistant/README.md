@@ -245,7 +245,7 @@ Every read tool calls `mojo.apps.metrics.rest.helpers.check_view_permissions(req
 |---|---|---|---|
 | `search_docs` | `all` | No | Search the documentation knowledge base (docit books and pages). Returns ranked excerpts with page and book references. Use `book` to scope the search to one book by id or slug. |
 
-`permission: "all"` is satisfied by any authenticated user (see `mojo.apps.account.models.User.has_permission`) — it mirrors docit's own `Book`/`Page` `VIEW_PERMS = ['all']`. `search_docs` calls the same `search_any()` dispatch as `GET/POST /api/docit/search`: hybrid pgvector + full-text search when `mojo.apps.docit_kb` is installed, page-level full-text fallback otherwise. See [docit/knowledge.md](../docit/knowledge.md).
+`permission: "all"` is satisfied by any authenticated user (see `mojo.apps.account.models.User.has_permission`) — it gates only whether the **tool itself** is offered, not what it returns. `search_docs` calls the same `search_any()` dispatch as `GET/POST /api/docit/search`, passing `visible_groups(user=user)` — so results are confined to the asking user's own tenants exactly as the REST endpoint's are, even though the tool is visible to everyone: hybrid pgvector + full-text search when `mojo.apps.docit_kb` is installed, page-level full-text fallback otherwise. See [docit/README.md](../docit/README.md#permissions-and-tenant-scoping) and [docit/knowledge.md](../docit/knowledge.md).
 
 ### Models Domain (`view_admin`)
 

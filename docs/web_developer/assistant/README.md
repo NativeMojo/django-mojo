@@ -495,7 +495,7 @@ The assistant checks the user's permissions before executing each tool. The tool
 | `view_groups` | Query groups, group detail, group members, group activity |
 | `view_logs` | Query the audit log trail (logit.Log) — request history, model changes, API errors, custom events |
 | `assistant` | Read, write, and delete memory entries and skills across all tiers (subject to per-tier access rules) |
-| *(any authenticated user)* | `search_docs` — search the documentation knowledge base (docit domain, `permission: "all"`). Load it with `load_tools(domain="docit")`, which itself requires `view_admin`. |
+| *(any authenticated user)* | `search_docs` — search the documentation knowledge base (docit domain, `permission: "all"`). Load it with `load_tools(domain="docit")`, which itself requires `view_admin`. Every authenticated user may **call** it, but results are scoped to the asking user's own groups — same rule as `GET /api/docit/search` (see [docit/README.md](../docit/README.md#knowledge-base-search)). |
 
 Users without any of these permissions will receive: `"You don't have permissions for any assistant tools."`
 

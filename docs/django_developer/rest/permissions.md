@@ -140,7 +140,22 @@ Tools that honor the flags: `describe_model`, `query_model`, `aggregate_model`, 
 | `"all"` | No authentication required (public) |
 | `"authenticated"` | Any logged-in user |
 | `"owner"` | The instance's `OWNER_FIELD` matches `request.user` |
+| `"member"` | Any member of the row's owning group (via `GROUP_FIELD`) — no per-member grant needed |
 | Any other string | Checked via `request.user.has_permission(perm)` |
+
+`"member"` is meaningful only on a group-scoped model (a direct `group` FK or
+`RestMeta.GROUP_FIELD`) — `GROUP_FIELD` is what resolves "the row's owning
+group" to check membership against. It is honored by `GroupMember.has_permission`
+and `ApiKey.has_permission` (both always return `True` for it — a group-scoped
+API key of the tenant satisfies it too), but **not** by `User.has_permission`,
+which has no `"member"` case. That asymmetry is the point: it is not a global
+grant, so it only ever widens access within the group-membership check that
+`GROUP_FIELD` confinement already applies — a user with no membership in the
+row's group still reads nothing. Reserve the literal string `member` as a
+*global* `User` permission for nothing else; granting it platform-wide would
+defeat the group confinement. See `mojo.apps.docit.models.book.Book.RestMeta`
+for a real usage — `VIEW_PERMS` includes `"member"` so any member of a book's
+group can read that group's docs without an explicit per-user grant.
 
 ## The "owner" Permission
 
