@@ -3927,6 +3927,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#docit-domain-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docit Domain (all)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#models-domain-view_admin" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5009,7 +5020,7 @@
 </tbody>
 </table>
 <h3 id="domain-tools-loaded-on-demand">Domain Tools (loaded on demand)<a class="headerlink" href="#domain-tools-loaded-on-demand" title="Permanent link">&para;</a></h3>
-<p>All other tools (security, jobs, users, groups, metrics, full discovery) start unloaded. The LLM calls <code>load_tools</code> to activate them.</p>
+<p>All other tools (security, jobs, users, groups, metrics, docit, full discovery) start unloaded. The LLM calls <code>load_tools</code> to activate them.</p>
 <p><strong>Domains and their tool counts:</strong></p>
 <table>
 <thead>
@@ -5038,6 +5049,10 @@
 <tr>
 <td><code>metrics</code></td>
 <td>Fetch time-series metrics, system health, and incident trends</td>
+</tr>
+<tr>
+<td><code>docit</code></td>
+<td>Search the documentation knowledge base (docit books and pages)</td>
 </tr>
 <tr>
 <td><code>discovery</code></td>
@@ -5657,6 +5672,26 @@
 </tr>
 </tbody>
 </table>
+<h3 id="docit-domain-all">Docit Domain (<code>all</code>)<a class="headerlink" href="#docit-domain-all" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Permission</th>
+<th>Mutates</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>search_docs</code></td>
+<td><code>all</code></td>
+<td>No</td>
+<td>Search the documentation knowledge base (docit books and pages). Returns ranked excerpts with page and book references. Use <code>book</code> to scope the search to one book by id or slug.</td>
+</tr>
+</tbody>
+</table>
+<p><code>permission: "all"</code> is satisfied by any authenticated user (see <code>mojo.apps.account.models.User.has_permission</code>) — it mirrors docit's own <code>Book</code>/<code>Page</code> <code>VIEW_PERMS = ['all']</code>. <code>search_docs</code> calls the same <code>search_any()</code> dispatch as <code>GET/POST /api/docit/search</code>: hybrid pgvector + full-text search when <code>mojo.apps.docit_kb</code> is installed, page-level full-text fallback otherwise. See <a href="../docit/knowledge/">docit/knowledge.md</a>.</p>
 <h3 id="models-domain-view_admin">Models Domain (<code>view_admin</code>)<a class="headerlink" href="#models-domain-view_admin" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

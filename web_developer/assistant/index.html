@@ -4764,7 +4764,7 @@
 <h2 id="tool-loading">Tool Loading<a class="headerlink" href="#tool-loading" title="Permanent link">&para;</a></h2>
 <p>The assistant uses a two-tier system to manage which tools are active in each conversation.</p>
 <p><strong>Core tools</strong> are always available from the first message: memory, models, docs, web, logs, and file tools. These handle general queries.</p>
-<p><strong>Domain tools</strong> (security, jobs, users, groups, metrics) are loaded on demand. When the assistant needs domain-specific capabilities, it calls the built-in <code>load_tools</code> tool first. You will see this reflected in <code>tool_calls_made</code>:</p>
+<p><strong>Domain tools</strong> (security, jobs, users, groups, metrics, docit) are loaded on demand. When the assistant needs domain-specific capabilities, it calls the built-in <code>load_tools</code> tool first. You will see this reflected in <code>tool_calls_made</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="nt">&quot;tool_calls_made&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="w">    </span><span class="p">{</span><span class="nt">&quot;tool&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;load_tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;input&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;jobs&quot;</span><span class="p">}},</span>
 <a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="w">    </span><span class="p">{</span><span class="nt">&quot;tool&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;query_jobs&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;input&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;failed&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;minutes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">60</span><span class="p">}}</span>
@@ -4821,6 +4821,10 @@
 <tr>
 <td><code>assistant</code></td>
 <td>Read, write, and delete memory entries and skills across all tiers (subject to per-tier access rules)</td>
+</tr>
+<tr>
+<td><em>(any authenticated user)</em></td>
+<td><code>search_docs</code> — search the documentation knowledge base (docit domain, <code>permission: "all"</code>). Load it with <code>load_tools(domain="docit")</code>, which itself requires <code>view_admin</code>.</td>
 </tr>
 </tbody>
 </table>

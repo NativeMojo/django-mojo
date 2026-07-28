@@ -4368,12 +4368,23 @@ in-memory state or module globals in the test process, the server doesn't see it
 2. Waits ~1.5s for uvicorn's file watcher to detect the change
 3. Polls until the server comes back up (up to 10s)
 4. Yields — your test runs against the live reloaded server
-5. Restores the original <code>django.conf</code>
+5. Reverts <strong>only the keys it set</strong>, against <code>django.conf</code> as it stands
 6. Waits for the server to reload again</p>
 <p><strong>Why this works:</strong> <code>asgi_local</code> starts uvicorn with <code>--reload --reload-include '*.conf'</code>,
 so any change to <code>var/django.conf</code> triggers a full Django reload.</p>
 <p><strong>Cost:</strong> Each <code>server_settings</code> call takes ~3–5 seconds (two reload cycles). Use it
 only when genuinely necessary — for most tests the default settings are correct.</p>
+<p><strong>Concurrency:</strong> test modules run as threads, so two contexts could otherwise overlap.
+They don't: whole contexts are serialized process-wide, the file is captured and
+restored under a mutex, and the restore is <em>subtractive</em> — it never writes back a
+whole-file snapshot, so it cannot re-introduce a key another context is holding. The
+runner also diffs <code>var/django.conf</code> across the run and warns (naming keys only) if
+anything was stranded.</p>
+<blockquote>
+<p><strong>Caution — values are written in cleartext.</strong> Overrides land in
+<code>testproject/var/django.conf</code> as plain text for the duration of the context. It is
+gitignored, but don't pass a real production credential.</p>
+</blockquote>
 <p><strong>Supported value types:</strong>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">th</span><span class="o">.</span><span class="n">server_settings</span><span class="p">(</span>
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>    <span class="n">BOUNCER_REQUIRE_TOKEN</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>          <span class="c1"># bool</span>

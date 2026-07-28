@@ -1017,6 +1017,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#bedrock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BEDROCK
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#bouncer" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1050,6 +1061,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#docit_kb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DOCIT_KB
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#duid" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1065,6 +1087,17 @@
     <span class="md-ellipsis">
       
         EMAIL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#embeddings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EMBEDDINGS
       
     </span>
   </a>
@@ -4703,6 +4736,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#bedrock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BEDROCK
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#bouncer" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4736,6 +4780,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#docit_kb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DOCIT_KB
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#duid" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4751,6 +4806,17 @@
     <span class="md-ellipsis">
       
         EMAIL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#embeddings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EMBEDDINGS
       
     </span>
   </a>
@@ -5461,6 +5527,11 @@
 <ul>
 <li><code>BASE_URL</code></li>
 </ul>
+<h3 id="bedrock">BEDROCK<a class="headerlink" href="#bedrock" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>BEDROCK_EMBED_MODEL</code></li>
+<li><code>BEDROCK_REGION</code> — falls back to <code>AWS_REGION</code></li>
+</ul>
 <h3 id="bouncer">BOUNCER<a class="headerlink" href="#bouncer" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>BOUNCER_ACCENT_COLOR</code></li>
@@ -5508,6 +5579,14 @@
 <li><code>DNSMAN_REGISTRANT_CONTACT</code></li>
 <li><code>DNSMAN_SEARCH_BATCH_LIMIT</code></li>
 </ul>
+<h3 id="docit_kb">DOCIT_KB<a class="headerlink" href="#docit_kb" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>DOCIT_KB_RECONCILE_ENABLED</code> — kill switch for the knowledge-base
+  reconciliation cron dispatcher (default <code>True</code>). Details:
+  <a href="../../docit/knowledge/#settings">docit knowledge base</a>.</li>
+<li><code>DOCIT_KB_RECONCILE_LIMIT</code> — maximum pages one reconciliation sweep may queue</li>
+<li><code>DOCIT_KB_RECONCILE_LOOKBACK_HOURS</code> — how far back the sweep's stale arm looks</li>
+</ul>
 <h3 id="duid">DUID<a class="headerlink" href="#duid" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>DUID_HEADER</code></li>
@@ -5519,6 +5598,11 @@
 <li><code>EMAIL_TASK_CHANNEL</code></li>
 <li><code>EMAIL_VERIFY_CODE_TTL</code></li>
 <li><code>EMAIL_VERIFY_TOKEN_TTL</code></li>
+</ul>
+<h3 id="embeddings">EMBEDDINGS<a class="headerlink" href="#embeddings" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>EMBEDDINGS_DIM</code> — must match the <code>PageChunk</code> vector column (1024); changing it requires a migration + re-embed</li>
+<li><code>EMBEDDINGS_PROVIDER</code> — <code>bedrock</code> (default) or <code>mock</code></li>
 </ul>
 <h3 id="events">EVENTS<a class="headerlink" href="#events" title="Permanent link">&para;</a></h3>
 <ul>

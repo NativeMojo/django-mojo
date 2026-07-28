@@ -2453,6 +2453,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#knowledge-base-optional-mojoappsdocit_kb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Knowledge Base (optional — mojo.apps.docit_kb)
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4081,6 +4092,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#knowledge-base-optional-mojoappsdocit_kb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Knowledge Base (optional — mojo.apps.docit_kb)
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4265,6 +4287,16 @@
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">child</span><span class="o">.</span><span class="n">parent</span> <span class="o">=</span> <span class="n">child</span>   <span class="c1"># &quot;A page cannot be its own parent&quot;</span>
 <a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">grandchild</span><span class="o">.</span><span class="n">parent</span> <span class="o">=</span> <span class="n">child_of_grandchild</span>  <span class="c1"># cycle detection</span>
 </code></pre></div></p>
+<h2 id="knowledge-base-optional-mojoappsdocit_kb">Knowledge Base (optional — mojo.apps.docit_kb)<a class="headerlink" href="#knowledge-base-optional-mojoappsdocit_kb" title="Permanent link">&para;</a></h2>
+<p>Installing the optional <code>mojo.apps.docit_kb</code> app turns DocIt into a
+searchable knowledge base: pages are chunked on heading boundaries, embedded
+via AWS Bedrock (pgvector storage, HNSW index), and served through a hybrid
+vector + full-text search — exposed as <code>GET/POST /api/docit/search</code> and as
+the assistant's <code>search_docs</code> tool. Without the app, the same endpoint falls
+back to page-level Postgres full-text search with no extra schema or
+dependencies.</p>
+<p>See <a href="knowledge/">knowledge.md</a> for enabling, settings
+(<code>EMBEDDINGS_*</code> / <code>BEDROCK_*</code>), architecture, and the reindex/backfill flow.</p>
 
 
 

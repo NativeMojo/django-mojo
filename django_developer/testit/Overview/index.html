@@ -3846,6 +3846,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="TESTIT Module Config">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-server_settings-restores-subtractive-and-one-at-a-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How server_settings() restores — subtractive, and one at a time
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4138,6 +4155,7 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <li><strong>Top-level</strong>: <code>status</code> (passed/failed), <code>total</code>, <code>passed</code>, <code>failed</code>, <code>skipped</code>, <code>duration</code></li>
 <li><strong><code>modules</code></strong>: per-module breakdown — <code>tests</code>, <code>passed</code>, <code>failed</code>, <code>skipped</code>, <code>duration</code> for each test module</li>
 <li><strong><code>failures</code></strong>: per-failure entries with <code>test_name</code>, <code>function</code>, <code>status</code>, <code>assertion</code>, <code>test_source</code>, <code>file_path</code>, <code>line</code>, <code>traceback</code> (errors only), and <code>server_log_tail</code></li>
+<li><strong><code>conf_drift</code></strong>: names of any <code>var/django.conf</code> keys that changed across the run — normally empty. A non-empty list means a <code>th.server_settings()</code> context did not restore cleanly and the key is now stranded. Key <strong>names only</strong>; values are never reported, since an override may be a credential.</li>
 </ul>
 <p>LLM agents should always use <code>--agent</code> and read the JSON report instead of parsing terminal output. Never use <code>--plain</code> for full suite runs — it disables the rich UI but doesn't improve agent output.</p>
 <h3 id="opt-in-modules">Opt-in Modules<a class="headerlink" href="#opt-in-modules" title="Permanent link">&para;</a></h3>
@@ -4201,15 +4219,14 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="c1"># testit/server_lock.py keeps that restart away from open websockets on its own.</span>
 <a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="n">TESTIT</span> <span class="o">=</span> <span class="p">{</span>
 <a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>    <span class="s2">&quot;requires_apps&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;mojo.apps.account&quot;</span><span class="p">],</span>
-<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>    <span class="s2">&quot;server_settings&quot;</span><span class="p">:</span> <span class="p">{},</span>                   <span class="c1"># dict of Django settings to apply before the module starts</span>
-<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="p">}</span>
-<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>
-<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="c1"># tests/test_security/__init__.py  — opt-in slow module</span>
-<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="n">TESTIT</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>    <span class="s2">&quot;requires_apps&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;mojo.apps.account&quot;</span><span class="p">],</span>
-<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>    <span class="s2">&quot;serial&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
-<a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>    <span class="s2">&quot;requires_extra&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;slow&quot;</span><span class="p">],</span>              <span class="c1"># skipped unless --full or --extra slow</span>
-<a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="p">}</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="p">}</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="c1"># tests/test_security/__init__.py  — opt-in slow module</span>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="n">TESTIT</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>    <span class="s2">&quot;requires_apps&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;mojo.apps.account&quot;</span><span class="p">],</span>
+<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>    <span class="s2">&quot;serial&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>    <span class="s2">&quot;requires_extra&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;slow&quot;</span><span class="p">],</span>              <span class="c1"># skipped unless --full or --extra slow</span>
+<a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a><span class="p">}</span>
 </code></pre></div>
 <p>When a large app has many tests, split it into domain-focused packages (<code>test_auth</code>, <code>test_mfa</code>, <code>test_user_mgmt</code>, etc.) rather than one monolithic <code>test_accounts</code>. Each package runs in parallel by default.</p>
 <blockquote>
@@ -4223,7 +4240,32 @@ takes it <strong>exclusively</strong> for both of its reloads. Modules stay para
 only the actual restart windows are excluded — much cheaper than marking every
 caller serial. Use <code>"serial": True</code> for the <em>other</em> reasons (signal handlers
 bound to the main thread, as in <code>test_job_engine</code>).</p>
+<p>A <code>WsClient</code> opened <strong>inside</strong> a <code>server_settings()</code> body is fine: the thread
+already holding the exclusive hold is granted the shared hold immediately
+(it is the restarter — it cannot tear down its own socket behind its own back).</p>
 </blockquote>
+<h3 id="how-server_settings-restores-subtractive-and-one-at-a-time">How <code>server_settings()</code> restores — subtractive, and one at a time<a class="headerlink" href="#how-server_settings-restores-subtractive-and-one-at-a-time" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>It removes only the keys it set.</strong> The context captures the exact source
+  lines for its own keys (inside the lock), and on exit puts those lines back —
+  or deletes the key when it was not there before — against <code>var/django.conf</code>
+  <strong>as it stands</strong>. Every other line is left untouched.</li>
+<li><strong>Whole contexts are serialized process-wide.</strong> Two overlapping contexts mean
+  two live reloads fighting over one uvicorn worker; the second one waits.
+  Acquisition has a 120s valve that logs loudly and proceeds, so a leaked
+  context can never deadlock a run.</li>
+<li><strong>Why it matters:</strong> the old implementation snapshotted the <em>whole file</em> on the
+  way in and wrote that snapshot back on the way out. Modules run as threads, so
+  a second context could snapshot while the first one's override was live and
+  then restore it — stranding the first context's key in <code>var/django.conf</code>
+  permanently, silently changing every later run.</li>
+<li><strong>The runner checks.</strong> <code>testit/runner.py</code> parses <code>var/django.conf</code> at the start
+  and end of every run and warns loudly if any key changed, naming the <strong>keys
+  only</strong> (never the values). <code>--agent</code> reports the same list as <code>conf_drift</code>.
+  Best-effort: it cannot catch a run killed mid-context.</li>
+<li><strong>Caution:</strong> overrides are written to <code>var/django.conf</code> in <strong>cleartext</strong>. Do
+  not pass a real credential you would mind sitting in a gitignored file.</li>
+</ul>
 <p>Supported keys:</p>
 <table>
 <thead>
@@ -4247,7 +4289,7 @@ bound to the main thread, as in <code>test_job_engine</code>).</p>
 <tr>
 <td><code>server_settings</code></td>
 <td><code>{}</code></td>
-<td>Django settings dict applied before the module starts (same mechanism as <code>th.server_settings()</code>).</td>
+<td><strong>Reserved — not implemented.</strong> The key is accepted by the config loader and then ignored; the runner never applies it. Use <code>th.server_settings()</code> inside the tests that need an override.</td>
 </tr>
 <tr>
 <td><code>requires_extra</code></td>
@@ -4256,7 +4298,7 @@ bound to the main thread, as in <code>test_job_engine</code>).</p>
 </tr>
 </tbody>
 </table>
-<p>All keys are optional. A missing <code>__init__.py</code> or a missing <code>TESTIT</code> assignment uses defaults (parallel, no app requirements, no server settings).</p>
+<p>All keys are optional. A missing <code>__init__.py</code> or a missing <code>TESTIT</code> assignment uses defaults (parallel, no app requirements).</p>
 <hr />
 <h2 id="decorators-shared-state">Decorators &amp; Shared State<a class="headerlink" href="#decorators-shared-state" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">testit</span><span class="w"> </span><span class="kn">import</span> <span class="n">helpers</span> <span class="k">as</span> <span class="n">th</span>
@@ -4365,6 +4407,7 @@ bound to the main thread, as in <code>test_job_engine</code>).</p>
 <li>Top-level <code>status</code>, <code>total</code>, <code>passed</code>, <code>failed</code>, <code>skipped</code>, <code>duration</code></li>
 <li>Per-module stats in <code>modules</code> dict (tests, passed, failed, skipped, duration)</li>
 <li>Per-failure diagnostics in <code>failures</code> list (test_source, file_path, line, traceback, server_log_tail)</li>
+<li><code>conf_drift</code> — names of <code>var/django.conf</code> keys stranded by a settings override (empty on a clean run)</li>
 <li>HTTP helper: <code>testit.client.RestClient</code></li>
 <li>Reuses auth tokens and integrates with <code>opts.client</code>.</li>
 <li><code>opts.client.last_response</code> — after every request this is set to an <code>objict</code> with <code>method</code>, <code>path</code>, <code>status_code</code>, <code>body</code>, <code>headers</code>, and <code>elapsed_ms</code>. Useful for diagnosing failures without re-running the request.</li>
