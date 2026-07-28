@@ -23,3 +23,12 @@ def embed_page(job):
         logger.info(f"embed_page: page {page_id} no longer exists; nothing to do")
         return
     knowledge.embed_page_now(page)
+
+
+def reconcile_embeddings(job):
+    """Sweep for pages whose chunks fell behind and queue embed jobs. No payload."""
+    from mojo.apps.docit_kb.services import knowledge
+
+    result = knowledge.reconcile_stale_pages()
+    logger.info(f"reconcile_embeddings job {job.pk} {result}")
+    return result

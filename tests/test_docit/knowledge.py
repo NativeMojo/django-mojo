@@ -3,6 +3,8 @@ from testit import helpers as th
 KB_USER = "kbtest_user"
 KB_PWORD = "kbtest##mojo99"
 EMBED_JOB = "mojo.apps.docit_kb.asyncjobs.embed_page"
+RECON_JOB = "mojo.apps.docit_kb.asyncjobs.reconcile_embeddings"
+RECON_KEY = "docit_kb.recon:"
 
 PAGE_ALPHA_CONTENT = """# Alpha
 
@@ -32,6 +34,7 @@ def setup_knowledge_testing(opts):
     Page.objects.filter(book__title__startswith="kbtest_").delete()
     Book.objects.filter(title__startswith="kbtest_").delete()
     Job.objects.filter(func=EMBED_JOB).delete()
+    Job.objects.filter(func=RECON_JOB).delete()
     User.objects.filter(username=KB_USER).delete()
 
     group, _ = Group.objects.get_or_create(name="kbtest_org", kind="organization")
@@ -461,3 +464,352 @@ def test_fallback_page_search(opts):
     found = search_any("ZXQTOKEN99")
     assert found.mode in ("hybrid", "fts"), \
         f"Dispatcher must route to the KB when installed, got mode {found.mode}"
+
+
+# ---------------------------------------------------------------------------
+# Reconciliation sweep
+#
+# The sweep is GLOBAL — other test modules create docit pages in parallel, so
+# every assertion below is about MEMBERSHIP of a specific page id in the queued
+# recon jobs, never about totals.
+# ---------------------------------------------------------------------------
+
+
+def _clean_recon_pages():
+    """Drop every kbtest_recon* fixture (and its chunks/jobs) from prior runs."""
+    from mojo.apps.docit.models import Page
+    from mojo.apps.jobs.models import Job
+
+    stale = list(Page.objects.filter(title__startswith="kbtest_recon").values_list("id", flat=True))
+    Page.objects.filter(id__in=stale).delete()
+    for page_id in stale:
+        Job.objects.filter(func=EMBED_JOB, payload__page_id=page_id).delete()
+
+
+def _recon_page(opts, suffix, content):
+    """Create a kbtest_recon page and drop the embed job Page.save queued for it."""
+    from mojo.apps.account.models import User
+    from mojo.apps.docit.models import Book, Page
+
+    user = User.objects.get(pk=opts.kb_user_id)
+    book = Book.objects.get(pk=opts.kb_book_id)
+    page = Page.objects.create(
+        book=book, title=f"kbtest_recon_{suffix}", content=content,
+        user=user, created_by=user, modified_by=user)
+    _drop_embed_jobs(page.pk)
+    return page
+
+
+def _drop_embed_jobs(page_id):
+    """Simulate a dropped publish: the job row for this page never made it."""
+    from mojo.apps.jobs.models import Job
+
+    Job.objects.filter(func=EMBED_JOB, payload__page_id=page_id).delete()
+
+
+def _recon_job_count(page_id):
+    from mojo.apps.jobs.models import Job
+
+    return Job.objects.filter(
+        func=EMBED_JOB, payload__page_id=page_id,
+        idempotency_key__startswith=RECON_KEY).count()
+
+
+def _after_grace(offset_seconds=60):
+    """An instant far enough past now that a just-saved page clears the grace window."""
+    from datetime import timedelta
+    from django.utils import timezone
+    from mojo.apps.docit_kb.services.knowledge import RECONCILE_GRACE_SEC
+
+    return timezone.now() + timedelta(seconds=RECONCILE_GRACE_SEC + offset_seconds)
+
+
+@th.django_unit_test()
+def test_reconcile_heals_stale_page(opts):
+    """A dropped embed publish leaves stale chunks; the sweep re-queues and heals them."""
+    from datetime import timedelta
+    from django.utils import timezone
+    from mojo.apps.docit_kb.models import PageChunk
+    from mojo.apps.docit_kb.services import knowledge
+
+    _clean_recon_pages()
+    page = _recon_page(opts, "stale", "# Stale\n\nRECONOLDTOK11 is the original body.\n")
+    knowledge.embed_page_now(page)
+
+    page.content = "# Stale\n\nRECONNEWTOK22 replaced the original body.\n"
+    page.save()
+    _drop_embed_jobs(page.pk)
+    PageChunk.objects.filter(page=page).update(modified=page.modified - timedelta(hours=1))
+
+    result = knowledge.reconcile_stale_pages(now=_after_grace())
+    assert _recon_job_count(page.pk) == 1, \
+        f"The sweep must queue exactly one recon embed job for the stale page, sweep={result}"
+
+    th.run_pending_jobs()
+    bodies = " ".join(PageChunk.objects.filter(page=page).values_list("content", flat=True))
+    assert "RECONOLDTOK11" not in bodies, \
+        f"The healed page must no longer serve pre-edit content, chunks={bodies!r}"
+    assert "RECONNEWTOK22" in bodies, \
+        f"The healed page must serve the edited content, chunks={bodies!r}"
+
+    # Re-sweep in a later bucket with an empty job window, so nothing but the
+    # watermark itself can suppress the page.
+    _drop_embed_jobs(page.pk)
+    later = timezone.now() + timedelta(hours=2)
+    knowledge.reconcile_stale_pages(now=later)
+    assert _recon_job_count(page.pk) == 0, \
+        "A healed page must not be re-queued — the chunk watermark now matches the page"
+
+
+@th.django_unit_test()
+def test_watermark_uses_page_modified_snapshot(opts):
+    """Chunks certify the page version they were built from, not 'now'."""
+    from mojo.apps.docit_kb.services import knowledge
+
+    _clean_recon_pages()
+    page = _recon_page(opts, "snap", "# Snap\n\nRECONSNAP33 body.\n")
+    knowledge.embed_page_now(page)
+
+    # A save landing after the embed bumps page.modified past the watermark.
+    # Its embed job is dropped (queue outage) so only the watermark decides.
+    page.metadata = {"note": "touched after embed"}
+    page.save()
+    _drop_embed_jobs(page.pk)
+
+    result = knowledge.reconcile_stale_pages(now=_after_grace())
+    assert _recon_job_count(page.pk) == 1, \
+        ("Chunks stamped with the OLD page version must leave the page flagged; "
+         f"stamping timezone.now() would hide it. sweep={result}")
+
+
+@th.django_unit_test()
+def test_reconcile_metadata_only_save_not_requeued(opts):
+    """Once the embed job runs, the re-stamped watermark clears the page."""
+    from datetime import timedelta
+    from django.utils import timezone
+    from mojo.apps.docit_kb.services import knowledge
+
+    _clean_recon_pages()
+    page = _recon_page(opts, "meta", "# Meta\n\nRECONMETA44 body.\n")
+    knowledge.embed_page_now(page)
+
+    page.metadata = {"note": "metadata only"}
+    page.save()
+    executed = th.run_pending_jobs()
+    assert executed >= 1, f"The save must queue an embed job to run, executed={executed}"
+
+    later = timezone.now() + timedelta(hours=2)
+    result = knowledge.reconcile_stale_pages(now=later)
+    assert _recon_job_count(page.pk) == 0, \
+        f"A page whose embed job ran must not be swept again, sweep={result}"
+
+
+@th.django_unit_test()
+def test_reconcile_never_chunked_heals_beyond_lookback(opts):
+    """The never-chunked arm has no lookback — adoption backfill is automatic."""
+    from datetime import timedelta
+    from django.utils import timezone
+    from mojo.apps.docit.models import Page
+    from mojo.apps.docit_kb.models import PageChunk
+    from mojo.apps.docit_kb.services import knowledge
+
+    _clean_recon_pages()
+    page = _recon_page(opts, "ancient", "# Ancient\n\nRECONOLD55 body.\n")
+    assert PageChunk.objects.filter(page=page).count() == 0, \
+        "Fixture must start with no chunks — the embed job was dropped"
+
+    # Queryset update bypasses auto_now. Both instants are parked ahead of the
+    # real clock so that no page another module is writing in parallel can be
+    # inside the lookback window or newer than this one.
+    base = timezone.now() + timedelta(days=30)
+    Page.objects.filter(pk=page.pk).update(modified=base)
+    when = base + timedelta(hours=200)   # 200h > the 168h stale-arm lookback
+
+    result = knowledge.reconcile_stale_pages(now=when)
+    assert _recon_job_count(page.pk) == 1, \
+        f"A never-chunked page must be queued regardless of age, sweep={result}"
+
+
+@th.django_unit_test()
+def test_reconcile_null_embeddings_arm(opts):
+    """Null vectors are healed when a provider exists, and ignored when none does."""
+    from django.conf import settings as dj_settings
+    from mojo.apps.docit_kb.models import PageChunk
+    from mojo.apps.docit_kb.services import knowledge
+
+    _clean_recon_pages()
+    page = _recon_page(opts, "nullvec", "# Nullvec\n\nRECONNULL66 body.\n")
+    original = getattr(dj_settings, "EMBEDDINGS_PROVIDER", "mock")
+    dj_settings.EMBEDDINGS_PROVIDER = "bedrock"  # no AWS creds in the test env
+    try:
+        knowledge.embed_page_now(page)
+    finally:
+        dj_settings.EMBEDDINGS_PROVIDER = original
+    _drop_embed_jobs(page.pk)
+    assert PageChunk.objects.filter(page=page, embedding__isnull=True).exists(), \
+        "Fixture must have chunks with null embeddings"
+
+    result = knowledge.reconcile_stale_pages(now=_after_grace())
+    assert _recon_job_count(page.pk) == 1, \
+        f"A chunked page with null vectors must be re-queued when a provider exists, sweep={result}"
+
+    # No provider: null vectors are the normal steady state of an FTS-only
+    # install and must never be queued, or the sweep loops forever.
+    _drop_embed_jobs(page.pk)
+    dj_settings.EMBEDDINGS_PROVIDER = "bedrock"
+    try:
+        result = knowledge.reconcile_stale_pages(now=_after_grace(120))
+        assert _recon_job_count(page.pk) == 0, \
+            f"Without a provider the null-embedding arm must be skipped entirely, sweep={result}"
+    finally:
+        dj_settings.EMBEDDINGS_PROVIDER = original
+
+
+@th.django_unit_test()
+def test_reconcile_blank_guard_asymmetry(opts):
+    """Blank + never chunked is skipped; blank + still chunked must heal."""
+    from mojo.apps.docit_kb.models import PageChunk
+    from mojo.apps.docit_kb.services import knowledge
+
+    _clean_recon_pages()
+    blank = _recon_page(opts, "blank", "   \n\n  \n")
+    blanked = _recon_page(opts, "blanked", "# Blanked\n\nRECONBLANK77 body.\n")
+    knowledge.embed_page_now(blanked)
+    blanked.content = "   \n"
+    blanked.save()
+    _drop_embed_jobs(blanked.pk)
+
+    result = knowledge.reconcile_stale_pages(now=_after_grace())
+    assert _recon_job_count(blank.pk) == 0, \
+        f"A blank never-chunked page yields zero chunks by design and must not loop, sweep={result}"
+    assert result.skipped_blank >= 1, \
+        f"The blank page must be counted as skipped, sweep={result}"
+    assert _recon_job_count(blanked.pk) == 1, \
+        f"A blanked page that still serves chunks must heal, sweep={result}"
+
+    th.run_pending_jobs()
+    assert PageChunk.objects.filter(page=blanked).count() == 0, \
+        "Healing a blanked page must remove the chunks it was still serving"
+    _drop_embed_jobs(blanked.pk)
+    knowledge.reconcile_stale_pages(now=_after_grace(180))
+    assert _recon_job_count(blanked.pk) == 0, \
+        "Once emptied, the page falls under the blank guard and must not be re-queued"
+
+
+@th.django_unit_test()
+def test_reconcile_grace(opts):
+    """A page saved seconds ago is left to its own embed job."""
+    from django.utils import timezone
+    from mojo.apps.docit_kb.services import knowledge
+
+    _clean_recon_pages()
+    page = _recon_page(opts, "fresh", "# Fresh\n\nRECONFRESH88 body.\n")
+
+    result = knowledge.reconcile_stale_pages(now=timezone.now())
+    assert _recon_job_count(page.pk) == 0, \
+        f"A page inside the grace window must not be swept, sweep={result}"
+
+    result = knowledge.reconcile_stale_pages(now=_after_grace())
+    assert _recon_job_count(page.pk) == 1, \
+        f"Past the grace window the same page must be swept, sweep={result}"
+
+
+@th.django_unit_test()
+def test_reconcile_inflight_and_bucket_dedupe(opts):
+    """An in-flight embed suppresses the page; repeat sweeps in one bucket queue once."""
+    from mojo.apps import jobs
+    from mojo.apps.docit_kb.services import knowledge
+
+    _clean_recon_pages()
+    page = _recon_page(opts, "inflight", "# Inflight\n\nRECONFLIGHT99 body.\n")
+    jobs.publish(EMBED_JOB, {"page_id": page.pk}, max_retries=2)
+
+    result = knowledge.reconcile_stale_pages(now=_after_grace())
+    assert _recon_job_count(page.pk) == 0, \
+        f"A page with a pending embed job must not be re-queued, sweep={result}"
+    assert result.skipped_inflight >= 1, \
+        f"The in-flight page must be counted, sweep={result}"
+
+    executed = th.run_pending_jobs()
+    assert executed >= 1, f"The in-flight embed job must run, executed={executed}"
+
+    # Make it stale again with a dropped publish, then sweep twice in one bucket.
+    page.content = "# Inflight\n\nRECONFLIGHT99 body, edited.\n"
+    page.save()
+    _drop_embed_jobs(page.pk)
+    when = _after_grace()
+    knowledge.reconcile_stale_pages(now=when)
+    knowledge.reconcile_stale_pages(now=when)
+    assert _recon_job_count(page.pk) == 1, \
+        (f"Two sweeps in one hourly bucket must leave exactly one recon job, "
+         f"got {_recon_job_count(page.pk)}")
+
+
+@th.django_unit_test()
+def test_reconcile_limit(opts):
+    """The cap is honored and the newest edit wins the budget."""
+    from datetime import timedelta
+    from django.utils import timezone
+    from mojo.apps.docit.models import Page
+    from mojo.apps.docit_kb.services import knowledge
+
+    _clean_recon_pages()
+    older = _recon_page(opts, "limit_older", "# Older\n\nRECONLIMITA body.\n")
+    newer = _recon_page(opts, "limit_newer", "# Newer\n\nRECONLIMITB body.\n")
+
+    # Park both ahead of every real page so the DESC ordering is deterministic
+    # even while other modules are writing pages in parallel.
+    base = timezone.now() + timedelta(days=1)
+    Page.objects.filter(pk=older.pk).update(modified=base)
+    Page.objects.filter(pk=newer.pk).update(modified=base + timedelta(seconds=5))
+    when = base + timedelta(seconds=700)
+
+    result = knowledge.reconcile_stale_pages(limit=1, now=when)
+    assert result.queued == 1, f"limit=1 must publish exactly one job, sweep={result}"
+    assert _recon_job_count(newer.pk) == 1, \
+        f"The newest stale page must win the budget, sweep={result}"
+    assert _recon_job_count(older.pk) == 0, \
+        f"The older stale page must wait for the next sweep, sweep={result}"
+
+    _clean_recon_pages()
+
+
+@th.django_unit_test()
+def test_reconcile_cron_dispatcher(opts):
+    """The cron dispatcher queues the sweep job, and the kill switch stops it."""
+    from datetime import timedelta
+    from django.conf import settings as dj_settings
+    from django.utils import timezone
+    from mojo.apps.docit.models import Page
+    from mojo.apps.docit_kb import cronjobs
+    from mojo.apps.docit_kb.models import PageChunk
+    from mojo.apps.jobs.models import Job
+
+    _clean_recon_pages()
+    Job.objects.filter(func=RECON_JOB).delete()
+    page = _recon_page(opts, "cron", "# Cron\n\nRECONCRON10 body.\n")
+    # The sweep runs on the real clock inside the job, so age the page out of
+    # the grace window rather than passing a simulated instant.
+    Page.objects.filter(pk=page.pk).update(modified=timezone.now() - timedelta(hours=2))
+
+    job_id = cronjobs.reconcile_embeddings()
+    assert job_id, f"The dispatcher must return a job id, got {job_id!r}"
+    assert Job.objects.filter(func=RECON_JOB, status="pending").count() == 1, \
+        "The dispatcher must queue exactly one sweep job"
+
+    th.run_pending_jobs()   # the sweep runs and publishes per-page embed jobs
+    assert _recon_job_count(page.pk) == 1, \
+        "The sweep job must queue a recon embed job for the stale page"
+    th.run_pending_jobs()   # the embed jobs run
+    assert PageChunk.objects.filter(page=page).count() >= 1, \
+        "The full cron -> sweep -> embed chain must chunk the page"
+
+    Job.objects.filter(func=RECON_JOB).delete()
+    dj_settings.DOCIT_KB_RECONCILE_ENABLED = False
+    try:
+        result = cronjobs.reconcile_embeddings()
+        assert result is None, f"The disabled dispatcher must return None, got {result!r}"
+        assert Job.objects.filter(func=RECON_JOB).count() == 0, \
+            "DOCIT_KB_RECONCILE_ENABLED=False must queue nothing"
+    finally:
+        del dj_settings.DOCIT_KB_RECONCILE_ENABLED

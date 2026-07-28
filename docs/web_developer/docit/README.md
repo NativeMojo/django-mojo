@@ -214,6 +214,14 @@ no-op. Repeat reindexes of unchanged pages are deduplicated by the jobs
 system (idempotency keyed on page id + last-modified), so calling this in a
 loop cannot flood the queue.
 
+You normally do not need this after an edit. Re-embedding is queued
+automatically on save, and when the server's reconciliation cron is enabled
+a re-embed that got dropped (queue outage, failed job) is detected and
+retried on its own — search catches up within roughly 15 minutes without
+any client action. Reach for `reindex` for backfills (books that existed
+before the knowledge base was enabled) and after an embedding-model change,
+not as a routine step after saving a page.
+
 ## Assistant Tool
 
 When `mojo.apps.assistant` is installed, the `docit` tool domain provides

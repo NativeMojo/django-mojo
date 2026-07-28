@@ -1,5 +1,33 @@
 ## Unreleased
 
+**feature (docit_kb)** — **reconciliation cron: dropped re-embeds now heal
+themselves (maestro item 544).** The embed publish on `Page.save()` is
+fire-and-forget, so a queue outage or a permanently failed job left a page
+serving its **pre-edit** chunks in search — including content the edit
+removed — until someone noticed and reindexed the book by hand. A new `*/15`
+cron dispatcher (`mojo/apps/docit_kb/cronjobs.py`) queues one sweep job
+(`asyncjobs.reconcile_embeddings` → `knowledge.reconcile_stale_pages`), which
+queues a normal embed job per affected page. Three arms, capped together and
+ordered newest-edit-first: **stale** (chunks behind the page, within a 168h
+lookback), **never chunked** (no lookback — adopting the app now backfills
+itself; blank pages are skipped so they cannot loop), and **null embeddings**
+(a failed embed of an unchanged page, retried hourly — skipped entirely when
+no embeddings provider is configured, since null vectors are the normal state
+of an FTS-only install). Pages saved in the last 10 minutes, and pages with an
+embed job already in flight, are left alone; each page is queued at most once
+an hour via job idempotency keys. The exposure window for a dropped re-embed
+goes from unbounded to about one cron period plus job latency. Requires the
+deployment's cron runner to be wired up (`load_app_cron()` + `run_now()`);
+`DOCIT_KB_RECONCILE_ENABLED` (default `True`) is the kill switch, with
+`DOCIT_KB_RECONCILE_LIMIT` (200) and `DOCIT_KB_RECONCILE_LOOKBACK_HOURS` (168)
+bounding each sweep. **`PageChunk.modified` changes meaning:** the pipeline
+now stamps it with the page's `modified` value as of the run that built the
+chunks, making it a verification watermark ("certified against page version
+X") rather than a last-write timestamp — that is what makes the staleness test
+exact, and it makes a save landing mid-embed leave the page flagged instead of
+silently declared current. Anything reading those rows for freshness must read
+them that way (migration `docit_kb.0002`, help_text only).
+
 **fix (testit)** — **`th.server_settings()` no longer strands overrides in
 `var/django.conf` (maestro item 543).** The context manager snapshotted the
 *whole* conf file on the way in — outside the server lock — and wrote that

@@ -563,6 +563,7 @@ def test_load_app_cron_real_modules_no_errors(opts):
     known_modules = [
         "mojo.apps.incident.cronjobs",
         "mojo.apps.account.cronjobs",
+        "mojo.apps.docit_kb.cronjobs",
         "mojo.apps.jobs.cronjobs",
         "mojo.apps.logit.cronjobs",
         "mojo.apps.shortlink.cronjobs",

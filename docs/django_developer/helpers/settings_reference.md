@@ -129,6 +129,14 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `DNSMAN_REGISTRANT_CONTACT`
 - `DNSMAN_SEARCH_BATCH_LIMIT`
 
+### DOCIT_KB
+
+- `DOCIT_KB_RECONCILE_ENABLED` — kill switch for the knowledge-base
+  reconciliation cron dispatcher (default `True`). Details:
+  [docit knowledge base](../docit/knowledge.md#settings).
+- `DOCIT_KB_RECONCILE_LIMIT` — maximum pages one reconciliation sweep may queue
+- `DOCIT_KB_RECONCILE_LOOKBACK_HOURS` — how far back the sweep's stale arm looks
+
 ### DUID
 
 - `DUID_HEADER`

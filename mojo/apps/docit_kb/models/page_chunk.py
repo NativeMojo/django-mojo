@@ -56,7 +56,13 @@ class PageChunk(models.Model, MojoModel):
     )
 
     created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
-    modified = models.DateTimeField(auto_now=True, db_index=True)
+    # NOT a last-content-change timestamp: the embed pipeline overwrites this
+    # with the page's `modified` value as of the run that verified the chunk,
+    # so it reads as "certified against page version X". The reconciliation
+    # sweep flags a page when page.modified > MAX(chunk.modified).
+    modified = models.DateTimeField(
+        auto_now=True, db_index=True,
+        help_text="Pipeline verification watermark — the page version these chunks were built from")
 
     class Meta:
         ordering = ['page', 'position']
