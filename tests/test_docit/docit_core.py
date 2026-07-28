@@ -371,25 +371,32 @@ def test_asset_rest_api(opts):
 
 @th.django_unit_test()
 def test_book_permissions_and_access_control(opts):
-    """Test Book access control and permission enforcement."""
-    from mojo.apps.account.models import User
+    """Book reads go through RestMeta, not a model-level helper.
+
+    This used to assert on Book.can_user_view(), a method the REST layer never
+    called and which ended in `return True` — it was removed with the tenant
+    scoping (maestro item 530). Access is asserted through the API instead,
+    which is the thing that actually gates a read.
+    """
     from mojo.apps.docit.models import Book
 
-    user = User.objects.get(username=TEST_USER)
+    assert opts.client.login(TEST_USER, TEST_PWORD), "Authentication failed"
     book = Book.objects.get(id=opts.test_book_id)
 
-    # Test owner can view
-    assert book.can_user_view(user) == True, "Book owner should be able to view book"
+    resp = opts.client.get(f"/api/docit/book/{book.id}")
+    assert resp.status_code == 200, \
+        f"A manage_docit holder should read the book, got {resp.status_code}"
 
-    # Test inactive book access
     book.is_active = False
     book.save()
-    assert book.can_user_view(user) == False, "Inactive books should not be viewable"
-
-    # Restore active status
-    book.is_active = True
-    book.save()
-    assert book.can_user_view(user) == True, "Active books should be viewable again"
+    try:
+        resp = opts.client.get(f"/api/docit/book/{book.id}")
+        assert resp.status_code == 200, \
+            (f"is_active gates the PUBLIC endpoints, not authenticated reads; "
+             f"got {resp.status_code}")
+    finally:
+        book.is_active = True
+        book.save()
 
 
 @th.django_unit_test()
@@ -518,33 +525,25 @@ def test_rest_api_graphs_functionality(opts):
 
 @th.django_unit_test()
 def test_unauthorized_access_restrictions(opts):
-    """Test that unauthorized users cannot access DocIt resources."""
-    # Logout current user
+    """Anonymous callers get nothing from the authenticated docit endpoints.
+
+    This test used to accept any status code for both requests, so it passed
+    while the endpoints were serving content to anonymous callers. It asserts
+    now (maestro item 530).
+    """
     opts.client.logout()
     assert not opts.client.is_authenticated, "Should be logged out"
 
-    # Try to access book list without authentication
     resp = opts.client.get("/api/docit/book")
-    # With VIEW_PERMS = ['public'], this should succeed
-    # The test verifies the permissions are working as expected
+    assert resp.status_code in (401, 403), \
+        f"Anonymous book list must be denied, got {resp.status_code}"
 
-    # Try to create book without authentication
-    book_data = {
+    resp = opts.client.post("/api/docit/book", json={
         "title": "unauthorized_book",
-        "description": "Should not be created"
-    }
-
-    resp = opts.client.post("/api/docit/book", json=book_data)
-    # With SAVE_PERMS = ['manage_docit', 'owner'], this should fail for anonymous users
-    if resp.status_code == 403:
-        # This is expected for unauthorized creation
-        pass
-    elif resp.status_code == 401:
-        # This is also acceptable for unauthorized creation
-        pass
-    else:
-        # If it succeeds, that might be due to test environment setup
-        pass
+        "description": "Should not be created",
+    })
+    assert resp.status_code in (401, 403), \
+        f"Anonymous book create must be denied, got {resp.status_code}"
 
 
 @th.django_unit_test()

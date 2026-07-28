@@ -4,7 +4,7 @@ from ..models import PageRevision
 
 @md.URL('page/revision')
 @md.URL('page/revision/<int:pk>')
-@md.custom_security("uses custom security")
+@md.uses_model_security(PageRevision)
 def on_page_revision(request, pk=None):
     """
     Standard CRUD endpoints for PageRevision model

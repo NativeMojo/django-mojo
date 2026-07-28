@@ -1,5 +1,48 @@
 ## Unreleased
 
+**security (docit)** — **docit is tenant-scoped; public reading is now an
+explicit per-book opt-in (maestro item 530).** Every docit model declared
+`VIEW_PERMS = ['all']` with no `GROUP_FIELD`, and the handlers carried a
+`@md.custom_security(...)` marker that enforces nothing (it is registry
+metadata, not a wrapper). The result, confirmed by regression tests written
+against the old code: **any authenticated user read every tenant's books,
+pages — published or not, `?graph=detail` includes `content` — revisions and
+assets**; the `book/slug` and `page/slug` endpoints called `on_rest_get`
+directly, which only serializes, so they served that same content to
+**unauthenticated** callers; `/api/docit/search` (and the `search_docs`
+assistant tool) returned ranked snippets across every tenant; and because
+`'all'` also satisfied the FK-attach VIEW check, a user with page-create rights
+in their own group could create pages and assets **inside another tenant's
+book**. Now: `VIEW_PERMS = ['view_docit', 'manage_docit', 'docs', 'member']`
+plus `GROUP_FIELD` on all four models (`group`, `book__group`, `book__group`,
+`page__book__group`), so the stock group-scoped machinery confines lists,
+detail reads, and API keys; the `custom_security` markers are replaced with
+`@md.uses_model_security(...)`; and search takes a `groups` argument derived
+from the caller (`services.search.visible_groups`, mirroring the list path —
+an `ApiKey` is never unrestricted). `'member'` means any member of the owning
+group may read that group's docs without a per-member grant; note that
+`ApiKey.has_permission` auto-satisfies `'member'` too, so any group-scoped key
+of a tenant can read that tenant's docs, still confined to the key's own group
+tree. Writing is unchanged. **Anonymous documentation** moves to new endpoints
+— `GET /api/docit/public/book/<slug>`, `public/pages`, `public/page` — which
+serve only books with the new `Book.is_public` flag (default `False`,
+migration `docit.0004`), only while the book is active and its owning group's
+whole ancestor chain is active, only published pages, and only through a
+server-pinned response graph (`?graph=` is ignored). **Breaking:**
+`GET /api/docit/page/slug/<slug>` now **requires** a `book` parameter (id or
+slug), and both slug endpoints now require authentication — page slugs are
+unique per book, so the old bare `.get(slug=...)` also raised
+`MultipleObjectsReturned` (a 500) as soon as two books shared a page name, and
+`DoesNotExist` (also a 500) for anything unknown; both are 400/404 now.
+`Book.can_user_view()` and `Asset.can_user_access()` are **removed** — the REST
+layer never called them, they were not framework hooks, and both ended in
+`return True`. `Book` now rejects a create with no group, and `Page`/`Asset` a
+create with no book, with a 400 rather than an `IntegrityError` 500 (that is
+the path a denied cross-tenant FK attach takes). The security suite's
+whitelist no longer lists docit's endpoints and models as intentionally
+public, and `test_routes.py` no longer hardcodes the four docit models as
+"custom secured" — that map is why this audit stayed quiet.
+
 **feature (docit_kb)** — **reconciliation cron: dropped re-embeds now heal
 themselves (maestro item 544).** The embed publish on `Page.save()` is
 fire-and-forget, so a queue outage or a permanently failed job left a page

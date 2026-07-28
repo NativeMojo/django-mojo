@@ -69,9 +69,11 @@ class PageRevision(models.Model, MojoModel):
         unique_together = ['page', 'version']
 
     class RestMeta:
-        VIEW_PERMS = ['all']
+        # See Book.RestMeta for why 'member' is here and what it does not grant.
+        VIEW_PERMS = ['view_docit', 'manage_docit', 'docs', 'member']
         SAVE_PERMS = ['manage_docit', 'docs', 'owner']
         DELETE_PERMS = ['manage_docit', 'owner']
+        GROUP_FIELD = 'page__book__group'
 
         GRAPHS = {
             'default': {

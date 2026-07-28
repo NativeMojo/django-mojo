@@ -301,8 +301,13 @@ def test_search_book_filter(opts):
     main_page.save()
     knowledge.embed_page_now(main_page)
 
+    # Superset, not equality: this is the control for the two filtered calls
+    # below, and an UNfiltered hybrid search legitimately also returns the
+    # vector leg's nearest neighbours — which on a long-lived database
+    # includes whatever other modules have embedded. The filtered assertions
+    # that follow are the actual subject, and those stay exact.
     unfiltered = knowledge.search("COMMONTOK77")
-    assert {r.book_id for r in unfiltered.results} == {opts.kb_book_id, other_book.pk}, \
+    assert {opts.kb_book_id, other_book.pk} <= {r.book_id for r in unfiltered.results}, \
         f"Unfiltered search must span both books, got {[r.book_slug for r in unfiltered.results]}"
 
     by_slug = knowledge.search("COMMONTOK77", book=opts.kb_book_slug)

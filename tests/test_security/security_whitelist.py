@@ -20,17 +20,13 @@ SECURITY_WHITELIST = {
         'api/auth/token/refresh',
         'api/refresh_token',
 
-        # Documentation (public documentation system)
-        'api/docit/book',
-        'api/docit/page',
-        'api/docit/book/<int:pk>',
-        'api/docit/page/<int:pk>',
-        'api/docit/book/slug/<str:slug>',
-        'api/docit/page/slug/<str:slug>',
-        'api/docit/page/revision',
-        'api/docit/page/revision/<int:pk>',
-        'api/docit/book/asset',
-        'api/docit/book/asset/<int:pk>',
+        # Documentation — ONLY the opt-in public surface. The docit CRUD and
+        # slug endpoints are tenant-scoped and authenticated (maestro item
+        # 530); they were whitelisted here as "intentionally public", which is
+        # why this suite never flagged the cross-tenant exposure.
+        'api/docit/public/book/<str:slug>',
+        'api/docit/public/pages',
+        'api/docit/public/page',
 
         # Add more patterns as needed...
         # Use this format for parameterized routes:
@@ -38,11 +34,9 @@ SECURITY_WHITELIST = {
     ],
 
     'public_models': [
-        # Documentation models (if meant to be public)
-        'mojo.apps.docit.Book',
-        'mojo.apps.docit.Page',
-        'mojo.apps.docit.Asset',
-        'mojo.apps.docit.PageRevision',
+        # No docit models here: reads are confined by RestMeta VIEW_PERMS +
+        # GROUP_FIELD, and anonymous reading goes through the dedicated
+        # public/* endpoints above rather than the models being public.
 
         # Add more models as needed...
         # Format: 'app_name.ModelName'
@@ -54,12 +48,12 @@ SECURITY_WHITELIST = {
         'api/version': 'Version info - safe to be public',
         'api/myip': 'IP lookup utility - safe to be public',
         'api/sysinfo/detailed': 'System info endpoint - safe for monitoring',
-        'api/docit/book': 'Public documentation system',
-        'api/docit/page': 'Public documentation system',
-        'mojo.apps.docit.Book': 'Public documentation model',
-        'mojo.apps.docit.Page': 'Public documentation model',
-        'mojo.apps.docit.Asset': 'Public documentation assets',
-        'mojo.apps.docit.PageRevision': 'Public documentation revisions',
+        'api/docit/public/book/<str:slug>':
+            'Opt-in public docs — serves only books with is_public=True',
+        'api/docit/public/pages':
+            'Opt-in public docs — published pages of an is_public book',
+        'api/docit/public/page':
+            'Opt-in public docs — one published page of an is_public book',
     }
 }
 

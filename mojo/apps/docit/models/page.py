@@ -100,9 +100,13 @@ class Page(models.Model, MojoModel):
         unique_together = ['book', 'slug']
 
     class RestMeta:
-        VIEW_PERMS = ['all']
+        # See Book.RestMeta for why 'member' is here and what it does not grant.
+        VIEW_PERMS = ['view_docit', 'manage_docit', 'docs', 'member']
         SAVE_PERMS = ['manage_docit', 'docs', 'owner']
         DELETE_PERMS = ['manage_docit', 'owner']
+        # A page's tenant is its book's — reached as a related path, which the
+        # framework traverses for list filtering AND for the detail rebind.
+        GROUP_FIELD = 'book__group'
         CREATED_BY_OWNER_FIELD = 'created_by'
         UPDATED_BY_OWNER_FIELD = 'modified_by'
         GRAPHS = {
@@ -157,11 +161,38 @@ class Page(models.Model, MojoModel):
                 "fields": [
                 'id', 'title', 'slug', 'order_priority', 'parent', 'children'
                 ],
+            },
+            # Anonymous-facing graphs, pinned server-side by the public
+            # endpoints. No owner/actor fields, and is_published is omitted
+            # because an unpublished page never reaches these graphs at all.
+            'public': {
+                "fields": [
+                    'id', 'title', 'slug', 'content', 'order_priority',
+                    'metadata', 'parent', 'modified'
+                ],
+                "extra": ["html"],
+            },
+            'public_list': {
+                "fields": [
+                    'id', 'title', 'slug', 'order_priority', 'parent'
+                ],
             }
         }
 
     def __str__(self):
         return f"{self.book.title} / {self.title}"
+
+    def on_rest_pre_save(self, changed_fields, created):
+        """A page must have a book — that book is what makes it tenanted.
+
+        When a caller names a book they may not view, the framework's FK-attach
+        gate denies the assignment *silently* and the save continues with the
+        field unset. Without this check that lands as an IntegrityError 500;
+        with it, a cross-tenant attach is a clean 400.
+        """
+        import mojo.errors as me
+        if created and not self.book_id:
+            raise me.ValueException("book is required")
 
     def save(self, *args, **kwargs):
         """Override save to auto-generate slug, validate hierarchy, and log operations"""

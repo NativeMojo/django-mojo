@@ -48,6 +48,13 @@ class Book(models.Model, MojoModel):
         db_index=True,
         help_text="Whether this book is active and visible"
     )
+    is_public = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=("Opt this book into anonymous public reading via the "
+                   "/api/docit/public endpoints. Off by default — the "
+                   "authenticated endpoints stay tenant-scoped either way.")
+    )
 
     # Ownership and tracking
     group = models.ForeignKey(
@@ -95,9 +102,15 @@ class Book(models.Model, MojoModel):
         verbose_name_plural = 'Books'
 
     class RestMeta:
-        VIEW_PERMS = ['all']
+        # 'member' lets any member of the owning group read that group's docs
+        # without a per-member grant — docs are group-visible by nature. It is
+        # NOT a global grant: User.has_permission has no 'member' case, so the
+        # flat (tenantless) branch stays closed and reads are confined to the
+        # caller's own tenants. GROUP_FIELD is what engages that confinement.
+        VIEW_PERMS = ['view_docit', 'manage_docit', 'docs', 'member']
         SAVE_PERMS = ['manage_docit', 'docs', 'owner']
         DELETE_PERMS = ['manage_docit', 'owner']
+        GROUP_FIELD = 'group'
         CREATED_BY_OWNER_FIELD = 'created_by'
         UPDATED_BY_OWNER_FIELD = 'modified_by'
         POST_SAVE_ACTIONS = ["reindex"]
@@ -137,6 +150,14 @@ class Book(models.Model, MojoModel):
                     # "created_by": "basic",
                     # "modified_by": "basic"
                 }
+            },
+            # Served to anonymous callers by the public endpoints. Owner,
+            # config and permissions are deliberately absent — this graph is
+            # pinned server-side precisely so a caller cannot ask for another.
+            'public': {
+                "fields": [
+                    'id', 'title', 'slug', 'description', 'modified'
+                ],
             }
         }
 
@@ -191,33 +212,17 @@ class Book(models.Model, MojoModel):
         """Get all assets associated with this book"""
         return self.assets.all().order_by('-order_priority', 'id')
 
-    def can_user_view(self, user):
+    def on_rest_pre_save(self, changed_fields, created):
+        """A book must belong to a tenant.
+
+        GROUP_FIELD confines reads to the owning group, so a group-less book
+        would sit outside that confinement. The framework stamps `group` from
+        request.group on create when the body omits it (this hook runs after
+        that), so this only fires when there was no group to infer at all.
         """
-        Check if a user can view this book
-
-        This provides fine-grained access control beyond the basic RestMeta permissions.
-        The Book model handles detailed access logic here.
-        """
-        # Inactive books are not viewable
-        if not self.is_active:
-            return False
-
-        # Owner can always view
-        if self.user == user:
-            return True
-
-        # Group members can view if no specific restrictions
-        if user and user.groups.filter(id=self.group.id).exists():
-            return True
-
-        # Check custom permissions if defined
-        if self.permissions:
-            # This is where we'd implement custom permission logic
-            # For now, return True for basic implementation
-            return True
-
-        # Default to allowing view (since RestMeta has public view)
-        return True
+        import mojo.errors as me
+        if created and not self.group_id:
+            raise me.ValueException("group is required")
 
     def on_action_reindex(self, value):
         """Queue knowledge-base embed jobs for every page of this book.

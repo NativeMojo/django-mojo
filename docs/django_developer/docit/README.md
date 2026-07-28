@@ -13,9 +13,10 @@ from mojo.apps.docit.models import Book
 
 book = Book.objects.create(
     title="API Documentation",
-    group=group,
+    group=group,          # required — the book's tenant (see Permissions)
     user=user,
-    is_published=True
+    is_active=True,
+    is_public=False,      # opt in to anonymous reading; default False
 )
 ```
 
@@ -82,34 +83,110 @@ count = page.get_revision_count()
 | `user` | FK → User | Owner |
 | `created_by` | FK → User | Original creator |
 
-## RestMeta
+## Permissions and tenant scoping
+
+Every docit model is **group-scoped**. Reads are confined to the caller's own
+tenants by the standard framework machinery — there is no docit-specific
+permission code.
 
 ```python
 class RestMeta:
-    VIEW_PERMS = ["all"]        # public reading
-    SAVE_PERMS = ["manage_docit", "owner"]
-    DELETE_PERMS = ["manage_docit"]
-    CAN_DELETE = True
-    GRAPHS = {
-        "list": {"fields": ["id", "title", "slug", "is_published", "order_priority", "parent"]},
-        "default": {"fields": ["id", "title", "slug", "content", "is_published", "created", "modified"]},
-        "html": {"extra": ["html"]},      # includes rendered HTML
-        "tree": {"extra": ["children"]},  # hierarchical with children
-    }
+    VIEW_PERMS = ["view_docit", "manage_docit", "docs", "member"]
+    SAVE_PERMS = ["manage_docit", "docs", "owner"]
+    DELETE_PERMS = ["manage_docit", "owner"]
+    GROUP_FIELD = "group"        # Book; see the table below for the others
 ```
+
+| Model | `GROUP_FIELD` |
+|---|---|
+| `Book` | `group` |
+| `Page` | `book__group` |
+| `Asset` | `book__group` |
+| `PageRevision` | `page__book__group` |
+
+`GROUP_FIELD` is what engages tenant scoping: it narrows list queries, and on
+detail reads the framework rebinds `request.group` to the **instance's** owning
+group, so a caller cannot reach another tenant's row by passing their own
+`?group=`.
+
+`"member"` means *any member of the owning group may read that group's docs*,
+with no per-member grant — documentation is group-visible by nature. Two things
+to know about it:
+
+- It is **not** a global grant. `User.has_permission` has no `"member"` case,
+  so the flat (tenantless) branch stays closed and a user with no membership
+  reads nothing. Reserve the literal string `member` as a *global* user
+  permission for nothing else — granting it platform-wide would widen these
+  reads to every tenant.
+- `ApiKey.has_permission` **does** auto-satisfy `"member"`, so any
+  group-scoped API key of a tenant — including one minted with an empty
+  permissions dict — can read that tenant's books, drafts, revisions and
+  assets. It stays confined to the key's own group tree.
+
+Members can read their own tenant's **unpublished** pages; `is_published` gates
+the public endpoints only. Writing still requires `manage_docit` / `docs` /
+ownership — widening VIEW did not widen SAVE.
+
+`Book.group` is required at the REST layer (`on_rest_pre_save` raises a 400
+when a create would leave it unset), and `Page`/`Asset` likewise require a
+`book`. That last check is what turns a denied cross-tenant FK attach — the
+framework skips the assignment silently — into a clean 400 instead of an
+`IntegrityError` 500.
 
 ## REST Endpoints
 
 ```python
 @md.URL('page')
 @md.URL('page/<int:pk>')
+@md.uses_model_security(Page)          # required — RestMeta does the gating
 def on_page(request, pk=None):
     return Page.on_rest_request(request, pk)
-
-@md.URL('page/slug/<str:slug>')
-def on_page_by_slug(request, slug=None):
-    return Page.objects.get(slug=slug).on_rest_get(request)
 ```
+
+Endpoints that resolve an instance themselves must hand it to
+`on_rest_handle_get`, never to `on_rest_get` — the latter only serializes and
+applies no permission check at all:
+
+```python
+@md.URL('page/slug/<str:slug>')
+@md.uses_model_security(Page)
+def on_page_by_slug(request, slug=None):
+    # `book` is required: Page.slug is unique per book, not globally.
+    page = Page.objects.filter(slug=slug, book_id=book_id).first()
+    if page is None:
+        raise me.ValueException("Page not found", code=404, status=404)
+    return Page.on_rest_handle_get(request, page)
+```
+
+## Public documentation (opt-in)
+
+Set `Book.is_public = True` to publish a book to anonymous readers. Nothing
+else changes: the authenticated endpoints stay tenant-scoped, and anonymous
+reading is served only by the dedicated `public/*` endpoints in
+`mojo/apps/docit/rest/public.py`.
+
+Those endpoints serve a book only when it opts in, is active, belongs to a
+group, and that group's whole ancestor chain is active — a suspended tenant
+stops serving public content immediately. They serve published pages only, and
+they pin the response graph server-side (`public` / `public_list`), so a caller
+cannot widen the response with `?graph=detail`.
+
+## Knowledge-base search
+
+`search_any()` takes a `groups` argument that confines results to those
+tenants. `None` means unrestricted and is correct only for internal/system
+callers; request-facing callers pass `visible_groups()`:
+
+```python
+from mojo.apps.docit.services.search import search_any, visible_groups
+
+groups = visible_groups(user=request.user, api_key=getattr(request, "api_key", None))
+found = search_any(query, groups=groups)
+```
+
+`visible_groups()` mirrors the list path: a global `view_docit` / `manage_docit`
+/ `docs` holder gets `None` (unrestricted), anyone else is narrowed to their own
+groups, an `ApiKey` is never unrestricted, and an anonymous caller gets nothing.
 
 ## Render Endpoint
 

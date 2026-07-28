@@ -125,15 +125,13 @@ def check_model_has_custom_security(model_name):
                     if registry_info.get('type') == 'custom':
                         return True
 
-        # Also check for specific known patterns
-        known_custom_security_models = {
-            'Book': 'docit',
-            'Page': 'docit',
-            'Asset': 'docit',
-            'PageRevision': 'docit'
-        }
-
-        return model_name in known_custom_security_models
+        # Deliberately no hardcoded model map here. This used to name docit's
+        # Book/Page/Asset/PageRevision as custom-secured, which was false —
+        # their handlers carried a @custom_security marker that enforced
+        # nothing — and it silenced this audit for exactly the models that had
+        # no tenant scoping at all (maestro item 530). Whether a model is
+        # custom-secured is answered by the registry above, or not at all.
+        return False
 
     except Exception:
         return False

@@ -119,15 +119,22 @@ def _embed_input(row):
     return f"{row.heading}\n{row.content}" if row.heading else row.content
 
 
-def search(query, book=None, limit=10):
+def search(query, book=None, limit=10, groups=None):
     """
     Hybrid search over published chunks. Returns objict(mode, results) where
     mode is "hybrid" (vector + FTS) or "fts" (no embeddings provider).
+
+    `groups` confines results to those tenants; None means unrestricted. See
+    mojo.apps.docit.services.search.visible_groups for how request-facing
+    callers derive it.
     """
     qs = PageChunk.objects.filter(
         page__is_published=True,
         page__book__is_active=True,
     ).select_related("page", "page__book")
+    if groups is not None:
+        # Also drops group-less books, which belong to no tenant at all.
+        qs = qs.filter(page__book__group__in=groups)
     if book is not None and book != "":
         qs = _filter_book(qs, book)
     pool = max(limit * 3, 15)

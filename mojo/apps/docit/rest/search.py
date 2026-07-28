@@ -30,6 +30,12 @@ def on_search(request):
     except (TypeError, ValueError):
         limit = DEFAULT_LIMIT
     limit = max(1, min(limit, MAX_LIMIT))
-    from mojo.apps.docit.services.search import search_any
-    found = search_any(str(query).strip(), book=request.DATA.get("book", None), limit=limit)
+    from mojo.apps.docit.services.search import search_any, visible_groups
+    # Search reads the same content the list endpoints serve, so it has to be
+    # confined the same way — without this it was a cross-tenant snippet feed
+    # for any authenticated caller.
+    groups = visible_groups(
+        user=request.user, api_key=getattr(request, "api_key", None))
+    found = search_any(str(query).strip(), book=request.DATA.get("book", None),
+                       limit=limit, groups=groups)
     return {"results": found.results, "mode": found.mode, "count": len(found.results)}

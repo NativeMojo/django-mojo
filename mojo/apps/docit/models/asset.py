@@ -75,9 +75,11 @@ class Asset(models.Model, MojoModel):
         verbose_name_plural = 'Assets'
 
     class RestMeta:
-        VIEW_PERMS = ['all']
+        # See Book.RestMeta for why 'member' is here and what it does not grant.
+        VIEW_PERMS = ['view_docit', 'manage_docit', 'docs', 'member']
         SAVE_PERMS = ['manage_docit', 'docs', 'owner']
         DELETE_PERMS = ['manage_docit', 'owner']
+        GROUP_FIELD = 'book__group'
         CREATED_BY_OWNER_FIELD = 'created_by'
         GRAPHS = {
             'default': {
@@ -131,6 +133,12 @@ class Asset(models.Model, MojoModel):
         if self.file:
             return f"{self.book.title} / {self.filename}"
         return f"{self.book.title} / Asset #{self.id}"
+
+    def on_rest_pre_save(self, changed_fields, created):
+        """An asset must have a book — see Page.on_rest_pre_save."""
+        import mojo.errors as me
+        if created and not self.book_id:
+            raise me.ValueException("book is required")
 
     def save(self, *args, **kwargs):
         """Override save to inherit user from book and log operations"""
@@ -209,14 +217,6 @@ class Asset(models.Model, MojoModel):
         if self.filename:
             return self.filename
         return f"Asset #{self.id}"
-
-    def can_user_access(self, user):
-        """
-        Check if user can access this asset
-
-        Assets inherit access control from their parent book
-        """
-        return self.book.can_user_view(user)
 
     def get_file_extension(self):
         """Get file extension from filename"""

@@ -106,9 +106,10 @@ def test_get_tools_for_limited_user(opts):
 def test_get_tools_for_noperms_user(opts):
     """User with no assistant-relevant perms sees only permission='all' tools.
 
-    docit's search_docs is intentionally open to every authenticated user
-    (mirrors docit VIEW_PERMS = ['all']); no privileged or mutating tool may
-    leak to a no-perms user.
+    docit's search_docs is intentionally VISIBLE to every authenticated user
+    (permission="all"); what it returns is tenant-scoped inside the handler
+    (maestro item 530), so a no-perms user sees the tool but no content. No
+    privileged or mutating tool may leak to a no-perms user.
     """
     from mojo.apps.assistant import get_registry, get_tools_for_user
     registry = get_registry()

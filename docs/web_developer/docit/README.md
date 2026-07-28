@@ -4,21 +4,36 @@ Documentation/wiki system with hierarchical pages and Markdown rendering.
 
 ## Permissions
 
-- Reading: `all` (public, no auth required by default)
-- Writing: `manage_docit` or `owner`
-- Deleting: `manage_docit`
+Every endpoint below except `/api/docit/public/*` requires authentication, and
+returns only content belonging to **your own groups**.
+
+- Reading: any member of the owning group, or `view_docit` / `manage_docit` /
+  `docs`. A member sees their own tenant's unpublished drafts too.
+- Writing: `manage_docit`, `docs`, or ownership
+- Deleting: `manage_docit` or ownership
+
+Requesting another tenant's book or page by id or slug returns **403**, and it
+will not appear in any list. Anonymous requests get **401**.
+
+> **Changed:** these endpoints used to read as public. They are authenticated
+> and tenant-scoped now; anonymous documentation lives under
+> `/api/docit/public/*` and serves only books that opted in.
 
 ## Endpoints
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/docit/page` | List pages |
+| GET | `/api/docit/page` | List pages (your tenants only) |
 | POST | `/api/docit/page` | Create page |
 | GET | `/api/docit/page/<id>` | Get page |
 | PUT/POST | `/api/docit/page/<id>` | Update page |
 | DELETE | `/api/docit/page/<id>` | Delete page |
-| GET | `/api/docit/page/slug/<slug>` | Get page by slug |
+| GET | `/api/docit/page/slug/<slug>?book=<id\|slug>` | Get page by slug — `book` is **required** |
+| GET | `/api/docit/book/slug/<slug>` | Get book by slug |
 | POST | `/api/docit/render` | Render Markdown to HTML |
+| GET | `/api/docit/public/book/<slug>` | **No auth** — an opted-in public book |
+| GET | `/api/docit/public/pages?book=<slug>` | **No auth** — its published pages |
+| GET | `/api/docit/public/page?book=<slug>&slug=<slug>` | **No auth** — one published page |
 
 ## Get a Page
 
@@ -59,8 +74,55 @@ GET /api/docit/page/1?graph=html
 
 ## Get Page by Slug
 
+`book` is required — page slugs are unique **within a book**, not globally, so
+`getting-started` typically exists in several books. Pass the book id or its
+slug:
+
 ```
-GET /api/docit/page/slug/getting-started
+GET /api/docit/page/slug/getting-started?book=install-guide
+GET /api/docit/page/slug/getting-started?book=3
+```
+
+| Status | Condition |
+|---|---|
+| 400 | `book` missing |
+| 401 | Not authenticated |
+| 403 | The page belongs to a group you are not a member of |
+| 404 | No page with that slug in that book (or no such book) |
+
+## Public Documentation
+
+Books with `is_public` set are readable with no authentication. Nothing else
+is: these endpoints serve only opted-in, active books belonging to an active
+group, only their **published** pages, and a fixed response shape — `?graph=`
+is ignored.
+
+```
+GET /api/docit/public/book/install-guide
+GET /api/docit/public/pages?book=install-guide
+GET /api/docit/public/page?book=install-guide&slug=getting-started
+```
+
+`public/pages` returns a flat list ordered by `order_priority`; build the tree
+client-side from each row's `parent`. Anything not publicly readable — a book
+that did not opt in, an inactive book, a suspended tenant, an unpublished page
+— returns **404** rather than distinguishing the cases.
+
+```json
+{
+  "status": true,
+  "data": {
+    "id": 12,
+    "title": "Getting Started",
+    "slug": "getting-started",
+    "content": "# Getting Started\n\nWelcome...",
+    "html": "<h1>Getting Started</h1>...",
+    "parent": null,
+    "order_priority": 100,
+    "metadata": {},
+    "modified": "2024-01-15T10:00:00Z"
+  }
+}
 ```
 
 ## Available Graphs
@@ -143,7 +205,10 @@ Error responses:
 ## Knowledge-Base Search
 
 **GET/POST** `/api/docit/search` — authenticated. Ranked search over
-published pages of active books.
+published pages of active books **in your own groups**. A global `view_docit`
+/ `manage_docit` / `docs` holder searches across all tenants; everyone else,
+including API keys, is confined to their own. Content you cannot read through
+the list endpoints will not appear here either.
 
 | Param | Required | Description |
 |---|---|---|
@@ -226,4 +291,6 @@ not as a routine step after saving a page.
 
 When `mojo.apps.assistant` is installed, the `docit` tool domain provides
 `search_docs` (same parameters and results as the search endpoint) so the
-assistant can ground answers in your documentation.
+assistant can ground answers in your documentation. The tool is offered to
+every authenticated user, but its results are scoped to the asking user's own
+groups exactly as the endpoint is.

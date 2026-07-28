@@ -204,7 +204,8 @@ def test_write_perms_subset_of_view_perms(opts):
 
 
 # ---------------------------------------------------------------------------
-# Docs — VIEW is 'all', category only in SAVE (fine-grained, not a category toggle)
+# Docs — 'docs' is the category term; docit models carry it in both VIEW and
+# SAVE (VIEW was 'all' until maestro item 530 made these models tenant-scoped)
 # ---------------------------------------------------------------------------
 
 @th.django_unit_test()
