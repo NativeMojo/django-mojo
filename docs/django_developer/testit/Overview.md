@@ -126,6 +126,7 @@ When `rich` is installed and `-j` is greater than 1, the runner shows a live per
 - **Top-level**: `status` (passed/failed), `total`, `passed`, `failed`, `skipped`, `duration`
 - **`modules`**: per-module breakdown — `tests`, `passed`, `failed`, `skipped`, `duration` for each test module
 - **`failures`**: per-failure entries with `test_name`, `function`, `status`, `assertion`, `test_source`, `file_path`, `line`, `traceback` (errors only), and `server_log_tail`
+- **`conf_drift`**: names of any `var/django.conf` keys that changed across the run — normally empty. A non-empty list means a `th.server_settings()` context did not restore cleanly and the key is now stranded. Key **names only**; values are never reported, since an override may be a credential.
 
 LLM agents should always use `--agent` and read the JSON report instead of parsing terminal output. Never use `--plain` for full suite runs — it disables the rich UI but doesn't improve agent output.
 
@@ -195,7 +196,6 @@ TESTIT = {
 # testit/server_lock.py keeps that restart away from open websockets on its own.
 TESTIT = {
     "requires_apps": ["mojo.apps.account"],
-    "server_settings": {},                   # dict of Django settings to apply before the module starts
 }
 
 # tests/test_security/__init__.py  — opt-in slow module
@@ -218,6 +218,32 @@ When a large app has many tests, split it into domain-focused packages (`test_au
 > only the actual restart windows are excluded — much cheaper than marking every
 > caller serial. Use `"serial": True` for the *other* reasons (signal handlers
 > bound to the main thread, as in `test_job_engine`).
+>
+> A `WsClient` opened **inside** a `server_settings()` body is fine: the thread
+> already holding the exclusive hold is granted the shared hold immediately
+> (it is the restarter — it cannot tear down its own socket behind its own back).
+
+### How `server_settings()` restores — subtractive, and one at a time
+
+- **It removes only the keys it set.** The context captures the exact source
+  lines for its own keys (inside the lock), and on exit puts those lines back —
+  or deletes the key when it was not there before — against `var/django.conf`
+  **as it stands**. Every other line is left untouched.
+- **Whole contexts are serialized process-wide.** Two overlapping contexts mean
+  two live reloads fighting over one uvicorn worker; the second one waits.
+  Acquisition has a 120s valve that logs loudly and proceeds, so a leaked
+  context can never deadlock a run.
+- **Why it matters:** the old implementation snapshotted the *whole file* on the
+  way in and wrote that snapshot back on the way out. Modules run as threads, so
+  a second context could snapshot while the first one's override was live and
+  then restore it — stranding the first context's key in `var/django.conf`
+  permanently, silently changing every later run.
+- **The runner checks.** `testit/runner.py` parses `var/django.conf` at the start
+  and end of every run and warns loudly if any key changed, naming the **keys
+  only** (never the values). `--agent` reports the same list as `conf_drift`.
+  Best-effort: it cannot catch a run killed mid-context.
+- **Caution:** overrides are written to `var/django.conf` in **cleartext**. Do
+  not pass a real credential you would mind sitting in a gitignored file.
 
 Supported keys:
 
@@ -225,10 +251,10 @@ Supported keys:
 |---|---|---|
 | `serial` | `False` | Force this module to run sequentially, after all parallel modules complete. Use for modules that rely on signals bound to the main thread. **Not** needed merely because a module calls `th.server_settings()` — `testit/server_lock.py` handles that hazard without giving up parallelism. |
 | `requires_apps` | `[]` | List of Django app labels. The module is skipped entirely if any listed app is not in `INSTALLED_APPS`. |
-| `server_settings` | `{}` | Django settings dict applied before the module starts (same mechanism as `th.server_settings()`). |
+| `server_settings` | `{}` | **Reserved — not implemented.** The key is accepted by the config loader and then ignored; the runner never applies it. Use `th.server_settings()` inside the tests that need an override. |
 | `requires_extra` | `[]` | List of `--extra` flags. The module is skipped unless at least one flag is present. Use `["slow"]` for opt-in modules included by `--full`. |
 
-All keys are optional. A missing `__init__.py` or a missing `TESTIT` assignment uses defaults (parallel, no app requirements, no server settings).
+All keys are optional. A missing `__init__.py` or a missing `TESTIT` assignment uses defaults (parallel, no app requirements).
 
 ---
 
@@ -358,6 +384,7 @@ All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to acce
   - Top-level `status`, `total`, `passed`, `failed`, `skipped`, `duration`
   - Per-module stats in `modules` dict (tests, passed, failed, skipped, duration)
   - Per-failure diagnostics in `failures` list (test_source, file_path, line, traceback, server_log_tail)
+  - `conf_drift` — names of `var/django.conf` keys stranded by a settings override (empty on a clean run)
 - HTTP helper: `testit.client.RestClient`
   - Reuses auth tokens and integrates with `opts.client`.
   - `opts.client.last_response` — after every request this is set to an `objict` with `method`, `path`, `status_code`, `body`, `headers`, and `elapsed_ms`. Useful for diagnosing failures without re-running the request.

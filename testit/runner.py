@@ -1011,9 +1011,65 @@ def _print_summary_plain(duration, skipped_modules=None):
 
 
 # ---------------------------------------------------------------------------
+# django.conf drift detection
+# ---------------------------------------------------------------------------
+# BEST-EFFORT IN-RUN HYGIENE, not a guarantee. th.server_settings() writes
+# overrides into var/django.conf and takes them back out again; a bug (or a run
+# killed mid-context) can leave one behind, where it silently changes the
+# behavior of every later run. Snapshotting the parsed config at both ends of a
+# run catches the ones that survive to the end — it cannot catch a crash-strand,
+# because the second snapshot never happens.
+#
+# Key NAMES only, ever. An override's VALUE may be a credential; it must not
+# reach the console or the agent report.
+def _snapshot_conf(conf_path=None):
+    """Parsed key -> value map of var/django.conf, or None if unreadable."""
+    try:
+        from mojo.helpers.settings.parser import DjangoConfigLoader
+        if conf_path is None:
+            conf_path = paths.VAR_ROOT / "django.conf"
+        context = {}
+        DjangoConfigLoader(config_path=conf_path).load_config(context)
+        return context
+    except Exception:
+        # No conf file, or a value this loader cannot parse — skip detection
+        # rather than fail a test run over a diagnostic.
+        return None
+
+
+def _conf_drift(before, after):
+    """Names of the keys that changed between two snapshots. Never values."""
+    if before is None or after is None:
+        return []
+    drifted = set(before.keys()) ^ set(after.keys())
+    for key in set(before.keys()) & set(after.keys()):
+        try:
+            if before[key] != after[key]:
+                drifted.add(key)
+        except Exception:
+            drifted.add(key)
+    return sorted(drifted)
+
+
+def _report_conf_drift(drifted):
+    if not drifted:
+        return
+    logit.color_print(
+        "\n  !! var/django.conf CHANGED during this run: " + ", ".join(drifted),
+        logit.ConsoleLogger.RED)
+    logit.color_print(
+        "     A th.server_settings() context did not restore cleanly. Those keys are "
+        "now stranded and will affect every later run — inspect var/django.conf.",
+        logit.ConsoleLogger.RED)
+    logit.color_print(
+        "     (values withheld on purpose — an override may be a credential)",
+        logit.ConsoleLogger.YELLOW)
+
+
+# ---------------------------------------------------------------------------
 # Agent output
 # ---------------------------------------------------------------------------
-def _write_agent_report(opts, display=None):
+def _write_agent_report(opts, display=None, conf_drift=None):
     """Write structured test report to var/test_failures.json for LLM agents.
 
     This is the primary output channel for --agent mode. Agents should read
@@ -1093,6 +1149,8 @@ def _write_agent_report(opts, display=None):
         "duration": round(duration, 2),
         "modules": modules,
         "failures": failures,
+        # Key names only — never the values (see _snapshot_conf).
+        "conf_drift": list(conf_drift or []),
     }
 
     report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
@@ -1219,6 +1277,8 @@ def main(opts):
         sys.exit(1)
 
     _abort_event.clear()
+    # Baseline for the end-of-run django.conf drift check (see _snapshot_conf).
+    conf_before = _snapshot_conf()
     helpers.reset_test_run()
     helpers.STOP_ON_FAIL = bool(opts.stop)
     helpers.VERBOSE = opts.verbose or opts.errors
@@ -1507,9 +1567,13 @@ def main(opts):
     if helpers.TEST_RUN.failed == 0:
         clear_checkpoint()
 
+    # Did a settings override strand itself in var/django.conf?
+    drifted = _conf_drift(conf_before, _snapshot_conf())
+    _report_conf_drift(drifted)
+
     # Agent report — structured JSON for LLM consumption
     if opts.agent:
-        _write_agent_report(opts, display=display)
+        _write_agent_report(opts, display=display, conf_drift=drifted)
         report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
         print(f"\n  Agent report: {report_path}")
         if helpers.TEST_RUN.failed > 0:

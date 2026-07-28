@@ -51,10 +51,23 @@ def test_writer_excludes_readers(opts):
 
     lock = ServerRestartLock()
     assert_true(lock.acquire_write(timeout=1.0), "the exclusive hold should be granted on an idle lock")
-    assert_true(
-        not lock.acquire_read(timeout=0.3),
-        "a websocket must not open while the server is being restarted",
+
+    # From ANOTHER thread — the exclusive holder itself is allowed straight
+    # through (it is the restarter; see test_server_conf.py), so the exclusion
+    # this test pins has to be checked from a thread that is not it.
+    granted = []
+
+    def _reader():
+        granted.append(lock.acquire_read(timeout=0.3))
+
+    t = threading.Thread(target=_reader)
+    t.start()
+    t.join(timeout=10)
+    assert_eq(
+        granted, [False],
+        f"a websocket must not open while the server is being restarted, got {granted}",
     )
+
     lock.release_write()
     assert_true(lock.acquire_read(timeout=1.0), "a shared hold should be granted once the restart finishes")
     lock.release_read()

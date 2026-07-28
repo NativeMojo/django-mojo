@@ -1,5 +1,26 @@
 ## Unreleased
 
+**fix (testit)** — **`th.server_settings()` no longer strands overrides in
+`var/django.conf` (maestro item 543).** The context manager snapshotted the
+*whole* conf file on the way in — outside the server lock — and wrote that
+snapshot back on the way out. Test modules run as threads, so a second context
+could snapshot while the first one's override was still live and then restore
+it, re-introducing the first context's key permanently. A stranded key silently
+changes the behavior of every later run on that machine, and for a value like an
+API key it sits unnoticed in a gitignored file. Now: the snapshot is taken
+**inside** the lock and records only the lines for the keys being overridden;
+the restore is **subtractive** — it removes exactly those keys from the file as
+it stands and leaves every other line (including another context's) untouched;
+the file's read-modify-write runs under a mutex; and whole contexts are
+serialized process-wide behind a 120s liveness valve that logs and proceeds
+rather than deadlocking. Two supporting changes: `testit/server_lock.py` now
+grants a shared hold immediately to the thread that already holds the exclusive
+one (opening a `WsClient` inside a `server_settings()` body was a guaranteed 30s
+stall), and the runner diffs `var/django.conf` across every run, warning loudly
+— and reporting `conf_drift` in `--agent` mode — when a key was stranded. Drift
+reporting names **keys only**, never values. Also fixed: appending a new key to
+a conf file with no trailing newline glued it onto the last line.
+
 **feature (docit)** — **knowledge-base search: pgvector + Bedrock embeddings
 (maestro item 532).** New optional app `mojo.apps.docit_kb` chunks docit
 pages on heading boundaries, embeds them with AWS Bedrock (Titan Text

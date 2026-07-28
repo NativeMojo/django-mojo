@@ -301,7 +301,7 @@ with th.server_settings(BOUNCER_REQUIRE_TOKEN=True):
 2. Waits ~1.5s for uvicorn's file watcher to detect the change
 3. Polls until the server comes back up (up to 10s)
 4. Yields — your test runs against the live reloaded server
-5. Restores the original `django.conf`
+5. Reverts **only the keys it set**, against `django.conf` as it stands
 6. Waits for the server to reload again
 
 **Why this works:** `asgi_local` starts uvicorn with `--reload --reload-include '*.conf'`,
@@ -309,6 +309,17 @@ so any change to `var/django.conf` triggers a full Django reload.
 
 **Cost:** Each `server_settings` call takes ~3–5 seconds (two reload cycles). Use it
 only when genuinely necessary — for most tests the default settings are correct.
+
+**Concurrency:** test modules run as threads, so two contexts could otherwise overlap.
+They don't: whole contexts are serialized process-wide, the file is captured and
+restored under a mutex, and the restore is *subtractive* — it never writes back a
+whole-file snapshot, so it cannot re-introduce a key another context is holding. The
+runner also diffs `var/django.conf` across the run and warns (naming keys only) if
+anything was stranded.
+
+> **Caution — values are written in cleartext.** Overrides land in
+> `testproject/var/django.conf` as plain text for the duration of the context. It is
+> gitignored, but don't pass a real production credential.
 
 **Supported value types:**
 ```python

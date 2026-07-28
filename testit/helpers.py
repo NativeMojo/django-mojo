@@ -583,23 +583,129 @@ def _format_conf_value(value):
     return str(value)
 
 
+def _conf_line_key(line):
+    """The setting name a django.conf line assigns, or None if it assigns none.
+
+    Same rules the settings loader uses (mojo/helpers/settings/parser.py):
+    a line assigns when it contains '=' and is not a comment; the key is
+    everything before the FIRST '='.
+    """
+    stripped = line.strip()
+    if '=' in stripped and not stripped.startswith('#'):
+        return stripped.split('=', 1)[0].strip()
+    return None
+
+
+def _join_conf_lines(parts):
+    """Join conf lines, making sure only the last one may lack a newline."""
+    out = []
+    last = len(parts) - 1
+    for index, part in enumerate(parts):
+        if index < last and part and not part.endswith('\n'):
+            part += '\n'
+        out.append(part)
+    return ''.join(out)
+
+
 def _apply_conf_overrides(original_text, overrides):
     lines = original_text.splitlines(keepends=True)
     applied = set()
     result = []
     for line in lines:
-        stripped = line.strip()
-        if '=' in stripped and not stripped.startswith('#'):
-            key = stripped.split('=', 1)[0].strip()
-            if key in overrides:
-                result.append(f"{key} = {_format_conf_value(overrides[key])}\n")
-                applied.add(key)
-                continue
+        key = _conf_line_key(line)
+        if key is not None and key in overrides:
+            result.append(f"{key} = {_format_conf_value(overrides[key])}\n")
+            applied.add(key)
+            continue
         result.append(line)
     for key, value in overrides.items():
         if key not in applied:
             result.append(f"{key} = {_format_conf_value(value)}\n")
-    return ''.join(result)
+    return _join_conf_lines(result)
+
+
+def _capture_conf_lines(text, keys):
+    """Snapshot the exact source line that sets each key — None when unset.
+
+    Only the overridden keys are recorded, never the whole file: that is what
+    makes the restore subtractive and therefore safe against a concurrent
+    context that is touching OTHER keys. Duplicate assignments capture the LAST
+    one, matching the loader's last-wins parse.
+    """
+    snapshot = {key: None for key in keys}
+    for line in text.splitlines(keepends=True):
+        key = _conf_line_key(line)
+        if key is not None and key in snapshot:
+            snapshot[key] = line
+    return snapshot
+
+
+def _restore_conf_overrides(current_text, snapshot):
+    """Undo an override against the file AS IT STANDS, key by key.
+
+    For each captured key: put its original line back verbatim exactly once
+    (collapsing duplicates, last position wins), drop the key entirely when it
+    was absent at capture time, and re-append it if it has since vanished.
+    Every other line in the file is left untouched — including keys another
+    thread's context is holding.
+    """
+    if not snapshot:
+        return current_text
+
+    lines = current_text.splitlines(keepends=True)
+    last_index = {}
+    for index, line in enumerate(lines):
+        key = _conf_line_key(line)
+        if key is not None and key in snapshot:
+            last_index[key] = index
+
+    parts = []
+    restored = set()
+    for index, line in enumerate(lines):
+        key = _conf_line_key(line)
+        if key is not None and key in snapshot:
+            if snapshot[key] is None:
+                continue                        # absent at capture — remove it
+            if index != last_index[key]:
+                continue                        # duplicate — collapse to one
+            parts.append(snapshot[key])
+            restored.add(key)
+            continue
+        parts.append(line)
+
+    for key, line in snapshot.items():
+        if line is not None and key not in restored:
+            parts.append(line)                  # vanished under us — put it back
+    return _join_conf_lines(parts)
+
+
+# Serializes the read-modify-write of django.conf itself. Held only for the
+# file operation — never across a sleep, a poll or a server reload.
+_CONF_MUTEX = threading.Lock()
+
+# Test hook: called between the read and the write inside the mutex, to widen
+# the window a missing mutex would lose data in. None in normal operation.
+_CONF_TEST_YIELD = None
+
+
+def _conf_apply(conf_path, overrides):
+    """Apply overrides to django.conf and return the pre-override snapshot."""
+    with _CONF_MUTEX:
+        text = conf_path.read_text()
+        snapshot = _capture_conf_lines(text, overrides.keys())
+        if _CONF_TEST_YIELD is not None:
+            _CONF_TEST_YIELD()
+        conf_path.write_text(_apply_conf_overrides(text, overrides))
+        return snapshot
+
+
+def _conf_restore(conf_path, snapshot):
+    """Subtract an override from django.conf as it currently stands."""
+    with _CONF_MUTEX:
+        text = conf_path.read_text()
+        if _CONF_TEST_YIELD is not None:
+            _CONF_TEST_YIELD()
+        conf_path.write_text(_restore_conf_overrides(text, snapshot))
 
 
 def _read_dev_server_conf():
@@ -631,6 +737,20 @@ def _poll_server_up(host, port, timeout=10):
     return False
 
 
+# Seams so tests can drive server_settings() without real sleeps or a real
+# server. Production code paths never rebind these.
+_SLEEP = time.sleep
+_POLL = _poll_server_up
+
+# Serializes whole server_settings contexts against each other. Two contexts
+# overlapping is what used to strand overrides; even with the subtractive
+# restore it means two live reloads fighting over one uvicorn worker, which is
+# never what a test wants. Acquisition has a timeout and degrades loudly rather
+# than hanging the suite (a leaked context would otherwise be terminal).
+_SETTINGS_SERIALIZE = threading.Lock()
+_SETTINGS_SERIALIZE_TIMEOUT = 120.0
+
+
 @contextlib.contextmanager
 def server_settings(**overrides):
     """
@@ -660,15 +780,30 @@ def server_settings(**overrides):
       1. Writes the overrides into var/django.conf (merging with existing values)
       2. Waits for uvicorn to reload and the server to come back up
       3. Yields — your test runs here against the live server with new settings
-      4. Restores the original var/django.conf
+      4. Removes ONLY the keys it set, restoring their previous lines
       5. Waits for the server to reload and come back up again
 
     Raises RuntimeError if the server does not come back up within the timeout.
+
+    RESTORE IS SUBTRACTIVE (maestro item 543)
+    -----------------------------------------
+    Step 4 used to write back a whole-file snapshot taken on the way in. Test
+    modules run as THREADS, so a second context could snapshot the file while
+    the first one's override was live and then write that stale snapshot back on
+    exit — re-introducing the first context's key and stranding it in
+    var/django.conf for good. Now the snapshot is taken INSIDE the lock and
+    holds only the lines for the keys being overridden; the restore removes
+    exactly those keys from the file as it stands and leaves every other line
+    alone. Whole contexts are serialized against each other on top of that.
+
+    CAUTION: overrides are written to var/django.conf in CLEARTEXT. Do not pass
+    a real credential you would mind sitting in a gitignored file — and if a
+    run does strand one, the runner's end-of-run drift check names the key (it
+    never prints the value).
     """
     from mojo.helpers import paths
-    conf_path = paths.VAR_ROOT / 'django.conf'
-    original = conf_path.read_text()
     host, port = _read_dev_server_conf()
+    logger = logit.get_logger("testit", "testit.log")
 
     # Both reloads below kill the uvicorn worker, and with it every in-flight
     # websocket. Hold the server exclusively so no WsClient has a socket open
@@ -676,34 +811,50 @@ def server_settings(**overrides):
     # unsynchronized behavior on timeout rather than hanging the suite.
     from testit import server_lock
 
-    with server_lock.exclusive():
-        conf_path.write_text(_apply_conf_overrides(original, overrides))
-        # Give uvicorn's watchdog time to detect the change and begin reloading,
-        # then wait for the server to come back up.
-        time.sleep(1.5)
-        if not _poll_server_up(host, port, timeout=10):
-            conf_path.write_text(original)
-            raise RuntimeError(
-                f"server_settings: server at {host}:{port} did not come back up "
-                f"after writing overrides {overrides!r}"
-            )
-
-        try:
-            yield
-        finally:
-            conf_path.write_text(original)
-            # Wait long enough for uvicorn to detect the conf change, kill the old
-            # worker, start and warm up the new worker.  The initial sleep must be
-            # long enough that the OLD worker (still running with the overrides) has
-            # exited before _poll_server_up gets a response — otherwise the poll
-            # returns True against the stale worker and subsequent tests see the
-            # overrides still in effect.
-            time.sleep(3)
-            if not _poll_server_up(host, port, timeout=10):
+    # One settings context at a time, process-wide. The timeout is the liveness
+    # valve: a context that somehow never released must not deadlock the run.
+    serialized = _SETTINGS_SERIALIZE.acquire(timeout=_SETTINGS_SERIALIZE_TIMEOUT)
+    if not serialized:
+        logger.error(
+            f"[server_settings] proceeding WITHOUT the serialization lock after "
+            f"{_SETTINGS_SERIALIZE_TIMEOUT}s — another settings context is still "
+            f"open. Overrides {sorted(overrides.keys())} may interleave with it."
+        )
+    try:
+        # Resolved under the lock so a test that redirects VAR_ROOT cannot be
+        # seen half-applied by a context waiting to start.
+        conf_path = paths.VAR_ROOT / 'django.conf'
+        with server_lock.exclusive(logger=logger):
+            snapshot = _conf_apply(conf_path, overrides)
+            # Give uvicorn's watchdog time to detect the change and begin
+            # reloading, then wait for the server to come back up.
+            _SLEEP(1.5)
+            if not _POLL(host, port, timeout=10):
+                _conf_restore(conf_path, snapshot)
                 raise RuntimeError(
                     f"server_settings: server at {host}:{port} did not come back up "
-                    f"after restoring original django.conf"
+                    f"after writing overrides {sorted(overrides.keys())}"
                 )
+
+            try:
+                yield
+            finally:
+                _conf_restore(conf_path, snapshot)
+                # Wait long enough for uvicorn to detect the conf change, kill the old
+                # worker, start and warm up the new worker.  The initial sleep must be
+                # long enough that the OLD worker (still running with the overrides) has
+                # exited before the poll gets a response — otherwise the poll
+                # returns True against the stale worker and subsequent tests see the
+                # overrides still in effect.
+                _SLEEP(3)
+                if not _POLL(host, port, timeout=10):
+                    raise RuntimeError(
+                        f"server_settings: server at {host}:{port} did not come back up "
+                        f"after restoring django.conf"
+                    )
+    finally:
+        if serialized:
+            _SETTINGS_SERIALIZE.release()
 
 
 class assert_raises:

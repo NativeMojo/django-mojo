@@ -21,6 +21,12 @@ Many websocket tests still run concurrently with each other; a settings
 override simply waits for open sockets to close and holds off new ones until
 the server is back up.
 
+One exception, and it is not a loophole: the thread that already holds the
+exclusive hold gets a shared hold immediately. Opening a websocket INSIDE a
+``th.server_settings()`` body is a normal thing to do, and that thread is the
+restarter — it cannot tear down its own socket behind its own back, so waiting
+would only stall it for the full reader timeout.
+
 FAILSAFE
 --------
 Every acquisition takes a timeout and DEGRADES instead of deadlocking: on
@@ -50,11 +56,21 @@ class ServerRestartLock:
         self._readers = 0
         self._writer = False
         self._writers_waiting = 0
+        self._writer_thread = None
 
     def acquire_read(self, timeout=READER_TIMEOUT):
         """Returns True if the shared hold was acquired, False on timeout."""
         deadline = time.monotonic() + timeout
         with self._cond:
+            # The thread that already holds the exclusive hold is the one doing
+            # the restarting; a websocket IT opens is not the hazard this lock
+            # guards against, and making it queue behind itself is a guaranteed
+            # stall for the full reader timeout. Common shape:
+            #     with th.server_settings(...):
+            #         ws = WsClient(...); ws.connect()
+            if self._writer and self._writer_thread == threading.get_ident():
+                self._readers += 1
+                return True
             while self._writer or self._writers_waiting > 0:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -82,6 +98,7 @@ class ServerRestartLock:
                         return False
                     self._cond.wait(remaining)
                 self._writer = True
+                self._writer_thread = threading.get_ident()
                 return True
             finally:
                 self._writers_waiting -= 1
@@ -90,6 +107,7 @@ class ServerRestartLock:
     def release_write(self):
         with self._cond:
             self._writer = False
+            self._writer_thread = None
             self._cond.notify_all()
 
     def state(self):
@@ -118,8 +136,9 @@ def exclusive(timeout=WRITER_TIMEOUT, logger=None):
         readers, _writer, _waiting = LOCK.state()
         logger.warning(
             f"[server_lock] proceeding without the exclusive hold after {timeout}s "
-            f"({readers} websocket connection(s) still open) — a websocket test may "
-            f"see its connection torn down by the reload"
+            f"({readers} websocket connection(s) still open) — the caller is about "
+            f"to mutate var/django.conf and restart the server, so a websocket test "
+            f"may see its connection torn down by the reload"
         )
     try:
         yield acquired
