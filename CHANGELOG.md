@@ -1,4 +1,4 @@
-## Unreleased
+## v1.2.57 - July 28, 2026
 
 **security (docit)** — **docit is tenant-scoped; public reading is now an
 explicit per-book opt-in (maestro item 530).** Every docit model declared
