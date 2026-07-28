@@ -213,16 +213,29 @@ class Book(models.Model, MojoModel):
         return self.assets.all().order_by('-order_priority', 'id')
 
     def on_rest_pre_save(self, changed_fields, created):
-        """A book must belong to a tenant.
+        """A book must belong to a tenant, on create AND on every update.
 
         GROUP_FIELD confines reads to the owning group, so a group-less book
-        would sit outside that confinement. The framework stamps `group` from
+        sits outside that confinement entirely: with no group to resolve, the
+        detail check keeps whatever `?group=` the caller supplied, and any
+        member of any tenant passes it. The framework stamps `group` from
         request.group on create when the body omits it (this hook runs after
-        that), so this only fires when there was no group to infer at all.
+        that), so on create this only fires when there was nothing to infer.
+
+        The check is deliberately NOT `if created` — `{"group": 0}` (or null,
+        or "") on an update clears the FK with no permission gate of its own,
+        which would re-open exactly that hole on an existing book.
         """
         import mojo.errors as me
-        if created and not self.group_id:
+        if not self.group_id:
             raise me.ValueException("group is required")
+        # is_public publishes to the anonymous internet, so it takes a
+        # manage-level grant — ownership alone is not enough.
+        if "is_public" in changed_fields and self.is_public:
+            actor = self.active_user
+            if actor is None or not actor.has_permission(["manage_docit", "docs"]):
+                raise me.PermissionDeniedException(
+                    "manage_docit or docs is required to publish a book")
 
     def on_action_reindex(self, value):
         """Queue knowledge-base embed jobs for every page of this book.

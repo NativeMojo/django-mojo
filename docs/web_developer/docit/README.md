@@ -103,10 +103,15 @@ GET /api/docit/public/pages?book=install-guide
 GET /api/docit/public/page?book=install-guide&slug=getting-started
 ```
 
-`public/pages` returns a flat list ordered by `order_priority`; build the tree
-client-side from each row's `parent`. Anything not publicly readable — a book
-that did not opt in, an inactive book, a suspended tenant, an unpublished page
-— returns **404** rather than distinguishing the cases.
+`public/pages` returns a flat list ordered by `order_priority` (capped at 500
+pages); build the tree client-side from each row's `parent`. Anything not
+publicly readable — a book that did not opt in, an inactive book, a suspended
+tenant, an unpublished page — returns **404** rather than distinguishing the
+cases. These endpoints are rate-limited per IP.
+
+The rendered field is **`html_safe`**, not `html`: raw HTML in a page's
+markdown is escaped before it reaches an anonymous reader. (`html`, which
+preserves raw HTML, stays on the authenticated graphs only.)
 
 ```json
 {
@@ -116,7 +121,7 @@ that did not opt in, an inactive book, a suspended tenant, an unpublished page
     "title": "Getting Started",
     "slug": "getting-started",
     "content": "# Getting Started\n\nWelcome...",
-    "html": "<h1>Getting Started</h1>...",
+    "html_safe": "<h1>Getting Started</h1>...",
     "parent": null,
     "order_priority": 100,
     "metadata": {},
@@ -124,6 +129,9 @@ that did not opt in, an inactive book, a suspended tenant, an unpublished page
   }
 }
 ```
+
+Publishing a book (setting `is_public`) requires `manage_docit` or `docs` —
+being the book's owner is not enough.
 
 ## Available Graphs
 

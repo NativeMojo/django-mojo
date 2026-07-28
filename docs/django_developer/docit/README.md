@@ -171,6 +171,25 @@ stops serving public content immediately. They serve published pages only, and
 they pin the response graph server-side (`public` / `public_list`), so a caller
 cannot widen the response with `?graph=detail`.
 
+Three further constraints on this surface, because it is reachable without a
+session:
+
+- The `public` page graph renders **`html_safe`** (escaped), never `html`.
+  `Page.html` deliberately preserves raw HTML from the page's markdown — fine
+  for authors inside a tenant, not for anonymous readers.
+- `public/pages` is capped at `MAX_PUBLIC_PAGES` and each endpoint carries its
+  own `@md.rate_limit`; anonymous callers are exempt from the global
+  per-identity throttle, so a public endpoint has to bring its own.
+- Setting `is_public` requires `manage_docit` / `docs`. `SAVE_PERMS` also
+  admits `owner`, and publishing a book to the internet should not be a
+  power that ownership alone confers — `Book.on_rest_pre_save` enforces this.
+
+Group-less books are refused outright: `Book.on_rest_pre_save` requires a
+group on **every** save, not just create. A book with no group resolves to no
+tenant, and the detail permission check then keeps the caller's own `?group=`
+rather than the row's — so a null group is an escape from tenant scoping, not
+merely an unset field.
+
 ## Knowledge-base search
 
 `search_any()` takes a `groups` argument that confines results to those

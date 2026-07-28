@@ -102,6 +102,17 @@ class PageRevision(models.Model, MojoModel):
     def __str__(self):
         return f"{self.page.title} v{self.version}"
 
+    def on_rest_pre_save(self, changed_fields, created):
+        """A revision must have a page — see Page.on_rest_pre_save.
+
+        Without this, a denied cross-tenant `page` attach leaves the field
+        unset and `save()` dereferences `self.page` for the version lookup,
+        turning what should be a 400 into a 500.
+        """
+        import mojo.errors as me
+        if created and not self.page_id:
+            raise me.ValueException("page is required")
+
     def save(self, *args, **kwargs):
         """Override save to validate version and log operations"""
 

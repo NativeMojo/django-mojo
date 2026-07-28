@@ -13,7 +13,17 @@ book that did not opt in, or serve an unpublished page.
 import mojo.decorators as md
 import mojo.errors as me
 from mojo.serializers import serialize
-from ..models import Book, Page
+from ..models import Book
+
+# A public book's page list is served whole (clients build the nav tree from
+# it), so it is capped rather than paginated. Books larger than this are not a
+# shape this endpoint is meant to serve.
+MAX_PUBLIC_PAGES = 500
+
+# Anonymous callers are exempt from the global per-identity throttle, so these
+# endpoints carry their own. Page reads render markdown per request, which is
+# the expensive part.
+PUBLIC_IP_LIMIT = 240
 
 
 def _public_book(slug):
@@ -45,6 +55,7 @@ def _require_public_book(slug):
 
 @md.GET('public/book/<str:slug>')
 @md.public_endpoint("Public documentation — book metadata for an opted-in book")
+@md.rate_limit("docit_public_book", ip_limit=PUBLIC_IP_LIMIT)
 def on_public_book(request, slug=None):
     """Book metadata for a book with is_public=True."""
     book = _require_public_book(slug)
@@ -53,6 +64,7 @@ def on_public_book(request, slug=None):
 
 @md.GET('public/pages')
 @md.public_endpoint("Public documentation — published page list for an opted-in book")
+@md.rate_limit("docit_public_pages", ip_limit=PUBLIC_IP_LIMIT)
 def on_public_pages(request):
     """Published pages of a public book, flat. Clients build the tree from `parent`.
 
@@ -60,12 +72,13 @@ def on_public_pages(request):
     """
     book = _require_public_book(request.DATA.get("book", None))
     pages = (book.pages.filter(is_published=True)
-             .order_by('-order_priority', 'title'))
+             .order_by('-order_priority', 'title')[:MAX_PUBLIC_PAGES])
     return [serialize(page, graph="public_list") for page in pages]
 
 
 @md.GET('public/page')
 @md.public_endpoint("Public documentation — one published page of an opted-in book")
+@md.rate_limit("docit_public_page", ip_limit=PUBLIC_IP_LIMIT)
 def on_public_page(request):
     """One published page of a public book. `book` is the book slug, `slug` the page's."""
     book = _require_public_book(request.DATA.get("book", None))

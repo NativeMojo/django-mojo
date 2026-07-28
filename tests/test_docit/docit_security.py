@@ -376,6 +376,77 @@ def test_cannot_create_a_page_in_another_tenants_book(opts):
 
 
 @th.django_unit_test()
+def test_book_group_cannot_be_cleared_by_an_update(opts):
+    """A group-less book escapes tenant scoping entirely, so clearing the
+    group must be refused — on update, not just at create time.
+
+    `{"group": 0}` (and null, and "") clears an FK with no permission gate of
+    its own, and with no group to resolve, the detail check keeps whatever
+    `?group=` the caller supplied.
+    """
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.group import Group
+    from mojo.apps.docit.models import Book
+
+    user_a = User.objects.get(id=opts.user_a_id)
+    member = Group.objects.get(id=opts.org_a.group_id).get_member_for_user(user_a)
+    member.add_permission("manage_docit")
+    member.save()
+
+    _login(opts, USER_A)
+    for cleared in (0, None, ""):
+        resp = opts.client.post(f"/api/docit/book/{opts.org_a.book_id}",
+                                json={"group": cleared})
+        assert resp.status_code in (400, 403), \
+            (f"Clearing a book's group with {cleared!r} must be refused, got "
+             f"{resp.status_code}: {str(resp.response)[:200]}")
+        book = Book.objects.get(id=opts.org_a.book_id)
+        assert book.group_id == opts.org_a.group_id, \
+            f"Book group was cleared by {cleared!r} — it is now {book.group_id}"
+
+
+@th.django_unit_test()
+def test_publishing_a_book_requires_a_manage_grant(opts):
+    """is_public exposes a book to the anonymous internet — ownership alone
+    must not be enough to flip it."""
+    from mojo.apps.docit.models import Book
+
+    _login(opts, USER_B)
+    resp = opts.client.post(f"/api/docit/book/{opts.org_b.book_id}",
+                            json={"is_public": True})
+    assert resp.status_code in (401, 403), \
+        (f"A member without a manage grant must not publish a book, got "
+         f"{resp.status_code}: {str(resp.response)[:200]}")
+    assert not Book.objects.get(id=opts.org_b.book_id).is_public, \
+        "Book was published by a caller with no manage grant"
+
+
+@th.django_unit_test()
+def test_public_page_html_is_escaped(opts):
+    """The public graph must not hand raw HTML from page markdown to the world."""
+    from mojo.apps.docit.models import Page
+
+    a = opts.org_a
+    page = Page.objects.get(book_id=a.public_book_id, slug=a.public_page_slug)
+    page.content = "# Title\n\n<script>alert(1)</script>\n"
+    page.save()
+
+    anon = _anon(opts)
+    resp = anon.get("/api/docit/public/page", params={
+        "book": a.public_book_slug, "slug": a.public_page_slug})
+    assert resp.status_code == 200, \
+        f"Expected 200, got {resp.status_code}: {str(resp.response)[:200]}"
+    data = resp.response["data"]
+    rendered = data.get("html_safe") or ""
+    assert "<script>" not in rendered, \
+        f"Raw script tag served to an anonymous reader: {rendered[:300]}"
+    assert "&lt;script&gt;" in rendered, \
+        f"Expected the script tag to be escaped, got: {rendered[:300]}"
+    assert "html" not in data, \
+        f"The unescaped `html` property must not be in the public graph: {list(data)}"
+
+
+@th.django_unit_test()
 def test_plain_member_cannot_save_own_tenants_book(opts):
     """VIEW_PERMS widened to members; SAVE_PERMS did not."""
     _login(opts, USER_B)

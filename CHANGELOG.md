@@ -43,6 +43,29 @@ whitelist no longer lists docit's endpoints and models as intentionally
 public, and `test_routes.py` no longer hardcodes the four docit models as
 "custom secured" — that map is why this audit stayed quiet.
 
+Hardening from the post-build security review, in the same change:
+**`Book.group` is now required on every save, not just create** — `{"group":
+0}` (or null, or `""`) clears an FK with no permission gate of its own, and a
+group-less book resolves to no tenant, at which point the detail check keeps
+the caller's own `?group=` instead of the row's; that made a cleared group an
+escape from tenant scoping rather than a missing field. **Setting `is_public`
+requires `manage_docit`/`docs`** — `SAVE_PERMS` also admits `owner`, and
+publishing to the anonymous internet should not be a power ownership alone
+confers. **The public page graph renders a new `Page.html_safe`** (escaped)
+instead of `html`, which deliberately preserves raw HTML from a page's
+markdown — safe for authors within a tenant, not for anonymous readers.
+`public/pages` is capped at 500 rows and all three public endpoints carry
+`@md.rate_limit`, since anonymous callers are exempt from the global
+per-identity throttle. `PageRevision` gained the same "page is required"
+create guard as `Page`/`Asset`.
+
+*Known residual, tracked separately:* the fail-open is fixed for docit at the
+model layer, but the underlying framework behavior remains — when a
+`GROUP_FIELD` path resolves to `None`, `MojoModel._evaluate_permission` leaves
+`request.group` at the caller-supplied value instead of clearing it, unlike the
+legacy direct-`group` branch which fails closed. Any group-scoped model with a
+nullable tenant FK is exposed the same way.
+
 **feature (docit_kb)** — **reconciliation cron: dropped re-embeds now heal
 themselves (maestro item 544).** The embed publish on `Page.save()` is
 fire-and-forget, so a queue outage or a permanently failed job left a page

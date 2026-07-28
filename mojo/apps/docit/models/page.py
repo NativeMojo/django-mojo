@@ -170,7 +170,9 @@ class Page(models.Model, MojoModel):
                     'id', 'title', 'slug', 'content', 'order_priority',
                     'metadata', 'parent', 'modified'
                 ],
-                "extra": ["html"],
+                # html_safe, never html: this graph goes to anonymous readers,
+                # and `html` preserves raw HTML from the page's markdown.
+                "extra": ["html_safe"],
             },
             'public_list': {
                 "fields": [
@@ -282,11 +284,26 @@ class Page(models.Model, MojoModel):
     def html(self):
         """
         Renders the Markdown content of the page to HTML.
+
+        Raw HTML in the markdown is preserved — page authors are trusted
+        within their own tenant. Anonymous readers get `html_safe` instead.
         """
         from mojo.apps.docit.services.markdown import MarkdownRenderer
         renderer = MarkdownRenderer()
         rendered_html = renderer.render(self.content)
         return rendered_html
+
+    @property
+    def html_safe(self):
+        """Rendered HTML with raw HTML escaped — the anonymous-facing form.
+
+        `html` deliberately does not escape, so a page carrying `<script>`
+        would otherwise be handed to unauthenticated readers by the public
+        endpoints. Same renderer the public /api/docit/render endpoint uses.
+        """
+        from mojo.apps.docit.services.markdown import MarkdownRenderer
+        renderer = MarkdownRenderer()
+        return renderer.render_safe(self.content)
 
     @property
     def ast(self):
