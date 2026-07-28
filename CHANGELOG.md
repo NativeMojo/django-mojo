@@ -15,6 +15,14 @@ now documents `POST /api/refresh_token` instead of telling clients to log in
 again. Legitimate `expires_in` responses (`mfa_token` 300s, phone-verify
 `session_token` 600s, notifications, jobs) are untouched.
 
+**test** — **the login/refresh response shape is now pinned.** Nothing asserted
+it, which is why the docs could drift from the code unnoticed for so long.
+`tests/test_auth/login_response_contract.py` asserts the *exact* top-level key
+set for `POST /api/login` and `POST /api/refresh_token` — an exact set rather
+than a presence check, because adding a response field is a documented API
+change and the failure message names the doc files to update. A presence check
+would have caught neither of the bugs above.
+
 ## v1.2.56 - July 27, 2026
 
 **feat** — **filevault access audit trail (`VaultAccessLog`).** Every attempt to
