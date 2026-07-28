@@ -51,15 +51,19 @@ def test_run_jobs_executes(opts):
     _reset()
     from mojo.apps import jobs
 
-    jobs.publish(func=HANDLER, payload={"marker": "alpha"})
+    job_id = jobs.publish(func=HANDLER, payload={"marker": "alpha"})
     assert CALLS == [], "the job must not run until run_jobs() is called"
     assert th.pending_job_count() >= 1, "publish should leave a job on the queue"
 
     result = th.run_jobs()
 
-    assert result.count == 1, f"expected to drain exactly 1 job, drained {result.count}"
+    # Scoped to OUR job, not the total: modules run in parallel against one
+    # shared queue, so another module publishing on the default channel would
+    # otherwise turn a passing test red.
+    drained = [str(j) for j in result.job_ids]
+    assert str(job_id) in drained, \
+        f"the published job {job_id} should have been drained, drained {drained}"
     assert CALLS == ["alpha"], f"the real handler should have run, got {CALLS}"
-    assert th.pending_job_count() == 0, "the queue should be empty after the drain"
 
 
 @th.django_unit_test("run_jobs marks the Job row completed")
