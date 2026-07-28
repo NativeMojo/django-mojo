@@ -4633,7 +4633,7 @@
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="k">raise</span> <span class="n">PermissionDeniedException</span><span class="p">()</span>
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">token_package</span> <span class="o">=</span> <span class="n">JWToken</span><span class="p">(</span><span class="n">user</span><span class="o">.</span><span class="n">get_auth_key</span><span class="p">())</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">uid</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">ip</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="p">)</span>
 </code></pre></div>
-<p>Returns <code>access_token</code>, <code>refresh_token</code>, <code>expires_in</code>, and <code>user</code> dict.</p>
+<p>Returns <code>access_token</code>, <code>refresh_token</code>, and a <code>user</code> dict. Token lifetimes are carried in each JWT's <code>exp</code> claim — they are not returned as a separate field.</p>
 <h2 id="jwt_login-helper"><code>jwt_login</code> Helper<a class="headerlink" href="#jwt_login-helper" title="Permanent link">&para;</a></h2>
 <p>All login endpoints (password, OAuth, magic link, MFA complete, invite accept) issue tokens via the shared <code>jwt_login</code> helper:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.rest.user</span><span class="w"> </span><span class="kn">import</span> <span class="n">jwt_login</span>
@@ -4685,7 +4685,7 @@ apply their mutation before the session is withheld).</p>
 <p><strong>Completing MFA:</strong>
 - SMS: <code>POST /api/auth/sms/verify</code> with <code>mfa_token</code> + <code>code</code>
 - TOTP: <code>POST /api/auth/totp/verify</code> with <code>mfa_token</code> + <code>code</code></p>
-<p>Both return the standard JWT response (<code>access_token</code>, <code>refresh_token</code>, <code>expires_in</code>, <code>user</code>) on success.</p>
+<p>Both return the standard JWT response (<code>access_token</code>, <code>refresh_token</code>, <code>user</code>) on success.</p>
 <p>The <code>mfa_token</code> is single-use and expires in <code>expires_in</code> seconds (default 300).</p>
 <h2 id="token-refresh">Token Refresh<a class="headerlink" href="#token-refresh" title="Permanent link">&para;</a></h2>
 <p><strong>Endpoint:</strong> <code>POST /api/refresh_token</code> (also: <code>/api/token/refresh</code>)</p>
