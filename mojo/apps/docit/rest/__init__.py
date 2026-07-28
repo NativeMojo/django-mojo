@@ -9,3 +9,4 @@ from .page import *
 from .page_revision import *
 from .asset import *
 from .render import *
+from .search import *

@@ -206,6 +206,25 @@ class Page(models.Model, MojoModel):
             logit.info(f"Creating new page: {self.title} in book {self.book.title}")
 
         super().save(*args, **kwargs)
+        self._publish_embed_job()
+
+    def _publish_embed_job(self):
+        """Queue a knowledge-base re-embed when mojo.apps.docit_kb is installed.
+
+        A failed publish (e.g. Redis down) must never break a page save —
+        the reindex action on Book recovers any missed pages.
+        """
+        from django.apps import apps
+        if not apps.is_installed("mojo.apps.docit_kb"):
+            return
+        try:
+            from mojo.apps import jobs
+            jobs.publish(
+                "mojo.apps.docit_kb.asyncjobs.embed_page",
+                {"page_id": self.pk},
+                max_retries=2)
+        except Exception as err:
+            logit.error(f"docit_kb embed publish failed for page {self.pk}: {err}")
 
     def delete(self, *args, **kwargs):
         """Override delete to log the operation"""

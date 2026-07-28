@@ -104,6 +104,11 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `BOUNCER_THRESHOLDS_OVERRIDES`
 - `BOUNCER_TOKEN_TTL`
 
+### BEDROCK
+
+- `BEDROCK_EMBED_MODEL`
+- `BEDROCK_REGION` — falls back to `AWS_REGION`
+
 ### DEACTIVATE
 
 - `DEACTIVATE_TOKEN_TTL`
@@ -135,6 +140,11 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `EMAIL_TASK_CHANNEL`
 - `EMAIL_VERIFY_CODE_TTL`
 - `EMAIL_VERIFY_TOKEN_TTL`
+
+### EMBEDDINGS
+
+- `EMBEDDINGS_DIM` — must match the `PageChunk` vector column (1024); changing it requires a migration + re-embed
+- `EMBEDDINGS_PROVIDER` — `bedrock` (default) or `mock`
 
 ### EVENTS
 

@@ -46,9 +46,17 @@ dependencies = [
     "rich>=13.0.0"
 ]
 
+[project.optional-dependencies]
+# Docit knowledge base (mojo.apps.docit_kb) — vector search over docit pages.
+# Requires the pgvector Postgres extension in the target database.
+kb = [
+    "pgvector>=0.4.0",
+]
+
 [dependency-groups]
 dev = [
     "psycopg2-binary>=2.9.11",
+    "pgvector>=0.4.0",
 ]
 
 [tool.hatch.build.targets.wheel]

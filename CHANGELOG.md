@@ -1,5 +1,26 @@
 ## Unreleased
 
+**feature (docit)** — **knowledge-base search: pgvector + Bedrock embeddings
+(maestro item 532).** New optional app `mojo.apps.docit_kb` chunks docit
+pages on heading boundaries, embeds them with AWS Bedrock (Titan Text
+Embeddings V2, stored in a pgvector `VectorField` with an HNSW index), and
+serves hybrid vector + Postgres full-text search with reciprocal-rank
+fusion. Exposed as authenticated `GET/POST /api/docit/search` and as the
+assistant's `search_docs` tool (new `docit` tool domain). `Page.save()`
+queues an async re-embed (content-hash diff — unchanged chunks are never
+re-embedded; a failed publish never breaks a save) and `Book` gains a
+`reindex` action for backfills. All vector schema lives in the new app:
+`mojo.apps.docit` is schema-unchanged, and without `docit_kb` in
+`INSTALLED_APPS` the endpoint falls back to page-level full-text search —
+no pgvector, no Bedrock, no new dependencies. Supporting pieces: new
+provider-agnostic `mojo/helpers/embeddings.py` (`bedrock` + deterministic
+`mock` providers), `EMBEDDINGS_*`/`BEDROCK_*` settings family, a
+`django-mojo[kb]` extra carrying the `pgvector` package, and
+`bin/create_testproject` now creates the `vector` extension (clear error
+when the host Postgres lacks pgvector). Docs in both tracks
+(`docit/knowledge.md` + web search-endpoint reference); pipeline, ranking,
+visibility, and REST contract pinned by `tests/test_docit/knowledge.py`.
+
 **docs (fix)** — **the documented login response was wrong in twelve places.**
 `docs/web_developer/core/authentication.md` told clients the JWT arrives as
 `data.token` and to "use the `token` value in all subsequent requests" — there

@@ -32,6 +32,7 @@ DOMAIN_DESCRIPTIONS = {
     "memory": "Read, write, and delete persistent assistant memories",
     "models": "Query and describe any Django model in the system",
     "docs": "Read framework documentation",
+    "docit": "Search the documentation knowledge base (docit books and pages)",
     "web": "Fetch and read web pages",
     "logs": "Query the audit log trail",
     "files": "Query, view, and analyze uploaded files",

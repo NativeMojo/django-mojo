@@ -156,3 +156,16 @@ The Page model prevents circular parent hierarchies:
 child.parent = child   # "A page cannot be its own parent"
 grandchild.parent = child_of_grandchild  # cycle detection
 ```
+
+## Knowledge Base (optional — mojo.apps.docit_kb)
+
+Installing the optional `mojo.apps.docit_kb` app turns DocIt into a
+searchable knowledge base: pages are chunked on heading boundaries, embedded
+via AWS Bedrock (pgvector storage, HNSW index), and served through a hybrid
+vector + full-text search — exposed as `GET/POST /api/docit/search` and as
+the assistant's `search_docs` tool. Without the app, the same endpoint falls
+back to page-level Postgres full-text search with no extra schema or
+dependencies.
+
+See [knowledge.md](knowledge.md) for enabling, settings
+(`EMBEDDINGS_*` / `BEDROCK_*`), architecture, and the reindex/backfill flow.

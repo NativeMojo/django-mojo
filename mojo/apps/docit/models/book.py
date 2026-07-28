@@ -100,6 +100,7 @@ class Book(models.Model, MojoModel):
         DELETE_PERMS = ['manage_docit', 'owner']
         CREATED_BY_OWNER_FIELD = 'created_by'
         UPDATED_BY_OWNER_FIELD = 'modified_by'
+        POST_SAVE_ACTIONS = ["reindex"]
         GRAPHS = {
             'default': {
                 "fields": [
@@ -217,6 +218,19 @@ class Book(models.Model, MojoModel):
 
         # Default to allowing view (since RestMeta has public view)
         return True
+
+    def on_action_reindex(self, value):
+        """Queue knowledge-base embed jobs for every page of this book.
+
+        Triggered by {"reindex": true} on save. No-op unless
+        mojo.apps.docit_kb is installed.
+        """
+        from django.apps import apps
+        if not apps.is_installed("mojo.apps.docit_kb"):
+            return {"status": True, "data": {"queued": 0, "enabled": False}}
+        from mojo.apps.docit_kb.services import knowledge
+        queued = knowledge.reindex_book(self)
+        return {"status": True, "data": {"queued": queued, "enabled": True}}
 
     def get_page_count(self):
         """Get total number of published pages in this book"""

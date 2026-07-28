@@ -104,10 +104,22 @@ def test_get_tools_for_limited_user(opts):
 
 @th.django_unit_test()
 def test_get_tools_for_noperms_user(opts):
-    """User with no assistant-relevant perms should see no tools."""
-    from mojo.apps.assistant import get_tools_for_user
+    """User with no assistant-relevant perms sees only permission='all' tools.
+
+    docit's search_docs is intentionally open to every authenticated user
+    (mirrors docit VIEW_PERMS = ['all']); no privileged or mutating tool may
+    leak to a no-perms user.
+    """
+    from mojo.apps.assistant import get_registry, get_tools_for_user
+    registry = get_registry()
     tools = get_tools_for_user(opts.noperms_user)
-    assert_eq(len(tools), 0, f"No-perms user should see 0 tools, got {len(tools)}")
+    tool_names = {t["name"] for t in tools}
+    open_tools = {name for name, entry in registry.items() if entry["permission"] == "all"}
+    assert_eq(tool_names, open_tools,
+              f"No-perms user must see exactly the permission='all' tools {open_tools}, got {tool_names}")
+    for name in tool_names:
+        assert_true(not registry[name]["mutates"],
+                    f"No permission='all' tool may mutate data — {name} does")
 
 
 @th.django_unit_test()

@@ -139,3 +139,66 @@ Error responses:
 |---|---|
 | 400 | `markdown` field missing or empty |
 | 401 | Not authenticated |
+
+## Knowledge-Base Search
+
+**GET/POST** `/api/docit/search` — authenticated. Ranked search over
+published pages of active books.
+
+| Param | Required | Description |
+|---|---|---|
+| `q` | yes | Search terms (`search` accepted as an alias). Websearch syntax: `"exact phrase"`, `-excluded`, `or` |
+| `book` | no | Scope to one book by id or slug |
+| `limit` | no | Max results — default 10, clamped to 1–50 |
+
+```json
+{
+  "status": true,
+  "code": 200,
+  "data": {
+    "mode": "hybrid",
+    "count": 2,
+    "results": [
+      {
+        "page_id": 12,
+        "page_slug": "quickstart",
+        "page_title": "Quickstart",
+        "book_id": 3,
+        "book_slug": "install-guide",
+        "heading": "Install > Quickstart",
+        "snippet": "## Quickstart\n\nRun the installer...",
+        "score": 0.032787
+      }
+    ]
+  }
+}
+```
+
+`mode` reports how the search ran: `hybrid` (vector + full-text — the
+knowledge-base app with an embeddings provider), `fts` (knowledge-base app
+without a provider), or `pages` (page-level full-text fallback when the
+knowledge-base app is not installed). Results are chunk-level excerpts in
+`hybrid`/`fts` mode (`heading` is the section breadcrumb) and page-level in
+`pages` mode (`heading` empty).
+
+Error responses:
+
+| Status | Condition |
+|---|---|
+| 400 | `q` missing or empty |
+| 403 | Not authenticated |
+
+## Reindex a Book
+
+**POST** `/api/docit/book/<id>` with `{"reindex": true}` — requires book
+save permission (`manage_docit`, `docs`, or owner). Queues a background
+re-embed job for every page of the book; use it to backfill after enabling
+the knowledge base or after changing embedding settings. The response's
+`action` data reports `{"queued": N, "enabled": true|false}` (`enabled`
+false means the knowledge-base app is not installed).
+
+## Assistant Tool
+
+When `mojo.apps.assistant` is installed, the `docit` tool domain provides
+`search_docs` (same parameters and results as the search endpoint) so the
+assistant can ground answers in your documentation.
