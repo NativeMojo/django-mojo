@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Tuple, Any, Union
 from mojo.apps.fileman.models import File, FileRendition
 from mojo.apps.fileman.renderer.base import BaseRenderer, RenditionRole
 from mojo.apps.fileman.renderer.image import ImageRenderer
+from mojo.apps.fileman.renderer.vector import VectorRenderer
 from mojo.apps.fileman.renderer.video import VideoRenderer
 from mojo.apps.fileman.renderer.document import DocumentRenderer
 from mojo.apps.fileman.renderer.audio import AudioRenderer
@@ -11,8 +12,12 @@ from mojo.helpers import logit
 
 logger = logit.get_logger(__name__, "fileman.log")
 
-# Register renderers in order of preference
+# Register renderers in order of preference.
+# VectorRenderer comes first: it matches on content type rather than the coarse
+# category, so it must get the chance to claim an SVG before ImageRenderer picks
+# it up on category == "image" and hands it to PIL, which cannot read SVG.
 RENDERERS = [
+    VectorRenderer,
     ImageRenderer,
     VideoRenderer,
     DocumentRenderer,
@@ -20,7 +25,8 @@ RENDERERS = [
 ]
 
 __all__ = [
-    'BaseRenderer', 'RenditionRole', 'ImageRenderer', 'VideoRenderer', 'DocumentRenderer', 'AudioRenderer',
+    'BaseRenderer', 'RenditionRole', 'ImageRenderer', 'VectorRenderer', 'VideoRenderer',
+    'DocumentRenderer', 'AudioRenderer',
     'get_renderer_for_file', 'create_rendition', 'create_all_renditions',
     'get_rendition', 'get_or_create_rendition'
 ]

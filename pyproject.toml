@@ -52,11 +52,22 @@ dependencies = [
 kb = [
     "pgvector>=0.4.0",
 ]
+# SVG rasterization for fileman renditions (mojo.apps.fileman.renderer.vector).
+# Optional on purpose: resvg-py is a single-maintainer wrapper around the resvg
+# Rust crate, and most deployments never upload an SVG. Without it, SVG files
+# simply get no renditions — exactly the pre-1.2.59 behavior. Self-contained
+# wheels (manylinux/musllinux/macOS/Windows), so no system libraries are needed.
+# See docs/django_developer/fileman/renditions.md.
+svg = [
+    "resvg-py>=0.3.3,<0.4.0",
+]
 
 [dependency-groups]
 dev = [
     "psycopg2-binary>=2.9.11",
     "pgvector>=0.4.0",
+    # Present in dev so the SVG rendition tests actually execute.
+    "resvg-py>=0.3.3,<0.4.0",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -664,9 +664,9 @@ class File(models.Model, MojoModel):
         """Enqueue an async job to regenerate renditions (all or specified roles).
 
         `roles` is sanitized: non-iterables become None (regenerate all);
-        each entry is coerced to a stripped string, blanks dropped, and the
-        list is capped at MAX_REGENERATE_ROLES to prevent unbounded worker
-        loops from a compromised/overeager caller.
+        each entry is coerced to a stripped string, blanks dropped, duplicates
+        collapsed, and the list is capped at MAX_REGENERATE_ROLES to prevent
+        unbounded worker loops from a compromised/overeager caller.
         """
         from mojo.apps import jobs
 
@@ -681,11 +681,17 @@ class File(models.Model, MojoModel):
                 sanitized = None
             else:
                 sanitized = []
+                seen = set()
                 for r in roles:
                     if not isinstance(r, str):
                         continue
                     r = r.strip()
-                    if r:
+                    # Dedupe (order-preserving): the cap alone does not stop
+                    # ["thumbnail"] * 20 from rendering the same role 20 times,
+                    # which multiplies the per-role cost by 20 for every
+                    # renderer — the very thing MAX_REGENERATE_ROLES guards.
+                    if r and r not in seen:
+                        seen.add(r)
                         sanitized.append(r)
                 sanitized = sanitized[: self.MAX_REGENERATE_ROLES] or None
 
