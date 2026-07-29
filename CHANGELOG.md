@@ -1,4 +1,4 @@
-## Unreleased
+## v1.2.59 - July 29, 2026
 
 **feature (fileman)** — **SVG files now get thumbnails (maestro item 617).**
 An uploaded SVG completed fine and then sat with `thumbnail: null` forever:
