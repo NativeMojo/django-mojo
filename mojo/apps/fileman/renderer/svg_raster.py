@@ -37,6 +37,20 @@ Five independent caps bound the work, each covering a bomb the others miss:
                                 bytes and runs for over 40 seconds
   5. RLIMIT_AS in the child   - Linux-only backstop; macOS cannot set it at all
 
+Two rules keep cap 2 honest, and both are load-bearing. resvg parses `data:`
+URIs with a full WHATWG-grammar parser and expands internal DTD entities inside
+attribute values, so a scan looking only for a literal `data:image/...;base64,`
+run of text is trivially evaded — by a media-type parameter
+(`;charset=x;base64,`), by a percent-encoded body (`data:image/png,%89PNG...`),
+or by splitting the URI across an entity. Therefore:
+
+  * a `data:image/` URI in any form other than the canonical `;base64,` is
+    REFUSED rather than skipped, and
+  * a document declaring any internal entity is REFUSED outright.
+
+Both checks run before the not-SVG sniff, so a hostile document can never be
+demoted to "probably a raster image" and handed a second pass.
+
 See docs/django_developer/fileman/renditions.md.
 """
 
@@ -60,11 +74,26 @@ DEFAULT_MEMORY_MB = 512              # RLIMIT_AS ceiling inside the child
 # How much of the head we decode when sniffing.
 SNIFF_BYTES = 4096
 
-# `data:image/<type>;base64,<blob>` — the blob runs to the closing quote.
-_DATA_URI_RE = re.compile(
-    r"data:image/[a-z0-9.+-]+;base64,([A-Za-z0-9+/=\s]+)",
-    re.IGNORECASE,
-)
+# Formats the embedded-raster scan will read a header from. Mirrors the
+# allowlist ImageRenderer uses — this scan runs in the WORKER, outside the
+# subprocess boundary, so it must not hand arbitrary bytes to every Pillow
+# decoder's _open().
+_EMBEDDED_IMAGE_FORMATS = ["JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF"]
+
+# Any `data:image/...` URI, however it is spelled. Group 1 is everything
+# between the media type and the comma, so a non-canonical form can be
+# recognised and refused rather than silently skipped.
+_DATA_URI_RE = re.compile(r"data:image/[a-z0-9.+-]+([^,\"'>\s]*),",
+                          re.IGNORECASE)
+
+# Base64 payload following a canonical `;base64,` introducer.
+_B64_BLOB_RE = re.compile(r"[A-Za-z0-9+/=\s]*")
+
+# An internal DTD entity declaration. Refused outright: entities let an author
+# split a `data:` URI across the document so no single run of text matches the
+# scan below, and roxmltree expands them inside attribute values. They are also
+# the billion-laughs vector. Nothing legitimate needs them in a thumbnail.
+_ENTITY_DECL_RE = re.compile(r"<!ENTITY\b", re.IGNORECASE)
 
 
 class SvgRasterError(Exception):
@@ -104,14 +133,26 @@ def _embedded_pixel_count(text):
 
     Only image headers are parsed — PIL reads the dimensions without decoding
     pixel data, so this stays sub-millisecond even for a megabyte of base64.
-    A blob whose header will not parse counts as a refusal: an embedded image
-    we cannot measure is one we cannot bound.
+
+    Fail-closed in both directions: an embedded image we cannot measure is one
+    we cannot bound, and so is a `data:` URI written in any form other than the
+    canonical `;base64,`. resvg parses data URIs with a full WHATWG-grammar
+    parser, so a scan that only recognises the canonical spelling would let
+    `data:image/png;charset=x;base64,...` and `data:image/png,<percent-encoded>`
+    through unmeasured. Refusing the odd spellings is the only way a byte-level
+    scan can keep up with a real URL parser.
     """
     from PIL import Image
 
     total = 0
     for match in _DATA_URI_RE.finditer(text):
-        blob = "".join(match.group(1).split())
+        meta = match.group(1)
+        if meta.lower() != ";base64":
+            raise SvgRasterError(
+                "embedded data: image must use the canonical ;base64, form")
+
+        blob_match = _B64_BLOB_RE.match(text, match.end())
+        blob = "".join(blob_match.group(0).split()) if blob_match else ""
         if not blob:
             continue
         try:
@@ -121,7 +162,7 @@ def _embedded_pixel_count(text):
         if not raw:
             continue
         try:
-            with Image.open(io.BytesIO(raw)) as img:
+            with Image.open(io.BytesIO(raw), formats=_EMBEDDED_IMAGE_FORMATS) as img:
                 width, height = img.size
         except Exception:
             raise SvgRasterError("embedded image header is unreadable")
@@ -129,12 +170,17 @@ def _embedded_pixel_count(text):
     return total
 
 
+def max_input_bytes():
+    """The input cap, for callers that must check a size before reading bytes."""
+    return _setting("FILEMAN_SVG_MAX_BYTES", DEFAULT_MAX_BYTES)
+
+
 def validate_svg_bytes(data):
     """Fail-closed input checks. Raises SvgRasterError; returns None on success."""
     if not data:
         raise SvgRasterError("empty file")
 
-    max_bytes = _setting("FILEMAN_SVG_MAX_BYTES", DEFAULT_MAX_BYTES)
+    max_bytes = max_input_bytes()
     if len(data) > max_bytes:
         raise SvgRasterError(
             "svg is %d bytes, over the %d byte limit" % (len(data), max_bytes))
@@ -144,21 +190,29 @@ def validate_svg_bytes(data):
     if data[:2] == b"\x1f\x8b":
         raise SvgRasterError("gzip-compressed svg (.svgz) is not supported")
 
-    head = data[:SNIFF_BYTES].decode("utf-8", errors="ignore").lstrip("﻿").lstrip()
+    # The bomb checks run BEFORE the sniff, so that a hostile document can never
+    # be classified as merely "not svg" and handed a second pass down the raster
+    # path. Only a document that survives them may be called not-SVG.
+    text = data.decode("utf-8", errors="ignore")
+
+    if _ENTITY_DECL_RE.search(text):
+        raise SvgRasterError("internal entity declarations are not allowed")
+
+    max_pixels = _setting("FILEMAN_SVG_MAX_EMBEDDED_PIXELS",
+                          DEFAULT_MAX_EMBEDDED_PIXELS)
+    embedded = _embedded_pixel_count(text)
+    if embedded > max_pixels:
+        raise SvgRasterError(
+            "embedded rasters total %d pixels, over the %d pixel limit"
+            % (embedded, max_pixels))
+
+    head = text[:SNIFF_BYTES].lstrip("﻿").lstrip()
     if not head.startswith("<"):
         raise SvgRasterError("content does not start with an xml/svg element",
                              not_svg=True)
     if "<svg" not in head.lower():
         raise SvgRasterError("no <svg> element in the first %d bytes" % SNIFF_BYTES,
                              not_svg=True)
-
-    max_pixels = _setting("FILEMAN_SVG_MAX_EMBEDDED_PIXELS",
-                          DEFAULT_MAX_EMBEDDED_PIXELS)
-    embedded = _embedded_pixel_count(data.decode("utf-8", errors="ignore"))
-    if embedded > max_pixels:
-        raise SvgRasterError(
-            "embedded rasters total %d pixels, over the %d pixel limit"
-            % (embedded, max_pixels))
 
 
 def rasterize(svg_bytes):
@@ -230,16 +284,24 @@ def _child_main():
     # wall clock somehow does not fire.
     try:
         import resource
-        try:
-            resource.setrlimit(resource.RLIMIT_AS,
-                               (memory_mb * 1024 * 1024, resource.RLIM_INFINITY))
-        except Exception:
-            pass
-        try:
-            resource.setrlimit(resource.RLIMIT_CPU,
-                               (cpu_seconds, resource.RLIM_INFINITY))
-        except Exception:
-            pass
+
+        def _limit(what, target, label):
+            # Keep the INHERITED hard limit. Passing RLIM_INFINITY as the hard
+            # limit fails for an unprivileged process whenever the inherited
+            # hard limit is finite — exactly the hardened deployments (systemd
+            # LimitAS=, container memory limits) where the ceiling matters most.
+            try:
+                soft, hard = resource.getrlimit(what)
+                if hard != resource.RLIM_INFINITY:
+                    target = min(target, hard)
+                resource.setrlimit(what, (target, hard))
+            except Exception as e:
+                # Say so rather than swallowing it: a silently absent ceiling
+                # reads identically to an enforced one.
+                sys.stderr.write("warning: could not set %s: %s\n" % (label, e))
+
+        _limit(resource.RLIMIT_AS, memory_mb * 1024 * 1024, "RLIMIT_AS")
+        _limit(resource.RLIMIT_CPU, cpu_seconds, "RLIMIT_CPU")
     except ImportError:
         pass
 

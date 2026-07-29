@@ -36,6 +36,15 @@ a payload that is not an SVG falls back to the raster path, so a real PNG named
 `logo.svg` still thumbnails; every other refusal is terminal and degrades
 exactly as before — no rendition row, no exception out of the job.
 
+Because resvg parses `data:` URIs with a full WHATWG-grammar parser and expands
+internal DTD entities inside attribute values, the embedded-raster cap is
+fail-closed: a `data:image/` URI in any form other than the canonical
+`;base64,` is **refused** rather than skipped, and a document declaring any
+internal entity is **refused outright** (which also moves the billion-laughs
+check ahead of the render). Both would otherwise let a ~22 KB file smuggle a
+64-megapixel raster past the budget. An SVG embedding a raster the ordinary way
+is unaffected.
+
 **fix (fileman)** — **`regenerate_renditions` now dedupes roles.**
 `MAX_REGENERATE_ROLES` capped a request at 20 roles, but
 `{"regenerate_renditions": ["thumbnail"] * 20}` still rendered the same role 20

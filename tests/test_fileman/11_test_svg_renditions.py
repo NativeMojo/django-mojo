@@ -416,6 +416,156 @@ def test_svg_embedded_raster_bomb_is_refused(opts):
               "an embedded raster bomb must produce no renditions")
 
 
+@th.django_unit_test("SVG: embedded raster bombs cannot evade the pixel budget")
+def test_embedded_raster_bomb_evasions_are_refused(opts):
+    import urllib.parse
+    from PIL import Image
+    from mojo.apps.fileman.renderer import svg_raster
+
+    # 8000x8000 1-bit PNG: 64 Mpx (over the 40 Mpx budget) in ~17 KB on the
+    # wire, so every variant below sits far under the byte cap and renders well
+    # inside the timeout. resvg parses data: URIs with a full WHATWG-grammar
+    # parser, so each of these spellings loads the same raster — a scan that
+    # only recognised the canonical form measured zero pixels and let them
+    # through.
+    buf = io.BytesIO()
+    Image.new("1", (8000, 8000), 1).save(buf, format="PNG", compress_level=9)
+    raw = buf.getvalue()
+    encoded = base64.b64encode(raw).decode()
+    percent = urllib.parse.quote_from_bytes(raw)
+
+    head = '<svg xmlns="http://www.w3.org/2000/svg" width="99" height="99">'
+    variants = {
+        "canonical ;base64,":
+            f'{head}<image width="99" height="99" '
+            f'href="data:image/png;base64,{encoded}"/></svg>',
+        "media-type parameter":
+            f'{head}<image width="99" height="99" '
+            f'href="data:image/png;charset=utf-8;base64,{encoded}"/></svg>',
+        "percent-encoded body":
+            f'{head}<image width="99" height="99" '
+            f'href="data:image/png,{percent}"/></svg>',
+        "DTD entity split":
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE svg [<!ENTITY p "data:image/png;base64,">]>'
+            f'{head}<image width="99" height="99" href="&p;{encoded}"/></svg>',
+    }
+
+    for name, svg in variants.items():
+        payload = svg.encode()
+        assert_true(len(payload) < svg_raster.DEFAULT_MAX_BYTES,
+                    f"{name}: payload must sit under the byte cap to be meaningful, "
+                    f"got {len(payload)} bytes")
+        raised = None
+        try:
+            svg_raster.rasterize(payload)
+        except svg_raster.SvgRasterError as e:
+            raised = e
+        assert_true(raised is not None,
+                    f"{name}: a 64-megapixel embedded raster must be refused")
+        assert_true(raised.not_svg is False,
+                    f"{name}: the refusal is terminal and must not fall back to "
+                    f"the raster path")
+
+
+@th.django_unit_test("SVG: internal entity declarations are refused before rendering")
+def test_internal_entity_declaration_is_refused(opts):
+    from mojo.apps.fileman.renderer import svg_raster
+
+    # Entities let an author split a data: URI so no single run of text matches
+    # the embedded-raster scan, and they are the billion-laughs vector. They are
+    # refused in the parent, before a child is ever spawned.
+    payload = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE svg [<!ENTITY greeting "hello">]>'
+        '<svg xmlns="http://www.w3.org/2000/svg" width="99" height="99">'
+        '<text x="5" y="30">&greeting;</text></svg>'
+    ).encode()
+
+    raised = None
+    try:
+        svg_raster.rasterize(payload)
+    except svg_raster.SvgRasterError as e:
+        raised = e
+    assert_true(raised is not None, "an internal entity declaration must be refused")
+    assert_true(raised.not_svg is False,
+                "an entity refusal is terminal and must not fall back to the raster path")
+
+
+@th.django_unit_test("SVG: a bomb behind a long preamble stays terminal, not not-svg")
+def test_bomb_behind_long_preamble_is_terminal(opts):
+    from PIL import Image
+    from mojo.apps.fileman.renderer import svg_raster
+
+    # The <svg> element sits past the 4096-byte sniff window. If the bomb checks
+    # ran after the sniff, this would be classified merely "not svg" and handed
+    # a second pass down the raster path instead of being refused outright.
+    buf = io.BytesIO()
+    Image.new("1", (8000, 8000), 1).save(buf, format="PNG", compress_level=9)
+    encoded = base64.b64encode(buf.getvalue()).decode()
+    preamble = "<!--" + ("p" * 5000) + "-->"
+    payload = (
+        f'{preamble}<svg xmlns="http://www.w3.org/2000/svg" width="99" height="99">'
+        f'<image width="99" height="99" href="data:image/png;base64,{encoded}"/></svg>'
+    ).encode()
+
+    raised = None
+    try:
+        svg_raster.rasterize(payload)
+    except svg_raster.SvgRasterError as e:
+        raised = e
+    assert_true(raised is not None, "the embedded bomb must be refused")
+    assert_true(raised.not_svg is False,
+                "a bomb must be terminal even when the sniff window misses <svg>")
+
+
+@th.django_unit_test("SVG: a large non-SVG file named .svg is not pulled into memory")
+def test_oversize_file_named_svg_is_refused_by_size(opts):
+    from mojo.apps.fileman.models import FileRendition
+    from mojo.apps.fileman.renderer import svg_raster
+    from mojo.apps.fileman.renderer.vector import VectorRenderer
+
+    # VectorRenderer is registered first, so it must not read an arbitrarily
+    # large file into the worker before the byte cap is applied. Nothing
+    # upstream bounds an upload's real size.
+    oversize = b"\x00" * (svg_raster.DEFAULT_MAX_BYTES + 4096)
+    f = _make_svg_file(opts, "huge.svg", oversize)
+
+    reads = []
+    original_open = svg_raster.rasterize
+
+    def tripwire(svg_bytes):
+        reads.append(len(svg_bytes))
+        return original_open(svg_bytes)
+
+    svg_raster.rasterize = tripwire
+    try:
+        renderer = VectorRenderer(f)
+        result = renderer._download_original()
+    finally:
+        svg_raster.rasterize = original_open
+
+    assert_true(result is None,
+                "an oversize file must not produce a rasterized source")
+    assert_eq(len(reads), 0,
+              "the size gate must refuse before any bytes reach rasterize()")
+    assert_eq(FileRendition.objects.filter(original_file=f).count(), 0,
+              "an oversize .svg must produce no renditions")
+
+
+@th.django_unit_test("SVG: a non-image file named .svg is left to its own renderer")
+def test_svg_suffix_does_not_hijack_non_image(opts):
+    from mojo.apps.fileman.renderer.vector import VectorRenderer
+
+    f = _make_svg_file(opts, "clip.svg", b"\x00\x00\x00\x18ftypmp42",
+                       content_type="video/mp4")
+    f.category = "video"
+    f.save(update_fields=["category", "modified"])
+
+    assert_true(not VectorRenderer.supports_file(f),
+                "a video named .svg must not be claimed by the SVG renderer")
+
+
 @th.django_unit_test("SVG: gzip-compressed .svgz is refused")
 def test_svgz_is_refused(opts):
     import gzip

@@ -134,10 +134,22 @@ Five independent caps, each covering a bomb the others miss:
 | `FILEMAN_SVG_TIMEOUT` | `15` | filter bombs (`feMorphology`, `feTurbulence`) — tiny inputs on a tiny canvas |
 | `FILEMAN_SVG_MEMORY_MB` | `512` | backstop only — `RLIMIT_AS` in the child |
 
-Two of these deserve care if you are changing this code:
+Three of these deserve care if you are changing this code:
 
 - **The raster box is passed as BOTH width and height.** Passing `width` alone preserves aspect ratio without bounding the other axis: a 40×4000 SVG at `width=150` renders 150×**15000**.
 - **`FILEMAN_SVG_MEMORY_MB` is a Linux-only backstop, not the memory control.** macOS cannot set `RLIMIT_AS` at all (`setrlimit` raises `ValueError: current limit exceeds maximum limit`), so on a Mac dev box that cap does not exist and cannot be tested. `FILEMAN_SVG_MAX_EMBEDDED_PIXELS` is the portable control against memory bombs — do not remove it on the assumption that `RLIMIT_AS` has it covered.
+- **The embedded-pixel scan is fail-closed by necessity, and that is why two otherwise-valid constructs are rejected** (see below). resvg parses `data:` URIs with a full WHATWG-grammar parser and expands internal DTD entities inside attribute values, so a scan that only recognises a literal `data:image/…;base64,` run of text is evaded by a media-type parameter, a percent-encoded body, or an entity that splits the URI in two. Loosening either rejection re-opens the bomb.
+
+### Rejected constructs
+
+Two things a browser would render are deliberately refused, because they defeat the embedded-raster cap:
+
+| Construct | Example |
+|---|---|
+| A `data:image/` URI in any non-canonical form | `data:image/png;charset=utf-8;base64,…` or `data:image/png,%89PNG…` |
+| Any internal DTD entity declaration | `<!DOCTYPE svg [<!ENTITY p "…">]>` |
+
+Both are refused in the worker before a child is spawned, and both are **terminal** — they never fall back to the raster path. Entity declarations are also the billion-laughs vector, so refusing them moves that check ahead of the render too. An SVG that embeds a raster in the ordinary `data:image/png;base64,…` form is unaffected.
 
 The rasterized PNG and any refusal are memoized per renderer instance, so a bomb costs one timeout per file rather than one per requested role.
 
@@ -147,7 +159,9 @@ The rasterized PNG and any refusal are memoized per renderer instance, so a bomb
 - Output is PNG with alpha preserved (correct for logos), regardless of the role's usual format.
 - Roles larger than `FILEMAN_SVG_RASTER_BOX` are upscaled from the raster. No default role is.
 - `.svgz` (gzip-compressed SVG) is **not supported** — it is refused on its magic bytes as a decompression-bomb vector.
-- Content is sniffed, not trusted. A payload that is not an SVG document falls back to the raster path, so a real PNG uploaded as `logo.svg` (browsers set the content type from the extension) still gets a thumbnail. Every other refusal is terminal.
+- Content is sniffed, not trusted. A payload that is not an SVG document falls back to the raster path, so a real PNG uploaded as `logo.svg` (browsers set the content type from the extension) still gets a thumbnail. Every other refusal is terminal, and the bomb checks run *before* the sniff so a hostile document cannot be demoted to "probably a raster image" to earn that second pass.
+- A bare `.svg` filename only routes here when the file is categorized as an image. Without that guard this renderer — which is registered first — would claim a large file merely named `clip.svg` away from the renderer that should handle it.
+- The size cap is checked against the file on disk *before* its bytes are read into the worker, since an OOM kill is the one failure no `except` can turn into a clean skip.
 - Any refusal degrades exactly like a file with no renderer: no rendition row, no exception out of the job, a logged warning.
 - SVG text needs fonts on the worker. A slim container with no system fonts renders text with glyphs missing — cosmetic, not a failure.
 

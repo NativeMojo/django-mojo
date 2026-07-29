@@ -31,6 +31,12 @@ class VectorRenderer(ImageRenderer):
         content_type = (file.content_type or "").split(";")[0].strip().lower()
         if content_type in svg_raster.SVG_CONTENT_TYPES:
             return True
+        # A bare .svg suffix only counts when the file is categorized as an
+        # image. Without that guard this renderer — which is registered first —
+        # would claim a multi-gigabyte video named `clip.svg` away from
+        # VideoRenderer and pull it down the SVG path.
+        if file.category != "image":
+            return False
         return (file.filename or "").lower().endswith(".svg")
 
     def __init__(self, file):
@@ -52,8 +58,22 @@ class VectorRenderer(ImageRenderer):
             backend = self.file.file_manager.backend
             svg_path = self.get_temp_path(".svg")
             backend.download(self.file.storage_file_path, svg_path)
+
+            # Check the size on disk BEFORE reading. rasterize() enforces the
+            # same cap, but only once the bytes are already resident — and
+            # nothing upstream bounds an upload's real size (the S3 presign
+            # builds its content-length-range from a client-declared value), so
+            # reading first would let a huge file named *.svg OOM the worker.
+            # An OOM kill is the one failure no `except` can turn into a clean
+            # skip.
+            max_bytes = svg_raster.max_input_bytes()
+            actual = os.path.getsize(svg_path)
+            if actual > max_bytes:
+                raise svg_raster.SvgRasterError(
+                    "svg is %d bytes, over the %d byte limit" % (actual, max_bytes))
+
             with open(svg_path, "rb") as fh:
-                svg_bytes = fh.read()
+                svg_bytes = fh.read(max_bytes + 1)
 
             self._raster_png = svg_raster.rasterize(svg_bytes)
             self._raster_state = "ok"
