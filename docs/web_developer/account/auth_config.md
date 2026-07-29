@@ -146,6 +146,13 @@ The `group_uuid` param is preserved through navigation (login ↔ register
 switcher), the OAuth round-trip (Google/Apple/GitHub callback), and the
 login → passkey enrollment redirect.
 
+Branding includes the **browser tab icon**: when the resolved group sets
+`theme.favicon_url`, that icon is the only one the page declares — the
+deployment's default `/favicon/*` links and web manifest are suppressed, so the
+tab cannot fall back to the host's favicon. Groups that leave the key empty get
+the deployment's own icons. The `GET /api/auth/config` response is unchanged;
+`theme.favicon_url` was always returned there.
+
 ---
 
 ## `mojo-auth.js` Helpers

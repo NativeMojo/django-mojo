@@ -37,7 +37,7 @@ rather than appending to it.
 |-----|------|---------|-------------|
 | `app_title` | string | `"DJANGO MOJO"` | Brand name in card header |
 | `logo_url` | string | `""` | Logo image URL (header + hero panel) |
-| `favicon_url` | string | `""` | Favicon URL |
+| `favicon_url` | string | `""` | Favicon URL or path. When set it is the **only** icon declared on the hosted auth pages — the deployment's own `/favicon/*` links and web manifest are suppressed. Not constrained to `https://` (a relative path is valid). |
 | `hero_image_url` | string | `""` | Left panel background image |
 | `hero_headline` | string | `"Welcome back"` | Text over the hero image |
 | `hero_subheadline` | string | `"Admin Portal"` | Supporting text below headline |

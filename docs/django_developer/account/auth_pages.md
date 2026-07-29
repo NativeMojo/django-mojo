@@ -100,7 +100,14 @@ server {
 ```
 
 Set `theme.favicon_url` in `AUTH_CONFIG` to your favicon path — the template
-includes `<link rel="icon" href="...">` when this key is non-empty.
+includes `<link rel="icon" href="...">` when this key is non-empty. It
+**replaces** the deployment's default icons rather than joining them: the five
+`/favicon/*` links above (including `site.webmanifest`) are suppressed, so the
+browser has exactly one candidate and cannot fall back to the host's icon. The
+trade is that those pages then declare no web manifest and no
+`apple-touch-icon`, so PWA install metadata, `theme-color`, and the iOS
+home-screen icon are absent on the auth pages for that tenant. Leave the key
+empty to keep the deployment's own set.
 
 ### 3. OAuth Setup
 

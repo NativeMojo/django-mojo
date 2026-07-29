@@ -254,3 +254,103 @@ def test_public_config_endpoint_default(opts):
     data = resp.response.data
     assert_eq(sorted(data.login.methods), sorted(ALL_LOGIN_METHODS),
               f"default config must offer all login methods, got {data.login.methods}")
+
+
+# ---------------------------------------------------------------------------
+# theme.favicon_url rendering on the hosted auth pages
+#
+# `/auth` is bouncer-gated — a cold test client is served the challenge page,
+# not the login page — so these render the templates in-process through the
+# same context builder the views use. Same pattern as
+# tests/test_auth/bouncer_forms.py.
+# ---------------------------------------------------------------------------
+
+FAVICON_URL = 'https://cdn.example.com/tenant-favicon.png'
+
+# Every template that extends account/auth_base.html, i.e. every page that
+# carries the favicon markup: /auth, /register, /passkey, /contact.
+HOSTED_TEMPLATES = ('account/login.html', 'account/register.html',
+                    'account/passkey_enroll.html', 'account/contact.html')
+
+# The deployment's own icons, served when no tenant favicon is configured.
+DEFAULT_FAVICON_PATHS = (
+    '/favicon/apple-touch-icon.png',
+    '/favicon/favicon-32x32.png',
+    '/favicon/favicon-16x16.png',
+    '/favicon/site.webmanifest',
+    '/favicon/favicon.ico',
+)
+
+
+def _render_auth_page(template_name, group=None):
+    """Render a hosted auth template through the bouncer's context builder."""
+    from django.test import RequestFactory
+    from django.shortcuts import render
+    from mojo.apps.account.rest.bouncer.views import _auth_context
+
+    factory = RequestFactory()
+    request = factory.get('/auth')
+    ctx = _auth_context(request, group=group)
+    ctx['page_mode'] = 'login'
+    ctx['page_title'] = 'Sign In'
+    return render(request, template_name, ctx).content.decode('utf-8')
+
+
+@th.django_unit_test("theme.favicon_url renders as the only icon on every hosted auth page")
+def test_favicon_url_renders_on_hosted_pages(opts):
+    opts.group.metadata = {"auth_config": {"theme": {"favicon_url": FAVICON_URL}}}
+    opts.group.save(update_fields=["metadata"])
+    try:
+        for template_name in HOSTED_TEMPLATES:
+            html = _render_auth_page(template_name, group=opts.group)
+            assert_true(
+                f'<link rel="icon" href="{FAVICON_URL}">' in html,
+                f"{template_name} must render the group's theme.favicon_url as "
+                f"<link rel=\"icon\" href=\"{FAVICON_URL}\">. The key reaches the "
+                f"template context but no favicon link was emitted for it."
+            )
+            assert_true(
+                '/favicon/' not in html,
+                f"{template_name} must not also serve the deployment's own "
+                f"/favicon/* icons when a tenant favicon is set — the browser "
+                f"would choose between candidates and can pick the host's."
+            )
+    finally:
+        _reset_metadata(opts.group)
+
+
+@th.django_unit_test("no theme.favicon_url keeps the deployment's own favicon links")
+def test_favicon_url_unset_keeps_deployment_icons(opts):
+    html = _render_auth_page('account/login.html', group=None)
+    for path in DEFAULT_FAVICON_PATHS:
+        assert_true(
+            path in html,
+            f"with no theme.favicon_url set, the deployment's own {path} link "
+            f"must still render — an existing deployment's head must not change."
+        )
+    assert_true(
+        '<link rel="icon" href="">' not in html,
+        "an unset theme.favicon_url must not emit an empty favicon link"
+    )
+
+
+@th.django_unit_test("theme.favicon_url is HTML-escaped in the favicon href")
+def test_favicon_url_is_html_escaped(opts):
+    breakout = 'https://cdn.example.com/i.png"><script>alert(1)</script>'
+    opts.group.metadata = {"auth_config": {"theme": {"favicon_url": breakout}}}
+    opts.group.save(update_fields=["metadata"])
+    try:
+        html = _render_auth_page('account/login.html', group=opts.group)
+        assert_true(
+            '<script>alert(1)</script>' not in html,
+            "theme.favicon_url must be autoescaped in the href — a value "
+            "containing a quote must not break out of the attribute and inject "
+            "markup. Do not render this key through |safe."
+        )
+        assert_true(
+            '&quot;' in html,
+            "the quote in theme.favicon_url must be escaped to &quot;, "
+            "proving the value went through Django's autoescaping"
+        )
+    finally:
+        _reset_metadata(opts.group)

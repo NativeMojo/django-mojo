@@ -4,11 +4,20 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{% block page_title %}{{ page_title|default:"Sign In" }}{% endblock %}</title>
+    {% if favicon_url %}
+    {# A tenant favicon replaces the deployment's icons outright: declaring both
+       leaves the choice to browser heuristics, which score by declared size and
+       can pick the host's sized PNG over the tenant's. One candidate, one
+       outcome. Never |safe — the value is admin-set config, but autoescaping is
+       what keeps a quote in it from breaking out of the attribute. #}
+    <link rel="icon" href="{{ favicon_url }}">
+    {% else %}
     <link rel="apple-touch-icon" sizes="180x180" href="/favicon/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon/favicon-16x16.png">
     <link rel="manifest" href="/favicon/site.webmanifest">
     <link rel="shortcut icon" href="/favicon/favicon.ico">
+    {% endif %}
     <link rel="stylesheet" href="{{ api_base }}/api/account/static/mojo-auth-theme.css" />
     {% if custom_css_url %}<link rel="stylesheet" href="{{ custom_css_url }}" />{% endif %}
     {% if custom_css %}<style>{{ custom_css|safe }}</style>{% endif %}

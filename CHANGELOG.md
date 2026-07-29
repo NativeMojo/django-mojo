@@ -1,3 +1,35 @@
+## Unreleased
+
+**fix (account)** — **`theme.favicon_url` now actually sets the favicon on the
+hosted auth pages (maestro item 894).** The key was documented in both doc
+tracks, listed in `DEFAULT_AUTH_CONFIG`, resolved down the group parent chain,
+and passed into the template context — and then no template read it. Every
+white-label tenant that set it kept seeing **the deployment host's favicon** in
+the browser tab, silently: no warning, no validation error, the setting simply
+had no effect. `auth_base.html` hardcoded five `/favicon/*` links, so the one
+surface a tenant's users see *before* they are signed in carried the wrong icon.
+
+It now renders, on all four pages that extend `auth_base.html` — `/auth`,
+`/register`, `/passkey` and `/contact`. A tenant favicon **replaces** the
+deployment's icons rather than joining them: declaring both leaves the choice to
+browser heuristics, which score candidates by declared size and can pick the
+host's sized PNG over the tenant's un-sized link. One candidate, one outcome.
+The trade is that a tenant who sets the key gets no web manifest and no
+`apple-touch-icon` **on the auth pages**, so PWA install metadata,
+`theme-color`, and the iOS home-screen icon are absent there.
+
+**A deployment that does not set `theme.favicon_url` renders exactly the same
+head as before** — the fallback branch is the previous five links verbatim, and
+empty/`None` both take it. The key is deliberately **not** constrained to
+`https://`: the docs instruct deployments to set it to a favicon *path*, and the
+retired `AUTH_FAVICON_URL` migration maps onto it, so an https-only validator
+would reject documented usage. It is rendered through Django's autoescaping and
+never `|safe`, so a quote in the value cannot break out of the attribute — a
+regression test pins that.
+
+Unrelated and still open: the bouncer challenge page, which many first-time
+visitors see before the login page, declares no favicon links at all.
+
 ## v1.2.59 - July 29, 2026
 
 **feature (fileman)** — **SVG files now get thumbnails (maestro item 617).**
