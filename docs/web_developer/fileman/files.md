@@ -98,6 +98,11 @@ Renditions (thumbnails, previews, resized images, transcoded video/audio) are cr
 
 This means: **immediately after completion the `renditions` map may be empty `{}`**. Poll the file or re-fetch after a short delay until the map is populated.
 
+**SVG files get thumbnails too.** An uploaded `image/svg+xml` file produces the same rendition roles as any raster image, as PNG; the original SVG is what `url` still serves. Two caveats for clients:
+
+- This requires the server to have the optional SVG support installed. If it does not, or if the SVG is rejected as malformed or abusive, `renditions` stays `{}` and `thumbnail` stays `null` — render your normal no-thumbnail placeholder.
+- Very large SVGs (over 2 MB) and gzip-compressed `.svgz` files are refused and get no renditions.
+
 Access via the `renditions` field or the `thumbnail` shortcut:
 
 ```json

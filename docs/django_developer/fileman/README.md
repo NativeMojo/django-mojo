@@ -81,7 +81,8 @@ See [renditions.md](renditions.md).
 
 The short version:
 
-- The renderer system lives in `mojo/apps/fileman/renderer/` (image, video, audio, document).
+- The renderer system lives in `mojo/apps/fileman/renderer/` (image, vector, video, audio, document).
+- SVG is rasterized to PNG in an isolated subprocess and then follows the image path — requires the `django-mojo[svg]` extra. See [renditions.md](renditions.md#svg-rasterization).
 - `File.mark_as_completed()` enqueues `mojo.apps.fileman.asyncjobs.process_file_renditions` on the `"renditions"` channel with `idempotency_key="renditions:<file_id>"`.
 - The asyncjob calls `renderer.create_all_renditions(file)`, which creates every role defined in the matching renderer's `default_renditions`.
 - Regeneration goes through `mojo.apps.fileman.asyncjobs.regenerate_renditions`.

@@ -1,3 +1,48 @@
+## Unreleased
+
+**feature (fileman)** — **SVG files now get thumbnails (maestro item 617).**
+An uploaded SVG completed fine and then sat with `thumbnail: null` forever:
+`get_file_category` maps `image/svg+xml` into the coarse `"image"` bucket, so
+`ImageRenderer` claimed the file and PIL's format allowlist rejected it —
+swallowed by a broad `except`, leaving no rendition row and no visible error.
+SVG is now rasterized to a bounded PNG and flows through the ordinary image
+path, producing **the same rendition roles and sizes as any raster image**,
+with alpha preserved and the original SVG untouched. Renderer selection is by
+content type (`VectorRenderer`, registered ahead of `ImageRenderer`);
+`File.category` is deliberately unchanged, so consumers filtering media on
+`category == "image"` still see SVGs.
+
+Rasterization is an **optional extra** — `pip install django-mojo[svg]`, which
+pulls `resvg-py` (self-contained wheels, **no system libraries**). Without it
+SVG behaves exactly as before, so a plain `pip install django-mojo` upgrade
+does **not** turn thumbnails on; deployments that want them must change their
+install line. Existing SVGs backfill via
+`{"regenerate_renditions": true}`.
+
+The engine runs **in a subprocess** launched by absolute path with a minimal
+environment, so the process parsing attacker-controlled XML holds no Django,
+no ORM and no credentials. resvg has no JavaScript engine, no network stack and
+resolves no external entities, so script execution, SSRF and XXE are absent by
+construction rather than disabled by flag; `resources_dir` is never passed, so
+`file://` references load nothing. `librsvg`/ImageMagick delegate chains are
+deliberately not used. Five caps bound the work, each covering a bomb the
+others miss: `FILEMAN_SVG_MAX_BYTES` (2 MB), `FILEMAN_SVG_MAX_EMBEDDED_PIXELS`
+(40 Mpx — a 1.6 MB SVG embedding a 20000×20000 PNG passes both the byte cap and
+the timeout, then decodes to multiple GB), `FILEMAN_SVG_RASTER_BOX` (1024, applied
+to both axes), `FILEMAN_SVG_TIMEOUT` (15s — what stops filter bombs like a
+326-byte `feMorphology`), and `FILEMAN_SVG_MEMORY_MB` (512, a **Linux-only**
+backstop; macOS cannot set `RLIMIT_AS` at all). Content is sniffed, not trusted:
+a payload that is not an SVG falls back to the raster path, so a real PNG named
+`logo.svg` still thumbnails; every other refusal is terminal and degrades
+exactly as before — no rendition row, no exception out of the job.
+
+**fix (fileman)** — **`regenerate_renditions` now dedupes roles.**
+`MAX_REGENERATE_ROLES` capped a request at 20 roles, but
+`{"regenerate_renditions": ["thumbnail"] * 20}` still rendered the same role 20
+times, multiplying the per-role cost for every renderer — the exact unbounded
+worker loop that cap was written to prevent. The sanitized list is now
+order-preserving and deduplicated.
+
 ## v1.2.57 - July 28, 2026
 
 ## v1.2.58 - July 28, 2026
