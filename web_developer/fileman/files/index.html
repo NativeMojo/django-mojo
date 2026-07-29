@@ -4055,6 +4055,11 @@
 <h2 id="renditions">Renditions<a class="headerlink" href="#renditions" title="Permanent link">&para;</a></h2>
 <p>Renditions (thumbnails, previews, resized images, transcoded video/audio) are created <strong>asynchronously</strong> after a file is marked completed. The server enqueues a background job on the <code>renditions</code> channel; the file's <code>upload_status</code> flips to <code>completed</code> immediately while rendition work runs in the background.</p>
 <p>This means: <strong>immediately after completion the <code>renditions</code> map may be empty <code>{}</code></strong>. Poll the file or re-fetch after a short delay until the map is populated.</p>
+<p><strong>SVG files get thumbnails too.</strong> An uploaded <code>image/svg+xml</code> file produces the same rendition roles as any raster image, as PNG; the original SVG is what <code>url</code> still serves. Two caveats for clients:</p>
+<ul>
+<li>This requires the server to have the optional SVG support installed. If it does not, or if the SVG is rejected as malformed or abusive, <code>renditions</code> stays <code>{}</code> and <code>thumbnail</code> stays <code>null</code> — render your normal no-thumbnail placeholder.</li>
+<li>Very large SVGs (over 2 MB) and gzip-compressed <code>.svgz</code> files are refused and get no renditions.</li>
+</ul>
 <p>Access via the <code>renditions</code> field or the <code>thumbnail</code> shortcut:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;thumbnail&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://storage.example.com/thumbnails/img_abc.jpg&quot;</span><span class="p">,</span>

@@ -3833,6 +3833,100 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#svg-rasterization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SVG rasterization
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="SVG rasterization">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-resvg" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why resvg
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security-posture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security posture
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#caps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Caps
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rejected-constructs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rejected constructs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backfilling-existing-svgs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backfilling existing SVGs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#adding-a-new-rendition-role" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3940,11 +4034,143 @@
 <p><code>mojo/apps/fileman/renderer/</code>:</p>
 <ul>
 <li><code>image.py</code> — Pillow-based thumbnails and resizes.</li>
+<li><code>vector.py</code> — SVG rasterized to PNG, then handed to the image path. See <a href="#svg-rasterization">SVG rasterization</a> below.</li>
 <li><code>video.py</code> — ffmpeg-based thumbnails and transcodes. Warns on missing ffmpeg; per-role exceptions are isolated.</li>
 <li><code>audio.py</code> — ffmpeg-based waveform/transcode.</li>
 <li><code>document.py</code> — PDF page previews via poppler/ImageMagick.</li>
 </ul>
-<p>Dispatch: <code>renderer.get_renderer_for_file(file)</code> returns the first renderer whose <code>supported_categories</code> includes <code>file.category</code>.</p>
+<p>Dispatch: <code>renderer.get_renderer_for_file(file)</code> returns the first renderer that claims the file. Most renderers claim on <code>supported_categories</code> containing <code>file.category</code>; <code>VectorRenderer</code> overrides <code>supports_file</code> to match on <strong>content type</strong> instead and is registered first, so SVG is routed before <code>ImageRenderer</code> can pick it up on <code>category == "image"</code>.</p>
+<h2 id="svg-rasterization">SVG rasterization<a class="headerlink" href="#svg-rasterization" title="Permanent link">&para;</a></h2>
+<p>SVG uploads produce PNG renditions with the same roles and sizes as any raster image. The original SVG is never modified — only the renditions are PNG.</p>
+<h3 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h3>
+<p>Rasterization is an <strong>optional extra</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pip<span class="w"> </span>install<span class="w"> </span>django-mojo<span class="o">[</span>svg<span class="o">]</span>
+</code></pre></div>
+<p>Without it, SVG files upload normally and simply get no renditions (a warning naming the extra is logged). <strong>A plain <code>pip install django-mojo</code> upgrade does not enable this</strong> — downstream deployments that want SVG thumbnails must change their install line.</p>
+<p>The extra pulls <code>resvg-py</code>, which ships self-contained wheels (manylinux/musllinux x86_64 + aarch64, macOS, Windows; cp310–cp315) with zero runtime dependencies. <strong>No system libraries are required.</strong></p>
+<h3 id="why-resvg">Why resvg<a class="headerlink" href="#why-resvg" title="Permanent link">&para;</a></h3>
+<p>Both <code>resvg-py</code> and <code>cairosvg</code> were probed against hostile inputs before choosing. Two findings drove the design:</p>
+<ul>
+<li><strong>Neither engine is safe in-process.</strong> resvg renders SVG filters correctly, and that is exactly what makes it bombable: <code>feMorphology radius=800</code> is a 326-byte document that runs for over 40 seconds. cairosvg is immune to that only because it does not implement filters at all — it silently drops them, so any SVG with a drop shadow or blur renders <em>wrong</em> — and it has its own bomb (a 300k-segment path ran over 45 seconds) plus a <code>RecursionError</code> on deep nesting. A hard wall-clock timeout is mandatory either way, and a Python-level timeout cannot interrupt a native call, so the work has to run in a subprocess.</li>
+<li>Given a subprocess is required regardless, resvg wins on correctness and deployment: it renders filters properly and needs no system libraries, where cairosvg requires <code>libcairo2</code> on every downstream install.</li>
+</ul>
+<p><code>librsvg</code> and ImageMagick delegate chains are deliberately <strong>not</strong> used — that combination is behind the long ImageTragick CVE tail.</p>
+<p>Trade-off worth knowing: <code>resvg-py</code> is a single-maintainer wrapper around the upstream <code>resvg</code> Rust crate. That is the reason it is an optional extra rather than a core dependency, and the reason it runs behind a process boundary.</p>
+<h3 id="security-posture">Security posture<a class="headerlink" href="#security-posture" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>How</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No script execution</td>
+<td>resvg has no JavaScript engine at all — not a flag</td>
+</tr>
+<tr>
+<td>No network access</td>
+<td>resvg has no network stack; external <code>&lt;image href&gt;</code>, remote CSS and web fonts are simply not fetched</td>
+</tr>
+<tr>
+<td>No XXE</td>
+<td>External XML entities are not resolved; the refusal message does not echo the referenced path</td>
+</tr>
+<tr>
+<td>No local file reads</td>
+<td><code>resources_dir</code> is never passed, so <code>file://</code> references load nothing</td>
+</tr>
+<tr>
+<td>No credentials in reach</td>
+<td>The child gets a minimal environment — no DB or cloud credentials — and imports no Django, no ORM</td>
+</tr>
+</tbody>
+</table>
+<p>The child is launched <strong>by absolute path</strong>, never <code>python -m mojo.apps.fileman.renderer.svg_raster</code>: <code>-m</code> imports the parent packages first and hits a module-scope settings read in <code>mojo/helpers/request.py</code>. Every <code>mojo.*</code> import in <code>svg_raster.py</code> therefore sits inside a function body.</p>
+<h3 id="caps">Caps<a class="headerlink" href="#caps" title="Permanent link">&para;</a></h3>
+<p>Five independent caps, each covering a bomb the others miss:</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Stops</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FILEMAN_SVG_MAX_BYTES</code></td>
+<td><code>2097152</code> (2 MB)</td>
+<td>oversized documents and large <code>data:</code> payloads</td>
+</tr>
+<tr>
+<td><code>FILEMAN_SVG_MAX_EMBEDDED_PIXELS</code></td>
+<td><code>40000000</code> (40 Mpx)</td>
+<td>a <code>data:</code>-URI raster bomb — a 1.6 MB SVG embedding a 20000×20000 PNG passes the byte cap <em>and</em> the timeout, then decodes to multiple GB</td>
+</tr>
+<tr>
+<td><code>FILEMAN_SVG_RASTER_BOX</code></td>
+<td><code>1024</code></td>
+<td>an absurd <code>viewBox</code>/<code>width</code> — 100000×100000 renders for ~2 minutes unbounded</td>
+</tr>
+<tr>
+<td><code>FILEMAN_SVG_TIMEOUT</code></td>
+<td><code>15</code></td>
+<td>filter bombs (<code>feMorphology</code>, <code>feTurbulence</code>) — tiny inputs on a tiny canvas</td>
+</tr>
+<tr>
+<td><code>FILEMAN_SVG_MEMORY_MB</code></td>
+<td><code>512</code></td>
+<td>backstop only — <code>RLIMIT_AS</code> in the child</td>
+</tr>
+</tbody>
+</table>
+<p>Three of these deserve care if you are changing this code:</p>
+<ul>
+<li><strong>The raster box is passed as BOTH width and height.</strong> Passing <code>width</code> alone preserves aspect ratio without bounding the other axis: a 40×4000 SVG at <code>width=150</code> renders 150×<strong>15000</strong>.</li>
+<li><strong><code>FILEMAN_SVG_MEMORY_MB</code> is a Linux-only backstop, not the memory control.</strong> macOS cannot set <code>RLIMIT_AS</code> at all (<code>setrlimit</code> raises <code>ValueError: current limit exceeds maximum limit</code>), so on a Mac dev box that cap does not exist and cannot be tested. <code>FILEMAN_SVG_MAX_EMBEDDED_PIXELS</code> is the portable control against memory bombs — do not remove it on the assumption that <code>RLIMIT_AS</code> has it covered.</li>
+<li><strong>The embedded-pixel scan is fail-closed by necessity, and that is why two otherwise-valid constructs are rejected</strong> (see below). resvg parses <code>data:</code> URIs with a full WHATWG-grammar parser and expands internal DTD entities inside attribute values, so a scan that only recognises a literal <code>data:image/…;base64,</code> run of text is evaded by a media-type parameter, a percent-encoded body, or an entity that splits the URI in two. Loosening either rejection re-opens the bomb.</li>
+</ul>
+<h3 id="rejected-constructs">Rejected constructs<a class="headerlink" href="#rejected-constructs" title="Permanent link">&para;</a></h3>
+<p>Two things a browser would render are deliberately refused, because they defeat the embedded-raster cap:</p>
+<table>
+<thead>
+<tr>
+<th>Construct</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A <code>data:image/</code> URI in any non-canonical form</td>
+<td><code>data:image/png;charset=utf-8;base64,…</code> or <code>data:image/png,%89PNG…</code></td>
+</tr>
+<tr>
+<td>Any internal DTD entity declaration</td>
+<td><code>&lt;!DOCTYPE svg [&lt;!ENTITY p "…"&gt;]&gt;</code></td>
+</tr>
+</tbody>
+</table>
+<p>Both are refused in the worker before a child is spawned, and both are <strong>terminal</strong> — they never fall back to the raster path. Entity declarations are also the billion-laughs vector, so refusing them moves that check ahead of the render too. An SVG that embeds a raster in the ordinary <code>data:image/png;base64,…</code> form is unaffected.</p>
+<p>The rasterized PNG and any refusal are memoized per renderer instance, so a bomb costs one timeout per file rather than one per requested role.</p>
+<h3 id="behavior">Behavior<a class="headerlink" href="#behavior" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Rendition roles, sizes and crop modes are inherited from <code>ImageRenderer</code> — SVG gets exactly what a raster image gets.</li>
+<li>Output is PNG with alpha preserved (correct for logos), regardless of the role's usual format.</li>
+<li>Roles larger than <code>FILEMAN_SVG_RASTER_BOX</code> are upscaled from the raster. No default role is.</li>
+<li><code>.svgz</code> (gzip-compressed SVG) is <strong>not supported</strong> — it is refused on its magic bytes as a decompression-bomb vector.</li>
+<li>Content is sniffed, not trusted. A payload that is not an SVG document falls back to the raster path, so a real PNG uploaded as <code>logo.svg</code> (browsers set the content type from the extension) still gets a thumbnail. Every other refusal is terminal, and the bomb checks run <em>before</em> the sniff so a hostile document cannot be demoted to "probably a raster image" to earn that second pass.</li>
+<li>A bare <code>.svg</code> filename only routes here when the file is categorized as an image. Without that guard this renderer — which is registered first — would claim a large file merely named <code>clip.svg</code> away from the renderer that should handle it.</li>
+<li>The size cap is checked against the file on disk <em>before</em> its bytes are read into the worker, since an OOM kill is the one failure no <code>except</code> can turn into a clean skip.</li>
+<li>Any refusal degrades exactly like a file with no renderer: no rendition row, no exception out of the job, a logged warning.</li>
+<li>SVG text needs fonts on the worker. A slim container with no system fonts renders text with glyphs missing — cosmetic, not a failure.</li>
+</ul>
+<h3 id="backfilling-existing-svgs">Backfilling existing SVGs<a class="headerlink" href="#backfilling-existing-svgs" title="Permanent link">&para;</a></h3>
+<p>SVGs uploaded before this shipped have no renditions. Rebuild per file with the existing action:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="err">POST</span><span class="w"> </span><span class="err">/api/</span><span class="kc">f</span><span class="err">ilema</span><span class="kc">n</span><span class="err">/</span><span class="kc">f</span><span class="err">ile/</span><span class="mi">123</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="p">{</span><span class="nt">&quot;regenerate_renditions&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
+</code></pre></div>
 <h2 id="adding-a-new-rendition-role">Adding a new rendition role<a class="headerlink" href="#adding-a-new-rendition-role" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Add the role constant to <code>RenditionRole</code> in <code>renderer/base.py</code>.</li>
@@ -3965,6 +4191,14 @@
 <tr>
 <td>ffmpeg missing on worker</td>
 <td><code>VideoRenderer._check_ffmpeg</code> logs a warning. Video rendition attempts raise and are caught per-role; other renderers continue.</td>
+</tr>
+<tr>
+<td><code>resvg-py</code> missing on worker</td>
+<td>SVG renditions are skipped with a warning naming <code>django-mojo[svg]</code>. The job still completes; other files are unaffected.</td>
+</tr>
+<tr>
+<td>Malicious or malformed SVG</td>
+<td>Refused by one of the five caps. No rendition row, no exception out of the job — identical to a file with no renderer.</td>
 </tr>
 <tr>
 <td>File deleted before job runs</td>

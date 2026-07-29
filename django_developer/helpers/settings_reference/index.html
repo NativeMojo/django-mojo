@@ -1116,6 +1116,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#fileman" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FILEMAN
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#fresh" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4835,6 +4846,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#fileman" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FILEMAN
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#fresh" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5607,6 +5629,23 @@
 <h3 id="events">EVENTS<a class="headerlink" href="#events" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>EVENTS_ON_ERRORS</code></li>
+</ul>
+<h3 id="fileman">FILEMAN<a class="headerlink" href="#fileman" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>FILEMAN_EXPORT_EXPIRES_DAYS</code> — days until assistant <code>export_data</code> files
+  expire and are deleted by the cleanup job (default <code>14</code>). See
+  <a href="../../assistant/#settings">assistant settings</a>.</li>
+<li><code>FILEMAN_SVG_MAX_BYTES</code> — first of five independent caps bounding SVG-to-PNG
+  rasterization for renditions (default <code>2097152</code>, 2 MB). Defaults and the
+  bomb each one stops:
+  <a href="../../fileman/renditions/#svg-rasterization">SVG rasterization</a>.</li>
+<li><code>FILEMAN_SVG_MAX_EMBEDDED_PIXELS</code> — default <code>40000000</code> (40 Mpx)</li>
+<li><code>FILEMAN_SVG_MEMORY_MB</code> — default <code>512</code>; Linux-only backstop</li>
+<li><code>FILEMAN_SVG_RASTER_BOX</code> — default <code>1024</code>, applied to both width and height</li>
+<li><code>FILEMAN_SVG_TIMEOUT</code> — default <code>15</code> seconds</li>
+<li><code>FILEMAN_USE_SHORTLINKS</code> — global default for wrapping File/FileRendition
+  download URLs in <code>/s/&lt;code&gt;</code> short links (default <code>True</code>). See
+  <a href="../../fileman/shortlinks/">fileman shortlinks</a>.</li>
 </ul>
 <h3 id="fresh">FRESH<a class="headerlink" href="#fresh" title="Permanent link">&para;</a></h3>
 <ul>
