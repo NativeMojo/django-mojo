@@ -1,5 +1,9 @@
 ## Unreleased
 
+## v1.2.60 - July 29, 2026
+
+
+
 **fix (account)** — **`theme.favicon_url` now actually sets the favicon on the
 hosted auth pages (maestro item 894).** The key was documented in both doc
 tracks, listed in `DEFAULT_AUTH_CONFIG`, resolved down the group parent chain,
