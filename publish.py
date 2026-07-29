@@ -240,6 +240,25 @@ def update_init_version(version: str) -> None:
         raise PublishError(f"Failed to update {INIT_FILE}: {str(e)}")
 
 
+def relock() -> None:
+    """
+    Re-resolve uv.lock so it agrees with the just-bumped pyproject.toml.
+
+    uv.lock holds an entry for this package itself (source = { editable = "." })
+    carrying its version, so a version bump leaves the lock one line stale.
+    Nothing here used to fix that, so the drift surfaced later as a dirty
+    uv.lock after somebody's unrelated `uv run` re-synced it — 11 of the
+    repo's `chore: uv.lock` commits are that being cleaned up by hand.
+
+    Locking here, before commit_changes() runs `git add .`, puts the lock in
+    the release commit where it belongs. `uv lock` without --upgrade only
+    changes what pyproject requires, so on a plain patch bump this is the one
+    version line and nothing else.
+    """
+    logger.info("Re-locking uv.lock against the new version...")
+    run_command("uv lock", capture_output=False)
+
+
 def build_and_publish() -> None:
     """Build and publish the package to PyPI."""
     logger.info("Cleaning dist/...")
@@ -383,6 +402,11 @@ def main() -> None:
         # Update files
         update_changelog(version, notes)
         update_init_version(version)
+
+        # Keep uv.lock in step with pyproject.toml before anything commits.
+        # Unconditional: --nobump still benefits, and `uv lock` is a no-op when
+        # the lock is already current.
+        relock()
 
         # Build and publish
         if not args.nopypi:

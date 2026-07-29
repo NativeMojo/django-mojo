@@ -32,7 +32,14 @@ fi
 
 # Run tests — capture exit code so we always stop the server
 EXIT_CODE=0
-uv run "$SCRIPT_DIR/testit.py" "$@" || EXIT_CODE=$?
+# --frozen: run against uv.lock as it stands, never rewrite it. The lock
+# carries this package's own version (source = { editable = "." }), so after
+# publish.py bumps pyproject.toml a plain `uv run` re-syncs and rewrites that
+# line — every test run after a release left the tree dirty in a file nobody
+# touched. publish.py now re-locks at release time, which is the only place
+# the lock should move. A dependency added to pyproject.toml without a
+# `uv lock` will fail here with an ImportError; that is the intended trade.
+uv run --frozen "$SCRIPT_DIR/testit.py" "$@" || EXIT_CODE=$?
 
 if [ "$STARTED_SERVER" -eq 1 ]; then
     "$SCRIPT_DIR/asgi_local" stop

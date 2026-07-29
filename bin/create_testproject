@@ -7,7 +7,9 @@ TESTPROJECT="$REPO_ROOT/testproject"
 
 # Use uv if available, fall back to venv python, then system python
 if command -v uv &>/dev/null; then
-    PYTHON="uv run python"
+    # --frozen for the same reason as bin/run_tests: never let a routine
+    # command rewrite uv.lock's self-version entry behind the caller's back.
+    PYTHON="uv run --frozen python"
 elif [ -f "$REPO_ROOT/.venv/bin/python" ]; then
     PYTHON="$REPO_ROOT/.venv/bin/python"
 else
