@@ -354,3 +354,29 @@ def test_favicon_url_is_html_escaped(opts):
         )
     finally:
         _reset_metadata(opts.group)
+
+
+@th.django_unit_test("no template comment markup leaks into a rendered auth page")
+def test_auth_pages_leak_no_template_comments(opts):
+    # Django's `{# ... #}` comment syntax is SINGLE-LINE ONLY — the lexer's
+    # tag regex is `{#.*?#}` with no DOTALL, so a comment spanning lines is
+    # never tokenized and renders as literal text. In <head> the HTML parser
+    # then hoists that text into <body>, where it is visible on the page.
+    # Multi-line commentary must use {% comment %}/{% endcomment %}.
+    opts.group.metadata = {"auth_config": {"theme": {"favicon_url": FAVICON_URL}}}
+    opts.group.save(update_fields=["metadata"])
+    try:
+        for template_name in HOSTED_TEMPLATES:
+            for group in (opts.group, None):
+                html = _render_auth_page(template_name, group=group)
+                for marker in ('{#', '#}', '{%', '%}', '{{', '}}'):
+                    assert_true(
+                        marker not in html,
+                        f"{template_name} (favicon "
+                        f"{'set' if group else 'unset'}) leaked the literal "
+                        f"template marker {marker!r} into its rendered output. "
+                        f"Django only strips `{{# #}}` comments that fit on ONE "
+                        f"line; a multi-line one renders as visible page text."
+                    )
+    finally:
+        _reset_metadata(opts.group)
