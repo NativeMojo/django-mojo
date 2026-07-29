@@ -158,6 +158,23 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `EVENTS_ON_ERRORS`
 
+### FILEMAN
+
+- `FILEMAN_EXPORT_EXPIRES_DAYS` — days until assistant `export_data` files
+  expire and are deleted by the cleanup job (default `14`). See
+  [assistant settings](../assistant/README.md#settings).
+- `FILEMAN_SVG_MAX_BYTES` — first of five independent caps bounding SVG-to-PNG
+  rasterization for renditions (default `2097152`, 2 MB). Defaults and the
+  bomb each one stops:
+  [SVG rasterization](../fileman/renditions.md#svg-rasterization).
+- `FILEMAN_SVG_MAX_EMBEDDED_PIXELS` — default `40000000` (40 Mpx)
+- `FILEMAN_SVG_MEMORY_MB` — default `512`; Linux-only backstop
+- `FILEMAN_SVG_RASTER_BOX` — default `1024`, applied to both width and height
+- `FILEMAN_SVG_TIMEOUT` — default `15` seconds
+- `FILEMAN_USE_SHORTLINKS` — global default for wrapping File/FileRendition
+  download URLs in `/s/<code>` short links (default `True`). See
+  [fileman shortlinks](../fileman/shortlinks.md).
+
 ### FRESH
 
 - `FRESH_AUTH_WINDOW`

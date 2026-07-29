@@ -96,7 +96,7 @@ AWS_S3_REGION_NAME = "us-east-1"
 
 ### Backend interface — `download(file_path, local_path)`
 
-All backends used by the renderer pipeline (image, video, audio, document) must implement:
+All backends used by the renderer pipeline (image, vector, video, audio, document) must implement:
 
 ```python
 def download(self, file_path: str, local_path: str) -> None:
