@@ -3942,6 +3942,12 @@ share one auth domain.</p>
 <p>The <code>group_uuid</code> param is preserved through navigation (login ↔ register
 switcher), the OAuth round-trip (Google/Apple/GitHub callback), and the
 login → passkey enrollment redirect.</p>
+<p>Branding includes the <strong>browser tab icon</strong>: when the resolved group sets
+<code>theme.favicon_url</code>, that icon is the only one the page declares — the
+deployment's default <code>/favicon/*</code> links and web manifest are suppressed, so the
+tab cannot fall back to the host's favicon. Groups that leave the key empty get
+the deployment's own icons. The <code>GET /api/auth/config</code> response is unchanged;
+<code>theme.favicon_url</code> was always returned there.</p>
 <hr />
 <h2 id="mojo-authjs-helpers"><code>mojo-auth.js</code> Helpers<a class="headerlink" href="#mojo-authjs-helpers" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1">// Fetch the resolved auth config</span>

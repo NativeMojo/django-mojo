@@ -4106,7 +4106,14 @@ can intercept and serve directly for better performance:</p>
 <a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a><span class="p">}</span>
 </code></pre></div>
 <p>Set <code>theme.favicon_url</code> in <code>AUTH_CONFIG</code> to your favicon path — the template
-includes <code>&lt;link rel="icon" href="..."&gt;</code> when this key is non-empty.</p>
+includes <code>&lt;link rel="icon" href="..."&gt;</code> when this key is non-empty. It
+<strong>replaces</strong> the deployment's default icons rather than joining them: the five
+<code>/favicon/*</code> links above (including <code>site.webmanifest</code>) are suppressed, so the
+browser has exactly one candidate and cannot fall back to the host's icon. The
+trade is that those pages then declare no web manifest and no
+<code>apple-touch-icon</code>, so PWA install metadata, <code>theme-color</code>, and the iOS
+home-screen icon are absent on the auth pages for that tenant. Leave the key
+empty to keep the deployment's own set.</p>
 <h3 id="3-oauth-setup">3. OAuth Setup<a class="headerlink" href="#3-oauth-setup" title="Permanent link">&para;</a></h3>
 <p>Enable Google/Apple/GitHub by configuring their provider credentials. The
 login methods must also be included in <code>AUTH_CONFIG.login.methods</code> (or the
