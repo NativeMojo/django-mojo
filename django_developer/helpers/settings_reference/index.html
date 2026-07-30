@@ -5536,6 +5536,47 @@
 <ul>
 <li><code>AUTH_BEARER_HANDLERS</code></li>
 <li><code>AUTH_BEARER_NAME_MAP</code></li>
+<li><code>AUTH_CSP_DIRECTIVES</code> — <strong>file-only</strong> (<code>settings.get_static</code>). Dict, default
+  <code>{}</code>. Per-directive merge over the default Content-Security-Policy on the
+  hosted auth pages. A present key replaces that directive wholesale, an empty
+  value drops it, an unknown key is emitted as-is (so you can add <code>report-uri</code>).
+  The per-request nonce is always appended to the final <code>script-src</code> and cannot
+  be removed. Has no effect while <code>AUTH_CSP_ENABLED</code> is off. See
+  <a href="../../security/csp/">Content Security Policy</a>.</li>
+<li><code>AUTH_CSP_ENABLED</code> — <strong>file-only</strong> (<code>settings.get_static</code>). Bool, default
+  <strong><code>False</code></strong>. The <strong>opt-in switch</strong> for the CSP on the hosted auth pages:
+  <code>True</code> sends the header, and with it unset or <code>False</code> no header is sent at
+  all. The <code>nonce="{{ csp_nonce }}"</code> attributes are stamped into the templates
+  either way — a nonce with no CSP is inert, so the default is a no-op. See
+  <a href="../../security/csp/">Content Security Policy</a>.</li>
+<li><code>AUTH_CSP_REPORT_ONLY</code> — <strong>file-only</strong> (<code>settings.get_static</code>). Bool, default
+  <code>False</code>. <code>True</code> sends <code>Content-Security-Policy-Report-Only</code> instead of the
+  enforcing header — set it alongside <code>AUTH_CSP_ENABLED = True</code> as the first
+  step of a rollout, especially if you ship your own auth-template overrides.
+  Meaningless on its own. See <a href="../../security/csp/">Content Security Policy</a>.</li>
+<li><code>AUTH_HANDOFF_CODE_TTL</code> — int, default <code>60</code>. Seconds before a cross-origin
+  handoff code expires.</li>
+<li><code>AUTH_HANDOFF_ALLOWED_URLS</code> — list, <strong>unset by default (monitor mode)</strong>.
+  Destination URLs <code>POST /api/auth/handoff</code> may mint a code for, matched on
+  <strong>exact host + path prefix</strong> (<code>https://*.example.com/</code> admits one extra
+  dot-free label). <strong>Setting it — any list, even <code>[]</code> — turns enforcement on</strong>:
+  <code>redirect_uri</code> becomes required and an unlisted destination gets a <code>400</code> with
+  no code minted, plus an <code>auth:handoff_destination_refused</code> incident. Unset,
+  with no resolver either, is monitor mode: the code is minted as always and an
+  unlisted destination files an <code>auth:handoff_destination_unlisted</code> incident
+  naming it. Deliberately separate from <code>ALLOWED_REDIRECT_URLS</code>, which was
+  written under different semantics (wildcards are inert there). See
+  <a href="../../account/auth/#cross-origin-auth-handoff">Cross-Origin Auth Handoff</a>.</li>
+<li><code>AUTH_HANDOFF_RESOLVER</code> — dotted path to <code>fn(url, request=None) -&gt; bool</code>,
+  loaded via <code>mojo.helpers.modules.load_function()</code> and cached. Default <code>""</code>.
+  <strong>When set it decides</strong> and <code>AUTH_HANDOFF_ALLOWED_URLS</code> is not consulted — the
+  answer for a multi-tenant platform whose destinations live in a DB, not a
+  settings file. <strong>Setting it also turns handoff enforcement on</strong>, exactly like
+  the list. The resolver is security-critical deployment code: it must compare
+  hosts exactly (never substring/prefix), check the scheme, and fail closed. The
+  framework wraps the call — a resolver that raises, or a dotted path that fails
+  to import, refuses <strong>everything</strong> and is logged. Unlike <code>USER_LOGIN_HANDLER</code>,
+  it never fails open.</li>
 <li><code>AUTH_PHONE_VERIFY_DEV_BYPASS_CODE</code> — <strong>file-only</strong> (<code>settings.get_static</code>). A fixed code accepted in place of the real SMS code during phone verification; never set it in production. Deliberately not readable from the DB/Redis settings plane, so a <code>Setting</code> row cannot arm an authentication bypass at runtime.</li>
 </ul>
 <h3 id="aws">AWS<a class="headerlink" href="#aws" title="Permanent link">&para;</a></h3>

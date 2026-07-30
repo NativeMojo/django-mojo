@@ -6449,6 +6449,7 @@ into the kernel firewall fleet-wide.</p>
 <h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="abuse_hardening/">Authenticated-Abuse Hardening</a> — global per-identity API throttle, traffic-concentration detection, account kill switch, websocket connection limits, deployment hardening</li>
+<li><a href="csp/">Content Security Policy</a> — the nonce-based CSP on the hosted auth pages, <strong>opt-in and off by default</strong> (<code>AUTH_CSP_ENABLED</code> ships <code>False</code>): how to turn it on, the default policy, the per-page <code>frame-ancestors</code> rule, the <code>{{ csp_nonce }}</code> contract for overridden templates, and the <code>AUTH_CSP_*</code> settings</li>
 <li><a href="maestro_board/">Maestro Board Link</a> — push tickets into a remote maestro board and sync both directions (registration, status_map, signed webhooks, echo suppression)</li>
 <li><a href="ticket_actions/">Ticket Actions</a> — structured Approve/Deny action notes on tickets: schema, dispatch guards, built-in handlers (rule approval/update, block confirm, escalate), handler registration, LLM opt-in contract</li>
 <li><a href="../account/bouncer/">Bouncer Architecture</a> — bot detection, scoring, tokens, signatures</li>

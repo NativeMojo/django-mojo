@@ -3888,6 +3888,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#embedding-auth-register-and-passkey-may-refuse-to-be-framed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Embedding — /auth, /register and /passkey may refuse to be framed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#honeypot-decoy-pages" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4209,11 +4220,32 @@ page issues a short-lived single-use handoff code:</p>
 </code></pre></div>
 <p>The flow:
 1. Auth page completes login.
-2. Detects cross-origin redirect, POSTs <code>/api/auth/handoff</code> → gets <code>code</code>.
+2. Detects cross-origin redirect, POSTs <code>/api/auth/handoff</code> with
+   <code>{"redirect_uri": "&lt;resolved destination&gt;"}</code> → gets <code>code</code>.
 3. Browser navigates to <code>&lt;redirect&gt;?auth_code=&lt;code&gt;</code>.
 4. The app calls <code>MojoAuth.handleAuthCodeFromURL()</code> on bootstrap — strips the
    param, POSTs <code>/api/auth/exchange</code>, stores resulting tokens.</p>
 <p>Codes are single-use and expire after <code>AUTH_HANDOFF_CODE_TTL</code> seconds (default 60).</p>
+<p><strong>The destination may be allowlisted server-side — that is an operator
+choice.</strong> <code>?redirect=</code> is attacker-supplied and the code buys an access +
+refresh token pair, so a deployment can restrict which destinations get one.
+<strong>The check is opt-in and off by default:</strong> with neither
+<code>AUTH_HANDOFF_ALLOWED_URLS</code> nor <code>AUTH_HANDOFF_RESOLVER</code> configured the server
+mints for any destination (and records an internal incident naming it); with
+either configured it returns <code>400</code> and mints nothing for anything unlisted. See
+<a href="../authentication/#cross-origin-auth-handoff">Cross-Origin Auth Handoff</a>.</p>
+<p>Either way, <strong>when the mint is refused the auth page shows an error and stays
+put</strong> — it does not fall back to navigating to the destination without a code.
+If your app's origin is a legitimate destination, ask the operator to add it
+before pointing <code>?redirect=</code> at it on a deployment that enforces; on one that
+does not, it works today but shows up in their incident feed as a destination to
+allowlist.</p>
+<p><code>MojoAuth.requestHandoffCode(destination)</code> takes the destination as a required
+argument and rejects without one, regardless of what the server enforces. Treat
+a rejection as "do not navigate".</p>
+<p><strong><code>?back=</code></strong> (the "Back to website" link) accepts only <code>http</code>/<code>https</code> URLs and
+same-origin relative paths — a <code>javascript:</code>/<code>data:</code> value is dropped and the
+link stays hidden.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">&lt;</span><span class="nt">script</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://auth.example.com/api/account/static/mojo-auth.js&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">init</span><span class="p">({</span><span class="w"> </span><span class="nx">baseURL</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;https://auth.example.com&#39;</span><span class="w"> </span><span class="p">});</span>
@@ -4233,6 +4265,29 @@ page issues a short-lived single-use handoff code:</p>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>GET /api/account/static/mojo-auth.js          → MojoAuth library
 </code></pre></div>
 <p>Served with <code>Cache-Control: public, max-age=86400</code> in production.</p>
+<hr />
+<h2 id="embedding-auth-register-and-passkey-may-refuse-to-be-framed">Embedding — <code>/auth</code>, <code>/register</code> and <code>/passkey</code> may refuse to be framed<a class="headerlink" href="#embedding-auth-register-and-passkey-may-refuse-to-be-framed" title="Permanent link">&para;</a></h2>
+<p><strong>Do not frame them.</strong> On a deployment that has enabled the hosted-page
+Content-Security-Policy, these three pages are served with
+<code>Content-Security-Policy: … frame-ancestors 'none' …</code>, so a browser refuses to
+render them inside an <code>&lt;iframe&gt;</code>, <code>&lt;frame&gt;</code>, <code>&lt;embed&gt;</code> or <code>&lt;object&gt;</code> from any
+origin, including your own. They hold access and refresh tokens in
+<code>localStorage</code>; framing them is a clickjacking surface with no legitimate use.</p>
+<p><strong>The header is opt-in and off by default</strong> (<code>AUTH_CSP_ENABLED</code> ships <code>False</code>),
+so on a stock deployment no CSP header is sent at all and these pages can still
+be framed. Treat that as an accident of configuration, not a supported
+integration — an operator can turn the header on at any time and a framed
+embed breaks that day.</p>
+<p>Link or redirect to them instead — see
+<a href="#linking-to-auth-pages">Linking to Auth Pages</a> and
+<a href="#cross-origin-redirect-handoff">Cross-Origin Redirect Handoff</a>.</p>
+<p><code>/contact</code> is <strong>never</strong> affected: even with the policy enabled it deliberately
+omits <code>frame-ancestors</code> so it can stay embeddable from an external marketing
+site. See <a href="../public_messages/">Public Messages</a>.</p>
+<p>No REST endpoint, request payload, response body or status code is affected
+either way. The policy, when enabled, also locks <code>script-src</code> to a per-request
+nonce, which matters only if your deployment overrides the page templates — see
+the backend note in <code>docs/django_developer/security/csp.md</code>.</p>
 <hr />
 <h2 id="honeypot-decoy-pages">Honeypot Decoy Pages<a class="headerlink" href="#honeypot-decoy-pages" title="Permanent link">&para;</a></h2>
 <table>
