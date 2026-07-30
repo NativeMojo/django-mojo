@@ -51,13 +51,24 @@ nonce-locked. `data:` because `validate_custom_css` explicitly permits data URIs
 external marketing site. Callers pass `frame_ancestors=""` to drop the
 directive.
 
-Settings (all file-only, all read PER REQUEST)
-----------------------------------------------
+Settings (all file-only, all read PER REQUEST) — **OPT-IN, off by default**
+--------------------------------------------------------------------------
 | Key | Default | Meaning |
 |---|---|---|
-| `AUTH_CSP_ENABLED`     | `True`  | `False` → no header at all |
+| `AUTH_CSP_ENABLED`     | `False` | `True` → send the header |
 | `AUTH_CSP_REPORT_ONLY` | `False` | `True` → `Content-Security-Policy-Report-Only` |
 | `AUTH_CSP_DIRECTIVES`  | `{}`    | per-directive merge over the defaults |
+
+`AUTH_CSP_ENABLED` ships **False** so upgrading changes nothing. A CSP can only
+break things — a deployment that overrides an auth template with its own inline
+`<script>`, or iframes the login page, would start failing with no warning — and
+that is not a cost to impose on someone who never asked for the header. The
+nonce attributes are stamped into the templates either way; a `nonce` with no
+CSP is inert, so the default really is a no-op.
+
+Rollout, when you do want it: set `AUTH_CSP_ENABLED = True` **and**
+`AUTH_CSP_REPORT_ONLY = True`, watch your browser console / report endpoint for
+blocked inline scripts, fix or nonce them, then drop `AUTH_CSP_REPORT_ONLY`.
 
 Merge semantics: a present key REPLACES that directive wholesale; an empty
 value DROPS the directive; an unknown key is emitted as-is (so a deployment can
@@ -193,12 +204,13 @@ def build_policy(nonce, api_base="", frame_ancestors="'none'"):
 def apply(response, nonce, api_base="", frame_ancestors="'none'"):
     """Stamp the policy onto `response` and return it.
 
-    Returns the response untouched when `AUTH_CSP_ENABLED` is false. Sets the
-    report-only header instead of the enforcing one when `AUTH_CSP_REPORT_ONLY`
-    is true — the recommended first step for a deployment with overridden auth
-    templates.
+    Returns the response untouched unless `AUTH_CSP_ENABLED` is true — the
+    header is OPT-IN, so this is a no-op for a deployment that has not asked
+    for it. Sets the report-only header instead of the enforcing one when
+    `AUTH_CSP_REPORT_ONLY` is true — the recommended first step for a
+    deployment with overridden auth templates.
     """
-    if not settings.get_static('AUTH_CSP_ENABLED', True, kind="bool"):
+    if not settings.get_static('AUTH_CSP_ENABLED', False, kind="bool"):
         return response
     policy = build_policy(nonce, api_base=api_base, frame_ancestors=frame_ancestors)
     if settings.get_static('AUTH_CSP_REPORT_ONLY', False, kind="bool"):

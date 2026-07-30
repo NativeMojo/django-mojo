@@ -35,6 +35,11 @@ TEST_PWORD = "handoff##mojo99"
 # Destinations the pinned test-project allowlist admits.
 ALLOWED_DEST = "https://example.com/app"
 ALLOWED_WILDCARD_DEST = "https://tenant.handoff.example.net/app/home"
+# The allowlist ENTRIES that admit the two destinations above. Enforcement is
+# opt-in, so the test server has no allowlist by default — the enforcement test
+# installs these with th.server_settings().
+ALLOWED_ENTRY = "https://example.com/"
+ALLOWED_WILDCARD_ENTRY = "https://*.handoff.example.net/app"
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +103,67 @@ def setup_handoff_user(opts):
     user.save_password(TEST_PWORD)
     user.save()
     opts.user_id = user.pk
+
+
+@contextlib.contextmanager
+def _unconfigured():
+    """Remove BOTH handoff settings in-process — the shipped default state."""
+    from django.conf import settings as django_settings
+    from mojo.apps.account.services import redirect_allowlist
+
+    missing = object()
+    prev_urls = getattr(django_settings, "AUTH_HANDOFF_ALLOWED_URLS", missing)
+    prev_resolver = getattr(django_settings, "AUTH_HANDOFF_RESOLVER", missing)
+    for key in ("AUTH_HANDOFF_ALLOWED_URLS", "AUTH_HANDOFF_RESOLVER"):
+        if hasattr(django_settings, key):
+            delattr(django_settings, key)
+    redirect_allowlist._reset_cache_for_tests()
+    try:
+        yield
+    finally:
+        if prev_urls is not missing:
+            django_settings.AUTH_HANDOFF_ALLOWED_URLS = prev_urls
+        if prev_resolver is not missing:
+            django_settings.AUTH_HANDOFF_RESOLVER = prev_resolver
+        redirect_allowlist._reset_cache_for_tests()
+
+
+# ---------------------------------------------------------------------------
+# Enforcement is opt-in — the setting is the switch (no flag day on upgrade)
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("opt-in: nothing configured is monitor mode, not enforcement")
+def test_enforcement_is_off_when_unconfigured(opts):
+    from mojo.apps.account.services import redirect_allowlist as ra
+    with _unconfigured():
+        assert_true(not ra.is_enforced(),
+                    "with neither setting present the handoff must NOT be enforced — "
+                    "an upgrading deployment has to keep working unchanged")
+
+
+@th.django_unit_test("opt-in: an empty allowlist is a deliberate enforce-and-allow-nothing")
+def test_empty_allowlist_is_enforcement(opts):
+    from mojo.apps.account.services import redirect_allowlist as ra
+    with _allowlist(urls=[]):
+        assert_true(ra.is_enforced(),
+                    "AUTH_HANDOFF_ALLOWED_URLS = [] is SET, so enforcement must be on")
+        assert_true(not ra.is_allowed_destination(ALLOWED_DEST),
+                    "an empty allowlist must then admit nothing")
+
+
+@th.django_unit_test("opt-in: a resolver alone turns enforcement on")
+def test_resolver_alone_is_enforcement(opts):
+    from django.conf import settings as django_settings
+    from mojo.apps.account.services import redirect_allowlist as ra
+    with _unconfigured():
+        django_settings.AUTH_HANDOFF_RESOLVER = f"{__name__}._resolver_allow_all"
+        ra._reset_cache_for_tests()
+        try:
+            assert_true(ra.is_enforced(),
+                        "a configured resolver must turn enforcement on without a list")
+        finally:
+            delattr(django_settings, "AUTH_HANDOFF_RESOLVER")
+            ra._reset_cache_for_tests()
 
 
 # ---------------------------------------------------------------------------
@@ -325,14 +391,125 @@ def test_handoff_endpoint_requires_auth(opts):
                 f"unauthenticated handoff should be rejected, got {resp.status_code}")
 
 
-@th.unit_test("auth/handoff requires a redirect_uri")
-def test_handoff_endpoint_requires_redirect_uri(opts):
+@th.unit_test("auth/handoff monitor mode mints anything and needs no redirect_uri")
+def test_handoff_endpoint_monitor_mode_mints_anything(opts):
+    """The shipped default: no allowlist configured means NOTHING changes.
+
+    This is THE upgrade-safety test, and it runs against the test server's
+    default state on purpose — no server_settings, no fixture. A deployment
+    that upgrades without setting AUTH_HANDOFF_ALLOWED_URLS or
+    AUTH_HANDOFF_RESOLVER must keep minting exactly as it did before this
+    feature existed: for a request with no redirect_uri at all, and for a
+    destination that enforcement would refuse.
+    """
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1", key="auth_handoff")
+
     assert_true(opts.client.login(TEST_USER, TEST_PWORD), "login should succeed")
+
     resp = opts.client.post("/api/auth/handoff", {})
-    assert_eq(resp.status_code, 400,
-              f"handoff without redirect_uri should 400, got {resp.status_code}: {resp.response}")
-    assert_true(_minted_code(resp) is None,
-                f"a refused handoff must not return a code, got {resp.response}")
+    assert_eq(resp.status_code, 200,
+              f"monitor mode must mint with no redirect_uri (pre-feature behavior), "
+              f"got {resp.status_code}: {resp.response}")
+    assert_true(bool(_minted_code(resp)),
+                f"monitor mode must return a code for an empty body, got {resp.response}")
+
+    resp = opts.client.post("/api/auth/handoff", {"redirect_uri": "https://evil.tld/steal"})
+    assert_eq(resp.status_code, 200,
+              f"monitor mode must mint even for a destination enforcement would refuse — "
+              f"that is the whole point of opt-in. Got {resp.status_code}: {resp.response}")
+    assert_true(bool(_minted_code(resp)),
+                f"monitor mode must return a code for a foreign host, got {resp.response}")
+
+
+@th.unit_test("auth/handoff enforced: required redirect_uri, allowed mints, unlisted refused")
+def test_handoff_endpoint_enforcement(opts):
+    """Everything enforcement changes, inside ONE server reload.
+
+    Enforcement is opt-in, so the test server does not run it by default —
+    setting AUTH_HANDOFF_ALLOWED_URLS is what turns it on, exactly as a
+    deployment would. Grouped into a single test because each
+    th.server_settings block costs a uvicorn reload.
+    """
+    from mojo.decorators.limits import clear_rate_limits
+
+    with th.server_settings(AUTH_HANDOFF_ALLOWED_URLS=[ALLOWED_ENTRY, ALLOWED_WILDCARD_ENTRY]):
+        clear_rate_limits(ip="127.0.0.1", key="auth_handoff")
+        assert_true(opts.client.login(TEST_USER, TEST_PWORD), "login should succeed")
+
+        resp = opts.client.post("/api/auth/handoff", {})
+        assert_eq(resp.status_code, 400,
+                  f"with an allowlist configured, a missing redirect_uri must 400, "
+                  f"got {resp.status_code}: {resp.response}")
+        assert_true(_minted_code(resp) is None,
+                    f"a refused handoff must not return a code, got {resp.response}")
+
+        resp = opts.client.post("/api/auth/handoff", {"redirect_uri": ALLOWED_DEST})
+        assert_eq(resp.status_code, 200,
+                  f"an allowed destination must still mint under enforcement, "
+                  f"got {resp.status_code}: {resp.response}")
+        assert_true(bool(_minted_code(resp)),
+                    f"an allowed destination must return a code, got {resp.response}")
+
+        resp = opts.client.post("/api/auth/handoff", {"redirect_uri": ALLOWED_WILDCARD_DEST})
+        assert_eq(resp.status_code, 200,
+                  f"an allowed wildcard destination must mint, "
+                  f"got {resp.status_code}: {resp.response}")
+        assert_true(bool(_minted_code(resp)), f"a code should be returned, got {resp.response}")
+
+        refused = [
+            ("https://evil.tld/steal", "a foreign host"),
+            ("https://example.com.evil.tld/", "a suffix-extended confusable host"),
+            ("https://example.com@evil.tld/", "a userinfo confusable host"),
+            ("https://a.b.handoff.example.net/app", "two labels under a one-label wildcard"),
+            ("https://tenant.handoff.example.net/other", "a path outside the allowed prefix"),
+            ("javascript:alert(1)", "a javascript: URL"),
+            ("/relative/path", "a relative path"),
+        ]
+        for dest, why in refused:
+            resp = opts.client.post("/api/auth/handoff", {"redirect_uri": dest})
+            assert_eq(resp.status_code, 400,
+                      f"handoff to {dest!r} ({why}) should 400 under enforcement, "
+                      f"got {resp.status_code}: {resp.response}")
+            assert_true(_minted_code(resp) is None,
+                        f"handoff to {dest!r} ({why}) must not return a code, got {resp.response}")
+
+
+@th.django_unit_test("monitor mode files an incident naming the unlisted destination")
+def test_monitor_mode_reports_incident(opts):
+    """Monitor mode is only useful if it TELLS you. The incident feed is what
+    lets a deployment build AUTH_HANDOFF_ALLOWED_URLS before opting in."""
+    from mojo.apps.incident.models import Event
+    from mojo.apps.account.services import redirect_allowlist as ra
+    from mojo.helpers.redis import get_connection
+
+    dest = "https://monitor-probe.example.org/landing"
+    category = "auth:handoff_destination_unlisted"
+    Event.objects.filter(category=category).delete()
+    # Suppression is per host per hour — clear it so this test is repeatable
+    # against a long-lived Redis.
+    try:
+        get_connection().delete(f"{ra._NOTICE_PREFIX}:monitor:monitor-probe.example.org")
+    except Exception:
+        pass
+
+    ra.report_unlisted_destination(dest, request=None, enforced=False)
+
+    events = list(Event.objects.filter(category=category))
+    assert_eq(len(events), 1,
+              f"monitor mode must file exactly one {category} event, got {len(events)}")
+    assert_true(dest in (events[0].details or ""),
+                f"the incident body must name the destination so it can be "
+                f"allowlisted, got {events[0].details!r}")
+
+    # Suppressed: a second report for the same host inside the window is a no-op.
+    ra.report_unlisted_destination(dest, request=None, enforced=False)
+    assert_eq(Event.objects.filter(category=category).count(), 1,
+              "a repeat destination inside the suppression window must not "
+              "file a second incident — a crafted-link flood must not be able "
+              "to spam the incident plane")
+
+    Event.objects.filter(category=category).delete()
 
 
 @th.unit_test("auth/handoff returns code + expires_in for an allowed destination")
@@ -346,38 +523,6 @@ def test_handoff_endpoint_returns_code(opts):
     assert_true(data.expires_in > 0,
                 f"expires_in should be positive, got {data.expires_in}")
     opts.handoff_code = data.code
-
-
-@th.unit_test("auth/handoff admits a wildcard destination under the allowed path")
-def test_handoff_endpoint_wildcard_destination(opts):
-    assert_true(opts.client.login(TEST_USER, TEST_PWORD), "login should succeed")
-    resp = opts.client.post("/api/auth/handoff", {"redirect_uri": ALLOWED_WILDCARD_DEST})
-    assert_eq(resp.status_code, 200,
-              f"an allowed wildcard destination should mint, got {resp.status_code}: {resp.response}")
-    assert_true(bool(_minted_code(resp)), f"a code should be returned, got {resp.response}")
-
-
-@th.unit_test("auth/handoff refuses disallowed destinations and mints no code")
-def test_handoff_endpoint_refuses_disallowed_destinations(opts):
-    from mojo.decorators.limits import clear_rate_limits
-    clear_rate_limits(ip="127.0.0.1", key="auth_handoff")
-
-    assert_true(opts.client.login(TEST_USER, TEST_PWORD), "login should succeed")
-    refused = [
-        ("https://evil.tld/steal", "a foreign host"),
-        ("https://example.com.evil.tld/", "a suffix-extended confusable host"),
-        ("https://example.com@evil.tld/", "a userinfo confusable host"),
-        ("https://a.b.handoff.example.net/app", "two labels under a one-label wildcard"),
-        ("https://tenant.handoff.example.net/other", "a path outside the allowed prefix"),
-        ("javascript:alert(1)", "a javascript: URL"),
-        ("/relative/path", "a relative path"),
-    ]
-    for dest, why in refused:
-        resp = opts.client.post("/api/auth/handoff", {"redirect_uri": dest})
-        assert_eq(resp.status_code, 400,
-                  f"handoff to {dest!r} ({why}) should 400, got {resp.status_code}: {resp.response}")
-        assert_true(_minted_code(resp) is None,
-                    f"handoff to {dest!r} ({why}) must not return a code, got {resp.response}")
 
 
 @th.unit_test("auth/exchange returns JWT for valid code")

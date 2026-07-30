@@ -523,8 +523,38 @@ def test_csp_can_be_disabled(opts):
 
     response = csp.apply(HttpResponse('ok'), 'abc')
     assert_true(csp.HEADER in response,
-                "with AUTH_CSP_ENABLED restored to its default the header must "
-                "come back — the setting is read per request, not at import")
+                "with AUTH_CSP_ENABLED restored to the test project's True the "
+                "header must come back — the setting is read per request, not "
+                "at import")
+
+
+@th.django_unit_test("CSP is OPT-IN: absent AUTH_CSP_ENABLED sets no header")
+def test_csp_is_opt_in_by_default(opts):
+    """The shipped default is OFF. This is the upgrade-safety test.
+
+    A deployment that upgrades without asking for a CSP must get exactly what
+    it had before: no header. The test project sets AUTH_CSP_ENABLED = True so
+    the live-server tests above can assert a real header, so this test removes
+    the setting entirely to see what a stock deployment gets.
+    """
+    from django.http import HttpResponse
+    from mojo.apps.account.services import csp
+
+    orig = _save_conf('AUTH_CSP_ENABLED')
+    try:
+        from django.conf import settings as dj_settings
+        if hasattr(dj_settings, 'AUTH_CSP_ENABLED'):
+            delattr(dj_settings, 'AUTH_CSP_ENABLED')
+        response = csp.apply(HttpResponse('ok'), 'abc')
+        assert_true(csp.HEADER not in response,
+                    f"with AUTH_CSP_ENABLED unset the framework must send NO "
+                    f"enforcing CSP — the header is opt-in. "
+                    f"Got: {response.get(csp.HEADER)!r}")
+        assert_true(csp.REPORT_ONLY_HEADER not in response,
+                    f"an unset AUTH_CSP_ENABLED must not send a report-only "
+                    f"header either. Got: {response.get(csp.REPORT_ONLY_HEADER)!r}")
+    finally:
+        _restore_conf('AUTH_CSP_ENABLED', orig)
 
 
 @th.django_unit_test("AUTH_CSP_REPORT_ONLY=True swaps the enforcing header for the report-only one")

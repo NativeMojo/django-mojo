@@ -218,27 +218,45 @@ def on_user_login(request):
 @md.requires_auth()
 @md.rate_limit("auth_handoff", ip_limit=30)
 @md.requires_geofence(scope="auth")
-@md.requires_params("redirect_uri")
 def on_auth_handoff(request):
     """
     Issue a short-lived, single-use handoff code for the authenticated user.
     The auth-origin page calls this when redirecting to a different-origin app
     so the app can exchange the code for a JWT without the JWT touching the URL.
 
-    `redirect_uri` is REQUIRED and must be allowed by
-    `mojo.apps.account.services.redirect_allowlist` — the code buys an access
-    AND refresh token pair, so where it is going is decided here, before one
-    exists, and never at exchange time (see that module's docstring). Fail
-    closed: a deployment with no allowlist and no resolver mints nothing.
+    `redirect_uri` names where the code is going. Destination ENFORCEMENT IS
+    OPT-IN and off until a deployment sets `AUTH_HANDOFF_ALLOWED_URLS` or
+    `AUTH_HANDOFF_RESOLVER`:
+
+      * monitor mode (neither set) — mints exactly as it always has;
+        `redirect_uri` is optional, and one that is not on the allowlist files
+        an `auth:handoff_destination_unlisted` incident instead of refusing.
+        The incident feed names every destination you would have to allowlist,
+        so it writes the setting for you.
+      * enforced (either set) — `redirect_uri` is required and must be allowed
+        by `mojo.apps.account.services.redirect_allowlist`, else 400, no code
+        minted, and an `auth:handoff_destination_refused` incident.
+
+    The check is here, at issuance, and never at exchange time: the code buys
+    an access AND refresh token pair, and an attacker holding it also controls
+    every header on the exchange call (see that module's docstring).
     """
     from mojo.apps.account.services import auth_handoff, redirect_allowlist
     destination = request.DATA.get("redirect_uri")
-    if not redirect_allowlist.is_allowed_destination(destination, request):
-        logit.warning(
-            "account.auth_handoff",
-            f"refused handoff for user {request.user.pk} to {destination!r} — "
-            f"destination is not allowed")
-        raise merrors.ValueException("redirect_uri is not permitted for auth handoff")
+    if redirect_allowlist.is_enforced():
+        if not destination:
+            raise merrors.ValueException(
+                "redirect_uri is required for auth handoff")
+        if not redirect_allowlist.is_allowed_destination(destination, request):
+            redirect_allowlist.report_unlisted_destination(
+                destination, request=request, enforced=True)
+            raise merrors.ValueException("redirect_uri is not permitted for auth handoff")
+    elif destination and not redirect_allowlist.is_allowed_destination(destination, request):
+        # Monitor mode: mint anyway — that is the pre-existing behavior and an
+        # upgrade must not change it — but file an incident naming the
+        # destination, so the feed builds the allowlist before anyone opts in.
+        redirect_allowlist.report_unlisted_destination(
+            destination, request=request, enforced=False)
     code = auth_handoff.create_handoff_code(
         request.user, destination=destination, ip=request.ip)
     return JsonResponse({

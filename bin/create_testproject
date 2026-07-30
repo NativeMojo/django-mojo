@@ -92,9 +92,15 @@ MOJO_TEST_MODE = True
 # to flip these per-test. Tests that need different values mutate
 # django.conf.settings in-process or use test-mode headers where supported.
 ALLOWED_REDIRECT_URLS = ["https://example.com/"]
-# Cross-origin auth handoff destinations. Deliberately a SEPARATE setting from
-# ALLOWED_REDIRECT_URLS — see docs/django_developer/account/auth.md.
-AUTH_HANDOFF_ALLOWED_URLS = ["https://example.com/", "https://*.handoff.example.net/app"]
+# AUTH_HANDOFF_ALLOWED_URLS is deliberately NOT set here. Setting it at all is
+# the opt-in switch for handoff destination enforcement, so leaving it unset
+# means this server runs in MONITOR mode — exactly what a stock deployment gets
+# on upgrade, which is the behavior most worth having under test by default.
+# The enforcement tests opt in per-test with th.server_settings(...).
+# Content-Security-Policy on the hosted auth pages is OPT-IN and ships off.
+# Turned on here so tests/test_auth/csp.py can assert the real header on a live
+# response; tests covering the shipped default do so in-process.
+AUTH_CSP_ENABLED = True
 GITHUB_CLIENT_ID = "test-client-id-123"
 
 # Deterministic embeddings for the docit knowledge base — no AWS calls in
