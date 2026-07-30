@@ -120,13 +120,21 @@ def test_run_jobs_handles_failure(opts):
     from mojo.apps.jobs.models import Job
 
     bad_id = jobs.publish(func=FAILING_HANDLER, payload={})
-    jobs.publish(func=HANDLER, payload={"marker": "after-failure"})
+    good_id = jobs.publish(func=HANDLER, payload={"marker": "after-failure"})
 
     result = th.run_jobs()
 
-    assert result.count == 2, f"both jobs should be drained, got {result.count}"
+    # Scoped to OUR two jobs for the same reason test_run_jobs_executes is
+    # (see the note there): run_jobs() drains every channel, so a job another
+    # module publishes concurrently lands in this result too. Asserting the
+    # total made a passing drain go red whenever that happened.
+    drained = [str(j) for j in result.job_ids]
+    assert str(bad_id) in drained, \
+        f"the failing job {bad_id} should have been drained, drained {drained}"
+    assert str(good_id) in drained, \
+        f"the job queued after the failure should still be drained, drained {drained}"
     assert CALLS == ["after-failure"], \
-        "a job queued after a failing one must still run"
+        f"a job queued after a failing one must still run, got {CALLS}"
     bad = Job.objects.get(id=bad_id)
     assert bad.status in ("failed", "retrying"), \
         f"a raising handler should not be recorded as completed, got {bad.status}"
@@ -148,6 +156,10 @@ def test_run_jobs_max_jobs(opts):
     for i in range(4):
         jobs.publish(func=HANDLER, payload={"marker": i})
 
+    # Unlike the drain-everything tests above, an exact count IS safe here: the
+    # cap stops at exactly 2 no matter how many jobs are queued, and we queued
+    # 4. What is NOT safe is asserting WHICH 2 ran — a job from a concurrent
+    # module can be one of them — so this test asserts the cap, not identity.
     result = th.run_jobs(max_jobs=2)
     assert result.count == 2, f"max_jobs=2 should stop after 2, got {result.count}"
     assert result.hit_limit is True, "hitting the cap should be reported, not silent"

@@ -128,56 +128,86 @@ def test_gate_none_request(opts):
 # ---------------------------------------------------------------------------
 # End-to-end: verify the gate actually closes when X-Forwarded-For is set.
 # This is the critical regression guard for a production-LB scenario.
+#
+# The two tests below are a strict A/B: identical headers, differing ONLY in
+# X-Forwarded-For. Both assert on the SENTINEL geo rather than on the decision
+# `reason`, because with the gate CLOSED this request controls nothing — the
+# engine falls through to shared state that other modules mutate concurrently:
+#   - real GEOFENCE_SYSTEM_RULES rows (tests/test_geofence/config_plane.py
+#     writes them), which take it off the no_rules fast path;
+#   - the (ip, group) decision cache — the cache-ttl header is ignored too when
+#     the gate is closed, so a decision cached for 127.0.0.1 by another test is
+#     returned verbatim;
+#   - whatever GeoLocatedIP has cached for 127.0.0.1.
+# Any of those can make `reason` be private_ip / country_not_allowed / a cached
+# value, so asserting reason == "no_rules" was a race. The sentinel country code
+# cannot come from ANY of them — only from this request's own X-Mojo-Test-Geo —
+# which makes its absence an exact, race-free reading of "the gate stayed shut".
 # ---------------------------------------------------------------------------
 
-@th.django_unit_test("e2e: X-Forwarded-For closes the gate — geofence header ignored")
-def test_e2e_xff_disables_test_geo(opts):
-    """A request with X-Forwarded-For must NOT honor X-Mojo-Test-Geo,
-    even though MOJO_TEST_MODE=1 is set in the test server."""
+# ISO 3166-1 leaves ZZ user-assigned: no geoip provider returns it, no fixture
+# uses it, so it can only reach a response by way of our own header.
+SENTINEL_COUNTRY = "ZZ"
+SENTINEL_REGION = "ZZ-XFF"
+
+
+def _gate_probe_headers():
+    """Headers whose ONLY visible effect is a sentinel-flavored decision.
+
+    Geo says country ZZ; the system rule allows US only. Gate open → the rule
+    and the geo both apply → blocked with country=ZZ. Gate closed → every one
+    of these is ignored and ZZ can never appear.
+    """
     import json
-    # Hit /api/geo/check with both: a geofence-blocking rule AND an X-Mojo-Test-Geo
-    # override that would normally allow. With X-Forwarded-For set, the gate
-    # closes and the override is ignored — falls through to GEOFENCE_TEST_OVERRIDE
-    # setting (None in default) → real geoip lookup of 127.0.0.1 → private_ip
-    # branch → allowed per GEOFENCE_ALLOW_PRIVATE_IPS default True. Result is
-    # `allowed=True, reason="private_ip"` — proving the X-Mojo-Test-Geo override
-    # was NOT honored (it would have returned "passed" or "country_not_allowed"
-    # depending on the rule). The key signal is that the response shape differs
-    # from what the override would have produced.
-    headers = {
-        "X-Forwarded-For": "1.2.3.4",  # closes the gate
-        "X-Mojo-Test-Geo": json.dumps({"country_code": "US", "region_code": "US-CA",
+    return {
+        "X-Mojo-Test-Geo": json.dumps({"country_code": SENTINEL_COUNTRY,
+                                       "region_code": SENTINEL_REGION,
                                        "is_tor": False, "is_vpn": False,
                                        "is_proxy": False, "is_datacenter": False}),
         "X-Mojo-Test-Geofence-System": json.dumps({"country": {"in": ["US"]}}),
         "X-Mojo-Test-Geofence-Cache-Ttl": "0",
     }
+
+
+@th.django_unit_test("e2e: X-Forwarded-For closes the gate — geofence headers ignored")
+def test_e2e_xff_disables_test_geo(opts):
+    """A request with X-Forwarded-For must NOT honor X-Mojo-Test-Geo,
+    even though MOJO_TEST_MODE=1 is set in the test server."""
+    headers = dict(_gate_probe_headers(), **{"X-Forwarded-For": "1.2.3.4"})
     resp = opts.client.get("/api/geo/check", headers=headers)
     assert resp.status_code == 200, f"got {resp.status_code}: {opts.client.last_response.body}"
     d = resp.response.data
-    # With gate CLOSED, no test headers applied. System rules default to {} →
-    # no_rules fast path. The X-Mojo-Test-Geofence-System header MUST be ignored.
-    assert d.reason == "no_rules", \
-        f"gate closure must ignore X-Mojo-Test-Geofence-System; expected no_rules, got reason={d.reason!r}"
-    assert d.allowed is True, \
-        f"no rules apply when gate is closed; expected allowed=True, got {d.allowed}"
+    # The control below proves ZZ is exactly what a gate-open request returns,
+    # so its absence here is the gate holding — whatever `reason` says.
+    assert d.country != SENTINEL_COUNTRY, \
+        (f"gate closure must ignore X-Mojo-Test-Geo, but the decision carries the "
+         f"sentinel country {d.country!r} (reason={d.reason!r})")
+    assert d.country_code != SENTINEL_COUNTRY, \
+        (f"gate closure must ignore X-Mojo-Test-Geo, but country_code is the "
+         f"sentinel {d.country_code!r} (reason={d.reason!r})")
+    assert d.region != SENTINEL_REGION, \
+        (f"gate closure must ignore X-Mojo-Test-Geo, but the decision carries the "
+         f"sentinel region {d.region!r} (reason={d.reason!r})")
 
 
 @th.django_unit_test("e2e: control — without X-Forwarded-For, gate is open and headers apply")
 def test_e2e_gate_open_control(opts):
     """Control case: identical request WITHOUT X-Forwarded-For applies the
-    test override. Proves the previous test's pass wasn't accidental."""
-    import json
-    headers = {
-        "X-Mojo-Test-Geo": json.dumps({"country_code": "RU", "region_code": "RU-MOW",
-                                       "is_tor": False, "is_vpn": False,
-                                       "is_proxy": False, "is_datacenter": False}),
-        "X-Mojo-Test-Geofence-System": json.dumps({"country": {"in": ["US"]}}),
-        "X-Mojo-Test-Geofence-Cache-Ttl": "0",
-    }
-    resp = opts.client.get("/api/geo/check", headers=headers)
+    test override. Proves the previous test's pass wasn't accidental.
+
+    Concurrency-safe in the other direction: with the gate OPEN these headers
+    replace the system rules, the geo and the cache TTL outright, so nothing
+    another module writes can reach this decision.
+    """
+    resp = opts.client.get("/api/geo/check", headers=_gate_probe_headers())
+    assert resp.status_code == 200, f"got {resp.status_code}: {opts.client.last_response.body}"
     d = resp.response.data
+    assert d.country == SENTINEL_COUNTRY, \
+        (f"gate-open control must apply X-Mojo-Test-Geo; expected country "
+         f"{SENTINEL_COUNTRY!r}, got {d.country!r} (reason={d.reason!r})")
     assert d.allowed is False, \
         f"gate-open control must apply override; expected blocked, got allowed={d.allowed}"
     assert d.reason == "country_not_allowed", \
         f"override should produce country_not_allowed, got {d.reason!r}"
+    assert d.rule_level == "system", \
+        f"the blocking rule came from X-Mojo-Test-Geofence-System, got rule_level={d.rule_level!r}"
