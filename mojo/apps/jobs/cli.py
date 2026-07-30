@@ -31,6 +31,12 @@ Examples:
     python -m mojo.apps.jobs.cli scheduler foreground
     python -m mojo.apps.jobs.cli scheduler stop
 
+    # Dedicate this box to one channel (consume less than you publish to)
+    python -m mojo.apps.jobs.cli engine start --channels sites
+
+    # A second engine on the same box, its own channels and pidfile
+    python -m mojo.apps.jobs.cli engine start --channels uploads --runner-id uploads-engine
+
     # Verbose output
     python -m mojo.apps.jobs.cli -v status
 """
@@ -46,11 +52,34 @@ from typing import Optional, List
 from mojo.helpers import logit
 
 
-def is_engine_running():
-    """Check if any job engine is currently running."""
+def parse_channels_arg(value):
+    """
+    Turn a --channels value into a channel list, or None when absent.
+
+    None means "the component decides" — the engine falls back to
+    JOBS_CHANNELS, the scheduler to its auto mode. Deliberately does NOT read
+    settings itself: passing the settings list would make every scheduler look
+    explicitly pinned, and its auto mode (which serves channels this box does
+    not consume) would never engage.
+    """
+    if not value:
+        return None
+    channels = [c.strip() for c in value.split(',') if c.strip()]
+    return channels or None
+
+
+def is_engine_running(runner_id=None):
+    """
+    Check if a job engine is currently running.
+
+    With a runner_id, checks only THAT runner — so a box can run a second
+    engine on a different channel set alongside the default one. Without one,
+    any live engine counts (the historical behavior).
+    """
     from mojo.apps.jobs.daemon import DaemonRunner
 
-    for pid_file in Path('/tmp').glob('job-engine-*.pid'):
+    pattern = f'job-engine-{runner_id}.pid' if runner_id else 'job-engine-*.pid'
+    for pid_file in Path('/tmp').glob(pattern):
         runner = DaemonRunner("JobEngine", lambda: None, pidfile=str(pid_file))
         if runner.status():
             return True
@@ -128,9 +157,10 @@ def setup_signal_handlers(engine=None, scheduler=None):
     signal.signal(signal.SIGINT, signal_handler)
 
 
-def start_engine_daemon(verbose=False, logfile_override: Optional[str] = None):
+def start_engine_daemon(verbose=False, logfile_override: Optional[str] = None,
+                        channels=None, runner_id=None):
     """Start engine as daemon process."""
-    if is_engine_running():
+    if is_engine_running(runner_id):
         if verbose:
             print("✓ Engine already running, skipping")
         return True
@@ -139,17 +169,8 @@ def start_engine_daemon(verbose=False, logfile_override: Optional[str] = None):
     from mojo.apps.jobs.daemon import DaemonRunner
     from mojo.helpers import paths
 
-    # Get channels from settings
-    try:
-        from mojo.helpers.settings import settings
-        channels = settings.get("JOBS_CHANNELS", ['default'])
-        if isinstance(channels, str):
-            channels = [channels]
-    except:
-        channels = ['default']
-
-    # Create engine
-    engine = JobEngine(channels=channels)
+    # channels=None → the engine falls back to JOBS_CHANNELS itself.
+    engine = JobEngine(channels=channels, runner_id=runner_id)
 
     # Auto-generate pidfile
     pidfile = f"/tmp/job-engine-{engine.runner_id}.pid"
@@ -179,7 +200,7 @@ def start_engine_daemon(verbose=False, logfile_override: Optional[str] = None):
         return False
 
 
-def start_scheduler_daemon(verbose=False):
+def start_scheduler_daemon(verbose=False, channels=None):
     """Start scheduler as daemon process."""
     if is_scheduler_running():
         if verbose:
@@ -190,16 +211,9 @@ def start_scheduler_daemon(verbose=False):
     from mojo.apps.jobs.daemon import DaemonRunner
     from mojo.helpers import paths
 
-    # Get channels from settings
-    try:
-        from mojo.helpers.settings import settings
-        channels = settings.get("JOBS_CHANNELS", ['default'])
-        if isinstance(channels, str):
-            channels = [channels]
-    except:
-        channels = ['default']
-
-    # Create scheduler
+    # channels=None is load-bearing: it puts the scheduler in auto mode, where
+    # it serves the whole cluster's scheduled channels rather than only the
+    # ones this box happens to consume.
     scheduler = Scheduler(channels=channels)
 
     # Auto-generate pidfile
@@ -230,25 +244,16 @@ def start_scheduler_daemon(verbose=False):
         return False
 
 
-def start_engine_foreground(verbose=False):
+def start_engine_foreground(verbose=False, channels=None, runner_id=None):
     """Start engine in foreground mode."""
     from mojo.apps.jobs.job_engine import JobEngine
 
-    # Get channels from settings
-    try:
-        from mojo.helpers.settings import settings
-        channels = settings.get("JOBS_CHANNELS", ['default'])
-        if isinstance(channels, str):
-            channels = [channels]
-    except:
-        channels = ['default']
-
-    # Create engine
-    engine = JobEngine(channels=channels)
+    # channels=None → the engine falls back to JOBS_CHANNELS itself.
+    engine = JobEngine(channels=channels, runner_id=runner_id)
 
     if verbose:
         print(f"🚀 Starting engine in foreground mode")
-        print(f"   Channels: {channels}")
+        print(f"   Channels: {engine.channels}")
         print(f"   Runner ID: {engine.runner_id}")
         print(f"   Press Ctrl+C to stop")
         print()
@@ -272,25 +277,16 @@ def start_engine_foreground(verbose=False):
         return False
 
 
-def start_scheduler_foreground(verbose=False):
+def start_scheduler_foreground(verbose=False, channels=None):
     """Start scheduler in foreground mode."""
     from mojo.apps.jobs.scheduler import Scheduler
 
-    # Get channels from settings
-    try:
-        from mojo.helpers.settings import settings
-        channels = settings.get("JOBS_CHANNELS", ['default'])
-        if isinstance(channels, str):
-            channels = [channels]
-    except:
-        channels = ['default']
-
-    # Create scheduler
+    # channels=None → auto mode, see start_scheduler_daemon.
     scheduler = Scheduler(channels=channels)
 
     if verbose:
         print(f"🚀 Starting scheduler in foreground mode")
-        print(f"   Channels: {channels}")
+        print(f"   Channels: {scheduler.channels}")
         print(f"   Scheduler ID: {scheduler.scheduler_id}")
         print(f"   Press Ctrl+C to stop")
         print()
@@ -510,6 +506,15 @@ Examples:
   %(prog)s scheduler foreground  # Run scheduler in foreground
   %(prog)s scheduler stop        # Stop just scheduler
   %(prog)s -v status             # Verbose status
+
+Channel options (engine/scheduler start & foreground):
+  --channels a,b     Consume only these channels, ignoring JOBS_CHANNELS.
+                     Lets a box consume a narrower set than it publishes to.
+  --runner-id ID     Distinct engine identity, so a second engine can run
+                     on this box alongside the default one.
+
+  %(prog)s engine start --channels sites
+  %(prog)s engine start --channels uploads --runner-id uploads-engine
         """
     )
 
@@ -538,6 +543,21 @@ Examples:
         type=str,
         default=None,
         help='Log file path for engine daemon mode (overrides settings)'
+    )
+    parser.add_argument(
+        '--channels',
+        type=str,
+        default=None,
+        help='Comma-separated channels to consume, e.g. --channels sites,uploads. '
+             'Overrides JOBS_CHANNELS for this process, so a box can consume a '
+             'narrower set than it publishes to. Omit for the default behavior.'
+    )
+    parser.add_argument(
+        '--runner-id',
+        type=str,
+        default=None,
+        help='Explicit engine runner id (default: <hostname>-engine). Give a '
+             'distinct id to run a second engine on this box alongside the first.'
     )
     parser.add_argument(
         'action',
@@ -580,11 +600,16 @@ Examples:
             if verbose:
                 print("⚠️  'start' is deprecated. Use 'engine start' and 'scheduler start' instead.")
             return False
-        elif command == 'engine':
+        channels = parse_channels_arg(parsed_args.channels)
+
+        if command == 'engine':
             if action == 'start':
-                return start_engine_daemon(verbose, logfile_override=parsed_args.logfile)
+                return start_engine_daemon(
+                    verbose, logfile_override=parsed_args.logfile,
+                    channels=channels, runner_id=parsed_args.runner_id)
             elif action == 'foreground':
-                return start_engine_foreground(verbose)
+                return start_engine_foreground(
+                    verbose, channels=channels, runner_id=parsed_args.runner_id)
             elif action == 'stop':
                 return stop_engine_daemon(verbose)
             else:
@@ -592,9 +617,9 @@ Examples:
                 return False
         elif command == 'scheduler':
             if action == 'start':
-                return start_scheduler_daemon(verbose)
+                return start_scheduler_daemon(verbose, channels=channels)
             elif action == 'foreground':
-                return start_scheduler_foreground(verbose)
+                return start_scheduler_foreground(verbose, channels=channels)
             elif action == 'stop':
                 return stop_scheduler_daemon(verbose)
             else:

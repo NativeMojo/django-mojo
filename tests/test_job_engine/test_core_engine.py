@@ -105,7 +105,13 @@ def test_engine_initialization(opts):
     # Create engine
     engine = JobEngine(channels=[opts.test_channel])
 
-    assert engine.channels == [opts.test_channel], f"Expected channels {[opts.test_channel]}, got {engine.channels}"
+    # The requested channels are consumed; the engine also adds its own host
+    # channel so a publisher can address this box directly (JOBS_HOSTNAME_CHANNEL).
+    from mojo.apps.jobs.job_engine import host_channel
+    assert opts.test_channel in engine.channels, \
+        f"Expected {opts.test_channel} to be consumed, got {engine.channels}"
+    assert set(engine.channels) <= {opts.test_channel, host_channel()}, \
+        f"Engine should consume only what was asked for plus its host channel, got {engine.channels}"
     assert engine.runner_id is not None, f"Expected runner_id to be set, got {engine.runner_id}"
     assert engine.max_workers > 0, f"Expected max_workers > 0, got {engine.max_workers}"
     assert not engine.running, f"Expected engine.running to be False, got {engine.running}"

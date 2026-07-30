@@ -12,6 +12,81 @@ def prune_jobs(force=False, verbose=False, now=None):
         payload={})
 
 
+def find_unconsumed_channels():
+    """
+    Channels with queued jobs that no live engine is consuming.
+
+    Returns a list of (channel, depth). A channel counts as consumed if any
+    runner heartbeat (they carry the runner's channel list and expire on their
+    own) names it — so a busy-but-served queue is never reported; that is a
+    capacity question, not a routing mistake.
+    """
+    from mojo.apps.jobs.adapters import get_adapter
+    from mojo.apps.jobs.keys import JobKeys
+    import json
+
+    redis = get_adapter()
+    keys = JobKeys()
+    client = redis.get_client()
+
+    def _text(value):
+        return value.decode('utf-8') if isinstance(value, (bytes, bytearray)) else value
+
+    # Every channel some live runner claims to consume.
+    consumed = set()
+    for key in client.scan_iter(match=f"{keys.prefix}:runner:*:hb", count=200):
+        try:
+            raw = redis.get(_text(key))
+            if not raw:
+                continue
+            consumed.update(json.loads(_text(raw)).get("channels") or [])
+        except Exception as e:
+            logit.warning(f"find_unconsumed_channels: unreadable heartbeat {key}: {e}")
+
+    marker = ":queue:"
+    orphans = []
+    for key in client.scan_iter(match=f"{keys.prefix}:*{marker}*", count=200):
+        key_str = _text(key)
+        parts = key_str.split(marker)
+        if len(parts) != 2 or not parts[1]:
+            continue
+        channel = parts[1]
+        if channel in consumed:
+            continue
+        depth = redis.llen(key_str) or 0
+        if depth > 0:
+            orphans.append((channel, depth))
+    return sorted(orphans)
+
+
+# Every 5 minutes: jobs are only routed as named now, so a channel nobody
+# consumes is the way a misconfiguration shows up. Say so loudly — queued jobs
+# expire (JOBS_DEFAULT_EXPIRES_SEC), so the window to react is finite.
+@schedule(minutes="*/5")
+def check_unconsumed_channels(force=False, verbose=False, now=None):
+    from mojo.apps import incident
+
+    try:
+        orphans = find_unconsumed_channels()
+    except Exception as e:
+        logit.error(f"check_unconsumed_channels: scan failed: {e}")
+        return
+
+    for channel, depth in orphans:
+        logit.warning(
+            f"jobs: channel '{channel}' has {depth} queued job(s) and no live consumer")
+        incident.report_event(
+            f"Job channel '{channel}' has {depth} queued job(s) but no engine is "
+            f"consuming it. Add it to a worker's JOBS_CHANNELS (or start an engine "
+            f"with --channels {channel}); queued jobs expire if left unclaimed.",
+            title=f"Unconsumed job channel: {channel}",
+            category="jobs:unconsumed_channel",
+            level=3,
+            channel=channel,
+            queue_depth=depth)
+    return orphans
+
+
 # Runs at the top of every hour to dispatch user-scheduled tasks
 @schedule(minutes="0")
 def dispatch_scheduled_tasks(now=None):

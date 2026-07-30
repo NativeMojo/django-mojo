@@ -28,14 +28,18 @@ HANDLER = f"{__name__}.record_call"
 CH_FIREWALL = "t906_firewall"
 CH_A = "t906_a"
 CH_B = "t906_b"
+CH_SCHED = "t906_sched"
+CH_SEED = "t906_seed"
+CH_ORPHAN = "t906_orphan"
 
-TEST_CHANNELS = [CH_FIREWALL, CH_A, CH_B]
+TEST_CHANNELS = [CH_FIREWALL, CH_A, CH_B, CH_SCHED, CH_SEED, CH_ORPHAN]
 
 
 def _clear(opts):
     """Reset our channels. Tests share a long-lived DB and Redis, so anything
     this module will create must be deleted before it is created."""
     from mojo.apps.jobs.models import Job
+    from mojo.apps.incident.models import Event
 
     CALLS.clear()
     for ch in TEST_CHANNELS:
@@ -43,7 +47,16 @@ def _clear(opts):
         opts.redis.delete(opts.keys.sched(ch))
         opts.redis.delete(opts.keys.sched_broadcast(ch))
         opts.redis.delete(opts.keys.processing(ch))
+    # Our channels must not linger in the shared sched registry.
+    opts.redis.get_client().srem(opts.keys.sched_registry(), *TEST_CHANNELS)
     Job.objects.filter(channel__in=TEST_CHANNELS).delete()
+    Event.objects.filter(category="jobs:unconsumed_channel",
+                         title__in=[_alert_title(ch) for ch in TEST_CHANNELS]).delete()
+
+
+def _alert_title(channel):
+    """The title check_unconsumed_channels gives its incident."""
+    return f"Unconsumed job channel: {channel}"
 
 
 @th.django_unit_setup()
@@ -142,6 +155,222 @@ def test_disjoint_engines_claim_only_own_channels(opts):
         f"the {CH_B!r} engine should then claim its own job, drained {drained_b}"
     )
     assert CALLS == ["a", "b"], f"both jobs should have run by now, got {CALLS}"
+
+
+@th.django_unit_test("an engine also consumes a channel named after its host")
+def test_hostname_channel(opts):
+    _clear(opts)
+    from unittest import mock
+    from mojo.apps.jobs import job_engine as je
+
+    engine = je.JobEngine(channels=["default"], runner_id="t906-host-on")
+    assert je.host_channel() in engine.channels, (
+        f"the host channel {je.host_channel()!r} should be consumed so a publisher "
+        f"can target this box, engine has {engine.channels}"
+    )
+
+    with mock.patch.object(je, "JOBS_HOSTNAME_CHANNEL", False):
+        opted_out = je.JobEngine(channels=["default"], runner_id="t906-host-off")
+    assert opted_out.channels == ["default"], (
+        f"JOBS_HOSTNAME_CHANNEL=False must leave the channel list alone, "
+        f"got {opted_out.channels}"
+    )
+
+
+@th.django_unit_test("an explicit channel list is not mutated by the host channel")
+def test_channels_argument_not_mutated(opts):
+    """The host channel is appended to a COPY — a shared list must survive."""
+    _clear(opts)
+    from mojo.apps.jobs.job_engine import JobEngine
+
+    caller_list = ["default"]
+    JobEngine(channels=caller_list, runner_id="t906-nomutate")
+    assert caller_list == ["default"], (
+        f"the caller's channel list must not be mutated, it became {caller_list}"
+    )
+
+
+@th.django_unit_test("the scheduler promotes a channel this box does not consume")
+def test_scheduler_registry_covers_foreign_channel(opts):
+    """Auto mode: a delayed job on a foreign channel still gets promoted.
+
+    This is the second half of the bug — the cluster runs ONE scheduler, so if
+    it only served its own box's JOBS_CHANNELS, every other box's delayed jobs
+    and retries would stall forever.
+    """
+    _clear(opts)
+    import time
+    from mojo.apps import jobs
+    from mojo.apps.jobs.scheduler import Scheduler
+
+    job_id = jobs.publish(func=HANDLER, payload={"marker": "sched"},
+                          channel=CH_SCHED, delay=1)
+
+    assert opts.redis.zcard(opts.keys.sched(CH_SCHED)) == 1, (
+        f"a delayed job should be parked in the {CH_SCHED!r} sched ZSET"
+    )
+    assert CH_SCHED in jobs.get_sched_channels(), (
+        f"publish should register {CH_SCHED!r} so the cluster scheduler finds it, "
+        f"registry holds {jobs.get_sched_channels()}"
+    )
+
+    scheduler = Scheduler(channels=None, scheduler_id="t906-sched")
+    assert scheduler.auto_channels is True, \
+        "Scheduler(channels=None) must be in auto mode"
+    scheduler._refresh_channels()
+    assert CH_SCHED in scheduler.channels, (
+        f"auto mode should pick up {CH_SCHED!r} from the registry, "
+        f"serving {scheduler.channels}"
+    )
+
+    time.sleep(1.2)  # let the job come due
+    scheduler._process_scheduled_jobs()
+
+    assert job_id in _queued_ids(opts, CH_SCHED), (
+        f"the due job should have been promoted onto the {CH_SCHED!r} queue, "
+        f"queue holds {_queued_ids(opts, CH_SCHED)}"
+    )
+
+
+@th.django_unit_test("an explicitly pinned scheduler ignores the registry")
+def test_scheduler_explicit_channels_are_pinned(opts):
+    _clear(opts)
+    from mojo.apps import jobs
+    from mojo.apps.jobs.scheduler import Scheduler
+
+    jobs.register_sched_channel(CH_SCHED)
+
+    scheduler = Scheduler(channels=["default"], scheduler_id="t906-pinned")
+    scheduler._refresh_channels()
+
+    assert scheduler.auto_channels is False, \
+        "an explicit channel list must disable auto mode"
+    assert scheduler.channels == ["default"], (
+        f"a pinned scheduler must serve exactly what it was given, "
+        f"got {scheduler.channels}"
+    )
+
+
+@th.django_unit_test("the scheduler seeds its registry from pre-existing sched keys")
+def test_scheduler_seed_scan(opts):
+    """Jobs delayed before this version shipped are not in the registry."""
+    _clear(opts)
+    from mojo.apps import jobs
+    from mojo.apps.jobs.scheduler import Scheduler
+
+    # Simulate pre-upgrade state: a sched ZSET with no registry entry.
+    opts.redis.zadd(opts.keys.sched(CH_SEED), {"t906-pre-upgrade-job": 1.0})
+    opts.redis.get_client().srem(opts.keys.sched_registry(), CH_SEED)
+    assert CH_SEED not in jobs.get_sched_channels(), \
+        "precondition: the seed channel must start out unregistered"
+
+    scheduler = Scheduler(channels=None, scheduler_id="t906-seed")
+    scheduler._seed_registry()
+
+    assert CH_SEED in jobs.get_sched_channels(), (
+        f"the startup scan should have registered {CH_SEED!r}, "
+        f"registry holds {jobs.get_sched_channels()}"
+    )
+    assert opts.keys.sched_registry().split(":")[-1] not in jobs.get_sched_channels(), \
+        "the registry key itself must never be mistaken for a channel"
+
+
+@th.django_unit_test("a queue with no live consumer raises an incident")
+def test_unconsumed_channel_alert(opts):
+    _clear(opts)
+    from mojo.apps import jobs
+    from mojo.apps.jobs import cronjobs
+    from mojo.apps.incident.models import Event
+
+    jobs.publish(func=HANDLER, payload={"marker": "orphan"}, channel=CH_ORPHAN)
+
+    orphans = dict(cronjobs.find_unconsumed_channels())
+    assert CH_ORPHAN in orphans, (
+        f"{CH_ORPHAN!r} has a queued job and no consumer, so it should be "
+        f"reported; found {sorted(orphans)}"
+    )
+
+    cronjobs.check_unconsumed_channels()
+    assert Event.objects.filter(category="jobs:unconsumed_channel",
+                                title=_alert_title(CH_ORPHAN)).exists(), (
+        "an unconsumed channel must raise a jobs:unconsumed_channel incident — "
+        "it is the only thing that surfaces a misrouted publish now"
+    )
+
+
+@th.django_unit_test("a channel a live runner consumes is not reported")
+def test_consumed_channel_is_not_alerted(opts):
+    _clear(opts)
+    import json
+    from mojo.apps import jobs
+    from mojo.apps.jobs import cronjobs
+
+    jobs.publish(func=HANDLER, payload={"marker": "served"}, channel=CH_ORPHAN)
+
+    # Stand in for a live engine: a heartbeat naming the channel.
+    hb_key = opts.keys.runner_hb("t906-fake-runner")
+    opts.redis.set(hb_key, json.dumps({
+        "runner_id": "t906-fake-runner",
+        "channels": [CH_ORPHAN],
+    }), ex=60)
+    try:
+        orphans = dict(cronjobs.find_unconsumed_channels())
+        assert CH_ORPHAN not in orphans, (
+            f"{CH_ORPHAN!r} has a live consumer, so a backlog on it is a capacity "
+            f"question, not a routing error; found {sorted(orphans)}"
+        )
+    finally:
+        opts.redis.delete(hb_key)
+
+
+@th.django_unit_test("--channels parses to a list, absent means the component decides")
+def test_parse_channels_arg(opts):
+    from mojo.apps.jobs.cli import parse_channels_arg
+
+    assert parse_channels_arg("a, b") == ["a", "b"], \
+        f"a comma list should split and strip, got {parse_channels_arg('a, b')}"
+    assert parse_channels_arg("solo") == ["solo"], \
+        "a single channel should still come back as a list"
+    for empty in (None, "", " , , "):
+        assert parse_channels_arg(empty) is None, (
+            f"parse_channels_arg({empty!r}) must be None so the component keeps "
+            f"its own default, got {parse_channels_arg(empty)!r}"
+        )
+
+
+@th.django_unit_test("the scheduler CLI leaves auto mode on when --channels is absent")
+def test_cli_scheduler_defaults_to_auto_mode(opts):
+    """Without this the whole scheduler half of the fix is dead code: passing
+    the settings list would make every scheduler look explicitly pinned."""
+    from unittest import mock
+    from mojo.apps.jobs import cli
+
+    for start in ("start_scheduler_daemon", "start_scheduler_foreground"):
+        with mock.patch("mojo.apps.jobs.scheduler.Scheduler") as fake, \
+             mock.patch("mojo.apps.jobs.daemon.DaemonRunner"), \
+             mock.patch.object(cli, "setup_signal_handlers"), \
+             mock.patch.object(cli, "is_scheduler_running", return_value=False):
+            getattr(cli, start)(verbose=False)
+
+        assert fake.call_args is not None, f"{start} should construct a Scheduler"
+        passed = fake.call_args.kwargs.get("channels", "MISSING")
+        assert passed is None, (
+            f"{start} must pass channels=None so auto mode engages, passed {passed!r}"
+        )
+
+
+@th.django_unit_test("DEFAULT_CHANNELS covers every channel the framework publishes to")
+def test_default_channels_cover_framework(opts):
+    """Drift guard: publish no longer reroutes, so a framework channel missing
+    from the default consume list would strand jobs on an unconsumed queue."""
+    from mojo.apps.jobs import DEFAULT_CHANNELS
+
+    for channel in ("default", "priority", "cleanup", "incident_handlers",
+                    "renditions", "certs", "webhooks", "webhook_fanout"):
+        assert channel in DEFAULT_CHANNELS, (
+            f"the framework publishes to {channel!r}, so it must be in "
+            f"DEFAULT_CHANNELS or an unconfigured deployment strands those jobs"
+        )
 
 
 def _drain(opts, engine, max_jobs=10):

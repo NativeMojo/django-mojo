@@ -203,7 +203,11 @@ API_THROTTLE_ENABLED = False
 # itself is unit-tested in-process (tests/test_realtime/connection_limits.py).
 WS_CONNECT_RATE_LIMIT = 0
 
-JOBS_CHANNELS = ["default", "email", "incident_handlers", "renditions"]
+# Mirrors mojo.apps.jobs.DEFAULT_CHANNELS plus the suite's own "email" channel.
+# publish() routes to the channel it is given (no reroute onto "default"), so
+# the drain in th.run_jobs() must list every channel the suite publishes to.
+JOBS_CHANNELS = ["default", "priority", "cleanup", "incident_handlers",
+                 "renditions", "certs", "webhooks", "webhook_fanout", "email"]
 JOBS_DEFAULT_MAX_RETRIES = 0
 JOBS_ENGINE_MAX_WORKERS = 2
 JOBS_RUNNER_HEARTBEAT_SEC = 5

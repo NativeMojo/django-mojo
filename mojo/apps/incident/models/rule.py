@@ -180,11 +180,10 @@ class RuleSet(models.Model, MojoModel):
                     "incident_id": incident.pk if incident else None,
                 }
                 try:
-                    channel = "incident_handlers" if "incident_handlers" in jobs.JOB_CHANNELS else "default"
                     jobs.publish(
                         "mojo.apps.incident.handlers.event_handlers.execute_handler",
                         payload,
-                        channel=channel,
+                        channel="incident_handlers",
                     )
                     published = True
                 except Exception:

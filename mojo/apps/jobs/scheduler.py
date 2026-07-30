@@ -25,8 +25,15 @@ from .keys import JobKeys
 from .adapters import get_adapter
 from .models import Job, JobEvent
 
+from . import DEFAULT_CHANNELS, get_sched_channels, register_sched_channel
+
 # Module-level settings (readability)
-JOBS_CHANNELS = settings.get_static('JOBS_CHANNELS', ['default'])
+JOBS_CHANNELS = settings.get_static('JOBS_CHANNELS', DEFAULT_CHANNELS)
+
+# How often auto mode re-reads the sched registry. Cheap (one SMEMBERS on a
+# handful of names), but it runs inside the loop that must renew a 5s
+# leadership lock, so it is not done every cycle.
+CHANNEL_REFRESH_SEC = 5
 JOBS_SCHEDULER_LOCK_TTL_MS = settings.get_static('JOBS_SCHEDULER_LOCK_TTL_MS', 5000)
 JOBS_STREAM_MAXLEN = settings.get_static('JOBS_STREAM_MAXLEN', 100000)
 JOBS_DEBUG = settings.get_static('JOBS_DEBUG', False)
@@ -49,10 +56,17 @@ class Scheduler:
         Initialize the scheduler.
 
         Args:
-            channels: List of channels to schedule for (default: all configured)
+            channels: Explicit channels to schedule for. Omit (None) for AUTO
+                mode: JOBS_CHANNELS plus every channel the cluster has
+                registered scheduled work on, refreshed as it runs. Auto mode
+                is what lets the single lock-holding scheduler promote delayed
+                jobs and retries for channels this box does not consume.
+                Passing a list pins it — no discovery.
             scheduler_id: Unique scheduler identifier (auto-generated if not provided)
         """
-        self.channels = channels or self._get_all_channels()
+        self.auto_channels = not channels
+        self._last_channel_refresh = 0
+        self.channels = list(channels) if channels else self._get_all_channels()
         self.scheduler_id = scheduler_id or self._generate_scheduler_id()
         self.redis = get_adapter()
         self.keys = JobKeys()
@@ -81,14 +95,70 @@ class Scheduler:
                   f"channels={self.channels}")
 
     def _get_all_channels(self) -> List[str]:
-        """Get all configured channels from settings or discover from Redis."""
-        # Try settings first
-        configured = JOBS_CHANNELS
-        if configured:
-            return configured
+        """Configured channels, as a copy we are free to extend."""
+        return list(JOBS_CHANNELS or DEFAULT_CHANNELS)
 
-        # Default channels
-        return ['default']
+    def _configured_channels(self) -> List[str]:
+        """The settings-derived floor for auto mode."""
+        return list(JOBS_CHANNELS or DEFAULT_CHANNELS)
+
+    def _refresh_channels(self):
+        """
+        In auto mode, union the configured channels with the sched registry.
+
+        A registry read that fails leaves the current list in place — the loop
+        must keep promoting whatever it already knows about.
+        """
+        if not self.auto_channels:
+            return
+
+        now = time.time()
+        if now - self._last_channel_refresh < CHANNEL_REFRESH_SEC:
+            return
+        self._last_channel_refresh = now
+
+        try:
+            registered = get_sched_channels()
+        except Exception as e:
+            logger.debug(f"Channel refresh failed, keeping {len(self.channels)} channels: {e}")
+            return
+
+        merged = sorted(set(self._configured_channels()) | set(registered))
+        if merged != self.channels:
+            added = sorted(set(merged) - set(self.channels))
+            if added:
+                logger.info(f"Scheduler now also serving channels: {added}")
+            self.channels = merged
+
+    def _seed_registry(self):
+        """
+        One-time backfill of the sched registry from existing ZSET keys.
+
+        The registry is written at publish/retry time, so jobs scheduled before
+        this version shipped are not in it. Scan once at startup so they are
+        still promoted. Auto mode only; failures are non-fatal.
+        """
+        if not self.auto_channels:
+            return
+
+        found = set()
+        try:
+            client = self.redis.get_client()
+            for pattern, marker in ((f"{self.keys.prefix}:sched:*", ":sched:"),
+                                    (f"{self.keys.prefix}:sched_broadcast:*", ":sched_broadcast:")):
+                for key in client.scan_iter(match=pattern, count=200):
+                    key_str = key.decode('utf-8') if isinstance(key, (bytes, bytearray)) else key
+                    parts = key_str.split(marker)
+                    if len(parts) == 2 and parts[1]:
+                        found.add(parts[1])
+        except Exception as e:
+            logger.warning(f"Scheduler could not seed the channel registry: {e}")
+            return
+
+        for channel in found:
+            register_sched_channel(channel)
+        if found:
+            logger.info(f"Seeded sched registry from existing keys: {sorted(found)}")
 
     def _generate_scheduler_id(self) -> str:
         """Generate a consistent scheduler ID based on hostname."""
@@ -113,6 +183,10 @@ class Scheduler:
         self.running = True
         self.start_time = timezone.now()
         self.stop_event.clear()
+
+        # Backfill the registry from pre-existing sched keys, then take them in.
+        self._seed_registry()
+        self._refresh_channels()
 
         # Register signal handlers
         self._setup_signal_handlers()
@@ -273,6 +347,9 @@ class Scheduler:
         """Process scheduled jobs for all channels."""
         now = timezone.now()
         now_ms = now.timestamp() * 1000
+
+        # Pick up channels other boxes have scheduled work on (auto mode).
+        self._refresh_channels()
 
         # Close old DB connections at start
         close_old_connections()

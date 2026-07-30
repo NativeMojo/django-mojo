@@ -915,10 +915,13 @@ def _drain_engine(channels):
 
 def _job_channels(channel=None):
     from mojo.helpers.settings import settings
+    from mojo.apps.jobs import DEFAULT_CHANNELS
 
     if channel:
         return [channel] if isinstance(channel, str) else list(channel)
-    channels = settings.get("JOBS_CHANNELS", ["default"])
+    # publish() no longer reroutes unlisted channels onto "default", so the
+    # drain has to cover every channel the framework actually publishes to.
+    channels = settings.get("JOBS_CHANNELS", DEFAULT_CHANNELS)
     if isinstance(channels, str):
         channels = [channels]
     return list(channels)
