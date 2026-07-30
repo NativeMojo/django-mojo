@@ -21,18 +21,56 @@ The `mojo/apps/jobs/settings.py` file is a reference showing example configurati
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `JOBS_CHANNELS` | `["default"]` | List of channels the scheduler monitors |
+| `JOBS_CHANNELS` | `DEFAULT_CHANNELS` (see below) | Channels this box **consumes** |
+| `JOBS_HOSTNAME_CHANNEL` | `True` | Also consume a channel named after this host |
 
-Configure channels and run separate engine processes per channel:
+`JOBS_CHANNELS` is a **consume** list only. It does not restrict what you may
+publish to: `jobs.publish(channel="anything")` always lands on `anything`, so a
+box can hand work to another box's dedicated channel without consuming it
+itself. See [Publishing — Channels](publishing.md#channels).
+
+The default is `mojo.apps.jobs.DEFAULT_CHANNELS` — every channel the framework
+itself publishes to, so an unconfigured deployment runs all framework jobs:
 
 ```python
-JOBS_CHANNELS = ['default', 'emails', 'webhooks', 'heavy', 'maintenance']
+DEFAULT_CHANNELS = ['default', 'priority', 'cleanup', 'incident_handlers',
+                    'renditions', 'certs', 'webhooks', 'webhook_fanout']
+```
+
+Set it explicitly to dedicate a box, and run engines per channel:
+
+```python
+JOBS_CHANNELS = ['default', 'emails', 'heavy']
 ```
 
 ```bash
-python manage.py jobs_engine --channels emails --max-workers 20
-python manage.py jobs_engine --channels heavy --max-workers 5
+python -m mojo.apps.jobs.cli engine start --channels emails
+python -m mojo.apps.jobs.cli engine start --channels heavy --runner-id heavy-engine
 ```
+
+`--channels` overrides `JOBS_CHANNELS` for that process; `--runner-id` gives a
+second engine on the same box its own identity and pidfile.
+
+### Upgrade note — explicit `JOBS_CHANNELS`
+
+`publish()` used to reroute any channel missing from `JOBS_CHANNELS` onto
+`default`. It no longer does. If you set `JOBS_CHANNELS` by hand, framework jobs
+now ride their own queues, so **add every channel you actually use** to some
+engine's list — at minimum the `DEFAULT_CHANNELS` entries for the features you
+run (`renditions` for fileman, `certs` for dnsman certificates,
+`incident_handlers`, `webhooks`, `webhook_fanout`, `cleanup`, `priority`), plus
+any `ScheduledTask.channel` values.
+
+You do not have to get this right from memory: a queue with jobs and no live
+consumer raises a `jobs:unconsumed_channel` incident within ~5 minutes, naming
+the channel. React to it — queued jobs still expire after
+`JOBS_DEFAULT_EXPIRES_SEC`.
+
+### Channel names
+
+Non-empty strings; `publish()` raises `ValueError` on an empty channel. Avoid
+colons (the engine derives the channel from the queue key's last colon segment)
+and keep the set bounded — each channel gets its own metric slug.
 
 ## Engine Configuration
 

@@ -34,9 +34,9 @@ Rapid re-posts of `{"action": "mark_as_completed"}` (double-click, client retry)
 
 ### Why a dedicated channel
 
-ffmpeg/Pillow work can be long and memory-heavy. Running it on the `renditions` channel lets ops point a specialized worker pool at it (e.g., `--channels renditions --max-workers 2`) without slowing the default channel.
+ffmpeg/Pillow work can be long and memory-heavy. Running it on the `renditions` channel lets ops point a specialized worker pool at it (e.g., `python -m mojo.apps.jobs.cli engine start --channels renditions`) without slowing the default channel.
 
-If the `renditions` channel is not listed in `JOBS_CHANNELS`, the publish falls back to `default` with a warning — work still happens, it just shares a pool.
+`renditions` is in `JOBS_CHANNELS`' default list, so it is consumed out of the box. If you set `JOBS_CHANNELS` explicitly, include `renditions` in some engine's list — the job stays on the `renditions` queue rather than falling back to `default`, and an unconsumed queue raises a `jobs:unconsumed_channel` incident. See [Jobs — Channels](../jobs/publishing.md#channels).
 
 ## Handlers
 

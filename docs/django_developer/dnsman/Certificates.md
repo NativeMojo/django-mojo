@@ -127,9 +127,11 @@ and no second auth surface — the job channel already exists.
 The payoff is operational: **standing up a replacement host is a sync, not a
 reissue.** No new CA order, no rate-limit exposure, and hosts stay disposable.
 
-> `jobs.publish` silently falls back to the `default` channel when the
-> configured channel is absent from `JOBS_CHANNELS`. Add `certs` to the
-> consuming runner's channel list or the broadcast lands where nobody listens.
+> `jobs.publish` routes to the channel it is given — the broadcast always goes
+> to the configured channel. `certs` (the default) ships in `JOBS_CHANNELS`'
+> default list. If you set `JOBS_CHANNELS` explicitly, or override
+> `DNSMAN_CERT_SYNC_CHANNEL`, make sure a runner consumes that channel; an
+> unconsumed queue raises a `jobs:unconsumed_channel` incident.
 
 ## Staging is the default
 

@@ -1,5 +1,65 @@
 ## Unreleased
 
+**BREAKING (jobs)** — **`jobs.publish()` now routes to the channel you name and
+never reroutes (maestro item 906).** It used to validate the requested channel
+against the *publishing box's own* `JOBS_CHANNELS` and silently redirect anything
+unlisted to `"default"` — while returning success. One setting meant both "what
+this box consumes" and "what this box may target", which made cross-box routing
+impossible: publishing to another box's dedicated channel either got rerouted
+onto the publisher's own engine (work lost, publish reported success), or
+required listing the channel and thereby competing for its jobs. Redis queues are
+created on first push, so a channel never needed publisher-side declaration.
+
+**What to check before upgrading.** If you set `JOBS_CHANNELS` explicitly,
+framework jobs now ride their own queues instead of collapsing onto `default`.
+Add every channel you actually use to some engine's consume list: `renditions`
+(fileman), `certs` (dnsman certificates — or your
+`DNSMAN_CERT_SYNC_CHANNEL` override), `incident_handlers`, `webhooks`,
+`webhook_fanout`, `cleanup`, `priority`, plus any `ScheduledTask.channel` values.
+Deployments that never set `JOBS_CHANNELS` need no action — its default is now
+`mojo.apps.jobs.DEFAULT_CHANNELS`, which covers every channel the framework
+publishes to. You do not have to get the list right from memory: see the new
+alert below. Note that queued jobs still expire after
+`JOBS_DEFAULT_EXPIRES_SEC`, so an unconsumed channel is time-sensitive.
+
+Also in this change:
+
+- **A queue with no consumer is now loud.** New `check_unconsumed_channels` cron
+  (every 5 min) reports a `jobs:unconsumed_channel` incident for any queue that
+  has jobs and no live runner heartbeat naming its channel — the channel, the
+  depth, and what to do. This is the safety net that replaces the silent
+  reroute: a typo or a missing worker surfaces as an alert instead of as work
+  that quietly ran on the wrong box. A channel with a live consumer is never
+  reported (a backlog there is capacity, not routing).
+- **`--channels a,b` and `--runner-id` on the jobs CLI**, for `engine
+  start|foreground` and (`--channels`) `scheduler start|foreground`. A box can
+  now consume a narrower set than it publishes to without touching settings.
+  `--runner-id` also scopes the "already running" pidfile check, so a second
+  engine can run alongside the first on one host. The `--channels` flag the docs
+  previously showed on a `manage.py jobs_engine` command never existed — that
+  command does not exist; the real entry point is `python -m mojo.apps.jobs.cli`.
+- **Hostname channels.** Each engine also consumes a channel named after its own
+  host (lowercased, `.`/`_` → `-`), so `jobs.publish(..., channel="web-01")`
+  targets exactly that box with no configuration. `JOBS_HOSTNAME_CHANNEL = False`
+  opts out.
+- **The scheduler now covers the whole cluster.** It is a singleton (leadership
+  lock) but promoted only its *own* box's `JOBS_CHANNELS`, so in any multi-box
+  topology the lock winner silently stalled every other box's delayed jobs **and
+  engine retries** (retries route through the same sched ZSET). Started without
+  `--channels` it now serves `JOBS_CHANNELS` united with a Redis registry of
+  channels that have scheduled work — written at publish/retry time, refreshed
+  every 5s, and seeded once at startup from pre-existing sched keys. This is a
+  behavior change for anyone who relied on a narrow scheduler list to hold a
+  channel's delayed jobs: the sanctioned tool for that is the per-channel pause
+  flag, which auto mode still honors. An explicit `--channels`/`channels=` list
+  still pins the scheduler exactly as before.
+- **`publish(channel="")` / `None` now raises `ValueError`** instead of minting a
+  `queue:None` key that no engine would ever read.
+- The fallback's own warning never named the channel — `logit.warning` does no
+  `%s` interpolation, so logs read `channel '%s' not in JOBS_CHANNELS`
+  literally. Moot now that the fallback is gone, but it is why this went
+  unnoticed for so long.
+
 ## v1.2.61 - July 29, 2026
 
 hotfix for bad template

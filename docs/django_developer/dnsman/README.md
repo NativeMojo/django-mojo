@@ -198,9 +198,11 @@ order, no rate-limit exposure, and hosts stay disposable.
 | `DNSMAN_CERT_SYNC_CHANNEL` | `"certs"` | Channel for the cert-updated broadcast |
 | `DNSMAN_DNS_PROPAGATION_TIMEOUT` | `300` | Seconds to wait for authoritative visibility |
 
-`jobs.publish` silently falls back to the `default` channel when the configured
-channel is not in `JOBS_CHANNELS` — add `certs` to the runner's channel list, or
-the broadcast lands somewhere you are not listening.
+`jobs.publish` routes to the channel it is given, so the broadcast always lands
+on this channel. `certs` (the default) is in `JOBS_CHANNELS`' default list and is
+consumed out of the box; if you set `JOBS_CHANNELS` explicitly — or override
+`DNSMAN_CERT_SYNC_CHANNEL` — make sure some engine consumes it, or the broadcast
+sits on a queue nobody reads (which raises a `jobs:unconsumed_channel` incident).
 
 ## Further reading
 

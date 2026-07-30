@@ -254,24 +254,82 @@ Empty list if no runners respond.
 
 ## Channels
 
-Channels route jobs to specific worker pools. Run separate engine processes per channel:
-
-```bash
-# Email worker pool
-python manage.py jobs_engine --channels emails --max-workers 20
-
-# Heavy processing pool
-python manage.py jobs_engine --channels heavy --max-workers 5
-
-# Default catches everything else
-python manage.py jobs_engine --channels default --max-workers 10
-```
-
-Configure available channels in settings:
+A channel is a named queue. **A job goes to the channel you name — always.**
+Publishing is never validated against this box's configuration, so you can hand
+work to a queue this box does not consume. That is the whole point: it is how one
+box gives work to another.
 
 ```python
-JOBS_CHANNELS = ['default', 'emails', 'webhooks', 'webhook_fanout', 'heavy', 'maintenance']
+# Lands on "sites" even if this box's JOBS_CHANNELS does not include it.
+jobs.publish("myapp.services.deploy.run", {"site_id": 7}, channel="sites")
 ```
+
+Redis queues are created on first push, so a channel needs no declaration
+anywhere before you publish to it. An empty channel raises `ValueError`.
+
+`JOBS_CHANNELS` is a **consume** list: what this box's engine pulls from. Run
+engines per channel with the jobs CLI:
+
+```bash
+python -m mojo.apps.jobs.cli engine start --channels emails
+python -m mojo.apps.jobs.cli engine start --channels heavy --runner-id heavy-engine
+```
+
+`--channels` overrides `JOBS_CHANNELS` for that process, which is what lets a box
+consume a narrower set than it publishes to. `--runner-id` gives a second engine
+on the same host its own identity and pidfile.
+
+### Cross-box routing
+
+An API box that also runs an engine, handing deploys to a dedicated worker box:
+
+```python
+# API box — publishes to "sites", never consumes it
+JOBS_CHANNELS = ["default"]
+```
+
+```python
+# Worker box — consumes only "sites"
+JOBS_CHANNELS = ["sites"]
+```
+
+```bash
+# ...or without touching settings on the worker box:
+python -m mojo.apps.jobs.cli engine start --channels sites
+```
+
+Nothing on the API box can claim a `sites` job, so the work runs where it must.
+
+### Targeting one specific box
+
+Every engine also consumes a channel named after its own host (the hostname
+lowercased, with `.` and `_` turned into `-`), so you can address a single box
+with no configuration at all:
+
+```python
+jobs.publish("myapp.services.cache.purge", {}, channel="web-01")
+```
+
+Set `JOBS_HOSTNAME_CHANNEL = False` to opt out.
+
+### When nobody is listening
+
+A job published to a channel no engine consumes waits on its queue. Within about
+five minutes the framework raises a `jobs:unconsumed_channel` incident naming the
+channel and its depth, so a typo or a missing worker surfaces as an alert rather
+than as work that silently ran in the wrong place. Queued jobs still expire after
+`JOBS_DEFAULT_EXPIRES_SEC`, so treat that incident as actionable.
+
+A channel with a live consumer is never reported — a backlog there is a capacity
+question, not a routing mistake.
+
+### Framework channels
+
+`JOBS_CHANNELS` defaults to `mojo.apps.jobs.DEFAULT_CHANNELS`, which covers every
+channel the framework publishes to (`default`, `priority`, `cleanup`,
+`incident_handlers`, `renditions`, `certs`, `webhooks`, `webhook_fanout`) — so an
+unconfigured deployment runs all of it. If you set `JOBS_CHANNELS` explicitly,
+see the [upgrade note](settings.md#upgrade-note--explicit-jobs_channels).
 
 The `webhook_fanout` channel is used by the framework's `WebhookSubscription` fan-out dispatcher (see [account — Webhook Subscriptions](../account/webhook_subscriptions.md)). It executes the DB query + per-row enqueue step; individual HTTP deliveries run on the `webhooks` channel. Keeping them on separate channels prevents fan-out coordination work from competing with HTTP delivery slots under load.
 
