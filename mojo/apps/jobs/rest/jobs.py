@@ -147,7 +147,8 @@ def on_health_overview(request):
     try:
         manager = get_manager()
 
-        channels = settings.get('JOBS_CHANNELS', ['default'])
+        from mojo.apps.jobs import DEFAULT_CHANNELS
+        channels = settings.get('JOBS_CHANNELS', DEFAULT_CHANNELS)
         health_data = {}
 
         for channel in channels:

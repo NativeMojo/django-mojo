@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.db.models import Q
 from mojo.apps.jobs.adapters import get_adapter
 from mojo.apps.jobs.keys import JobKeys
+from mojo.apps.jobs import DEFAULT_CHANNELS
 from mojo.helpers.settings import settings
 
 from datetime import datetime
@@ -43,7 +44,7 @@ def on_get_config(request):
             'runner_heartbeat_sec': settings.get('JOBS_RUNNER_HEARTBEAT_SEC', 5),
             'scheduler_lock_ttl_ms': settings.get('JOBS_SCHEDULER_LOCK_TTL_MS', 5000),
         },
-        'channels': settings.get('JOBS_CHANNELS', ['default'])
+        'channels': settings.get('JOBS_CHANNELS', DEFAULT_CHANNELS)
     }
 
     return JsonResponse({
