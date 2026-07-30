@@ -113,7 +113,10 @@
             loginMethods: LOGIN_METHODS,
             passkeyPrompt: PASSKEY_PROMPT,
             groupUuid: GROUP_UUID,
-            backUrl: paramBack,
+            // Sanitized (see safeBackHref below — function declarations hoist).
+            // Page scripts read this straight into an href, so it must never
+            // carry a javascript:/data: URL either.
+            backUrl: safeBackHref(paramBack) || "",
             params: params,
         };
 
@@ -174,16 +177,20 @@
                     return;
                 }
 
-                MojoAuth.requestHandoffCode()
+                MojoAuth.requestHandoffCode(target)
                     .then(function (d) {
                         var sep = target.indexOf('?') === -1 ? '?' : '&';
                         window.location.href = target + sep + 'auth_code=' + encodeURIComponent(d.code);
                     })
                     .catch(function () {
-                        // Best-effort: if handoff issuance fails, fall back to a
-                        // plain redirect \u2014 the app may still loop back, but no
-                        // worse than today's behaviour.
-                        window.location.href = target;
+                        // The server refuses to mint a code for a destination it
+                        // does not allow. Navigating anyway would defeat that
+                        // check \u2014 it is the same crafted ?redirect= link, just
+                        // without the code. Show the error and stay put.
+                        window._mat.hideOverlay();
+                        window._mat.showMessage(
+                            "That destination isn't allowed. Please return to the app and try again.",
+                            "error");
                     });
             },
             onAuthSuccess: function () {
@@ -192,10 +199,31 @@
             },
         };
 
-        // Override "Back to website" link when ?back= param is present
+        // Override "Back to website" link when ?back= param is present.
+        //
+        // ?back= is attacker-controllable, and an href is a script sink: a
+        // javascript: (or data:) URL here executes in the auth origin the
+        // moment the visitor clicks "Back". Only http/https absolute URLs and
+        // same-origin relative paths are accepted. The HOST is deliberately not
+        // allowlisted — "back to the marketing site" is legitimately
+        // cross-origin, and the scheme check is what closes the hole.
+        function safeBackHref(raw) {
+            if (!raw) return null;
+            // Leading "//" is protocol-relative — an absolute cross-origin URL
+            // wearing a relative URL's clothes. Resolve everything and judge
+            // the result's protocol, which is the only thing that decides
+            // whether a click runs script.
+            var resolved;
+            try { resolved = new URL(raw, window.location.href); }
+            catch (e) { return null; }
+            if (resolved.protocol !== "http:" && resolved.protocol !== "https:") return null;
+            return resolved.href;
+        } // end safeBackHref
+
         if (paramBack) {
+            var backHref = safeBackHref(paramBack);
             var backEl = $("mat-hero-back");
-            if (backEl) { backEl.href = paramBack; backEl.style.display = ""; }
+            if (backEl && backHref) { backEl.href = backHref; backEl.style.display = ""; }
         }
 
         // Init MojoAuth — API_BASE defaults to current origin (same-server API)
