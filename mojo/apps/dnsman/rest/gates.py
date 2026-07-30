@@ -35,11 +35,17 @@ def require_platform_admin(request, what):
     `what` names the operation and is echoed in the refusal, so a denied caller
     learns which surface refused them and nothing about what exists behind it.
     """
+    # `branch` is carried into the incident the dispatcher emits
+    # (mojo/decorators/http.py), so a denial on a PLATFORM boundary is
+    # separable from the ordinary tenant denials it would otherwise be pooled
+    # with. These are the ones worth alerting on.
     if is_key_backed_session(request):
         raise me.PermissionDeniedException(
             f"{what} is restricted to platform administrators "
-            f"and cannot be performed with an API key")
+            f"and cannot be performed with an API key",
+            branch="dnsman.platform_admin.api_key")
     if not getattr(request.user, "is_superuser", False):
         raise me.PermissionDeniedException(
-            f"{what} is restricted to platform administrators")
+            f"{what} is restricted to platform administrators",
+            branch="dnsman.platform_admin.not_superuser")
     return True

@@ -351,11 +351,21 @@ def discover_house_domains(untracked_only=False):
             # adoptability is affected (see below).
             private_names.add(key)
             continue
-        public_names.add(key)
         row = rows.get(key) or _discovery_row(key, _adoptable, _reason)
+        if key in public_names:
+            # Route53 permits several public zones for one name. Discovery would
+            # otherwise report the last one seen while adopt binds whatever
+            # find_zone_id returns first — a different API with a different
+            # ordering — so the operator could adopt the empty, non-delegated
+            # duplicate and believe DNS is managed when nothing resolves.
+            row.adoptable = False
+            row.reason = ("more than one public Route53 hosted zone carries this "
+                          "name — resolve the duplicate before adopting")
+        else:
+            row.hosted_zone_id = zone.id
+            row.record_count = zone.record_count
+        public_names.add(key)
         row.hosted_zone = True
-        row.hosted_zone_id = zone.id
-        row.record_count = zone.record_count
         rows[key] = row
 
     for key in private_names - public_names:

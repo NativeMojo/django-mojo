@@ -319,3 +319,23 @@ def test_credential_masked(opts):
     assert "api_key_masked" in body, "credential detail should expose api_key_masked"
     assert "GDKEYtest1234" not in body, "credential detail leaked the raw api key"
     assert_no_secrets(resp.response, "credential detail")
+
+
+@th.django_unit_test("adopt refuses an unresolvable group_uuid, not just an unresolvable group id")
+def test_adopt_refuses_an_unresolvable_group_uuid(opts):
+    """
+    The dispatcher populates request.group from ?group_uuid= as well as ?group=.
+    Keying the guard on `group` alone would leave the uuid form taking the exact
+    silent path the guard exists to close.
+    """
+    from mojo.apps.dnsman.models import Domain
+
+    login(opts, opts.admin_email, opts.admin_pw)
+    resp = opts.client.post("/api/dnsman/registrar/adopt", json=dict(
+        group_uuid="00000000-0000-0000-0000-000000000000",
+        domain="dm-unresolvable-uuid.com"))
+    assert resp.status_code != 200, (
+        "an unresolvable group_uuid must be refused, not silently treated as "
+        f"'no group' (status {resp.status_code})")
+    assert not Domain.objects.filter(name="dm-unresolvable-uuid.com").exists(), \
+        "a refused adopt must create nothing"

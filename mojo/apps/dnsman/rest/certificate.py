@@ -33,13 +33,22 @@ def on_certificate(request, pk=None):
     """Status and renewal state. The graphs carry no PEM and no key — material
     comes only from the material endpoint below."""
     if pk is not None:
-        # Pre-fetch purely to answer "is this a house certificate?" before the
-        # generic handler's own permission pass. The default graph carries the
-        # owning domain (name, provider, status, expires) and certificate pks are
-        # sequential, so an ungated detail fetch is an enumeration oracle over
-        # the house inventory that registrar/discover keeps superuser-only.
-        _guard_house_certificate(
-            request, Certificate.get_instance_or_404(pk), "House certificates")
+        # The default graph carries the owning domain (name, provider, status,
+        # expires) and certificate pks are sequential, so an ungated detail
+        # fetch is an enumeration oracle over the house inventory that
+        # registrar/discover keeps superuser-only.
+        #
+        # The model check runs FIRST — the opposite of the registrar endpoints,
+        # and deliberately. Here it is a real gate (instance-scoped, and it
+        # correctly refuses anonymous and foreign-tenant callers), so putting
+        # the house guard ahead of it would let an unauthenticated caller tell a
+        # house certificate (403 "platform administrators") from a tenant one
+        # (401) — a free classification oracle over sequential pks. Same
+        # ordering as certificate/material below.
+        certificate = Certificate.get_instance_or_404(pk)
+        Certificate.rest_check_permission_or_raise(
+            request, ["VIEW_PERMS"], certificate)
+        _guard_house_certificate(request, certificate, "House certificates")
     return Certificate.on_rest_request(request, pk)
 
 
@@ -65,8 +74,11 @@ def on_certificate_revoke(request):
     """Revocation is irreversible and reaches the CA — the house guard below is
     the destructive twin of the read guard on the detail route."""
     certificate = Certificate.get_instance_or_404(request.DATA.get("certificate"))
-    _guard_house_certificate(request, certificate, "Revoking a house certificate")
+    # Model check first, then the house guard — same ordering and same reason as
+    # the detail route above: leading with the guard would classify house vs.
+    # tenant certificates for a caller who cannot read either.
     Certificate.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"], certificate)
+    _guard_house_certificate(request, certificate, "Revoking a house certificate")
     certs.revoke(certificate)
     return certificate.on_rest_get(request)
 

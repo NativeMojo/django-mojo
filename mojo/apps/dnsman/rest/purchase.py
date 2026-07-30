@@ -124,7 +124,12 @@ def on_registrar_adopt(request):
     # quietly produce a house domain indistinguishable from a deliberate one —
     # and assign-group only ever fires once, so it could not be corrected.
     # Same guard, same reason as rest/credential.py.
-    if "group" in request.DATA and request.group is None:
+    #
+    # BOTH keys, not just `group`: the dispatcher also populates request.group
+    # from ?group_uuid= (mojo/decorators/http.py), so keying on `group` alone
+    # leaves the uuid form taking the exact silent path this guard exists to
+    # close.
+    if ("group" in request.DATA or "group_uuid" in request.DATA) and request.group is None:
         raise me.ValueException(
             "The requested group does not exist or is not active — "
             "omit 'group' entirely to adopt this domain platform-scoped")

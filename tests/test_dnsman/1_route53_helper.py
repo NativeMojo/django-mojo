@@ -1149,3 +1149,26 @@ def test_list_hosted_zones_reports_truncation(opts):
     assert result.truncated is True, (
         "The page bound was hit while AWS still reported IsTruncated — the "
         "caller must be told the zone inventory is partial")
+
+
+@th.django_unit_test()
+def test_list_registered_domains_tolerates_an_unparseable_name(opts):
+    """
+    One odd registrar row must not blank the whole inventory. normalize_name
+    raises on whitespace and '/', and this is a LISTING, not a lookup — the raw
+    value comes back lowercased and the caller flags it.
+    """
+    from mojo.helpers.aws import route53
+
+    client = _client(list_domains={"Domains": [
+        {"DomainName": "bad name.com"},
+        {"DomainName": "Good.com"},
+    ]})
+    with patch(f"{MODULE}._domains_client", return_value=client):
+        result = route53.list_registered_domains()
+
+    names = [d.name for d in result.domains]
+    assert "good.com" in names, (
+        f"a valid name must survive alongside an invalid one, got {names}")
+    assert "bad name.com" in names, (
+        f"the unparseable name should come back raw, not drop the listing; got {names}")

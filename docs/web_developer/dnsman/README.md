@@ -40,7 +40,10 @@ UI must gate on these, or it renders controls that 403.**
 - `certificate/material/<pk>` — requires `manage_dns`, not `view_dns`. Being
   allowed to see that a certificate exists is not the same as being allowed to
   hold its private key. For a domain with **no group** (a house/platform
-  domain) it additionally requires a superuser.
+  domain) it additionally requires a superuser — and so do `GET
+  /api/dnsman/certificate/<pk>` and `POST /api/dnsman/certificate/revoke` for
+  a certificate on that same domain. Only the per-instance routes carry this
+  guard; the list route (`GET /api/dnsman/certificate`) is unaffected.
 - **`GET /api/dnsman/whois`** — requires `manage_dns` despite being a read. The
   registrar returns the real registrant name, street address, phone and email to
   the account owner *regardless of WHOIS privacy*, so this is PII and a

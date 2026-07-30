@@ -315,3 +315,37 @@ def test_discovery_creates_nothing(opts):
     assert before == after, (
         f"discovery must be read-only — Domain count moved from {before} to "
         f"{after}. Ingest is an explicit adopt call, never a side effect of listing")
+
+
+@th.django_unit_test("duplicate public zones for one name are flagged, not silently collapsed")
+def test_duplicate_public_zones_flagged(opts):
+    """
+    Route53 permits several public zones for the same name. Collapsing to
+    last-wins would show one zone id while adopt binds whatever find_zone_id
+    returns first — a different API with a different ordering — so the operator
+    could adopt the empty, non-delegated duplicate and believe DNS is managed.
+    """
+    result = _discover(_registered(), _zones("disc-dupe.com", "disc-dupe.com"))
+
+    rows = _by_name(result)
+    row = rows.get("disc-dupe.com")
+    assert row is not None, "the duplicated name must still be listed"
+    assert row.adoptable is False, (
+        "a name with more than one public hosted zone must not be offered for "
+        "adoption — dnsman cannot tell which zone adopt would bind")
+    assert row.reason and "more than one" in row.reason.lower(), \
+        f"the row must say the zones are duplicated, got {row.reason!r}"
+
+
+@th.django_unit_test("an unparseable registered name is listed, not fatal")
+def test_unparseable_registered_name(opts):
+    """The registrar path must be as tolerant as the zone path — a listing that
+    dies on one odd row is a listing nobody can trust."""
+    result = _discover(_registered("disc-ok.com", "bad name.com"), _zones())
+
+    rows = _by_name(result)
+    assert "disc-ok.com" in rows, \
+        f"a good registration must survive a bad one; got {sorted(rows)}"
+    bad = rows.get("bad name.com")
+    assert bad is not None, f"the odd row should still be listed; got {sorted(rows)}"
+    assert bad.adoptable is False, "a name that will not normalize cannot be adopted"

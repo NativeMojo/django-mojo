@@ -551,8 +551,17 @@ def list_registered_domains(access_key=None, secret_key=None, max_pages=20):
             name = entry.get("DomainName")
             if not name:
                 continue
+            try:
+                name = normalize_name(name)
+            except me.ValueException:
+                # One unparseable registrar row must not blank the whole
+                # inventory — this is a listing, not a lookup. Hand the raw
+                # value back lowercased and let the caller decide; dnsman's
+                # discovery flags anything that will not normalize as
+                # un-adoptable rather than dropping or exploding on it.
+                name = name.strip().lower().rstrip(".")
             domains.append(objict(
-                name=normalize_name(name),
+                name=name,
                 auto_renew=entry.get("AutoRenew"),
                 transfer_lock=entry.get("TransferLock"),
                 expires=entry.get("Expiry")))
