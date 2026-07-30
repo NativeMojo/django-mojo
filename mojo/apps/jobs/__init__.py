@@ -16,8 +16,28 @@ from mojo.apps import metrics
 from .keys import JobKeys
 from .adapters import get_adapter
 
-# Module-level settings for readability
-JOB_CHANNELS = settings.get_static('JOBS_CHANNELS', ['default'])
+# Channels the framework itself publishes to. This is the JOBS_CHANNELS
+# default, so an out-of-the-box deployment consumes everything the framework
+# can produce. Publishing does NOT consult this list — it exists purely so a
+# box that never configures JOBS_CHANNELS still runs framework jobs now that
+# publish() no longer reroutes unlisted channels to "default".
+#
+# "certs" covers the DEFAULT of DNSMAN_CERT_SYNC_CHANNEL; override that setting
+# and you must add your channel to some consumer's list.
+DEFAULT_CHANNELS = [
+    'default',
+    'priority',
+    'cleanup',
+    'incident_handlers',
+    'renditions',
+    'certs',
+    'webhooks',
+    'webhook_fanout',
+]
+
+# Module-level settings for readability. JOB_CHANNELS is the box's CONSUME
+# list; publish() does not read it (kept for import compatibility).
+JOB_CHANNELS = settings.get_static('JOBS_CHANNELS', DEFAULT_CHANNELS)
 JOBS_PAYLOAD_MAX_BYTES = settings.get_static('JOBS_PAYLOAD_MAX_BYTES', 16384)
 JOBS_DEFAULT_EXPIRES_SEC = settings.get_static('JOBS_DEFAULT_EXPIRES_SEC', 900)
 JOBS_DEFAULT_MAX_RETRIES = settings.get_static('JOBS_DEFAULT_MAX_RETRIES', 0)
@@ -33,7 +53,45 @@ __all__ = [
     'cancel',
     'status',
     'get_sysinfo',
+    'register_sched_channel',
+    'get_sched_channels',
 ]
+
+
+def register_sched_channel(channel):
+    """
+    Record that `channel` has scheduled (delayed or retrying) work.
+
+    The cluster runs ONE scheduler, but each box configures only the channels
+    it consumes. Without this registry the lock-winning scheduler would never
+    promote another box's delayed jobs. Called by every writer that puts a job
+    into a sched ZSET.
+
+    Never raises: losing a registry write degrades promotion latency, it must
+    not fail the publish that triggered it.
+    """
+    try:
+        get_adapter().get_client().sadd(JobKeys().sched_registry(), channel)
+    except Exception as e:
+        logit.warning(f"jobs: failed to register sched channel {channel}: {e}")
+
+
+def get_sched_channels():
+    """
+    Channels known to have scheduled work — see register_sched_channel().
+
+    Returns a sorted list, empty if the registry is unreadable (the caller
+    falls back to its configured list).
+    """
+    try:
+        members = get_adapter().get_client().smembers(JobKeys().sched_registry())
+    except Exception as e:
+        logit.warning(f"jobs: failed to read the sched registry: {e}")
+        return []
+    return sorted(
+        m.decode('utf-8') if isinstance(m, (bytes, bytearray)) else m
+        for m in (members or [])
+    )
 
 
 def publish(
@@ -58,7 +116,9 @@ def publish(
     Args:
         func: Job function (registered name or callable with _job_name)
         payload: Data to pass to the job handler
-        channel: Channel to publish to (default: "default")
+        channel: Channel to publish to (default: "default"). Used verbatim —
+            the job lands on this channel whether or not this box consumes it,
+            which is how work is handed to another box. Must be non-empty.
         delay: Delay in seconds from now
         run_at: Specific time to run the job (overrides delay)
         broadcast: If True, all runners on the channel will execute
@@ -85,6 +145,11 @@ def publish(
     else:
         func_path = func
 
+    # A channel is required: an empty one would mint a "...queue:None" key and
+    # strand the job on a queue no engine will ever name.
+    if not channel or not isinstance(channel, str):
+        raise ValueError(f"Job channel must be a non-empty string, got {channel!r}")
+
     # Validate payload
     payload = payload or {}
     if not isinstance(payload, dict):
@@ -97,13 +162,13 @@ def publish(
     if len(payload_json.encode('utf-8')) > max_bytes:
         raise ValueError(f"Payload exceeds maximum size of {max_bytes} bytes")
 
-    # Validate channel against configured channels — fall back to "default"
-    # if the requested channel is not configured, so projects work out of
-    # the box without listing every possible channel in JOBS_CHANNELS.
-    configured_channels = JOB_CHANNELS if isinstance(JOB_CHANNELS, list) else [JOB_CHANNELS]
-    if channel not in configured_channels:
-        logit.warning("jobs.publish: channel '%s' not in JOBS_CHANNELS, falling back to 'default'", channel)
-        channel = "default"
+    # The requested channel is used verbatim. Publishing is deliberately NOT
+    # validated against this box's JOBS_CHANNELS: that conflated "what I
+    # consume" with "what I may target" and made it impossible to hand work to
+    # another box. Redis queues spring into existence on first push, so a
+    # channel needs no publisher-side declaration; a channel nobody consumes is
+    # surfaced by the jobs:unconsumed_channel incident (see cronjobs), not by
+    # silently running the job somewhere it does not belong.
 
     # Generate job ID
     job_id = uuid.uuid4().hex  # UUID without dashes
@@ -188,6 +253,10 @@ def publish(
             score = run_at.timestamp() * 1000  # milliseconds
             target_zset = keys.sched_broadcast(channel) if broadcast else keys.sched(channel)
             redis.zadd(target_zset, {job_id: score})
+
+            # So the cluster's single scheduler promotes this even if the box it
+            # runs on does not consume `channel`.
+            register_sched_channel(channel)
 
             # Record scheduled event
             JobEvent.objects.create(

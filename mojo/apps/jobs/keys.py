@@ -114,6 +114,20 @@ class JobKeys:
         """
         return f"{self.prefix}:sched_broadcast:{channel}"
 
+    def sched_registry(self) -> str:
+        """
+        SET of channels known to have scheduled/retrying work.
+
+        The cluster runs a single Scheduler, but each box configures only its
+        own channels — so the lock winner needs to know about channels it does
+        not consume, or the other boxes' delayed jobs never get promoted.
+        Writers SADD here whenever they put a job in a sched ZSET.
+
+        Deliberately not under `sched:` — the seed scan matches `sched:*` and
+        must not pick up this key as if it were a channel.
+        """
+        return f"{self.prefix}:sched_registry"
+
     def reaper_lock(self, channel: str) -> str:
         """
         Per-channel lock key for the reaper (to avoid races).

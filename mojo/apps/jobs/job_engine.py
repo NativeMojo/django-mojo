@@ -34,13 +34,27 @@ from mojo.helpers import dates
 logger = logit.get_logger("jobs", "jobs.log", debug=True)
 
 
+from . import DEFAULT_CHANNELS, register_sched_channel
+
 JOBS_ENGINE_CLAIM_BATCH = settings.get_static('JOBS_ENGINE_CLAIM_BATCH', 5)
-JOBS_CHANNELS = settings.get_static('JOBS_CHANNELS', ['default'])
+JOBS_CHANNELS = settings.get_static('JOBS_CHANNELS', DEFAULT_CHANNELS)
 JOBS_ENGINE_MAX_WORKERS = settings.get_static('JOBS_ENGINE_MAX_WORKERS', 10)
 JOBS_ENGINE_CLAIM_BUFFER = settings.get_static('JOBS_ENGINE_CLAIM_BUFFER', 2)
 JOBS_RUNNER_HEARTBEAT_SEC = settings.get_static('JOBS_RUNNER_HEARTBEAT_SEC', 5)
 JOBS_VISIBILITY_TIMEOUT_MS = settings.get_static('JOBS_VISIBILITY_TIMEOUT_MS', 30000)
 JOBS_DEBUG = settings.get_static('JOBS_DEBUG', False)
+JOBS_HOSTNAME_CHANNEL = settings.get_static('JOBS_HOSTNAME_CHANNEL', True)
+
+
+def host_channel() -> str:
+    """
+    This box's own channel name, derived from the hostname.
+
+    Every engine consumes it (unless JOBS_HOSTNAME_CHANNEL is False), so any
+    publisher can address one specific box with no configuration at all:
+    jobs.publish(..., channel=host_channel_of_that_box).
+    """
+    return socket.gethostname().lower().replace('.', '-').replace('_', '-')
 
 
 def load_job_function(func_path: str) -> Callable:
@@ -72,11 +86,17 @@ class JobEngine:
         Initialize the job engine.
 
         Args:
-            channels: List of channels to consume from (default: from settings.JOBS_CHANNELS)
+            channels: List of channels to consume from (default: from
+                settings.JOBS_CHANNELS). This box's own host channel is
+                appended unless JOBS_HOSTNAME_CHANNEL is False.
             runner_id: Unique runner identifier (auto-generated if not provided)
             max_workers: Maximum thread pool workers (default from settings)
         """
-        self.channels = channels or JOBS_CHANNELS
+        # list() matters: appending the host channel to the module-level
+        # JOBS_CHANNELS would mutate it for every later engine in this process.
+        self.channels = list(channels or JOBS_CHANNELS)
+        if JOBS_HOSTNAME_CHANNEL and host_channel() not in self.channels:
+            self.channels.append(host_channel())
         self.runner_id = runner_id or self._generate_runner_id()
         self.redis = get_adapter()
         self.keys = JobKeys()
@@ -118,15 +138,8 @@ class JobEngine:
                   f"channels={self.channels}")
 
     def _generate_runner_id(self) -> str:
-        """Generate a consistent runner ID based on hostname and channels."""
-        hostname = socket.gethostname()
-        # Clean hostname for use in ID (remove dots, make lowercase)
-        clean_hostname = hostname.lower().replace('.', '-').replace('_', '-')
-
-        # # Create a consistent suffix based on channels served
-        # channels_hash = hash(tuple(sorted(self.channels))) % 10000
-
-        return f"{clean_hostname}-engine"
+        """Generate a consistent runner ID based on hostname."""
+        return f"{host_channel()}-engine"
 
     def initialize(self):
         if (self.is_initialized):
@@ -719,6 +732,10 @@ class JobEngine:
                 score = job.run_at.timestamp() * 1000
                 target_zset = self.keys.sched_broadcast(job.channel) if job.broadcast else self.keys.sched(job.channel)
                 self.redis.zadd(target_zset, {job_id: score})
+
+                # A retry is scheduled work: register the channel so whichever
+                # box holds the scheduler lock promotes it back onto the queue.
+                register_sched_channel(job.channel)
 
                 metrics.record("jobs.retried")
             else:
