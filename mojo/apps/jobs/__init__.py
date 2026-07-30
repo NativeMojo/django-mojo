@@ -80,14 +80,12 @@ def get_sched_channels():
     """
     Channels known to have scheduled work — see register_sched_channel().
 
-    Returns a sorted list, empty if the registry is unreadable (the caller
-    falls back to its configured list).
+    Returns a sorted list; an empty list means the registry is genuinely empty.
+    Redis errors PROPAGATE on purpose: a caller that merges this into its own
+    channel list has to tell "nothing registered" apart from "could not read",
+    or a transient blip would silently drop channels it was already serving.
     """
-    try:
-        members = get_adapter().get_client().smembers(JobKeys().sched_registry())
-    except Exception as e:
-        logit.warning(f"jobs: failed to read the sched registry: {e}")
-        return []
+    members = get_adapter().get_client().smembers(JobKeys().sched_registry())
     return sorted(
         m.decode('utf-8') if isinstance(m, (bytes, bytearray)) else m
         for m in (members or [])

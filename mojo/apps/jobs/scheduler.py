@@ -29,14 +29,14 @@ from . import DEFAULT_CHANNELS, get_sched_channels, register_sched_channel
 
 # Module-level settings (readability)
 JOBS_CHANNELS = settings.get_static('JOBS_CHANNELS', DEFAULT_CHANNELS)
+JOBS_SCHEDULER_LOCK_TTL_MS = settings.get_static('JOBS_SCHEDULER_LOCK_TTL_MS', 5000)
+JOBS_STREAM_MAXLEN = settings.get_static('JOBS_STREAM_MAXLEN', 100000)
+JOBS_DEBUG = settings.get_static('JOBS_DEBUG', False)
 
 # How often auto mode re-reads the sched registry. Cheap (one SMEMBERS on a
 # handful of names), but it runs inside the loop that must renew a 5s
 # leadership lock, so it is not done every cycle.
 CHANNEL_REFRESH_SEC = 5
-JOBS_SCHEDULER_LOCK_TTL_MS = settings.get_static('JOBS_SCHEDULER_LOCK_TTL_MS', 5000)
-JOBS_STREAM_MAXLEN = settings.get_static('JOBS_STREAM_MAXLEN', 100000)
-JOBS_DEBUG = settings.get_static('JOBS_DEBUG', False)
 
 
 
@@ -95,19 +95,16 @@ class Scheduler:
                   f"channels={self.channels}")
 
     def _get_all_channels(self) -> List[str]:
-        """Configured channels, as a copy we are free to extend."""
-        return list(JOBS_CHANNELS or DEFAULT_CHANNELS)
-
-    def _configured_channels(self) -> List[str]:
-        """The settings-derived floor for auto mode."""
+        """Configured channels (the auto-mode floor), as a copy we may extend."""
         return list(JOBS_CHANNELS or DEFAULT_CHANNELS)
 
     def _refresh_channels(self):
         """
         In auto mode, union the configured channels with the sched registry.
 
-        A registry read that fails leaves the current list in place — the loop
-        must keep promoting whatever it already knows about.
+        A registry read that fails leaves the current list untouched — the loop
+        must keep promoting the channels it already knows about rather than
+        shrinking back to this box's own on a transient Redis error.
         """
         if not self.auto_channels:
             return
@@ -120,10 +117,10 @@ class Scheduler:
         try:
             registered = get_sched_channels()
         except Exception as e:
-            logger.debug(f"Channel refresh failed, keeping {len(self.channels)} channels: {e}")
+            logger.warning(f"Channel refresh failed, still serving {self.channels}: {e}")
             return
 
-        merged = sorted(set(self._configured_channels()) | set(registered))
+        merged = sorted(set(self._get_all_channels()) | set(registered))
         if merged != self.channels:
             added = sorted(set(merged) - set(self.channels))
             if added:

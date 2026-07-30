@@ -251,6 +251,33 @@ def test_scheduler_explicit_channels_are_pinned(opts):
     )
 
 
+@th.django_unit_test("a failed registry read leaves the scheduler's channels alone")
+def test_scheduler_keeps_channels_when_registry_unreadable(opts):
+    """A transient Redis error must not shrink the scheduler back to this box's
+    own channels — that would stall every other box's delayed jobs until the
+    next successful refresh."""
+    _clear(opts)
+    from unittest import mock
+    from mojo.apps import jobs
+    from mojo.apps.jobs.scheduler import Scheduler
+
+    jobs.register_sched_channel(CH_SCHED)
+    scheduler = Scheduler(channels=None, scheduler_id="t906-resilient")
+    scheduler._refresh_channels()
+    assert CH_SCHED in scheduler.channels, "precondition: the channel should be picked up"
+
+    serving = list(scheduler.channels)
+    scheduler._last_channel_refresh = 0  # allow an immediate re-refresh
+    with mock.patch("mojo.apps.jobs.scheduler.get_sched_channels",
+                    side_effect=RuntimeError("redis down")):
+        scheduler._refresh_channels()
+
+    assert scheduler.channels == serving, (
+        f"a failed registry read must leave the channel list untouched, "
+        f"it became {scheduler.channels}"
+    )
+
+
 @th.django_unit_test("the scheduler seeds its registry from pre-existing sched keys")
 def test_scheduler_seed_scan(opts):
     """Jobs delayed before this version shipped are not in the registry."""
