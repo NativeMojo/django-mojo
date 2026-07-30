@@ -64,8 +64,8 @@
     </div>
 
     {{ login_methods|json_script:"mat-login-methods" }}
-    <script src="{{ api_base }}/api/account/static/mojo-auth.js"></script>
-    <script>
+    <script nonce="{{ csp_nonce }}" src="{{ api_base }}/api/account/static/mojo-auth.js"></script>
+    <script nonce="{{ csp_nonce }}">
     (function () {
         // API_BASE: use configured value, fall back to current origin (same-origin API)
         var API_BASE = "{{ api_base }}" || window.location.origin;

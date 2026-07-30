@@ -134,7 +134,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
 {% block page_script %}
 {{ register_fields|json_script:"reg-fields-data" }}
 {{ register_extra_fields|json_script:"reg-extra-fields-data" }}
-<script>
+<script nonce="{{ csp_nonce }}">
 (function () {
     var m = window._mat;
     var $ = m.$;
