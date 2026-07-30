@@ -4005,8 +4005,8 @@
 <h3 id="why-idempotency">Why idempotency<a class="headerlink" href="#why-idempotency" title="Permanent link">&para;</a></h3>
 <p>Rapid re-posts of <code>{"action": "mark_as_completed"}</code> (double-click, client retry) collapse to a single job via <code>idempotency_key="renditions:&lt;file_id&gt;"</code>. The renderer itself also short-circuits roles that already exist, so repeat execution is safe.</p>
 <h3 id="why-a-dedicated-channel">Why a dedicated channel<a class="headerlink" href="#why-a-dedicated-channel" title="Permanent link">&para;</a></h3>
-<p>ffmpeg/Pillow work can be long and memory-heavy. Running it on the <code>renditions</code> channel lets ops point a specialized worker pool at it (e.g., <code>--channels renditions --max-workers 2</code>) without slowing the default channel.</p>
-<p>If the <code>renditions</code> channel is not listed in <code>JOBS_CHANNELS</code>, the publish falls back to <code>default</code> with a warning — work still happens, it just shares a pool.</p>
+<p>ffmpeg/Pillow work can be long and memory-heavy. Running it on the <code>renditions</code> channel lets ops point a specialized worker pool at it (e.g., <code>python -m mojo.apps.jobs.cli engine start --channels renditions</code>) without slowing the default channel.</p>
+<p><code>renditions</code> is in <code>JOBS_CHANNELS</code>' default list, so it is consumed out of the box. If you set <code>JOBS_CHANNELS</code> explicitly, include <code>renditions</code> in some engine's list — the job stays on the <code>renditions</code> queue rather than falling back to <code>default</code>, and an unconsumed queue raises a <code>jobs:unconsumed_channel</code> incident. See <a href="../../jobs/publishing/#channels">Jobs — Channels</a>.</p>
 <h2 id="handlers">Handlers<a class="headerlink" href="#handlers" title="Permanent link">&para;</a></h2>
 <p>Both live in <code>mojo/apps/fileman/asyncjobs.py</code>.</p>
 <h3 id="process_file_renditionsjob"><code>process_file_renditions(job)</code><a class="headerlink" href="#process_file_renditionsjob" title="Permanent link">&para;</a></h3>

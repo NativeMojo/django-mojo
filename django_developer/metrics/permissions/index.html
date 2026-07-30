@@ -3788,6 +3788,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#why-public-writes-are-gated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why public writes are gated
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3914,7 +3925,7 @@
 <td><code>public</code></td>
 <td>literal</td>
 <td><code>public</code></td>
-<td>Anyone (no auth required)</td>
+<td><strong>Read</strong>: anyone (no auth). <strong>Write</strong>: <code>write_metrics</code>/<code>metrics</code>, unless explicitly opted into anonymous writes (see below)</td>
 </tr>
 <tr>
 <td><code>global</code></td>
@@ -3969,7 +3980,25 @@
 <a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        → if not set, denied
 </code></pre></div>
 <h3 id="write-permission-flow">Write Permission Flow<a class="headerlink" href="#write-permission-flow" title="Permanent link">&para;</a></h3>
-<p>Same structure, but checks <code>["write_metrics", "metrics"]</code> instead of <code>["view_metrics", "metrics"]</code>.</p>
+<p>Same structure, but checks <code>["write_metrics", "metrics"]</code> instead of
+<code>["view_metrics", "metrics"]</code> — <strong>except for <code>public</code></strong>, which is NOT an
+implicit allow on the write side:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>check_write_permissions(request, &quot;public&quot;):
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    per-account write perms == &quot;public&quot;?   → allowed (explicit opt-in)
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    per-account write perms set?           → user must have that permission
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    otherwise                              → user must have &quot;write_metrics&quot;/&quot;metrics&quot;
+</code></pre></div>
+<h3 id="why-public-writes-are-gated">Why public writes are gated<a class="headerlink" href="#why-public-writes-are-gated" title="Permanent link">&para;</a></h3>
+<p>Every distinct slug recorded becomes a permanent member of the account's slug
+registry (<code>mets:&lt;account&gt;:slugs</code>) plus never-expiring month/year counter keys.
+An anonymous writer could therefore grow Redis without bound and pollute every
+category listing. Deployments that genuinely want anonymous counters opt in
+explicitly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">metrics</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_write_perms</span><span class="p">(</span><span class="s2">&quot;public&quot;</span><span class="p">,</span> <span class="s2">&quot;public&quot;</span><span class="p">)</span>   <span class="c1"># restore anonymous public writes</span>
+</code></pre></div>
+<p>Prefer an app-specific collect endpoint that records server-side with bounded
+slug names over opening raw anonymous writes.</p>
 <h2 id="category-permission-metrics">Category Permission: <code>metrics</code><a class="headerlink" href="#category-permission-metrics" title="Permanent link">&para;</a></h2>
 <p>The <code>metrics</code> category permission grants full read+write access to all metrics across all account types (global, group, user). This is the recommended permission for admin users who need full metrics access.</p>
 <p>Fine-grained alternatives:</p>
@@ -4002,59 +4031,59 @@
 <h2 id="per-account-permission-configuration">Per-Account Permission Configuration<a class="headerlink" href="#per-account-permission-configuration" title="Permanent link">&para;</a></h2>
 <p>Custom accounts can have their own view/write permissions configured via the admin API or Python:</p>
 <h3 id="python-api">Python API<a class="headerlink" href="#python-api" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">metrics</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># Set who can view metrics for the &quot;my-app&quot; account</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_view_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">,</span> <span class="s2">&quot;view_my_app_metrics&quot;</span><span class="p">)</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># Set who can write metrics for the &quot;my-app&quot; account</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_write_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_my_app&quot;</span><span class="p">)</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="c1"># Make an account&#39;s metrics publicly viewable</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_view_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">,</span> <span class="s2">&quot;public&quot;</span><span class="p">)</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="c1"># Read current permissions</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="n">view</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">get_view_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">)</span>   <span class="c1"># returns string or None</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="n">write</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">get_write_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">)</span>  <span class="c1"># returns string or None</span>
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="c1"># List all accounts that have permissions configured</span>
-<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="n">accounts</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">list_accounts</span><span class="p">()</span>
-<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>
-<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="c1"># Remove permissions (denies all access)</span>
-<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_view_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
-<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_write_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">metrics</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># Set who can view metrics for the &quot;my-app&quot; account</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_view_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">,</span> <span class="s2">&quot;view_my_app_metrics&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1"># Set who can write metrics for the &quot;my-app&quot; account</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_write_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">,</span> <span class="s2">&quot;manage_my_app&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1"># Make an account&#39;s metrics publicly viewable</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_view_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">,</span> <span class="s2">&quot;public&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="c1"># Read current permissions</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="n">view</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">get_view_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">)</span>   <span class="c1"># returns string or None</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="n">write</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">get_write_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">)</span>  <span class="c1"># returns string or None</span>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="c1"># List all accounts that have permissions configured</span>
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="n">accounts</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">list_accounts</span><span class="p">()</span>
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>
+<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="c1"># Remove permissions (denies all access)</span>
+<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_view_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_write_perms</span><span class="p">(</span><span class="s2">&quot;my-app&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="rest-api">REST API<a class="headerlink" href="#rest-api" title="Permanent link">&para;</a></h3>
 <p>The permissions endpoint requires <code>manage_incidents</code>, <code>metrics</code>, or <code>manage_metrics</code> permission.</p>
 <p><strong>List all accounts with permissions:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/metrics/permissions
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/metrics/permissions
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="p">{</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">      </span><span class="nt">&quot;account&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;my-app&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">      </span><span class="nt">&quot;view_permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;view_my_app&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">      </span><span class="nt">&quot;write_permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;manage_my_app&quot;</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="p">],</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">      </span><span class="nt">&quot;account&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;my-app&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">      </span><span class="nt">&quot;view_permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;view_my_app&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">      </span><span class="nt">&quot;write_permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;manage_my_app&quot;</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="p">}</span>
 </code></pre></div>
 <p><strong>Get permissions for a specific account:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/metrics/permissions/&lt;account&gt;
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>GET /api/metrics/permissions/&lt;account&gt;
 </code></pre></div>
 <p><strong>Set permissions:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>POST /api/metrics/permissions/&lt;account&gt;
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>POST /api/metrics/permissions/&lt;account&gt;
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;view_permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;public&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;write_permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;manage_my_app&quot;</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;view_permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;public&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;write_permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;manage_my_app&quot;</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>Permission values are comma-separated strings. Use <code>"public"</code> to allow unauthenticated access.</p>
 <p><strong>Remove all permissions for an account:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>DELETE /api/metrics/permissions/&lt;account&gt;
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>DELETE /api/metrics/permissions/&lt;account&gt;
 </code></pre></div>
 <h2 id="group-scoped-permissions">Group-Scoped Permissions<a class="headerlink" href="#group-scoped-permissions" title="Permanent link">&para;</a></h2>
 <p>When the account is <code>group-&lt;id&gt;</code>, the system checks permissions at two levels:</p>

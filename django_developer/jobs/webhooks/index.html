@@ -4276,12 +4276,14 @@
 <a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">JOBS_WEBHOOK_USER_AGENT</span> <span class="o">=</span> <span class="s2">&quot;Django-MOJO-Webhook/1.0&quot;</span>   <span class="c1"># Outbound User-Agent; override to hide the framework</span>
 <a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">WEBHOOK_SIGNATURE_HEADER</span> <span class="o">=</span> <span class="s2">&quot;X-Mojo-Signature&quot;</span>         <span class="c1"># Signature header name; override to hide the framework (coordinate with receivers)</span>
 <a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="c1"># Include webhooks channel</span>
-<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">]</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="c1"># webhooks is in JOBS_CHANNELS&#39; default list, so it is consumed out of the</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="c1"># box. Only needed if you set JOBS_CHANNELS explicitly — see Jobs — Channels.</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">]</span>
 </code></pre></div>
 <p>Run a dedicated worker for webhooks:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>webhooks<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">20</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>python<span class="w"> </span>-m<span class="w"> </span>mojo.apps.jobs.cli<span class="w"> </span>engine<span class="w"> </span>start<span class="w"> </span>--channels<span class="w"> </span>webhooks
 </code></pre></div>
+<p>See <a href="../publishing/#channels">Jobs — Channels</a> for the consume-list/publish-target distinction and what happens if nothing consumes a channel.</p>
 <h2 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Sensitive headers (<code>Authorization</code>, <code>X-API-Key</code>, etc.) are automatically masked in logs and metadata</li>

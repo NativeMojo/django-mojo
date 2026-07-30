@@ -3763,6 +3763,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Channels">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#upgrade-note-channel-routing-changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrade note — channel routing changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#channel-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Channel names
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3959,17 +3987,84 @@
 <tbody>
 <tr>
 <td><code>JOBS_CHANNELS</code></td>
-<td><code>["default"]</code></td>
-<td>List of channels the scheduler monitors</td>
+<td><code>DEFAULT_CHANNELS</code> (see below)</td>
+<td>Channels this box <strong>consumes</strong></td>
+</tr>
+<tr>
+<td><code>JOBS_ALLOWED_CHANNELS</code></td>
+<td><code>[]</code></td>
+<td>User channels this deployment <strong>publishes</strong> to — set identically on every box</td>
+</tr>
+<tr>
+<td><code>JOBS_HOSTNAME_CHANNEL</code></td>
+<td><code>True</code></td>
+<td>Also consume the engine's box-direct channel (named after its runner id)</td>
 </tr>
 </tbody>
 </table>
-<p>Configure channels and run separate engine processes per channel:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;emails&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">,</span> <span class="s1">&#39;heavy&#39;</span><span class="p">,</span> <span class="s1">&#39;maintenance&#39;</span><span class="p">]</span>
+<p><code>JOBS_CHANNELS</code> is a <strong>consume</strong> list. Publishing is gated separately:
+<code>publish(channel=X)</code> succeeds when <code>X</code> is a framework channel
+(<code>DEFAULT_CHANNELS</code>), a channel this box consumes, a declared user channel
+(<code>JOBS_ALLOWED_CHANNELS</code>), or a box-direct channel ending <code>-engine</code>. Anything
+else raises <code>ValueError</code>, queues nothing, and files a <code>jobs:rejected_channel</code>
+incident (one per channel per hour) naming the channel and the publishing
+function. An allowed channel is routed <strong>verbatim</strong> — consumed here or not —
+which is how a box hands work to another box's dedicated channel. See
+<a href="../publishing/#channels">Publishing — Channels</a>.</p>
+<p>The default is <code>mojo.apps.jobs.DEFAULT_CHANNELS</code> — every channel the framework
+itself publishes to, so an unconfigured deployment runs all framework jobs:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">DEFAULT_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;priority&#39;</span><span class="p">,</span> <span class="s1">&#39;cleanup&#39;</span><span class="p">,</span> <span class="s1">&#39;incident_handlers&#39;</span><span class="p">,</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>                    <span class="s1">&#39;renditions&#39;</span><span class="p">,</span> <span class="s1">&#39;certs&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">,</span> <span class="s1">&#39;webhook_fanout&#39;</span><span class="p">]</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>emails<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">20</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>heavy<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">5</span>
+<p>Set it explicitly to dedicate a box, declare the deployment's user channels
+once, and run engines per channel:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># every box</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">JOBS_ALLOWED_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;emails&#39;</span><span class="p">,</span> <span class="s1">&#39;heavy&#39;</span><span class="p">]</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># this box</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;emails&#39;</span><span class="p">,</span> <span class="s1">&#39;heavy&#39;</span><span class="p">]</span>
 </code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python<span class="w"> </span>-m<span class="w"> </span>mojo.apps.jobs.cli<span class="w"> </span>engine<span class="w"> </span>start<span class="w"> </span>--channels<span class="w"> </span>emails
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>python<span class="w"> </span>-m<span class="w"> </span>mojo.apps.jobs.cli<span class="w"> </span>engine<span class="w"> </span>start<span class="w"> </span>--channels<span class="w"> </span>heavy<span class="w"> </span>--runner-id<span class="w"> </span>heavy-engine
+</code></pre></div>
+<p><code>--channels</code> overrides <code>JOBS_CHANNELS</code> for that process; <code>--runner-id</code> gives a
+second engine on the same box its own identity, pidfile, and box-direct
+channel.</p>
+<h3 id="upgrade-note-channel-routing-changed">Upgrade note — channel routing changed<a class="headerlink" href="#upgrade-note-channel-routing-changed" title="Permanent link">&para;</a></h3>
+<p><code>publish()</code> used to reroute any channel missing from <code>JOBS_CHANNELS</code> onto
+<code>default</code>, silently. Now an <strong>allowed</strong> channel is routed verbatim and an
+<strong>undeclared</strong> one is refused (<code>ValueError</code> + a <code>jobs:rejected_channel</code>
+incident; nothing is queued). Two consequences when upgrading:</p>
+<ul>
+<li>If you set <code>JOBS_CHANNELS</code> by hand, framework jobs now ride their own
+  queues — keep the <code>DEFAULT_CHANNELS</code> entries for the features you run
+  (<code>renditions</code> for fileman, <code>certs</code> for dnsman certificates — or your
+  <code>DNSMAN_CERT_SYNC_CHANNEL</code> override, which also needs declaring —
+  <code>incident_handlers</code>, <code>webhooks</code>, <code>webhook_fanout</code>, <code>cleanup</code>, <code>priority</code>)
+  in some engine's consume list.</li>
+<li>Declare every <strong>user</strong> channel you publish to in <code>JOBS_ALLOWED_CHANNELS</code>
+  (the publisher box's own consume list also counts). Existing
+  <code>ScheduledTask.channel</code> values must be declared too — an undeclared one now
+  fails at save and at dispatch.</li>
+</ul>
+<p>Misconfigurations are loud, not silent: an undeclared publish raises at the
+call site with a <code>jobs:rejected_channel</code> incident, and an allowed-but-
+unconsumed queue raises <code>jobs:unconsumed_channel</code> within ~5 minutes. Queued
+jobs still expire after <code>JOBS_DEFAULT_EXPIRES_SEC</code>.</p>
+<h3 id="channel-names">Channel names<a class="headerlink" href="#channel-names" title="Permanent link">&para;</a></h3>
+<p>Enforced: letters, digits, <code>_</code>, <code>.</code> and <code>-</code>, 1–100 characters.
+<code>publish()</code> raises <code>ValueError</code> on anything else, and <code>ScheduledTask.save()</code>
+rejects a bad or undeclared <code>channel</code> at write time. Colons are excluded
+because the engine recovers the channel by splitting the queue key on <code>:</code>;
+whitespace and control characters because a channel name reaches log lines
+and incident titles.</p>
+<p>The <code>-engine</code> suffix is reserved by convention for box-direct channels (every
+engine consumes a channel named after its runner id): any channel ending in
+<code>-engine</code> is implicitly publishable, so do not name ordinary work queues with
+that suffix.</p>
+<p>The allowlist also keeps the channel set bounded — each distinct channel
+creates its own <code>jobs.published.&lt;channel&gt;</code> metric slug, and those slugs are
+not pruned.</p>
 <h2 id="engine-configuration">Engine Configuration<a class="headerlink" href="#engine-configuration" title="Permanent link">&para;</a></h2>
 <p>Controls the job engine (runner) behavior.</p>
 <table>
@@ -4105,33 +4200,39 @@ key, since inbound verification honors it too. See
 <a href="../../account/webhook_signing/">Webhook Signing</a>.</p>
 <h2 id="example-configurations">Example Configurations<a class="headerlink" href="#example-configurations" title="Permanent link">&para;</a></h2>
 <h3 id="minimal-development">Minimal (Development)<a class="headerlink" href="#minimal-development" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Uses all defaults — just need Redis running</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Uses all defaults — JOBS_CHANNELS already defaults to DEFAULT_CHANNELS, so</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># every framework channel is consumed; just need Redis running.</span>
 </code></pre></div>
 <h3 id="standard-production">Standard Production<a class="headerlink" href="#standard-production" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">JOBS_REDIS_URL</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;REDIS_URL&#39;</span><span class="p">,</span> <span class="s1">&#39;redis://localhost:6379/0&#39;</span><span class="p">)</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;emails&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">]</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">JOBS_DEFAULT_MAX_RETRIES</span> <span class="o">=</span> <span class="mi">3</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">JOBS_DEFAULT_EXPIRES_SEC</span> <span class="o">=</span> <span class="mi">1800</span>  <span class="c1"># 30 minutes</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">JOBS_ENGINE_MAX_WORKERS</span> <span class="o">=</span> <span class="mi">20</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">JOBS_REDIS_URL</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;REDIS_URL&#39;</span><span class="p">,</span> <span class="s1">&#39;redis://localhost:6379/0&#39;</span><span class="p">)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># Extends DEFAULT_CHANNELS with a custom &quot;emails&quot; channel — see the upgrade</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># note above; omitting a DEFAULT_CHANNELS entry here means nothing consumes it.</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;priority&#39;</span><span class="p">,</span> <span class="s1">&#39;cleanup&#39;</span><span class="p">,</span> <span class="s1">&#39;incident_handlers&#39;</span><span class="p">,</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>                 <span class="s1">&#39;renditions&#39;</span><span class="p">,</span> <span class="s1">&#39;certs&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">,</span> <span class="s1">&#39;webhook_fanout&#39;</span><span class="p">,</span> <span class="s1">&#39;emails&#39;</span><span class="p">]</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1"># Declared user channels — same value on every box, so any box may publish</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1"># to &quot;emails&quot; whether or not it consumes it.</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">JOBS_ALLOWED_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;emails&#39;</span><span class="p">]</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="n">JOBS_DEFAULT_MAX_RETRIES</span> <span class="o">=</span> <span class="mi">3</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="n">JOBS_DEFAULT_EXPIRES_SEC</span> <span class="o">=</span> <span class="mi">1800</span>  <span class="c1"># 30 minutes</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="n">JOBS_ENGINE_MAX_WORKERS</span> <span class="o">=</span> <span class="mi">20</span>
 </code></pre></div>
 <h3 id="high-throughput">High Throughput<a class="headerlink" href="#high-throughput" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">JOBS_ENGINE_MAX_WORKERS</span> <span class="o">=</span> <span class="mi">50</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">JOBS_ENGINE_CLAIM_BUFFER</span> <span class="o">=</span> <span class="mi">3</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">JOBS_ENGINE_CLAIM_BATCH</span> <span class="o">=</span> <span class="mi">20</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">JOBS_STREAM_MAXLEN</span> <span class="o">=</span> <span class="mi">500000</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">JOBS_PAYLOAD_MAX_BYTES</span> <span class="o">=</span> <span class="mi">102400</span>  <span class="c1"># 100KB</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">JOBS_ENGINE_MAX_WORKERS</span> <span class="o">=</span> <span class="mi">50</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">JOBS_ENGINE_CLAIM_BUFFER</span> <span class="o">=</span> <span class="mi">3</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">JOBS_ENGINE_CLAIM_BATCH</span> <span class="o">=</span> <span class="mi">20</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">JOBS_STREAM_MAXLEN</span> <span class="o">=</span> <span class="mi">500000</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">JOBS_PAYLOAD_MAX_BYTES</span> <span class="o">=</span> <span class="mi">102400</span>  <span class="c1"># 100KB</span>
 </code></pre></div>
 <h3 id="low-latency">Low Latency<a class="headerlink" href="#low-latency" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">JOBS_ENGINE_READ_TIMEOUT</span> <span class="o">=</span> <span class="mi">10</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">JOBS_ENGINE_CLAIM_BATCH</span> <span class="o">=</span> <span class="mi">2</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">JOBS_RUNNER_HEARTBEAT_SEC</span> <span class="o">=</span> <span class="mi">2</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">JOBS_ENGINE_READ_TIMEOUT</span> <span class="o">=</span> <span class="mi">10</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">JOBS_ENGINE_CLAIM_BATCH</span> <span class="o">=</span> <span class="mi">2</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">JOBS_RUNNER_HEARTBEAT_SEC</span> <span class="o">=</span> <span class="mi">2</span>
 </code></pre></div>
 <h3 id="reliability-focused">Reliability-Focused<a class="headerlink" href="#reliability-focused" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">JOBS_DEFAULT_MAX_RETRIES</span> <span class="o">=</span> <span class="mi">5</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">JOBS_DEFAULT_EXPIRES_SEC</span> <span class="o">=</span> <span class="mi">3600</span>  <span class="c1"># 1 hour</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">JOBS_IDLE_TIMEOUT_MS</span> <span class="o">=</span> <span class="mi">300000</span>    <span class="c1"># 5 minutes</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">JOBS_DEFAULT_BACKOFF_MAX</span> <span class="o">=</span> <span class="mi">7200</span>  <span class="c1"># 2 hours</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">JOBS_DEFAULT_MAX_RETRIES</span> <span class="o">=</span> <span class="mi">5</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">JOBS_DEFAULT_EXPIRES_SEC</span> <span class="o">=</span> <span class="mi">3600</span>  <span class="c1"># 1 hour</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">JOBS_IDLE_TIMEOUT_MS</span> <span class="o">=</span> <span class="mi">300000</span>    <span class="c1"># 5 minutes</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">JOBS_DEFAULT_BACKOFF_MAX</span> <span class="o">=</span> <span class="mi">7200</span>  <span class="c1"># 2 hours</span>
 </code></pre></div>
 
 

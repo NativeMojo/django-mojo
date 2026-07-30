@@ -5733,6 +5733,11 @@
 </ul>
 <h3 id="jobs">JOBS<a class="headerlink" href="#jobs" title="Permanent link">&para;</a></h3>
 <ul>
+<li><code>JOBS_ALLOWED_CHANNELS</code> — the deployment's declared user channels (set
+  identically on every box). <code>publish()</code> refuses a channel outside
+  <code>DEFAULT_CHANNELS</code> ∪ <code>JOBS_CHANNELS</code> ∪ this list ∪ <code>*-engine</code> with
+  <code>ValueError</code> plus a <code>jobs:rejected_channel</code> incident. See
+  <a href="../../jobs/settings/#channels">Jobs — Channels</a>.</li>
 <li><code>JOBS_CHANNELS</code></li>
 <li><code>JOBS_DAEMON_WORKDIR</code></li>
 <li><code>JOBS_DEBUG</code></li>
@@ -5746,6 +5751,10 @@
 <li><code>JOBS_ENGINE_LOGFILE</code></li>
 <li><code>JOBS_ENGINE_MAX_WORKERS</code></li>
 <li><code>JOBS_ENGINE_READ_TIMEOUT</code></li>
+<li><code>JOBS_HOSTNAME_CHANNEL</code> — when <code>True</code> (default), each engine also consumes
+  its box-direct channel, named after its runner id (default
+  <code>&lt;hostname&gt;-engine</code>), so a publisher can address one specific engine with
+  no configuration. See <a href="../../jobs/settings/#channels">Jobs — Channels</a>.</li>
 <li><code>JOBS_IDLE_TIMEOUT_MS</code></li>
 <li><code>JOBS_LOCAL_QUEUE_MAXSIZE</code></li>
 <li><code>JOBS_PAYLOAD_MAX_BYTES</code></li>

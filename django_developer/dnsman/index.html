@@ -4138,9 +4138,11 @@ order, no rate-limit exposure, and hosts stay disposable.</p>
 </tr>
 </tbody>
 </table>
-<p><code>jobs.publish</code> silently falls back to the <code>default</code> channel when the configured
-channel is not in <code>JOBS_CHANNELS</code> — add <code>certs</code> to the runner's channel list, or
-the broadcast lands somewhere you are not listening.</p>
+<p><code>jobs.publish</code> routes to the channel it is given, so the broadcast always lands
+on this channel. <code>certs</code> (the default) is in <code>JOBS_CHANNELS</code>' default list and is
+consumed out of the box; if you set <code>JOBS_CHANNELS</code> explicitly — or override
+<code>DNSMAN_CERT_SYNC_CHANNEL</code> — make sure some engine consumes it, or the broadcast
+sits on a queue nobody reads (which raises a <code>jobs:unconsumed_channel</code> incident).</p>
 <h2 id="further-reading">Further reading<a class="headerlink" href="#further-reading" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="Registrar/">Registrar.md</a> — purchase internals and the ops runbook</li>

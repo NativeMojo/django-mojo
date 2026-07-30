@@ -4141,11 +4141,16 @@
 </ol>
 <p>The framework does not enforce this — it's purely operational discipline. There is no registry to manage; just the strings on each subscription row.</p>
 <h2 id="channel-configuration">Channel configuration<a class="headerlink" href="#channel-configuration" title="Permanent link">&para;</a></h2>
-<p>The fan-out uses two job channels. Either add both to your project's <code>JOBS_CHANNELS</code> setting so dedicated workers can subscribe, or let them fall back to <code>"default"</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># settings.py</span>
+<p>The fan-out uses two job channels, <code>webhooks</code> and <code>webhook_fanout</code>. Both ship
+in <code>JOBS_CHANNELS</code>' default list, so an unconfigured deployment already
+consumes them. If you set <code>JOBS_CHANNELS</code> explicitly, include both — a job
+published to either one stays there rather than falling back to <code>default</code>,
+and a channel with no live consumer raises a <code>jobs:unconsumed_channel</code>
+incident:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># settings.py — only needed if you set JOBS_CHANNELS explicitly</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;default&quot;</span><span class="p">,</span> <span class="s2">&quot;webhooks&quot;</span><span class="p">,</span> <span class="s2">&quot;webhook_fanout&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
 </code></pre></div>
-<p>Separating <code>webhook_fanout</code> from <code>webhooks</code> keeps fan-out work (DB query, per-row enqueue) from competing with HTTP delivery slots when traffic spikes.</p>
+<p>Separating <code>webhook_fanout</code> from <code>webhooks</code> keeps fan-out work (DB query, per-row enqueue) from competing with HTTP delivery slots when traffic spikes. See <a href="../../jobs/publishing/#channels">Jobs — Channels</a>.</p>
 <h2 id="error-reporting">Error reporting<a class="headerlink" href="#error-reporting" title="Permanent link">&para;</a></h2>
 <p>Per-row failures during fan-out are reported to the incident app, never to log files:</p>
 <table>

@@ -2033,6 +2033,56 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Channels">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cross-box-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-box routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#targeting-one-specific-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Targeting one specific engine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-nobody-is-listening" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When nobody is listening
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#framework-channels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Framework channels
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4285,6 +4335,56 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Channels">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cross-box-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-box routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#targeting-one-specific-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Targeting one specific engine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-nobody-is-listening" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When nobody is listening
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#framework-channels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Framework channels
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4671,57 +4771,132 @@
 <li>Collecting system info (<code>jobs.get_sysinfo()</code> uses this internally)</li>
 </ul>
 <h2 id="channels">Channels<a class="headerlink" href="#channels" title="Permanent link">&para;</a></h2>
-<p>Channels route jobs to specific worker pools. Run separate engine processes per channel:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Email worker pool</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>emails<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">20</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="c1"># Heavy processing pool</span>
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>heavy<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">5</span>
-<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>
-<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="c1"># Default catches everything else</span>
-<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>python<span class="w"> </span>manage.py<span class="w"> </span>jobs_engine<span class="w"> </span>--channels<span class="w"> </span>default<span class="w"> </span>--max-workers<span class="w"> </span><span class="m">10</span>
+<p>A channel is a named queue. <strong>A declared channel gets the job exactly as
+named — never rerouted</strong> — and it does not have to be one this box consumes.
+That is the whole point: it is how one box gives work to another.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Lands on &quot;sites&quot; even if this box&#39;s JOBS_CHANNELS does not include it —</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="c1"># as long as &quot;sites&quot; is declared in JOBS_ALLOWED_CHANNELS.</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s2">&quot;myapp.services.deploy.run&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;site_id&quot;</span><span class="p">:</span> <span class="mi">7</span><span class="p">},</span> <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;sites&quot;</span><span class="p">)</span>
 </code></pre></div>
-<p>Configure available channels in settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;emails&#39;</span><span class="p">,</span> <span class="s1">&#39;webhooks&#39;</span><span class="p">,</span> <span class="s1">&#39;webhook_fanout&#39;</span><span class="p">,</span> <span class="s1">&#39;heavy&#39;</span><span class="p">,</span> <span class="s1">&#39;maintenance&#39;</span><span class="p">]</span>
+<p>A channel may be published to when it is any of:</p>
+<ul>
+<li>a framework channel (<code>mojo.apps.jobs.DEFAULT_CHANNELS</code>) — always allowed,</li>
+<li>a channel <strong>this box consumes</strong> (<code>JOBS_CHANNELS</code>),</li>
+<li>a declared user channel (<code>JOBS_ALLOWED_CHANNELS</code> — one list, set the same
+  on every box),</li>
+<li>a box-direct channel ending in <code>-engine</code> (see
+  <a href="#targeting-one-specific-engine">Targeting one specific engine</a>).</li>
+</ul>
+<p>Anything else is refused: <code>publish()</code> raises <code>ValueError</code>, creates <strong>no</strong> job,
+and files a <code>jobs:rejected_channel</code> incident naming the channel and the
+publishing function (suppressed to one event per channel per hour). A
+developer publishing a job knows the channel at code-writing time, so
+declaring it is one settings line — and a typo fails at the call site instead
+of stranding work on a queue nobody consumes.</p>
+<p>The name itself is also validated — letters, digits, <code>_</code>, <code>.</code> and <code>-</code>, up to
+100 characters — because it becomes a Redis key, a metric slug and an
+incident title; anything else raises <code>ValueError</code>.</p>
+<p><code>JOBS_CHANNELS</code> is a <strong>consume</strong> list: what this box's engine pulls from. Run
+engines per channel with the jobs CLI:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>python<span class="w"> </span>-m<span class="w"> </span>mojo.apps.jobs.cli<span class="w"> </span>engine<span class="w"> </span>start<span class="w"> </span>--channels<span class="w"> </span>emails
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>python<span class="w"> </span>-m<span class="w"> </span>mojo.apps.jobs.cli<span class="w"> </span>engine<span class="w"> </span>start<span class="w"> </span>--channels<span class="w"> </span>heavy<span class="w"> </span>--runner-id<span class="w"> </span>heavy-engine
 </code></pre></div>
+<p><code>--channels</code> overrides <code>JOBS_CHANNELS</code> for that process, which is what lets a box
+consume a narrower set than it publishes to. <code>--runner-id</code> gives a second engine
+on the same host its own identity and pidfile.</p>
+<h3 id="cross-box-routing">Cross-box routing<a class="headerlink" href="#cross-box-routing" title="Permanent link">&para;</a></h3>
+<p>An API box that also runs an engine, handing deploys to a dedicated worker box.
+Both boxes share the same declaration:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Every box — the deployment&#39;s user channels, declared once</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="n">JOBS_ALLOWED_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;sites&quot;</span><span class="p">]</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># API box — publishes to &quot;sites&quot;, never consumes it</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;default&quot;</span><span class="p">]</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># Worker box — consumes only &quot;sites&quot;</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="n">JOBS_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;sites&quot;</span><span class="p">]</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># ...or without touching settings on the worker box:</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>python<span class="w"> </span>-m<span class="w"> </span>mojo.apps.jobs.cli<span class="w"> </span>engine<span class="w"> </span>start<span class="w"> </span>--channels<span class="w"> </span>sites
+</code></pre></div>
+<p>Nothing on the API box can claim a <code>sites</code> job, so the work runs where it must.
+(Publishing to a channel the box itself consumes needs no
+<code>JOBS_ALLOWED_CHANNELS</code> entry — the consume list is part of the allow union —
+but declare shared channels once, identically everywhere, and the topology
+stays obvious.)</p>
+<h3 id="targeting-one-specific-engine">Targeting one specific engine<a class="headerlink" href="#targeting-one-specific-engine" title="Permanent link">&para;</a></h3>
+<p>Every engine also consumes a channel named after its <strong>runner id</strong> — by
+default the hostname (lowercased, <code>.</code>/<code>_</code> → <code>-</code>) plus <code>-engine</code>, the same id
+you see in its heartbeat, pidfile and logs. Channels ending in <code>-engine</code> are
+implicitly allowed — hostnames vary per deployment and cannot live in a
+hand-written list — so you can address a single engine with no configuration
+at all:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s2">&quot;myapp.services.cache.purge&quot;</span><span class="p">,</span> <span class="p">{},</span> <span class="n">channel</span><span class="o">=</span><span class="s2">&quot;web-01-engine&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>A second engine started with <code>--runner-id heavy-engine</code> gets its own direct
+channel <code>heavy-engine</code>. A mistyped host channel passes the allowlist (the
+suffix is the rule) and is caught by the unconsumed-channel incident below.
+Set <code>JOBS_HOSTNAME_CHANNEL = False</code> to opt an engine out of consuming its
+direct channel.</p>
+<h3 id="when-nobody-is-listening">When nobody is listening<a class="headerlink" href="#when-nobody-is-listening" title="Permanent link">&para;</a></h3>
+<p>Declared is not the same as consumed: you can allowlist <code>emails</code> and still
+forget to run an engine for it. A job published to an allowed channel no
+engine consumes waits on its queue, and within about five minutes the
+framework raises a <code>jobs:unconsumed_channel</code> incident naming the channel and
+its depth — so a missing worker (or a typo'd <code>-engine</code> channel) surfaces as an
+alert rather than as work that silently ran in the wrong place. Queued jobs
+still expire after <code>JOBS_DEFAULT_EXPIRES_SEC</code>, so treat that incident as
+actionable.</p>
+<p>The alert does not repeat every cycle: an unchanged backlog is re-reported only
+when its depth changes or after an hour, and if many channels are orphaned at
+once (engines down fleet-wide) the five deepest are named individually and the
+rest are collapsed into one summary event.</p>
+<p>A channel with a live consumer is never reported — a backlog there is a capacity
+question, not a routing mistake.</p>
+<h3 id="framework-channels">Framework channels<a class="headerlink" href="#framework-channels" title="Permanent link">&para;</a></h3>
+<p><code>JOBS_CHANNELS</code> defaults to <code>mojo.apps.jobs.DEFAULT_CHANNELS</code>, which covers every
+channel the framework publishes to (<code>default</code>, <code>priority</code>, <code>cleanup</code>,
+<code>incident_handlers</code>, <code>renditions</code>, <code>certs</code>, <code>webhooks</code>, <code>webhook_fanout</code>) — so an
+unconfigured deployment runs all of it. If you set <code>JOBS_CHANNELS</code> explicitly,
+see the <a href="../settings/#upgrade-note--explicit-jobs_channels">upgrade note</a>.</p>
 <p>The <code>webhook_fanout</code> channel is used by the framework's <code>WebhookSubscription</code> fan-out dispatcher (see <a href="../../account/webhook_subscriptions/">account — Webhook Subscriptions</a>). It executes the DB query + per-row enqueue step; individual HTTP deliveries run on the <code>webhooks</code> channel. Keeping them on separate channels prevents fan-out coordination work from competing with HTTP delivery slots under load.</p>
 <p>Default channel is <code>"default"</code>.</p>
 <h2 id="payload-best-practices">Payload Best Practices<a class="headerlink" href="#payload-best-practices" title="Permanent link">&para;</a></h2>
 <p>Payloads are persisted to PostgreSQL. Max size is <strong>16KB</strong> by default (<code>JOBS_PAYLOAD_MAX_BYTES</code>).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Good — pass IDs, fetch in job</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s2">&quot;myapp.services.order.process&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;order_id&quot;</span><span class="p">:</span> <span class="mi">42</span><span class="p">})</span>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1"># Bad — large objects in payload</span>
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s2">&quot;myapp.services.order.process&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;order&quot;</span><span class="p">:</span> <span class="n">huge_dict</span><span class="p">})</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1"># Good — pass IDs, fetch in job</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s2">&quot;myapp.services.order.process&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;order_id&quot;</span><span class="p">:</span> <span class="mi">42</span><span class="p">})</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="c1"># Bad — large objects in payload</span>
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="n">jobs</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s2">&quot;myapp.services.order.process&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;order&quot;</span><span class="p">:</span> <span class="n">huge_dict</span><span class="p">})</span>
 </code></pre></div>
 <p>Always pass identifiers and fetch the data inside the job function.</p>
 <h2 id="other-functions">Other Functions<a class="headerlink" href="#other-functions" title="Permanent link">&para;</a></h2>
 <h3 id="status">status()<a class="headerlink" href="#status" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">info</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">status</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="c1"># Returns dict: {id, status, channel, func, created, started_at, finished_at, attempt, last_error, metadata}</span>
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="c1"># Returns None if not found</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="n">info</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">status</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="c1"># Returns dict: {id, status, channel, func, created, started_at, finished_at, attempt, last_error, metadata}</span>
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="c1"># Returns None if not found</span>
 </code></pre></div>
 <h3 id="cancel">cancel()<a class="headerlink" href="#cancel" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="n">success</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">cancel</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="c1"># Returns True if cancel requested, False if not found or already terminal</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="n">success</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">cancel</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="c1"># Returns True if cancel requested, False if not found or already terminal</span>
 </code></pre></div>
 <p>Sets <code>cancel_requested=True</code> on the job. The running function must check via <code>job.check_cancel_requested()</code>.</p>
 <h3 id="get_runners">get_runners()<a class="headerlink" href="#get_runners" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="n">runners</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">get_runners</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="c1"># Returns list of dicts with runner info and heartbeat data</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="n">runners</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">get_runners</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="c1"># Returns list of dicts with runner info and heartbeat data</span>
 </code></pre></div>
 <h3 id="get_sysinfo">get_sysinfo()<a class="headerlink" href="#get_sysinfo" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">info</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">get_sysinfo</span><span class="p">(</span><span class="n">runner_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span>
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="c1"># Returns list of dicts with CPU, memory, disk, network info per runner</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="n">info</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">get_sysinfo</span><span class="p">(</span><span class="n">runner_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="c1"># Returns list of dicts with CPU, memory, disk, network info per runner</span>
 </code></pre></div>
 <p>Requires <code>psutil</code> installed on runners.</p>
 <h3 id="broadcast_command">broadcast_command()<a class="headerlink" href="#broadcast_command" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="n">responses</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">broadcast_command</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">2.0</span><span class="p">)</span>
-<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="c1"># Commands: &quot;status&quot;, &quot;shutdown&quot;, &quot;pause&quot;, &quot;resume&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="n">responses</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">broadcast_command</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">2.0</span><span class="p">)</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="c1"># Commands: &quot;status&quot;, &quot;shutdown&quot;, &quot;pause&quot;, &quot;resume&quot;</span>
 </code></pre></div>
 <h3 id="ping">ping()<a class="headerlink" href="#ping" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="n">alive</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">ping</span><span class="p">(</span><span class="s2">&quot;runner-host1-abc123&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">2.0</span><span class="p">)</span>
-<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="c1"># Returns True/False</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="n">alive</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">ping</span><span class="p">(</span><span class="s2">&quot;runner-host1-abc123&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">2.0</span><span class="p">)</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="c1"># Returns True/False</span>
 </code></pre></div>
 
 

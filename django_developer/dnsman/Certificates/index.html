@@ -3968,9 +3968,11 @@ and no second auth surface — the job channel already exists.</p>
 <p>The payoff is operational: <strong>standing up a replacement host is a sync, not a
 reissue.</strong> No new CA order, no rate-limit exposure, and hosts stay disposable.</p>
 <blockquote>
-<p><code>jobs.publish</code> silently falls back to the <code>default</code> channel when the
-configured channel is absent from <code>JOBS_CHANNELS</code>. Add <code>certs</code> to the
-consuming runner's channel list or the broadcast lands where nobody listens.</p>
+<p><code>jobs.publish</code> routes to the channel it is given — the broadcast always goes
+to the configured channel. <code>certs</code> (the default) ships in <code>JOBS_CHANNELS</code>'
+default list. If you set <code>JOBS_CHANNELS</code> explicitly, or override
+<code>DNSMAN_CERT_SYNC_CHANNEL</code>, make sure a runner consumes that channel; an
+unconsumed queue raises a <code>jobs:unconsumed_channel</code> incident.</p>
 </blockquote>
 <h2 id="staging-is-the-default">Staging is the default<a class="headerlink" href="#staging-is-the-default" title="Permanent link">&para;</a></h2>
 <p><code>DNSMAN_ACME_DIRECTORY_URL</code> defaults to the Let's Encrypt <strong>staging</strong> directory.

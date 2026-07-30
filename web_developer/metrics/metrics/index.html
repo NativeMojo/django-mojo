@@ -4047,6 +4047,12 @@
 <ul>
 <li>Configurable per account namespace (can be <code>"public"</code> for open access)</li>
 <li>Defaults to <code>view_metrics</code> or <code>manage_users</code></li>
+<li><strong>Reads</strong> of the <code>public</code> account are anonymous. <strong>Writes</strong> (<code>POST
+  /api/metrics/record</code>, <code>/api/metrics/value/set</code>) are not: they require
+  <code>write_metrics</code>/<code>metrics</code>, unless an operator explicitly opted the account
+  into anonymous writes server-side (<code>set_write_perms("public", "public")</code>).
+  Anonymous clients that need to count something should go through an
+  app-specific collect endpoint, not raw metric writes.</li>
 </ul>
 <h2 id="endpoints">Endpoints<a class="headerlink" href="#endpoints" title="Permanent link">&para;</a></h2>
 <table>
