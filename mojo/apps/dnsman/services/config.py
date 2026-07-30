@@ -6,9 +6,14 @@ action to find out. Reports shapes and booleans, never secrets:
 `registrant_contact_configured` says whether purchasing has its prerequisite
 met, not what the contact is — `registrar._registrant_contact()` already
 documents that the contact itself is never echoed back to any caller.
+
+One field varies per group. The registrant contact is a per-group setting with
+a house fallback, so `registrant_contact_configured` answers for the group that
+was asked about: its own contact if it has one, otherwise the one it inherits.
+It stays a boolean either way — a tenant learns whether purchasing will work
+for them, never whose contact makes it work.
 """
 
-from mojo import errors as me
 from mojo.helpers import acme
 from mojo.apps.dnsman.models.domain import PROVIDER_ROUTE53, PROVIDER_GODADDY
 from mojo.apps.dnsman.services import registrar
@@ -16,19 +21,15 @@ from mojo.apps.dnsman.services import dns as dns_service
 from mojo.apps.dnsman.services import certs
 
 
-def _registrant_contact_configured():
-    try:
-        registrar._registrant_contact()
-        return True
-    except me.ValueException:
-        return False
+def _registrant_contact_configured(group=None):
+    return registrar.contact_configured(group)
 
 
-def get_config():
+def get_config(group=None):
     directory_url = certs.directory_url()
     return dict(
         purchase_enabled=registrar._purchase_enabled(),
-        registrant_contact_configured=_registrant_contact_configured(),
+        registrant_contact_configured=_registrant_contact_configured(group),
         max_domain_price=str(registrar._max_price()),
         currency="USD",
         quote_ttl_minutes=registrar._quote_ttl_minutes(),

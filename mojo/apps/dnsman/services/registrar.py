@@ -32,6 +32,8 @@ ever guards live registrations.
 import concurrent.futures
 import hashlib
 import hmac
+import json
+import re
 import secrets as pysecrets
 from decimal import Decimal, InvalidOperation
 
@@ -86,6 +88,39 @@ REQUIRED_CONTACT_FIELDS = [
 # Registries in these countries additionally require a state/province.
 STATE_REQUIRED_COUNTRIES = {"US", "CA"}
 
+# The DB/settings key holding the contact. Group-scopable: a Setting row for a
+# group overrides its parent chain, which overrides the global row, which
+# overrides the deployment's conf file.
+REGISTRANT_CONTACT_KEY = "DNSMAN_REGISTRANT_CONTACT"
+
+# Every member of the AWS `ContactDetail` shape, in full. An unknown key is not
+# ignored by botocore — it raises ParamValidationError before the call leaves
+# the process, which for a hand-written setting means a typo'd field name
+# detonates at purchase time, AFTER durable intent. So the allow-list is
+# enforced at write time instead. ExtraParams is included because ccTLD
+# registries need it; its contents are AWS's to validate, not ours.
+CONTACT_FIELDS = {
+    "FirstName", "LastName", "ContactType", "OrganizationName",
+    "AddressLine1", "AddressLine2", "City", "State", "CountryCode",
+    "ZipCode", "PhoneNumber", "Email", "Fax", "ExtraParams",
+}
+
+# The AWS enum, verified against the installed botocore model for
+# route53domains/2014-05-15. Anything else is a 400 from AWS mid-purchase.
+CONTACT_TYPES = {"PERSON", "COMPANY", "ASSOCIATION", "PUBLIC_BODY", "RESELLER"}
+
+# ICANN phone format: +<country code>.<number>
+PHONE_RE = re.compile(r"^\+\d{1,3}\.\d{4,15}$")
+
+COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
+
+# Where a scope's own contact came from. `settings_file` is reachable only on
+# the global scope — there is no per-group conf file — and tells the operator
+# that saving will create a DB row shadowing the deployment's file.
+SOURCE_DATABASE = "database"
+SOURCE_SETTINGS_FILE = "settings_file"
+SOURCE_NONE = "none"
+
 # How long a `submitted` purchase with no operation id may go unresolved before
 # we declare that the registration never reached AWS. Generous on purpose: AWS
 # operations are visible in list_operations within seconds, so half an hour of
@@ -118,31 +153,204 @@ def _require_purchase_enabled():
         raise me.ValueException(PURCHASE_DISABLED)
 
 
-def _registrant_contact():
-    """
-    Return the configured ICANN contact, or refuse.
+def _coerce_contact(value):
+    """A contact as a plain dict, whatever shape it arrived in. Never raises."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return {}
+    if not isinstance(value, dict):
+        return {}
+    return dict(value)
 
-    Refusing here — before availability, before any row — means an unconfigured
-    deployment can never reach `register_domain` with a contact AWS will bounce.
-    The values themselves are never echoed back to the caller.
+
+def validate_contact(contact):
     """
-    contact = settings.get("DNSMAN_REGISTRANT_CONTACT", {}, kind="dict") or {}
+    Return a list of problems with `contact` — empty means AWS will accept it.
+
+    Every problem string NAMES A FIELD and never quotes a value: these strings
+    reach REST responses and logs, and the values are PII.
+
+    Shape, not just presence. The three ways a present-but-wrong contact still
+    fails are all after durable intent: a `ContactType` outside the AWS enum, a
+    `PhoneNumber` that is not ICANN `+<cc>.<number>`, and an unknown key —
+    which botocore refuses with ParamValidationError before the call even goes
+    out. Catching them at write time turns each into a readable 400.
+    """
+    contact = _coerce_contact(contact)
+    if not contact:
+        return ["A registrant contact is required"]
+
+    problems = []
+
+    for field in REQUIRED_CONTACT_FIELDS:
+        if not str(contact.get(field) or "").strip():
+            problems.append(f"{field} is required")
+
+    country = str(contact.get("CountryCode") or "").strip().upper()
+    if country in STATE_REQUIRED_COUNTRIES and not str(contact.get("State") or "").strip():
+        problems.append(f"State is required for CountryCode {country}")
+
+    unknown = sorted(set(contact.keys()) - CONTACT_FIELDS)
+    for field in unknown:
+        problems.append(f"{field} is not a registrant contact field")
+
+    contact_type = str(contact.get("ContactType") or "").strip()
+    if contact_type and contact_type not in CONTACT_TYPES:
+        problems.append(
+            f"ContactType must be one of: {', '.join(sorted(CONTACT_TYPES))}")
+
+    phone = str(contact.get("PhoneNumber") or "").strip()
+    if phone and not PHONE_RE.match(phone):
+        problems.append(
+            "PhoneNumber must be in ICANN format +<country code>.<number>, "
+            "for example +1.5035551212")
+
+    # Shape only, never the 251-entry ISO enum: botocore does not enforce enums
+    # client-side and AWS rejects a bogus code anyway. What is being guarded
+    # here is malformed data, not an invented country.
+    if country and not COUNTRY_RE.match(country):
+        problems.append("CountryCode must be a two-letter ISO country code")
+
+    return problems
+
+
+def _resolve_contact(group=None):
+    """
+    The contact IN EFFECT for this scope, valid or not. Never raises.
+
+    Resolution is the settings chain and nothing custom: the group's own row,
+    then its parent chain, then the global row, then the deployment conf file.
+    """
+    contact = settings.get(REGISTRANT_CONTACT_KEY, {}, group=group, kind="dict")
+    return _coerce_contact(contact)
+
+
+def _registrant_contact(group=None):
+    """
+    Return the ICANN contact in effect for `group`, or refuse.
+
+    Refusing here — before availability, before any row — means a misconfigured
+    scope can never reach `register_domain` with a contact AWS will bounce. The
+    values themselves are never echoed back to the caller; only field names
+    appear in the refusal.
+
+    A group with no contact of its own inherits its parent's, then the house
+    contact. `group=None` is the house contact itself.
+    """
+    contact = _resolve_contact(group)
     if not contact:
         raise me.ValueException(
             "No registrant contact is configured (DNSMAN_REGISTRANT_CONTACT); "
             "domain purchasing is unavailable until one is set.")
-    missing = [
-        field for field in REQUIRED_CONTACT_FIELDS
-        if not str(contact.get(field) or "").strip()
-    ]
-    country = str(contact.get("CountryCode") or "").strip().upper()
-    if country in STATE_REQUIRED_COUNTRIES and not str(contact.get("State") or "").strip():
-        missing.append("State")
-    if missing:
+    problems = validate_contact(contact)
+    if problems:
         raise me.ValueException(
             "The configured registrant contact (DNSMAN_REGISTRANT_CONTACT) is "
-            f"incomplete; missing: {', '.join(missing)}")
+            f"not usable: {'; '.join(problems)}")
     return dict(contact)
+
+
+def contact_configured(group=None):
+    """Whether `quote()` would accept this scope's contact right now."""
+    try:
+        _registrant_contact(group)
+        return True
+    except me.ValueException:
+        return False
+
+
+def read_contact(group=None):
+    """
+    Return (contact, source) for EXACTLY this scope — no inheritance.
+
+    `settings.get()` deliberately cannot express "this scope only": it walks
+    group -> parent chain -> global -> conf file, which is right for resolution
+    and wrong for an editor, where a group must see its own row or nothing. A
+    tenant learning the house contact by reading its own form is the whole
+    thing this separation exists to prevent.
+
+    `contact` is None only when this scope has nothing of its own; an existing
+    row with an unusable value returns that value with source `database`, so
+    the caller can report what is actually there rather than silently falling
+    back to a scope it is not allowed to see.
+    """
+    from mojo.apps.account.models.setting import Setting
+
+    row = Setting.objects.filter(key=REGISTRANT_CONTACT_KEY, group=group).first()
+    if row is not None:
+        return _coerce_contact(row.get_value()), SOURCE_DATABASE
+
+    # No per-group conf file exists, so the file is a global-scope answer only.
+    if group is None:
+        conf = _coerce_contact(
+            settings.get_static(REGISTRANT_CONTACT_KEY, {}, kind="dict"))
+        if conf:
+            return conf, SOURCE_SETTINGS_FILE
+
+    return None, SOURCE_NONE
+
+
+def save_contact(contact, group=None):
+    """
+    Validate and persist a contact for one scope. Returns the stored dict.
+
+    `is_secret=True` is load-bearing, not caution. A plaintext Setting row is
+    serialized as `display_value` by the generic settings REST, which any
+    `manage_settings` holder can read — the operator's home address included.
+    A secret row lands in `mojo_secrets`, which the serializer strips
+    unconditionally, on every graph including the unknown-graph fallback.
+    """
+    from mojo.apps.account.models.setting import Setting
+
+    contact = _coerce_contact(contact)
+    problems = validate_contact(contact)
+    if problems:
+        raise me.ValueException(
+            f"The registrant contact is not usable: {'; '.join(problems)}")
+
+    Setting.set(REGISTRANT_CONTACT_KEY, contact, is_secret=True, group=group)
+    logger.info(
+        f"dnsman: registrant contact saved for {_scope_label(group)}")
+    return contact
+
+
+def clear_contact(group=None):
+    """
+    Drop this scope's own contact row. Returns True when a row was removed.
+
+    Goes through `Setting.remove()` on purpose: a queryset `.delete()` never
+    runs `Model.delete()`, so `remove_from_cache()` would not fire and a stale
+    Redis entry would keep resolving after the row was gone.
+    """
+    from mojo.apps.account.models.setting import Setting
+
+    removed = Setting.remove(REGISTRANT_CONTACT_KEY, group=group)
+    if removed:
+        logger.info(f"dnsman: registrant contact cleared for {_scope_label(group)}")
+    return removed
+
+
+def _scope_label(group):
+    """A log-safe name for a contact scope. Never carries contact values."""
+    return f"group {group.pk}" if group is not None else "the house account"
+
+
+def _contact_fingerprint(contact):
+    """
+    A stable, non-reversible marker for WHICH contact was filed on a purchase.
+
+    Salted with the deployment SECRET_KEY, so holding the ledger alone does not
+    let anyone confirm a guessed contact by recomputing the digest. Recorded
+    instead of the contact itself: the ledger must be able to answer "whose
+    contact went on this domain" without becoming a second PII store.
+    """
+    canonical = json.dumps(
+        _coerce_contact(contact), sort_keys=True, separators=(",", ":"), default=str)
+    salt = str(settings.SECRET_KEY or "")
+    return hmac.new(
+        salt.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def _max_price():
@@ -471,7 +679,10 @@ def quote(group, user, name, years=1):
     indeterminate availability answer creates NO row at all.
     """
     _require_purchase_enabled()
-    _registrant_contact()
+    # Scoped to the buying group: a tenant with its own contact is validated
+    # against THAT contact, not the house one, so the preflight answers the
+    # same question `purchase()` will ask at redemption.
+    _registrant_contact(group)
 
     name = naming.normalize_domain(name)
     tld = naming.split_tld(name)
@@ -586,7 +797,15 @@ def purchase(group, user, purchase_id, token):
             # Re-check under the lock: the switch may have been thrown between
             # the quote and this confirmation, and nothing durable exists yet.
             _require_purchase_enabled()
-            contact = _registrant_contact()
+            # row.group, NEVER the `group` argument. The argument is optional
+            # attribution — the check above accepts None, and request.group is
+            # None for a group that went inactive between the quote and this
+            # confirmation. Resolving from it would file the HOUSE contact on a
+            # tenant's domain at the one irreversible, real-money step.
+            # row.group is the authority; it is what the Domain row is created
+            # with a few lines below.
+            contact = _registrant_contact(row.group)
+            registrant_scope = row.group_id if row.group_id else "house"
 
             privacy_wanted = bool((row.metadata or {}).get("privacy_supported", True))
 
@@ -635,6 +854,13 @@ def purchase(group, user, purchase_id, token):
     metadata = dict(row.metadata or {})
     metadata["privacy_applied"] = bool(result.privacy)
     metadata["privacy_downgraded"] = bool(result.privacy_downgraded)
+    # A quote does not pin the contact — the one read under the lock above is
+    # what got filed. Now that the contact is tenant-editable, the ledger has
+    # to be able to answer WHICH one, so record the scope it was resolved for
+    # and a salted digest of the values. `metadata` is in neither REST graph,
+    # so this adds no PII surface.
+    metadata["registrant_scope"] = registrant_scope
+    metadata["registrant_fingerprint"] = _contact_fingerprint(contact)
     row.metadata = metadata
     row.save(update_fields=["operation_id", "metadata", "modified"])
 
@@ -893,16 +1119,13 @@ def update_contacts(domain, contact):
     _require_route53(domain)
     if not contact or not isinstance(contact, dict):
         raise me.ValueException("Contact details are required")
-    missing = [
-        field for field in REQUIRED_CONTACT_FIELDS
-        if not str(contact.get(field) or "").strip()
-    ]
-    country = str(contact.get("CountryCode") or "").strip().upper()
-    if country in STATE_REQUIRED_COUNTRIES and not str(contact.get("State") or "").strip():
-        missing.append("State")
-    if missing:
+    # Same validator as the stored registrant contact: this dict reaches the
+    # same AWS ContactDetail shape, so an unknown key or a malformed phone
+    # number fails here identically rather than at the API boundary.
+    problems = validate_contact(contact)
+    if problems:
         raise me.ValueException(
-            f"These contact fields are required: {', '.join(missing)}")
+            f"These contact fields are required: {'; '.join(problems)}")
 
     operation_id = route53.update_contacts(domain.name, dict(contact))
     return objict(name=domain.name, operation_id=operation_id)
