@@ -68,6 +68,26 @@ def parse_channels_arg(value):
     return channels or None
 
 
+def parse_runner_id_arg(value):
+    """
+    Validate a --runner-id, or None when absent.
+
+    The runner id becomes a pidfile path and Redis key segments, so it is held
+    to the same charset as a channel name: a '*' would make the "already
+    running" glob match unrelated engines, and a '/' would put the pidfile
+    outside /tmp.
+    """
+    if not value:
+        return None
+    from mojo.apps.jobs import CHANNEL_NAME_RE
+    if not CHANNEL_NAME_RE.match(value):
+        raise ValueError(
+            f"Invalid --runner-id {value!r}: use only letters, digits, '_', '.' "
+            f"and '-' (max 100 chars)"
+        )
+    return value
+
+
 def is_engine_running(runner_id=None):
     """
     Check if a job engine is currently running.
@@ -381,15 +401,20 @@ def stop_command(verbose=False):
     return failed == 0
 
 
-def stop_engine_daemon(verbose=False):
-    """Stop just the engine daemon."""
+def stop_engine_daemon(verbose=False, runner_id=None):
+    """
+    Stop engine daemons.
+
+    With a runner_id, stops only that engine — otherwise a box running two
+    engines on different channel sets could not stop one without killing both.
+    """
     from mojo.apps.jobs.daemon import DaemonRunner
 
     stopped = 0
     failed = 0
 
-    # Stop all engine instances
-    for pid_file in Path('/tmp').glob('job-engine-*.pid'):
+    pattern = f'job-engine-{runner_id}.pid' if runner_id else 'job-engine-*.pid'
+    for pid_file in Path('/tmp').glob(pattern):
         runner = DaemonRunner("JobEngine", lambda: None, pidfile=str(pid_file))
         if runner.stop():
             if verbose:
@@ -601,17 +626,22 @@ Channel options (engine/scheduler start & foreground):
                 print("⚠️  'start' is deprecated. Use 'engine start' and 'scheduler start' instead.")
             return False
         channels = parse_channels_arg(parsed_args.channels)
+        try:
+            runner_id = parse_runner_id_arg(parsed_args.runner_id)
+        except ValueError as e:
+            print(f"❌ {e}")
+            return False
 
         if command == 'engine':
             if action == 'start':
                 return start_engine_daemon(
                     verbose, logfile_override=parsed_args.logfile,
-                    channels=channels, runner_id=parsed_args.runner_id)
+                    channels=channels, runner_id=runner_id)
             elif action == 'foreground':
                 return start_engine_foreground(
-                    verbose, channels=channels, runner_id=parsed_args.runner_id)
+                    verbose, channels=channels, runner_id=runner_id)
             elif action == 'stop':
-                return stop_engine_daemon(verbose)
+                return stop_engine_daemon(verbose, runner_id=runner_id)
             else:
                 print("Engine command requires 'start', 'foreground', or 'stop' action")
                 return False

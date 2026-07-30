@@ -164,6 +164,12 @@ class ScheduledTask(models.Model, MojoModel):
         if self.task_type not in valid_types:
             raise ValueError(f"Invalid task_type: {self.task_type}")
 
+        # Validate channel. Owners can edit their own task without any jobs
+        # permission, and dispatch publishes to this value verbatim, so reject a
+        # malformed name here rather than hourly at publish time.
+        from mojo.apps.jobs import validate_channel_name
+        validate_channel_name(self.channel)
+
         # Validate notify channels
         valid_channels = ["email", "in_app", "sms", "push"]
         if not isinstance(self.notify, list):

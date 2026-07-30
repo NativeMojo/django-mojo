@@ -3,6 +3,7 @@ Django-MOJO Jobs System - Public API
 
 A reliable background job system for Django with Redis fast path and Postgres truth.
 """
+import re
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional, Union
@@ -58,6 +59,35 @@ __all__ = [
 # register_sched_channel/get_sched_channels are framework plumbing — called by
 # publish(), the engine's retry path, and the scheduler. Importable, but kept
 # out of __all__ because app code has no reason to touch them.
+
+
+# A channel name becomes a Redis key segment, a metric slug, a log line, and an
+# incident title. Publishing no longer clamps unknown channels to "default", so
+# this is the one place that keeps those downstream uses safe. Letters, digits,
+# underscore, dot and dash only — notably NO colons (the engine recovers the
+# channel by splitting the queue key on ":", job_engine.py) and no whitespace or
+# control characters (they would forge log lines and skip the unconsumed-channel
+# scan). 100 chars matches Job.channel's column width.
+CHANNEL_NAME_RE = re.compile(r'^[A-Za-z0-9_.\-]{1,100}$')
+
+
+def validate_channel_name(channel):
+    """
+    Raise ValueError unless `channel` is a usable channel name.
+
+    Deliberately a CHARSET check, not a membership check: any well-formed
+    channel is publishable whether or not this box consumes it. That is the
+    routing contract — see publish().
+    """
+    if not channel or not isinstance(channel, str):
+        raise ValueError(f"Job channel must be a non-empty string, got {channel!r}")
+    if not CHANNEL_NAME_RE.match(channel):
+        raise ValueError(
+            f"Invalid job channel {channel!r}: use only letters, digits, '_', '.' "
+            f"and '-' (max 100 chars). Channel names become Redis keys and log "
+            f"fields, so ':' and whitespace are not allowed."
+        )
+    return channel
 
 
 def register_sched_channel(channel):
@@ -145,10 +175,9 @@ def publish(
     else:
         func_path = func
 
-    # A channel is required: an empty one would mint a "...queue:None" key and
-    # strand the job on a queue no engine will ever name.
-    if not channel or not isinstance(channel, str):
-        raise ValueError(f"Job channel must be a non-empty string, got {channel!r}")
+    # Fail before any DB write. A malformed channel would otherwise reach a
+    # Redis key, a metric slug, and an incident title verbatim.
+    validate_channel_name(channel)
 
     # Validate payload
     payload = payload or {}

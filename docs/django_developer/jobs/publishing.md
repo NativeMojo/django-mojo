@@ -265,7 +265,9 @@ jobs.publish("myapp.services.deploy.run", {"site_id": 7}, channel="sites")
 ```
 
 Redis queues are created on first push, so a channel needs no declaration
-anywhere before you publish to it. An empty channel raises `ValueError`.
+anywhere before you publish to it. The name itself is validated — letters,
+digits, `_`, `.` and `-`, up to 100 characters — because it becomes a Redis key,
+a metric slug and an incident title; anything else raises `ValueError`.
 
 `JOBS_CHANNELS` is a **consume** list: what this box's engine pulls from. Run
 engines per channel with the jobs CLI:
@@ -319,6 +321,11 @@ five minutes the framework raises a `jobs:unconsumed_channel` incident naming th
 channel and its depth, so a typo or a missing worker surfaces as an alert rather
 than as work that silently ran in the wrong place. Queued jobs still expire after
 `JOBS_DEFAULT_EXPIRES_SEC`, so treat that incident as actionable.
+
+The alert does not repeat every cycle: an unchanged backlog is re-reported only
+when its depth changes or after an hour, and if many channels are orphaned at
+once (engines down fleet-wide) the five deepest are named individually and the
+rest are collapsed into one summary event.
 
 A channel with a live consumer is never reported — a backlog there is a capacity
 question, not a routing mistake.

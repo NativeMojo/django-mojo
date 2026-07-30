@@ -53,8 +53,14 @@ Also in this change:
   channel's delayed jobs: the sanctioned tool for that is the per-channel pause
   flag, which auto mode still honors. An explicit `--channels`/`channels=` list
   still pins the scheduler exactly as before.
-- **`publish(channel="")` / `None` now raises `ValueError`** instead of minting a
-  `queue:None` key that no engine would ever read.
+- **Channel names are now validated**: letters, digits, `_`, `.`, `-`, 1–100
+  chars; `publish()` raises `ValueError` on anything else, and
+  `ScheduledTask.save()` rejects a bad `channel` at write time rather than
+  failing hourly at dispatch. This replaces the reroute as the guard on the
+  name itself — a channel becomes a Redis key segment, a metric slug, a log
+  line and an incident title, and `ScheduledTask.channel` is editable by a task
+  owner with no jobs permission. Colons are excluded because the engine recovers
+  the channel by splitting the queue key on `:`.
 - The fallback's own warning never named the channel — `logit.warning` does no
   `%s` interpolation, so logs read `channel '%s' not in JOBS_CHANNELS`
   literally. Moot now that the fallback is gone, but it is why this went

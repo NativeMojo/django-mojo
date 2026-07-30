@@ -47,7 +47,9 @@ def find_unconsumed_channels():
     orphans = []
     for key in client.scan_iter(match=f"{keys.prefix}:*{marker}*", count=200):
         key_str = _text(key)
-        parts = key_str.split(marker)
+        # split(..., 1) so a legacy channel containing ":queue:" is still
+        # reported rather than silently skipped for having 3 parts.
+        parts = key_str.split(marker, 1)
         if len(parts) != 2 or not parts[1]:
             continue
         channel = parts[1]
@@ -59,22 +61,62 @@ def find_unconsumed_channels():
     return sorted(orphans)
 
 
+# How many orphan channels to name individually per pass; the rest are counted
+# in one summary event so a fleet-wide outage cannot flood the incident log.
+UNCONSUMED_REPORT_LIMIT = 5
+
+# Suppression window for an unchanged orphan. Nothing drains an orphan queue —
+# expiry is enforced at claim time and there is no claimant — so llen stays > 0
+# until an operator acts. Without this the cron would file an event every 5
+# minutes forever.
+UNCONSUMED_RENOTIFY_SEC = 3600
+
+
+def _unconsumed_notice_key(keys, channel):
+    return f"{keys.prefix}:alerted:unconsumed:{channel}"
+
+
 # Every 5 minutes: jobs are only routed as named now, so a channel nobody
-# consumes is the way a misconfiguration shows up. Say so loudly — queued jobs
-# expire (JOBS_DEFAULT_EXPIRES_SEC), so the window to react is finite.
+# consumes is how a misconfiguration shows up. Report it, but do not re-report an
+# unchanged backlog every cycle.
 @schedule(minutes="*/5")
 def check_unconsumed_channels(force=False, verbose=False, now=None):
     from mojo.apps import incident
+    from mojo.apps.jobs.adapters import get_adapter
+    from mojo.apps.jobs.keys import JobKeys
 
     try:
         orphans = find_unconsumed_channels()
     except Exception as e:
         logit.error(f"check_unconsumed_channels: scan failed: {e}")
-        return
+        return []
 
-    for channel, depth in orphans:
+    if not orphans:
+        return []
+
+    redis = get_adapter()
+    keys = JobKeys()
+
+    # Deepest backlogs first — those are the ones worth naming when truncating.
+    ranked = sorted(orphans, key=lambda item: item[1], reverse=True)
+    named, extra = ranked[:UNCONSUMED_REPORT_LIMIT], ranked[UNCONSUMED_REPORT_LIMIT:]
+    reported = []
+
+    for channel, depth in named:
         logit.warning(
             f"jobs: channel '{channel}' has {depth} queued job(s) and no live consumer")
+
+        # Re-notify only when the depth changes or the window lapses, so a
+        # standing misconfiguration is one incident rather than 288 a day.
+        notice_key = _unconsumed_notice_key(keys, channel)
+        try:
+            last = redis.get(notice_key)
+            if not force and last is not None and str(last) == str(depth):
+                continue
+            redis.set(notice_key, str(depth), ex=UNCONSUMED_RENOTIFY_SEC)
+        except Exception as e:
+            logit.warning(f"check_unconsumed_channels: suppression check failed: {e}")
+
         incident.report_event(
             f"Job channel '{channel}' has {depth} queued job(s) but no engine is "
             f"consuming it. Add it to a worker's JOBS_CHANNELS (or start an engine "
@@ -84,6 +126,21 @@ def check_unconsumed_channels(force=False, verbose=False, now=None):
             level=3,
             channel=channel,
             queue_depth=depth)
+        reported.append(channel)
+
+    if extra:
+        logit.warning(
+            f"jobs: {len(extra)} more unconsumed channel(s) not individually reported")
+        incident.report_event(
+            f"{len(extra)} additional job channel(s) have queued work and no live "
+            f"consumer, beyond the {UNCONSUMED_REPORT_LIMIT} deepest reported "
+            f"separately. This usually means engines are down fleet-wide rather "
+            f"than one channel being misconfigured.",
+            title=f"Unconsumed job channels: {len(extra)} more",
+            category="jobs:unconsumed_channel",
+            level=3,
+            extra_channel_count=len(extra))
+
     return orphans
 
 

@@ -68,9 +68,14 @@ the channel. React to it — queued jobs still expire after
 
 ### Channel names
 
-Non-empty strings; `publish()` raises `ValueError` on an empty channel. Avoid
-colons (the engine derives the channel from the queue key's last colon segment)
-and keep the set bounded — each channel gets its own metric slug.
+Enforced: letters, digits, `_`, `.` and `-`, 1–100 characters.
+`publish()` raises `ValueError` on anything else, and `ScheduledTask.save()`
+rejects a bad `channel` at write time. Colons are excluded because the engine
+recovers the channel by splitting the queue key on `:`; whitespace and control
+characters because a channel name reaches log lines and incident titles.
+
+Keep the set bounded regardless — each distinct channel creates its own
+`jobs.published.<channel>` metric slug, and those slugs are not pruned.
 
 ## Engine Configuration
 

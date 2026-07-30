@@ -49,6 +49,8 @@ def _clear(opts):
         opts.redis.delete(opts.keys.processing(ch))
     # Our channels must not linger in the shared sched registry.
     opts.redis.get_client().srem(opts.keys.sched_registry(), *TEST_CHANNELS)
+    for ch in TEST_CHANNELS:
+        opts.redis.delete(f"{opts.keys.prefix}:alerted:unconsumed:{ch}")
     Job.objects.filter(channel__in=TEST_CHANNELS).delete()
     Event.objects.filter(category="jobs:unconsumed_channel",
                          title__in=[_alert_title(ch) for ch in TEST_CHANNELS]).delete()
@@ -117,6 +119,104 @@ def test_publish_empty_channel_raises(opts):
 
     assert not Job.objects.filter(func=HANDLER, channel__in=("", None)).exists(), (
         "a rejected publish must not leave a Job row behind"
+    )
+
+
+@th.django_unit_test("publish rejects a malformed channel name")
+def test_publish_rejects_malformed_channel(opts):
+    """A channel becomes a Redis key, a metric slug, a log line and an incident
+    title. Nothing clamps it to "default" any more, so the charset is the guard.
+    """
+    _clear(opts)
+    from mojo.apps import jobs
+    from mojo.apps.jobs.models import Job
+
+    before = Job.objects.count()
+    bad_names = [
+        "   ",                       # whitespace-only would mint "queue: "
+        "with space",
+        "has:colon",                 # engine splits the queue key on ":"
+        "line\nbreak",               # would forge log lines
+        "glob*star",                 # would match unrelated keys in scans
+        "trav/ersal",
+        "x" * 101,                   # Job.channel is max_length=100
+    ]
+    for bad in bad_names:
+        try:
+            jobs.publish(func=HANDLER, payload={}, channel=bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"publish(channel={bad!r}) must raise ValueError")
+
+    assert Job.objects.count() == before, (
+        "a rejected publish must not leave a Job row behind"
+    )
+
+    # Everything the framework and the host-channel feature actually use.
+    for good in ("default", "webhook_fanout", "t906.dotted", "web-01", "x" * 100):
+        jobs.validate_channel_name(good)
+
+
+@th.django_unit_test("a ScheduledTask cannot be saved with a malformed channel")
+def test_scheduled_task_channel_validated(opts):
+    """Owners can edit their own task with no jobs permission, and dispatch
+    publishes task.channel verbatim — so it must be rejected at write time."""
+    _clear(opts)
+    from mojo.apps.jobs.models import ScheduledTask
+
+    task = ScheduledTask(name="t906 bad channel", task_type="report",
+                         run_times=["09:00"], run_days=[0], channel="has:colon")
+    try:
+        task.save()
+    except ValueError:
+        pass
+    else:
+        ScheduledTask.objects.filter(name="t906 bad channel").delete()
+        raise AssertionError(
+            "saving a ScheduledTask with a malformed channel must raise ValueError"
+        )
+
+
+@th.django_unit_test("--runner-id is charset-checked before it becomes a path")
+def test_parse_runner_id_arg(opts):
+    from mojo.apps.jobs.cli import parse_runner_id_arg
+
+    assert parse_runner_id_arg("uploads-engine") == "uploads-engine", \
+        "a well-formed runner id should pass through"
+    assert parse_runner_id_arg(None) is None, "absent means the engine picks its own"
+
+    # '*' would make the "already running" glob match unrelated engines;
+    # '/' would put the pidfile outside /tmp.
+    for bad in ("star*", "../../etc/cron.d/x", "has space"):
+        try:
+            parse_runner_id_arg(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"parse_runner_id_arg({bad!r}) must raise ValueError")
+
+
+@th.django_unit_test("an unchanged orphan channel is not re-reported every cycle")
+def test_unconsumed_alert_is_suppressed_when_unchanged(opts):
+    """Nothing drains an orphan queue, so without suppression this cron would
+    file an incident every 5 minutes forever."""
+    _clear(opts)
+    from mojo.apps import jobs
+    from mojo.apps.jobs import cronjobs
+    from mojo.apps.incident.models import Event
+
+    opts.redis.delete(cronjobs._unconsumed_notice_key(opts.keys, CH_ORPHAN))
+    jobs.publish(func=HANDLER, payload={"marker": "orphan"}, channel=CH_ORPHAN)
+
+    cronjobs.check_unconsumed_channels()
+    first = Event.objects.filter(category="jobs:unconsumed_channel",
+                                 title=_alert_title(CH_ORPHAN)).count()
+    assert first == 1, f"the first pass should report the orphan once, got {first}"
+
+    cronjobs.check_unconsumed_channels()
+    again = Event.objects.filter(category="jobs:unconsumed_channel",
+                                 title=_alert_title(CH_ORPHAN)).count()
+    assert again == 1, (
+        f"an unchanged backlog must not raise a second incident, got {again}"
     )
 
 
