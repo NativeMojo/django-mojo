@@ -525,6 +525,48 @@ def list_operations(submitted_since=None, access_key=None, secret_key=None, max_
     return operations
 
 
+def list_registered_domains(access_key=None, secret_key=None, max_pages=20):
+    """
+    Every domain REGISTERED in this AWS account.
+
+    Returns objict(domains=[objict(name, auto_renew, transfer_lock, expires)],
+    truncated=bool) — deliberately NOT a bare list like `list_operations` above.
+    An operations poll that stops early self-heals on the next run; an
+    *inventory* that stops early silently answers "that is everything", which is
+    a wrong answer. `truncated` is True when `max_pages` was reached with a page
+    marker still outstanding, so a caller can report the gap instead of hiding
+    it.
+
+    NOTE the API asymmetry with `list_hosted_zones` below: route53domains takes
+    an INTEGER MaxItems; route53 takes a STRING.
+    """
+    client = _domains_client(access_key, secret_key)
+    params = {"MaxItems": 100}
+    domains = []
+    pages = 0
+    truncated = False
+    while True:
+        resp = client.list_domains(**params)
+        for entry in resp.get("Domains") or []:
+            name = entry.get("DomainName")
+            if not name:
+                continue
+            domains.append(objict(
+                name=normalize_name(name),
+                auto_renew=entry.get("AutoRenew"),
+                transfer_lock=entry.get("TransferLock"),
+                expires=entry.get("Expiry")))
+        pages += 1
+        marker = resp.get("NextPageMarker")
+        if not marker:
+            break
+        if pages >= max_pages:
+            truncated = True
+            break
+        params["Marker"] = marker
+    return objict(domains=domains, truncated=truncated)
+
+
 def get_domain_detail(name, access_key=None, secret_key=None):
     """Return the registrar view of a domain: contacts, expiry, nameservers, flags."""
     name = normalize_name(name)
@@ -590,6 +632,52 @@ def update_auto_renew(name, enabled, access_key=None, secret_key=None):
 # ---------------------------------------------------------------------------
 # Route53 — hosted zones
 # ---------------------------------------------------------------------------
+
+def list_hosted_zones(access_key=None, secret_key=None, region=None, max_pages=20):
+    """
+    Every hosted zone in this AWS account.
+
+    Returns objict(zones=[objict(id, name, private, record_count)],
+    truncated=bool) — same contract and the same reasoning as
+    `list_registered_domains` above: a partial inventory that reports as
+    complete is worse than one that admits the gap.
+
+    Private zones are RETURNED, flagged `private=True`, not filtered. This
+    helper stays a faithful mirror of AWS; the policy call belongs to the
+    caller (dnsman's discovery service excludes them — see
+    mojo/apps/dnsman/services/onboarding.py).
+
+    NOTE: MaxItems is a STRING on this API, as in `list_records` below — but an
+    INTEGER on route53domains. Passing the wrong type is a ParamValidationError.
+    """
+    client = _dns_client(access_key, secret_key, region)
+    params = {"MaxItems": "100"}
+    zones = []
+    pages = 0
+    truncated = False
+    while True:
+        resp = client.list_hosted_zones(**params)
+        for zone in resp.get("HostedZones") or []:
+            if not zone.get("Id"):
+                continue
+            config = zone.get("Config") or {}
+            zones.append(objict(
+                id=_zone_id(zone.get("Id")),
+                name=_decode_name(zone.get("Name")),
+                private=bool(config.get("PrivateZone")),
+                record_count=zone.get("ResourceRecordSetCount")))
+        pages += 1
+        if not resp.get("IsTruncated"):
+            break
+        marker = resp.get("NextMarker")
+        if not marker:
+            break
+        if pages >= max_pages:
+            truncated = True
+            break
+        params["Marker"] = marker
+    return objict(zones=zones, truncated=truncated)
+
 
 def find_zone_id(name, access_key=None, secret_key=None, region=None):
     """

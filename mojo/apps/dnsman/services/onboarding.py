@@ -11,16 +11,24 @@ Three ways in, none of which spends money:
     account (superuser-only, enforced by the REST layer).
 
 Blast-radius rule that shapes all of this: a provider API key is ACCOUNT-WIDE.
-Nothing here ever returns, stores or logs the list of domains in the linked
-account — only a count, and only per-name confirmations for names the caller
-already supplied. There is deliberately no "show me everything in this account"
-surface.
+Nothing here ever returns, stores or logs the list of domains in a TENANT'S
+linked account — only a count, and only per-name confirmations for names the
+caller already supplied. There is deliberately no "show me everything in this
+account" surface for a BYO credential.
+
+`discover_house_domains` is the ONE scoped exception, and it is not a hole in
+that rule: it lists the HOUSE AWS account, which the platform already owns
+outright and already hands zones out of via `adopt_route53`. It never touches a
+`DnsCredential`, so no tenant key is ever enumerated. Its gate is platform
+superuser, enforced in `rest/` — see `rest/gates.require_platform_admin`.
 
 Like `services/dns.py`, this module is ungated mechanism: permissions are the
 REST layer's job.
 """
 
 from django.utils import timezone
+
+from objict import objict
 
 from mojo import errors as me
 from mojo.helpers import logit
@@ -201,8 +209,12 @@ def adopt_route53(group, user, name, create_zone=False):
     No purchase, no money — this only starts managing a zone that already
     exists (or, with `create_zone=True`, creates an empty one).
 
-    PERMISSIONS: the REST layer enforces `manage_dns` AND superuser. It is not
-    checked here because this module is ungated mechanism, but the superuser
+    `group` may be None: that produces a PLATFORM-SCOPED (house) domain, which
+    no tenant can see or reach, and which a superuser assigns to a group later
+    via `rest/purchase.on_registrar_assign_group`.
+
+    PERMISSIONS: the REST layer enforces `manage_dns` AND platform admin. It is
+    not checked here because this module is ungated mechanism, but the superuser
     requirement is not optional: adoption hands a group control of a hosted zone
     in the HOUSE AWS account, so exposing it to any `manage_dns` holder would be
     a cross-tenant zone-claim primitive.
@@ -219,6 +231,15 @@ def adopt_route53(group, user, name, create_zone=False):
                 f"No Route53 hosted zone exists for '{name}'. "
                 f"Pass create_zone to create one.")
         zone_id = route53.create_hosted_zone(name).zone_id
+    elif route53.get_zone(zone_id).private:
+        # find_zone_id falls back to a PRIVATE zone when no public zone carries
+        # the name. A private zone is VPC-internal and resolves nowhere on the
+        # public internet, so managing one as a Domain would mean certificates
+        # that can never validate and records nobody can look up. Refuse rather
+        # than adopt something that looks live and is not.
+        raise me.ValueException(
+            f"The only Route53 hosted zone for '{name}' is PRIVATE "
+            f"(VPC-internal) and cannot be managed as a public domain")
 
     domain = Domain(
         group=group,
@@ -230,3 +251,143 @@ def adopt_route53(group, user, name, create_zone=False):
         hosted_zone_id=zone_id)
     domain.save()
     return domain
+
+
+# ---------------------------------------------------------------------------
+# house-account discovery
+# ---------------------------------------------------------------------------
+
+def _discovery_row(name, adoptable=True, reason=None):
+    return objict(
+        name=name,
+        registered=False,
+        hosted_zone=False,
+        hosted_zone_id=None,
+        record_count=None,
+        expires=None,
+        auto_renew=None,
+        tracked=False,
+        domain=None,
+        adoptable=adoptable,
+        reason=reason)
+
+
+def _house_name(raw):
+    """
+    Resolve an AWS-reported name to the form `Domain.name` is stored in.
+
+    Returns (key, adoptable, reason). `Domain.name` holds the
+    `naming.normalize_domain` form, which is IDNA-encoded — so matching on the
+    raw name would report every internationalized domain as untracked and then
+    have `adopt` refuse it as already tracked.
+
+    A name that will not normalize at all (an underscore label, a non-IDNA
+    label, a reverse-DNS zone AWS reports oddly) is NOT fatal: one strange zone
+    must not blank the whole account inventory. It is returned under its raw
+    name, flagged un-adoptable, with the reason.
+    """
+    raw = (raw or "").strip().lower().rstrip(".")
+    try:
+        return naming.normalize_domain(raw), True, None
+    except me.ValueException as err:
+        return raw, False, str(err)
+
+
+def discover_house_domains(untracked_only=False):
+    """
+    Everything the HOUSE AWS account holds, merged by domain name.
+
+    Route53 registers domains and hosts DNS zones through two separate APIs and
+    the sets do not match: a domain can be registered with no zone (just bought,
+    or delegated elsewhere), and a zone can exist for a name registered at
+    another registrar. Both are listed and merged, and each row says which of
+    the two it has plus whether dnsman already tracks it.
+
+    Read-only: creates nothing, changes nothing, spends nothing.
+
+    NOTE ON TRACKED: `Domain.name` is globally unique, so `tracked` means "some
+    Domain row already has this name" — regardless of provider. A name held as a
+    GoDaddy BYO domain therefore reads as tracked here too, and `adopt` would
+    refuse it. That is the honest answer, not a provider-aware one.
+
+    PERMISSIONS: none here — this module is ungated mechanism. The gate is
+    platform superuser in `rest/`; see the module docstring.
+    """
+    from mojo.helpers.aws import route53
+
+    try:
+        registered = route53.list_registered_domains()
+    except Exception as err:
+        raise me.ValueException(
+            f"The house AWS account's registered domains could not be listed: "
+            f"{_provider_error_message(err)}")
+    try:
+        hosted = route53.list_hosted_zones()
+    except Exception as err:
+        # Deliberately fatal rather than returning the registrations alone: a
+        # half inventory is indistinguishable from an account with no zones.
+        raise me.ValueException(
+            f"The house AWS account's hosted zones could not be listed: "
+            f"{_provider_error_message(err)}")
+
+    rows = {}
+    private_names = set()
+    public_names = set()
+
+    for entry in registered.domains:
+        key, adoptable, reason = _house_name(entry.name)
+        row = rows.get(key) or _discovery_row(key, adoptable, reason)
+        row.registered = True
+        row.expires = entry.expires
+        row.auto_renew = entry.auto_renew
+        rows[key] = row
+
+    for zone in hosted.zones:
+        key, _adoptable, _reason = _house_name(zone.name)
+        if zone.private:
+            # Private zones are VPC-internal and never become a row of their
+            # own — but the name is remembered, because a name that is
+            # REGISTERED and has only a private zone is still a real row whose
+            # adoptability is affected (see below).
+            private_names.add(key)
+            continue
+        public_names.add(key)
+        row = rows.get(key) or _discovery_row(key, _adoptable, _reason)
+        row.hosted_zone = True
+        row.hosted_zone_id = zone.id
+        row.record_count = zone.record_count
+        rows[key] = row
+
+    for key in private_names - public_names:
+        row = rows.get(key)
+        if row is None:
+            continue
+        # `find_zone_id` falls back to the private zone when no public zone
+        # carries the name, so adopting this would start managing a zone that
+        # resolves nowhere on the public internet. adopt_route53 refuses it too;
+        # flagging it here keeps an operator from being led there at all.
+        row.adoptable = False
+        row.reason = ("the only Route53 hosted zone for this name is private "
+                      "(VPC-internal)")
+
+    if rows:
+        tracked = dict(
+            Domain.objects.filter(name__in=list(rows.keys()))
+            .values_list("name", "id"))
+        for key, domain_id in tracked.items():
+            row = rows.get(key)
+            if row is None:
+                continue
+            row.tracked = True
+            row.domain = domain_id
+            row.adoptable = False
+            row.reason = row.reason or "already tracked by this system"
+
+    data = sorted(rows.values(), key=lambda row: row.name)
+    if untracked_only:
+        data = [row for row in data if not row.tracked]
+
+    return objict(
+        count=len(data),
+        truncated=bool(registered.truncated or hosted.truncated),
+        domains=data)

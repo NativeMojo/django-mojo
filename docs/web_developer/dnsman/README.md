@@ -25,12 +25,18 @@ they may already see — it never widens it.
 Three surfaces are deliberately stricter than a plain read. **Anything building
 UI must gate on these, or it renders controls that 403.**
 
-- `registrar/adopt` — **platform superuser only**. This is checked as the
-  literal `is_superuser` attribute on the user, **not** as a permission string:
-  there is no `admin` permission that opens it, and gating a button on one would
-  render a control that fails. Adoption hands a group control of a hosted zone
-  in the house AWS account; open to any `manage_dns` holder it would be a
-  cross-tenant zone-claim primitive.
+- `registrar/adopt`, `registrar/discover`, `registrar/assign-group` —
+  **platform superuser only**. This is checked as the literal `is_superuser`
+  attribute on the user, **not** as a permission string: there is no `admin`
+  permission that opens it, and gating a button on one would render a control
+  that fails. Passing `?group=` you *do* have rights in does not help either —
+  the superuser check runs first, on purpose. These three hand out, enumerate,
+  or reassign house-account assets; open to any `manage_dns` holder they would
+  be cross-tenant primitives.
+
+  **An API key can never satisfy these**, including a key linked to a superuser
+  member. A group-scoped credential must not inherit platform authority, so
+  these are interactive-superuser only.
 - `certificate/material/<pk>` — requires `manage_dns`, not `view_dns`. Being
   allowed to see that a certificate exists is not the same as being allowed to
   hold its private key. For a domain with **no group** (a house/platform
@@ -55,6 +61,10 @@ is still saved and the reason appears in `last_error`.
 **There is no create route.** Domains come into existence only through
 `registrar/quote` → `registrar/purchase`, `registrar/adopt`, or
 `registrar/register-existing`.
+
+`group` is **not** writable here. A domain with no group is platform-scoped and
+invisible to tenants; assigning it to one is a superuser action through
+`registrar/assign-group`, and it cannot be moved again afterwards.
 
 `status` is one of `pending`, `registering`, `active`, `failed`. In practice you
 will never see `failed`: a registration that fails deletes its domain row and
@@ -249,10 +259,70 @@ removed — so a failed attempt never blocks a later retry of the same name.
 The purchase ledger: who bought what, price, our cost, status, registrar
 operation id, and any error. Read-only. `confirm_token` is never returned.
 
+### `GET /api/dnsman/registrar/discover`
+Superuser only. Everything the **house AWS account** holds, whether or not
+dnsman tracks it — the answer to "what do we own that isn't in here?". Creates
+nothing, changes nothing, spends nothing.
+
+Optional `?untracked=1` returns only the rows dnsman does not already have.
+
+```json
+{ "count": 2, "truncated": false, "domains": [
+  { "name": "example.com", "registered": true, "hosted_zone": true,
+    "hosted_zone_id": "Z1ABCDEF", "record_count": 14,
+    "expires": "2027-03-01T00:00:00Z", "auto_renew": true,
+    "tracked": false, "domain": null, "adoptable": true, "reason": null },
+  { "name": "legacy.com", "registered": true, "hosted_zone": false,
+    "hosted_zone_id": null, "record_count": null,
+    "expires": "2026-11-02T00:00:00Z", "auto_renew": false,
+    "tracked": true, "domain": 12, "adoptable": false,
+    "reason": "already tracked by this system" }
+]}
+```
+
+Route53 registers domains and hosts DNS zones through two separate APIs and the
+sets do not match, so `registered` and `hosted_zone` are independent: a name can
+be one, the other, or both.
+
+- **`tracked`** means *some* `Domain` row already has this name. `Domain.name` is
+  globally unique, so a name held as a GoDaddy BYO domain reads as tracked here
+  too — this flag is not provider-aware, and `adopt` would refuse the name.
+- **`adoptable: false`** — don't offer an adopt control. `reason` says why:
+  already tracked, the name will not normalize, or its only hosted zone is
+  private (VPC-internal, resolves nowhere public).
+- **`truncated: true`** means the page bound was reached and **the list is
+  incomplete**. Surface it; do not render a partial inventory as the whole
+  account.
+
 ### `POST /api/dnsman/registrar/adopt`
 Superuser only. Brings an existing house-account hosted zone under management
 with no purchase and no money — the path by which DNS management is useful on
 day one, before anything has been bought.
+
+```json
+{ "domain": "example.com", "create_zone": false }
+```
+
+`group` is **optional**. Omit it and the domain is adopted *platform-scoped* —
+it belongs to no tenant, appears in no tenant's list, and is assigned later with
+`registrar/assign-group`. That is the normal flow out of `discover`.
+
+Supplying a `group` that does not resolve (deleted, or deactivated) is an
+**error**, not a silent platform-scoped adopt — so a typo'd group id fails loudly
+instead of quietly producing a house domain.
+
+Refused when the name's only hosted zone is private.
+
+### `POST /api/dnsman/registrar/assign-group`
+Superuser only. Hands a platform-scoped domain to a group.
+
+```json
+{ "domain": 12, "group": 3 }
+```
+
+**Assign only.** A domain that already belongs to a group is refused — moving a
+domain from one tenant to another is not supported. Build the UI as a one-time
+action on unassigned domains, not as an editable field.
 
 ## WHOIS and privacy
 

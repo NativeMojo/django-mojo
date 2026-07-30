@@ -537,6 +537,7 @@ def test_adopt_route53_uses_the_existing_zone(opts):
     Domain.objects.filter(name=ADOPT_DOMAIN).delete()
 
     with patch(f"{R53}.find_zone_id", return_value="ZADOPTED") as find_zone, \
+            patch(f"{R53}.get_zone", return_value=objict(private=False)), \
             patch(f"{R53}.create_hosted_zone") as create_zone, \
             patch(f"{R53}.register") as register:
         domain = onboarding.adopt_route53(None, None, ADOPT_DOMAIN)
@@ -554,6 +555,38 @@ def test_adopt_route53_uses_the_existing_zone(opts):
         "Expected no zone to be created when one already exists")
     assert register.call_count == 0, (
         "Adoption must never touch the registrar — no purchase, no money")
+
+
+@th.django_unit_test()
+def test_adopt_route53_refuses_a_private_only_zone(opts):
+    """
+    find_zone_id falls back to a PRIVATE zone when no public zone carries the
+    name. A private zone is VPC-internal: it resolves nowhere on the public
+    internet, so a certificate for it could never validate and its records would
+    be invisible. Adopting one would look successful and be useless.
+    """
+    from mojo.apps.dnsman.models import Domain
+    from mojo.apps.dnsman.services import onboarding
+    from mojo import errors as me
+
+    Domain.objects.filter(name=ADOPT_DOMAIN).delete()
+
+    raised = None
+    with patch(f"{R53}.find_zone_id", return_value="ZPRIVATE"), \
+            patch(f"{R53}.get_zone", return_value=objict(private=True)), \
+            patch(f"{R53}.create_hosted_zone") as create_zone:
+        try:
+            onboarding.adopt_route53(None, None, ADOPT_DOMAIN)
+        except me.ValueException as err:
+            raised = err
+        created = create_zone.call_count
+
+    assert raised is not None, "Expected a private-only zone to be refused"
+    assert "private" in str(raised).lower(), (
+        f"Expected the refusal to name the private zone as the reason, got {raised}")
+    assert created == 0, "A refused adoption must not create a replacement zone"
+    assert not Domain.objects.filter(name=ADOPT_DOMAIN).exists(), (
+        "A refused adoption must create nothing")
 
 
 @th.django_unit_test()

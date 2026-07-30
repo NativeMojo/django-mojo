@@ -2,7 +2,28 @@ import mojo.decorators as md
 import mojo.errors as me
 from mojo.helpers import logit
 from mojo.apps.dnsman.models import Certificate, Domain
+from mojo.apps.dnsman.rest.gates import require_platform_admin
 from mojo.apps.dnsman.services import certs
+
+
+def _guard_house_certificate(request, certificate, what):
+    """
+    A certificate on a group-less (house) domain is platform property.
+
+    Certificate scopes through RestMeta.GROUP_FIELD = "domain__group", and the
+    framework only rebinds request.group to the instance's tenant when that
+    resolution yields something (mojo/models/rest.py). For a house domain it
+    yields None, the rebind is skipped, and the caller-supplied `?group=`
+    SURVIVES into a membership check that honors GroupMember permissions — so a
+    tenant admin holding manage_dns in their own group passes a check that was
+    never about their group at all.
+
+    The LIST path is unaffected (`domain__group=<group>` cannot match a null),
+    so this guards the per-instance paths, where it is the only thing standing
+    between a tenant admin and a platform certificate.
+    """
+    if certificate.domain.group_id is None:
+        require_platform_admin(request, what)
 
 
 @md.URL('certificate')
@@ -11,6 +32,14 @@ from mojo.apps.dnsman.services import certs
 def on_certificate(request, pk=None):
     """Status and renewal state. The graphs carry no PEM and no key — material
     comes only from the material endpoint below."""
+    if pk is not None:
+        # Pre-fetch purely to answer "is this a house certificate?" before the
+        # generic handler's own permission pass. The default graph carries the
+        # owning domain (name, provider, status, expires) and certificate pks are
+        # sequential, so an ungated detail fetch is an enumeration oracle over
+        # the house inventory that registrar/discover keeps superuser-only.
+        _guard_house_certificate(
+            request, Certificate.get_instance_or_404(pk), "House certificates")
     return Certificate.on_rest_request(request, pk)
 
 
@@ -33,7 +62,10 @@ def on_certificate_request(request):
 @md.POST('certificate/revoke')
 @md.requires_params("certificate")
 def on_certificate_revoke(request):
+    """Revocation is irreversible and reaches the CA — the house guard below is
+    the destructive twin of the read guard on the detail route."""
     certificate = Certificate.get_instance_or_404(request.DATA.get("certificate"))
+    _guard_house_certificate(request, certificate, "Revoking a house certificate")
     Certificate.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"], certificate)
     certs.revoke(certificate)
     return certificate.on_rest_get(request)
@@ -59,10 +91,9 @@ def on_certificate_material(request, pk=None):
     # yields None, request.group is never rebound to the instance, and the
     # check degrades to the caller's own group — which any tenant admin with
     # manage_dns would pass. For a house certificate that means handing over a
-    # private key, so require a platform superuser explicitly.
-    if certificate.domain.group_id is None and not getattr(request.user, "is_superuser", False):
-        raise me.PermissionDeniedException(
-            "House certificate material is restricted to platform administrators")
+    # private key, so require a platform admin explicitly. Shared with the
+    # detail and revoke routes so the rule lives in exactly one place.
+    _guard_house_certificate(request, certificate, "House certificate material")
 
     if certificate.status != "active":
         raise me.ValueException(f"Certificate is {certificate.status}, not active")

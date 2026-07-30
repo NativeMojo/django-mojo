@@ -167,3 +167,32 @@ not let it read as ownership.
   as errors — that is the crash-window alarm and it deserves a human.
 - Domains have `auto_renew=True` by default; expiries accrue on the house
   account. Watch `Domain.expires`.
+
+### Auditing the house AWS account
+
+`GET /api/dnsman/registrar/discover` (superuser) answers "what is in our AWS
+account that dnsman does not know about?" — merged across the registrar and
+hosted-zone APIs, one row per name.
+
+```
+GET /api/dnsman/registrar/discover?untracked=1
+```
+
+Worth running after any manual console work, and before assuming an outage is a
+dnsman bug — a domain nobody adopted is a domain nobody is renewing, monitoring
+or issuing certificates for.
+
+Reading the flags:
+
+| Flag | Means |
+|---|---|
+| `registered: false, hosted_zone: true` | Registered elsewhere, DNS hosted here. Adoptable; renewal is somebody else's problem. |
+| `registered: true, hosted_zone: false` | We own it, no zone exists. Adopt with `create_zone: true`. |
+| `tracked: true` | A `Domain` row already has this name — **any provider**, since `Domain.name` is globally unique. `adopt` will refuse it. |
+| `adoptable: false` | Already tracked, or the name will not normalize, or its only zone is private. `reason` says which. |
+| `truncated: true` | The page bound was hit. **The list is incomplete** — do not treat it as an inventory. |
+
+Ingest is deliberately two steps: `discover` never creates anything, and each
+`adopt` is its own call. Adopt without a `group` for anything that is not yet a
+specific tenant's, then `registrar/assign-group` when it is. Assignment is
+one-way — a domain that already has a group is never re-homed.

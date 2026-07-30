@@ -1,5 +1,59 @@
 ## Unreleased
 
+**SECURITY (dnsman)** — **a tenant admin could read and revoke certificates
+belonging to house domains (maestro item 946).** `Certificate` scopes through
+`RestMeta.GROUP_FIELD = "domain__group"`, and the framework only rebinds
+`request.group` to the row's tenant when that path resolves to something. For a
+domain with **no group** it resolves to `None`, the rebind is skipped, and the
+caller-supplied `?group=` survives into a membership check that honors
+`GroupMember` grants — so anyone holding `manage_dns` in *their own* group
+passed. `GET /api/dnsman/certificate/<pk>?group=<own>` returned the certificate
+plus the house domain's name through the default graph (an enumeration oracle,
+since pks are sequential), and `POST /api/dnsman/certificate/revoke` reached the
+CA. `certificate/material` was already guarded; the other two were not. All
+three now share one guard. Note a **direct** `group` FK does not behave this way
+— it rebinds to `None` and falls through to the caller's *global* permissions —
+so this affects only models scoped through a `GROUP_FIELD` path. Reachable
+before this release: `registrar/adopt` required the `group` *key* but never
+checked that it resolved, so a deactivated id already produced a null-group
+domain.
+
+**feat (dnsman)** — **house AWS account discovery: `GET
+/api/dnsman/registrar/discover` (superuser).** dnsman could only manage a domain
+someone already named, so anything registered or hosted in the house AWS account
+outside dnsman was invisible and unadoptable. Discovery lists Route53
+registrations and hosted zones — two separate APIs whose sets do not match —
+merged one row per name, each flagged `registered` / `hosted_zone` / `tracked` /
+`adoptable`, with `?untracked=1` to filter. It creates nothing; ingest stays an
+explicit `adopt`. Private (VPC-internal) zones are excluded, and a registered
+name whose *only* zone is private is flagged un-adoptable rather than silently
+adopted into a zone that resolves nowhere — `adopt_route53` now refuses that
+case too. A bounded page walk reports `truncated: true` rather than passing off a
+partial inventory as the whole account. New model-free primitives
+`route53.list_registered_domains()` / `route53.list_hosted_zones()` back it (mind
+the API asymmetry: `MaxItems` is an int on `route53domains`, a string on
+`route53`). **This is a scoped exception to the "no account-wide listing" rule,
+not a reversal**: it lists the house account, never a tenant's `DnsCredential`.
+
+**feat (dnsman)** — **`registrar/adopt` takes an optional group; new
+`POST /api/dnsman/registrar/assign-group`.** Adopting with no group produces a
+*platform-scoped* domain that no tenant can list or fetch; a superuser assigns it
+to a group later. Assignment is **one-way** — a domain that already has a group
+is refused, because re-homing between tenants is a cross-tenant transfer
+primitive nothing needs. A supplied `group` that does not resolve (deleted or
+deactivated) is now an **error** on both endpoints instead of silently meaning
+"no group", which previously turned a typo'd id into an unowned house domain.
+
+**BREAKING (dnsman)** — **platform-admin endpoints now refuse API keys.**
+`registrar/adopt`, `registrar/discover`, `registrar/assign-group` and the house
+branch of `certificate/material` check a shared gate
+(`mojo/apps/dnsman/rest/gates.require_platform_admin`) that rejects key-backed
+sessions outright. A bare `request.user.is_superuser` read is not sufficient: for
+an `ApiKey` in override mode `request.user` IS a real `User`, so a group-scoped
+key linked to a superuser member inherited platform authority it was never issued
+for. Any integration driving `registrar/adopt` with an API key must move to an
+interactive superuser session.
+
 ## v1.2.62 - July 30, 2026
 
 

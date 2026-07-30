@@ -1,6 +1,8 @@
 import mojo.decorators as md
 import mojo.errors as me
+from mojo.helpers import logit
 from mojo.apps.dnsman.models import Domain, DomainPurchase
+from mojo.apps.dnsman.rest.gates import require_platform_admin
 from mojo.apps.dnsman.services import registrar, onboarding
 
 
@@ -77,8 +79,30 @@ def on_registrar_purchase(request):
     )
 
 
+@md.GET('registrar/discover')
+def on_registrar_discover(request):
+    """
+    What the HOUSE AWS account holds, merged by name, tracked flags included.
+
+    Superuser only. This is the one account-wide listing in dnsman, and the gate
+    is the whole reason it is allowed to exist: the response names every domain
+    in the house account — including ones already assigned to other tenants — so
+    below platform level it is a cross-tenant enumeration surface. The BYO
+    credential rule is untouched; see services/onboarding.py.
+
+    Read-only. Creates nothing, changes nothing, spends nothing.
+    """
+    require_platform_admin(request, "House account discovery")
+    Domain.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"])
+
+    untracked = request.DATA.get("untracked", False)
+    if isinstance(untracked, str):
+        untracked = untracked.lower() in ("1", "true", "yes")
+    return onboarding.discover_house_domains(untracked_only=bool(untracked))
+
+
 @md.POST('registrar/adopt')
-@md.requires_params("group", "domain")
+@md.requires_params("domain")
 def on_registrar_adopt(request):
     """
     Adopt an existing hosted zone in the house AWS account.
@@ -86,10 +110,24 @@ def on_registrar_adopt(request):
     Superuser only, and not because adoption is expensive — because it hands a
     group control over a zone in the HOUSE account. Exposed to any manage_dns
     holder it would be a cross-tenant zone-claim primitive.
+
+    `group` is OPTIONAL. Omitting it adopts the domain platform-scoped (no
+    group), which is what the discovery flow does — no tenant can see or reach
+    it, and a superuser assigns it later via `registrar/assign-group`.
     """
+    require_platform_admin(request, "Adoption")
     Domain.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"])
-    if not getattr(request.user, "is_superuser", False):
-        raise me.PermissionDeniedException("Adoption is restricted to platform administrators")
+
+    # A group that was SUPPLIED but did not resolve is an error, never "no
+    # group": Group.get_active returns None for an inactive or nonexistent id,
+    # silently and by design, so without this a typo'd or deactivated id would
+    # quietly produce a house domain indistinguishable from a deliberate one —
+    # and assign-group only ever fires once, so it could not be corrected.
+    # Same guard, same reason as rest/credential.py.
+    if "group" in request.DATA and request.group is None:
+        raise me.ValueException(
+            "The requested group does not exist or is not active — "
+            "omit 'group' entirely to adopt this domain platform-scoped")
 
     domain = onboarding.adopt_route53(
         group=request.group,
@@ -97,6 +135,49 @@ def on_registrar_adopt(request):
         name=request.DATA.get("domain"),
         create_zone=bool(request.DATA.get("create_zone", False)),
     )
+    return domain.on_rest_get(request)
+
+
+@md.POST('registrar/assign-group')
+@md.requires_params("domain", "group")
+def on_registrar_assign_group(request):
+    """
+    Give a platform-scoped (house) domain to a group.
+
+    Superuser only: this is the moment a house asset becomes a tenant's, so it
+    is the same class of action as adoption itself.
+
+    ASSIGN ONLY — never re-home. A domain that already belongs to a group is
+    refused. Moving one tenant's domain to another tenant is a different
+    operation with a different risk profile, and nothing needs it; building it
+    "just in case" would hand every future caller a cross-tenant transfer
+    primitive.
+    """
+    require_platform_admin(request, "Assigning a domain to a group")
+
+    domain = Domain.get_instance_or_404(request.DATA.get("domain"))
+    Domain.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"], domain)
+
+    if domain.group_id is not None:
+        raise me.ValueException(
+            f"'{domain.name}' already belongs to a group — "
+            f"re-homing a domain between groups is not supported")
+
+    # rest_check_permission_or_raise rebinds request.group to the instance's
+    # group (None here), so re-resolve from the body rather than trusting it.
+    from mojo.apps.account.models.group import Group
+
+    group = Group.get_active(request.DATA.get_typed("group", None, int))
+    if group is None:
+        raise me.ValueException("The requested group does not exist or is not active")
+
+    domain.group = group
+    domain.save()
+
+    logit.info(
+        f"dnsman: domain {domain.name} (id={domain.pk}) assigned to group "
+        f"{group.name} (id={group.pk}) by user={getattr(request.user, 'pk', None)} "
+        f"ip={request.ip}")
     return domain.on_rest_get(request)
 
 

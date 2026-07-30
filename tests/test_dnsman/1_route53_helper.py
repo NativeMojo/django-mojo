@@ -980,3 +980,172 @@ def test_get_change_reports_insync(opts):
     with patch(f"{MODULE}._dns_client", return_value=client):
         result = route53.get_change("C2")
     assert result.insync is False, "Expected insync to be False while a change is PENDING"
+
+
+# ---------------------------------------------------------------------------
+# account-wide listers — the house-account inventory primitives
+#
+# These back dnsman's superuser-only discovery surface. Both report `truncated`
+# rather than returning a bare list, because an inventory that silently stops
+# early answers "that is everything" — a wrong answer, unlike an operations poll
+# that self-heals on the next run.
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_list_registered_domains_follows_the_page_marker(opts):
+    from mojo.helpers.aws import route53
+
+    page_one = {
+        "Domains": [{"DomainName": "Example.COM.", "AutoRenew": True,
+                     "TransferLock": False, "Expiry": "2027-01-01"}],
+        "NextPageMarker": "PAGE2",
+    }
+    page_two = {
+        "Domains": [{"DomainName": "second.com", "AutoRenew": False,
+                     "TransferLock": True, "Expiry": "2028-01-01"}],
+    }
+    client = MagicMock()
+    client.list_domains.side_effect = [page_one, page_two]
+
+    with patch(f"{MODULE}._domains_client", return_value=client):
+        result = route53.list_registered_domains()
+
+    assert client.list_domains.call_count == 2, (
+        f"Expected NextPageMarker to be followed, got "
+        f"{client.list_domains.call_count} call(s)")
+    assert result.truncated is False, (
+        "Both pages were consumed, so the listing is complete — truncated must "
+        "be False")
+    assert [d.name for d in result.domains] == ["example.com", "second.com"], (
+        f"Expected both pages, normalized, got {[d.name for d in result.domains]}")
+    assert result.domains[0].auto_renew is True, "Expected AutoRenew to be carried through"
+    assert result.domains[1].transfer_lock is True, "Expected TransferLock to be carried through"
+    assert result.domains[0].expires == "2027-01-01", "Expected Expiry to be carried through"
+
+    second_call = client.list_domains.call_args_list[1].kwargs
+    assert second_call.get("Marker") == "PAGE2", (
+        f"Expected NextPageMarker to drive the second page's Marker, "
+        f"got {second_call.get('Marker')}")
+
+
+@th.django_unit_test()
+def test_list_registered_domains_passes_an_integer_max_items(opts):
+    """route53domains takes an INT MaxItems; route53 takes a STRING. Passing the
+    wrong type is a ParamValidationError, and the two APIs sit side by side."""
+    from mojo.helpers.aws import route53
+
+    client = _client(list_domains={"Domains": []})
+    with patch(f"{MODULE}._domains_client", return_value=client):
+        route53.list_registered_domains()
+
+    sent = client.list_domains.call_args.kwargs
+    assert isinstance(sent.get("MaxItems"), int), (
+        f"route53domains.list_domains needs an INTEGER MaxItems, got "
+        f"{type(sent.get('MaxItems')).__name__}")
+
+
+@th.django_unit_test()
+def test_list_registered_domains_reports_truncation(opts):
+    from mojo.helpers.aws import route53
+
+    client = MagicMock()
+    client.list_domains.return_value = {
+        "Domains": [{"DomainName": "loop.com"}],
+        "NextPageMarker": "ALWAYS",
+    }
+
+    with patch(f"{MODULE}._domains_client", return_value=client):
+        result = route53.list_registered_domains(max_pages=2)
+
+    assert client.list_domains.call_count == 2, (
+        f"Expected max_pages to bound the walk, got {client.list_domains.call_count}")
+    assert result.truncated is True, (
+        "The page bound was hit with a marker still outstanding — the caller "
+        "must be told the inventory is partial, not handed a silent subset")
+
+
+@th.django_unit_test()
+def test_list_hosted_zones_follows_is_truncated(opts):
+    from mojo.helpers.aws import route53
+
+    page_one = {
+        "HostedZones": [
+            {"Id": "/hostedzone/ZPUB", "Name": "example.com.",
+             "Config": {"PrivateZone": False}, "ResourceRecordSetCount": 7},
+        ],
+        "IsTruncated": True,
+        "NextMarker": "ZONE2",
+    }
+    page_two = {
+        "HostedZones": [
+            {"Id": "/hostedzone/ZPRIV", "Name": "\\052.internal.example.com.",
+             "Config": {"PrivateZone": True}, "ResourceRecordSetCount": 2},
+        ],
+        "IsTruncated": False,
+    }
+    client = MagicMock()
+    client.list_hosted_zones.side_effect = [page_one, page_two]
+
+    with patch(f"{MODULE}._dns_client", return_value=client):
+        result = route53.list_hosted_zones()
+
+    assert client.list_hosted_zones.call_count == 2, (
+        f"Expected IsTruncated to drive a second page, got "
+        f"{client.list_hosted_zones.call_count} call(s)")
+    assert result.truncated is False, "Both pages were consumed — truncated must be False"
+    assert len(result.zones) == 2, f"Expected zones from both pages, got {len(result.zones)}"
+
+    assert result.zones[0].id == "ZPUB", (
+        f"Expected the /hostedzone/ prefix to be stripped, got {result.zones[0].id}")
+    assert result.zones[0].name == "example.com", (
+        f"Expected the trailing dot stripped, got {result.zones[0].name}")
+    assert result.zones[0].private is False, "Expected a public zone to report private=False"
+    assert result.zones[0].record_count == 7, "Expected ResourceRecordSetCount to carry through"
+
+    assert result.zones[1].name == "*.internal.example.com", (
+        f"Expected the octal escape decoded, got {result.zones[1].name}")
+    assert result.zones[1].private is True, (
+        "A private zone must be RETURNED and flagged — this helper mirrors AWS; "
+        "filtering is the caller's policy call")
+
+    second_call = client.list_hosted_zones.call_args_list[1].kwargs
+    assert second_call.get("Marker") == "ZONE2", (
+        f"Expected NextMarker to drive the second page, got {second_call.get('Marker')}")
+
+
+@th.django_unit_test()
+def test_list_hosted_zones_passes_a_string_max_items(opts):
+    """The asymmetry that bites: route53 wants MaxItems as a STRING, while
+    route53domains wants an int. Same as list_records above."""
+    from mojo.helpers.aws import route53
+
+    client = _client(list_hosted_zones={"HostedZones": [], "IsTruncated": False})
+    with patch(f"{MODULE}._dns_client", return_value=client):
+        route53.list_hosted_zones()
+
+    sent = client.list_hosted_zones.call_args.kwargs
+    assert isinstance(sent.get("MaxItems"), str), (
+        f"route53.list_hosted_zones needs a STRING MaxItems, got "
+        f"{type(sent.get('MaxItems')).__name__}")
+
+
+@th.django_unit_test()
+def test_list_hosted_zones_reports_truncation(opts):
+    from mojo.helpers.aws import route53
+
+    client = MagicMock()
+    client.list_hosted_zones.return_value = {
+        "HostedZones": [{"Id": "/hostedzone/ZLOOP", "Name": "loop.com.",
+                         "Config": {}, "ResourceRecordSetCount": 1}],
+        "IsTruncated": True,
+        "NextMarker": "ALWAYS",
+    }
+
+    with patch(f"{MODULE}._dns_client", return_value=client):
+        result = route53.list_hosted_zones(max_pages=3)
+
+    assert client.list_hosted_zones.call_count == 3, (
+        f"Expected max_pages to bound the walk, got {client.list_hosted_zones.call_count}")
+    assert result.truncated is True, (
+        "The page bound was hit while AWS still reported IsTruncated — the "
+        "caller must be told the zone inventory is partial")

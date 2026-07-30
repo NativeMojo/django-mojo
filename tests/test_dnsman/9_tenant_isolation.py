@@ -39,6 +39,14 @@ def setup_tenant_isolation(opts):
         domain_name="ti-bravo-example.com", status="completed",
         price="12.00", cost="12.00", currency="USD")
 
+    # A HOUSE domain: no group at all. This is the normal state of a domain
+    # adopted out of the house AWS account before anyone assigns it, so every
+    # tenant boundary has to hold against it — including for the rows that hang
+    # off it, which scope through GROUP_FIELD rather than a direct group FK.
+    opts.domain_house = make_domain(name="ti-house-example.com", group=None,
+                                    provider="godaddy", status="active")
+    opts.certificate_house = make_certificate(opts.domain_house)
+
 
 @th.django_unit_test("a domain list never contains another tenant's rows")
 def test_domain_list_scoped(opts):
@@ -113,3 +121,85 @@ def test_dns_write_cross_tenant(opts):
         domain=opts.domain_b.pk, type="TXT", name="probe", record_values=["x"]))
     assert resp.status_code in (401, 403, 404), \
         f"tenant A wrote a DNS record on tenant B's domain (status {resp.status_code})"
+
+
+# ---------------------------------------------------------------------------
+# House (group-less) rows — the platform tier a tenant must never reach
+#
+# A Domain scopes on a DIRECT group FK, so a null group rebinds request.group to
+# None and the check falls through to the caller's GLOBAL permissions, which a
+# GroupMember grant is not. A Certificate scopes through
+# GROUP_FIELD = "domain__group", and THAT rebind is skipped when it resolves to
+# None — so the caller-supplied ?group= survives into a membership check. Same
+# null group, opposite outcomes; hence the explicit guards in rest/certificate.py.
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("a house domain is absent from a tenant's domain list")
+def test_house_domain_not_in_tenant_list(opts):
+    login(opts, opts.email_a, opts.pw_a)
+    resp = opts.client.get("/api/dnsman/domain", params=dict(group=opts.group_a.pk))
+    assert resp.status_code == 200, f"tenant A could not list its own domains ({resp.status_code})"
+    assert "ti-house-example.com" not in str(resp.response), (
+        "a platform-scoped domain leaked into a tenant's list — 'no group' must "
+        "mean 'no tenant', not 'every tenant'")
+
+
+@th.django_unit_test("a house domain cannot be fetched by pk by a tenant")
+def test_house_domain_detail_refused(opts):
+    login(opts, opts.email_a, opts.pw_a)
+    resp = opts.client.get(f"/api/dnsman/domain/{opts.domain_house.pk}",
+                           params=dict(group=opts.group_a.pk))
+    assert resp.status_code in (401, 403, 404), (
+        f"a tenant fetched a platform-scoped domain by pk (status {resp.status_code})")
+    assert "ti-house-example.com" not in str(resp.response), \
+        "the refusal itself leaked the house domain name"
+
+
+@th.django_unit_test("a house certificate cannot be read by naming your own group")
+def test_house_certificate_detail_refused(opts):
+    """
+    The GROUP_FIELD rebind is skipped at a null group, so ?group=<own group>
+    survives into Group.user_has_permission — which honors GroupMember grants.
+    Without the explicit house guard this returns the certificate AND the owning
+    domain through the default graph's {"domain": "basic"} sub-graph, and
+    certificate pks are sequential: an enumeration oracle over the house
+    inventory that registrar/discover keeps superuser-only.
+    """
+    login(opts, opts.email_a, opts.pw_a)
+    resp = opts.client.get(f"/api/dnsman/certificate/{opts.certificate_house.pk}",
+                           params=dict(group=opts.group_a.pk))
+    assert resp.status_code in (401, 403, 404), (
+        f"a tenant read a house certificate by naming its own group "
+        f"(status {resp.status_code})")
+    assert "ti-house-example.com" not in str(resp.response), \
+        "the refusal leaked the house domain name through the certificate graph"
+
+
+@th.django_unit_test("a house certificate cannot be revoked by a tenant")
+def test_house_certificate_revoke_refused(opts):
+    """The destructive twin of the read above: revocation is irreversible and
+    reaches the CA."""
+    from mojo.apps.dnsman.models import Certificate
+
+    login(opts, opts.email_a, opts.pw_a)
+    resp = opts.client.post("/api/dnsman/certificate/revoke", json=dict(
+        certificate=opts.certificate_house.pk, group=opts.group_a.pk))
+    assert resp.status_code in (401, 403, 404), (
+        f"a tenant reached revocation on a house certificate "
+        f"(status {resp.status_code})")
+
+    fresh = Certificate.objects.get(pk=opts.certificate_house.pk)
+    assert fresh.status != "revoked", \
+        "a house certificate was revoked by a caller from another tenant"
+
+
+@th.django_unit_test("a house certificate's key material stays out of tenant hands")
+def test_house_certificate_material_refused(opts):
+    login(opts, opts.email_a, opts.pw_a)
+    resp = opts.client.get(
+        f"/api/dnsman/certificate/material/{opts.certificate_house.pk}",
+        params=dict(group=opts.group_a.pk))
+    assert resp.status_code in (401, 403, 404), (
+        f"a tenant reached house certificate MATERIAL (status {resp.status_code})")
+    assert "private_key_pem" not in str(resp.response), \
+        "the refusal still returned a key field"

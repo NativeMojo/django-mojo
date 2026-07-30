@@ -100,6 +100,110 @@ def test_adopt_requires_superuser(opts):
         f"the house AWS account (status {resp.status_code})")
 
 
+@th.django_unit_test("house-account discovery is refused to manage_dns without superuser")
+def test_discover_requires_superuser(opts):
+    login(opts, opts.manager_email, opts.manager_pw)
+    resp = opts.client.get("/api/dnsman/registrar/discover")
+    assert resp.status_code in (401, 403), (
+        "discovery lists every domain in the house AWS account, including other "
+        f"tenants' — it must be superuser-only (status {resp.status_code})")
+
+
+@th.django_unit_test("naming your own group does not open house-account discovery")
+def test_discover_group_param_does_not_open_it(opts):
+    """
+    The model permission check is NOT the gate here. With ?group=<own group> it
+    consults Group.user_has_permission, which honors GroupMember grants — so a
+    group admin passes it. The superuser gate runs FIRST for exactly this
+    reason; this pins that ordering.
+    """
+    login(opts, opts.manager_email, opts.manager_pw)
+    resp = opts.client.get("/api/dnsman/registrar/discover",
+                           params=dict(group=opts.group.pk))
+    assert resp.status_code in (401, 403), (
+        "supplying a group the caller has rights in must not satisfy the "
+        f"platform-admin gate (status {resp.status_code})")
+
+
+@th.django_unit_test("assigning a domain to a group is refused to manage_dns without superuser")
+def test_assign_group_requires_superuser(opts):
+    login(opts, opts.manager_email, opts.manager_pw)
+    resp = opts.client.post("/api/dnsman/registrar/assign-group", json=dict(
+        domain=opts.domain.pk, group=opts.group.pk))
+    assert resp.status_code in (401, 403), (
+        "assignment turns a house asset into a tenant's — it must be "
+        f"superuser-only (status {resp.status_code})")
+
+    opts.domain.refresh_from_db()
+    assert opts.domain.group_id is None, \
+        "a refused assignment must not have moved the domain into a group"
+
+
+@th.django_unit_test("adopt refuses a group id that does not resolve")
+def test_adopt_refuses_an_unresolvable_group(opts):
+    """
+    Group.get_active returns None for an inactive or nonexistent id, silently.
+    Without a guard a typo'd id would quietly adopt the domain platform-scoped —
+    indistinguishable from a deliberate house adopt, and assign-group only ever
+    fires once, so it could never be corrected.
+    """
+    from mojo.apps.dnsman.models import Domain
+
+    login(opts, opts.admin_email, opts.admin_pw)
+    resp = opts.client.post("/api/dnsman/registrar/adopt", json=dict(
+        group=99999999, domain="dm-unresolvable-group.com"))
+    assert resp.status_code != 200, (
+        "an unresolvable group must be refused, not silently treated as "
+        f"'no group' (status {resp.status_code})")
+    assert not Domain.objects.filter(name="dm-unresolvable-group.com").exists(), (
+        "a refused adopt must create nothing — least of all a house domain the "
+        "caller did not ask for")
+
+
+@th.django_unit_test("a superuser assigns an unowned house domain to a group")
+def test_assign_group_happy_path(opts):
+    """No network on this path: it is a plain field write, so it is safe to
+    exercise end-to-end against the live server."""
+    from tests.test_dnsman._helpers import make_domain
+
+    # A fresh row on purpose — opts.domain is the module's shared null-group
+    # fixture and opts.certificate hangs off it.
+    domain = make_domain(name="dm-assignable-example.com", group=None,
+                         provider="godaddy", status="active")
+
+    login(opts, opts.admin_email, opts.admin_pw)
+    resp = opts.client.post("/api/dnsman/registrar/assign-group", json=dict(
+        domain=domain.pk, group=opts.group.pk))
+    assert resp.status_code == 200, (
+        f"a superuser must be able to assign an unowned domain "
+        f"(status {resp.status_code}: {resp.response})")
+
+    domain.refresh_from_db()
+    assert domain.group_id == opts.group.pk, (
+        f"expected the domain to land in group {opts.group.pk}, "
+        f"got {domain.group_id}")
+
+
+@th.django_unit_test("a domain that already belongs to a group is never re-homed")
+def test_assign_group_refuses_rehoming(opts):
+    from tests.test_dnsman._helpers import make_domain, make_group
+
+    owned = make_domain(name="dm-owned-example.com", group=opts.group,
+                        provider="godaddy", status="active")
+    other = make_group("dnsrest-other")
+
+    login(opts, opts.admin_email, opts.admin_pw)
+    resp = opts.client.post("/api/dnsman/registrar/assign-group", json=dict(
+        domain=owned.pk, group=other.pk))
+    assert resp.status_code != 200, (
+        "moving a domain between tenants is a cross-tenant transfer primitive "
+        f"and must be refused (status {resp.status_code})")
+
+    owned.refresh_from_db()
+    assert owned.group_id == opts.group.pk, (
+        f"the domain must stay with its original group, got {owned.group_id}")
+
+
 @th.django_unit_test("certificate material is refused to view_dns")
 def test_material_requires_manage(opts):
     login(opts, opts.viewer_email, opts.viewer_pw)

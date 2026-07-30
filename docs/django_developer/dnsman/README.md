@@ -15,6 +15,8 @@ REST reference for API consumers: [web_developer/dnsman](../../web_developer/dns
 
 ```
 mojo/helpers/aws/route53.py      Route53 Domains + hosted-zone primitives (model-free)
+                                 incl. list_registered_domains() / list_hosted_zones()
+                                 — paginated account inventory, report `truncated`
 mojo/helpers/acme/               Minimal ACMEv2 DNS-01 client (jws.py, client.py)
 mojo/helpers/dns/godaddy.py      GoDaddy record API (pre-existing; gained raise_on_error)
 mojo/helpers/dns/probe.py        Authoritative TXT probe — "is this record live yet?"
@@ -25,7 +27,8 @@ mojo/apps/dnsman/
     naming.py    Domain/record normalization — the single source of truth
     dns.py       Provider dispatch (UNGATED mechanism)
     providers/   route53_provider.py, godaddy_provider.py behind one interface
-    onboarding.py  link a credential, adopt a zone, claim a BYO domain
+    onboarding.py  link a credential, adopt a zone, claim a BYO domain,
+                   discover the house AWS account's inventory
     registrar.py   search / quote / purchase / poll / WHOIS / privacy
     certs.py       ACME DNS-01 issuance, renewal, revocation, sync broadcast
     email.py       provider-dispatched SES record application
@@ -79,10 +82,17 @@ account holds many domains and rotation has to happen in exactly one place.
 whose credential is null, inactive, or unverified raises **before any network
 call**. Call sites do not repeat this check.
 
-A provider key is account-wide, so blast radius is deliberately contained:
-nothing in this app exposes "list every domain in the linked account". Ownership
-is proven per-name at registration, so a member can only ever confirm a domain
-they already knew to name.
+A **tenant's** provider key is account-wide, so blast radius is deliberately
+contained: nothing in this app exposes "list every domain in a linked
+credential's account". Ownership is proven per-name at registration, so a member
+can only ever confirm a domain they already knew to name.
+
+There is exactly one account-wide listing, and it is a different account:
+`onboarding.discover_house_domains()` lists the **house AWS account**, which the
+platform owns outright and already hands zones out of via `adopt_route53`. It
+never touches a `DnsCredential`, so no tenant key is enumerated by it, and its
+REST gate is platform superuser (`rest/gates.require_platform_admin`). The BYO
+rule above is unchanged and still pinned by a test.
 
 ## Permissions
 
@@ -113,6 +123,48 @@ Three ways in, and no bare create route (`CAN_CREATE = False`):
    of a zone in the house account, which for anyone else would be a
    cross-tenant zone-claim primitive.
 3. **BYO** — `onboarding.register_existing()`, proven by the linked credential
+
+### Finding what to adopt
+
+Adoption is exact-name only, so it can only ever bring in a domain somebody
+already remembered. `onboarding.discover_house_domains()` is the inventory that
+makes it usable: it lists the house AWS account's **registrations** and **hosted
+zones** — two separate APIs whose sets do not match — merged into one row per
+name, each flagged `registered` / `hosted_zone` / `tracked` / `adoptable`.
+
+It creates nothing. Ingest stays an explicit `adopt` call, never a side effect
+of looking.
+
+Two things it deliberately refuses to hide:
+
+- **`truncated`** — the page walk is bounded (`max_pages`), and a bounded walk
+  that reports as complete is a wrong answer, not a small one.
+- **Private zones** — VPC-internal, so they resolve nowhere public and are
+  excluded. A name whose *only* zone is private still appears when it is also
+  registered, flagged un-adoptable, because `find_zone_id` would otherwise fall
+  back to that private zone. `adopt_route53` refuses it at the other end too.
+
+### Group assignment
+
+A domain adopted with `group=None` is **platform-scoped**: no tenant can list or
+fetch it (the framework filters group-scoped lists to the caller's groups, and a
+null group falls through to a check on the caller's *global* permissions, which
+a `GroupMember` grant is not).
+
+`registrar/assign-group` moves such a domain into a group. It is superuser-only
+and **assign-only** — a domain that already has a group is refused, because
+re-homing between tenants is a cross-tenant transfer primitive that nothing
+needs.
+
+> **Rows that hang off a house domain need their own guard.** `Certificate`
+> scopes through `RestMeta.GROUP_FIELD = "domain__group"`, and the framework
+> skips its `request.group` rebind when that path resolves to `None` — so a
+> caller-supplied `?group=` survives into a membership check that honors
+> `GroupMember` grants. A direct `group` FK does not behave this way (it rebinds
+> to `None` and falls through to global permissions). `rest/certificate.py`
+> therefore guards its per-instance routes explicitly via
+> `_guard_house_certificate`. Any future model scoped through a `GROUP_FIELD`
+> path needs the same treatment.
 
 ### The no-failed-rows invariant
 
