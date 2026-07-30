@@ -265,12 +265,30 @@ https://app.example.com/portal?auth_code=<32-hex>
 
 The flow:
 1. Auth page completes login.
-2. Detects cross-origin redirect, POSTs `/api/auth/handoff` → gets `code`.
+2. Detects cross-origin redirect, POSTs `/api/auth/handoff` with
+   `{"redirect_uri": "<resolved destination>"}` → gets `code`.
 3. Browser navigates to `<redirect>?auth_code=<code>`.
 4. The app calls `MojoAuth.handleAuthCodeFromURL()` on bootstrap — strips the
    param, POSTs `/api/auth/exchange`, stores resulting tokens.
 
 Codes are single-use and expire after `AUTH_HANDOFF_CODE_TTL` seconds (default 60).
+
+**The destination must be allowlisted server-side.** `?redirect=` is
+attacker-supplied, and the code buys an access + refresh token pair, so the
+server refuses to mint one for a destination it does not allow — see
+`AUTH_HANDOFF_ALLOWED_URLS` / `AUTH_HANDOFF_RESOLVER` in
+[Cross-Origin Auth Handoff](authentication.md#cross-origin-auth-handoff). When
+the mint is refused the auth page shows an error and **stays put**; it does not
+fall back to navigating to the destination without a code. A deployment that
+configures neither setting refuses every cross-origin redirect handoff, so add
+your app's origin before pointing `?redirect=` at it.
+
+`MojoAuth.requestHandoffCode(destination)` takes the destination as a required
+argument and rejects without one. Treat a rejection as "do not navigate".
+
+**`?back=`** (the "Back to website" link) accepts only `http`/`https` URLs and
+same-origin relative paths — a `javascript:`/`data:` value is dropped and the
+link stays hidden.
 
 ```html
 <script src="https://auth.example.com/api/account/static/mojo-auth.js"></script>

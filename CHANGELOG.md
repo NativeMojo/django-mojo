@@ -1,5 +1,63 @@
 ## Unreleased
 
+**BREAKING (account/security)** — **`POST /api/auth/handoff` now requires an
+allowlisted `redirect_uri`, and refuses by default (maestro item 943).** The
+endpoint minted a code that `POST /api/auth/exchange` trades for an access
+**and** refresh token pair, and recorded nothing about where the code was going;
+`mojo-auth.js` posted an empty body, and the destination was chosen entirely by
+client-side JS reading the attacker-supplied `?redirect=` param. A crafted link
+opened by an already-signed-in user handed that user's refresh token to any
+origin. `docs/django_developer/account/auth.md` documented this as intentional
+and delegated the fix to deployments; that text is now false and has been
+rewritten.
+
+The destination is decided at **issuance**, where nothing spoofable
+participates: `redirect_uri` is required, checked before a code exists, and a
+refusal returns `400` with **no code minted**. `auth/exchange` is deliberately
+unchanged — it is a server-to-server call from the consuming app's backend,
+which sets its own headers, so an attacker holding the code holds those too.
+
+Two new settings, checked in order:
+
+- **`AUTH_HANDOFF_RESOLVER`** — dotted path to `fn(url, request=None) -> bool`,
+  loaded via `mojo.helpers.modules.load_function()` and cached. When set it
+  decides. This is the answer for a multi-tenant platform whose destinations
+  live in a DB rather than a settings file. It is security-critical deployment
+  code: the framework wraps the call and treats an exception — or a dotted path
+  that fails to import — as **refused**, logged. Unlike `USER_LOGIN_HANDLER`,
+  which swallows errors, a broken resolver never opens the gate.
+- **`AUTH_HANDOFF_ALLOWED_URLS`** — static list, matched on **exact host + path
+  prefix**. `https://*.example.com/` admits `example.com` and one extra
+  dot-free label (`a.example.com`), not `a.b.example.com` and not
+  `example.com.evil.tld`; `/app` does not admit `/application`; an `https://`
+  entry never admits an `http://` destination. Host-only matching was rejected —
+  it would make every open redirector, query reflector and analytics beacon on
+  an allowed host a token-deposit site.
+
+**Neither configured → every cross-origin handoff is refused.** Same-origin and
+relative redirects are unaffected (they never mint a code). This deliberately
+does **not** inherit `ALLOWED_REDIRECT_URLS`: operators wrote those values under
+different semantics — wildcards are inert there and live here — so reusing them
+would silently change what they mean. **Any deployment whose auth page redirects
+cross-origin must set one of the two before upgrading, or those redirects stop
+working.** `create_handoff_code()` gains a `destination=` argument and stores
+`dest` alongside `uid`/`ip`, for audit only — neither is enforced on consume.
+
+Client-side, `MojoAuth.requestHandoffCode(destination)` now takes the
+destination and rejects without one, and the auth page's failure path shows an
+error and **navigates nowhere** — it used to fall back to the raw target, which
+would have defeated the check.
+
+**fix (account/security)** — **`?back=` on the hosted auth pages can no longer
+carry a `javascript:` URL.** `auth_base.html` assigned the raw query param
+straight to the "Back to website" link's `href` (and published it on
+`_matConfig.backUrl`, which page scripts read into an href), so
+`?back=javascript:…` executed on the auth origin the moment a visitor clicked
+Back — a live XSS sink with no CSP behind it. Both sinks now resolve the value
+and accept only `http`/`https`. The host is deliberately **not** allowlisted:
+"back to the marketing site" is legitimately cross-origin, and the scheme check
+is what closes the hole.
+
 ## v1.2.62 - July 30, 2026
 
 

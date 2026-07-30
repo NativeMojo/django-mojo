@@ -64,6 +64,24 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `AUTH_BEARER_HANDLERS`
 - `AUTH_BEARER_NAME_MAP`
+- `AUTH_HANDOFF_CODE_TTL` — int, default `60`. Seconds before a cross-origin
+  handoff code expires.
+- `AUTH_HANDOFF_ALLOWED_URLS` — list, default `[]`. Destination URLs
+  `POST /api/auth/handoff` may mint a code for, matched on **exact host + path
+  prefix** (`https://*.example.com/` admits one extra dot-free label). Empty and
+  with no resolver means every cross-origin handoff is refused — **fail-closed
+  by design**. Deliberately separate from `ALLOWED_REDIRECT_URLS`, which was
+  written under different semantics (wildcards are inert there). See
+  [Cross-Origin Auth Handoff](../account/auth.md#cross-origin-auth-handoff).
+- `AUTH_HANDOFF_RESOLVER` — dotted path to `fn(url, request=None) -> bool`,
+  loaded via `mojo.helpers.modules.load_function()` and cached. **When set it
+  decides** and `AUTH_HANDOFF_ALLOWED_URLS` is not consulted — the answer for a
+  multi-tenant platform whose destinations live in a DB, not a settings file.
+  The resolver is security-critical deployment code: it must compare hosts
+  exactly (never substring/prefix), check the scheme, and fail closed. The
+  framework wraps the call — a resolver that raises, or a dotted path that fails
+  to import, refuses **everything** and is logged. Unlike `USER_LOGIN_HANDLER`,
+  it never fails open.
 - `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` — **file-only** (`settings.get_static`). A fixed code accepted in place of the real SMS code during phone verification; never set it in production. Deliberately not readable from the DB/Redis settings plane, so a `Setting` row cannot arm an authentication bypass at runtime.
 
 ### AWS

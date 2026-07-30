@@ -150,13 +150,17 @@ the auth origin. The handoff service mints a short-lived, single-use code that
 the auth page appends to the redirect URL; the app exchanges it for a JWT.
 
 ```python
-from mojo.apps.account.services import auth_handoff
+from mojo.apps.account.services import auth_handoff, redirect_allowlist
 
-# Issued from the authenticated POST /api/auth/handoff handler
-code = auth_handoff.create_handoff_code(request.user, ip=request.ip)
+# Issued from the authenticated POST /api/auth/handoff handler. The destination
+# is REQUIRED and checked BEFORE a code exists — see below.
+if not redirect_allowlist.is_allowed_destination(destination, request):
+    raise merrors.ValueException("redirect_uri is not permitted for auth handoff")
+code = auth_handoff.create_handoff_code(request.user, destination=destination, ip=request.ip)
 
 # Consumed by the public POST /api/auth/exchange handler
-data = auth_handoff.consume_handoff_code(code)  # {"uid": <id>, "ip": "..."} or None
+data = auth_handoff.consume_handoff_code(code)
+# -> {"uid": <id>, "ip": "...", "dest": "https://app.example.com/"} or None
 ```
 
 Codes are 32-hex random strings stored under Redis key `auth:handoff:<code>`,
@@ -167,15 +171,84 @@ exchange attempts cannot both win. The exchange endpoint reuses
 tracking, last-login bump, and webapp-URL metadata all fire on the handoff
 exchange.
 
+### The destination is allowlisted at issuance
+
+A handoff code buys an access **and** refresh token pair, so where it is going
+is decided when it is minted, and nowhere else. `POST /api/auth/handoff`
+**requires** `redirect_uri` and returns `400` — minting nothing — when the
+destination is not allowed. Neither `dest` nor `ip` is re-checked on consume:
+`POST /api/auth/exchange` is a server-to-server call from the consuming app's
+own backend, which chooses its own egress IP and its own headers, so an
+`Origin`/`Referer` check there would reject honest callers and stop nobody who
+already holds the code. Both stored fields are audit records.
+
+**This is fail-closed.** A deployment that configures neither setting below
+refuses every cross-origin handoff. Same-origin and relative redirects are
+unaffected — they never mint a code, because the tokens already live in
+`localStorage` on the destination origin.
+
 | Setting | Default | Purpose |
 |---|---|---|
 | `AUTH_HANDOFF_CODE_TTL` | `60` | Seconds before a handoff code expires |
+| `AUTH_HANDOFF_ALLOWED_URLS` | `[]` | Static list of allowed destination URLs |
+| `AUTH_HANDOFF_RESOLVER` | `""` | Dotted path to `fn(url, request=None) -> bool`; when set it decides and the static list is not consulted |
 
-**Security trade-off.** The redirect destination is **not** allowlisted — by
-design, per the request scope. A malicious `?redirect=evil.example.com` link
-opened by an already-signed-in user will hand a JWT to `evil` after
-auto-session-resume. Deployments needing tighter control should layer their
-own allowlist over the `?redirect=` param before the bouncer.
+Static entries match on **exact host + path prefix**:
+
+```python
+AUTH_HANDOFF_ALLOWED_URLS = [
+    "https://app.example.com/",        # any path on that host
+    "https://portal.example.com/app",  # /app and /app/... only, not /application
+    "https://*.tenants.example.com/",  # one extra dot-free label, plus the base host
+]
+```
+
+- Scheme must be `http`/`https` **and must match the entry** — an `https://`
+  entry never admits an `http://` destination. This is also how `javascript:`
+  and `data:` are refused: they have no hostname.
+- Host comparison is case-folded and exact. `*.example.com` admits
+  `example.com` and `a.example.com`, but **not** `a.b.example.com` and **not**
+  `example.com.evil.tld`.
+- Path matching stops at a segment boundary, so `/app` does not admit
+  `/application`. Query strings are ignored. Host-only matching was
+  deliberately rejected — it would turn every open redirector, query reflector
+  and analytics beacon on an allowed host into a token-deposit site.
+- Hostnames must be plain ASCII host characters; list IDN destinations in
+  punycode. That closes the parser-differential class where Python keeps a
+  character inside the host that a browser treats as an authority terminator.
+
+`AUTH_HANDOFF_ALLOWED_URLS` is deliberately **separate** from
+`ALLOWED_REDIRECT_URLS` (the OAuth `redirect_uri` allowlist). Operators wrote
+those values under different semantics — notably, wildcards are inert there and
+live here — so a deployment must opt into handoff destinations explicitly.
+
+### Supplying a resolver instead of a list
+
+A multi-tenant platform that cannot enumerate destinations in a settings file
+implements one function against its own domain registry:
+
+```python
+# myapp/services/handoff.py
+def allow_tenant_destination(url, request=None):
+    from urllib.parse import urlsplit
+    parts = urlsplit(url)
+    if parts.scheme != "https":
+        return False
+    return TenantDomain.objects.filter(
+        hostname=(parts.hostname or "").lower(), is_active=True).exists()
+```
+
+```python
+AUTH_HANDOFF_RESOLVER = "myapp.services.handoff.allow_tenant_destination"
+```
+
+Loaded once via `mojo.helpers.modules.load_function()` and cached by dotted
+path. **A resolver is security-critical code in your deployment**: compare
+hosts exactly, never substring- or prefix-match a hostname, and check the
+scheme. The framework fails closed around it — a resolver that raises, or a
+dotted path that fails to import, refuses **everything** and is logged. Unlike
+`USER_LOGIN_HANDLER`, which swallows errors so a failing analytics hook cannot
+lock users out, a broken resolver must never open the gate.
 
 See [Auth Pages — Cross-Origin Redirect Handoff](../../web_developer/account/auth_pages.md#cross-origin-redirect-handoff)
 for the end-to-end client-side flow.

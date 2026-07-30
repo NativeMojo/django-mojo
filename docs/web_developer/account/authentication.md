@@ -180,8 +180,14 @@ minted at the auth origin. The handoff is an authorization-code flow:
 **POST** `/api/auth/handoff`
 
 ```json
-{}
+{
+  "redirect_uri": "https://app.example.com/dashboard"
+}
 ```
+
+| Field | Required | Notes |
+|---|---|---|
+| `redirect_uri` | yes | The absolute URL the code will be handed to. Must be on the server's handoff allowlist (`AUTH_HANDOFF_ALLOWED_URLS`, or accepted by the deployment's `AUTH_HANDOFF_RESOLVER`). |
 
 **Response:**
 
@@ -195,8 +201,15 @@ minted at the auth origin. The handoff is an authorization-code flow:
 }
 ```
 
+A missing or disallowed `redirect_uri` returns **`400`** and **no code is
+minted** — the destination is decided here, before a credential exists, and is
+never re-checked at exchange time. A deployment that has configured neither
+setting refuses every cross-origin handoff, so this endpoint requires operator
+opt-in before it mints anything.
+
 The auth-page JS does this automatically when `?redirect=` points to a different
-origin — apps usually don't call it directly. Rate-limited to 30 requests/IP.
+origin — apps usually don't call it directly. When the mint is refused, the auth
+page shows an error and **does not navigate**. Rate-limited to 30 requests/IP.
 
 **Step 2 — Exchange the code (app origin, public)**
 
