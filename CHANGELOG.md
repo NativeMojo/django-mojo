@@ -1,5 +1,9 @@
 ## Unreleased
 
+## v1.2.62 - July 30, 2026
+
+
+
 **BREAKING (metrics)** — **anonymous writes to the `public` metrics account are
 denied (maestro item 937).** `POST /api/metrics/record` (and `value/set`,
 `category_delete`) accepted writes to `public` from anyone — no auth — and every
