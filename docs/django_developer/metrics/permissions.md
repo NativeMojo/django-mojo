@@ -8,7 +8,7 @@ Every metrics operation targets an **account**. The account determines which per
 
 | Account | Format | Example | Who can access |
 |---------|--------|---------|---------------|
-| `public` | literal | `public` | Anyone (no auth required) |
+| `public` | literal | `public` | **Read**: anyone (no auth). **Write**: `write_metrics`/`metrics`, unless explicitly opted into anonymous writes (see below) |
 | `global` | literal | `global` | Users with `view_metrics` / `write_metrics` / `metrics` permission |
 | Group | `group-<id>` | `group-42` | Group members with the relevant permission, or users with system-level permission |
 | User | `user-<id>` | `user-7` | The user themselves, or users with system-level permission |
@@ -48,7 +48,32 @@ check_view_permissions(request, account):
 
 ### Write Permission Flow
 
-Same structure, but checks `["write_metrics", "metrics"]` instead of `["view_metrics", "metrics"]`.
+Same structure, but checks `["write_metrics", "metrics"]` instead of
+`["view_metrics", "metrics"]` — **except for `public`**, which is NOT an
+implicit allow on the write side:
+
+```
+check_write_permissions(request, "public"):
+    per-account write perms == "public"?   → allowed (explicit opt-in)
+    per-account write perms set?           → user must have that permission
+    otherwise                              → user must have "write_metrics"/"metrics"
+```
+
+### Why public writes are gated
+
+Every distinct slug recorded becomes a permanent member of the account's slug
+registry (`mets:<account>:slugs`) plus never-expiring month/year counter keys.
+An anonymous writer could therefore grow Redis without bound and pollute every
+category listing. Deployments that genuinely want anonymous counters opt in
+explicitly:
+
+```python
+from mojo.apps import metrics
+metrics.set_write_perms("public", "public")   # restore anonymous public writes
+```
+
+Prefer an app-specific collect endpoint that records server-side with bounded
+slug names over opening raw anonymous writes.
 
 ## Category Permission: `metrics`
 

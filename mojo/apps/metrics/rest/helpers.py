@@ -89,6 +89,18 @@ def check_write_permissions(request, account="public"):
         if perms != "public":
             if not request.user.is_authenticated or not request.user.has_permission(perms):
                 raise mojo.errors.PermissionDeniedException()
+    else:
+        # "public" reads are open, but writes are not: every distinct slug is a
+        # permanent registry member, so an anonymous writer could grow Redis
+        # without bound. Anonymous writes need the explicit per-account opt-in
+        # (set_write_perms("public", "public")); otherwise a configured perm or
+        # write_metrics/metrics is required.
+        perms = metrics.get_write_perms("public")
+        if perms == "public":
+            return
+        required = perms if perms else ["write_metrics", "metrics"]
+        if not request.user.is_authenticated or not request.user.has_permission(required):
+            raise mojo.errors.PermissionDeniedException()
 
 
 def fetch_group_fanout(parent_id, child_kind, slugs, dt_start=None, dt_end=None,

@@ -4,6 +4,12 @@
 
 - Configurable per account namespace (can be `"public"` for open access)
 - Defaults to `view_metrics` or `manage_users`
+- **Reads** of the `public` account are anonymous. **Writes** (`POST
+  /api/metrics/record`, `/api/metrics/value/set`) are not: they require
+  `write_metrics`/`metrics`, unless an operator explicitly opted the account
+  into anonymous writes server-side (`set_write_perms("public", "public")`).
+  Anonymous clients that need to count something should go through an
+  app-specific collect endpoint, not raw metric writes.
 
 ## Endpoints
 

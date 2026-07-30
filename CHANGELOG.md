@@ -1,5 +1,17 @@
 ## Unreleased
 
+**BREAKING (metrics)** — **anonymous writes to the `public` metrics account are
+denied (maestro item 937).** `POST /api/metrics/record` (and `value/set`,
+`category_delete`) accepted writes to `public` from anyone — no auth — and every
+distinct slug becomes a permanent registry member plus never-expiring month/year
+counter keys, so an anonymous caller could grow Redis without bound. Public
+**reads** are unchanged. Writes to `public` now require
+`write_metrics`/`metrics` (or a configured per-account write perm); a deployment
+that genuinely wants anonymous counters opts back in explicitly with
+`metrics.set_write_perms("public", "public")`. No known caller used the
+anonymous path — audit any client-side beacon before upgrading, and prefer an
+app-specific collect endpoint that records server-side with bounded slugs.
+
 **fix (testit)** — **`th.clear_jobs(channel=...)` now scopes Job-row deletion to
 that channel.** It dropped the named channels' Redis keys but then deleted
 *every* `pending`/`running` Job row platform-wide, so the `channel=` argument

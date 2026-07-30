@@ -277,10 +277,12 @@ def test_metrics_api(opts):
     resp = opts.client.post(f"/api/metrics/record", dict(slug="c3", account="global"))
     assert resp.status_code == 403, f"global -> Expected status_code is 403 but got {resp.status_code}"
 
-    # now lets use the public API
+    # Anonymous writes to "public" are denied unless an operator opted the
+    # account in via set_write_perms("public", "public") — see write_perms.py.
     resp = opts.client.post(f"/api/metrics/record", dict(slug="c3"))
-    assert resp.status_code == 200, f"public -> Expected status_code is 200 but got {resp.status_code}"
+    assert resp.status_code == 403, f"public -> Expected status_code is 403 but got {resp.status_code}"
 
+    # Anonymous READS of public metrics stay open.
     resp = opts.client.get(f"/api/metrics/fetch", params=dict(slugs="c3", with_labels=True))
     assert resp.status_code == 200, f"fetch public Expected status_code is 200 but got {resp.status_code}"
     assert resp.response.data, "missing resp.data"
@@ -400,14 +402,15 @@ def test_metrics_series_api_with_delta(opts):
         f"delta_pct expected 200.0, got {body['deltas']['delta_api'].get('delta_pct')}"
 
 
-@th.unit_test()
+@th.django_unit_test()
 def test_fetch_and_series_accept_singular_slug(opts):
     """Both /api/metrics/fetch and /api/metrics/series should accept singular ``slug``
     in addition to the plural ``slugs`` so single-metric callers don't have to remember
     the plural form."""
-    # Seed via the public record endpoint.
-    resp = opts.client.post("/api/metrics/record", dict(slug="single_kpi"))
-    assert resp.status_code == 200, f"seed expected 200, got {resp.status_code}: {resp.body}"
+    from mojo.apps import metrics
+    # Seed in-process — the REST record endpoint no longer accepts anonymous
+    # public writes, and this test is about fetch/series parameter shapes.
+    metrics.record("single_kpi", account="public")
 
     # /api/metrics/fetch with singular `slug`
     resp = opts.client.get("/api/metrics/fetch", params=dict(slug="single_kpi", with_labels=True))
