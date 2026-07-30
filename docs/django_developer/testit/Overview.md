@@ -440,6 +440,33 @@ calling in setup — the DB and Redis are long-lived), `th.pending_job_count()`
 asserts something *was* queued, and `th.promote_scheduled_jobs()` promotes due
 jobs without running them.
 
+**Isolate a job-testing module on its own channel.** The daemon warning above
+applies just as much to another *test module*: with no `channel=`, `run_jobs()`
+drains every channel in `JOBS_CHANNELS` and `clear_jobs()` wipes every one of
+them, rows included. Modules run as parallel threads against one Redis and one
+database, so two modules that both drain globally will take each other's jobs —
+one deletes the other's rows between publish and drain, or executes its handler
+inside the wrong test's assertions. Give a module that leans on the queue a
+private channel and pass it everywhere:
+
+```python
+CHANNEL = "testit_myapp_jobs"        # any name legal per validate_channel_name
+
+jobs.publish(func=HANDLER, payload={...}, channel=CHANNEL)
+th.run_jobs(channel=CHANNEL)
+th.clear_jobs(channel=CHANNEL)       # setup AND teardown
+```
+
+Keep the name **out of `JOBS_CHANNELS`** — that is what makes it invisible to
+everyone else's no-argument drain. `publish()` takes the channel verbatim and
+never requires the publishing box to consume it, so an unlisted channel is a
+supported target, not a trick. `channel=` scopes the whole of `clear_jobs()`,
+Job rows included, so a scoped clear never reaches another channel's rows.
+
+The tradeoff to make deliberately: a module scoped this way no longer exercises
+the no-argument "drain everything" path. Leave that to a module that publishes
+through a real service and drains globally.
+
 **Addressing handlers:** `publish()` stores a dotted **path** and re-imports it
 at execution time, so a handler defined inside a test module must be addressed
 by the name that module is actually loaded under. testit imports test files as

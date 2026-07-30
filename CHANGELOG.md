@@ -1,5 +1,19 @@
 ## Unreleased
 
+**fix (testit)** — **`th.clear_jobs(channel=...)` now scopes Job-row deletion to
+that channel.** It dropped the named channels' Redis keys but then deleted
+*every* `pending`/`running` Job row platform-wide, so the `channel=` argument
+was only half honored. Test modules run as parallel threads against one Redis
+and one database: a module clearing its own channel would strip the rows out
+from under jobs another module still had queued elsewhere, leaving queue entries
+with nothing behind them — a drain that then pops one finds no row. Row deletion
+now matches the channels whose queues were cleared, which is what the argument
+always read as. `clear_jobs()` with no channel is unchanged (every channel in
+`JOBS_CHANNELS`). This is what makes a private test channel actually private;
+`docs/django_developer/testit/Overview.md` documents the isolation pattern, and
+`tests/test_jobs/test_run_jobs_helper.py` now uses it so it no longer races
+`tests/test_dnsman/6_certs_service.py`, which drains globally by design.
+
 **BREAKING (jobs)** — **`jobs.publish()` now routes to the channel you name and
 never reroutes (maestro item 906).** It used to validate the requested channel
 against the *publishing box's own* `JOBS_CHANNELS` and silently redirect anything

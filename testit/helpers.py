@@ -1021,14 +1021,22 @@ def clear_jobs(channel=None, delete_rows=True):
     Tests run against a long-lived database and a shared Redis, so a job left
     queued by an earlier module would otherwise be picked up by the first
     `run_jobs()` that happens to run after it.
+
+    `channel` scopes the WHOLE call, rows included. Modules run as parallel
+    threads against one Redis and one database, so a module that isolates
+    itself on a private channel has to stay invisible to everyone else's
+    cleanup: a global row delete would strip the Job rows out from under jobs
+    still queued on a channel this call never touched, leaving queue entries
+    with nothing behind them.
     """
     from mojo.apps.jobs.adapters import get_adapter
     from mojo.apps.jobs.keys import JobKeys
 
     redis = get_adapter()
     keys = JobKeys()
+    channels = _job_channels(channel)
 
-    for ch in _job_channels(channel):
+    for ch in channels:
         redis.delete(keys.queue(ch))
         redis.delete(keys.sched(ch))
         redis.delete(keys.sched_broadcast(ch))
@@ -1036,7 +1044,8 @@ def clear_jobs(channel=None, delete_rows=True):
 
     if delete_rows:
         from mojo.apps.jobs.models import Job
-        Job.objects.filter(status__in=["pending", "running"]).delete()
+        Job.objects.filter(status__in=["pending", "running"],
+                           channel__in=channels).delete()
 
 
 def pending_job_count(channel=None):
