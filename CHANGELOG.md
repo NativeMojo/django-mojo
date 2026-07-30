@@ -1,5 +1,52 @@
 ## Unreleased
 
+**BEHAVIOR CHANGE (account/security)** — **the hosted `/auth`, `/register` and
+`/passkey` pages can no longer be embedded in an iframe, and now carry a
+nonce-based Content-Security-Policy (maestro item 945).** The framework
+previously set **no** security headers at all on these pages — no CSP, no
+`X-Frame-Options` — so the highest-value pages it serves, the ones holding
+access and refresh tokens in `localStorage`, were framable by any origin. They
+now send `frame-ancestors 'none'`. **`/contact` is unaffected**: it deliberately
+omits `frame-ancestors` so the documented "embed `/contact?kind=<kind>` in an
+iframe" marketing-site integration keeps working.
+
+The rest of the policy:
+
+```
+default-src 'self'; base-uri 'none'; object-src 'none';
+frame-ancestors 'none'; form-action 'self';
+script-src 'self' 'nonce-<32 hex>'; style-src 'self' 'unsafe-inline' https: [<api_origin>];
+img-src * data:; font-src 'self' data:; connect-src 'self' [<api_origin>]
+```
+
+`script-src` is nonce-locked — no `'unsafe-inline'`, no wildcard, no bare
+scheme — so an injected `<script>` cannot execute. `style-src` and `img-src` stay
+permissive on purpose: tenant `custom_css`, `logo_url`, `hero_image_url` and
+`favicon_url` are arbitrary-origin by design, and a nonce in `style-src` would
+make browsers ignore `'unsafe-inline'` and break every style attribute on the
+page. Scope is deliberately narrow — the bouncer challenge/decoy pages, the
+email-confirm pages and every JSON API response are unchanged, and this is not
+framework-wide middleware.
+
+**Check before upgrading if your deployment overrides the auth templates.**
+Any inline `<script>` in your own `account/auth_base.html`, `login.html`,
+`register.html`, `passkey_enroll.html` or `contact.html` — or added through
+`{% block page_script %}` / `{% block extra_css %}` — has no nonce and will stop
+executing. Fix by stamping `nonce="{{ csp_nonce }}"` on the `<script>` open tag;
+the context key is always present. `{{ x|json_script:"id" }}` tags need nothing
+(Django emits them as `type="application/json"` data blocks, which CSP never
+checks), and style attributes need nothing.
+
+Three new optional settings, all **file-only** (`settings.get_static`, so a
+DB/Redis `Setting` row can never weaken the header) and all read **per request**:
+`AUTH_CSP_REPORT_ONLY = True` sends `Content-Security-Policy-Report-Only`
+instead — observe violations before enforcing; `AUTH_CSP_ENABLED = False`
+removes the header entirely; `AUTH_CSP_DIRECTIVES` merges per directive (a
+present key replaces, an empty value drops, an unknown key is emitted as-is, so
+you can add `report-uri`). The per-request nonce is always appended to the final
+`script-src` and cannot be removed. Full reference:
+`docs/django_developer/security/csp.md`.
+
 **BREAKING (account/security)** — **`POST /api/auth/handoff` now requires an
 allowlisted `redirect_uri`, and refuses by default (maestro item 943).** The
 endpoint minted a code that `POST /api/auth/exchange` trades for an access

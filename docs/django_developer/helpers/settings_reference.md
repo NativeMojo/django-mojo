@@ -64,6 +64,19 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `AUTH_BEARER_HANDLERS`
 - `AUTH_BEARER_NAME_MAP`
+- `AUTH_CSP_DIRECTIVES` — **file-only** (`settings.get_static`). Dict, default
+  `{}`. Per-directive merge over the default Content-Security-Policy on the
+  hosted auth pages. A present key replaces that directive wholesale, an empty
+  value drops it, an unknown key is emitted as-is (so you can add `report-uri`).
+  The per-request nonce is always appended to the final `script-src` and cannot
+  be removed. See [Content Security Policy](../security/csp.md).
+- `AUTH_CSP_ENABLED` — **file-only** (`settings.get_static`). Bool, default
+  `True`. `False` sets no CSP header on the hosted auth pages at all. See
+  [Content Security Policy](../security/csp.md).
+- `AUTH_CSP_REPORT_ONLY` — **file-only** (`settings.get_static`). Bool, default
+  `False`. `True` sends `Content-Security-Policy-Report-Only` instead of the
+  enforcing header — the recommended first step for a deployment that ships its
+  own auth-template overrides. See [Content Security Policy](../security/csp.md).
 - `AUTH_HANDOFF_CODE_TTL` — int, default `60`. Seconds before a cross-origin
   handoff code expires.
 - `AUTH_HANDOFF_ALLOWED_URLS` — list, default `[]`. Destination URLs

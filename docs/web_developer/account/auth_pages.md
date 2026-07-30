@@ -318,6 +318,29 @@ Served with `Cache-Control: public, max-age=86400` in production.
 
 ---
 
+## Embedding — `/auth`, `/register` and `/passkey` refuse to be framed
+
+These three pages are served with
+`Content-Security-Policy: … frame-ancestors 'none' …`, so a browser will refuse
+to render them inside an `<iframe>`, `<frame>`, `<embed>` or `<object>` from any
+origin, including your own. They hold access and refresh tokens in
+`localStorage`; framing them is a clickjacking surface with no legitimate use.
+
+Link or redirect to them instead — see
+[Linking to Auth Pages](#linking-to-auth-pages) and
+[Cross-Origin Redirect Handoff](#cross-origin-redirect-handoff).
+
+`/contact` is **not** affected: it deliberately omits `frame-ancestors` so it
+can stay embeddable from an external marketing site. See
+[Public Messages](public_messages.md).
+
+No REST endpoint, request payload, response body or status code changed. The
+policy also locks `script-src` to a per-request nonce, which matters only if
+your deployment overrides the page templates — see the backend note in
+`docs/django_developer/security/csp.md`.
+
+---
+
 ## Honeypot Decoy Pages
 
 | Path | GET | POST |

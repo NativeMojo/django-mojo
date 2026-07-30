@@ -225,3 +225,13 @@ For a fully separated marketing site:
 
 Option 1 is the least work and inherits all bouncer protections. Option 3
 requires you to render the same challenge flow that the built-in page does.
+
+**Option 1 keeps working under the hosted-page CSP.** `/contact` is served with
+a `Content-Security-Policy` that **deliberately omits `frame-ancestors`**,
+precisely so this integration stays available — unlike `/auth`, `/register` and
+`/passkey`, which send `frame-ancestors 'none'` because they hold auth tokens in
+`localStorage`. A deployment that adds `frame-ancestors` for `/contact` through
+the `AUTH_CSP_DIRECTIVES` setting removes the iframe option; if it needs one,
+naming the specific marketing origins
+(`frame-ancestors https://www.example.com`) preserves it, `'none'` does not.
+See `docs/django_developer/security/csp.md`.

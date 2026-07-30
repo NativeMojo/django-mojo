@@ -908,6 +908,7 @@ Health rules **never** use `block://` — infrastructure issues should not block
 ## Related Documentation
 
 - [Authenticated-Abuse Hardening](abuse_hardening.md) — global per-identity API throttle, traffic-concentration detection, account kill switch, websocket connection limits, deployment hardening
+- [Content Security Policy](csp.md) — the nonce-based CSP on the hosted auth pages: default policy, the per-page `frame-ancestors` rule, the `{{ csp_nonce }}` contract for overridden templates, and the `AUTH_CSP_*` settings
 - [Maestro Board Link](maestro_board.md) — push tickets into a remote maestro board and sync both directions (registration, status_map, signed webhooks, echo suppression)
 - [Ticket Actions](ticket_actions.md) — structured Approve/Deny action notes on tickets: schema, dispatch guards, built-in handlers (rule approval/update, block confirm, escalate), handler registration, LLM opt-in contract
 - [Bouncer Architecture](../account/bouncer.md) — bot detection, scoring, tokens, signatures
