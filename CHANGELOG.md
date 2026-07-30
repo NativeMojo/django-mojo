@@ -1,5 +1,66 @@
 ## Unreleased
 
+**feat (dnsman)** — **the registrant contact is now portal-managed, per group,
+with a house fallback (maestro item 951).** `DNSMAN_REGISTRANT_CONTACT` was
+conf-file only, so an operator seeing "purchasing is unavailable" could not fix
+it without a deploy. It is now a DB-backed `Setting` row resolved through the
+normal chain — **the group's own row → its parent chain → the global row → the
+conf file** — edited through two new endpoints. No new model, no migration.
+
+```
+GET  /api/dnsman/registrant[?group=<id>]
+POST /api/dnsman/registrant[?group=<id>]   {"contact": {...}} | {"clear": true}
+```
+
+Both verbs require `manage_dns`, **including the read** — the payload is the
+registrant's legal name, address, phone and email. Omitting `group` addresses
+the house contact and additionally requires a platform admin. A scope only ever
+sees its own row: a group with nothing of its own reports `contact: null` plus
+`inherited: true`, and `problems` never describes an inherited contact.
+
+**Behavior changes worth reading:**
+
+- **A group with its own contact now registers under it** — and because
+  `route53.register()` sends one contact block as Admin, Registrant *and* Tech,
+  that tenant holds all three roles on domains it registers. Its registrant
+  email also starts its own ICANN 15-day verification clock, on a mailbox the
+  operator does not monitor. See
+  [Custody](docs/django_developer/dnsman/Registrar.md#custody).
+- **Contact validation is stricter and can refuse a deployment that worked
+  before.** Shape is now checked, not just presence: `ContactType` against the
+  AWS enum, `PhoneNumber` against ICANN `+<cc>.<number>`, `CountryCode` as two
+  letters, and every key against the full AWS `ContactDetail` member list. An
+  unknown key raises `ParamValidationError` inside botocore, so a typo'd field
+  in a hand-written setting used to be accepted silently and detonate at
+  purchase time — after durable intent. A conf-file contact that violates any of
+  these now refuses quotes instead, which is fail-closed and visible:
+  `registrant_contact_configured` reports `false` and `GET
+  /api/dnsman/registrant` names the field. `update_contacts()` shares the same
+  validator.
+- **`GET /api/dnsman/config` takes an optional `?group=`.**
+  `registrant_contact_configured` answers for that group; omitting the group
+  answers for the house account exactly as before. Still a boolean, still never
+  the values.
+- **`purchase()` resolves the contact from the quote's own group** (`row.group`),
+  never from the `group` argument. That argument is optional attribution and is
+  `None` whenever the buyer's group went inactive between quote and confirm —
+  resolving from it would have filed the **house** contact on a tenant's domain
+  at the one irreversible, real-money step. A quote still does not *pin* the
+  contact, but `DomainPurchase.metadata` now records `registrant_scope` and a
+  `SECRET_KEY`-salted digest of what was actually filed. `metadata` is in
+  neither REST graph.
+
+The row is stored `is_secret=True`, which puts it in `mojo_secrets` and keeps it
+out of every REST graph including the unknown-graph fallback — without this, the
+generic settings API would serialize the operator's home address as
+`display_value` to any `manage_settings` holder. **That is REST masking, not
+encryption at rest:** `MojoSecrets` derives the secrets password from the row's
+own non-secret columns, so it protects nothing against someone holding the
+database.
+
+Deployments that keep setting `DNSMAN_REGISTRANT_CONTACT` in `django.conf` are
+unaffected until a DB row is saved over it.
+
 **fix (framework)** — **`SYSTEM_REQUEST` was a process-wide mutable singleton;
 system-context saves leaked a tenant across unrelated calls and crashed on any
 model with an owner FK (maestro item 963).** Two defects on one path, fixed

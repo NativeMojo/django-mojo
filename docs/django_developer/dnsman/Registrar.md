@@ -120,13 +120,46 @@ TLD that cannot have it would be nonsense.
 
 ### Enabling purchases
 
-1. Set `DNSMAN_REGISTRANT_CONTACT` — a complete ICANN contact. Required:
-   `FirstName`, `LastName`, `ContactType`, `AddressLine1`, `City`,
-   `CountryCode`, `ZipCode`, `PhoneNumber`, `Email`, plus `State` for US/CA.
-   Quotes refuse while it is incomplete.
+1. Set the **house registrant contact** — a complete ICANN contact. This is
+   portal-managed, not a deploy: `POST /api/dnsman/registrant` with no `group`,
+   as a platform admin. Quotes refuse while it is incomplete.
 2. Confirm the AWS credentials can reach `route53domains` in **us-east-1**.
 3. Review `DNSMAN_MAX_DOMAIN_PRICE` (default 50.00).
 4. Set `DNSMAN_PURCHASE_ENABLED = True`.
+
+### The registrant contact
+
+Stored as a `Setting` row under `DNSMAN_REGISTRANT_CONTACT`, resolved through
+the normal settings chain: **the group's own row → its parent chain → the
+global row → the deployment's conf file**. So a group that sets its own contact
+registers under it, and one that does not inherits the house contact. A
+deployment that still sets the key in `django.conf` keeps working untouched
+until someone saves a DB row over it.
+
+Required fields: `FirstName`, `LastName`, `ContactType`, `AddressLine1`,
+`City`, `CountryCode`, `ZipCode`, `PhoneNumber`, `Email`, plus `State` for
+US/CA. Shape is checked too, not just presence — `ContactType` against the AWS
+enum (`PERSON`, `COMPANY`, `ASSOCIATION`, `PUBLIC_BODY`, `RESELLER`),
+`PhoneNumber` against ICANN `+<cc>.<number>`, `CountryCode` as two letters, and
+every key against the full AWS `ContactDetail` member list. That last one
+matters: botocore raises `ParamValidationError` on an unknown key, so a typo'd
+field name in a hand-written setting used to be accepted silently and detonate
+at purchase time, after durable intent. It is now a 400 at save time.
+
+`ExtraParams` is accepted for ccTLD registries but its *contents* are not
+shape-checked here — AWS validates those.
+
+The row is written with `is_secret=True`, which puts it in `mojo_secrets` and
+keeps it out of every REST graph including the unknown-graph fallback. That is
+**REST masking, not encryption at rest**: `MojoSecrets` derives the secrets
+password from the row's own non-secret columns, so it protects nothing against
+someone holding the database.
+
+**Migration note.** A deployment whose conf-file contact has a non-conforming
+phone number, an unknown key, or a bad `ContactType` starts refusing quotes
+instead of failing at AWS. Fail-closed, and visible:
+`registrant_contact_configured` reports `false` and `GET /api/dnsman/registrant`
+names the offending field.
 
 ### Do the canary purchase first
 
@@ -142,6 +175,13 @@ The first use of a new registrant email triggers an ICANN verification message.
 **If it is not verified within 15 days the domain is suspended.** The mailbox in
 `DNSMAN_REGISTRANT_CONTACT` must be monitored by a human, not a black hole.
 
+Per-group contacts multiply this, and it is the sharpest operational edge of the
+feature. Every tenant that sets its own contact starts its **own** 15-day clock,
+on a mailbox **the operator does not monitor and cannot check**. The domain that
+gets suspended is one the operator owns and pays for. Before enabling tenant
+contacts, decide who chases an unverified registrant email — there is no signal
+in this system that will tell you it happened.
+
 ### The 60-day transfer lock
 
 ICANN locks a newly registered domain against transfer for **60 days**. This is
@@ -150,10 +190,36 @@ inside that window is promising something that cannot be delivered.
 
 ### Custody
 
-Domains are registered with the operator's contact as registrant of record and
-held on behalf of the tenant. That is a real obligation: state it in
-product-facing terms, honour transfer-out on request as a manual process, and do
-not let it read as ownership.
+Custody depends on whose contact was filed, and the answer is no longer always
+the operator's.
+
+- **A group with no contact of its own** inherits the house contact. The
+  operator is registrant of record and holds the domain on behalf of the
+  tenant. That is a real obligation: state it in product-facing terms, honour
+  transfer-out on request as a manual process, and do not let it read as
+  ownership.
+- **A group that sets its own contact** becomes the registrant of record on the
+  domains it registers — and, because `route53.register()` sends the one
+  contact block as `AdminContact`, `RegistrantContact` **and** `TechContact`,
+  also the administrative and technical contact. Those are the addresses that
+  receive transfer-approval and change-of-registrant mail. So a tenant
+  `manage_dns` holder holds all three roles on an asset the operator owns and
+  pays for. This is deliberate; it is not a side effect to discover later.
+
+A quote does **not** pin the contact. `purchase()` re-reads it at confirmation
+time, resolving from the **quote's own group** (`row.group`) — never from the
+group the confirming request happened to name, which is optional attribution and
+is `None` whenever that group went inactive between the two calls. An edit
+between quote and confirm therefore changes what gets filed, by design: the TTL
+is 15 minutes, the price is unaffected, and refusing a redeemed quote over a
+benign contact edit would be worse.
+
+Because the answer is now tenant-editable, the ledger records it.
+`DomainPurchase.metadata` carries `registrant_scope` (the group id the contact
+was resolved for, or `"house"`) and `registrant_fingerprint`, a SECRET_KEY-salted
+SHA-256 of the contact that was actually sent. `metadata` is in neither REST
+graph, so this is an audit trail, not a second PII store — and the fingerprint
+is not reversible into a contact.
 
 ### Routine checks
 

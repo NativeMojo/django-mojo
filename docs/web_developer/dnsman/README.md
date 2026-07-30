@@ -49,6 +49,10 @@ UI must gate on these, or it renders controls that 403.**
   the account owner *regardless of WHOIS privacy*, so this is PII and a
   read-only `view_dns` operator has no business seeing it. **Hide the WHOIS
   section entirely from read-only operators** rather than letting it 403.
+- **`GET /api/dnsman/registrant`** — same reasoning, same rule: requires
+  `manage_dns` despite being a read, because the payload *is* the contact PII.
+  With no `?group=` it addresses the house contact and additionally requires a
+  platform admin. See [the registrant contact](#the-registrant-contact).
 
 ## Domains
 
@@ -142,9 +146,9 @@ specific domain and that it is active.
 ## Capability discovery
 
 ### `GET /api/dnsman/config`
-Requires `view_dns`, no group. Report what's currently turned on before
-attempting a gated action — a client should render its purchase and cert UI
-from this, not from probing `registrar/quote` and reading the refusal.
+Requires `view_dns`. Optional `?group=<id>`. Report what's currently turned on
+before attempting a gated action — a client should render its purchase and cert
+UI from this, not from probing `registrar/quote` and reading the refusal.
 
 ```json
 { "purchase_enabled": false, "registrant_contact_configured": true,
@@ -159,8 +163,14 @@ from this, not from probing `registrar/quote` and reading the refusal.
   "cert_renew_days": 30 }
 ```
 
-`registrant_contact_configured` is a boolean — the registrant contact itself
-is PII and is never returned here or anywhere else. `acme.staging` matters
+`registrant_contact_configured` is a boolean — the registrant contact itself is
+PII and is never returned here. **It is the one field that varies per group:**
+pass `?group=<id>` and it answers for that group (its own contact if it has one,
+otherwise the one it inherits); omit the group and it answers for the house
+account, exactly as before. So a purchase UI scoped to a group must ask with
+that group, or it will report the wrong availability. To read or edit the
+contact itself, see [the registrant contact](#the-registrant-contact) below.
+`acme.staging` matters
 beyond purchasing: dnsman defaults to Let's Encrypt **staging**, and a
 staging-issued certificate is **not publicly trusted** — do not render a
 staging cert as "active" without surfacing that. `search_batch_limit` mirrors
@@ -168,6 +178,70 @@ staging cert as "active" without surfacing that. `search_batch_limit` mirrors
 calls. `suggestions_enabled` is always `true` today — there is no kill switch
 for it; the flag exists purely so a client can feature-detect batch search
 and `registrar/suggest` against an older backend that predates them.
+
+## The registrant contact
+
+The ICANN contact domains get registered under. **Per group, with a house
+fallback**: a group with its own contact registers under it, a group without one
+inherits the house contact. Both live at one path, selected by `?group=`.
+
+### `GET /api/dnsman/registrant` · `POST /api/dnsman/registrant`
+
+Optional `?group=<id>`. **Both verbs require `manage_dns`** — including the
+read. The payload is a legal name, street address, phone number and email, so
+`view_dns` reaches neither scope; hide the whole section from read-only
+operators rather than letting it 403.
+
+**Omitting `group` addresses the HOUSE contact and requires a platform admin**
+(interactive superuser — an API key is refused). It is the operator's own
+personal data and the registrant of record for every tenant without one. A
+tenant admin gets a 403, and learns nothing about it.
+
+Both verbs return the same body:
+
+```json
+{ "scope": "group", "group": 42,
+  "contact": { "FirstName": "...", "LastName": "...", "ContactType": "PERSON",
+               "AddressLine1": "...", "City": "...", "State": "...",
+               "CountryCode": "US", "ZipCode": "...",
+               "PhoneNumber": "+1.5035551212", "Email": "..." },
+  "source": "database", "inherited": false,
+  "effective_configured": true, "problems": [] }
+```
+
+`contact`, `source` and `problems` describe **this scope's own row only** —
+never an inherited contact. A group with nothing of its own gets
+`contact: null`, `source: "none"`, `problems: []`, and `inherited: true`. That
+is deliberate: reporting which fields of an inherited contact are malformed
+would tell a tenant about the house one.
+
+| Field | Meaning |
+|---|---|
+| `source` | `database` (a saved row), `settings_file` (global scope only — a conf-file value that saving will shadow), or `none` |
+| `inherited` | Group scope with no row of its own, but a contact in effect above it |
+| `effective_configured` | Whether a quote would succeed for this scope right now — the same answer as `config.registrant_contact_configured` |
+| `problems` | Field-level complaints about **this** scope's row. Never contains a value, only field names |
+
+**POST** takes `{"contact": {...}}` to save, or `{"clear": true}` to drop this
+scope's row. Clearing a group reverts it to whatever it inherits; clearing the
+global scope reverts to the deployment's conf file when one is set (`source`
+then reports `settings_file`).
+
+Validation runs before anything is written, so a contact AWS would bounce is a
+readable 400 here rather than a failed registration after money has moved.
+Required: `FirstName`, `LastName`, `ContactType`, `AddressLine1`, `City`,
+`CountryCode`, `ZipCode`, `PhoneNumber`, `Email`, plus `State` for US/CA. Also
+enforced: `ContactType` ∈ `PERSON | COMPANY | ASSOCIATION | PUBLIC_BODY |
+RESELLER`, `PhoneNumber` as ICANN `+<cc>.<number>` (e.g. `+1.5035551212`),
+`CountryCode` as two letters, and **no unknown keys** — a misspelled field name
+is rejected rather than silently accepted. `ExtraParams` is allowed through for
+ccTLD registries but its contents are AWS's to validate.
+
+A saved contact takes effect on the next quote with no restart. Note that a
+**tenant which sets its own contact holds the registrant, admin and technical
+roles** on domains it registers, and that its registrant email starts its own
+ICANN 15-day verification clock — surface that in the UI rather than leaving it
+to be discovered.
 
 ## Buying a domain
 

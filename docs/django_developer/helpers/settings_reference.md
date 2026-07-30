@@ -126,7 +126,11 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   call (default `False`). Defaults and meanings for the whole family:
   [dnsman README settings table](../dnsman/README.md#settings).
 - `DNSMAN_QUOTE_TTL_MINUTES`
-- `DNSMAN_REGISTRANT_CONTACT`
+- `DNSMAN_REGISTRANT_CONTACT` — **group-scopable and DB-backed.** A `Setting`
+  row per group overrides the global row, which overrides the conf file; stored
+  `is_secret` so it never reaches a REST graph. Edited through
+  `/api/dnsman/registrant`, not here:
+  [the registrant contact](../dnsman/Registrar.md#the-registrant-contact).
 - `DNSMAN_SEARCH_BATCH_LIMIT`
 
 ### DOCIT_KB

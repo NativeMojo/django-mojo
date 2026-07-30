@@ -242,7 +242,7 @@ order, no rate-limit exposure, and hosts stay disposable.
 | `DNSMAN_QUOTE_TTL_MINUTES` | `15` | Quote/confirm-token lifetime |
 | `DNSMAN_SEARCH_BATCH_LIMIT` | `10` | Max names per batch search, after dedupe |
 | `ROUTE53_PRICE_CACHE_HOURS` | `24` | Per-TLD price cache in the route53 helper; `<= 0` disables |
-| `DNSMAN_REGISTRANT_CONTACT` | `{}` | ICANN contact; purchase refuses when incomplete |
+| `DNSMAN_REGISTRANT_CONTACT` | `{}` | ICANN contact; purchase refuses when incomplete. **DB-backed and group-scopable** — edit via `/api/dnsman/registrant`, not the conf file ([details](Registrar.md#the-registrant-contact)) |
 | `DNSMAN_ALLOWED_RECORD_TYPES` | A, AAAA, CNAME, TXT, MX, SRV, CAA, NS | Apex NS/SOA still refused |
 | `DNSMAN_ACME_DIRECTORY_URL` | Let's Encrypt **staging** | Deliberately not production |
 | `DNSMAN_ACME_CONTACT_EMAIL` | `None` | ACME account contact |
