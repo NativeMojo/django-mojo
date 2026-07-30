@@ -1,6 +1,11 @@
 # Content Security Policy — Hosted Auth Pages
 
-The framework emits a `Content-Security-Policy` header on the four pages it
+> **This is OPT-IN and OFF by default.** `AUTH_CSP_ENABLED` ships **`False`**,
+> so no `Content-Security-Policy` header is sent on any page unless your
+> deployment asks for one. Everything below describes what you get **once you
+> turn it on**.
+
+The framework can emit a `Content-Security-Policy` header on the four pages it
 hosts itself. The policy is nonce-based: `script-src` carries a fresh
 per-request nonce and **no `'unsafe-inline'`**, so an injected `<script>` — one
 that reached the page through a template variable, a reflected parameter, or a
@@ -10,7 +15,43 @@ Implementation: `mojo/apps/account/services/csp.py`.
 
 ---
 
+## Turning it on
+
+```python
+# settings/production.py — step 1: observe
+AUTH_CSP_ENABLED = True
+AUTH_CSP_REPORT_ONLY = True
+```
+
+1. Set **both** `AUTH_CSP_ENABLED = True` **and** `AUTH_CSP_REPORT_ONLY = True`.
+   The browser evaluates the policy and reports violations but enforces nothing.
+2. Load `/auth`, `/register`, `/passkey` and `/contact` and watch the browser
+   console (or a `report-uri` added through `AUTH_CSP_DIRECTIVES`) for blocked
+   inline scripts. **This matters most if you override the auth templates or add
+   JS through `{% block page_script %}`** — see
+   [Rolling this out](#rolling-this-out-on-a-deployment-with-overridden-templates).
+3. Fix what shows up: stamp `nonce="{{ csp_nonce }}"` on every inline `<script>`
+   your overrides introduce.
+4. Drop `AUTH_CSP_REPORT_ONLY` (or set it `False`). The policy is now enforced.
+
+### Why it is off by default
+
+A CSP can only ever *break* things — a deployment that overrides an auth
+template with its own inline `<script>`, or iframes the login page, would start
+failing with no warning — and that is not a cost to impose on someone who never
+asked for the header.
+
+The `nonce="{{ csp_nonce }}"` attributes are stamped into the shipped templates
+**either way**. A nonce with no CSP is inert, so the default really is a no-op:
+nothing about the markup, the endpoints, or the framing behavior of any page
+changes until you set `AUTH_CSP_ENABLED = True`.
+
+---
+
 ## Which responses carry the header
+
+**When `AUTH_CSP_ENABLED = True`** (with it unset or `False`, every row below is
+"no"):
 
 | Response | CSP | Why |
 |---|---|---|
@@ -81,8 +122,10 @@ collection endpoint. Add one through `AUTH_CSP_DIRECTIVES` (below).
 ### `frame-ancestors` is per page
 
 `'none'` on **login / register / passkey**. Those pages hold access and refresh
-tokens in `localStorage`, and before this change nothing stopped any origin from
-framing them — the framework shipped no `X-Frame-Options` either.
+tokens in `localStorage`, and nothing else stops an origin from framing them —
+the framework ships no `X-Frame-Options` either, so with `AUTH_CSP_ENABLED`
+unset or `False` these pages remain framable by any origin. Enabling the header
+is what closes that.
 
 **Omitted entirely on `/contact`.** Embedding `/contact?kind=<kind>` in an
 iframe is the documented least-work integration for an external marketing site
@@ -158,8 +201,8 @@ response without a code change.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `AUTH_CSP_ENABLED` | bool | `True` | `False` → no header at all |
-| `AUTH_CSP_REPORT_ONLY` | bool | `False` | `True` → send `Content-Security-Policy-Report-Only` instead |
+| `AUTH_CSP_ENABLED` | bool | **`False`** | **`True` → send the header.** The opt-in switch; with it unset or `False` no CSP header is sent on any page |
+| `AUTH_CSP_REPORT_ONLY` | bool | `False` | `True` → send `Content-Security-Policy-Report-Only` instead of the enforcing header. Only meaningful alongside `AUTH_CSP_ENABLED = True` |
 | `AUTH_CSP_DIRECTIVES` | dict | `{}` | per-directive merge over the defaults |
 
 They are deliberately **not** readable from the DB/Redis settings plane. A
@@ -177,7 +220,7 @@ weaken it. Same precedent as `MOJO_TEST_MODE` and
 - Values may be a string or a list of sources.
 - **The per-request nonce is always appended to the final `script-src`** and
   cannot be removed — emptying `script-src` yields a nonce-only `script-src`.
-  `AUTH_CSP_ENABLED=False` is the opt-out.
+  Leaving `AUTH_CSP_ENABLED` unset (or setting it `False`) is the only opt-out.
 
 ```python
 # settings/production.py
@@ -195,22 +238,26 @@ AUTH_CSP_DIRECTIVES = {
 
 ## Rolling this out on a deployment with overridden templates
 
-This is the one real upgrade risk. If your project ships its own
+Nothing here happens on upgrade — the header is off until you enable it. This
+is the risk you take on **when you do**. If your project ships its own
 `account/auth_base.html`, `login.html`, `register.html`, `passkey_enroll.html`
 or `contact.html` — or adds inline JS through `{% block page_script %}` — those
 scripts have no nonce and **will not run** once the policy is enforced.
 
 Recommended sequence:
 
-1. `AUTH_CSP_REPORT_ONLY = True`. The browser evaluates the policy and reports
-   violations but enforces nothing. Add a `report-uri` through
-   `AUTH_CSP_DIRECTIVES`, or just watch the browser console.
+1. `AUTH_CSP_ENABLED = True` **and** `AUTH_CSP_REPORT_ONLY = True`. The browser
+   evaluates the policy and reports violations but enforces nothing. Add a
+   `report-uri` through `AUTH_CSP_DIRECTIVES`, or just watch the browser
+   console. Exercise all four pages, including the framed `/contact` embed if
+   you use one.
 2. Add `nonce="{{ csp_nonce }}"` to every inline `<script>` your overrides
    introduce. Leave `json_script` tags alone.
 3. Remove `AUTH_CSP_REPORT_ONLY`.
 
-`AUTH_CSP_ENABLED = False` disables the header outright — the escape hatch, not
-the destination.
+Setting `AUTH_CSP_ENABLED = False` (or removing it) puts you back to the shipped
+default — no header at all. That is the rollback if something you missed breaks
+in production, not the destination.
 
 ---
 

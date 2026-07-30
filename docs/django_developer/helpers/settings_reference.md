@@ -69,29 +69,39 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   hosted auth pages. A present key replaces that directive wholesale, an empty
   value drops it, an unknown key is emitted as-is (so you can add `report-uri`).
   The per-request nonce is always appended to the final `script-src` and cannot
-  be removed. See [Content Security Policy](../security/csp.md).
+  be removed. Has no effect while `AUTH_CSP_ENABLED` is off. See
+  [Content Security Policy](../security/csp.md).
 - `AUTH_CSP_ENABLED` — **file-only** (`settings.get_static`). Bool, default
-  `True`. `False` sets no CSP header on the hosted auth pages at all. See
+  **`False`**. The **opt-in switch** for the CSP on the hosted auth pages:
+  `True` sends the header, and with it unset or `False` no header is sent at
+  all. The `nonce="{{ csp_nonce }}"` attributes are stamped into the templates
+  either way — a nonce with no CSP is inert, so the default is a no-op. See
   [Content Security Policy](../security/csp.md).
 - `AUTH_CSP_REPORT_ONLY` — **file-only** (`settings.get_static`). Bool, default
   `False`. `True` sends `Content-Security-Policy-Report-Only` instead of the
-  enforcing header — the recommended first step for a deployment that ships its
-  own auth-template overrides. See [Content Security Policy](../security/csp.md).
+  enforcing header — set it alongside `AUTH_CSP_ENABLED = True` as the first
+  step of a rollout, especially if you ship your own auth-template overrides.
+  Meaningless on its own. See [Content Security Policy](../security/csp.md).
 - `AUTH_HANDOFF_CODE_TTL` — int, default `60`. Seconds before a cross-origin
   handoff code expires.
-- `AUTH_HANDOFF_ALLOWED_URLS` — list, default `[]`. Destination URLs
-  `POST /api/auth/handoff` may mint a code for, matched on **exact host + path
-  prefix** (`https://*.example.com/` admits one extra dot-free label). Empty and
-  with no resolver means every cross-origin handoff is refused — **fail-closed
-  by design**. Deliberately separate from `ALLOWED_REDIRECT_URLS`, which was
+- `AUTH_HANDOFF_ALLOWED_URLS` — list, **unset by default (monitor mode)**.
+  Destination URLs `POST /api/auth/handoff` may mint a code for, matched on
+  **exact host + path prefix** (`https://*.example.com/` admits one extra
+  dot-free label). **Setting it — any list, even `[]` — turns enforcement on**:
+  `redirect_uri` becomes required and an unlisted destination gets a `400` with
+  no code minted, plus an `auth:handoff_destination_refused` incident. Unset,
+  with no resolver either, is monitor mode: the code is minted as always and an
+  unlisted destination files an `auth:handoff_destination_unlisted` incident
+  naming it. Deliberately separate from `ALLOWED_REDIRECT_URLS`, which was
   written under different semantics (wildcards are inert there). See
   [Cross-Origin Auth Handoff](../account/auth.md#cross-origin-auth-handoff).
 - `AUTH_HANDOFF_RESOLVER` — dotted path to `fn(url, request=None) -> bool`,
-  loaded via `mojo.helpers.modules.load_function()` and cached. **When set it
-  decides** and `AUTH_HANDOFF_ALLOWED_URLS` is not consulted — the answer for a
-  multi-tenant platform whose destinations live in a DB, not a settings file.
-  The resolver is security-critical deployment code: it must compare hosts
-  exactly (never substring/prefix), check the scheme, and fail closed. The
+  loaded via `mojo.helpers.modules.load_function()` and cached. Default `""`.
+  **When set it decides** and `AUTH_HANDOFF_ALLOWED_URLS` is not consulted — the
+  answer for a multi-tenant platform whose destinations live in a DB, not a
+  settings file. **Setting it also turns handoff enforcement on**, exactly like
+  the list. The resolver is security-critical deployment code: it must compare
+  hosts exactly (never substring/prefix), check the scheme, and fail closed. The
   framework wraps the call — a resolver that raises, or a dotted path that fails
   to import, refuses **everything** and is logged. Unlike `USER_LOGIN_HANDLER`,
   it never fails open.
