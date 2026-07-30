@@ -133,6 +133,32 @@ class MojoRedisCache(BaseCache):
         except Exception as error:
             self._log_redis_error("delete_many", error)
 
+    def delete_pattern(self, pattern, version=None):
+        """Delete every key matching ``pattern`` (glob-style, e.g.
+        ``"alea:txn:*"``) under this cache's KEY_PREFIX/version namespace.
+
+        SCAN-based so it never blocks Redis the way KEYS would, and scoped
+        to make_key()'s namespace so callers can clear one key family
+        without the FLUSHDB blast radius of ``clear()``. Returns the number
+        of keys deleted.
+        """
+        cache_pattern = self.make_key(pattern, version=version)
+        deleted = 0
+        try:
+            client = self._get_client()
+            batch = []
+            for key in client.scan_iter(match=cache_pattern, count=500):
+                batch.append(key)
+                if len(batch) >= 500:
+                    deleted += client.delete(*batch)
+                    batch = []
+            if batch:
+                deleted += client.delete(*batch)
+            return deleted
+        except Exception as error:
+            self._log_redis_error("delete_pattern", error)
+            return deleted
+
     def has_key(self, key, version=None):
         cache_key = self.make_key(key, version=version)
         try:
