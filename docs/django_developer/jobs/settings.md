@@ -120,15 +120,18 @@ key, since inbound verification honors it too. See
 ### Minimal (Development)
 
 ```python
-# Uses all defaults — just need Redis running
-JOBS_CHANNELS = ['default']
+# Uses all defaults — JOBS_CHANNELS already defaults to DEFAULT_CHANNELS, so
+# every framework channel is consumed; just need Redis running.
 ```
 
 ### Standard Production
 
 ```python
 JOBS_REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-JOBS_CHANNELS = ['default', 'emails', 'webhooks']
+# Extends DEFAULT_CHANNELS with a custom "emails" channel — see the upgrade
+# note above; omitting a DEFAULT_CHANNELS entry here means nothing consumes it.
+JOBS_CHANNELS = ['default', 'priority', 'cleanup', 'incident_handlers',
+                 'renditions', 'certs', 'webhooks', 'webhook_fanout', 'emails']
 JOBS_DEFAULT_MAX_RETRIES = 3
 JOBS_DEFAULT_EXPIRES_SEC = 1800  # 30 minutes
 JOBS_ENGINE_MAX_WORKERS = 20

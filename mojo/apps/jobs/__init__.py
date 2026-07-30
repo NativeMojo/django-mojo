@@ -53,9 +53,11 @@ __all__ = [
     'cancel',
     'status',
     'get_sysinfo',
-    'register_sched_channel',
-    'get_sched_channels',
 ]
+
+# register_sched_channel/get_sched_channels are framework plumbing — called by
+# publish(), the engine's retry path, and the scheduler. Importable, but kept
+# out of __all__ because app code has no reason to touch them.
 
 
 def register_sched_channel(channel):

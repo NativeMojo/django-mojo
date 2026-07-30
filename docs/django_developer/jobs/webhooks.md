@@ -213,15 +213,18 @@ JOBS_WEBHOOK_MAX_TIMEOUT = 300         # Maximum allowed timeout (seconds)
 JOBS_WEBHOOK_USER_AGENT = "Django-MOJO-Webhook/1.0"   # Outbound User-Agent; override to hide the framework
 WEBHOOK_SIGNATURE_HEADER = "X-Mojo-Signature"         # Signature header name; override to hide the framework (coordinate with receivers)
 
-# Include webhooks channel
+# webhooks is in JOBS_CHANNELS' default list, so it is consumed out of the
+# box. Only needed if you set JOBS_CHANNELS explicitly — see Jobs — Channels.
 JOBS_CHANNELS = ['default', 'webhooks']
 ```
 
 Run a dedicated worker for webhooks:
 
 ```bash
-python manage.py jobs_engine --channels webhooks --max-workers 20
+python -m mojo.apps.jobs.cli engine start --channels webhooks
 ```
+
+See [Jobs — Channels](publishing.md#channels) for the consume-list/publish-target distinction and what happens if nothing consumes a channel.
 
 ## Security
 

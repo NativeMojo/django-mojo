@@ -274,6 +274,10 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `JOBS_ENGINE_LOGFILE`
 - `JOBS_ENGINE_MAX_WORKERS`
 - `JOBS_ENGINE_READ_TIMEOUT`
+- `JOBS_HOSTNAME_CHANNEL` — when `True` (default), each engine also consumes a
+  channel named after its own host, so a publisher can address one specific
+  box with no configuration. See
+  [Jobs — Channels](../jobs/settings.md#channels).
 - `JOBS_IDLE_TIMEOUT_MS`
 - `JOBS_LOCAL_QUEUE_MAXSIZE`
 - `JOBS_PAYLOAD_MAX_BYTES`

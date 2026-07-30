@@ -100,14 +100,19 @@ The framework does not enforce this — it's purely operational discipline. Ther
 
 ## Channel configuration
 
-The fan-out uses two job channels. Either add both to your project's `JOBS_CHANNELS` setting so dedicated workers can subscribe, or let them fall back to `"default"`:
+The fan-out uses two job channels, `webhooks` and `webhook_fanout`. Both ship
+in `JOBS_CHANNELS`' default list, so an unconfigured deployment already
+consumes them. If you set `JOBS_CHANNELS` explicitly, include both — a job
+published to either one stays there rather than falling back to `default`,
+and a channel with no live consumer raises a `jobs:unconsumed_channel`
+incident:
 
 ```python
-# settings.py
+# settings.py — only needed if you set JOBS_CHANNELS explicitly
 JOBS_CHANNELS = ["default", "webhooks", "webhook_fanout", ...]
 ```
 
-Separating `webhook_fanout` from `webhooks` keeps fan-out work (DB query, per-row enqueue) from competing with HTTP delivery slots when traffic spikes.
+Separating `webhook_fanout` from `webhooks` keeps fan-out work (DB query, per-row enqueue) from competing with HTTP delivery slots when traffic spikes. See [Jobs — Channels](../jobs/publishing.md#channels).
 
 ## Error reporting
 
