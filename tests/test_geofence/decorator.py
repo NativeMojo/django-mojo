@@ -86,8 +86,11 @@ def test_bypass_permission(opts):
     assert opts.client.login(opts.bypass_email, opts.bypass_password), \
         "bypass user login failed (needed for auth'd /auth/handoff test)"
 
+    # redirect_uri must be on AUTH_HANDOFF_ALLOWED_URLS (pinned in the test
+    # project) — the handoff endpoint refuses an unlisted destination with a
+    # 400 before minting, which would mask what this test is actually checking.
     resp = opts.client.post(
-        "/api/auth/handoff", {},
+        "/api/auth/handoff", {"redirect_uri": "https://example.com/app"},
         headers=headers(geo=GEO_RU, system_rules={"country": {"in": ["US"]}}))
     assert resp.status_code == 200, \
         f"bypass_geofence user must pass /auth/handoff even with RU IP, got {resp.status_code}: {opts.client.last_response.body}"

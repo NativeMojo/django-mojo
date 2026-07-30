@@ -92,6 +92,9 @@ MOJO_TEST_MODE = True
 # to flip these per-test. Tests that need different values mutate
 # django.conf.settings in-process or use test-mode headers where supported.
 ALLOWED_REDIRECT_URLS = ["https://example.com/"]
+# Cross-origin auth handoff destinations. Deliberately a SEPARATE setting from
+# ALLOWED_REDIRECT_URLS — see docs/django_developer/account/auth.md.
+AUTH_HANDOFF_ALLOWED_URLS = ["https://example.com/", "https://*.handoff.example.net/app"]
 GITHUB_CLIENT_ID = "test-client-id-123"
 
 # Deterministic embeddings for the docit knowledge base — no AWS calls in
