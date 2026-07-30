@@ -36,16 +36,25 @@ another box's dedicated channel either got rerouted onto the publisher's own
 engine (work lost, publish reported success), or required listing the channel
 and thereby competing for its jobs.
 
-The replacement is fail-closed with the right list: a channel may be published
-to when it is a framework channel (`DEFAULT_CHANNELS`), a channel this box
-consumes (`JOBS_CHANNELS`), a declared user channel (new setting
+The replacement routes a **declared** channel verbatim, consumed locally or
+not: declared means a framework channel (`DEFAULT_CHANNELS`), a channel this
+box consumes (`JOBS_CHANNELS`), a declared user channel (new setting
 **`JOBS_ALLOWED_CHANNELS`** — one deployment-wide list, set identically on
-every box), or a box-direct channel ending `-engine`. An allowed channel is
-routed **verbatim**, consumed locally or not. Anything else raises
-`ValueError`, queues nothing, and files a `jobs:rejected_channel` incident
-naming the channel and the publishing function (suppressed to one per channel
-per hour) — a typo fails loudly at the call site instead of silently running
-in the wrong place or stranding work on a queue nobody consumes.
+every box), or a box-direct channel ending `-engine`. Undeclared channels are
+handled by mode, and **the setting itself is the switch — there is no flag
+day**:
+
+- `JOBS_ALLOWED_CHANNELS` **unset** (every upgrading deployment): monitor
+  mode. Undeclared publishes route exactly as before and file a
+  `jobs:undeclared_channel` incident naming the channel and the publishing
+  function (suppressed to one per channel per hour) — the incidents write
+  your channel list for you.
+- `JOBS_ALLOWED_CHANNELS` **set** (any list, even `[]`): enforcement.
+  An undeclared publish raises `ValueError`, queues nothing, and files a
+  `jobs:rejected_channel` incident — a typo fails loudly at the call site
+  instead of silently running in the wrong place or stranding work on a
+  queue nobody consumes. An undeclared `ScheduledTask.channel` fails at
+  save.
 
 **What to check before upgrading.** If you set `JOBS_CHANNELS` explicitly,
 framework jobs now ride their own queues instead of collapsing onto `default`.
@@ -53,14 +62,12 @@ Add every channel you actually use to some engine's consume list: `renditions`
 (fileman), `certs` (dnsman certificates — or your
 `DNSMAN_CERT_SYNC_CHANNEL` override, which must also be declared),
 `incident_handlers`, `webhooks`, `webhook_fanout`, `cleanup`, `priority`.
-Declare your user channels once in `JOBS_ALLOWED_CHANNELS` — including every
-existing `ScheduledTask.channel` value, which now fails at save and at
-dispatch if undeclared. Deployments that never set `JOBS_CHANNELS` and publish
-only to framework channels need no action. You do not have to get the lists
-right from memory: an undeclared publish raises immediately with an incident,
-and an allowed-but-unconsumed queue alerts within ~5 minutes (below). Queued
-jobs still expire after `JOBS_DEFAULT_EXPIRES_SEC`, so an unconsumed channel
-is time-sensitive.
+Then watch for `jobs:undeclared_channel` incidents, declare what they name in
+`JOBS_ALLOWED_CHANNELS`, and you are on enforcement. Deployments that never
+set `JOBS_CHANNELS` and publish only to framework channels need no action.
+An allowed-but-unconsumed queue alerts within ~5 minutes (below); queued jobs
+still expire after `JOBS_DEFAULT_EXPIRES_SEC`, so an unconsumed channel is
+time-sensitive.
 
 Also in this change:
 

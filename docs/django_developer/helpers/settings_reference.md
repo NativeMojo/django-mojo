@@ -262,9 +262,11 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 ### JOBS
 
 - `JOBS_ALLOWED_CHANNELS` — the deployment's declared user channels (set
-  identically on every box). `publish()` refuses a channel outside
-  `DEFAULT_CHANNELS` ∪ `JOBS_CHANNELS` ∪ this list ∪ `*-engine` with
-  `ValueError` plus a `jobs:rejected_channel` incident. See
+  identically on every box). Unset (default) = monitor mode: an undeclared
+  publish still routes and files a `jobs:undeclared_channel` incident.
+  Setting it (any list, even `[]`) turns enforcement on: `publish()` refuses
+  a channel outside `DEFAULT_CHANNELS` ∪ `JOBS_CHANNELS` ∪ this list ∪
+  `*-engine` with `ValueError` plus a `jobs:rejected_channel` incident. See
   [Jobs — Channels](../jobs/settings.md#channels).
 - `JOBS_CHANNELS`
 - `JOBS_DAEMON_WORKDIR`

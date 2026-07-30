@@ -38,10 +38,15 @@ DEFAULT_CHANNELS = [
 ]
 
 # Module-level settings for readability. JOB_CHANNELS is the box's CONSUME
-# list; JOBS_ALLOWED_CHANNELS is the deployment's declared user channels —
-# publish() refuses anything outside the union (see is_channel_allowed).
+# list; JOBS_ALLOWED_CHANNELS is the deployment's declared user channels.
+# The setting doubles as the enforcement switch: None (unset — the default)
+# means MONITOR mode, where an undeclared publish still routes as named but
+# files a jobs:undeclared_channel incident; any list (even []) turns
+# enforcement on and publish() refuses undeclared channels. Upgrading
+# deployments therefore never hit a flag day — they get incidents naming the
+# channels to declare, and opt into strictness by declaring them.
 JOB_CHANNELS = settings.get_static('JOBS_CHANNELS', DEFAULT_CHANNELS)
-JOBS_ALLOWED_CHANNELS = settings.get_static('JOBS_ALLOWED_CHANNELS', [])
+JOBS_ALLOWED_CHANNELS = settings.get_static('JOBS_ALLOWED_CHANNELS', None)
 JOBS_PAYLOAD_MAX_BYTES = settings.get_static('JOBS_PAYLOAD_MAX_BYTES', 16384)
 JOBS_DEFAULT_EXPIRES_SEC = settings.get_static('JOBS_DEFAULT_EXPIRES_SEC', 900)
 JOBS_DEFAULT_MAX_RETRIES = settings.get_static('JOBS_DEFAULT_MAX_RETRIES', 0)
@@ -102,60 +107,90 @@ def validate_channel_name(channel):
 ENGINE_CHANNEL_SUFFIX = '-engine'
 
 
+def channels_enforced():
+    """
+    Whether this box refuses undeclared channels.
+
+    Declaring JOBS_ALLOWED_CHANNELS (any list, even []) IS the opt-in: a
+    deployment that has never heard of the setting keeps 906's route-as-named
+    behavior and gets jobs:undeclared_channel incidents instead of failures —
+    no flag day on upgrade.
+    """
+    return JOBS_ALLOWED_CHANNELS is not None
+
+
 def is_channel_allowed(channel):
     """
-    Whether publish() may target `channel` from this box.
+    Whether `channel` is a declared publish target from this box.
 
-    Allowed: the framework's DEFAULT_CHANNELS, anything this box itself
+    Declared: the framework's DEFAULT_CHANNELS, anything this box itself
     consumes (JOBS_CHANNELS), the deployment's declared user channels
     (JOBS_ALLOWED_CHANNELS — set it identically on every box), and box-direct
-    channels ending in '-engine'. Everything else is a typo or an undeclared
-    channel: publish() refuses it and files a jobs:rejected_channel incident
-    rather than queueing work nothing will ever consume.
+    channels ending in '-engine'. What happens to everything else depends on
+    channels_enforced(): refused with a jobs:rejected_channel incident, or
+    (monitor mode) routed anyway with a jobs:undeclared_channel incident.
     """
     return (
         channel in DEFAULT_CHANNELS
         or channel in JOB_CHANNELS
-        or channel in JOBS_ALLOWED_CHANNELS
+        or channel in (JOBS_ALLOWED_CHANNELS or [])
         or channel.endswith(ENGINE_CHANNEL_SUFFIX)
     )
 
 
-# One rejected-channel incident per channel per window — a code bug retrying
-# publish() in a loop must not flood the incident log.
+# One undeclared/rejected-channel incident per channel per window — a code bug
+# retrying publish() in a loop must not flood the incident log.
 REJECTED_RENOTIFY_SEC = 3600
 
 
-def _rejected_notice_key(channel):
-    return f"{JobKeys().prefix}:alerted:rejected:{channel}"
+def _undeclared_notice_key(channel, enforced):
+    kind = "rejected" if enforced else "undeclared"
+    return f"{JobKeys().prefix}:alerted:{kind}:{channel}"
 
 
-def _report_rejected_channel(channel, func_path):
-    """File a suppressed incident for a refused publish. Never raises — the
-    caller is already about to raise the ValueError that matters."""
+def _report_undeclared_channel(channel, func_path, enforced):
+    """File a suppressed incident for an undeclared publish target. Never
+    raises — in enforced mode the caller is already about to raise the
+    ValueError that matters, and in monitor mode the publish must proceed."""
     try:
         redis = get_adapter()
-        notice_key = _rejected_notice_key(channel)
+        notice_key = _undeclared_notice_key(channel, enforced)
         if redis.get(notice_key) is not None:
             return
         redis.set(notice_key, "1", ex=REJECTED_RENOTIFY_SEC)
     except Exception as e:
-        logit.warning(f"jobs: rejected-channel suppression check failed: {e}")
-    try:
-        from mojo.apps import incident
-        incident.report_event(
+        logit.warning(f"jobs: undeclared-channel suppression check failed: {e}")
+    if enforced:
+        body = (
             f"jobs.publish(channel='{channel}') was refused and the job was NOT "
             f"queued: the channel is not in DEFAULT_CHANNELS, this box's "
             f"JOBS_CHANNELS, or JOBS_ALLOWED_CHANNELS, and does not end in "
             f"'{ENGINE_CHANNEL_SUFFIX}'. Publisher func: {func_path}. If the "
-            f"channel is real, add it to JOBS_ALLOWED_CHANNELS on every box.",
-            title=f"Rejected job channel: {channel}",
-            category="jobs:rejected_channel",
+            f"channel is real, add it to JOBS_ALLOWED_CHANNELS on every box."
+        )
+        title = f"Rejected job channel: {channel}"
+        category = "jobs:rejected_channel"
+    else:
+        body = (
+            f"jobs.publish(channel='{channel}') targets an undeclared channel. "
+            f"The job WAS queued (JOBS_ALLOWED_CHANNELS is not set, so "
+            f"enforcement is off). Publisher func: {func_path}. Declare your "
+            f"user channels in JOBS_ALLOWED_CHANNELS on every box — once set, "
+            f"undeclared publishes are refused instead of reported."
+        )
+        title = f"Undeclared job channel: {channel}"
+        category = "jobs:undeclared_channel"
+    try:
+        from mojo.apps import incident
+        incident.report_event(
+            body,
+            title=title,
+            category=category,
             level=3,
             channel=channel,
             func=func_path)
     except Exception as e:
-        logit.error(f"jobs: failed to report rejected channel {channel}: {e}")
+        logit.error(f"jobs: failed to report undeclared channel {channel}: {e}")
 
 
 def register_sched_channel(channel):
@@ -252,20 +287,24 @@ def publish(
     # Redis key, a metric slug, and an incident title verbatim.
     validate_channel_name(channel)
 
-    # Fail closed on undeclared channels. The pre-1.2.62 reroute-to-default hid
-    # typos by running the job in the wrong place; routing-as-named alone let a
-    # typo strand the job on a queue nobody consumes. Refusing loudly at the
-    # call site — with a suppressed incident naming the publisher — catches the
-    # mistake immediately and keeps channel cardinality bounded.
+    # Gate undeclared channels. The pre-1.2.62 reroute-to-default hid typos by
+    # running the job in the wrong place; routing-as-named alone let a typo
+    # strand the job on a queue nobody consumes. With JOBS_ALLOWED_CHANNELS
+    # set, an undeclared channel is refused loudly at the call site; unset
+    # (monitor mode) it still routes as named but files an incident naming the
+    # channel and publisher, so upgrading deployments learn their channel list
+    # instead of breaking.
     if not is_channel_allowed(channel):
-        _report_rejected_channel(channel, func_path)
-        raise ValueError(
-            f"Job channel {channel!r} is not an allowed publish target. Allowed: "
-            f"framework DEFAULT_CHANNELS, this box's JOBS_CHANNELS, the "
-            f"deployment's JOBS_ALLOWED_CHANNELS, and box-direct channels ending "
-            f"'{ENGINE_CHANNEL_SUFFIX}'. Add it to JOBS_ALLOWED_CHANNELS to "
-            f"declare it."
-        )
+        enforced = channels_enforced()
+        _report_undeclared_channel(channel, func_path, enforced)
+        if enforced:
+            raise ValueError(
+                f"Job channel {channel!r} is not a declared publish target. "
+                f"Allowed: framework DEFAULT_CHANNELS, this box's JOBS_CHANNELS, "
+                f"the deployment's JOBS_ALLOWED_CHANNELS, and box-direct channels "
+                f"ending '{ENGINE_CHANNEL_SUFFIX}'. Add it to "
+                f"JOBS_ALLOWED_CHANNELS to declare it."
+            )
 
     # Validate payload
     payload = payload or {}

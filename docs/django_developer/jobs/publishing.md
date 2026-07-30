@@ -273,12 +273,21 @@ A channel may be published to when it is any of:
 - a box-direct channel ending in `-engine` (see
   [Targeting one specific engine](#targeting-one-specific-engine)).
 
-Anything else is refused: `publish()` raises `ValueError`, creates **no** job,
-and files a `jobs:rejected_channel` incident naming the channel and the
-publishing function (suppressed to one event per channel per hour). A
-developer publishing a job knows the channel at code-writing time, so
-declaring it is one settings line — and a typo fails at the call site instead
-of stranding work on a queue nobody consumes.
+What happens to anything else depends on whether the deployment has opted
+into enforcement — **setting `JOBS_ALLOWED_CHANNELS` (any list, even `[]`) is
+the opt-in**:
+
+- **Enforced** (setting present): `publish()` raises `ValueError`, creates
+  **no** job, and files a `jobs:rejected_channel` incident naming the channel
+  and the publishing function (suppressed to one event per channel per hour).
+  A developer publishing a job knows the channel at code-writing time, so
+  declaring it is one settings line — and a typo fails at the call site
+  instead of stranding work on a queue nobody consumes.
+- **Monitor** (setting absent — the default, and what every existing
+  deployment upgrades into): the job still routes exactly as named, and a
+  `jobs:undeclared_channel` incident (same suppression) tells you which
+  channel to declare. Nothing breaks on upgrade; the incidents write your
+  channel list for you. Declare it and you get enforcement.
 
 The name itself is also validated — letters, digits, `_`, `.` and `-`, up to
 100 characters — because it becomes a Redis key, a metric slug and an

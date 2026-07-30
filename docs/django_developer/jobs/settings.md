@@ -22,18 +22,20 @@ The `mojo/apps/jobs/settings.py` file is a reference showing example configurati
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `JOBS_CHANNELS` | `DEFAULT_CHANNELS` (see below) | Channels this box **consumes** |
-| `JOBS_ALLOWED_CHANNELS` | `[]` | User channels this deployment **publishes** to — set identically on every box |
+| `JOBS_ALLOWED_CHANNELS` | unset (monitor mode) | User channels this deployment **publishes** to — set identically on every box. **Setting it (even to `[]`) turns enforcement on** |
 | `JOBS_HOSTNAME_CHANNEL` | `True` | Also consume the engine's box-direct channel (named after its runner id) |
 
-`JOBS_CHANNELS` is a **consume** list. Publishing is gated separately:
-`publish(channel=X)` succeeds when `X` is a framework channel
-(`DEFAULT_CHANNELS`), a channel this box consumes, a declared user channel
-(`JOBS_ALLOWED_CHANNELS`), or a box-direct channel ending `-engine`. Anything
-else raises `ValueError`, queues nothing, and files a `jobs:rejected_channel`
-incident (one per channel per hour) naming the channel and the publishing
-function. An allowed channel is routed **verbatim** — consumed here or not —
-which is how a box hands work to another box's dedicated channel. See
-[Publishing — Channels](publishing.md#channels).
+`JOBS_CHANNELS` is a **consume** list. Publishing is gated separately: a
+channel is *declared* when it is a framework channel (`DEFAULT_CHANNELS`), a
+channel this box consumes, a declared user channel (`JOBS_ALLOWED_CHANNELS`),
+or a box-direct channel ending `-engine`. With `JOBS_ALLOWED_CHANNELS` set,
+an undeclared publish raises `ValueError`, queues nothing, and files a
+`jobs:rejected_channel` incident (one per channel per hour) naming the
+channel and the publishing function; with it unset (monitor mode — the
+default), the publish still routes as named and a `jobs:undeclared_channel`
+incident reports what to declare. A declared channel is routed **verbatim** —
+consumed here or not — which is how a box hands work to another box's
+dedicated channel. See [Publishing — Channels](publishing.md#channels).
 
 The default is `mojo.apps.jobs.DEFAULT_CHANNELS` — every channel the framework
 itself publishes to, so an unconfigured deployment runs all framework jobs:
@@ -66,9 +68,12 @@ channel.
 ### Upgrade note — channel routing changed
 
 `publish()` used to reroute any channel missing from `JOBS_CHANNELS` onto
-`default`, silently. Now an **allowed** channel is routed verbatim and an
-**undeclared** one is refused (`ValueError` + a `jobs:rejected_channel`
-incident; nothing is queued). Two consequences when upgrading:
+`default`, silently. Now a **declared** channel is routed verbatim, and an
+undeclared one is either reported (monitor mode) or refused (enforced) —
+**there is no flag day**: a deployment that has not set
+`JOBS_ALLOWED_CHANNELS` upgrades into monitor mode, where every publish
+keeps working and undeclared channels surface as `jobs:undeclared_channel`
+incidents. What to do when upgrading:
 
 - If you set `JOBS_CHANNELS` by hand, framework jobs now ride their own
   queues — keep the `DEFAULT_CHANNELS` entries for the features you run
@@ -76,15 +81,17 @@ incident; nothing is queued). Two consequences when upgrading:
   `DNSMAN_CERT_SYNC_CHANNEL` override, which also needs declaring —
   `incident_handlers`, `webhooks`, `webhook_fanout`, `cleanup`, `priority`)
   in some engine's consume list.
-- Declare every **user** channel you publish to in `JOBS_ALLOWED_CHANNELS`
-  (the publisher box's own consume list also counts). Existing
-  `ScheduledTask.channel` values must be declared too — an undeclared one now
-  fails at save and at dispatch.
+- Watch for `jobs:undeclared_channel` incidents — they name every channel
+  your code publishes to that needs declaring (including
+  `ScheduledTask.channel` values). Add them to `JOBS_ALLOWED_CHANNELS`, set
+  identically on every box.
+- Once the setting exists, enforcement is on: an undeclared publish raises
+  `ValueError` with a `jobs:rejected_channel` incident and queues nothing,
+  and an undeclared `ScheduledTask.channel` fails at save.
 
-Misconfigurations are loud, not silent: an undeclared publish raises at the
-call site with a `jobs:rejected_channel` incident, and an allowed-but-
-unconsumed queue raises `jobs:unconsumed_channel` within ~5 minutes. Queued
-jobs still expire after `JOBS_DEFAULT_EXPIRES_SEC`.
+Either way misconfigurations are loud, not silent, and an
+allowed-but-unconsumed queue still raises `jobs:unconsumed_channel` within
+~5 minutes. Queued jobs still expire after `JOBS_DEFAULT_EXPIRES_SEC`.
 
 ### Channel names
 

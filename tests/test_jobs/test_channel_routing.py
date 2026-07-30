@@ -65,11 +65,14 @@ def _clear(opts):
     for ch in TEST_CHANNELS:
         opts.redis.delete(f"{opts.keys.prefix}:alerted:unconsumed:{ch}")
         opts.redis.delete(f"{opts.keys.prefix}:alerted:rejected:{ch}")
+        opts.redis.delete(f"{opts.keys.prefix}:alerted:undeclared:{ch}")
     Job.objects.filter(channel__in=TEST_CHANNELS).delete()
     Event.objects.filter(category="jobs:unconsumed_channel",
                          title__in=[_alert_title(ch) for ch in TEST_CHANNELS]).delete()
     Event.objects.filter(category="jobs:rejected_channel",
                          title__in=[_rejected_title(ch) for ch in TEST_CHANNELS]).delete()
+    Event.objects.filter(category="jobs:undeclared_channel",
+                         title__in=[_undeclared_title(ch) for ch in TEST_CHANNELS]).delete()
 
 
 def _alert_title(channel):
@@ -80,6 +83,31 @@ def _alert_title(channel):
 def _rejected_title(channel):
     """The title a refused publish gives its incident."""
     return f"Rejected job channel: {channel}"
+
+
+def _undeclared_title(channel):
+    """The title a monitor-mode undeclared publish gives its incident."""
+    return f"Undeclared job channel: {channel}"
+
+
+def _enforced(*declared):
+    """Pin enforcement ON with exactly `declared` as JOBS_ALLOWED_CHANNELS.
+
+    The gate reads the module global at call time, so patching it makes these
+    tests independent of whatever the box's testproject settings declare —
+    a stale settings file (no JOBS_ALLOWED_CHANNELS → monitor mode) and a
+    freshly generated one must both pass this module.
+    """
+    from unittest import mock
+    from mojo.apps import jobs
+    return mock.patch.object(jobs, "JOBS_ALLOWED_CHANNELS", list(declared))
+
+
+def _monitor():
+    """Pin monitor mode (JOBS_ALLOWED_CHANNELS unset)."""
+    from unittest import mock
+    from mojo.apps import jobs
+    return mock.patch.object(jobs, "JOBS_ALLOWED_CHANNELS", None)
 
 
 @th.django_unit_setup()
@@ -178,25 +206,27 @@ def test_publish_rejects_malformed_channel(opts):
         jobs.validate_channel_name(good)
 
 
-@th.django_unit_test("an undeclared channel is refused: ValueError, no job, one incident")
+@th.django_unit_test("enforced: an undeclared channel is refused — ValueError, no job, one incident")
 def test_publish_undeclared_channel_refused(opts):
-    """The 936 contract: route-as-named holds for DECLARED channels; a typo'd
-    or undeclared one fails at the call site instead of stranding a job on a
-    queue nothing consumes."""
+    """The 936 contract with enforcement on (JOBS_ALLOWED_CHANNELS set):
+    route-as-named holds for DECLARED channels; a typo'd or undeclared one
+    fails at the call site instead of stranding a job on a queue nothing
+    consumes."""
     _clear(opts)
     from mojo.apps import jobs
     from mojo.apps.jobs.models import Job
     from mojo.apps.incident.models import Event
 
-    for _ in range(2):  # second attempt exercises the suppression window
-        try:
-            jobs.publish(func=HANDLER, payload={}, channel=CH_UNDECLARED)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(
-                f"publish(channel={CH_UNDECLARED!r}) must raise ValueError"
-            )
+    with _enforced(CH_DECLARED):
+        for _ in range(2):  # second attempt exercises the suppression window
+            try:
+                jobs.publish(func=HANDLER, payload={}, channel=CH_UNDECLARED)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    f"publish(channel={CH_UNDECLARED!r}) must raise ValueError"
+                )
 
     assert not Job.objects.filter(channel=CH_UNDECLARED).exists(), (
         "a refused publish must not create a Job row"
@@ -212,54 +242,90 @@ def test_publish_undeclared_channel_refused(opts):
     )
 
 
+@th.django_unit_test("monitor mode: an undeclared channel still routes, with an incident")
+def test_publish_undeclared_channel_monitor_mode(opts):
+    """JOBS_ALLOWED_CHANNELS unset = no flag day: an upgrading deployment's
+    undeclared publishes keep working exactly as before and file a
+    jobs:undeclared_channel incident naming what to declare."""
+    _clear(opts)
+    from mojo.apps import jobs
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.incident.models import Event
+
+    with _monitor():
+        first = jobs.publish(func=HANDLER, payload={"marker": "m1"},
+                             channel=CH_UNDECLARED)
+        second = jobs.publish(func=HANDLER, payload={"marker": "m2"},
+                              channel=CH_UNDECLARED)
+
+    queued = _queued_ids(opts, CH_UNDECLARED)
+    assert first in queued and second in queued, (
+        f"monitor mode must route undeclared publishes as named, queue holds {queued}"
+    )
+    assert Job.objects.filter(channel=CH_UNDECLARED).count() == 2, (
+        "monitor mode must create the Job rows normally"
+    )
+    events = Event.objects.filter(category="jobs:undeclared_channel",
+                                  title=_undeclared_title(CH_UNDECLARED)).count()
+    assert events == 1, (
+        f"two undeclared publishes inside the suppression window must file "
+        f"exactly one jobs:undeclared_channel incident, got {events}"
+    )
+
+
 @th.django_unit_test("a channel declared in JOBS_ALLOWED_CHANNELS routes as named")
 def test_publish_declared_channel_routes(opts):
     _clear(opts)
     from mojo.apps import jobs
 
-    job_id = jobs.publish(func=HANDLER, payload={"marker": "declared"},
-                          channel=CH_DECLARED)
+    with _enforced(CH_DECLARED):
+        job_id = jobs.publish(func=HANDLER, payload={"marker": "declared"},
+                              channel=CH_DECLARED)
     assert job_id in _queued_ids(opts, CH_DECLARED), (
         f"a JOBS_ALLOWED_CHANNELS channel must queue as named, "
         f"queue holds {_queued_ids(opts, CH_DECLARED)}"
     )
 
 
-@th.django_unit_test("a '-engine' channel is implicitly allowed (box-direct)")
+@th.django_unit_test("a '-engine' channel is implicitly allowed even when enforced")
 def test_publish_engine_suffix_implicitly_allowed(opts):
     """Hostnames vary per deployment and cannot live in a hand-written list,
-    so the runner-id suffix IS the allow rule. A typo'd host channel passes
-    the gate and is caught by the unconsumed-channel incident instead."""
+    so the runner-id suffix IS the allow rule — even with an empty declared
+    list. A typo'd host channel passes the gate and is caught by the
+    unconsumed-channel incident instead."""
     _clear(opts)
     from mojo.apps import jobs
 
-    job_id = jobs.publish(func=HANDLER, payload={"marker": "direct"},
-                          channel=CH_BOX_DIRECT)
+    with _enforced():  # enforcement on, nothing declared
+        job_id = jobs.publish(func=HANDLER, payload={"marker": "direct"},
+                              channel=CH_BOX_DIRECT)
     assert job_id in _queued_ids(opts, CH_BOX_DIRECT), (
         f"a '-engine' channel must be publishable with zero configuration, "
         f"queue holds {_queued_ids(opts, CH_BOX_DIRECT)}"
     )
 
 
-@th.django_unit_test("a ScheduledTask cannot be saved with an undeclared channel")
+@th.django_unit_test("enforced: a ScheduledTask cannot be saved with an undeclared channel")
 def test_scheduled_task_undeclared_channel_rejected(opts):
     """Owner-editable field, published hourly — reject at write time, not at
-    dispatch."""
+    dispatch. Monitor mode allows the save (dispatch then routes and
+    reports), so pin enforcement on."""
     _clear(opts)
     from mojo.apps.jobs.models import ScheduledTask
 
     task = ScheduledTask(name="t936 undeclared channel", task_type="report",
                          run_times=["09:00"], run_days=[0],
                          channel=CH_UNDECLARED)
-    try:
-        task.save()
-    except ValueError:
-        pass
-    else:
-        ScheduledTask.objects.filter(name="t936 undeclared channel").delete()
-        raise AssertionError(
-            "saving a ScheduledTask with an undeclared channel must raise ValueError"
-        )
+    with _enforced(CH_DECLARED):
+        try:
+            task.save()
+        except ValueError:
+            pass
+        else:
+            ScheduledTask.objects.filter(name="t936 undeclared channel").delete()
+            raise AssertionError(
+                "saving a ScheduledTask with an undeclared channel must raise ValueError"
+            )
 
 
 @th.django_unit_test("a ScheduledTask cannot be saved with a malformed channel")

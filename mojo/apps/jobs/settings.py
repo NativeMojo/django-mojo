@@ -58,11 +58,14 @@ JOBS_CHANNELS = [
 ]
 
 # The deployment's declared USER channels — set the SAME value on every box.
-# publish(channel=X) succeeds when X is a DEFAULT_CHANNELS entry, in this
-# box's JOBS_CHANNELS, in this list, or ends in '-engine' (box-direct);
-# anything else raises ValueError and files a jobs:rejected_channel incident.
-# An allowed channel is routed verbatim, consumed here or not — that is how
-# one box hands work to another.
+# Leaving it UNSET means monitor mode: an undeclared publish still routes as
+# named and files a jobs:undeclared_channel incident naming what to declare.
+# Setting it (any list, even []) turns enforcement on: publish(channel=X)
+# then succeeds only when X is a DEFAULT_CHANNELS entry, in this box's
+# JOBS_CHANNELS, in this list, or ends in '-engine' (box-direct); anything
+# else raises ValueError and files a jobs:rejected_channel incident. A
+# declared channel is routed verbatim, consumed here or not — that is how one
+# box hands work to another.
 JOBS_ALLOWED_CHANNELS = [
     'emails',
     'uploads',
@@ -212,12 +215,14 @@ JOBS_CHANNELS
 
 JOBS_ALLOWED_CHANNELS
     The deployment's declared user channels — set identically on every box.
-    publish(channel=X) succeeds when X is in DEFAULT_CHANNELS, this box's
-    JOBS_CHANNELS, this list, or ends in '-engine'; anything else raises
-    ValueError, queues nothing, and files a jobs:rejected_channel incident
-    (suppressed to one per channel per hour). An allowed channel is routed
-    verbatim, consumed here or not.
-    Default: []
+    Unset (the default) = monitor mode: an undeclared publish still routes
+    as named and files a jobs:undeclared_channel incident. Set (any list,
+    even []) = enforcement: publish(channel=X) succeeds only when X is in
+    DEFAULT_CHANNELS, this box's JOBS_CHANNELS, this list, or ends in
+    '-engine'; anything else raises ValueError, queues nothing, and files a
+    jobs:rejected_channel incident (suppressed to one per channel per hour).
+    A declared channel is routed verbatim, consumed here or not.
+    Default: unset (monitor mode)
 
 JOBS_HOSTNAME_CHANNEL
     When True, each engine also consumes its box-direct channel, named after
