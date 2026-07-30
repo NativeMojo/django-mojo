@@ -94,6 +94,14 @@ one for the duration of the work with `ACTIVE_REQUEST.set(...)` — see
 that a model whose owner field is **not** nullable will now fail at the database
 instead, since there is nothing to put in it.
 
+**Audit caveat on the update path.** Leaving `UPDATED_BY_OWNER_FIELD` alone
+means the *previous* editor stays in it, while a `modified` timestamp
+(`auto_now`) still advances — so a system-context write leaves the row reading
+"modified at T by user X" for a change X did not make. `modified_by` feeds no
+permission decision, so this is audit fidelity rather than access control, but
+bind a request for any system-context write to a row whose edit history is
+meant to be trustworthy.
+
 ### Security implications
 
 This default is permissive: **any caller with `SAVE_PERMS` on the model can designate another user as the record's owner by including `user` in the body**, provided they also pass the per-FK `VIEW_PERMS` check on `account.User` (`view_users` / `manage_users` / `users`). The framework does not enforce "admin-only" semantics on the owner field — that is per-model policy.

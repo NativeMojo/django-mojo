@@ -7,11 +7,25 @@ together.
 
 **Behavior change, read this first.** `update_from_dict` takes no `request`
 argument, so mutating the module-level `SYSTEM_REQUEST` was the only lever a
-non-HTTP caller had — e.g. setting `SYSTEM_REQUEST.user` to a real `User` to get
-`modified_by` attribution. The framework no longer reads that object, so such a
-mutation is now silently ignored. Bind a request instead, which has always been
-the supported mechanism and is what the middleware itself does:
+non-HTTP caller had. The framework no longer reads that object, so **any such
+mutation is now silently ignored**. Bind a request instead, which has always
+been the supported mechanism and is what the middleware itself does:
 `token = ACTIVE_REQUEST.set(req)` / `ACTIVE_REQUEST.reset(token)`.
+
+Two levers were in reach, and the second matters more than the first:
+
+- `SYSTEM_REQUEST.user = <real User>` to get `created_by` / `modified_by`
+  attribution — now yields an unattributed write (see below).
+- `SYSTEM_REQUEST.group = <tenant>` before a `create_from_dict` to place the new
+  row in a tenant — **now yields `group=None`**. For a model where a null group
+  means "the system default, used by every tenant that has none of its own",
+  that is a widening, not a neutral null: `phonehub.PhoneConfig.get_for_group()`
+  and `account.push.PushConfig.get_for_user()` both fall back to
+  `filter(group__isnull=True)`, and both are `MojoSecrets` models holding
+  carrier credentials. Neither has a `user` field, so neither was protected by
+  the `ValueError` described below — on these models the mutate-the-singleton
+  pattern genuinely worked before this release. Audit any non-HTTP caller that
+  set `SYSTEM_REQUEST.group` and move it to `ACTIVE_REQUEST.set(...)`.
 
 **The leak.** `SYSTEM_REQUEST` was built once at import and shared by every
 request-less caller. `_evaluate_permission` rebinds `request.group` to a row's
