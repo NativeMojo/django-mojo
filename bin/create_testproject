@@ -208,6 +208,15 @@ WS_CONNECT_RATE_LIMIT = 0
 # the drain in th.run_jobs() must list every channel the suite publishes to.
 JOBS_CHANNELS = ["default", "priority", "cleanup", "incident_handlers",
                  "renditions", "certs", "webhooks", "webhook_fanout", "email"]
+# publish() refuses channels outside DEFAULT_CHANNELS ∪ JOBS_CHANNELS ∪ this
+# list ∪ '*-engine'. Every extra channel the suite publishes to must be
+# declared here — a missing entry fails loudly as ValueError at publish.
+# testit_run_jobs_helper / t906_* / t936_allowed are deliberately NOT in
+# JOBS_CHANNELS: they exercise the allowed-but-not-consumed (cross-box) path.
+JOBS_ALLOWED_CHANNELS = ["sms", "exec_broadcast", "exec_retry",
+                         "testit_run_jobs_helper", "t906_firewall", "t906_a",
+                         "t906_b", "t906_sched", "t906_seed", "t906_orphan",
+                         "t936_allowed"]
 JOBS_DEFAULT_MAX_RETRIES = 0
 JOBS_ENGINE_MAX_WORKERS = 2
 JOBS_RUNNER_HEARTBEAT_SEC = 5

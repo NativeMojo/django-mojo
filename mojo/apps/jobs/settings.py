@@ -42,8 +42,7 @@ WEBHOOK_SIGNATURE_HEADER = "X-Mojo-Signature"  # Outbound signature header name;
 # Channels Configuration
 #
 # This is a CONSUME list — the channels this box's engine and scheduler pull
-# from. It does NOT restrict publishing: jobs.publish(channel="anything") always
-# lands on "anything", which is how one box hands work to another.
+# from.
 #
 # The runtime default is mojo.apps.jobs.DEFAULT_CHANNELS (every channel the
 # framework itself publishes to). Set this explicitly only to dedicate a box —
@@ -58,8 +57,22 @@ JOBS_CHANNELS = [
     'reports'
 ]
 
-# Each engine also consumes a channel named after its own host, so a publisher
-# can target one specific box with no configuration. Set False to opt out.
+# The deployment's declared USER channels — set the SAME value on every box.
+# publish(channel=X) succeeds when X is a DEFAULT_CHANNELS entry, in this
+# box's JOBS_CHANNELS, in this list, or ends in '-engine' (box-direct);
+# anything else raises ValueError and files a jobs:rejected_channel incident.
+# An allowed channel is routed verbatim, consumed here or not — that is how
+# one box hands work to another.
+JOBS_ALLOWED_CHANNELS = [
+    'emails',
+    'uploads',
+    'maintenance',
+    'reports'
+]
+
+# Each engine also consumes its box-direct channel, named after its runner id
+# (default "<hostname>-engine"), so a publisher can target one specific engine
+# with no configuration. Set False to opt out.
 JOBS_HOSTNAME_CHANNEL = True
 
 # Example Full Configuration
@@ -190,18 +203,27 @@ WEBHOOK_SIGNATURE_HEADER
     Default: "X-Mojo-Signature"
 
 JOBS_CHANNELS
-    Channels this box CONSUMES (engine + scheduler). Publishing is not
-    restricted by it — jobs.publish(channel=X) always lands on X, so a box can
-    target a channel it does not consume. Override per process with
-    `--channels a,b` on the jobs CLI.
+    Channels this box CONSUMES (engine + scheduler). Override per process with
+    `--channels a,b` on the jobs CLI. Publishing to a channel this box
+    consumes is always allowed.
     Default: mojo.apps.jobs.DEFAULT_CHANNELS (every channel the framework
     publishes to: default, priority, cleanup, incident_handlers, renditions,
     certs, webhooks, webhook_fanout)
 
+JOBS_ALLOWED_CHANNELS
+    The deployment's declared user channels — set identically on every box.
+    publish(channel=X) succeeds when X is in DEFAULT_CHANNELS, this box's
+    JOBS_CHANNELS, this list, or ends in '-engine'; anything else raises
+    ValueError, queues nothing, and files a jobs:rejected_channel incident
+    (suppressed to one per channel per hour). An allowed channel is routed
+    verbatim, consumed here or not.
+    Default: []
+
 JOBS_HOSTNAME_CHANNEL
-    When True, each engine also consumes a channel named after its host
-    (lowercased, dots/underscores to dashes), so a publisher can address one
-    specific box with no configuration.
+    When True, each engine also consumes its box-direct channel, named after
+    its runner id (default "<hostname>-engine" — hostname lowercased,
+    dots/underscores to dashes), so a publisher can address one specific
+    engine with no configuration.
     Default: True
 
 Redis Keys (KISS approach)

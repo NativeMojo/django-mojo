@@ -166,9 +166,14 @@ class ScheduledTask(models.Model, MojoModel):
 
         # Validate channel. Owners can edit their own task without any jobs
         # permission, and dispatch publishes to this value verbatim, so reject a
-        # malformed name here rather than hourly at publish time.
-        from mojo.apps.jobs import validate_channel_name
+        # malformed or undeclared name here rather than hourly at publish time.
+        from mojo.apps.jobs import validate_channel_name, is_channel_allowed
         validate_channel_name(self.channel)
+        if not is_channel_allowed(self.channel):
+            raise ValueError(
+                f"Channel {self.channel!r} is not an allowed publish target — "
+                f"use an existing channel or add it to JOBS_ALLOWED_CHANNELS."
+            )
 
         # Validate notify channels
         valid_channels = ["email", "in_app", "sms", "push"]

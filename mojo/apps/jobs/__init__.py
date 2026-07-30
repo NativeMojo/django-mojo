@@ -24,7 +24,8 @@ from .adapters import get_adapter
 # publish() no longer reroutes unlisted channels to "default".
 #
 # "certs" covers the DEFAULT of DNSMAN_CERT_SYNC_CHANNEL; override that setting
-# and you must add your channel to some consumer's list.
+# and you must add your channel to some consumer's list AND to
+# JOBS_ALLOWED_CHANNELS (publish refuses undeclared channels).
 DEFAULT_CHANNELS = [
     'default',
     'priority',
@@ -37,8 +38,10 @@ DEFAULT_CHANNELS = [
 ]
 
 # Module-level settings for readability. JOB_CHANNELS is the box's CONSUME
-# list; publish() does not read it (kept for import compatibility).
+# list; JOBS_ALLOWED_CHANNELS is the deployment's declared user channels —
+# publish() refuses anything outside the union (see is_channel_allowed).
 JOB_CHANNELS = settings.get_static('JOBS_CHANNELS', DEFAULT_CHANNELS)
+JOBS_ALLOWED_CHANNELS = settings.get_static('JOBS_ALLOWED_CHANNELS', [])
 JOBS_PAYLOAD_MAX_BYTES = settings.get_static('JOBS_PAYLOAD_MAX_BYTES', 16384)
 JOBS_DEFAULT_EXPIRES_SEC = settings.get_static('JOBS_DEFAULT_EXPIRES_SEC', 900)
 JOBS_DEFAULT_MAX_RETRIES = settings.get_static('JOBS_DEFAULT_MAX_RETRIES', 0)
@@ -75,9 +78,9 @@ def validate_channel_name(channel):
     """
     Raise ValueError unless `channel` is a usable channel name.
 
-    Deliberately a CHARSET check, not a membership check: any well-formed
-    channel is publishable whether or not this box consumes it. That is the
-    routing contract — see publish().
+    Deliberately a CHARSET check only. Membership — may this box target the
+    channel at all — is is_channel_allowed(); publish() enforces both, in
+    that order.
     """
     if not channel or not isinstance(channel, str):
         raise ValueError(f"Job channel must be a non-empty string, got {channel!r}")
@@ -88,6 +91,71 @@ def validate_channel_name(channel):
             f"fields, so ':' and whitespace are not allowed."
         )
     return channel
+
+
+# Channels ending in this suffix are box-direct: every engine consumes a
+# channel named after its runner id (default "<hostname>-engine"), so
+# publish(channel="web-01-engine") targets exactly that box. Hostnames vary
+# per deployment and cannot live in a hand-written allowlist, so the suffix
+# IS the allow rule — a typo'd host channel passes the gate and is caught by
+# the unconsumed-channel incident instead.
+ENGINE_CHANNEL_SUFFIX = '-engine'
+
+
+def is_channel_allowed(channel):
+    """
+    Whether publish() may target `channel` from this box.
+
+    Allowed: the framework's DEFAULT_CHANNELS, anything this box itself
+    consumes (JOBS_CHANNELS), the deployment's declared user channels
+    (JOBS_ALLOWED_CHANNELS — set it identically on every box), and box-direct
+    channels ending in '-engine'. Everything else is a typo or an undeclared
+    channel: publish() refuses it and files a jobs:rejected_channel incident
+    rather than queueing work nothing will ever consume.
+    """
+    return (
+        channel in DEFAULT_CHANNELS
+        or channel in JOB_CHANNELS
+        or channel in JOBS_ALLOWED_CHANNELS
+        or channel.endswith(ENGINE_CHANNEL_SUFFIX)
+    )
+
+
+# One rejected-channel incident per channel per window — a code bug retrying
+# publish() in a loop must not flood the incident log.
+REJECTED_RENOTIFY_SEC = 3600
+
+
+def _rejected_notice_key(channel):
+    return f"{JobKeys().prefix}:alerted:rejected:{channel}"
+
+
+def _report_rejected_channel(channel, func_path):
+    """File a suppressed incident for a refused publish. Never raises — the
+    caller is already about to raise the ValueError that matters."""
+    try:
+        redis = get_adapter()
+        notice_key = _rejected_notice_key(channel)
+        if redis.get(notice_key) is not None:
+            return
+        redis.set(notice_key, "1", ex=REJECTED_RENOTIFY_SEC)
+    except Exception as e:
+        logit.warning(f"jobs: rejected-channel suppression check failed: {e}")
+    try:
+        from mojo.apps import incident
+        incident.report_event(
+            f"jobs.publish(channel='{channel}') was refused and the job was NOT "
+            f"queued: the channel is not in DEFAULT_CHANNELS, this box's "
+            f"JOBS_CHANNELS, or JOBS_ALLOWED_CHANNELS, and does not end in "
+            f"'{ENGINE_CHANNEL_SUFFIX}'. Publisher func: {func_path}. If the "
+            f"channel is real, add it to JOBS_ALLOWED_CHANNELS on every box.",
+            title=f"Rejected job channel: {channel}",
+            category="jobs:rejected_channel",
+            level=3,
+            channel=channel,
+            func=func_path)
+    except Exception as e:
+        logit.error(f"jobs: failed to report rejected channel {channel}: {e}")
 
 
 def register_sched_channel(channel):
@@ -146,9 +214,14 @@ def publish(
     Args:
         func: Job function (registered name or callable with _job_name)
         payload: Data to pass to the job handler
-        channel: Channel to publish to (default: "default"). Used verbatim —
-            the job lands on this channel whether or not this box consumes it,
-            which is how work is handed to another box. Must be non-empty.
+        channel: Channel to publish to (default: "default"). Must be an
+            allowed target: a framework DEFAULT_CHANNELS entry, a channel this
+            box consumes (JOBS_CHANNELS), a declared user channel
+            (JOBS_ALLOWED_CHANNELS), or a box-direct channel ending
+            '-engine'. Routed verbatim — the job lands on this channel whether
+            or not this box consumes it, which is how work is handed to
+            another box. An unlisted channel raises ValueError and files a
+            jobs:rejected_channel incident.
         delay: Delay in seconds from now
         run_at: Specific time to run the job (overrides delay)
         broadcast: If True, all runners on the channel will execute
@@ -179,6 +252,21 @@ def publish(
     # Redis key, a metric slug, and an incident title verbatim.
     validate_channel_name(channel)
 
+    # Fail closed on undeclared channels. The pre-1.2.62 reroute-to-default hid
+    # typos by running the job in the wrong place; routing-as-named alone let a
+    # typo strand the job on a queue nobody consumes. Refusing loudly at the
+    # call site — with a suppressed incident naming the publisher — catches the
+    # mistake immediately and keeps channel cardinality bounded.
+    if not is_channel_allowed(channel):
+        _report_rejected_channel(channel, func_path)
+        raise ValueError(
+            f"Job channel {channel!r} is not an allowed publish target. Allowed: "
+            f"framework DEFAULT_CHANNELS, this box's JOBS_CHANNELS, the "
+            f"deployment's JOBS_ALLOWED_CHANNELS, and box-direct channels ending "
+            f"'{ENGINE_CHANNEL_SUFFIX}'. Add it to JOBS_ALLOWED_CHANNELS to "
+            f"declare it."
+        )
+
     # Validate payload
     payload = payload or {}
     if not isinstance(payload, dict):
@@ -191,13 +279,11 @@ def publish(
     if len(payload_json.encode('utf-8')) > max_bytes:
         raise ValueError(f"Payload exceeds maximum size of {max_bytes} bytes")
 
-    # The requested channel is used verbatim. Publishing is deliberately NOT
-    # validated against this box's JOBS_CHANNELS: that conflated "what I
-    # consume" with "what I may target" and made it impossible to hand work to
-    # another box. Redis queues spring into existence on first push, so a
-    # channel needs no publisher-side declaration; a channel nobody consumes is
-    # surfaced by the jobs:unconsumed_channel incident (see cronjobs), not by
-    # silently running the job somewhere it does not belong.
+    # From here the channel is used verbatim — never rerouted. An allowed
+    # channel this box does not consume is a supported target (that is how work
+    # is handed to another box); an allowed channel nobody consumes is surfaced
+    # by the jobs:unconsumed_channel incident (see cronjobs), not by silently
+    # running the job somewhere it does not belong.
 
     # Generate job ID
     job_id = uuid.uuid4().hex  # UUID without dashes

@@ -261,6 +261,11 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### JOBS
 
+- `JOBS_ALLOWED_CHANNELS` — the deployment's declared user channels (set
+  identically on every box). `publish()` refuses a channel outside
+  `DEFAULT_CHANNELS` ∪ `JOBS_CHANNELS` ∪ this list ∪ `*-engine` with
+  `ValueError` plus a `jobs:rejected_channel` incident. See
+  [Jobs — Channels](../jobs/settings.md#channels).
 - `JOBS_CHANNELS`
 - `JOBS_DAEMON_WORKDIR`
 - `JOBS_DEBUG`
@@ -274,10 +279,10 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `JOBS_ENGINE_LOGFILE`
 - `JOBS_ENGINE_MAX_WORKERS`
 - `JOBS_ENGINE_READ_TIMEOUT`
-- `JOBS_HOSTNAME_CHANNEL` — when `True` (default), each engine also consumes a
-  channel named after its own host, so a publisher can address one specific
-  box with no configuration. See
-  [Jobs — Channels](../jobs/settings.md#channels).
+- `JOBS_HOSTNAME_CHANNEL` — when `True` (default), each engine also consumes
+  its box-direct channel, named after its runner id (default
+  `<hostname>-engine`), so a publisher can address one specific engine with
+  no configuration. See [Jobs — Channels](../jobs/settings.md#channels).
 - `JOBS_IDLE_TIMEOUT_MS`
 - `JOBS_LOCAL_QUEUE_MAXSIZE`
 - `JOBS_PAYLOAD_MAX_BYTES`

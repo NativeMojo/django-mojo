@@ -44,7 +44,8 @@ def on_get_config(request):
             'runner_heartbeat_sec': settings.get('JOBS_RUNNER_HEARTBEAT_SEC', 5),
             'scheduler_lock_ttl_ms': settings.get('JOBS_SCHEDULER_LOCK_TTL_MS', 5000),
         },
-        'channels': settings.get('JOBS_CHANNELS', DEFAULT_CHANNELS)
+        'channels': settings.get('JOBS_CHANNELS', DEFAULT_CHANNELS),
+        'allowed_channels': settings.get('JOBS_ALLOWED_CHANNELS', [])
     }
 
     return JsonResponse({

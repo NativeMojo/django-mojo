@@ -26,27 +26,41 @@ always read as. `clear_jobs()` with no channel is unchanged (every channel in
 `tests/test_jobs/test_run_jobs_helper.py` now uses it so it no longer races
 `tests/test_dnsman/6_certs_service.py`, which drains globally by design.
 
-**BREAKING (jobs)** — **`jobs.publish()` now routes to the channel you name and
-never reroutes (maestro item 906).** It used to validate the requested channel
-against the *publishing box's own* `JOBS_CHANNELS` and silently redirect anything
-unlisted to `"default"` — while returning success. One setting meant both "what
-this box consumes" and "what this box may target", which made cross-box routing
-impossible: publishing to another box's dedicated channel either got rerouted
-onto the publisher's own engine (work lost, publish reported success), or
-required listing the channel and thereby competing for its jobs. Redis queues are
-created on first push, so a channel never needed publisher-side declaration.
+**BREAKING (jobs)** — **`jobs.publish()` routes a declared channel exactly as
+named, and refuses an undeclared one (maestro items 906 + 936).** It used to
+validate the requested channel against the *publishing box's own*
+`JOBS_CHANNELS` and silently redirect anything unlisted to `"default"` — while
+returning success. One setting meant both "what this box consumes" and "what
+this box may target", which made cross-box routing impossible: publishing to
+another box's dedicated channel either got rerouted onto the publisher's own
+engine (work lost, publish reported success), or required listing the channel
+and thereby competing for its jobs.
+
+The replacement is fail-closed with the right list: a channel may be published
+to when it is a framework channel (`DEFAULT_CHANNELS`), a channel this box
+consumes (`JOBS_CHANNELS`), a declared user channel (new setting
+**`JOBS_ALLOWED_CHANNELS`** — one deployment-wide list, set identically on
+every box), or a box-direct channel ending `-engine`. An allowed channel is
+routed **verbatim**, consumed locally or not. Anything else raises
+`ValueError`, queues nothing, and files a `jobs:rejected_channel` incident
+naming the channel and the publishing function (suppressed to one per channel
+per hour) — a typo fails loudly at the call site instead of silently running
+in the wrong place or stranding work on a queue nobody consumes.
 
 **What to check before upgrading.** If you set `JOBS_CHANNELS` explicitly,
 framework jobs now ride their own queues instead of collapsing onto `default`.
 Add every channel you actually use to some engine's consume list: `renditions`
 (fileman), `certs` (dnsman certificates — or your
-`DNSMAN_CERT_SYNC_CHANNEL` override), `incident_handlers`, `webhooks`,
-`webhook_fanout`, `cleanup`, `priority`, plus any `ScheduledTask.channel` values.
-Deployments that never set `JOBS_CHANNELS` need no action — its default is now
-`mojo.apps.jobs.DEFAULT_CHANNELS`, which covers every channel the framework
-publishes to. You do not have to get the list right from memory: see the new
-alert below. Note that queued jobs still expire after
-`JOBS_DEFAULT_EXPIRES_SEC`, so an unconsumed channel is time-sensitive.
+`DNSMAN_CERT_SYNC_CHANNEL` override, which must also be declared),
+`incident_handlers`, `webhooks`, `webhook_fanout`, `cleanup`, `priority`.
+Declare your user channels once in `JOBS_ALLOWED_CHANNELS` — including every
+existing `ScheduledTask.channel` value, which now fails at save and at
+dispatch if undeclared. Deployments that never set `JOBS_CHANNELS` and publish
+only to framework channels need no action. You do not have to get the lists
+right from memory: an undeclared publish raises immediately with an incident,
+and an allowed-but-unconsumed queue alerts within ~5 minutes (below). Queued
+jobs still expire after `JOBS_DEFAULT_EXPIRES_SEC`, so an unconsumed channel
+is time-sensitive.
 
 Also in this change:
 
@@ -64,10 +78,15 @@ Also in this change:
   engine can run alongside the first on one host. The `--channels` flag the docs
   previously showed on a `manage.py jobs_engine` command never existed — that
   command does not exist; the real entry point is `python -m mojo.apps.jobs.cli`.
-- **Hostname channels.** Each engine also consumes a channel named after its own
-  host (lowercased, `.`/`_` → `-`), so `jobs.publish(..., channel="web-01")`
-  targets exactly that box with no configuration. `JOBS_HOSTNAME_CHANNEL = False`
-  opts out.
+- **Box-direct channels.** Each engine also consumes a channel named after its
+  **runner id** — default `<hostname>-engine` (hostname lowercased, `.`/`_` →
+  `-`) — so `jobs.publish(..., channel="web-01-engine")` targets exactly that
+  engine with no configuration, and a second engine started with
+  `--runner-id heavy-engine` gets its own direct channel. The `-engine` suffix
+  is what the publish allowlist admits implicitly (hostnames cannot live in a
+  hand-written list); a mistyped host channel therefore passes the gate and is
+  caught by the unconsumed-channel alert instead. `JOBS_HOSTNAME_CHANNEL =
+  False` opts an engine out.
 - **The scheduler now covers the whole cluster.** It is a singleton (leadership
   lock) but promoted only its *own* box's `JOBS_CHANNELS`, so in any multi-box
   topology the lock winner silently stalled every other box's delayed jobs **and

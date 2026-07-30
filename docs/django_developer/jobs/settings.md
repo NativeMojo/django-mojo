@@ -22,12 +22,18 @@ The `mojo/apps/jobs/settings.py` file is a reference showing example configurati
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `JOBS_CHANNELS` | `DEFAULT_CHANNELS` (see below) | Channels this box **consumes** |
-| `JOBS_HOSTNAME_CHANNEL` | `True` | Also consume a channel named after this host |
+| `JOBS_ALLOWED_CHANNELS` | `[]` | User channels this deployment **publishes** to — set identically on every box |
+| `JOBS_HOSTNAME_CHANNEL` | `True` | Also consume the engine's box-direct channel (named after its runner id) |
 
-`JOBS_CHANNELS` is a **consume** list only. It does not restrict what you may
-publish to: `jobs.publish(channel="anything")` always lands on `anything`, so a
-box can hand work to another box's dedicated channel without consuming it
-itself. See [Publishing — Channels](publishing.md#channels).
+`JOBS_CHANNELS` is a **consume** list. Publishing is gated separately:
+`publish(channel=X)` succeeds when `X` is a framework channel
+(`DEFAULT_CHANNELS`), a channel this box consumes, a declared user channel
+(`JOBS_ALLOWED_CHANNELS`), or a box-direct channel ending `-engine`. Anything
+else raises `ValueError`, queues nothing, and files a `jobs:rejected_channel`
+incident (one per channel per hour) naming the channel and the publishing
+function. An allowed channel is routed **verbatim** — consumed here or not —
+which is how a box hands work to another box's dedicated channel. See
+[Publishing — Channels](publishing.md#channels).
 
 The default is `mojo.apps.jobs.DEFAULT_CHANNELS` — every channel the framework
 itself publishes to, so an unconfigured deployment runs all framework jobs:
@@ -37,9 +43,14 @@ DEFAULT_CHANNELS = ['default', 'priority', 'cleanup', 'incident_handlers',
                     'renditions', 'certs', 'webhooks', 'webhook_fanout']
 ```
 
-Set it explicitly to dedicate a box, and run engines per channel:
+Set it explicitly to dedicate a box, declare the deployment's user channels
+once, and run engines per channel:
 
 ```python
+# every box
+JOBS_ALLOWED_CHANNELS = ['emails', 'heavy']
+
+# this box
 JOBS_CHANNELS = ['default', 'emails', 'heavy']
 ```
 
@@ -49,33 +60,49 @@ python -m mojo.apps.jobs.cli engine start --channels heavy --runner-id heavy-eng
 ```
 
 `--channels` overrides `JOBS_CHANNELS` for that process; `--runner-id` gives a
-second engine on the same box its own identity and pidfile.
+second engine on the same box its own identity, pidfile, and box-direct
+channel.
 
-### Upgrade note — explicit `JOBS_CHANNELS`
+### Upgrade note — channel routing changed
 
 `publish()` used to reroute any channel missing from `JOBS_CHANNELS` onto
-`default`. It no longer does. If you set `JOBS_CHANNELS` by hand, framework jobs
-now ride their own queues, so **add every channel you actually use** to some
-engine's list — at minimum the `DEFAULT_CHANNELS` entries for the features you
-run (`renditions` for fileman, `certs` for dnsman certificates,
-`incident_handlers`, `webhooks`, `webhook_fanout`, `cleanup`, `priority`), plus
-any `ScheduledTask.channel` values.
+`default`, silently. Now an **allowed** channel is routed verbatim and an
+**undeclared** one is refused (`ValueError` + a `jobs:rejected_channel`
+incident; nothing is queued). Two consequences when upgrading:
 
-You do not have to get this right from memory: a queue with jobs and no live
-consumer raises a `jobs:unconsumed_channel` incident within ~5 minutes, naming
-the channel. React to it — queued jobs still expire after
-`JOBS_DEFAULT_EXPIRES_SEC`.
+- If you set `JOBS_CHANNELS` by hand, framework jobs now ride their own
+  queues — keep the `DEFAULT_CHANNELS` entries for the features you run
+  (`renditions` for fileman, `certs` for dnsman certificates — or your
+  `DNSMAN_CERT_SYNC_CHANNEL` override, which also needs declaring —
+  `incident_handlers`, `webhooks`, `webhook_fanout`, `cleanup`, `priority`)
+  in some engine's consume list.
+- Declare every **user** channel you publish to in `JOBS_ALLOWED_CHANNELS`
+  (the publisher box's own consume list also counts). Existing
+  `ScheduledTask.channel` values must be declared too — an undeclared one now
+  fails at save and at dispatch.
+
+Misconfigurations are loud, not silent: an undeclared publish raises at the
+call site with a `jobs:rejected_channel` incident, and an allowed-but-
+unconsumed queue raises `jobs:unconsumed_channel` within ~5 minutes. Queued
+jobs still expire after `JOBS_DEFAULT_EXPIRES_SEC`.
 
 ### Channel names
 
 Enforced: letters, digits, `_`, `.` and `-`, 1–100 characters.
 `publish()` raises `ValueError` on anything else, and `ScheduledTask.save()`
-rejects a bad `channel` at write time. Colons are excluded because the engine
-recovers the channel by splitting the queue key on `:`; whitespace and control
-characters because a channel name reaches log lines and incident titles.
+rejects a bad or undeclared `channel` at write time. Colons are excluded
+because the engine recovers the channel by splitting the queue key on `:`;
+whitespace and control characters because a channel name reaches log lines
+and incident titles.
 
-Keep the set bounded regardless — each distinct channel creates its own
-`jobs.published.<channel>` metric slug, and those slugs are not pruned.
+The `-engine` suffix is reserved by convention for box-direct channels (every
+engine consumes a channel named after its runner id): any channel ending in
+`-engine` is implicitly publishable, so do not name ordinary work queues with
+that suffix.
+
+The allowlist also keeps the channel set bounded — each distinct channel
+creates its own `jobs.published.<channel>` metric slug, and those slugs are
+not pruned.
 
 ## Engine Configuration
 
@@ -137,6 +164,9 @@ JOBS_REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 # note above; omitting a DEFAULT_CHANNELS entry here means nothing consumes it.
 JOBS_CHANNELS = ['default', 'priority', 'cleanup', 'incident_handlers',
                  'renditions', 'certs', 'webhooks', 'webhook_fanout', 'emails']
+# Declared user channels — same value on every box, so any box may publish
+# to "emails" whether or not it consumes it.
+JOBS_ALLOWED_CHANNELS = ['emails']
 JOBS_DEFAULT_MAX_RETRIES = 3
 JOBS_DEFAULT_EXPIRES_SEC = 1800  # 30 minutes
 JOBS_ENGINE_MAX_WORKERS = 20

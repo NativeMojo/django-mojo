@@ -1,4 +1,5 @@
-"""Channel routing: publish puts a job on the channel it was given.
+"""Channel routing: publish puts a job on the channel it was given — if the
+channel is declared.
 
 The bug this module pins down (django-mojo <= 1.2.61): `publish()` validated the
 requested channel against the *publisher's own* `JOBS_CHANNELS` and silently
@@ -6,8 +7,16 @@ rerouted anything unlisted to "default" — returning success. That made
 cross-box routing impossible: a box could not publish to a channel it does not
 itself consume, because the one setting drove both.
 
-Channels here are prefixed `t906_` so they cannot collide with a real channel
-or with another module's queues.
+The fix is two-layered (items 906 + 936): an allowed channel is routed
+verbatim, consumed here or not; an UNDECLARED channel — outside
+DEFAULT_CHANNELS ∪ JOBS_CHANNELS ∪ JOBS_ALLOWED_CHANNELS and not ending in
+'-engine' — is refused with ValueError and a suppressed
+jobs:rejected_channel incident, instead of queueing work nothing consumes.
+
+Channels here are prefixed `t906_`/`t936` so they cannot collide with a real
+channel or another module's queues. The t906_* names are declared in the
+testproject's JOBS_ALLOWED_CHANNELS (allowed-but-not-consumed — the cross-box
+shape); the t936_undeclared name is deliberately NOT.
 """
 
 from testit import helpers as th
@@ -31,8 +40,12 @@ CH_B = "t906_b"
 CH_SCHED = "t906_sched"
 CH_SEED = "t906_seed"
 CH_ORPHAN = "t906_orphan"
+CH_UNDECLARED = "t936_undeclared"    # in NO list — publish must refuse it
+CH_DECLARED = "t936_allowed"         # in JOBS_ALLOWED_CHANNELS only
+CH_BOX_DIRECT = "t936-box-engine"    # implicitly allowed by the suffix
 
-TEST_CHANNELS = [CH_FIREWALL, CH_A, CH_B, CH_SCHED, CH_SEED, CH_ORPHAN]
+TEST_CHANNELS = [CH_FIREWALL, CH_A, CH_B, CH_SCHED, CH_SEED, CH_ORPHAN,
+                 CH_UNDECLARED, CH_DECLARED, CH_BOX_DIRECT]
 
 
 def _clear(opts):
@@ -51,14 +64,22 @@ def _clear(opts):
     opts.redis.get_client().srem(opts.keys.sched_registry(), *TEST_CHANNELS)
     for ch in TEST_CHANNELS:
         opts.redis.delete(f"{opts.keys.prefix}:alerted:unconsumed:{ch}")
+        opts.redis.delete(f"{opts.keys.prefix}:alerted:rejected:{ch}")
     Job.objects.filter(channel__in=TEST_CHANNELS).delete()
     Event.objects.filter(category="jobs:unconsumed_channel",
                          title__in=[_alert_title(ch) for ch in TEST_CHANNELS]).delete()
+    Event.objects.filter(category="jobs:rejected_channel",
+                         title__in=[_rejected_title(ch) for ch in TEST_CHANNELS]).delete()
 
 
 def _alert_title(channel):
     """The title check_unconsumed_channels gives its incident."""
     return f"Unconsumed job channel: {channel}"
+
+
+def _rejected_title(channel):
+    """The title a refused publish gives its incident."""
+    return f"Rejected job channel: {channel}"
 
 
 @th.django_unit_setup()
@@ -152,9 +173,93 @@ def test_publish_rejects_malformed_channel(opts):
         "a rejected publish must not leave a Job row behind"
     )
 
-    # Everything the framework and the host-channel feature actually use.
-    for good in ("default", "webhook_fanout", "t906.dotted", "web-01", "x" * 100):
+    # Everything the framework and the box-direct feature actually use.
+    for good in ("default", "webhook_fanout", "t906.dotted", "web-01-engine", "x" * 100):
         jobs.validate_channel_name(good)
+
+
+@th.django_unit_test("an undeclared channel is refused: ValueError, no job, one incident")
+def test_publish_undeclared_channel_refused(opts):
+    """The 936 contract: route-as-named holds for DECLARED channels; a typo'd
+    or undeclared one fails at the call site instead of stranding a job on a
+    queue nothing consumes."""
+    _clear(opts)
+    from mojo.apps import jobs
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.incident.models import Event
+
+    for _ in range(2):  # second attempt exercises the suppression window
+        try:
+            jobs.publish(func=HANDLER, payload={}, channel=CH_UNDECLARED)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"publish(channel={CH_UNDECLARED!r}) must raise ValueError"
+            )
+
+    assert not Job.objects.filter(channel=CH_UNDECLARED).exists(), (
+        "a refused publish must not create a Job row"
+    )
+    assert opts.redis.llen(opts.keys.queue(CH_UNDECLARED)) == 0, (
+        "a refused publish must not touch the channel's queue"
+    )
+    events = Event.objects.filter(category="jobs:rejected_channel",
+                                  title=_rejected_title(CH_UNDECLARED)).count()
+    assert events == 1, (
+        f"two refusals inside the suppression window must file exactly one "
+        f"jobs:rejected_channel incident, got {events}"
+    )
+
+
+@th.django_unit_test("a channel declared in JOBS_ALLOWED_CHANNELS routes as named")
+def test_publish_declared_channel_routes(opts):
+    _clear(opts)
+    from mojo.apps import jobs
+
+    job_id = jobs.publish(func=HANDLER, payload={"marker": "declared"},
+                          channel=CH_DECLARED)
+    assert job_id in _queued_ids(opts, CH_DECLARED), (
+        f"a JOBS_ALLOWED_CHANNELS channel must queue as named, "
+        f"queue holds {_queued_ids(opts, CH_DECLARED)}"
+    )
+
+
+@th.django_unit_test("a '-engine' channel is implicitly allowed (box-direct)")
+def test_publish_engine_suffix_implicitly_allowed(opts):
+    """Hostnames vary per deployment and cannot live in a hand-written list,
+    so the runner-id suffix IS the allow rule. A typo'd host channel passes
+    the gate and is caught by the unconsumed-channel incident instead."""
+    _clear(opts)
+    from mojo.apps import jobs
+
+    job_id = jobs.publish(func=HANDLER, payload={"marker": "direct"},
+                          channel=CH_BOX_DIRECT)
+    assert job_id in _queued_ids(opts, CH_BOX_DIRECT), (
+        f"a '-engine' channel must be publishable with zero configuration, "
+        f"queue holds {_queued_ids(opts, CH_BOX_DIRECT)}"
+    )
+
+
+@th.django_unit_test("a ScheduledTask cannot be saved with an undeclared channel")
+def test_scheduled_task_undeclared_channel_rejected(opts):
+    """Owner-editable field, published hourly — reject at write time, not at
+    dispatch."""
+    _clear(opts)
+    from mojo.apps.jobs.models import ScheduledTask
+
+    task = ScheduledTask(name="t936 undeclared channel", task_type="report",
+                         run_times=["09:00"], run_days=[0],
+                         channel=CH_UNDECLARED)
+    try:
+        task.save()
+    except ValueError:
+        pass
+    else:
+        ScheduledTask.objects.filter(name="t936 undeclared channel").delete()
+        raise AssertionError(
+            "saving a ScheduledTask with an undeclared channel must raise ValueError"
+        )
 
 
 @th.django_unit_test("a ScheduledTask cannot be saved with a malformed channel")
@@ -257,16 +362,31 @@ def test_disjoint_engines_claim_only_own_channels(opts):
     assert CALLS == ["a", "b"], f"both jobs should have run by now, got {CALLS}"
 
 
-@th.django_unit_test("an engine also consumes a channel named after its host")
-def test_hostname_channel(opts):
+@th.django_unit_test("an engine also consumes a channel named after its runner id")
+def test_runner_id_channel(opts):
+    """The box-direct channel IS the runner id (default '<hostname>-engine'),
+    so the name a publisher targets is the same id already visible in
+    heartbeats, pidfiles and logs — and its '-engine' suffix is what the
+    publish allowlist admits implicitly."""
     _clear(opts)
     from unittest import mock
     from mojo.apps.jobs import job_engine as je
 
     engine = je.JobEngine(channels=["default"], runner_id="t906-host-on")
-    assert je.host_channel() in engine.channels, (
-        f"the host channel {je.host_channel()!r} should be consumed so a publisher "
-        f"can target this box, engine has {engine.channels}"
+    assert "t906-host-on" in engine.channels, (
+        f"the engine should consume its own runner-id channel so a publisher "
+        f"can target it, engine has {engine.channels}"
+    )
+
+    default_engine = je.JobEngine(channels=["default"])
+    expected = f"{je.host_channel()}{je.ENGINE_CHANNEL_SUFFIX}"
+    assert default_engine.runner_id == expected, (
+        f"the default runner id should be the host channel plus "
+        f"{je.ENGINE_CHANNEL_SUFFIX!r}, got {default_engine.runner_id!r}"
+    )
+    assert expected in default_engine.channels, (
+        f"the default box-direct channel {expected!r} should be consumed, "
+        f"engine has {default_engine.channels}"
     )
 
     with mock.patch.object(je, "JOBS_HOSTNAME_CHANNEL", False):

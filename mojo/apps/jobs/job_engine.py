@@ -34,7 +34,7 @@ from mojo.helpers import dates
 logger = logit.get_logger("jobs", "jobs.log", debug=True)
 
 
-from . import DEFAULT_CHANNELS, register_sched_channel
+from . import DEFAULT_CHANNELS, ENGINE_CHANNEL_SUFFIX, register_sched_channel
 
 JOBS_ENGINE_CLAIM_BATCH = settings.get_static('JOBS_ENGINE_CLAIM_BATCH', 5)
 JOBS_CHANNELS = settings.get_static('JOBS_CHANNELS', DEFAULT_CHANNELS)
@@ -48,11 +48,14 @@ JOBS_HOSTNAME_CHANNEL = settings.get_static('JOBS_HOSTNAME_CHANNEL', True)
 
 def host_channel() -> str:
     """
-    This box's own channel name, derived from the hostname.
+    This box's hostname in channel-safe form (lowercased, '.'/'_' → '-').
 
-    Every engine consumes it (unless JOBS_HOSTNAME_CHANNEL is False), so any
-    publisher can address one specific box with no configuration at all:
-    jobs.publish(..., channel=host_channel_of_that_box).
+    Feeds the default runner id, "<host_channel()>-engine" — and the runner id
+    IS the engine's box-direct channel: every engine consumes a channel named
+    after its runner id (unless JOBS_HOSTNAME_CHANNEL is False), so a
+    publisher can address one specific engine with no configuration at all:
+    jobs.publish(..., channel="web-01-engine"). The '-engine' suffix is what
+    makes those channels implicitly allowed — see is_channel_allowed().
     """
     return socket.gethostname().lower().replace('.', '-').replace('_', '-')
 
@@ -87,17 +90,20 @@ class JobEngine:
 
         Args:
             channels: List of channels to consume from (default: from
-                settings.JOBS_CHANNELS). This box's own host channel is
-                appended unless JOBS_HOSTNAME_CHANNEL is False.
-            runner_id: Unique runner identifier (auto-generated if not provided)
+                settings.JOBS_CHANNELS). The engine's own box-direct channel —
+                named after its runner id — is appended unless
+                JOBS_HOSTNAME_CHANNEL is False.
+            runner_id: Unique runner identifier (auto-generated as
+                "<hostname>-engine" if not provided). Doubles as the engine's
+                box-direct channel name.
             max_workers: Maximum thread pool workers (default from settings)
         """
-        # list() matters: appending the host channel to the module-level
+        self.runner_id = runner_id or self._generate_runner_id()
+        # list() matters: appending the direct channel to the module-level
         # JOBS_CHANNELS would mutate it for every later engine in this process.
         self.channels = list(channels or JOBS_CHANNELS)
-        if JOBS_HOSTNAME_CHANNEL and host_channel() not in self.channels:
-            self.channels.append(host_channel())
-        self.runner_id = runner_id or self._generate_runner_id()
+        if JOBS_HOSTNAME_CHANNEL and self.runner_id not in self.channels:
+            self.channels.append(self.runner_id)
         self.redis = get_adapter()
         self.keys = JobKeys()
 
@@ -138,8 +144,10 @@ class JobEngine:
                   f"channels={self.channels}")
 
     def _generate_runner_id(self) -> str:
-        """Generate a consistent runner ID based on hostname."""
-        return f"{host_channel()}-engine"
+        """Generate a consistent runner ID based on hostname. The '-engine'
+        suffix keeps the id — and therefore the box-direct channel named after
+        it — inside the implicitly-allowed publish namespace."""
+        return f"{host_channel()}{ENGINE_CHANNEL_SUFFIX}"
 
     def initialize(self):
         if (self.is_initialized):

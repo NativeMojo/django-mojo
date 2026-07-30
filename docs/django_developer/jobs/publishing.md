@@ -254,20 +254,35 @@ Empty list if no runners respond.
 
 ## Channels
 
-A channel is a named queue. **A job goes to the channel you name — always.**
-Publishing is never validated against this box's configuration, so you can hand
-work to a queue this box does not consume. That is the whole point: it is how one
-box gives work to another.
+A channel is a named queue. **A declared channel gets the job exactly as
+named — never rerouted** — and it does not have to be one this box consumes.
+That is the whole point: it is how one box gives work to another.
 
 ```python
-# Lands on "sites" even if this box's JOBS_CHANNELS does not include it.
+# Lands on "sites" even if this box's JOBS_CHANNELS does not include it —
+# as long as "sites" is declared in JOBS_ALLOWED_CHANNELS.
 jobs.publish("myapp.services.deploy.run", {"site_id": 7}, channel="sites")
 ```
 
-Redis queues are created on first push, so a channel needs no declaration
-anywhere before you publish to it. The name itself is validated — letters,
-digits, `_`, `.` and `-`, up to 100 characters — because it becomes a Redis key,
-a metric slug and an incident title; anything else raises `ValueError`.
+A channel may be published to when it is any of:
+
+- a framework channel (`mojo.apps.jobs.DEFAULT_CHANNELS`) — always allowed,
+- a channel **this box consumes** (`JOBS_CHANNELS`),
+- a declared user channel (`JOBS_ALLOWED_CHANNELS` — one list, set the same
+  on every box),
+- a box-direct channel ending in `-engine` (see
+  [Targeting one specific engine](#targeting-one-specific-engine)).
+
+Anything else is refused: `publish()` raises `ValueError`, creates **no** job,
+and files a `jobs:rejected_channel` incident naming the channel and the
+publishing function (suppressed to one event per channel per hour). A
+developer publishing a job knows the channel at code-writing time, so
+declaring it is one settings line — and a typo fails at the call site instead
+of stranding work on a queue nobody consumes.
+
+The name itself is also validated — letters, digits, `_`, `.` and `-`, up to
+100 characters — because it becomes a Redis key, a metric slug and an
+incident title; anything else raises `ValueError`.
 
 `JOBS_CHANNELS` is a **consume** list: what this box's engine pulls from. Run
 engines per channel with the jobs CLI:
@@ -283,7 +298,13 @@ on the same host its own identity and pidfile.
 
 ### Cross-box routing
 
-An API box that also runs an engine, handing deploys to a dedicated worker box:
+An API box that also runs an engine, handing deploys to a dedicated worker box.
+Both boxes share the same declaration:
+
+```python
+# Every box — the deployment's user channels, declared once
+JOBS_ALLOWED_CHANNELS = ["sites"]
+```
 
 ```python
 # API box — publishes to "sites", never consumes it
@@ -301,26 +322,40 @@ python -m mojo.apps.jobs.cli engine start --channels sites
 ```
 
 Nothing on the API box can claim a `sites` job, so the work runs where it must.
+(Publishing to a channel the box itself consumes needs no
+`JOBS_ALLOWED_CHANNELS` entry — the consume list is part of the allow union —
+but declare shared channels once, identically everywhere, and the topology
+stays obvious.)
 
-### Targeting one specific box
+### Targeting one specific engine
 
-Every engine also consumes a channel named after its own host (the hostname
-lowercased, with `.` and `_` turned into `-`), so you can address a single box
-with no configuration at all:
+Every engine also consumes a channel named after its **runner id** — by
+default the hostname (lowercased, `.`/`_` → `-`) plus `-engine`, the same id
+you see in its heartbeat, pidfile and logs. Channels ending in `-engine` are
+implicitly allowed — hostnames vary per deployment and cannot live in a
+hand-written list — so you can address a single engine with no configuration
+at all:
 
 ```python
-jobs.publish("myapp.services.cache.purge", {}, channel="web-01")
+jobs.publish("myapp.services.cache.purge", {}, channel="web-01-engine")
 ```
 
-Set `JOBS_HOSTNAME_CHANNEL = False` to opt out.
+A second engine started with `--runner-id heavy-engine` gets its own direct
+channel `heavy-engine`. A mistyped host channel passes the allowlist (the
+suffix is the rule) and is caught by the unconsumed-channel incident below.
+Set `JOBS_HOSTNAME_CHANNEL = False` to opt an engine out of consuming its
+direct channel.
 
 ### When nobody is listening
 
-A job published to a channel no engine consumes waits on its queue. Within about
-five minutes the framework raises a `jobs:unconsumed_channel` incident naming the
-channel and its depth, so a typo or a missing worker surfaces as an alert rather
-than as work that silently ran in the wrong place. Queued jobs still expire after
-`JOBS_DEFAULT_EXPIRES_SEC`, so treat that incident as actionable.
+Declared is not the same as consumed: you can allowlist `emails` and still
+forget to run an engine for it. A job published to an allowed channel no
+engine consumes waits on its queue, and within about five minutes the
+framework raises a `jobs:unconsumed_channel` incident naming the channel and
+its depth — so a missing worker (or a typo'd `-engine` channel) surfaces as an
+alert rather than as work that silently ran in the wrong place. Queued jobs
+still expire after `JOBS_DEFAULT_EXPIRES_SEC`, so treat that incident as
+actionable.
 
 The alert does not repeat every cycle: an unchanged backlog is re-reported only
 when its depth changes or after an hour, and if many channels are orphaned at
