@@ -5734,9 +5734,11 @@
 <h3 id="jobs">JOBS<a class="headerlink" href="#jobs" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>JOBS_ALLOWED_CHANNELS</code> — the deployment's declared user channels (set
-  identically on every box). <code>publish()</code> refuses a channel outside
-  <code>DEFAULT_CHANNELS</code> ∪ <code>JOBS_CHANNELS</code> ∪ this list ∪ <code>*-engine</code> with
-  <code>ValueError</code> plus a <code>jobs:rejected_channel</code> incident. See
+  identically on every box). Unset (default) = monitor mode: an undeclared
+  publish still routes and files a <code>jobs:undeclared_channel</code> incident.
+  Setting it (any list, even <code>[]</code>) turns enforcement on: <code>publish()</code> refuses
+  a channel outside <code>DEFAULT_CHANNELS</code> ∪ <code>JOBS_CHANNELS</code> ∪ this list ∪
+  <code>*-engine</code> with <code>ValueError</code> plus a <code>jobs:rejected_channel</code> incident. See
   <a href="../../jobs/settings/#channels">Jobs — Channels</a>.</li>
 <li><code>JOBS_CHANNELS</code></li>
 <li><code>JOBS_DAEMON_WORKDIR</code></li>

@@ -3992,8 +3992,8 @@
 </tr>
 <tr>
 <td><code>JOBS_ALLOWED_CHANNELS</code></td>
-<td><code>[]</code></td>
-<td>User channels this deployment <strong>publishes</strong> to — set identically on every box</td>
+<td>unset (monitor mode)</td>
+<td>User channels this deployment <strong>publishes</strong> to — set identically on every box. <strong>Setting it (even to <code>[]</code>) turns enforcement on</strong></td>
 </tr>
 <tr>
 <td><code>JOBS_HOSTNAME_CHANNEL</code></td>
@@ -4002,15 +4002,17 @@
 </tr>
 </tbody>
 </table>
-<p><code>JOBS_CHANNELS</code> is a <strong>consume</strong> list. Publishing is gated separately:
-<code>publish(channel=X)</code> succeeds when <code>X</code> is a framework channel
-(<code>DEFAULT_CHANNELS</code>), a channel this box consumes, a declared user channel
-(<code>JOBS_ALLOWED_CHANNELS</code>), or a box-direct channel ending <code>-engine</code>. Anything
-else raises <code>ValueError</code>, queues nothing, and files a <code>jobs:rejected_channel</code>
-incident (one per channel per hour) naming the channel and the publishing
-function. An allowed channel is routed <strong>verbatim</strong> — consumed here or not —
-which is how a box hands work to another box's dedicated channel. See
-<a href="../publishing/#channels">Publishing — Channels</a>.</p>
+<p><code>JOBS_CHANNELS</code> is a <strong>consume</strong> list. Publishing is gated separately: a
+channel is <em>declared</em> when it is a framework channel (<code>DEFAULT_CHANNELS</code>), a
+channel this box consumes, a declared user channel (<code>JOBS_ALLOWED_CHANNELS</code>),
+or a box-direct channel ending <code>-engine</code>. With <code>JOBS_ALLOWED_CHANNELS</code> set,
+an undeclared publish raises <code>ValueError</code>, queues nothing, and files a
+<code>jobs:rejected_channel</code> incident (one per channel per hour) naming the
+channel and the publishing function; with it unset (monitor mode — the
+default), the publish still routes as named and a <code>jobs:undeclared_channel</code>
+incident reports what to declare. A declared channel is routed <strong>verbatim</strong> —
+consumed here or not — which is how a box hands work to another box's
+dedicated channel. See <a href="../publishing/#channels">Publishing — Channels</a>.</p>
 <p>The default is <code>mojo.apps.jobs.DEFAULT_CHANNELS</code> — every channel the framework
 itself publishes to, so an unconfigured deployment runs all framework jobs:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">DEFAULT_CHANNELS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;default&#39;</span><span class="p">,</span> <span class="s1">&#39;priority&#39;</span><span class="p">,</span> <span class="s1">&#39;cleanup&#39;</span><span class="p">,</span> <span class="s1">&#39;incident_handlers&#39;</span><span class="p">,</span>
@@ -4032,9 +4034,12 @@ second engine on the same box its own identity, pidfile, and box-direct
 channel.</p>
 <h3 id="upgrade-note-channel-routing-changed">Upgrade note — channel routing changed<a class="headerlink" href="#upgrade-note-channel-routing-changed" title="Permanent link">&para;</a></h3>
 <p><code>publish()</code> used to reroute any channel missing from <code>JOBS_CHANNELS</code> onto
-<code>default</code>, silently. Now an <strong>allowed</strong> channel is routed verbatim and an
-<strong>undeclared</strong> one is refused (<code>ValueError</code> + a <code>jobs:rejected_channel</code>
-incident; nothing is queued). Two consequences when upgrading:</p>
+<code>default</code>, silently. Now a <strong>declared</strong> channel is routed verbatim, and an
+undeclared one is either reported (monitor mode) or refused (enforced) —
+<strong>there is no flag day</strong>: a deployment that has not set
+<code>JOBS_ALLOWED_CHANNELS</code> upgrades into monitor mode, where every publish
+keeps working and undeclared channels surface as <code>jobs:undeclared_channel</code>
+incidents. What to do when upgrading:</p>
 <ul>
 <li>If you set <code>JOBS_CHANNELS</code> by hand, framework jobs now ride their own
   queues — keep the <code>DEFAULT_CHANNELS</code> entries for the features you run
@@ -4042,15 +4047,17 @@ incident; nothing is queued). Two consequences when upgrading:</p>
   <code>DNSMAN_CERT_SYNC_CHANNEL</code> override, which also needs declaring —
   <code>incident_handlers</code>, <code>webhooks</code>, <code>webhook_fanout</code>, <code>cleanup</code>, <code>priority</code>)
   in some engine's consume list.</li>
-<li>Declare every <strong>user</strong> channel you publish to in <code>JOBS_ALLOWED_CHANNELS</code>
-  (the publisher box's own consume list also counts). Existing
-  <code>ScheduledTask.channel</code> values must be declared too — an undeclared one now
-  fails at save and at dispatch.</li>
+<li>Watch for <code>jobs:undeclared_channel</code> incidents — they name every channel
+  your code publishes to that needs declaring (including
+  <code>ScheduledTask.channel</code> values). Add them to <code>JOBS_ALLOWED_CHANNELS</code>, set
+  identically on every box.</li>
+<li>Once the setting exists, enforcement is on: an undeclared publish raises
+  <code>ValueError</code> with a <code>jobs:rejected_channel</code> incident and queues nothing,
+  and an undeclared <code>ScheduledTask.channel</code> fails at save.</li>
 </ul>
-<p>Misconfigurations are loud, not silent: an undeclared publish raises at the
-call site with a <code>jobs:rejected_channel</code> incident, and an allowed-but-
-unconsumed queue raises <code>jobs:unconsumed_channel</code> within ~5 minutes. Queued
-jobs still expire after <code>JOBS_DEFAULT_EXPIRES_SEC</code>.</p>
+<p>Either way misconfigurations are loud, not silent, and an
+allowed-but-unconsumed queue still raises <code>jobs:unconsumed_channel</code> within
+~5 minutes. Queued jobs still expire after <code>JOBS_DEFAULT_EXPIRES_SEC</code>.</p>
 <h3 id="channel-names">Channel names<a class="headerlink" href="#channel-names" title="Permanent link">&para;</a></h3>
 <p>Enforced: letters, digits, <code>_</code>, <code>.</code> and <code>-</code>, 1–100 characters.
 <code>publish()</code> raises <code>ValueError</code> on anything else, and <code>ScheduledTask.save()</code>
