@@ -12,7 +12,7 @@ from mojo.apps.account.services import auth_config
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
 from mojo.apps.shortlink import maybe_shorten_url
-from mojo.helpers import dates, crypto
+from mojo.helpers import dates, crypto, logit
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
 
@@ -218,14 +218,29 @@ def on_user_login(request):
 @md.requires_auth()
 @md.rate_limit("auth_handoff", ip_limit=30)
 @md.requires_geofence(scope="auth")
+@md.requires_params("redirect_uri")
 def on_auth_handoff(request):
     """
     Issue a short-lived, single-use handoff code for the authenticated user.
     The auth-origin page calls this when redirecting to a different-origin app
     so the app can exchange the code for a JWT without the JWT touching the URL.
+
+    `redirect_uri` is REQUIRED and must be allowed by
+    `mojo.apps.account.services.redirect_allowlist` — the code buys an access
+    AND refresh token pair, so where it is going is decided here, before one
+    exists, and never at exchange time (see that module's docstring). Fail
+    closed: a deployment with no allowlist and no resolver mints nothing.
     """
-    from mojo.apps.account.services import auth_handoff
-    code = auth_handoff.create_handoff_code(request.user, ip=request.ip)
+    from mojo.apps.account.services import auth_handoff, redirect_allowlist
+    destination = request.DATA.get("redirect_uri")
+    if not redirect_allowlist.is_allowed_destination(destination, request):
+        logit.warning(
+            "account.auth_handoff",
+            f"refused handoff for user {request.user.pk} to {destination!r} — "
+            f"destination is not allowed")
+        raise merrors.ValueException("redirect_uri is not permitted for auth handoff")
+    code = auth_handoff.create_handoff_code(
+        request.user, destination=destination, ip=request.ip)
     return JsonResponse({
         "status": True,
         "data": {
