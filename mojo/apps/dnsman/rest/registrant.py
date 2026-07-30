@@ -36,15 +36,32 @@ def _authorize(request):
     """
     The gate for both verbs, in an order that matters.
 
-    The group-resolution guard runs FIRST. `Group.get_active` returns None for
-    a deactivated or typo'd id, silently and by design, so without this a
-    tenant whose group was just deactivated would fall into the global branch
-    and be refused by the platform gate — a routine tenant mistake reported as
-    a platform-boundary denial, in the incident channel that exists to alert on
+    AUTHENTICATION FIRST. The group-resolution guard below answers differently
+    for a group that exists and is active (falls through, eventually 401) than
+    for one that does not (400 naming the reason) — which, reached by an
+    anonymous caller, is a free group-id enumeration oracle: anonymous requests
+    are exempt from the throttle. The model check that would normally raise the
+    401 runs last here, so it cannot be relied on to close this. Every other
+    group-scoped endpoint answers 401 to both, and so must this one.
+
+    Then the group-resolution guard. `Group.get_active` returns None for a
+    deactivated or typo'd id, silently and by design, so without this a tenant
+    whose group was just deactivated would fall into the global branch and be
+    refused by the platform gate — a routine tenant mistake reported as a
+    platform-boundary denial, in the incident channel that exists to alert on
     real ones. Same guard, same reason as rest/purchase.py's adopt route; BOTH
     keys, because the dispatcher also populates request.group from
     ?group_uuid=.
     """
+    if request.user is None or not getattr(request.user, "is_authenticated", False):
+        raise me.PermissionDeniedException(
+            "Permission denied: unauthenticated",
+            code=401, status=401,
+            branch="unauthenticated",
+            permission_keys=["SAVE_PERMS", "VIEW_PERMS"],
+            model_name="Domain",
+            event_type="unauthenticated")
+
     if ("group" in request.DATA or "group_uuid" in request.DATA) and request.group is None:
         raise me.ValueException(
             "The requested group does not exist or is not active — "

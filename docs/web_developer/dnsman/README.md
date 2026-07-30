@@ -195,7 +195,21 @@ operators rather than letting it 403.
 **Omitting `group` addresses the HOUSE contact and requires a platform admin**
 (interactive superuser — an API key is refused). It is the operator's own
 personal data and the registrant of record for every tenant without one. A
-tenant admin gets a 403, and learns nothing about it.
+tenant admin gets a 403 from this endpoint, and the refusal discloses nothing.
+
+> **This endpoint is not the only way to see a registrant contact.** A domain
+> registered under the house contact carries it at the registrar, and
+> `GET /api/dnsman/whois?domain=<pk>` returns the registrar-held registrant,
+> admin and tech contacts to any `manage_dns` holder on that domain's group —
+> AWS hands them to the account owner regardless of WHOIS privacy. So a tenant
+> holding a domain that inherited the house contact can read it there. Treat
+> the scope isolation here as "the editor does not disclose it", not as a
+> guarantee that the house contact is unreachable by tenants.
+
+A `group` that is **supplied but does not resolve** (deleted, deactivated, or a
+typo) is a **400** — `"...does not exist or is not active..."` — not a silent
+fall-through to the house scope. That distinction matters: falling through
+would ask a tenant admin for platform-admin rights they never meant to invoke.
 
 Both verbs return the same body:
 

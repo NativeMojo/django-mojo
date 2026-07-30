@@ -232,19 +232,42 @@ def test_group_inherits_house_contact_opaquely(opts):
 
 @th.django_unit_test("a group's own contact overrides the house one for purchasing")
 def test_group_contact_overrides_house(opts):
+    """
+    Asserted through `Setting.resolve` and `read_contact`, NOT through the
+    `settings` singleton.
+
+    Not squeamishness — `Setting.resolve` IS the override mechanism under test,
+    so this is the more precise assertion. It is also the only one that holds:
+    `settings.get` is a process-global attribute, and modules running in
+    parallel threads patch it wholesale (`tests/test_account/test_inactive_sweep.py`
+    installs `return_value=False` for every key in the process), which lands
+    here as a bogus "no contact is configured". The end-to-end
+    `_registrant_contact` path is covered by the purchase regression below,
+    which holds its own passthrough patch for the whole block.
+    """
+    from mojo.apps.account.models.setting import Setting
     from mojo.apps.dnsman.services import registrar
 
     _clear(opts.group_a)
     _set(HOUSE_CONTACT)
     _set(TENANT_CONTACT, group=opts.group_a)
 
-    resolved = registrar._registrant_contact(opts.group_a)
-    assert resolved["Email"] == TENANT_CONTACT["Email"], \
-        f"a group with its own contact must register under it, got {resolved['Email']}"
+    resolved = registrar._coerce_contact(
+        Setting.resolve(registrar.REGISTRANT_CONTACT_KEY, opts.group_a))
+    assert resolved.get("Email") == TENANT_CONTACT["Email"], (
+        "a group with its own contact must register under it, got "
+        f"{resolved.get('Email')!r}")
 
-    house = registrar._registrant_contact(None)
-    assert house["Email"] == HOUSE_CONTACT["Email"], \
+    house = registrar._coerce_contact(
+        Setting.resolve(registrar.REGISTRANT_CONTACT_KEY, None))
+    assert house.get("Email") == HOUSE_CONTACT["Email"], \
         "the house contact must be unaffected by a group's override"
+
+    # And each scope still reports only its OWN row to an editor.
+    own, source = registrar.read_contact(opts.group_a)
+    assert own["Email"] == TENANT_CONTACT["Email"], \
+        "the group's editor must show the group's own contact"
+    assert source == "database", f"expected source 'database', got {source!r}"
 
     _clear(opts.group_a)
 
@@ -385,6 +408,12 @@ def test_malformed_contact_refused(opts):
         ("ContactType", dict(TENANT_CONTACT, ContactType="INDIVIDUAL")),
         ("PhoneNumber", dict(TENANT_CONTACT, PhoneNumber="512-555-0199")),
         ("Zipcode", dict(TENANT_CONTACT, Zipcode="73301")),
+        # A non-string scalar passes a truthiness check but is refused by
+        # botocore INSIDE register_domain — i.e. after durable intent, which is
+        # exactly what validating here is meant to prevent. It also puts the
+        # offending value in the AWS error text, which lands on the purchase row.
+        ("ZipCode", dict(TENANT_CONTACT, ZipCode=73301)),
+        ("Email", dict(TENANT_CONTACT, Email=["a@example.com"])),
     ]
     for field, contact in cases:
         resp = opts.client.post(URL, dict(group=opts.group_a.pk, contact=contact))
@@ -408,6 +437,33 @@ def test_inactive_group_is_a_value_error(opts):
         f"house scope and refused by the platform gate; got {resp.status_code}")
     assert "not active" in str(resp.response), \
         f"the refusal must say the group is not active, got {resp.response}"
+
+
+@th.django_unit_test("an anonymous caller cannot tell a real group id from a bogus one")
+def test_anonymous_gets_no_group_oracle(opts):
+    """
+    The group-resolution guard answers differently for a group that resolves
+    than for one that does not. Reached without authentication that is a free
+    group-id enumeration oracle — anonymous requests are exempt from the
+    throttle — so authentication has to be settled before the guard runs.
+    """
+    opts.client.logout()
+
+    real = opts.client.get(URL, params=dict(group=opts.group_a.pk))
+    bogus = opts.client.get(URL, params=dict(group=99999999))
+    dead = opts.client.get(URL, params=dict(group=opts.group_dead.pk))
+    house = opts.client.get(URL)
+
+    assert real.status_code == 401, \
+        f"an anonymous read must be 401, got {real.status_code}"
+    assert bogus.status_code == real.status_code, (
+        "an anonymous caller must not be able to tell a real group id from a "
+        f"nonexistent one: real={real.status_code} bogus={bogus.status_code}")
+    assert dead.status_code == real.status_code, (
+        "an anonymous caller must not be able to tell an active group from a "
+        f"deactivated one: active={real.status_code} inactive={dead.status_code}")
+    assert house.status_code == 401, \
+        f"an anonymous read of the house scope must be 401, got {house.status_code}"
 
 
 # ---------------------------------------------------------------------------

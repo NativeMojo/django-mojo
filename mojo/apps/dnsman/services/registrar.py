@@ -188,9 +188,24 @@ def validate_contact(contact):
         if not str(contact.get(field) or "").strip():
             problems.append(f"{field} is required")
 
+    # Type, not just truthiness. `str(value).strip()` accepts an int ZipCode or
+    # a list Email happily, and botocore then raises ParamValidationError from
+    # inside register_domain — after durable intent, which is the exact failure
+    # this validator exists to move forward. Worse, that exception embeds the
+    # offending VALUE and ends up on the purchase row. ExtraParams is the one
+    # non-scalar member; AWS validates its contents.
+    for field, value in contact.items():
+        if value is None or field == "ExtraParams":
+            continue
+        if field in CONTACT_FIELDS and not isinstance(value, str):
+            problems.append(f"{field} must be text")
+
     country = str(contact.get("CountryCode") or "").strip().upper()
     if country in STATE_REQUIRED_COUNTRIES and not str(contact.get("State") or "").strip():
-        problems.append(f"State is required for CountryCode {country}")
+        # Names the rule, not the value: a problem string reaches REST bodies
+        # and logs, and echoing the country back would describe a contact the
+        # reader may not be allowed to see.
+        problems.append("State is required for US and CA registrant contacts")
 
     unknown = sorted(set(contact.keys()) - CONTACT_FIELDS)
     for field in unknown:
