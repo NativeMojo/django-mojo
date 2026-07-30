@@ -1,5 +1,55 @@
 ## Unreleased
 
+**fix (framework)** — **`SYSTEM_REQUEST` was a process-wide mutable singleton;
+system-context saves leaked a tenant across unrelated calls and crashed on any
+model with an owner FK (maestro item 963).** Two defects on one path, fixed
+together.
+
+**Behavior change, read this first.** `update_from_dict` takes no `request`
+argument, so mutating the module-level `SYSTEM_REQUEST` was the only lever a
+non-HTTP caller had — e.g. setting `SYSTEM_REQUEST.user` to a real `User` to get
+`modified_by` attribution. The framework no longer reads that object, so such a
+mutation is now silently ignored. Bind a request instead, which has always been
+the supported mechanism and is what the middleware itself does:
+`token = ACTIVE_REQUEST.set(req)` / `ACTIVE_REQUEST.reset(token)`.
+
+**The leak.** `SYSTEM_REQUEST` was built once at import and shared by every
+request-less caller. `_evaluate_permission` rebinds `request.group` to a row's
+owning tenant on every FK attach — a documented side effect — so a
+`create_from_dict` that attached an FK to a group-owned row left that group on
+the singleton for the life of the process, and the *next*, unrelated
+system-context create read it back and stamped it onto the new row. No error, no
+log, wrong tenant. Reproduced end to end. `.DATA` was shared the same way.
+`create_from_dict`/`update_from_dict` now build a fresh pseudo-request per call
+via the new **`system_request()`**. `SYSTEM_REQUEST` remains importable but is
+**deprecated** — it is still one shared object, so passing it explicitly into a
+save path more than once reintroduces the leak; call `system_request()`.
+
+**The crash that hid it.** The create/update owner auto-stamp
+(`CREATED_BY_OWNER_FIELD` / `UPDATED_BY_OWNER_FIELD`) assigned the pseudo-user
+*itself* to a `User` FK, raising `ValueError: Cannot assign "{'id': 1, ...}" ...
+must be a "User" instance`. `is_request_user()` is `hasattr(user,
+"is_request_user")` and `objict.__getattr__` answers every attribute, so the
+pseudo-user passed a check meant to identify real `User` instances
+(`ANONYMOUS_USER` escaped only because it is unauthenticated). The update branch
+was worse: its `setattr` has no "already set" guard, so it fired on *every*
+system-context update of a model declaring `UPDATED_BY_OWNER_FIELD` — `docit.Book`
+and `docit.Page` in this repo. **This is why nothing in-repo ever reached the
+leak: the path crashed first.** The stamp now resolves through
+`_resolve_stamp_actor`, which yields only a real model instance; a
+non-attributable actor leaves the field alone — null on create, unchanged on
+update — which is already what an unlinked `ApiKey` does. Note a model whose
+owner FK is **not** nullable will now surface a database error instead of the
+`ValueError`; that case was broken either way.
+
+`is_request_user()` itself is deliberately unchanged — it is the framework's one
+identity predicate, and making it truthiness-based would flip the
+machine-identity gate and deny every system-context save (tracked separately as
+maestro item 46). Also fixed while here: `create_from_dict`'s `request` default
+was eagerly evaluated on every call, including calls that supplied their own
+request; it now uses a sentinel, so an explicit `request=None` still raises
+exactly as before rather than silently becoming an omnipotent system request.
+
 **SECURITY (dnsman)** — **a tenant admin could read and revoke certificates
 belonging to house domains (maestro item 946).** `Certificate` scopes through
 `RestMeta.GROUP_FIELD = "domain__group"`, and the framework only rebinds

@@ -30,16 +30,69 @@ _DATE_COMPONENT_LOOKUPS = {
 }
 _DATE_FIELD_TYPES = ("DateTimeField", "DateField")
 
-# use this when there is no ACTIVE_REQUEST
-SYSTEM_REQUEST = objict.objict()
-SYSTEM_REQUEST.user = objict.objict()
-SYSTEM_REQUEST.user.id = 1
-SYSTEM_REQUEST.user.display_name = "System"
-SYSTEM_REQUEST.user.username = "system"
-SYSTEM_REQUEST.user.email = ""
-SYSTEM_REQUEST.user.is_authenticated = True
-SYSTEM_REQUEST.user.has_permission = lambda perm: True
-SYSTEM_REQUEST.DATA = objict.objict()
+# Distinguishes "caller passed request=None" from "caller passed no request at
+# all". The two must not behave alike: an explicit None is the documented
+# fail-closed idiom (see _can_edit_protected_json), while an absent argument
+# falls back to the omnipotent system context.
+_UNSET = object()
+
+
+def system_request():
+    """A fresh stand-in request for code running outside an HTTP request
+    (jobs, crons, management commands, shell).
+
+    Build one PER CALL. The REST machinery writes to whatever request it is
+    given — _evaluate_permission rebinds request.group to a row's owning tenant
+    on every FK attach (documented in its docstring) — so a shared instance
+    carries one call's tenant into the next, where on_rest_save stamps it onto
+    the new row. Same hazard for .DATA, which perm hooks also write to.
+    """
+    request = objict.objict()
+    request.user = objict.objict()
+    request.user.id = 1
+    request.user.display_name = "System"
+    request.user.username = "system"
+    request.user.email = ""
+    request.user.is_authenticated = True
+    request.user.has_permission = lambda perm: True
+    request.DATA = objict.objict()
+    return request
+
+
+# DEPRECATED — one shared instance, kept so existing imports keep working.
+# Call system_request() instead: passing THIS object into a save path more than
+# once lets the previous call's tenant reach the next row.
+SYSTEM_REQUEST = system_request()
+
+
+def _resolve_stamp_actor(request):
+    """The user to attribute a write to, or None when there is nobody real.
+
+    request.acting_user — the member an ApiKey acts as (account.ApiKey.user) —
+    wins when present, in BOTH key modes: attributing a key's writes to a real
+    member is the point of the link, and it is independent of whether the key
+    also assumes that member's authority.
+
+    Otherwise request.user, but ONLY when it is an actual model instance.
+    is_request_user() cannot tell a pseudo-user from a real User: ANONYMOUS_USER
+    and the system request's user are both objicts, and objict.__getattr__
+    answers EVERY attribute, so hasattr(user, "is_request_user") is True for
+    both (see board item 46). Assigning one to a ForeignKey raises
+    ValueError: Cannot assign "{...}" ... must be a "User" instance.
+
+    A non-attributable actor leaves the owner field alone — already the
+    behavior for an unlinked ApiKey, which is what the per-app shims did by
+    hand (see phonehub/rest/sms.py).
+    """
+    actor = getattr(request, "acting_user", None)
+    if actor is None:
+        user = getattr(request, "user", None)
+        if (user is not None and getattr(user, "is_authenticated", False)
+                and is_request_user(request)):
+            actor = user
+    if not isinstance(actor, dm.Model):
+        return None
+    return actor
 
 
 # Process-local set of class names that have already emitted the CAN_SAVE
@@ -769,12 +822,17 @@ class MojoModel:
         return cls.on_rest_list_response(request, cls.objects.none())
 
     def update_from_dict(self, dict_data):
-        request = ACTIVE_REQUEST.get() or SYSTEM_REQUEST
+        request = ACTIVE_REQUEST.get() or system_request()
         return self.on_rest_save(request, dict_data)
 
     @classmethod
     def create_from_dict(cls, dict_data, **kwargs):
-        request = kwargs.pop('request', ACTIVE_REQUEST.get() or SYSTEM_REQUEST)
+        # _UNSET, not None: an explicitly passed request=None keeps reaching
+        # on_rest_save (and raising) exactly as before. The sentinel also stops
+        # the fallback being built on every call that supplies its own request.
+        request = kwargs.pop('request', _UNSET)
+        if request is _UNSET:
+            request = ACTIVE_REQUEST.get() or system_request()
         instance = cls(**kwargs)
         instance.on_rest_save(request, dict_data)
         instance.on_rest_created()
@@ -1695,30 +1753,21 @@ class MojoModel:
                     # is independent of whether the key also assumes that
                     # member's authority.
                     #
-                    # The is_request_user guard is load-bearing, not defensive:
-                    # this used to stamp request.user unconditionally, so an
-                    # api-key create of any model with a user FK assigned an
-                    # ApiKey to it and Django raised
+                    # The actor resolution is load-bearing, not defensive: this
+                    # used to stamp request.user unconditionally, so an api-key
+                    # create of any model with a user FK assigned an ApiKey to
+                    # it and Django raised
                     # ValueError: Cannot assign "<ApiKey>" ... must be a "User"
-                    # instance — a 500. Unlinked keys now simply leave the
-                    # field null, which is what the per-app shims were doing by
-                    # hand (see phonehub/rest/sms.py).
+                    # instance — a 500. _resolve_stamp_actor returns None for
+                    # any non-model identity — ApiKey, ANONYMOUS_USER, the
+                    # system pseudo-user — leaving the field null, which is
+                    # what the per-app shims did by hand (phonehub/rest/sms.py).
                     #
                     # Only auto-stamp when the body did not provide a value.
                     # Mirrors the "group" behavior directly below: body wins.
                     # Models that want strict self-ownership must opt out with
                     # CREATED_BY_OWNER_FIELD = None and re-stamp in on_rest_pre_save.
-                    actor = getattr(request, "acting_user", None)
-                    if actor is None and request.user.is_authenticated and is_request_user(request):
-                        # is_authenticated is load-bearing, not redundant:
-                        # ANONYMOUS_USER is an objict, and objict.__getattr__
-                        # returns None for any missing key, so
-                        # hasattr(user, "is_request_user") — and therefore
-                        # is_request_user() — is True for anonymous requests
-                        # (see board item 46). Without this guard an anonymous
-                        # create on a model with a user FK would assign the
-                        # objict and raise ValueError -> 500.
-                        actor = request.user
+                    actor = _resolve_stamp_actor(request)
                     if actor is not None and getattr(self, owner_field, None) is None:
                         setattr(self, owner_field, actor)
                 if request.group:
@@ -1744,9 +1793,12 @@ class MojoModel:
                     # a modified_by FK raises the same ValueError the create
                     # branch used to — and reference-mode attribution, the
                     # whole point of ApiKey.user, would be missing on updates.
-                    actor = getattr(request, "acting_user", None)
-                    if actor is None and request.user.is_authenticated and is_request_user(request):
-                        actor = request.user
+                    #
+                    # No "already set" guard here, unlike create: "who last
+                    # modified" is an actor fact, so it overwrites on every
+                    # update. That is also why an unresolvable actor MUST leave
+                    # the field alone rather than clear it.
+                    actor = _resolve_stamp_actor(request)
                     if actor is not None:
                         setattr(self, owner_field, actor)
             self.on_rest_pre_save(self.__changed_fields__, created)

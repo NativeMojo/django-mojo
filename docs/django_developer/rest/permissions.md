@@ -36,7 +36,7 @@ on_rest_request(request, pk)
 | `OWNER_FIELD` | `"user"` | FK field name pointing to the owning user. Used with `"owner"` perm. |
 | `GROUP_FIELD` | `"group"` | FK field name pointing to the owning group. May be a related path (e.g. `"original_file__group"`, `"agent__project"`). Governs detail + list + `?group=` scoping and create-time auto-assign — see [Group-Scoped Permissions](#group-scoped-permissions). |
 | `CREATED_BY_OWNER_FIELD` | `"user"` | FK field auto-stamped with `request.user` on create when the body omits it. Set to `None` to disable auto-stamping entirely. See "Create-time owner stamping" below. |
-| `UPDATED_BY_OWNER_FIELD` | `"modified_by"` | FK field set to `request.user` on every update. Unlike `CREATED_BY_OWNER_FIELD`, the update-path stamp always overwrites — "who last modified" is an actor fact, not a body fact. |
+| `UPDATED_BY_OWNER_FIELD` | `"modified_by"` | FK field set to `request.user` on every update. Unlike `CREATED_BY_OWNER_FIELD`, the update-path stamp always overwrites — "who last modified" is an actor fact, not a body fact. Both are skipped entirely when there is no real actor; see "When there is no real actor" below. |
 | `DENY_AI` | `False` | Shorthand — denies all assistant model tools on this model regardless of verb. |
 | `DENY_AI_VIEW` | `False` | Blocks the assistant's `describe_model`, `query_model`, `aggregate_model`, and `export_data`. |
 | `DENY_AI_CREATE` | `False` | Blocks the create path of the assistant's `save_model_instance`. |
@@ -74,6 +74,25 @@ POST /api/routes/operator       body: {user: 7, group: 1}    → user = 7
 # Explicit null / 0 / "" → coerced to None → auto-stamp still kicks in.
 POST /api/shortlink/shortlink   body: {user: null}           → user = request.user
 ```
+
+### When there is no real actor
+
+The stamp needs someone real to attribute the write to. It resolves, in order:
+
+1. `request.acting_user` — the member an `ApiKey` acts as, when the key is linked.
+2. `request.user`, **only when it is an actual model instance**.
+
+Anything else — an unlinked `ApiKey`, an anonymous caller, or the
+`system_request()` pseudo-user used by jobs, crons and management commands —
+yields no actor, and the field is **left as it is**: null on create, unchanged
+on update. It is never assigned a non-`User` value, which would raise
+`ValueError: Cannot assign ... must be a "User" instance`.
+
+A background caller that needs its writes attributed to a real user should bind
+one for the duration of the work with `ACTIVE_REQUEST.set(...)` — see
+[Programmatic (Non-HTTP) Usage](../core/mojo_model.md#the-system-request). Note
+that a model whose owner field is **not** nullable will now fail at the database
+instead, since there is nothing to put in it.
 
 ### Security implications
 

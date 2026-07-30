@@ -69,8 +69,8 @@ class Book(models.Model, MojoModel):
 | `PROTECTED_JSON_PERMS` | list | `[]` | Permissions required to modify the `"protected"` root key in any JSONField |
 | `OWNER_FIELD` | str | `"user"` | Field name for owner permission check |
 | `GROUP_FIELD` | str | `"group"` | Field name (or related path, e.g. `"agent__project"`) for group scoping — governs detail, list, and `?group=` permission checks |
-| `CREATED_BY_OWNER_FIELD` | str or None | `"user"` | Auto-stamped with `request.user` on create **only when the body omits it**. `None` disables. See [REST Permissions — Create-time owner stamping](../rest/permissions.md#create-time-owner-stamping). |
-| `UPDATED_BY_OWNER_FIELD` | str or None | `"modified_by"` | Always set to `request.user` on update (who last modified). See [REST Permissions](../rest/permissions.md). |
+| `CREATED_BY_OWNER_FIELD` | str or None | `"user"` | Auto-stamped with `request.user` on create **only when the body omits it**, and only when there is a real user to attribute to. `None` disables. See [REST Permissions — Create-time owner stamping](../rest/permissions.md#create-time-owner-stamping). |
+| `UPDATED_BY_OWNER_FIELD` | str or None | `"modified_by"` | Set to `request.user` on every update (who last modified). Left unchanged when there is no real user — e.g. a system-context save. See [REST Permissions](../rest/permissions.md). |
 | `ALT_PK_FIELD` | str | `"uuid"` | Field used for non-integer PK lookups |
 | `POST_SAVE_ACTIONS` | list | `["action"]` | Fields treated as post-save action triggers |
 | `FORMATS` | dict | `None` | Field lists for download formats (CSV etc.) |
@@ -702,6 +702,48 @@ data = book.to_dict(graph="default")
 data_list = Book.queryset_to_dict(Book.objects.all(), graph="list")
 ```
 
+### The system request
+
+Outside an HTTP request there is no `ACTIVE_REQUEST`, so `create_from_dict` and
+`update_from_dict` fall back to `system_request()` — a pseudo-request whose user
+is authenticated, is named `system`, and holds every permission.
+
+**It is built fresh on every call, and that matters.** The REST machinery writes
+to whatever request it is given: `_evaluate_permission` rebinds `request.group`
+to a row's owning tenant on every FK attach, and `on_rest_save` reads that value
+back to stamp the group on a newly created row. A request object reused across
+two unrelated saves therefore carries the first one's tenant into the second.
+
+```python
+from mojo.models.rest import system_request
+
+request = system_request()      # correct — one per logical operation
+```
+
+`SYSTEM_REQUEST` still exists as a module-level instance so older imports keep
+working, but it is **deprecated**: it is a single shared object, so passing it
+into a save path more than once reintroduces exactly that leak. Call
+`system_request()` instead.
+
+If a background caller needs writes attributed to a **real** user rather than to
+the system pseudo-user, bind a request for the duration of the work — this is
+also the only way to influence `update_from_dict`, which takes no `request`
+argument:
+
+```python
+from mojo.models.rest import ACTIVE_REQUEST
+
+token = ACTIVE_REQUEST.set(my_request)
+try:
+    book.update_from_dict({"title": "Updated Title"})
+finally:
+    ACTIVE_REQUEST.reset(token)
+```
+
+Without one, the owner fields (`CREATED_BY_OWNER_FIELD` /
+`UPDATED_BY_OWNER_FIELD`) are left untouched — see
+[Create-time owner stamping](../rest/permissions.md#create-time-owner-stamping).
+
 ## Protected JSON Fields
 
 Any `JSONField` on a MojoModel supports a reserved root key `"protected"`. Writes to `metadata["protected"]` (or any other JSONField's `"protected"` key) are blocked at the framework level unless the requesting user is a superuser or holds a permission listed in `PROTECTED_JSON_PERMS`.
@@ -743,7 +785,9 @@ group.metadata = {
 
 ### Programmatic bypass
 
-When calling `on_rest_update_jsonfield` directly outside a request context (e.g. from a management command or service), pass `request=None`. In that case `_can_edit_protected_json` returns `False`, so protected writes will still raise. Pass a `SYSTEM_REQUEST` or a real request with a superuser if the write is intentional.
+When calling `on_rest_update_jsonfield` directly outside a request context (e.g. from a management command or service), pass `request=None`. In that case `_can_edit_protected_json` returns `False`, so protected writes will still raise.
+
+To make the write intentional, pass a real request whose user is a superuser. A `system_request()` is **not** reliably enough on its own: `_can_edit_protected_json` tests `getattr(user, "is_superuser", False)`, and the system pseudo-user is an `objict` — `objict.__getattr__` answers every attribute with `None`, so the default never applies and the superuser branch never fires. It does succeed on a model that declares `PROTECTED_JSON_PERMS`, because the check then falls through to the pseudo-user's permission function, which grants everything. Do not "fix" this by adding `is_superuser` to the system request — that would silently open protected writes to every system-context save.
 
 ## Logging
 
