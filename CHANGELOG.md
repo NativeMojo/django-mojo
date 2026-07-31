@@ -1,5 +1,15 @@
 ## Unreleased
 
+## v1.2.63 - July 30, 2026
+
+fix: the KMS client now receives the framework's configured AWS_KEY/AWS_SECRET, so KSMSecrets — and with it dnsman certificate issuance — works on deployments without an instance profile.
+feat: opt-in nonce-based Content-Security-Policy for the hosted auth pages (AUTH_CSP_ENABLED, ships False).
+feat: portal-managed dnsman registrant contact, per group with a house fallback.
+SECURITY: a GROUP_FIELD resolving to None no longer keeps the caller's ?group=, closing a cross-tenant read on null-parent rows.
+fix: on_user_login and eight dnsman endpoints now declare their security type, so the audit registry can classify every route.
+test: full suite green — 3410 passed, 0 failed, 39 skipped.
+
+
 **fix (helpers/aws)** — **the KMS client never received the framework's AWS
 credentials, so `KSMSecrets` failed on every deployment without an instance
 profile.** `KMSHelper` built its client as `boto3.client("kms",
