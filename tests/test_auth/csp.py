@@ -38,6 +38,7 @@ Header lookups are case-normalized: `testit/client.py` flattens `requests`'
 import re
 
 from testit import helpers as th
+from testit import TestitSkip
 from testit.helpers import assert_true, assert_eq
 
 
@@ -141,6 +142,30 @@ def _set_conf(name, value):
     setattr(dj_settings, name, value)
 
 
+def _require_csp_enabled():
+    """Skip when this test project has not opted into the CSP.
+
+    `AUTH_CSP_ENABLED` ships **False** — that is the shipped contract, asserted
+    by `test_csp_is_opt_in_by_default`. Turning it on is a per-deployment choice
+    made in `testproject/var/django.conf`, and the whole `testproject/` tree is
+    gitignored, so a fresh checkout has no way to inherit it.
+
+    Without this guard every test below fails on any machine but the one that
+    authored the feature, and on CI — reporting a broken CSP when the CSP is
+    behaving exactly as designed. The tests that assert the OFF behavior need no
+    guard; they hold either way.
+
+    Read through the SAME accessor `csp.apply()` uses, so the guard and the
+    feature can never disagree — a guard reading a different source would either
+    skip a test that would have passed, or run one that never could.
+    """
+    from mojo.helpers.settings import settings
+    if not settings.get_static("AUTH_CSP_ENABLED", False, kind="bool"):
+        raise TestitSkip(
+            "AUTH_CSP_ENABLED is not True for this test project — set it in "
+            "testproject/var/django.conf to run the CSP tests")
+
+
 # ---------------------------------------------------------------------------
 # Live server — GET /passkey, the one un-gated hosted auth page.
 # Asserts the SHIPPED defaults only (server settings are fixed at startup).
@@ -148,6 +173,7 @@ def _set_conf(name, value):
 
 @th.django_unit_test("GET /passkey carries a Content-Security-Policy with every core directive")
 def test_passkey_page_sets_csp_header(opts):
+    _require_csp_enabled()
     resp = opts.client.get(PASSKEY_PATH)
     assert_eq(resp.status_code, 200,
               f"GET {PASSKEY_PATH} must render the passkey enrollment page, "
@@ -181,6 +207,7 @@ def test_passkey_page_sets_csp_header(opts):
 
 @th.django_unit_test("script-src is nonce-locked: no unsafe-inline, no unsafe-eval, no wildcard")
 def test_script_src_is_nonce_locked(opts):
+    _require_csp_enabled()
     opts.client.get(PASSKEY_PATH)
     policy = _policy_from(opts)
     script_src = _directive(policy, "script-src")
@@ -207,6 +234,7 @@ def test_served_scripts_are_all_guarded(opts):
     See the module docstring: no browser runs here, so this asserts the two
     properties that produce the block rather than the block itself.
     """
+    _require_csp_enabled()
     resp = opts.client.get(PASSKEY_PATH)
     html = resp.response if isinstance(resp.response, str) else (resp.text or "")
     policy = _policy_from(opts)
@@ -258,6 +286,7 @@ def test_injection_guard_has_teeth(opts):
 
 @th.django_unit_test("the nonce is fresh per request and matches that response's markup")
 def test_nonce_is_per_request(opts):
+    _require_csp_enabled()
     seen = []
     for attempt in (1, 2):
         resp = opts.client.get(PASSKEY_PATH)
@@ -333,6 +362,7 @@ def test_frame_ancestors_is_per_page(opts):
     """`/contact` is documented as iframe-embeddable from an external marketing
     site (docs/web_developer/account/public_messages.md), so it must NOT carry
     frame-ancestors. The token-holding pages must."""
+    _require_csp_enabled()
     from django.test import RequestFactory
     from mojo.apps.account.rest.bouncer.views import _serve_login, _serve_contact
     from mojo.apps.account.services import csp
@@ -505,6 +535,10 @@ def test_nonce_survives_script_src_override(opts):
 
 @th.django_unit_test("AUTH_CSP_ENABLED=False sets no CSP header at all")
 def test_csp_can_be_disabled(opts):
+    # Guarded whole: the tail asserts the header returns once the project's own
+    # True is restored. The OFF half stays covered by test_csp_is_opt_in_by_default,
+    # which needs no guard.
+    _require_csp_enabled()
     from django.http import HttpResponse
     from mojo.apps.account.services import csp
 
@@ -559,6 +593,8 @@ def test_csp_is_opt_in_by_default(opts):
 
 @th.django_unit_test("AUTH_CSP_REPORT_ONLY=True swaps the enforcing header for the report-only one")
 def test_report_only_mode(opts):
+    # Report-only still requires the CSP to be switched on at all.
+    _require_csp_enabled()
     from django.http import HttpResponse
     from mojo.apps.account.services import csp
 
