@@ -185,10 +185,17 @@ session:
   power that ownership alone confers — `Book.on_rest_pre_save` enforces this.
 
 Group-less books are refused outright: `Book.on_rest_pre_save` requires a
-group on **every** save, not just create. A book with no group resolves to no
-tenant, and the detail permission check then keeps the caller's own `?group=`
-rather than the row's — so a null group is an escape from tenant scoping, not
-merely an unset field.
+group on **every** save, not just create. This is a **data-integrity**
+invariant — docit books are tenant-owned, and a group-less one is a broken row
+rather than a platform-wide one.
+
+It used to be a security control as well. A book with no group resolved to no
+tenant, and the detail permission check then kept the caller's own `?group=`
+rather than the row's, so a null group was an escape from tenant scoping.
+Maestro item 953 fixed that in the framework: `request.group` is now re-bound to
+the row's tenant unconditionally, so a null tenant clears the binding and
+authorization falls through to the caller's **global** permissions. See
+[REST permissions](../rest/permissions.md).
 
 ## Knowledge-base search
 

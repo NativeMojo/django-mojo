@@ -10,17 +10,22 @@ def _guard_house_certificate(request, certificate, what):
     """
     A certificate on a group-less (house) domain is platform property.
 
-    Certificate scopes through RestMeta.GROUP_FIELD = "domain__group", and the
-    framework only rebinds request.group to the instance's tenant when that
-    resolution yields something (mojo/models/rest.py). For a house domain it
-    yields None, the rebind is skipped, and the caller-supplied `?group=`
-    SURVIVES into a membership check that honors GroupMember permissions — so a
-    tenant admin holding manage_dns in their own group passes a check that was
-    never about their group at all.
+    Certificate scopes through RestMeta.GROUP_FIELD = "domain__group". For a
+    house domain that resolution yields None, and the permission check falls
+    through to the caller's GLOBAL permissions — so any holder of a global
+    manage_dns grant passes a check that was never about their group at all.
+    This guard is LOAD-BEARING, not redundant with the framework check.
+
+    Before maestro item 953 it was load-bearing for a second, worse reason: a
+    null tenant left request.group at whatever `?group=` the caller supplied, so
+    a tenant-level manage_dns grant passed too. The framework now binds the
+    row's tenant unconditionally (mojo/models/rest.py) and that hole is closed —
+    but the global-permission fall-through above remains, which is why this
+    still runs.
 
     The LIST path is unaffected (`domain__group=<group>` cannot match a null),
     so this guards the per-instance paths, where it is the only thing standing
-    between a tenant admin and a platform certificate.
+    between a global manage_dns holder and a platform certificate.
     """
     if certificate.domain.group_id is None:
         require_platform_admin(request, what)
@@ -99,12 +104,19 @@ def on_certificate_material(request, pk=None):
     Certificate.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"], certificate)
 
     # Group scoping resolves through GROUP_FIELD = "domain__group". When the
-    # owning domain has NO group (a house/platform domain), that resolution
-    # yields None, request.group is never rebound to the instance, and the
-    # check degrades to the caller's own group — which any tenant admin with
-    # manage_dns would pass. For a house certificate that means handing over a
-    # private key, so require a platform admin explicitly. Shared with the
-    # detail and revoke routes so the rule lives in exactly one place.
+    # owning domain has NO group (a house/platform domain) that resolution
+    # yields None, and the permission check falls through to the caller's
+    # GLOBAL permissions — so any holder of a global manage_dns grant passes.
+    # For a house certificate that means handing over a private key, so require
+    # a platform admin explicitly. This guard is LOAD-BEARING, not redundant
+    # with the framework check.
+    #
+    # (Before maestro item 953 it was load-bearing for a second, worse reason:
+    # a null tenant left request.group at whatever ?group= the caller supplied,
+    # so a tenant-level manage_dns grant passed too. The framework now binds
+    # the row's tenant unconditionally and that hole is closed.)
+    #
+    # Shared with the detail and revoke routes so the rule lives in one place.
     _guard_house_certificate(request, certificate, "House certificate material")
 
     if certificate.status != "active":

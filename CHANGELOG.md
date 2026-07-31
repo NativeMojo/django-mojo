@@ -206,6 +206,46 @@ key linked to a superuser member inherited platform authority it was never issue
 for. Any integration driving `registrar/adopt` with an API key must move to an
 interactive superuser session.
 
+**SECURITY (framework)** — **a `GROUP_FIELD` that resolved to `None` kept the
+caller's `?group=`, so a tenant-level grant could read another tenant's — or the
+platform's — null-parent rows (maestro item 953).** Before a per-instance
+permission check, `_evaluate_permission` re-binds `request.group` to the row's
+owning tenant, which is what stops a caller-supplied `?group=` from widening
+access. The two branches that did it disagreed at null: the direct-`group`-FK
+branch assigned unconditionally (fail-closed), while the `GROUP_FIELD` branch
+assigned **only when the resolution was non-null** — leaving the caller's own
+group bound. `Group.user_has_permission` honors `GroupMember` grants, so any
+tenant admin passed a check that was never about their tenant.
+
+Both branches now resolve through one helper (`MojoModel._instance_group`) and
+assign unconditionally. A row with no owning tenant binds `None`, the
+group-membership branch is skipped, and authorization falls through to
+`request.user.has_permission` — **global** permissions only. Declaring
+`GROUP_FIELD = "group"` on a model that already has a direct `group` FK is now
+an exact no-op instead of a security-relevant declaration. This closes the
+"Known residual" recorded in the docit entry further down.
+
+REST-reachable on `account.PublicMessage` (null is its *normal* state — every
+contact submission on a non-white-label domain), `fileman.FileRendition`,
+`chat.ChatRoom` and `dnsman.Certificate`; `docit.Book`/`Page`/`Asset`/
+`PageRevision` were already protected by `Book.on_rest_pre_save`, whose refusal
+is now reclassified as a data-integrity invariant. **The exposure was inherited
+by any downstream model declaring its own `GROUP_FIELD` or subclassing one that
+does** — `RestMeta` lookup walks the MRO — which is why this is fixed in the
+framework rather than model-by-model.
+
+**What changes for callers.** A detail fetch of a tenant-less row with a
+GroupMember-only grant goes `200` → `403`; the remedy is a global grant, not a
+different `?group=`. A group-scoped **ApiKey** against a tenant-less row is now
+denied deterministically — this is not novel behavior, it is what every
+direct-FK model (`dnsman.Domain`, `DnsCredential`) already did. List endpoints
+are unaffected: they filter `<field>__in=<caller's groups>` and SQL `IN` never
+matches `NULL`, so tenant-less rows never appeared in them — the old
+reachable-by-pk-but-never-in-a-list behavior was already inconsistent. `dnsman`'s
+house-certificate material guard stays and is still load-bearing (it requires a
+platform superuser, where the framework alone would admit any global
+`manage_dns` holder).
+
 **feat (account/security)** — **an opt-in nonce-based Content-Security-Policy for
 the hosted auth pages (maestro item 945).** The framework sets **no** security
 headers on these pages today — no CSP, no `X-Frame-Options` — so the
