@@ -31,8 +31,10 @@ Security Properties
 - Zeroization of plaintext data keys in RAM
 
 Notes
-- This is a framework helper. It expects AWS creds/region via standard AWS SDK resolution
-  (env vars, instance profile, etc.) unless provided externally to boto3.
+- This is a framework helper. Credentials come from the framework's configured
+  AWS keys (`AWS_KEY` / `AWS_SECRET`), the same source every other helper in
+  this package uses. When those are unset it falls back to standard AWS SDK
+  resolution (env vars, instance profile, etc.).
 """
 
 from __future__ import annotations
@@ -47,6 +49,30 @@ from Crypto.Random import get_random_bytes
 from datetime import datetime, timezone
 
 from mojo.helpers import logit
+from mojo.helpers.settings import settings
+
+
+def client_kwargs(region_name):
+    """boto3 client kwargs for KMS, credentials included.
+
+    `var/django.conf` is not a credential source boto3 knows how to read, so a
+    deployment with perfectly good `AWS_KEY` / `AWS_SECRET` still failed with
+    NoCredentialsError until this passed them along — every other helper here
+    (s3, ec2, iam) already does.
+
+    Read with `get_static` deliberately: this client is what `MojoSecrets` uses
+    to encrypt and decrypt, so resolving credentials through the DB-backed
+    settings store risks recursing into a secret row that cannot be decrypted
+    until the client exists.
+
+    Unset keys stay `None`, which boto3 treats as "not supplied" and resolves
+    through its own chain — instance-profile deployments keep working.
+    """
+    return dict(
+        region_name=region_name,
+        aws_access_key_id=settings.get_static("AWS_KEY", None),
+        aws_secret_access_key=settings.get_static("AWS_SECRET", None),
+    )
 
 
 # --------------------------
@@ -125,8 +151,8 @@ class KMSHelper:
         self.region_name = region_name
         self.context_key = encryption_context_key
 
-        # Create a KMS client using default AWS credential resolution chain
-        self.kms = boto3.client("kms", region_name=region_name)
+        # Configured AWS keys first, boto3's own chain when they are unset
+        self.kms = boto3.client("kms", **client_kwargs(region_name))
 
         if ensure_key:
             self._ensure_key_and_alias_if_needed()

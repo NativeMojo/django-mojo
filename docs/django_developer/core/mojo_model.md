@@ -849,6 +849,37 @@ secrets = integration.secrets
 
 Encryption is AES-based, keyed per-instance using the record's `created` timestamp and class name. Never create individual encrypted fields — always use the secrets system.
 
+Because the key is derived from the row's own non-secret columns, `MojoSecrets`
+protects against a leaked REST graph, **not** against someone holding the
+database. When the threat model includes the database itself, use `KSMSecrets`.
+
+## KSMSecrets
+
+Same API as `MojoSecrets` — `set_secret`, `get_secret`, `.secrets` — but the
+blob is AWS KMS envelope-encrypted rather than derived from the row, so
+decryption needs the database **and** KMS access. Used for material that must
+survive a database compromise, such as `dnsman`'s `AcmeAccount` private key.
+
+```python
+from mojo.models import KSMSecrets, MojoModel
+
+class Integration(KSMSecrets, MojoModel):
+    ...
+```
+
+Two settings are required, both read with `get_static` (file settings only —
+never the DB-backed store, which would recurse through the very secrets this
+client decrypts):
+
+| Setting | Purpose |
+|---|---|
+| `KMS_KEY_ID` | Key ARN, key id, or an **alias** such as `alias/app-prod`. An alias that does not exist yet is created on first use, with rotation enabled. |
+| `AWS_KEY` / `AWS_SECRET` | Credentials for the KMS client. When unset, boto3 falls back to its own chain (env vars, instance profile), so instance-role deployments need neither. |
+
+`AWS_REGION` selects the region, defaulting to `AWS_DEFAULT_REGION` then
+`us-east-1`. Without `KMS_KEY_ID` any save or read of a `KSMSecrets` row raises
+`RuntimeError: KMS_KEY_ID must be configured to use KSMSecrets`.
+
 ## Key Properties
 
 | Property | Description |

@@ -1,5 +1,32 @@
 ## Unreleased
 
+**fix (helpers/aws)** — **the KMS client never received the framework's AWS
+credentials, so `KSMSecrets` failed on every deployment without an instance
+profile.** `KMSHelper` built its client as `boto3.client("kms",
+region_name=...)` — region only. Every other helper in `mojo/helpers/aws`
+(`s3`, `ec2`, `iam`, `ses`, `sns`) passes `AWS_KEY` / `AWS_SECRET` explicitly,
+because `var/django.conf` is a Django settings file and **boto3 has no idea it
+exists**. A box with perfectly valid, actively-used credentials still raised
+`NoCredentialsError` the moment anything touched a `KSMSecrets` row.
+
+The visible symptom was certificate issuance. `dnsman`'s `AcmeAccount` holds the
+ACME account private key in `KSMSecrets`, so **`issue()` could not obtain an
+ACME client at all** — issuance failed before reaching Let's Encrypt, on any
+host relying on configured keys rather than an instance role.
+
+Credentials are now read with `get_static` and passed through. `get_static`
+rather than `get` is deliberate: this client is what decrypts secrets, so
+resolving its own credentials through the DB-backed settings store could recurse
+into a secret row it cannot read yet. Unset keys stay `None`, which boto3 treats
+as "not supplied" and resolves through its own chain — **instance-profile
+deployments are unaffected**.
+
+`KSMSecrets` is also now documented (it never was): see
+[MojoModel → KSMSecrets](docs/django_developer/core/mojo_model.md#ksmsecrets)
+for the `KMS_KEY_ID` requirement and how it differs from `MojoSecrets`, whose
+key is derived from the row and therefore protects a leaked REST graph rather
+than a stolen database.
+
 **feat (dnsman)** — **the registrant contact is now portal-managed, per group,
 with a house fallback (maestro item 951).** `DNSMAN_REGISTRANT_CONTACT` was
 conf-file only, so an operator seeing "purchasing is unavailable" could not fix
