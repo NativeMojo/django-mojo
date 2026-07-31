@@ -90,6 +90,46 @@ def _undeclared_title(channel):
     return f"Undeclared job channel: {channel}"
 
 
+def _isolate_orphan_ranking(opts):
+    """Drain queued jobs on channels this module does not own.
+
+    `check_unconsumed_channels` files incidents for only the deepest
+    `UNCONSUMED_REPORT_LIMIT` (5) channels. Other modules finish leaving jobs
+    queued on shared channels — a full-suite run reaches 81 on `default`, 44 on
+    `renditions` — which pushes this module's one-job channel out of the
+    reported set and fails the assertions below for a reason that has nothing to
+    do with the behaviour under test.
+
+    Only unconsumed channels are touched: `find_unconsumed_channels` returns
+    channels that no live runner heartbeat claims, so these are inert leftovers
+    by definition and draining them cannot strand work a later test is waiting
+    on. Modules run serially, so anything seen here belongs to a module that has
+    already finished.
+    """
+    from mojo.apps.jobs import cronjobs
+    for channel, _depth in cronjobs.find_unconsumed_channels():
+        if channel not in TEST_CHANNELS:
+            opts.redis.delete(opts.keys.queue(channel))
+
+
+def _orphan_ranking():
+    """Ranked orphan channels with the report cutoff marked.
+
+    `check_unconsumed_channels` files incidents for only the DEEPEST
+    `UNCONSUMED_REPORT_LIMIT` channels and summarises the rest, so a one-job
+    test channel is silently dropped whenever the box is carrying enough other
+    orphan backlogs — which is the difference between this module passing alone
+    and failing in a full-suite run. Naming the competitors turns that from a
+    bare "got 0" into something diagnosable.
+    """
+    from mojo.apps.jobs import cronjobs
+    ranked = sorted(cronjobs.find_unconsumed_channels(),
+                    key=lambda item: item[1], reverse=True)
+    limit = cronjobs.UNCONSUMED_REPORT_LIMIT
+    return (f"{len(ranked)} orphan channel(s), report limit {limit} — "
+            f"reported={ranked[:limit]} truncated={ranked[limit:]}")
+
+
 def _enforced(*declared):
     """Pin enforcement ON with exactly `declared` as JOBS_ALLOWED_CHANNELS.
 
@@ -375,13 +415,16 @@ def test_unconsumed_alert_is_suppressed_when_unchanged(opts):
     from mojo.apps.jobs import cronjobs
     from mojo.apps.incident.models import Event
 
+    _isolate_orphan_ranking(opts)
     opts.redis.delete(cronjobs._unconsumed_notice_key(opts.keys, CH_ORPHAN))
     jobs.publish(func=HANDLER, payload={"marker": "orphan"}, channel=CH_ORPHAN)
 
     cronjobs.check_unconsumed_channels()
     first = Event.objects.filter(category="jobs:unconsumed_channel",
                                  title=_alert_title(CH_ORPHAN)).count()
-    assert first == 1, f"the first pass should report the orphan once, got {first}"
+    assert first == 1, (
+        f"the first pass should report the orphan once, got {first}. "
+        f"{_orphan_ranking()}")
 
     cronjobs.check_unconsumed_channels()
     again = Event.objects.filter(category="jobs:unconsumed_channel",
@@ -595,6 +638,7 @@ def test_unconsumed_channel_alert(opts):
     from mojo.apps.jobs import cronjobs
     from mojo.apps.incident.models import Event
 
+    _isolate_orphan_ranking(opts)
     jobs.publish(func=HANDLER, payload={"marker": "orphan"}, channel=CH_ORPHAN)
 
     orphans = dict(cronjobs.find_unconsumed_channels())
@@ -607,7 +651,8 @@ def test_unconsumed_channel_alert(opts):
     assert Event.objects.filter(category="jobs:unconsumed_channel",
                                 title=_alert_title(CH_ORPHAN)).exists(), (
         "an unconsumed channel must raise a jobs:unconsumed_channel incident — "
-        "it is the only thing that surfaces a misrouted publish now"
+        "it is the only thing that surfaces a misrouted publish now. "
+        f"{_orphan_ranking()}"
     )
 
 
