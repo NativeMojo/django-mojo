@@ -57,9 +57,9 @@ def search_any(query, book=None, limit=10, groups=None, max_distance=None):
     `max_distance` is the knowledge base's vector relevance floor — see
     docit_kb.services.knowledge.search. It ships off; None falls back to the
     DOCIT_KB_MAX_DISTANCE setting, which is unset by default. The search_pages
-    fallback below has no vectors and ignores it (it keeps its own rank > 0
-    bound), so a floored call on an install without docit_kb behaves exactly
-    as an unfloored one.
+    fallback below has no vector leg for it to apply to, so it ignores the
+    parameter and a floored call on an install without docit_kb behaves exactly
+    as an unfloored one — it carries the same `@@` match bound either way.
     """
     if apps.is_installed("mojo.apps.docit_kb"):
         from mojo.apps.docit_kb.services import knowledge
@@ -96,13 +96,16 @@ def search_pages(query, book=None, limit=10, groups=None):
     # multi-term query, so `rank__gt=0` admitted every page and this fallback
     # could never report "nothing matched" either. Rank remains the ordering
     # key. Same defect and same fix as docit_kb's _fts_leg.
-    qs = (qs.annotate(
-            search=vector,
-            rank=SearchRank(vector, sq),
-            snippet=SearchHeadline("content", sq, max_words=60,
-                                   start_sel="**", stop_sel="**"))
-          .filter(search=sq)
-          .order_by("-rank")[:limit])
+    # alias(), not annotate(): the match predicate needs the tsvector, but
+    # nothing reads it back, and annotate() would build and ship a full
+    # to_tsvector(title||content) per returned row.
+    qs = (qs.alias(search=vector)
+            .annotate(
+                rank=SearchRank(vector, sq),
+                snippet=SearchHeadline("content", sq, max_words=60,
+                                       start_sel="**", stop_sel="**"))
+            .filter(search=sq)
+            .order_by("-rank")[:limit])
     results = []
     for page in qs:
         results.append(objict(

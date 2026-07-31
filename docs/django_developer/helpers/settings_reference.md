@@ -176,6 +176,10 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### DOCIT_KB
 
+- `DOCIT_KB_MAX_DISTANCE` — cosine-distance relevance ceiling for the
+  knowledge-base vector search leg (default unset — no floor, an unbounded
+  kNN). Details:
+  [docit knowledge base → Relevance floor](../docit/knowledge.md#relevance-floor).
 - `DOCIT_KB_RECONCILE_ENABLED` — kill switch for the knowledge-base
   reconciliation cron dispatcher (default `True`). Details:
   [docit knowledge base](../docit/knowledge.md#settings).

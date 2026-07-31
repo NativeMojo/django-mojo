@@ -6,6 +6,8 @@ Docit knowledge base — chunk pipeline and hybrid search.
     reindex_book(book)          — queue embed jobs for every page of a book
     reconcile_stale_pages(...)  — sweep that heals pages whose chunks fell behind
 """
+import math
+
 from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
 from objict import objict
 from pgvector.django import CosineDistance
@@ -337,6 +339,17 @@ def _configured_max_distance():
     recovers with `float(default)`, and this default is None — so a
     present-but-garbage value would raise TypeError out of the settings helper
     on every search instead of degrading. Coerce here and fail soft.
+
+    The range check is not decoration. float() accepts "nan", and
+    `distance <= nan` is False for every row, so a NaN would silently empty the
+    vector leg for every query on every tenant while mode still reported
+    "hybrid" — a config typo that looks exactly like "the corpus has nothing".
+    Negative and infinite values fail the same way. 2.0 is the maximum cosine
+    distance, so anything above it is a no-op the caller did not intend.
+
+    Neither branch logs the raw value: this is a DB-backed setting, and those
+    reads return decrypted plaintext for is_secret rows (see the note on
+    mojo.helpers.settings.helper._warn_coercion).
     """
     from mojo.helpers.settings import settings
 
@@ -344,10 +357,17 @@ def _configured_max_distance():
     if raw is None or raw == "":
         return None
     try:
-        return float(raw)
+        value = float(raw)
     except (TypeError, ValueError):
-        logger.error(f"DOCIT_KB_MAX_DISTANCE={raw!r} is not a number; ignoring")
+        logger.error(
+            f"DOCIT_KB_MAX_DISTANCE is not a number ({type(raw).__name__}); ignoring")
         return None
+    if not math.isfinite(value) or not 0.0 <= value <= 2.0:
+        logger.error(
+            f"DOCIT_KB_MAX_DISTANCE={value} is outside the cosine-distance "
+            f"range 0.0-2.0; ignoring")
+        return None
+    return value
 
 
 def _filter_book(qs, book):
@@ -369,8 +389,12 @@ def _fts_leg(qs, query, pool):
     """
     sq = SearchQuery(query, search_type="websearch")
     vector = SearchVector("heading", weight="A") + SearchVector("content", weight="B")
+    # alias(), not annotate(): the match predicate needs the tsvector, but
+    # nothing reads it back, and annotate() would build and ship a full
+    # to_tsvector(heading||content) per returned row.
     return list(
-        qs.annotate(search=vector, rank=SearchRank(vector, sq))
+        qs.alias(search=vector)
+          .annotate(rank=SearchRank(vector, sq))
           .filter(search=sq)
           .order_by("-rank")[:pool])
 

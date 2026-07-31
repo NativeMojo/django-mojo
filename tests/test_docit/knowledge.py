@@ -1003,14 +1003,23 @@ def test_search_relevance_floor(opts):
     finally:
         del dj_settings.DOCIT_KB_MAX_DISTANCE
 
-    # An uncoercible setting degrades to "no floor" and logs — never raises.
-    dj_settings.DOCIT_KB_MAX_DISTANCE = "not-a-number"
-    try:
-        found = knowledge.search(NONSENSE_QUERY, book=book)
-        assert found.mode == "hybrid", \
-            f"An uncoercible setting must be ignored, not fatal — got mode {found.mode}"
-    finally:
-        del dj_settings.DOCIT_KB_MAX_DISTANCE
+    # A setting that is uncoercible or out of range degrades to "no floor" and
+    # logs — it must never raise, and must never silently empty the leg.
+    # "nan" is the dangerous one: float("nan") does NOT raise, and
+    # `distance <= nan` is False for every row, so an unguarded NaN would empty
+    # the vector leg for every query on every tenant while still reporting
+    # mode="hybrid" — indistinguishable from an empty corpus.
+    for bad in ("not-a-number", "nan", "inf", -1.0, 5.0):
+        dj_settings.DOCIT_KB_MAX_DISTANCE = bad
+        try:
+            found = knowledge.search(NONSENSE_QUERY, book=book)
+            assert found.mode == "hybrid", \
+                f"DOCIT_KB_MAX_DISTANCE={bad!r} must be ignored, not fatal — got mode {found.mode}"
+            assert len(found.results) >= 1, \
+                (f"DOCIT_KB_MAX_DISTANCE={bad!r} must fall back to NO floor, "
+                 f"not silently empty the vector leg")
+        finally:
+            del dj_settings.DOCIT_KB_MAX_DISTANCE
 
 
 @th.django_unit_test()
