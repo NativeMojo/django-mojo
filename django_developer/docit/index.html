@@ -4385,10 +4385,16 @@ session:</p>
   power that ownership alone confers — <code>Book.on_rest_pre_save</code> enforces this.</li>
 </ul>
 <p>Group-less books are refused outright: <code>Book.on_rest_pre_save</code> requires a
-group on <strong>every</strong> save, not just create. A book with no group resolves to no
-tenant, and the detail permission check then keeps the caller's own <code>?group=</code>
-rather than the row's — so a null group is an escape from tenant scoping, not
-merely an unset field.</p>
+group on <strong>every</strong> save, not just create. This is a <strong>data-integrity</strong>
+invariant — docit books are tenant-owned, and a group-less one is a broken row
+rather than a platform-wide one.</p>
+<p>It used to be a security control as well. A book with no group resolved to no
+tenant, and the detail permission check then kept the caller's own <code>?group=</code>
+rather than the row's, so a null group was an escape from tenant scoping.
+Maestro item 953 fixed that in the framework: <code>request.group</code> is now re-bound to
+the row's tenant unconditionally, so a null tenant clears the binding and
+authorization falls through to the caller's <strong>global</strong> permissions. See
+<a href="../rest/permissions/">REST permissions</a>.</p>
 <h2 id="knowledge-base-search">Knowledge-base search<a class="headerlink" href="#knowledge-base-search" title="Permanent link">&para;</a></h2>
 <p><code>search_any()</code> takes a <code>groups</code> argument that confines results to those
 tenants. <code>None</code> means unrestricted and is correct only for internal/system

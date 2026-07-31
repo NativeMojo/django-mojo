@@ -5623,7 +5623,8 @@ ceilings.</p>
 <li><strong>write</strong> → <strong>skip</strong> the view hook (a read affordance must not authorize a write); if the instance defines <code>check_edit_permission</code>, delegate to it (else fall through)</li>
 <li>a model with only <code>check_edit_permission</code> (e.g. <code>User</code>) uses it for reads too — there is no view hook to prefer</li>
 <li>If <code>"owner"</code> in perms and <code>instance.{OWNER_FIELD}.id == request.user.id</code> → allow</li>
-<li>If <code>request.group</code> set and the model is group-scoped (direct <code>group</code> FK <strong>or</strong> a <code>RestMeta.GROUP_FIELD</code>) → check group membership perms</li>
+<li>If an instance is provided and the model is group-scoped, <code>request.group</code> is re-bound to <strong>the row's</strong> owning tenant — <strong>unconditionally, including to <code>None</code></strong> — so a caller-supplied <code>?group=</code> can never widen access. A null tenant is a real answer: it clears the binding, skips step 6, and falls through to step 7 (global perms only). Direct <code>group</code> FK and <code>GROUP_FIELD</code> behave identically here.</li>
+<li>If <code>request.group</code> is set and the model is group-scoped (direct <code>group</code> FK <strong>or</strong> a <code>RestMeta.GROUP_FIELD</code>) → check group membership perms</li>
 <li>Otherwise → check <code>request.user.has_permission(perms)</code></li>
 </ol>
 <p>Use <code>rest_check_permission</code> directly when you need a boolean test with no action on denial (for example, list fallbacks that return a scoped result instead of a 403).</p>

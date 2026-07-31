@@ -4368,6 +4368,21 @@ different name, or when the tenant is reached through a related path:</p>
 <p>Notes:
 - The path is traversed null-safe hop-by-hop; a null link along the way yields
   "no group" (fail-closed — the flat user/superuser check still applies).
+- <strong>"No group" is a real answer, and it is binding.</strong> Before a per-instance
+  permission check, <code>request.group</code> is re-bound to the row's owning tenant
+  <strong>unconditionally</strong> — including to <code>None</code>. A row whose tenant path resolves to
+  null belongs to no tenant, so any <code>?group=</code> / <code>?group_uuid=</code> the caller sent is
+  discarded, the group-membership branch is skipped, and authorization falls
+  through to the caller's <strong>global</strong> permissions. A <code>GroupMember</code> grant is not a
+  global permission, so tenant-level access never reaches a null-tenant row.
+  This is identical for a direct <code>group</code> FK and for a <code>GROUP_FIELD</code> (plain or
+  related path) — the two shapes cannot diverge, because both resolve through
+  one helper. Declaring <code>GROUP_FIELD = "group"</code> on a model that already has a
+  direct <code>group</code> FK is therefore an exact no-op.
+  (Until maestro item 953 the <code>GROUP_FIELD</code> branch re-bound only when the
+  resolution was non-null, which left the caller's <code>?group=</code> standing and let a
+  tenant-level grant read null-tenant rows. Any downstream model declaring its
+  own <code>GROUP_FIELD</code>, or subclassing one that does, inherited that exposure.)
 - <strong>Create-time auto-assign</strong> stamps a <strong>direct</strong>-FK <code>GROUP_FIELD</code> from
   <code>request.group</code> when the body omits it (body wins), mirroring the historical
   <code>group</code> behavior. A <strong>related-path</strong> <code>GROUP_FIELD</code> has no local field to

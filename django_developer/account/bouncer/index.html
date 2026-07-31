@@ -4926,6 +4926,17 @@ submit endpoint returns 400.</p>
 - <code>SAVE_PERMS = ["manage_support", "security", "support"]</code>
 - <code>DELETE_PERMS = ["manage_support"]</code>
 - <code>GROUP_FIELD = "group"</code> — admins with only group-scoped perms see just their group's messages.</p>
+<p><strong>Tenant-less messages need a GLOBAL grant.</strong> <code>PublicMessage.group</code> is null
+whenever the submission did not resolve to a white-label group — which is every
+message submitted on the main platform domain, so null is the normal state, not
+an edge case. A row with no tenant is reachable only through the flat
+<code>request.user.has_permission</code> check, so triaging those messages (read, status
+update, delete) requires <code>support</code> / <code>view_support</code> / <code>manage_support</code> as a
+<strong>global</strong> grant; the same permission held only on a <code>GroupMember</code> row will not
+reach them. Notification emails carry the full message content regardless, so a
+group-scoped admin still sees submissions — they just cannot triage tenant-less
+ones through the API. See <a href="../../rest/permissions/">REST permissions</a> (maestro
+item 953).</p>
 <h3 id="notifications">Notifications<a class="headerlink" href="#notifications" title="Permanent link">&para;</a></h3>
 <p>Every flagged user receives a templated email when a message is submitted.
 Flag is a single boolean under the <code>protected</code> metadata namespace:</p>
