@@ -1,6 +1,7 @@
 from django.db import models
 from mojo.models import MojoModel, MojoSecrets
 from mojo.helpers import crypto, dates, logit
+from mojo.helpers.request import restricted_identity
 from mojo.apps import metrics
 from mojo.helpers.settings import settings
 from objict import objict
@@ -50,7 +51,8 @@ class Group(MojoSecrets, MojoModel):
         SAVE_PERMS = ["manage_groups", "manage_group", "groups"]
         PROTECTED_JSON_PERMS = ["admin_compliance", "admin_verify"]
         NO_SAVE_FIELDS = ["id", "pk", "created"]
-        POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate']
+        POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate',
+                             'revoke_group_tokens']
         GRAPHS = {
             "simple": {
                 "extra": ["timezone", "short_name", "thumbnail"],
@@ -277,6 +279,43 @@ class Group(MojoSecrets, MojoModel):
             meta.protected = objict.fromdict(meta.get("protected") or {})
         meta.protected[key] = value
         self.save(update_fields=["metadata", "modified"])
+
+    # ------------------------------------------------------------------
+    # Group-scoped token epoch (bulk revocation, no migration)
+    # ------------------------------------------------------------------
+
+    def get_group_token_epoch(self):
+        """Current epoch for this group's scoped tokens (see
+        mojo/apps/account/services/group_token.py).
+
+        Lives under metadata["protected"], which is REST-guarded by
+        MojoModel._can_edit_protected_json (superuser or
+        RestMeta.PROTECTED_JSON_PERMS = admin_compliance / admin_verify), so a
+        tenant group admin holding manage_group cannot rewind it to un-revoke
+        tokens. Absent reads as 0; a token payload whose epoch does not match
+        fails closed.
+        """
+        value = self.get_protected_metadata("group_token_epoch", 0)
+        if not isinstance(value, int) or isinstance(value, bool):
+            return 0
+        return value
+
+    def bump_group_token_epoch(self):
+        """Invalidate every outstanding group token for this group.
+
+        Increment-only. Read-modify-write is NOT atomic: two simultaneous bumps
+        can land N+1 instead of N+2. Both callers intend "invalidate everything
+        issued before now", and any token that survives the race expires within
+        GROUP_TOKEN_TTL. Accepted.
+        """
+        epoch = self.get_group_token_epoch() + 1
+        self.set_protected_metadata("group_token_epoch", epoch)
+        return epoch
+
+    def on_action_revoke_group_tokens(self, value):
+        epoch = self.bump_group_token_epoch()
+        self.log("group tokens revoked", kind="group:tokens_revoked")
+        return {"status": True, "epoch": epoch}
 
     def add_member(self, user):
         member, created = self.members.get_or_create(user=user)
@@ -608,9 +647,18 @@ class Group(MojoSecrets, MojoModel):
         # descendants) ONLY if it also holds the perm; the same confine-AND-perm
         # bar is enforced for writes in check_edit_permission and in the
         # group-scoped ApiKey branch of MojoModel._evaluate_permission.
-        api_key = getattr(request, "api_key", None)
-        if api_key is not None:
-            return api_key.is_group_allowed(self) and api_key.has_permission(perms)
+        #
+        # restricted_identity, not request.api_key: these hooks are the ONLY
+        # gate for Group detail ops (_evaluate_permission returns from them
+        # before the instance re-bind), so a confined identity that fell
+        # through to the user branch below would get a full cross-tenant Group
+        # read via its member's grants. A GroupScopedToken's has_permission is
+        # always False, so every Group record — its own included — is opaque to
+        # it; that is deliberate (tenant UI reads branding from
+        # public_auth_config, not the Group row). ApiKey behavior is unchanged.
+        identity = restricted_identity(request)
+        if identity is not None:
+            return identity.is_group_allowed(self) and identity.has_permission(perms)
         # check if the user is a member of the group
         if request.user.has_permission(perms):
             return True
@@ -632,10 +680,12 @@ class Group(MojoSecrets, MojoModel):
         # actual SAVE_PERMS grant. ApiKey: confined to its own group tree AND
         # holds the perm (same bar as check_view_permission and
         # _evaluate_permission). Users: global grant OR member-level grant, via
-        # user_has_permission (global-or-member, parent-aware).
-        api_key = getattr(request, "api_key", None)
-        if api_key is not None:
-            return api_key.is_group_allowed(self) and api_key.has_permission(perms)
+        # user_has_permission (global-or-member, parent-aware). Confined
+        # identities (ApiKey or GroupScopedToken) take the same bar — see
+        # check_view_permission for why this reads restricted_identity.
+        identity = restricted_identity(request)
+        if identity is not None:
+            return identity.is_group_allowed(self) and identity.has_permission(perms)
         return self.user_has_permission(request.user, perms)
 
     def on_action_realtime_message(self, value):
@@ -840,6 +890,16 @@ class Group(MojoSecrets, MojoModel):
 
     @classmethod
     def on_rest_handle_list(cls, request):
+        # A group token gets NO Group records at all — list and detail stay
+        # consistent (check_view_permission denies every Group row for this
+        # credential, own group included). FIRST, before any other branch: the
+        # member fallback below reads request.user.get_groups(), which is a real
+        # User under a group token and returns EVERY group the visitor belongs
+        # to — a cross-tenant leak on the list verb that the detail hooks
+        # already close.
+        if getattr(request, "group_token", None) is not None:
+            return cls.on_rest_list(request, cls.objects.none())
+
         if cls.rest_check_permission(request, "VIEW_PERMS"):
             return cls.on_rest_list(request)
 

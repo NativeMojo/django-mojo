@@ -230,10 +230,17 @@ JOBS_DEFAULT_MAX_RETRIES = 0
 JOBS_ENGINE_MAX_WORKERS = 2
 JOBS_RUNNER_HEARTBEAT_SEC = 5
 
-AUTH_BEARER_HANDLERS = {}
+# Both maps REPLACE their defaults wholesale (mojo/middleware/auth.py reads
+# them with settings.get_static and a default dict — there is no merge), so the
+# NAME_MAP must always list every scheme. Declaring only "grouptoken" here would
+# silently un-map bearer/apikey and degrade every request to anonymous.
+AUTH_BEARER_HANDLERS = {
+    "grouptoken": "mojo.apps.account.services.group_token.validate_token",
+}
 AUTH_BEARER_NAME_MAP = {
     "bearer": "user",
     "apikey": "user",
+    "grouptoken": "user",
 }
 
 ALLOW_SELF_DEACTIVATION = True

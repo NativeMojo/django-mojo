@@ -39,33 +39,64 @@ def get_referer(request):
     return request.META.get('HTTP_REFERER')
 
 
+def restricted_identity(request):
+    # The machine/confined identity for this request, if any: an ApiKey
+    # (mojo/apps/account/models/api_key.py) or a GroupScopedToken
+    # (mojo/apps/account/services/group_token.py). Both are bearer credentials
+    # whose authority must stay inside one group tree regardless of whose
+    # identity they carry, and both duck-type the same surface
+    # (is_group_allowed / has_permission / get_groups /
+    # get_groups_with_permission / override_user / is_active / limits), so the
+    # guards can read one predicate instead of enumerating credential kinds.
+    return getattr(request, "api_key", None) or getattr(request, "group_token", None)
+
+
+def identity_allows_group(request, group):
+    # Fail-closed tenant check for endpoints that authorize against an
+    # ARBITRARY caller-named group (metrics account=group-<id>, the chat room
+    # helpers, group/<pk>/member) rather than through model security's instance
+    # re-bind. Returns True for an ordinary user session — those are gated by
+    # their own membership/permission checks — and confines every restricted
+    # identity to its own group.
+    #
+    # `group=None` denies a restricted identity: a row with no tenant belongs
+    # to no tenant, and a confined credential has no business reaching it.
+    ident = restricted_identity(request)
+    if ident is None:
+        return True
+    return group is not None and ident.is_group_allowed(group)
+
+
 def is_key_backed_session(request):
-    # True when this request authenticated with an ApiKey — REGARDLESS of whose
-    # identity that key acts as. An ApiKey with override_user=True puts a real
-    # User in request.user, so the type of request.user stops being a reliable
-    # "is a human driving this" signal; request.api_key is the one that keeps
-    # telling the truth. The credential is a bearer token sitting in a config
-    # file, not a person at a keyboard.
+    # True when this request authenticated with a CONFINED bearer credential —
+    # an ApiKey or a GroupScopedToken — REGARDLESS of whose identity it acts
+    # as. Both can put a real User in request.user (ApiKey.override_user; a
+    # group token always does), so the type of request.user stops being a
+    # reliable "is a human driving this" signal; restricted_identity is the one
+    # that keeps telling the truth. The credential is a bearer token sitting in
+    # a config file or a browser's storage, not a person at a keyboard.
     #
     # Use this — never is_request_user() — for any check that means "this is a
-    # machine" (machine-identity gates, credential-mutation blocks). Use
-    # is_request_user() only where the question is genuinely "is request.user a
-    # User model instance" (attribution).
-    return getattr(request, "api_key", None) is not None
+    # machine or otherwise confined identity" (machine-identity gates,
+    # credential-mutation blocks). Use is_request_user() only where the
+    # question is genuinely "is request.user a User model instance"
+    # (attribution).
+    return restricted_identity(request) is not None
 
 
 def is_override_user_session(request):
-    # True only for an ApiKey that ASSUMES a member (ApiKey.override_user), i.e.
-    # the case where request.user is a real User whose GLOBAL permission dict
-    # would otherwise be consulted.
+    # True only for a confined credential that ASSUMES a member — an ApiKey
+    # with override_user=True, or any GroupScopedToken (which always carries a
+    # real user) — i.e. the case where request.user is a real User whose GLOBAL
+    # permission dict would otherwise be consulted.
     #
     # The distinction from is_key_backed_session matters: for an unlinked or
-    # reference-mode key, request.user IS the ApiKey, so `request.user.
+    # reference-mode ApiKey, request.user IS the ApiKey, so `request.user.
     # has_permission(...)` reads the KEY's own dict — which is correct and
     # already bounded to the key's group. Only in override mode does that read
     # resolve to a member's untenanted platform-wide grants.
-    api_key = getattr(request, "api_key", None)
-    return api_key is not None and bool(getattr(api_key, "override_user", False))
+    ident = restricted_identity(request)
+    return ident is not None and bool(getattr(ident, "override_user", False))
 
 
 def is_request_user(request):
