@@ -98,6 +98,51 @@ Include the access token in every authenticated request:
 Authorization: Bearer <access_token>
 ```
 
+## Group-Scoped Tokens (`grouptoken`)
+
+Some deployments hand a page a **group-scoped token** instead of a JWT — a
+credential that authenticates as you but is capped at **one group**:
+
+```
+Authorization: grouptoken gt1.<payload>.<signature>
+```
+
+It is opaque: do not parse it, and do not feed it to any JWT helper — it is not
+a JWT and `atob`/`jwt-decode` will fail on it.
+
+**What works**
+
+- `GET /api/user/me` — read-only self, so the usual boot check still works.
+- Any group-scoped resource in the token's own group, subject to your
+  membership permissions **in that group**.
+
+**What is refused (403)** — this is by design, not a bug to work around:
+
+- anything in another group, including a **child** of the token's group, and any
+  `group=` / `group_uuid=` parameter naming a different group;
+- `GET /api/group` (always an empty list) and `GET /api/group/<pk>` (always
+  403 — including the token's own group). Read tenant branding from the auth
+  config endpoints instead;
+- every write to the account: `POST /api/user/me`, password change, email or
+  phone change, `revoke_sessions`;
+- every credential endpoint: passkeys, TOTP setup/confirm/recovery codes, user
+  API keys;
+- `POST /api/auth/handoff` — a group token cannot be traded up.
+
+**No refresh.** `POST /api/refresh_token` does not accept one, and neither does
+`Authorization: Bearer`. When the token expires, obtain a new one from whatever
+flow issued it — do not run your JWT refresh loop against it.
+
+**401 semantics.** Every rejection is
+`401 {"error": "Invalid group token"}` — expiry, a bad signature, a revoked
+group, a removed membership and a deactivated account are deliberately
+indistinguishable. The single exception is
+`401 {"error": "Group token expired"}`, which is your cue to re-mint rather than
+send the user through a full re-authentication.
+
+A deployment that has not registered the scheme answers
+`401 {"error": "Invalid token type: grouptoken"}`.
+
 ## Refreshing a Token
 
 **POST** `/api/refresh_token`

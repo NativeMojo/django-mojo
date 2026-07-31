@@ -62,8 +62,21 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### AUTH
 
-- `AUTH_BEARER_HANDLERS`
-- `AUTH_BEARER_NAME_MAP`
+- `AUTH_BEARER_HANDLERS` — **file-only** (`settings.get_static`). Dict, default
+  `{}`. Maps an `Authorization` scheme prefix to a `(token, request) ->
+  (instance, error)` handler path. `bearer` and `apikey` are built in and need
+  no entry. **Replaces the default wholesale — there is no merge.** Registering
+  [group-scoped tokens](../account/auth.md#group-scoped-tokens) is opt-in here:
+  `{"grouptoken": "mojo.apps.account.services.group_token.validate_token"}`.
+  An unregistered scheme is answered with `401 Invalid token type`.
+- `AUTH_BEARER_NAME_MAP` — **file-only** (`settings.get_static`). Dict, default
+  `{"bearer": "user", "apikey": "user"}`. Names the request attribute each
+  scheme's resolved instance is assigned to. **Replaces the default wholesale —
+  there is no merge**, so always write the COMPLETE map. Declaring only a new
+  entry silently un-maps `bearer` and `apikey`: `request.user` never populates
+  and every request degrades to anonymous 403s with no diagnostic. With group
+  tokens registered the full map is
+  `{"bearer": "user", "apikey": "user", "grouptoken": "user"}`.
 - `AUTH_CSP_DIRECTIVES` — **file-only** (`settings.get_static`). Dict, default
   `{}`. Per-directive merge over the default Content-Security-Policy on the
   hosted auth pages. A present key replaces that directive wholesale, an empty
@@ -283,6 +296,13 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 ### GROUP
 
 - `GROUP_LAST_ACTIVITY_FREQ`
+- `GROUP_TOKEN_TTL` — **file-only** (`settings.get_static`). Int, default
+  `3600`. Lifetime in seconds of a
+  [group-scoped token](../account/auth.md#group-scoped-tokens). There is no
+  refresh path — expiry means re-mint, and it is the one refusal that reports a
+  distinct message (`"Group token expired"`) so a client can re-mint instead of
+  prompting a full re-auth. Clock-skew tolerance for a future `iat` is a fixed
+  60s module constant, not a setting.
 
 ### INCIDENT
 

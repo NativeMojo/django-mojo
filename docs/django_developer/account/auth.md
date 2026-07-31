@@ -353,6 +353,181 @@ Long-lived JWTs restricted by IP allowlist.
 - Required: `allowed_ips`, `expire_days`, `uid`
 - Requires: `manage_users` permission
 
+## Group-Scoped Tokens
+
+A third bearer scheme alongside `bearer` (JWT) and `apikey`:
+
+```
+Authorization: grouptoken gt1.<b64payload>.<sig>
+```
+
+It authenticates as a **real user** but authorization resolves **only** through
+that user's membership in one signed group. No other group, no descendants, no
+platform-global grants. Implementation:
+`mojo/apps/account/services/group_token.py`.
+
+**What it is for.** A JWT grants everything its account can reach in every group
+it belongs to. Handing one to JavaScript on a page whose content a tenant
+controls means the tenant receives a platform credential for every visitor who
+signs in. A group token is the credential a gated-site flow can hand to a tenant
+origin instead.
+
+### Format and signing
+
+`gt1.<b64payload>.<sig>`, where the payload is
+`{"u": user_id, "g": group_id, "e": epoch, "iat": unix_ts}` and the signature is
+`crypto.sign("gt1." + b64payload, user.get_auth_key())` — full 64-char
+HMAC-SHA256 hex, verified with `hmac.compare_digest`.
+
+The version tag is signed **inside** the HMAC, not merely prefixed to the wire
+format. `mojo/apps/account/utils/tokens.py` signs a bare b64 payload with the
+same per-user key; the domain tag keeps the two families apart.
+
+The secret is `user.get_auth_key()`, which buys two properties for free:
+rotating `auth_key` (what `POST /api/auth/sessions/revoke` already does) kills
+that user's group tokens, and a token forged against one user's key cannot be
+replayed as another.
+
+**Deliberately not a JWT.** A JWT signed with the same key would be accepted
+verbatim under `Authorization: bearer` and by `on_refresh_token` as a
+`refresh_token` — trading the scoped token for a full unscoped pair.
+`jwt.decode` cannot parse the `gt1.` format at all, so "a group token cannot be
+upgraded into a JWT" holds by construction.
+
+### Minting
+
+Service-level only. No REST endpoint mints one; no login or handoff behavior
+changes.
+
+```python
+from mojo.apps.account.services import group_token
+
+token = group_token.mint(user, group)          # raises PermissionDeniedException on refusal
+token = group_token.mint(user, group, issued_at=1234567890)   # tests / deterministic clock
+```
+
+`mint` refuses: a superuser, an inactive user, an effectively-inactive group (it
+or any ancestor), and anything but **direct** active membership
+(`check_parents=False` — delegation must not exceed the delegator, so a member
+of the parent gets no token for a child group).
+
+### Revocation
+
+| Lever | Scope | How |
+|---|---|---|
+| Epoch bump | every token for one group | `group.bump_group_token_epoch()`, or `POST /api/group/<pk>` with `{"revoke_group_tokens": true}` |
+| `auth_key` rotation | every token for one user | `POST /api/user/me {"revoke_sessions": true}`, or set `user.auth_key` |
+| Membership removal | that user in that group | delete the `GroupMember` row |
+| Group (or ancestor) deactivation | every token for the subtree | `group.is_active = False` |
+| User deactivation | every token for that user | `user.is_active = False` |
+
+The epoch lives in `group.metadata["protected"]["group_token_epoch"]` — no
+migration. The `protected` root key is REST-guarded by
+`MojoModel._can_edit_protected_json` (superuser or
+`RestMeta.PROTECTED_JSON_PERMS`, which on `Group` is `admin_compliance` /
+`admin_verify`), so a tenant group admin holding `manage_group` cannot rewind
+the epoch to un-revoke tokens. Absent reads as `0`; a payload whose epoch does
+not match fails closed.
+
+Read-modify-write on the epoch is **not** atomic: two simultaneous bumps can
+land `N+1` instead of `N+2`. Both callers intend "invalidate everything issued
+before now", and anything that survives the race expires within
+`GROUP_TOKEN_TTL`. Documented and accepted.
+
+### What a group token can and cannot do
+
+Confined by `is_group_allowed` — **strict equality with the signed group, no
+descendants** (unlike an ApiKey, which covers its subtree).
+
+Refused:
+
+- any group other than the signed one — via `?group=`/`group_uuid=`, a
+  `group-<id>` metrics account, a `room_id`, `group/<pk>/member`, or a detail
+  row whose owning tenant differs;
+- **`Group` records entirely** — detail *and* list, own group included. The
+  token's own `has_permission` is always `False`, so `Group` is opaque; tenant
+  UI reads branding from `public_auth_config`, not the `Group` row;
+- every groupless model (`group_token.groupless_denied`), including under
+  `RestMeta.ALLOW_API_KEY_GLOBAL` — that flag is an ApiKey-specific opt-in;
+- `@md.requires_global_perms`, **including with `allow_api_keys=True`**;
+- every `@md.denies_key_backed_session` endpoint — passkeys, TOTP, user API
+  keys, email/phone change, and `POST /api/auth/handoff`;
+- every write to the platform account (`POST /api/user/me`, password/email
+  change, `revoke_sessions` and every other POST_SAVE_ACTION, `DELETE`);
+- WebSocket auth (`mojo/apps/realtime/auth.py` calls handlers with
+  `request=None`; the handler fails closed on the first check).
+
+Allowed:
+
+- `GET /api/user/me` — the documented client bootstrap stays read-only self;
+- group-scoped rows in the signed group, resolved through the user's
+  `GroupMember` grants **in that group** (`check_user=False`, so the member's
+  untenanted global dict is never consulted).
+
+Every failure returns the same `401 {"error": "Invalid group token"}` — no
+account or group-state oracle. The one exception is expiry, which reports
+`"Group token expired"` so a client can re-mint instead of prompting a full
+re-auth.
+
+### Registration — opt-in per deployment
+
+Both entries are required, and **both settings replace their defaults
+wholesale** (`middleware/auth.py` reads them with `settings.get_static` and a
+default dict — there is no merge). Always write the complete NAME_MAP:
+
+```python
+AUTH_BEARER_HANDLERS = {
+    "grouptoken": "mojo.apps.account.services.group_token.validate_token",
+}
+AUTH_BEARER_NAME_MAP = {
+    "bearer": "user",
+    "apikey": "user",
+    "grouptoken": "user",
+}
+```
+
+A deployment that declares only the `grouptoken` entry in `AUTH_BEARER_NAME_MAP`
+silently un-maps `bearer` and `apikey`: `request.user` never populates and every
+request degrades to anonymous 403s with no diagnostic. A deployment that
+registers neither entry rejects `Authorization: grouptoken …` with
+`401 Invalid token type`, exactly as it does today.
+
+### Writing group-token-safe endpoints
+
+Model security (`@md.uses_model_security(Model)` + `RestMeta`) and
+`@md.requires_perms` / `@md.requires_group_perms` are confined already — nothing
+to do.
+
+An endpoint that authorizes against a **caller-named group** instead (a
+`group-<id>` account param, a `room_id`, a pk in the path) never gets model
+security's instance re-bind, so it must apply the bound itself:
+
+```python
+from mojo.helpers.request import identity_allows_group, is_override_user_session
+
+if not identity_allows_group(request, group):        # True for ordinary users
+    raise merrors.PermissionDeniedException()
+```
+
+An endpoint that short-circuits on the caller's **global** permission dict must
+skip that read for a session that assumes a member:
+
+```python
+check_user = not is_override_user_session(request)
+if not group.user_has_permission(request.user, perms, check_user):
+    raise merrors.PermissionDeniedException()
+```
+
+`restricted_identity(request)` returns the ApiKey or GroupScopedToken behind the
+request, or `None`. Both duck-type `is_group_allowed`, `has_permission`,
+`get_groups` and `get_groups_with_permission`, so one code path covers both.
+
+**Known gap.** These helpers cover the framework's own gates. A third-party app
+that reads `request.user.has_permission(...)` directly, with no group in the
+question, remains the deployment's responsibility — under a group token that
+read returns the visitor's untenanted platform grants. Use the two helpers, or
+route the endpoint through model security.
+
 ## Current User
 
 **Endpoint:** `GET /api/user/me`

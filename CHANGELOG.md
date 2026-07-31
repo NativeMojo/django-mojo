@@ -1,5 +1,72 @@
 ## Unreleased
 
+**feat (account)** — **`Authorization: grouptoken <t>` — a bearer that
+authenticates as a real user but is capped at ONE group.** The only bearer that
+authenticated as a person was a platform JWT, which grants everything that
+account can reach in every group it belongs to; handing one to JavaScript on a
+tenant-controlled page hands the tenant a platform credential for every visitor.
+A group token resolves authorization **only** through that user's membership in
+one signed group.
+
+- Format `gt1.<b64payload>.<sig>`, HMAC-SHA256 over `"gt1." + payload` with
+  `user.get_auth_key()`. Stateless — no table, no row per token, no migration.
+- **Not a JWT, deliberately:** `jwt.decode` cannot parse the format, so neither
+  a `bearer` replay nor `POST /api/refresh_token` can trade one up.
+- Minting is **service-level only** — `group_token.mint(user, group)`. No REST
+  endpoint mints one; login and `auth/handoff` are unchanged. `mint` refuses
+  superusers, inactive users, effectively-inactive groups, and anything but
+  direct active membership.
+- Revocation: `group.bump_group_token_epoch()` (also the new
+  `revoke_group_tokens` POST_SAVE_ACTION on `Group`) kills every token for that
+  group; rotating `auth_key` kills every token for that user. Membership
+  removal, group/ancestor deactivation and user deactivation all revoke
+  immediately. The epoch lives in `metadata.protected`, so a tenant group admin
+  cannot rewind it over REST.
+- **Opt-in per deployment.** Nothing changes until `AUTH_BEARER_HANDLERS` gains
+  `{"grouptoken": "mojo.apps.account.services.group_token.validate_token"}` and
+  `AUTH_BEARER_NAME_MAP` gains `"grouptoken": "user"`. Both settings replace
+  their defaults **wholesale** — always write the complete NAME_MAP
+  (`{"bearer": "user", "apikey": "user", "grouptoken": "user"}`); declaring only
+  the new entry silently un-maps JWT and apikey auth.
+- New setting `GROUP_TOKEN_TTL` (default `3600`). No refresh path.
+- Confinement: strict equality with the signed group (**no descendants**, unlike
+  an ApiKey). `Group` records are opaque — detail *and* list, own group
+  included. Groupless models are denied outright, `ALLOW_API_KEY_GLOBAL`
+  included. `requires_global_perms` refuses one even with `allow_api_keys=True`.
+  Every `denies_key_backed_session` endpoint refuses one. `GET /api/user/me`
+  works; every User write is refused. WebSocket auth is refused.
+- See [Group-Scoped Tokens](docs/django_developer/account/auth.md#group-scoped-tokens),
+  including the "writing group-token-safe endpoints" guidance and its known gap
+  for third-party apps that read `request.user.has_permission` directly.
+
+**fix (security)** — **an ApiKey with `override_user=True` no longer inherits
+its acting member's untenanted global grants at the gates that bypass model
+security.** These endpoints authorize against a caller-named group and never get
+model security's instance re-bind, so a key issued for tenant A could reach
+tenant B whenever the member it assumes also belonged to B:
+
+- **metrics** — `account=group-<id>` reads/writes are now bounded by
+  `is_group_allowed` in addition to the grant check, and the
+  `request.user.has_permission` short-circuits are skipped for assumed-member
+  sessions. **Reference-mode and unlinked keys are unaffected** — there
+  `request.user` IS the key, so that read is the key's own group-bounded dict.
+- **chat** — every room-resolving endpoint in `rooms.py` and `messages.py` is
+  now tenant-bound, not just the two admin helpers. `room/join` was a
+  cross-tenant *write* (membership row, system message, realtime publish);
+  `room/members` and `room/messages` served rosters and bodies through the
+  groupless membership/message models. A room with no group (DMs) refuses a
+  confined credential. `GET /api/chat/rooms` is filtered to the credential's own
+  groups.
+- **`POST /api/group/member/invite`**, `GroupMember.can_change_permission` and
+  `ApiKey.can_change_permission` no longer honor the acting member's global
+  `manage_groups`/`manage_users`; authority falls through to the requester's own
+  member row in the group.
+- **docit search** derives visible groups from the request's confined credential
+  rather than only `request.api_key`.
+
+If a deployment relied on an override key reaching a second tenant's metrics or
+chat through the member it assumes, issue that tenant its own key.
+
 **BREAKING (security)** — **`ApiKey` no longer returns the live raw token on ordinary reads.** `GET /api/group/apikey` and `GET /api/group/apikey/<id>` previously included a working credential in every response, list included, to any caller holding `manage_group` / `manage_groups` / `groups`. The `token` extra has moved off the `default` graph onto a new opt-in `token` graph:
 
 - **Migrate:** read the token with `GET /api/group/apikey/<id>?graph=token`. Same permission bar as before — this narrows where the secret travels, not who may ask for it.
