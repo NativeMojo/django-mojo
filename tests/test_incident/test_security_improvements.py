@@ -137,12 +137,37 @@ def test_run_handler_returns_false_when_no_handler(opts):
 
 @th.django_unit_test()
 def test_handler_map_has_all_types(opts):
-    """HANDLER_MAP should include all supported handler types."""
-    from mojo.apps.incident.handlers.event_handlers import HANDLER_MAP
+    """Every handler type must be BOTH dispatchable and parseable.
 
-    expected = {"job", "email", "sms", "notify", "block", "ticket", "llm"}
-    actual = set(HANDLER_MAP.keys())
-    assert expected == actual, f"HANDLER_MAP keys mismatch: expected {expected}, got {actual}"
+    `HANDLER_MAP` is what `execute_handler` dispatches on. The alternation in
+    `RuleSet.run_handler`'s split regex is what turns a chain string into specs
+    in the first place. A type present in one and missing from the other is
+    silently broken: the splitter does not break before an unknown scheme, so
+    the orphan spec is glued onto its neighbour's target list and never runs.
+
+    Asserted as an invariant rather than a hardcoded list on purpose — the old
+    list went stale the day `resolve://` was added and failed for the harmless
+    reason (a new handler exists) instead of the dangerous one (the two sides
+    disagree).
+    """
+    import inspect
+    import re
+    from mojo.apps.incident.handlers.event_handlers import HANDLER_MAP
+    from mojo.apps.incident.models.rule import RuleSet
+
+    source = inspect.getsource(RuleSet)
+    match = re.search(r"\(\?=\(\?:([a-z|_]+)\)://\)", source)
+    assert match, (
+        "could not find the handler-chain split regex in RuleSet.run_handler — "
+        "if it moved, point this test at its new home rather than deleting it")
+    parseable = set(match.group(1).split("|"))
+    dispatchable = set(HANDLER_MAP)
+
+    assert dispatchable == parseable, (
+        f"HANDLER_MAP and the chain splitter disagree — a handler in one and "
+        f"not the other is silently broken. "
+        f"dispatchable only: {sorted(dispatchable - parseable)}; "
+        f"parseable only: {sorted(parseable - dispatchable)}")
 
 
 @th.django_unit_test()
@@ -291,32 +316,37 @@ def test_ticket_note_is_llm_note_detection(opts):
 
 
 @th.django_unit_test()
-def test_ticket_is_llm_ticket_detection(opts):
-    """_is_llm_ticket should check parent ticket metadata."""
-    from mojo.apps.incident.models.ticket import Ticket, TicketNote
+def test_ticket_is_llm_enabled_detection(opts):
+    """A ticket is LLM-driven when its metadata says so.
 
-    # Create a ticket with llm_linked metadata
-    ticket = Ticket.objects.create(
-        title="LLM test ticket",
-        metadata={"llm_linked": True},
-    )
+    This asserted `TicketNote._is_llm_ticket()` until that method was removed in
+    5fe16623 (the ticket action-system rework); the question it asked — is this
+    note's parent an LLM ticket — now belongs to the ticket itself as
+    `Ticket.is_llm_enabled()`. `TicketNote._is_llm_note()` still exists but
+    answers a DIFFERENT question (did the LLM write this note), which is the
+    infinite-loop guard, not this.
 
-    note = TicketNote()
-    note.parent = ticket
-    assert note._is_llm_ticket() is True, "Should detect llm_linked ticket"
+    Both metadata keys count: `llm_linked` is set when a ticket is bound to the
+    agent loop, `llm_enabled` when an operator switches it on by action.
+    """
+    from mojo.apps.incident.models.ticket import Ticket
 
-    # Non-LLM ticket
-    ticket2 = Ticket.objects.create(
-        title="Normal ticket",
-        metadata={},
-    )
-    note2 = TicketNote()
-    note2.parent = ticket2
-    assert note2._is_llm_ticket() is False, "Should not flag non-LLM ticket"
+    titles = ["LLM test ticket", "LLM enabled ticket", "Normal ticket"]
+    Ticket.objects.filter(title__in=titles).delete()
 
-    # Cleanup
-    ticket.delete()
-    ticket2.delete()
+    linked = Ticket.objects.create(title=titles[0], metadata={"llm_linked": True})
+    enabled = Ticket.objects.create(title=titles[1], metadata={"llm_enabled": True})
+    plain = Ticket.objects.create(title=titles[2], metadata={})
+
+    try:
+        assert linked.is_llm_enabled(), \
+            "a ticket carrying llm_linked must report as LLM-driven"
+        assert enabled.is_llm_enabled(), \
+            "a ticket an operator enabled by action must report as LLM-driven"
+        assert not plain.is_llm_enabled(), \
+            "a ticket with empty metadata must not be flagged as LLM-driven"
+    finally:
+        Ticket.objects.filter(pk__in=[linked.pk, enabled.pk, plain.pk]).delete()
 
 
 # ---------------------------------------------------------------------------

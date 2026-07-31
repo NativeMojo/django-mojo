@@ -357,7 +357,17 @@ def test_llm_analysis_full_loop(opts):
     # A new ruleset should have been created (disabled)
     new_rule = RuleSet.objects.filter(category="analyze_test_full", name="Auto-block SSH brute force").first()
     assert new_rule is not None, "Expected new ruleset to be created"
-    assert new_rule.metadata.get("disabled") is True, "Expected ruleset to be disabled"
+
+    # An LLM-proposed rule must not be able to fire before a human approves it.
+    # This asserted a soft metadata["disabled"] flag; _tool_create_rule now sets
+    # the real is_active column, which is what check_by_category actually
+    # filters on — so the rule is inert rather than merely labelled inert.
+    assert new_rule.is_active is False, (
+        "an LLM-proposed ruleset must be created inactive — check_by_category "
+        "filters on is_active, so an active one would start firing its "
+        "block:// handler with no human approval")
+    assert new_rule.metadata.get("llm_proposed") is True, (
+        "the ruleset should be marked as LLM-proposed for the approval surface")
     assert new_rule.metadata.get("llm_proposed") is True, "Expected ruleset to be LLM-proposed"
 
     # History should have analysis entries (at minimum the final summary)

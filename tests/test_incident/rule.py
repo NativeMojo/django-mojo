@@ -266,19 +266,57 @@ def test_ruleset_check_by_category(opts):
     result = RuleSet.check_by_category("testing", event)
     assert result is not None, "check_by_category should return a RuleSet"
     assert result.id == ruleset2.id, "check_by_category should return the highest priority matching RuleSet"
-    # If we delete the matching rules from ruleset2, it should return ruleset3
-    Rule.objects.filter(parent=ruleset2).delete()
 
-    # Test the check_by_category method
+    # Make ruleset2 STOP matching so the scan should fall through to ruleset3.
+    #
+    # Deliberately re-pointing its rule rather than deleting it: a RuleSet with
+    # no rules is a documented catch-all that matches EVERY event in its
+    # category (RuleSet.check_all_match / check_any_match), so emptying ruleset2
+    # would make it match harder, not stop matching, and it would still shadow
+    # ruleset3 at priority 2.
+    Rule.objects.filter(parent=ruleset2).update(value="99")
+
     result = RuleSet.check_by_category("testing", event)
 
     assert result is not None, "check_by_category should return a RuleSet"
     assert result.id == ruleset3.id, "check_by_category should return the next highest priority matching RuleSet"
 
-    # If no RuleSets match, it should return None
-    Rule.objects.filter(parent=ruleset3).delete()
+    # If no RuleSet matches, it should return None — again by making the rule
+    # unsatisfiable rather than removing it.
+    Rule.objects.filter(parent=ruleset3).update(value="10.0.0")
     result = RuleSet.check_by_category("testing", event)
     assert result is None, "check_by_category should return None when no RuleSets match"
+
+
+@th.django_unit_test()
+def test_ruleset_with_no_rules_is_a_category_catch_all(opts):
+    """A RuleSet with zero rules matches every event in its category.
+
+    This is deliberate — it is how you declare "everything in this category gets
+    this handler" — and it is surprising enough that
+    test_ruleset_check_by_category was written assuming the opposite: emptying a
+    RuleSet there looked like a way to switch it off, when it actually turns it
+    into an unconditional match that shadows every lower-priority set.
+    """
+    from mojo.apps.incident.models.rule import RuleSet
+
+    RuleSet.objects.filter(category="testing_catchall").delete()
+
+    event = objict()
+    event.metadata = {"anything": "at all"}
+
+    catch_all = RuleSet.objects.create(
+        name="Catch-all RuleSet", category="testing_catchall",
+        priority=1, match_by=0)
+    try:
+        assert catch_all.check_rules(event), (
+            "a RuleSet with no rules must match every event in its category — "
+            "if this changes, test_ruleset_check_by_category's fall-through "
+            "setup needs revisiting too")
+        assert RuleSet.check_by_category("testing_catchall", event).id == catch_all.id, (
+            "the catch-all must be what check_by_category returns for its category")
+    finally:
+        RuleSet.objects.filter(pk=catch_all.pk).delete()
 
 
 @th.django_unit_test()
