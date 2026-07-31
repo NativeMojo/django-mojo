@@ -46,17 +46,25 @@ def visible_groups(user=None, api_key=None):
     return user.get_groups_with_permission(perms)
 
 
-def search_any(query, book=None, limit=10, groups=None):
+def search_any(query, book=None, limit=10, groups=None, max_distance=None):
     """Return objict(mode, results) — mode is "hybrid", "fts", or "pages".
 
     `groups` confines the search to those tenants. None means unrestricted —
     the right default for internal/system callers, but request-facing callers
     must pass the result of visible_groups(), which is never None for a caller
     that lacks a global grant.
+
+    `max_distance` is the knowledge base's vector relevance floor — see
+    docit_kb.services.knowledge.search. It ships off; None falls back to the
+    DOCIT_KB_MAX_DISTANCE setting, which is unset by default. The search_pages
+    fallback below has no vectors and ignores it (it keeps its own rank > 0
+    bound), so a floored call on an install without docit_kb behaves exactly
+    as an unfloored one.
     """
     if apps.is_installed("mojo.apps.docit_kb"):
         from mojo.apps.docit_kb.services import knowledge
-        return knowledge.search(query, book=book, limit=limit, groups=groups)
+        return knowledge.search(query, book=book, limit=limit, groups=groups,
+                                max_distance=max_distance)
     return objict(
         mode="pages",
         results=search_pages(query, book=book, limit=limit, groups=groups))
@@ -82,11 +90,18 @@ def search_pages(query, book=None, limit=10, groups=None):
     vector = SearchVector("title", weight="A") + SearchVector("content", weight="B")
     # Non-HTML highlight sentinels — Postgres defaults are <b></b>, which
     # invites rendering the snippet as HTML; page content is untrusted.
+    #
+    # Bounded by the tsvector match operator (`@@`), NOT by `rank__gt=0`:
+    # ts_rank returns 1e-20 rather than 0 for a non-matching document on a
+    # multi-term query, so `rank__gt=0` admitted every page and this fallback
+    # could never report "nothing matched" either. Rank remains the ordering
+    # key. Same defect and same fix as docit_kb's _fts_leg.
     qs = (qs.annotate(
+            search=vector,
             rank=SearchRank(vector, sq),
             snippet=SearchHeadline("content", sq, max_words=60,
                                    start_sel="**", stop_sel="**"))
-          .filter(rank__gt=0)
+          .filter(search=sq)
           .order_by("-rank")[:limit])
     results = []
     for page in qs:

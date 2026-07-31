@@ -1,5 +1,13 @@
 ## Unreleased
 
+fix (docit): neither leg of knowledge-base search bounded itself, so on any install with embeddings configured **no query was ever "unmatched"** — an off-topic search returned confident irrelevant chunks and the empty result set was unreachable. Two separate causes, both fixed.
+
+The vector leg was an unbounded kNN: it returns the nearest `k` chunks by cosine distance with no relevance ceiling, so once it runs every search yields results however unrelated. It now accepts a `max_distance` ceiling — `knowledge.search(query, max_distance=...)` and `search_any(query, max_distance=...)`, or the **`DOCIT_KB_MAX_DISTANCE`** setting for callers that cannot pass one (`/api/docit/search`, the assistant's `search_docs` tool). Both ship **off**: the setting is unset by default, so omitting the parameter reproduces previous behavior and emits identical SQL. `0.80` is the value calibrated for Titan V2 at 1024 dims. Read [Relevance floor](docs/django_developer/docit/knowledge.md#relevance-floor) before enabling it — the floor converts a retrieval miss into an *empty result*, and recall depends on HNSW query settings this framework does not set.
+
+The FTS leg's bound, `rank__gt=0`, **bounded nothing**: `ts_rank` returns `1e-20`, not `0`, for a non-matching document on a multi-term query, so every row passed. Measured on a 6-chunk book, a three-token nonsense query returned all 6 chunks. Both `_fts_leg` and the page-level `search_pages` fallback now bound on the tsvector match operator (`@@`), with rank kept only as the ordering key; genuine matches are unaffected.
+
+Note for anyone with a relevance heuristic on the score: `1/61 ≈ 0.016393` (the single-leg RRF floor) no longer implies an unconfirmed hit — either leg can now legitimately return empty, so a real FTS-only match scores the same.
+
 ## v1.2.63 - July 30, 2026
 
 fix: the KMS client now receives the framework's configured AWS_KEY/AWS_SECRET, so KSMSecrets — and with it dnsman certificate issuance — works on deployments without an instance profile.

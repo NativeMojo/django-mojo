@@ -119,7 +119,7 @@ def _embed_input(row):
     return f"{row.heading}\n{row.content}" if row.heading else row.content
 
 
-def search(query, book=None, limit=10, groups=None):
+def search(query, book=None, limit=10, groups=None, max_distance=None):
     """
     Hybrid search over published chunks. Returns objict(mode, results) where
     mode is "hybrid" (vector + FTS) or "fts" (no embeddings provider).
@@ -127,7 +127,22 @@ def search(query, book=None, limit=10, groups=None):
     `groups` confines results to those tenants; None means unrestricted. See
     mojo.apps.docit.services.search.visible_groups for how request-facing
     callers derive it.
+
+    `max_distance` is a cosine-distance relevance ceiling for the vector leg.
+    Without one the leg is an unbounded kNN, so no query is ever "unmatched" —
+    an off-topic search still returns its nearest neighbours. None means
+    unspecified and falls back to the DOCIT_KB_MAX_DISTANCE setting, which
+    ships UNSET, so the default is no floor. 0.80 is the value calibrated for
+    Titan V2 at 1024 dims; see docs/django_developer/docit/knowledge.md for
+    what raising or lowering it costs, and read the recall prerequisite there
+    before enabling it. To force no floor on an install where the setting is
+    on, pass 2.0 (the cosine-distance maximum).
+
+    When a provider is available and the floor removes every row, mode stays
+    "hybrid" and results may be empty — that is the honest report.
     """
+    if max_distance is None:
+        max_distance = _configured_max_distance()
     qs = PageChunk.objects.filter(
         page__is_published=True,
         page__book__is_active=True,
@@ -142,7 +157,7 @@ def search(query, book=None, limit=10, groups=None):
     fts_rows = _fts_leg(qs, query, pool)
     if fts_rows:
         legs.append(fts_rows)
-    vector_rows = _vector_leg(qs, query, pool)
+    vector_rows = _vector_leg(qs, query, pool, max_distance=max_distance)
     mode = "fts" if vector_rows is None else "hybrid"
     if vector_rows:
         legs.append(vector_rows)
@@ -315,6 +330,26 @@ def reconcile_stale_pages(limit=None, lookback_hours=None, now=None):
     return result
 
 
+def _configured_max_distance():
+    """DOCIT_KB_MAX_DISTANCE, or None when unset or uncoercible (= no floor).
+
+    Deliberately NOT settings.get(..., kind="float"). The coercion path there
+    recovers with `float(default)`, and this default is None — so a
+    present-but-garbage value would raise TypeError out of the settings helper
+    on every search instead of degrading. Coerce here and fail soft.
+    """
+    from mojo.helpers.settings import settings
+
+    raw = settings.get("DOCIT_KB_MAX_DISTANCE", None)
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.error(f"DOCIT_KB_MAX_DISTANCE={raw!r} is not a number; ignoring")
+        return None
+
+
 def _filter_book(qs, book):
     if isinstance(book, int) or (isinstance(book, str) and book.isdigit()):
         return qs.filter(page__book_id=int(book))
@@ -322,16 +357,31 @@ def _filter_book(qs, book):
 
 
 def _fts_leg(qs, query, pool):
+    """Chunks whose text actually matches `query`, best rank first.
+
+    Bounded by the tsvector match operator (`@@`), NOT by `rank__gt=0`.
+    ts_rank does not return 0 for a non-matching document — for a multi-term
+    query it returns 1e-20, which is > 0, so `rank__gt=0` admitted the entire
+    corpus. Measured on the kbtest book: a three-token nonsense query returned
+    all 6 chunks under `rank__gt=0` and 0 under `@@`, while "alpha widgets
+    configuration" went from 6 to the 2 chunks that genuinely contain those
+    terms. Rank stays the ordering key; matching is what `@@` decides.
+    """
     sq = SearchQuery(query, search_type="websearch")
     vector = SearchVector("heading", weight="A") + SearchVector("content", weight="B")
     return list(
-        qs.annotate(rank=SearchRank(vector, sq))
-          .filter(rank__gt=0)
+        qs.annotate(search=vector, rank=SearchRank(vector, sq))
+          .filter(search=sq)
           .order_by("-rank")[:pool])
 
 
-def _vector_leg(qs, query, pool):
-    """Top chunks by cosine distance, or None when no provider is available."""
+def _vector_leg(qs, query, pool, max_distance=None):
+    """Top chunks by cosine distance, or None when no provider is available.
+
+    `max_distance` is an optional cosine-distance ceiling; None is the
+    unbounded kNN this has always been. Rows above the ceiling are dropped
+    AFTER the slice is materialised — see the comment on the filter.
+    """
     if not embeddings.is_available():
         return None
     try:
@@ -344,10 +394,47 @@ def _vector_leg(qs, query, pool):
             f"query embedding dimension {len(query_vector)} does not match "
             f"column dimension {EMBEDDING_DIM}; skipping vector leg")
         return None
-    return list(
+    rows = list(
         qs.exclude(embedding__isnull=True)
           .annotate(distance=CosineDistance("embedding", query_vector))
           .order_by("distance")[:pool])
+    # The floor is applied HERE IN PYTHON, never as .filter(distance__lte=...).
+    # An HNSW *iterative* scan treats a WHERE predicate as something it must
+    # satisfy and keeps widening when it cannot — on precisely the unmatched
+    # queries this floor exists to make cheap. Maestro measured p95 60.1ms vs
+    # 2.1ms for that mistake (its item 259, whose record names the SQL
+    # predicate, not the tenant filter, as the cause). docit_kb sets no HNSW
+    # knobs, so at the default hnsw.iterative_scan=off it is not exposed today
+    # — which is exactly why the SQL form must not be written here: it would
+    # sit looking harmless until someone enables iterative scanning for recall.
+    #
+    # Keep the comparison in this form. `1 - row.distance >= threshold` is
+    # algebraically identical and NOT identical in IEEE 754: at a 0.20
+    # similarity threshold a distance of exactly 0.8 gives 0.8 <= 0.8 True but
+    # 1 - 0.8 = 0.19999999999999996 >= 0.2 False. Same at 0.10 and 0.45.
+    #
+    # `is not None`, not truthiness: max_distance=0.0 is a legitimate
+    # exact-matches-only floor that `if max_distance:` would silently disable.
+    #
+    # Rows arrive in non-decreasing distance order and the predicate is
+    # monotonic in that order, so this removes a SUFFIX, never a middle element
+    # (a NaN distance from a degenerate vector sorts last and fails <=, so it
+    # is still a suffix). Two consequences: the result equals
+    # `WHERE d <= t ORDER BY d LIMIT n` exactly, and survivors keep their
+    # 0..k-1 rank positions, so their RRF scores in search() are unchanged.
+    # The *result set* does change — dropped vector rows lose their
+    # contribution, so FTS-only rows previously squeezed out of [:limit] can
+    # surface. That is intended.
+    #
+    # That ordering is a deployment precondition, not a guarantee: it holds at
+    # iterative_scan=off and strict_order, but a server-side relaxed_order
+    # breaks it. The floor stays SAFE there — every kept row still satisfies
+    # the predicate — only the exact rank preservation lapses.
+    if max_distance is not None:
+        rows = [row for row in rows if row.distance <= max_distance]
+    # A list, never None: search() reads None as "no provider" and would
+    # misreport a live provider as mode="fts" when the floor empties the leg.
+    return rows
 
 
 def _result(row, score):

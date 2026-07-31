@@ -214,6 +214,13 @@ found = search_any(query, groups=groups)
 / `docs` holder gets `None` (unrestricted), anyone else is narrowed to their own
 groups, an `ApiKey` is never unrestricted, and an anonymous caller gets nothing.
 
+`search_any()` also takes `max_distance` — the knowledge base's vector
+relevance floor, with `DOCIT_KB_MAX_DISTANCE` as the operator-level equivalent
+for callers that cannot pass it (the REST endpoint, the assistant tool). Both
+ship off; the page-level fallback has no vectors and ignores it. See
+[knowledge.md → Relevance floor](knowledge.md#relevance-floor) for how to
+choose a value and what to verify first.
+
 ## Render Endpoint
 
 `POST /api/docit/render` renders arbitrary Markdown to HTML server-side. Requires authentication.

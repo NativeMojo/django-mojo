@@ -818,3 +818,218 @@ def test_reconcile_cron_dispatcher(opts):
             "DOCIT_KB_RECONCILE_ENABLED=False must queue nothing"
     finally:
         del dj_settings.DOCIT_KB_RECONCILE_ENABLED
+
+
+# ---------------------------------------------------------------------------
+# Relevance floor (max_distance / DOCIT_KB_MAX_DISTANCE)
+#
+# Why 0.5 and not the 0.80 shipped in the docs: under EMBEDDINGS_PROVIDER=mock
+# every vector is a hash-derived unit vector in 1024 dims, so two UNRELATED
+# texts sit at cosine distance 1.0 +/- 0.031 (sigma = 1/sqrt(1024)) — the
+# minimum measured over 20,000 synthetic chunks was 0.886. A chunk whose text
+# is byte-identical to the query embeds to the same vector, i.e. distance ~= 0.
+# A 0.5 floor therefore separates the two populations with ~16 sigma of
+# headroom and cannot be crossed by chance, where 0.80 leaves only ~2.7 sigma
+# against whatever this long-lived database has accumulated. Both values
+# exercise the identical code path.
+#
+# These tests live at the END of the module on purpose: the floor fixture adds
+# a permanently-embedded chunk to a shared corpus, and test_hybrid_search_ranking
+# above runs an unscoped search that is already flaky for that reason (item 1004).
+# ---------------------------------------------------------------------------
+
+FLOOR_QUERY = "FLOORTOKEN44 this paragraph is the entire chunk body."
+NONSENSE_QUERY = "xyzzyplughnotinanypage quorbanth vexlimoor"
+FLOOR = 0.5
+
+
+def _floor_page(opts):
+    """A page whose entire content is FLOOR_QUERY — one chunk at distance ~= 0.
+
+    No '#' heading and a single paragraph, so the chunker yields exactly one
+    chunk with heading="" and _embed_input returns the content verbatim;
+    embedding FLOOR_QUERY as a query produces the identical vector.
+
+    Deletes before creating: Page.save auto-slugs and de-duplicates with a
+    -1/-2 suffix, so a create-only helper called from three tests would leave
+    three distinct pages all sitting at distance ~= 0.
+    """
+    from mojo.apps.account.models import User
+    from mojo.apps.docit.models import Book, Page
+    from mojo.apps.docit_kb.services import knowledge
+
+    Page.objects.filter(book_id=opts.kb_book_id, title="kbtest_floor").delete()
+    user = User.objects.get(pk=opts.kb_user_id)
+    book = Book.objects.get(pk=opts.kb_book_id)
+    page = Page.objects.create(
+        book=book, title="kbtest_floor", content=FLOOR_QUERY,
+        user=user, created_by=user, modified_by=user)
+    knowledge.embed_page_now(page)
+    return page
+
+
+@th.django_unit_test()
+def test_vector_leg_relevance_floor(opts):
+    """The vector leg keeps rows within max_distance and drops the rest."""
+    from mojo.apps.docit.models import Page
+    from mojo.apps.docit_kb.models import PageChunk
+    from mojo.apps.docit_kb.services import knowledge
+
+    floor_page = _floor_page(opts)
+    # Embed what this test asserts on — the setup only creates the fixture
+    # pages, so their chunks otherwise exist solely as a side effect of
+    # earlier tests in this module.
+    for page_id in (opts.kb_page_alpha_id, opts.kb_page_beta_id):
+        knowledge.embed_page_now(Page.objects.get(pk=page_id))
+
+    qs = PageChunk.objects.filter(
+        page__book_id=opts.kb_book_id).select_related("page", "page__book")
+
+    # Control: unfloored the leg is a plain kNN, so it returns the exact match
+    # AND the unrelated neighbours riding along at distance ~= 1.0.
+    rows = knowledge._vector_leg(qs, FLOOR_QUERY, 30)
+    assert any(r.page_id == floor_page.pk for r in rows), \
+        f"Unfloored leg must find the byte-identical chunk, got pages {[r.page_id for r in rows]}"
+    assert len(rows) > 1, \
+        f"Control: an unbounded kNN also returns unrelated neighbours, got {len(rows)} row(s)"
+
+    # Floored: only the genuine match survives.
+    rows = knowledge._vector_leg(qs, FLOOR_QUERY, 30, max_distance=FLOOR)
+    assert [r.page_id for r in rows] == [floor_page.pk], \
+        f"A {FLOOR} floor must keep only the exact match, got pages {[r.page_id for r in rows]}"
+
+    # A query matching nothing: empty, and still a LIST. search() reads None as
+    # "no provider" and would misreport mode as "fts".
+    rows = knowledge._vector_leg(qs, NONSENSE_QUERY, 30, max_distance=FLOOR)
+    assert rows == [], f"An unmatched query must yield no rows above the floor, got {rows}"
+    assert isinstance(rows, list), \
+        f"An emptied leg must stay a list, never None — got {type(rows).__name__}"
+
+    # max_distance=0.0 is a real floor, not "off": a truthiness guard
+    # (`if max_distance:`) would skip the filter and return the whole pool.
+    unfloored = knowledge._vector_leg(qs, NONSENSE_QUERY, 30)
+    assert len(unfloored) > 0, \
+        "Control: with no floor the leg returns its nearest neighbours regardless of relevance"
+    assert knowledge._vector_leg(qs, NONSENSE_QUERY, 30, max_distance=0.0) == [], \
+        "max_distance=0.0 must be honored as a floor, not treated as absent"
+
+
+@th.django_unit_test()
+def test_fts_leg_relevance_bound(opts):
+    """The FTS leg admits only genuine text matches.
+
+    Regression: the bound used to be `rank__gt=0`, but ts_rank returns 1e-20 —
+    not 0 — for a non-matching document on a multi-term query, so every chunk
+    passed and the FTS leg was as unbounded as the vector leg. Both legs have
+    to bound themselves or an unmatched query can never return nothing.
+    """
+    from mojo.apps.docit.models import Page
+    from mojo.apps.docit.services.search import search_pages
+    from mojo.apps.docit_kb.models import PageChunk
+    from mojo.apps.docit_kb.services import knowledge
+
+    _floor_page(opts)
+    for page_id in (opts.kb_page_alpha_id, opts.kb_page_beta_id):
+        knowledge.embed_page_now(Page.objects.get(pk=page_id))
+
+    qs = PageChunk.objects.filter(
+        page__book_id=opts.kb_book_id).select_related("page", "page__book")
+
+    rows = knowledge._fts_leg(qs, NONSENSE_QUERY, 30)
+    assert rows == [], \
+        (f"Text that appears in no chunk must match nothing — got "
+         f"{[(r.page.title, r.heading) for r in rows]}")
+
+    # The bound must not cost genuine matches.
+    rows = knowledge._fts_leg(qs, "ZXQTOKEN99", 30)
+    assert [r.page_id for r in rows] == [opts.kb_page_beta_id], \
+        f"The exact identifier must still match its chunk, got pages {[r.page_id for r in rows]}"
+    rows = knowledge._fts_leg(qs, "alpha widgets configuration", 30)
+    assert rows and all(r.page_id == opts.kb_page_alpha_id for r in rows), \
+        f"Alpha terms must match alpha chunks only, got pages {[r.page_id for r in rows]}"
+
+    # The page-level fallback (no docit_kb installed) carries the same bound.
+    assert search_pages(NONSENSE_QUERY, book=opts.kb_book_slug) == [], \
+        "The page-level fallback must also return nothing for unmatched text"
+    found = search_pages("ZXQTOKEN99", book=opts.kb_book_slug)
+    assert [r.page_id for r in found] == [opts.kb_page_beta_id], \
+        f"The page-level fallback must still find real matches, got {[r.page_id for r in found]}"
+
+
+@th.django_unit_test()
+def test_search_relevance_floor(opts):
+    """knowledge.search: floor off by default, honored via kwarg or setting."""
+    from django.conf import settings as dj_settings
+    from mojo.apps.docit_kb.services import knowledge
+
+    floor_page = _floor_page(opts)
+    book = opts.kb_book_slug
+
+    # Default-off: omitting max_distance must match an explicit no-op floor
+    # (2.0 is the cosine-distance maximum). This fails the day anyone ships a
+    # default value for DOCIT_KB_MAX_DISTANCE without a decision.
+    default = knowledge.search(FLOOR_QUERY, book=book)
+    wide = knowledge.search(FLOOR_QUERY, book=book, max_distance=2.0)
+    assert [r.page_id for r in default.results] == [r.page_id for r in wide.results], \
+        (f"Omitting max_distance must equal an explicit no-op floor, got "
+         f"{[r.page_id for r in default.results]} vs {[r.page_id for r in wide.results]}")
+    assert any(r.page_id == floor_page.pk for r in default.results), \
+        f"Sanity: the floor page must be findable, got {[r.page_id for r in default.results]}"
+
+    # An unmatched query under a floor: honestly empty, and still hybrid.
+    found = knowledge.search(NONSENSE_QUERY, book=book, max_distance=FLOOR)
+    assert found.mode == "hybrid", \
+        f"A live provider still reports hybrid when the floor empties the leg, got {found.mode}"
+    assert found.results == [], \
+        f"An unmatched query must return zero rows under a floor, got {found.results}"
+
+    # The same floor must not break a genuine match end to end.
+    found = knowledge.search(FLOOR_QUERY, book=book, max_distance=FLOOR)
+    assert any(r.page_id == floor_page.pk for r in found.results), \
+        f"The floor must not drop a genuine match, got {[r.page_id for r in found.results]}"
+
+    # DOCIT_KB_MAX_DISTANCE applies when the caller passes nothing; the kwarg
+    # overrides it. Mutated in-process rather than via th.server_settings — a
+    # server_settings override can leak into var/django.conf under parallel
+    # full-suite runs (item 543), and these calls need no server.
+    dj_settings.DOCIT_KB_MAX_DISTANCE = FLOOR
+    try:
+        found = knowledge.search(NONSENSE_QUERY, book=book)
+        assert found.results == [], \
+            f"DOCIT_KB_MAX_DISTANCE must apply when no kwarg is given, got {found.results}"
+        found = knowledge.search(NONSENSE_QUERY, book=book, max_distance=2.0)
+        assert len(found.results) >= 1, \
+            "An explicit max_distance must override the setting, got no results"
+    finally:
+        del dj_settings.DOCIT_KB_MAX_DISTANCE
+
+    # An uncoercible setting degrades to "no floor" and logs — never raises.
+    dj_settings.DOCIT_KB_MAX_DISTANCE = "not-a-number"
+    try:
+        found = knowledge.search(NONSENSE_QUERY, book=book)
+        assert found.mode == "hybrid", \
+            f"An uncoercible setting must be ignored, not fatal — got mode {found.mode}"
+    finally:
+        del dj_settings.DOCIT_KB_MAX_DISTANCE
+
+
+@th.django_unit_test()
+def test_search_any_forwards_max_distance(opts):
+    """The docit dispatcher threads max_distance through to the KB search."""
+    from mojo.apps.docit.services.search import search_any
+
+    _floor_page(opts)
+    book = opts.kb_book_slug
+
+    # Control: same call, no floor — the dispatcher reaches a live vector leg.
+    found = search_any(NONSENSE_QUERY, book=book)
+    assert found.mode == "hybrid", \
+        f"Dispatcher must reach the KB with a provider present, got mode {found.mode}"
+    assert len(found.results) >= 1, \
+        "Control: with no floor the dispatcher returns the vector leg's neighbours"
+
+    found = search_any(NONSENSE_QUERY, book=book, max_distance=FLOOR)
+    assert found.mode == "hybrid", \
+        f"mode must stay hybrid when the floor empties the vector leg, got {found.mode}"
+    assert found.results == [], \
+        f"search_any must forward max_distance to knowledge.search, got {found.results}"
