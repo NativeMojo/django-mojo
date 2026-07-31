@@ -213,7 +213,8 @@ See [Rate Limiting](../core/rate_limiting.md) for full details.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/group/apikey` | List keys for a group |
+| `GET` | `/api/group/apikey` | List keys for a group (no tokens) |
+| `GET` | `/api/group/apikey?graph=token` | List keys **with their live raw tokens** (bulk read, audited) |
 | `POST` | `/api/group/apikey` | Create a key (response includes the raw token) |
 | `GET` | `/api/group/apikey/<id>` | Get key details (no token) |
 | `GET` | `/api/group/apikey/<id>?graph=token` | Get key details **plus the live raw token** (audited) |
@@ -316,6 +317,8 @@ old_key.delete()
 - **Key-derivation caveat.** `MojoSecrets._get_secrets_password()` derives the key from `{created}{pk}{ClassName}` — all plaintext columns on the same row, with no server-side secret mixed in. This protects against exfiltration of the `mojo_secrets` column on its own; it does **not** protect against a row-level or full-table dump. Treat `account_apikey` as a table of live credentials and protect it like one. (`KSMSecrets` — the KMS-backed base in the same module — is a stronger option; `ApiKey` does not use it today.)
 - **Token read-back is opt-in and audited.** The secret is on the `token` graph only — `GRAPHS["token"]` carries `("rest_get_token", "token")`. `default` (which list responses fall back to, since `ApiKey` defines no `list` graph) and `me` both omit it, and `/rotate` uses the forced `me` graph plus an explicit token field. Every export through `rest_get_token()` writes an `api_key:token_read` `logit.Log` row — one per serialized key, so a bulk read via `?graph=token` on a list is visible once per credential. **The permission bar is unchanged**: `graph=token` is open to the same `manage_group` / `manage_groups` / `groups` holders as any other read. What changed is that the credential no longer rides along on requests that never asked for it — not who may ask.
 - **An unrecognized graph name falls back to `default`.** A typo like `?graph=tokens` returns the key *without* the token rather than erroring — it fails closed, but it is a confusing silence if you are expecting the field.
+- **The opt-in read works on lists too.** `GET /api/group/apikey?graph=token` returns a live token for every key in the group, so it is a bulk credential read. It is audited once per key, but the list endpoint has no maximum page size — size the blast radius of a `groups` grant accordingly.
+- **File-based request logging is not masked.** With `LOGIT_FILE_ALL` / `LOGIT_DEBUG_ALL` enabled, `mojo/middleware/logging.py` writes small response bodies verbatim to `requests.log`, so a `?graph=token` response lands there in the clear. The DB-backed `logit.Log` path *is* masked (`mask_sensitive_data` matches `"token": "..."`). This predates the opt-in change — which strictly improves it, since previously *every* read did this — but it is the one place the "the secret only travels where it was asked for" property does not hold.
 - **`DENY_AI = True`.** The assistant's model tools cannot read this table at all. `query_model` takes a caller-supplied graph and does not filter sensitive values out of serialized output, so nothing else would stop it asking for the `token` graph.
 - `sys.*` permissions are unconditionally denied
 - Expired or inactive keys return 401

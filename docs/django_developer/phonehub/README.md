@@ -165,7 +165,8 @@ Configure a deployment to send SMS via another django-mojo instance:
        permissions={"send_sms": True},
    )
    # Hand `raw_token` to the caller. It is also stored encrypted on the row
-   # (api_key.get_token() and the default REST graph return it later) — see
+   # (api_key.get_token() server-side, or over REST via the opt-in, audited
+   # `token` graph — GET /api/group/apikey/<id>?graph=token) — see
    # account/api_keys.md#security-notes — but treat it as a live credential.
    ```
 

@@ -709,6 +709,11 @@ class ApiKey(MojoSecrets, MojoModel):
         silently drop the token for exactly the callers least able to recover
         it. So the just-minted value is attached explicitly, the same way
         group/apikey/rotate does it.
+
+        The hardcoded "default" is safe only because this model defines no
+        "basic" or "list" graph, so the downgrade would land on "default"
+        anyway. Adding either one means revisiting this line — otherwise the
+        create echo starts bypassing a narrowing the caller was meant to get.
         """
         raw = getattr(self, "_raw_token", None)
         if raw is None:

@@ -57,7 +57,7 @@ Requires `manage_group`, `manage_groups`, or the combined `groups` permission (g
 }
 ```
 
-> **The token is not "shown once" — but you have to ask for it.** It is stored encrypted server-side and stays retrievable, through one endpoint only:
+> **The token is not "shown once" — but you have to ask for it.** It is stored encrypted server-side and stays retrievable through the `token` graph:
 >
 > ```
 > GET /api/group/apikey/<id>?graph=token
@@ -71,7 +71,9 @@ Requires `manage_group`, `manage_groups`, or the combined `groups` permission (g
 > }
 > ```
 >
-> Ordinary reads never carry the secret: `GET /api/group/apikey` (list), `GET /api/group/apikey/<id>` (detail) and `GET /api/group/apikey/me` all omit `token`. The opt-in read is open to the same callers as any other read — `manage_group` / `manage_groups` / `groups` — and each one is audited server-side, so read access to a group's API keys is still equivalent to holding those keys. Grant it accordingly.
+> Ordinary reads never carry the secret: `GET /api/group/apikey` (list), `GET /api/group/apikey/<id>` (detail) and `GET /api/group/apikey/me` all omit `token` unless you pass `?graph=token`.
+>
+> **The list endpoint honors it too.** `GET /api/group/apikey?graph=token` returns a live token for every key in the group in one response — so this is a bulk credential read, not a per-key one. The opt-in changes *where the secret travels*, not *who may ask for it*: it is open to the same `manage_group` / `manage_groups` / `groups` holders as any other read, and every returned token is audited server-side. Read access to a group's API keys remains equivalent to holding those keys — grant it accordingly.
 >
 > **Watch the spelling.** An unrecognized graph name silently falls back to the default graph, so `?graph=tokens` returns `200` with no `token` field rather than an error.
 
@@ -194,7 +196,8 @@ Authorization: apikey <current-token>
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/group/apikey` | List keys for a group |
+| `GET` | `/api/group/apikey` | List keys for a group (no tokens) |
+| `GET` | `/api/group/apikey?graph=token` | List keys **with their live raw tokens** (bulk read, audited) |
 | `POST` | `/api/group/apikey` | Create a key |
 | `GET` | `/api/group/apikey/<id>` | Get key details (no token) |
 | `GET` | `/api/group/apikey/<id>?graph=token` | Get key details **plus the live raw token** (audited) |
