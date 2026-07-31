@@ -6,6 +6,7 @@ import uuid
 from datetime import timedelta
 
 from mojo.helpers import dates
+from mojo.helpers.crypto import keys as crypto_keys
 from mojo.helpers.redis import get_connection
 from mojo.helpers.settings import settings
 
@@ -16,13 +17,17 @@ def _redis():
     return get_connection()
 
 
-def _get_signing_key():
-    """Derive a signing key from SECRET_KEY + label."""
-    secret = settings.SECRET_KEY.encode('utf-8')
+def _signing_keys():
+    """Signing keys derived from SECRET_KEY + label — primary first, then one
+    per SECRET_KEY_FALLBACKS entry. issue() signs with [0]; validate() tries
+    each so tokens minted before a key rotation keep verifying."""
     label = settings.get_static('BOUNCER_TOKEN_SIGNING_KEY_LABEL', 'bouncer-token-signing')
     if isinstance(label, str):
         label = label.encode('utf-8')
-    return _hmac.new(secret, label, hashlib.sha256).digest()
+    return [
+        _hmac.new(secret.encode('utf-8'), label, hashlib.sha256).digest()
+        for secret in crypto_keys.secret_keys()
+    ]
 
 
 def _b64url_encode(data):
@@ -69,7 +74,7 @@ class TokenManager:
         }
 
         payload_b64 = _b64url_encode(json.dumps(payload, separators=(',', ':')))
-        sig = _hmac.new(_get_signing_key(), payload_b64.encode('ascii'), hashlib.sha256).digest()
+        sig = _hmac.new(_signing_keys()[0], payload_b64.encode('ascii'), hashlib.sha256).digest()
         _redis().setex(f"{_NONCE_PREFIX}{nonce}", ttl + 30, '1')
         return f"{payload_b64}.{_b64url_encode(sig)}"
 
@@ -84,15 +89,21 @@ class TokenManager:
 
         payload_b64, sig_b64 = token_str.split('.', 1)
 
-        expected_sig = _hmac.new(
-            _get_signing_key(), payload_b64.encode('ascii'), hashlib.sha256
-        ).digest()
         try:
             provided_sig = _b64url_decode(sig_b64)
         except Exception:
             raise ValueError('invalid_format')
 
-        if not _hmac.compare_digest(expected_sig, provided_sig):
+        signature_valid = False
+        for signing_key in _signing_keys():
+            expected_sig = _hmac.new(
+                signing_key, payload_b64.encode('ascii'), hashlib.sha256
+            ).digest()
+            if _hmac.compare_digest(expected_sig, provided_sig):
+                signature_valid = True
+                break
+
+        if not signature_valid:
             raise ValueError('invalid_signature')
 
         try:

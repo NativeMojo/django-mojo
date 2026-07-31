@@ -366,7 +366,7 @@ class Integration(models.Model, MojoModel):
 | Layer | Detail |
 |-------|--------|
 | **Encryption** | AES-256-GCM with per-file keys, chunked for large files |
-| **Key wrapping** | File encryption keys are wrapped using the Django `SECRET_KEY` + file UUID |
+| **Key wrapping** | File encryption keys are wrapped using the Django `SECRET_KEY` + file UUID. The key is read **file-based only** (`get_static` via `mojo.helpers.crypto.keys`) — a DB `Setting` row named `SECRET_KEY` cannot re-key wrapping at runtime. Unwrapping (and download-token validation) also tries each `SECRET_KEY_FALLBACKS` entry, so a key rotation does not brick stored files — see [crypto.md](../helpers/crypto.md#secret_key-rotation-secret_key_fallbacks); wrapping and token minting always use the primary key |
 | **Password protection** | Optional second layer — password is mixed into the KDF passphrase |
 | **Password storage** | Bcrypt hash stored separately; password verification does not decrypt the file |
 | **Download tokens** | HMAC-signed, bound to the **generating caller's** IP address, time-limited (default 300s, **hard-capped at `VAULT_TOKEN_MAX_TTL` = 3600s**) |

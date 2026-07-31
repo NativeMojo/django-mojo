@@ -110,6 +110,13 @@ entirely and reads **only** the Django settings file (same `kind=` coercion as
   to flip a behavior that was only ever meant to be a deploy-time flag.
   See [testit Overview](../testit/Overview.md#security-gate) and
   [Geofencing](../account/geofence.md#settings-reference).
+- Key material. `SECRET_KEY` is the worked example: filevault once read it via
+  `settings.get()`, which meant a `Setting` row named `SECRET_KEY` — writable
+  over REST with `manage_settings` — silently re-keyed per-file wrapping while
+  everything else stayed on the file-based key. It now goes through
+  `mojo.helpers.crypto.keys.secret_keys()` (a `get_static` read), like every
+  other `SECRET_KEY` consumer. `SECRET_KEY_FALLBACKS` follows the same rule: a
+  DB-settable fallback list would be a runtime-injectable key-acceptance list.
 - Settings read before Django (or the DB) is ready, e.g. `REDIS_URL` /
   `REDIS_SERVER` in `mojo/helpers/redis/client.py` — the DB-backed path itself
   depends on Redis, so reading it via `get()` would be circular.

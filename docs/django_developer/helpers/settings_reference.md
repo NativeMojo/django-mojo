@@ -507,7 +507,20 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### SECRET
 
-- `SECRET_KEY`
+- `SECRET_KEY` — the deployment signing/wrapping root. Beyond Django's own
+  uses, mojo derives from it directly: bouncer token signing, bouncer pass
+  cookies, and filevault's per-file key wrapping. **File-only** everywhere in
+  mojo — filevault reads it through `mojo.helpers.crypto.keys.secret_keys()`
+  (`settings.get_static`), so a `Setting` row named `SECRET_KEY` can never
+  re-key file wrapping at runtime.
+- `SECRET_KEY_FALLBACKS` — Django's own rotation list (default `[]`), honored
+  by mojo's crypto too: bouncer token/cookie **verification** and filevault
+  **unwrap**/token-validation accept material produced under any listed key,
+  while signing and wrapping always use the primary `SECRET_KEY`. **File-only**
+  (`settings.get_static`) — a DB-settable fallback list would be a
+  runtime-injectable key-acceptance list. See
+  [crypto.md](crypto.md#secret_key-rotation-secret_key_fallbacks) for the
+  rotation procedure and what it cannot cover (stored `hash.hash()` digests).
 
 ### SERIALIZE
 

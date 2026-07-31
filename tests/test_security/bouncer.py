@@ -193,7 +193,7 @@ def test_token_expired(opts):
     """Expired token is rejected."""
     import time
     from mojo.apps.account.services.bouncer.token_manager import (
-        TokenManager, _b64url_encode, _get_signing_key
+        TokenManager, _b64url_encode, _signing_keys
     )
     import hmac, hashlib, json
 
@@ -208,7 +208,7 @@ def test_token_expired(opts):
         'nonce': 'expired-nonce-123',
     }
     payload_b64 = _b64url_encode(json.dumps(payload, separators=(',', ':')))
-    sig = hmac.new(_get_signing_key(), payload_b64.encode('ascii'), hashlib.sha256).digest()
+    sig = hmac.new(_signing_keys()[0], payload_b64.encode('ascii'), hashlib.sha256).digest()
     token = f"{payload_b64}.{_b64url_encode(sig)}"
 
     try:

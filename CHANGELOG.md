@@ -1,5 +1,42 @@
 ## Unreleased
 
+feat: `SECRET_KEY_FALLBACKS` is now honored by mojo's own crypto — bouncer token/pass-cookie verification and filevault unwrap/token-validation accept material produced under a rotated-out key, so a `SECRET_KEY` rotation no longer invalidates issued tokens or bricks stored files.
+fix (security): filevault read `SECRET_KEY` through the DB-overridable settings path — a `Setting` row named `SECRET_KEY` (writable over REST with `manage_settings`) could silently re-key per-file wrapping at runtime. It now reads file-based settings only.
+
+
+**feat (crypto)** — **a `SECRET_KEY` rotation is now survivable.** Django's own
+`SECRET_KEY_FALLBACKS` only covers Django signing (sessions, signed cookies,
+password-reset tokens); everything mojo derives from `SECRET_KEY` directly knew
+nothing about it, so rotating the key invalidated every bouncer token and pass
+cookie and made every filevault file undecryptable. Mojo's verify/unwrap paths
+now iterate `mojo.helpers.crypto.keys.secret_keys()` — the primary
+`SECRET_KEY` followed by each `SECRET_KEY_FALLBACKS` entry:
+
+- bouncer auth-token verification (`TokenManager.validate`) and pass-cookie
+  verification (`verify_pass_cookie`, now also constant-time) try each
+  candidate key; issuance always signs under the primary
+- filevault ekey unwrap and download-token validation try each candidate;
+  wrapping and token minting always use the primary
+
+Fallbacks **never** sign, wrap, or issue — otherwise a rotation would never
+complete. Both settings are read file-based only (`get_static`): a DB-settable
+fallback list would be a runtime-injectable key-acceptance list. With no
+fallbacks configured, behavior is unchanged. Rotation procedure and coverage
+limits (stored `crypto.hash` digests need a re-hash migration — fallbacks
+cannot help a lookup key) are documented in
+[helpers/crypto.md](docs/django_developer/helpers/crypto.md#secret_key-rotation-secret_key_fallbacks).
+
+**fix (filevault, security)** — **`SECRET_KEY` was read through
+`settings.get()`, which consults the DB/Redis-backed `Setting` store first.**
+A `Setting` row named `SECRET_KEY` — creatable over REST by any holder of
+`manage_settings`/`groups` — would silently re-key filevault's per-file
+wrapping while every other consumer stayed on the file-based key. filevault now
+resolves the key through `crypto.keys.secret_keys()` (file-based only), like
+every other `SECRET_KEY` consumer. **Before upgrading**, check for an existing
+`Setting` row named `SECRET_KEY`: any file wrapped while such a row was live is
+wrapped under the row's value, so move that value into `SECRET_KEY_FALLBACKS`
+to keep those files readable, then delete the row.
+
 ## v1.2.64 - July 31, 2026
 
 fix: knowledge-base search can finally report "nothing matched" — the vector leg gains an optional relevance floor (`max_distance`, or the `DOCIT_KB_MAX_DISTANCE` setting), both shipping off.

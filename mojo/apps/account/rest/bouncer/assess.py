@@ -1,3 +1,4 @@
+import hmac
 import uuid
 
 from django.http import HttpResponse
@@ -5,6 +6,7 @@ from django.http import HttpResponse
 from mojo import decorators as md
 from mojo.helpers import logit
 from mojo.helpers.crypto import sign as crypto_sign, verify as crypto_verify
+from mojo.helpers.crypto import keys as crypto_keys
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 from mojo.apps import incident, jobs, metrics
@@ -326,9 +328,13 @@ def verify_pass_cookie(cookie_value, ip):
             return None
         ip_prefix = '.'.join(ip.split('.')[:3]) if ip else ''
         data = f"{muid}:{ip_prefix}:{issued_str}"
-        expected_sig = crypto_sign(data)[:16]
-        if provided_sig != expected_sig:
-            return None
-        return muid
+        # Try the primary SECRET_KEY, then each SECRET_KEY_FALLBACKS entry so
+        # cookies signed before a key rotation stay valid. Issuance
+        # (_set_pass_cookie) always signs with the primary.
+        for secret_key in crypto_keys.secret_keys():
+            expected_sig = crypto_sign(data, secret_key)[:16]
+            if hmac.compare_digest(provided_sig, expected_sig):
+                return muid
+        return None
     except Exception:
         return None

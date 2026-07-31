@@ -8,14 +8,39 @@ import json
 import uuid
 import mimetypes
 from io import BytesIO
-from mojo.helpers.settings import settings
 
 from mojo.helpers import logit
+from mojo.helpers.crypto import keys as crypto_keys
 from mojo.helpers.crypto import vault as crypto_vault
 
 
-def _get_secret_key():
-    return settings.get("SECRET_KEY", "")
+def _secret_keys():
+    """Key-wrapping candidates: primary SECRET_KEY first, then each
+    SECRET_KEY_FALLBACKS entry — file-based settings only. settings.get()
+    would consult the DB/Redis-backed Setting store first, letting a runtime
+    Setting row named SECRET_KEY silently re-key file wrapping. Wrap and
+    token-mint paths use [0]; unwrap and token-validate paths try each.
+    """
+    return crypto_keys.secret_keys()
+
+
+def _unwrap_ekey(wrapped_ekey, file_uuid):
+    """Unwrap an ekey with the primary key, then each fallback.
+
+    If every candidate fails, re-raise the PRIMARY key's error — the caller
+    must never see "fallback N failed" for a file that was simply wrapped
+    under a key that is gone.
+    """
+    candidates = _secret_keys()
+    try:
+        return crypto_vault.unwrap_ekey(wrapped_ekey, candidates[0], file_uuid)
+    except ValueError:
+        for secret_key in candidates[1:]:
+            try:
+                return crypto_vault.unwrap_ekey(wrapped_ekey, secret_key, file_uuid)
+            except ValueError:
+                continue
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -63,8 +88,8 @@ def upload_file(file_obj, name, group, user=None, password=None, description=Non
     # parse header to get chunk count
     header_info = crypto_vault.parse_header(encrypted_blob[:crypto_vault.VAULT_HEADER_SIZE])
 
-    # wrap ekey for storage
-    wrapped_ekey = crypto_vault.wrap_ekey(ekey, _get_secret_key(), file_uuid)
+    # wrap ekey for storage — always under the primary key
+    wrapped_ekey = crypto_vault.wrap_ekey(ekey, _secret_keys()[0], file_uuid)
 
     # hash password if provided
     hashed_pw = None
@@ -121,7 +146,7 @@ def download_file(vault_file, password=None):
             raise ValueError("Invalid password")
 
     # unwrap ekey
-    ekey = crypto_vault.unwrap_ekey(vault_file.ekey, _get_secret_key(), vault_file.uuid)
+    ekey = _unwrap_ekey(vault_file.ekey, vault_file.uuid)
 
     # fetch encrypted blob from S3
     fm = FileManager.get_for_group(vault_file.group, use="filevault")
@@ -166,7 +191,7 @@ def download_file_streaming(vault_file, password=None):
             raise ValueError("Invalid password")
 
     # unwrap ekey
-    ekey = crypto_vault.unwrap_ekey(vault_file.ekey, _get_secret_key(), vault_file.uuid)
+    ekey = _unwrap_ekey(vault_file.ekey, vault_file.uuid)
 
     # fetch encrypted blob from S3
     fm = FileManager.get_for_group(vault_file.group, use="filevault")
@@ -214,22 +239,27 @@ def delete_s3_object(vault_file):
 # ---------------------------------------------------------------------------
 
 def generate_download_token(vault_file, client_ip, ttl=None):
-    """Generate a signed, IP-bound download token."""
+    """Generate a signed, IP-bound download token — always under the primary key."""
     token = crypto_vault.generate_access_token(
-        vault_file.pk, client_ip, _get_secret_key(), ttl=ttl
+        vault_file.pk, client_ip, _secret_keys()[0], ttl=ttl
     )
     return token
 
 
 def validate_download_token(token, client_ip):
     """
-    Validate a download token.
+    Validate a download token, accepting signatures under the primary key or
+    any SECRET_KEY_FALLBACKS entry.
 
     Returns VaultFile on success, None on failure.
     """
     from mojo.apps.filevault.models import VaultFile
 
-    file_id = crypto_vault.validate_access_token(token, client_ip, _get_secret_key())
+    file_id = None
+    for secret_key in _secret_keys():
+        file_id = crypto_vault.validate_access_token(token, client_ip, secret_key)
+        if file_id is not None:
+            break
     if file_id is None:
         return None
     try:
@@ -277,8 +307,8 @@ def store_data(group, user, name, data, password=None, description=None, metadat
     from base64 import b64encode
     edata = b64encode(kdf_salt + nonce + ciphertext + tag).decode("utf-8")
 
-    # wrap ekey
-    wrapped_ekey = crypto_vault.wrap_ekey(ekey, _get_secret_key(), data_uuid)
+    # wrap ekey — always under the primary key
+    wrapped_ekey = crypto_vault.wrap_ekey(ekey, _secret_keys()[0], data_uuid)
 
     # hash password if provided
     hashed_pw = None
@@ -321,7 +351,7 @@ def retrieve_data(vault_data, password=None):
             raise ValueError("Invalid password")
 
     data_uuid = vault_data.metadata.get("_uuid", "")
-    ekey = crypto_vault.unwrap_ekey(vault_data.ekey, _get_secret_key(), data_uuid)
+    ekey = _unwrap_ekey(vault_data.ekey, data_uuid)
 
     from base64 import b64decode
     raw = b64decode(vault_data.edata)
