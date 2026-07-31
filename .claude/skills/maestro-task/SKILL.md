@@ -6,7 +6,7 @@ description: >-
   stage=inbox) is the work record, not a local file.
 user-invocable: true
 argument-hint: <feature/bug description>
-maestro-skill-version: 2
+maestro-skill-version: 5
 ---
 
 # Maestro Task — File Work onto the Board
@@ -20,17 +20,49 @@ workspace sees it live.
 ## Board Resolution (all maestro-* skills)
 
 1. Read `.claude/maestro.json` in the repo root:
-   `{"workspace": "<name or id>", "board": <board id>}`.
+   `{"workspace": "<name or id>", "board": <board id>, "project": <project id>}`.
+   `project` is **optional** and matters when several repos share one board:
+   it is the Project column value stamped on every item these skills file from
+   this repo, so work filed from one checkout is never mistaken for a sibling
+   repo's. Store the numeric id — it is the column value verbatim, so there is
+   nothing to resolve and nothing to drift. Omit the key when the board serves
+   a single repo.
 2. If the file is missing or the board doesn't resolve: call `whoami()` to
    confirm auth, then `list_workspaces()` and `list_boards(workspace)`, ask
    the user which board is this repo's work queue, and offer to write
    `.claude/maestro.json` so future sessions skip this step.
+   - `list_workspaces()` returning `[]` is **normal for a new account, not an
+     error**. The personal workspace `whoami()` reports holds the key and
+     credits and cannot hold a board. Say so, then offer
+     `create_workspace(name)` — it makes them admin and comes with a default
+     MoSCoW board. Ask first; never create one unprompted. (Names are claimed
+     globally, so a taken name fails — suggest a distinctive one.)
 3. If maestro is unreachable or unauthenticated: **stop with an explicit
    notice** and offer the repo's local intake skill (e.g. `/request`) if one
    exists. Never fall back silently.
 4. Call `get_board(board)` once and keep the column schema. Match `stage` /
    priority options **by value** from the schema — never assume the default
    template; warn the user if an expected stage option is missing.
+5. **Stamp `project` on every item you create.** When the config carries a
+   `project` and the board's schema has a `project` column, put it in the
+   `values` of every `create_board_item` call — top-level items, sub-items,
+   incidental findings and vibe history rows alike. Never ask the user which
+   project a repo belongs to; that is what the config is for. If the config
+   names a project but the board has no project column, file the item anyway
+   and say the label was dropped — do not silently discard it.
+6. **Keep the board's `name` and `workspace.name` from that call, and use them
+   in everything you say to the user.** Ids are internal keys — MCP takes and
+   returns them, but "board 8" and "#517" tell a reader nothing and force them
+   to go look it up. Whenever you report filing, moving, commenting on or
+   merely mentioning something, lead with the human name:
+   - board → `board "Internal" (Maestro workspace, id 8)`, not `board 8`
+   - item → `#586 "An agent cannot see what it deployed"`, not `#586`
+   - parent → say it is one: `filed under #516 "Sites + domains (epic)"`
+   - several items → a table of id, title and the values you set
+   - always include the item URL — `create_board_item` returns one, and
+     `get_board` returns `item_url_template` for items you did not create
+   If you have only an id, look the title up (`get_board_item`) before writing
+   the sentence. That lookup is far cheaper for you than for the user.
 
 ## Workflow
 
@@ -56,11 +88,30 @@ workspace sees it live.
    change, permissions, edge cases, what's explicitly out of scope.
 5. Compose the workspec markdown (template below).
 6. Create the item:
-   `create_board_item(board, title, values={"stage": "inbox", "moscow": "<must|should|could — ask or infer, default should>"}, description=<workspec>)`
+   `create_board_item(board, title, values={"stage": "inbox", "moscow": "<must|should|could — ask or infer, default should>", "project": <from .claude/maestro.json, omit if unset>}, description=<workspec>)`
    (use the board's actual priority column/options from the schema).
-6. Print the item id and the portal link
-   (`https://<maestro host>/workspaces/#/board/<board>?item=<id>`) and hand
-   off: "run `/maestro-scope <item-id>` to scope it."
+7. Name the new item as a **markdown link**, never a bare id — see
+   "Naming an item" below — and hand off: "run `/maestro-scope <item-id>` to
+   scope it."
+
+## Naming an Item
+
+Every time you name an item to the user — here, in a recap, anywhere — write
+it as a markdown link:
+
+```
+[#<id> <title> (<stage>)](<url>)
+```
+
+Take `url` straight from the tool result (`create_board_item`,
+`get_board_item` and friends return it; `get_board` returns one
+`item_url_template` with `{id}` to substitute). Never hand-assemble a host.
+
+Two reasons this is not cosmetic. A bare id is not something a user juggling
+parallel sessions can place — the title is the whole point. And a bare `#123`
+in a repo with a GitHub remote gets auto-linkified by the client to
+`github.com/<org>/<repo>/issues/123`, which is a real link to the wrong
+system; an explicit markdown link beats that guess.
 
 ## Workspec Template
 
