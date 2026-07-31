@@ -207,6 +207,53 @@ def test_own_tenant_still_readable_by_member(opts):
     )
 
 
+@th.django_unit_test("FK attach to a null-tenant row must not strip the caller's group from the new row")
+def test_fk_attach_to_null_tenant_keeps_caller_group(opts):
+    """Attaching a tenant-less FK must not silently create a tenant-less row.
+
+    `_evaluate_permission` re-binds `request.group` to the TARGET row's owning
+    tenant as a side effect, and the create-time auto-stamp reads
+    `request.group` AFTER the field loop has run every FK-attach VIEW check. So
+    a create that attaches an FK whose target has no tenant would leave the new
+    row with `group = NULL` instead of the caller's group — silently, with a
+    200. `on_rest_save` snapshots and restores the caller's group around the
+    loop (the same thing `on_rest_handle_batch` does between rows).
+
+    Uses the GLOBAL-grant user: the point is the group STAMP, not the
+    permission decision, so the FK attach itself must succeed.
+    """
+    from mojo.apps.account.models import User
+    from mojo.apps.shortlink.models import ShortLink
+
+    ShortLink.objects.filter(source="gfnull_fk_attach").delete()
+    glob = User.objects.get(username=GLOBAL_USER)
+    glob.add_permission(["manage_shortlinks"])
+    glob.save()
+
+    opts.client.login(GLOBAL_USER, PWORD)
+    resp = opts.client.post(
+        "/api/shortlink/link",
+        {
+            "url": "https://example.com/gfnull-fk-attach",
+            "source": "gfnull_fk_attach",
+            "rendition": opts.rend_null_id,
+            "group": opts.group_a_id,
+        },
+    )
+    assert resp.status_code == 200, \
+        f"creating a shortlink with a null-tenant rendition FK should succeed " \
+        f"for a global grant, got {resp.status_code}: {resp.response}"
+
+    link = ShortLink.objects.filter(source="gfnull_fk_attach").first()
+    assert link is not None, "the shortlink should have been created"
+    assert link.group_id == opts.group_a_id, (
+        f"the new row must keep the CALLER's group ({opts.group_a_id}); the "
+        f"null-tenant rendition FK must not clear it mid-save. "
+        f"Got group_id={link.group_id!r}"
+    )
+    ShortLink.objects.filter(source="gfnull_fk_attach").delete()
+
+
 @th.django_unit_test("GROUP_FIELD null: without ?group= the member is denied before and after")
 def test_null_tenant_denied_without_group_param(opts):
     """Pins that the fix only bites when a group was actually supplied — with no

@@ -1684,6 +1684,14 @@ class MojoModel:
         post_save_data = {}
         action_resp = None  # an action may have a specific response
         actions_only = True  # track if request contains only post_save_actions (no real field data)
+        # The field loop runs an FK-attach VIEW check per related field, and
+        # _evaluate_permission re-binds request.group to the TARGET row's owning
+        # tenant as a side effect — including to None when that row has no
+        # tenant. The create-time auto-stamp below reads request.group, so
+        # without this snapshot attaching a tenant-less FK would silently create
+        # the new row with no group instead of the caller's. Same restore
+        # on_rest_handle_batch already does between rows.
+        _caller_group = getattr(request, "group", None)
         # Iterate a snapshot — perm checks (e.g. Group.check_view_permission)
         # legitimately mutate request.DATA mid-save (graph downgrade etc.), so a
         # live view trips CPython's dict-mutation guard.
@@ -1696,6 +1704,7 @@ class MojoModel:
                 continue
             actions_only = False
             self.on_rest_save_field(key, value, request)
+        request.group = _caller_group
 
         created = self.pk is None
         if not actions_only or created:
