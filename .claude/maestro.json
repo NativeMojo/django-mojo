@@ -1,8 +1,4 @@
 {
   "workspace": 17,
-  "board": 11,
-  "intake_boards": {
-    "bugs": 26,
-    "features": 27
-  }
+  "board": 11
 }

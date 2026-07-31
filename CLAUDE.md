@@ -44,11 +44,17 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
 
 ## Planning
 
-Work items live on the **maestro boards** (`NativeMojo` workspace, shared
-with web-mojo; see `.claude/maestro.json`): **Backlog** (the work queue —
-the only board scope/build operate on) plus two intake boards, **Bugs** and
-**Feature Requests** (new filings route there by kind; accepted items are
-promoted to the Backlog at scoping time). A board item's markdown
+Work items live on a **single maestro board** — **Inbox**, board id 11 in the
+`NativeMojo` workspace, shared with web-mojo (see `.claude/maestro.json`).
+File everything there: bugs, feature requests, chores. An item's *kind* is
+carried by its workspec, not by which board it sits on.
+
+> The separate **Bugs** and **Feature Requests** intake boards were
+> consolidated into this one on 2026-07-30 and archived. There is no longer
+> any routing-by-kind at filing time and no promotion step at scoping time —
+> if you find a doc describing three boards, it predates the merge.
+
+A board item's markdown
 description is the workspec; its `stage` column value is inbox → scoped →
 planned → building → review → done, plus **parked** (= on hold for now —
 distinct from MoSCoW `Won't`, which means never); priority is MoSCoW
