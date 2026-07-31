@@ -10,18 +10,17 @@ distinct `branch` so the dispatcher emits a categorized incident
 These tests run in-process — `setattr(model.RestMeta, ...)` does not
 cross into the testit server process, so we exercise the handler
 methods directly and assert on the raised exception.
+
+They target `FlagProbe` (see `_flag_probe.py`), a throwaway model nothing else
+reads, rather than a real one. CAN_* flags live on the RestMeta *class*, so
+flipping one on a shared model is process-global and visible to every other test
+module running in parallel. Each gate raises before any database access, so the
+probe needs no table.
 """
 import objict
 from testit import helpers as th
 
-
-_FLAGS = ("CAN_UPDATE", "CAN_SAVE", "CAN_DELETE", "CAN_CREATE", "CAN_BATCH")
-
-
-def _clear_flags(model):
-    for f in _FLAGS:
-        if hasattr(model.RestMeta, f):
-            delattr(model.RestMeta, f)
+from ._flag_probe import FlagProbe
 
 
 def _build_request(user, method="PUT", data=None, path="/api/incident/event/ruleset/1"):
@@ -42,7 +41,6 @@ def _build_request(user, method="PUT", data=None, path="/api/incident/event/rule
 @th.django_unit_setup()
 def setup_feature_disabled(opts):
     from mojo.apps.account.models import User
-    from mojo.apps.incident.models import RuleSet
 
     user = User.objects.filter(email="feature_disabled_admin@test.com").last()
     if user is None:
@@ -57,22 +55,19 @@ def setup_feature_disabled(opts):
         user.add_permission(perm)
     opts.admin = user
 
-    RuleSet.objects.filter(name="feature-disabled-fixture").delete()
-    rs = RuleSet.objects.create(name="feature-disabled-fixture", category="feature_disabled_cat")
-    opts.ruleset = rs
+    # Never read before the gate raises — the handlers refuse first.
+    opts.instance = FlagProbe()
 
 
 @th.django_unit_test()
 def test_can_update_false_raises_feature_disabled(opts):
-    from mojo.apps.incident.models import RuleSet
     from mojo.errors import PermissionDeniedException
 
-    _clear_flags(RuleSet)
-    setattr(RuleSet.RestMeta, "CAN_UPDATE", False)
+    FlagProbe.RestMeta.CAN_UPDATE = False
     try:
         req = _build_request(opts.admin, data={"description": "blocked"})
         try:
-            RuleSet.on_rest_handle_save(req, opts.ruleset)
+            FlagProbe.on_rest_handle_save(req, opts.instance)
             assert False, "Expected PermissionDeniedException"
         except PermissionDeniedException as err:
             assert err.status == 403, f"Expected 403, got {err.status}"
@@ -82,28 +77,25 @@ def test_can_update_false_raises_feature_disabled(opts):
             assert err.branch == "can_update_false", (
                 f"Expected branch=can_update_false, got {err.branch!r}"
             )
-            assert err.model_name == "RuleSet", (
-                f"Expected model_name=RuleSet, got {err.model_name!r}"
+            assert err.model_name == "FlagProbe", (
+                f"Expected model_name=FlagProbe, got {err.model_name!r}"
             )
             assert "UPDATE not allowed" in err.reason, (
                 f"Expected 'UPDATE not allowed' in reason, got {err.reason!r}"
             )
     finally:
-        _clear_flags(RuleSet)
+        del FlagProbe.RestMeta.CAN_UPDATE
 
 
 @th.django_unit_test()
 def test_can_delete_false_raises_feature_disabled(opts):
-    from mojo.apps.incident.models import RuleSet
     from mojo.errors import PermissionDeniedException
 
-    _clear_flags(RuleSet)
-    original = getattr(RuleSet.RestMeta, "CAN_DELETE", None)
-    setattr(RuleSet.RestMeta, "CAN_DELETE", False)
+    FlagProbe.RestMeta.CAN_DELETE = False
     try:
         req = _build_request(opts.admin, method="DELETE")
         try:
-            RuleSet.on_rest_handle_delete(req, opts.ruleset)
+            FlagProbe.on_rest_handle_delete(req, opts.instance)
             assert False, "Expected PermissionDeniedException"
         except PermissionDeniedException as err:
             assert err.status == 403, f"Expected 403, got {err.status}"
@@ -117,28 +109,21 @@ def test_can_delete_false_raises_feature_disabled(opts):
                 f"Expected 'DELETE not allowed', got {err.reason!r}"
             )
     finally:
-        _clear_flags(RuleSet)
-        if original is None:
-            if hasattr(RuleSet.RestMeta, "CAN_DELETE"):
-                delattr(RuleSet.RestMeta, "CAN_DELETE")
-        else:
-            setattr(RuleSet.RestMeta, "CAN_DELETE", original)
+        del FlagProbe.RestMeta.CAN_DELETE
 
 
 @th.django_unit_test()
 def test_can_create_false_raises_feature_disabled(opts):
-    from mojo.apps.incident.models import RuleSet
     from mojo.errors import PermissionDeniedException
 
-    _clear_flags(RuleSet)
-    setattr(RuleSet.RestMeta, "CAN_CREATE", False)
+    FlagProbe.RestMeta.CAN_CREATE = False
     try:
         req = _build_request(
             opts.admin, method="POST",
             data={"name": "should-not-create", "category": "feature_disabled_cat"},
         )
         try:
-            RuleSet.on_rest_handle_create(req)
+            FlagProbe.on_rest_handle_create(req)
             assert False, "Expected PermissionDeniedException"
         except PermissionDeniedException as err:
             assert err.status == 403, f"Expected 403, got {err.status}"
@@ -149,23 +134,21 @@ def test_can_create_false_raises_feature_disabled(opts):
                 f"Expected can_create_false, got {err.branch!r}"
             )
     finally:
-        _clear_flags(RuleSet)
+        del FlagProbe.RestMeta.CAN_CREATE
 
 
 @th.django_unit_test()
 def test_can_batch_false_raises_feature_disabled(opts):
-    from mojo.apps.incident.models import RuleSet
     from mojo.errors import PermissionDeniedException
 
-    _clear_flags(RuleSet)
-    setattr(RuleSet.RestMeta, "CAN_BATCH", False)
+    FlagProbe.RestMeta.CAN_BATCH = False
     try:
         req = _build_request(
             opts.admin, method="POST",
             data={"batched": [{"name": "rs1", "category": "feature_disabled_cat"}]},
         )
         try:
-            RuleSet.on_rest_handle_batch(req)
+            FlagProbe.on_rest_handle_batch(req)
             assert False, "Expected PermissionDeniedException"
         except PermissionDeniedException as err:
             assert err.status == 403, f"Expected 403, got {err.status}"
@@ -176,4 +159,4 @@ def test_can_batch_false_raises_feature_disabled(opts):
                 f"Expected can_batch_false, got {err.branch!r}"
             )
     finally:
-        _clear_flags(RuleSet)
+        del FlagProbe.RestMeta.CAN_BATCH
