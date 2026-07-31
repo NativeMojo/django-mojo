@@ -5979,7 +5979,20 @@
 </ul>
 <h3 id="secret">SECRET<a class="headerlink" href="#secret" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>SECRET_KEY</code></li>
+<li><code>SECRET_KEY</code> — the deployment signing/wrapping root. Beyond Django's own
+  uses, mojo derives from it directly: bouncer token signing, bouncer pass
+  cookies, and filevault's per-file key wrapping. <strong>File-only</strong> everywhere in
+  mojo — filevault reads it through <code>mojo.helpers.crypto.keys.secret_keys()</code>
+  (<code>settings.get_static</code>), so a <code>Setting</code> row named <code>SECRET_KEY</code> can never
+  re-key file wrapping at runtime.</li>
+<li><code>SECRET_KEY_FALLBACKS</code> — Django's own rotation list (default <code>[]</code>), honored
+  by mojo's crypto too: bouncer token/cookie <strong>verification</strong> and filevault
+  <strong>unwrap</strong>/token-validation accept material produced under any listed key,
+  while signing and wrapping always use the primary <code>SECRET_KEY</code>. <strong>File-only</strong>
+  (<code>settings.get_static</code>) — a DB-settable fallback list would be a
+  runtime-injectable key-acceptance list. See
+  <a href="../crypto/#secret_key-rotation-secret_key_fallbacks">crypto.md</a> for the
+  rotation procedure and what it cannot cover (stored <code>hash.hash()</code> digests).</li>
 </ul>
 <h3 id="serialize">SERIALIZE<a class="headerlink" href="#serialize" title="Permanent link">&para;</a></h3>
 <ul>

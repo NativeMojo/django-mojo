@@ -5092,7 +5092,7 @@ caller must also include the correct <code>password</code>, or no token is minte
 </tr>
 <tr>
 <td><strong>Key wrapping</strong></td>
-<td>File encryption keys are wrapped using the Django <code>SECRET_KEY</code> + file UUID</td>
+<td>File encryption keys are wrapped using the Django <code>SECRET_KEY</code> + file UUID. The key is read <strong>file-based only</strong> (<code>get_static</code> via <code>mojo.helpers.crypto.keys</code>) — a DB <code>Setting</code> row named <code>SECRET_KEY</code> cannot re-key wrapping at runtime. Unwrapping (and download-token validation) also tries each <code>SECRET_KEY_FALLBACKS</code> entry, so a key rotation does not brick stored files — see <a href="../helpers/crypto/#secret_key-rotation-secret_key_fallbacks">crypto.md</a>; wrapping and token minting always use the primary key</td>
 </tr>
 <tr>
 <td><strong>Password protection</strong></td>
