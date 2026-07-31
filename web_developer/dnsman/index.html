@@ -3900,6 +3900,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-registrant-contact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The registrant contact
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The registrant contact">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#get-apidnsmanregistrant-post-apidnsmanregistrant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET /api/dnsman/registrant · POST /api/dnsman/registrant
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#buying-a-domain" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3967,10 +3995,32 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#get-apidnsmanregistrardiscover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET /api/dnsman/registrar/discover
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#post-apidnsmanregistraradopt" class="md-nav__link">
     <span class="md-ellipsis">
       
         POST /api/dnsman/registrar/adopt
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-apidnsmanregistrarassign-group" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /api/dnsman/registrar/assign-group
       
     </span>
   </a>
@@ -4122,22 +4172,34 @@ they may already see — it never widens it.</p>
 <p>Three surfaces are deliberately stricter than a plain read. <strong>Anything building
 UI must gate on these, or it renders controls that 403.</strong></p>
 <ul>
-<li><code>registrar/adopt</code> — <strong>platform superuser only</strong>. This is checked as the
-  literal <code>is_superuser</code> attribute on the user, <strong>not</strong> as a permission string:
-  there is no <code>admin</code> permission that opens it, and gating a button on one would
-  render a control that fails. Adoption hands a group control of a hosted zone
-  in the house AWS account; open to any <code>manage_dns</code> holder it would be a
-  cross-tenant zone-claim primitive.</li>
-<li><code>certificate/material/&lt;pk&gt;</code> — requires <code>manage_dns</code>, not <code>view_dns</code>. Being
+<li><code>registrar/adopt</code>, <code>registrar/discover</code>, <code>registrar/assign-group</code> —
+  <strong>platform superuser only</strong>. This is checked as the literal <code>is_superuser</code>
+  attribute on the user, <strong>not</strong> as a permission string: there is no <code>admin</code>
+  permission that opens it, and gating a button on one would render a control
+  that fails. Passing <code>?group=</code> you <em>do</em> have rights in does not help either —
+  the superuser check runs first, on purpose. These three hand out, enumerate,
+  or reassign house-account assets; open to any <code>manage_dns</code> holder they would
+  be cross-tenant primitives.</li>
+</ul>
+<p><strong>An API key can never satisfy these</strong>, including a key linked to a superuser
+  member. A group-scoped credential must not inherit platform authority, so
+  these are interactive-superuser only.
+- <code>certificate/material/&lt;pk&gt;</code> — requires <code>manage_dns</code>, not <code>view_dns</code>. Being
   allowed to see that a certificate exists is not the same as being allowed to
   hold its private key. For a domain with <strong>no group</strong> (a house/platform
-  domain) it additionally requires a superuser.</li>
-<li><strong><code>GET /api/dnsman/whois</code></strong> — requires <code>manage_dns</code> despite being a read. The
+  domain) it additionally requires a superuser — and so do <code>GET
+  /api/dnsman/certificate/&lt;pk&gt;</code> and <code>POST /api/dnsman/certificate/revoke</code> for
+  a certificate on that same domain. Only the per-instance routes carry this
+  guard; the list route (<code>GET /api/dnsman/certificate</code>) is unaffected.
+- <strong><code>GET /api/dnsman/whois</code></strong> — requires <code>manage_dns</code> despite being a read. The
   registrar returns the real registrant name, street address, phone and email to
   the account owner <em>regardless of WHOIS privacy</em>, so this is PII and a
   read-only <code>view_dns</code> operator has no business seeing it. <strong>Hide the WHOIS
-  section entirely from read-only operators</strong> rather than letting it 403.</li>
-</ul>
+  section entirely from read-only operators</strong> rather than letting it 403.
+- <strong><code>GET /api/dnsman/registrant</code></strong> — same reasoning, same rule: requires
+  <code>manage_dns</code> despite being a read, because the payload <em>is</em> the contact PII.
+  With no <code>?group=</code> it addresses the house contact and additionally requires a
+  platform admin. See <a href="#the-registrant-contact">the registrant contact</a>.</p>
 <h2 id="domains">Domains<a class="headerlink" href="#domains" title="Permanent link">&para;</a></h2>
 <h3 id="get-apidnsmandomain-get-apidnsmandomainpk"><code>GET /api/dnsman/domain</code> · <code>GET /api/dnsman/domain/&lt;pk&gt;</code><a class="headerlink" href="#get-apidnsmandomain-get-apidnsmandomainpk" title="Permanent link">&para;</a></h3>
 <p>List or fetch domains. Standard list params (<code>search</code>, <code>sort</code>, paging, <code>graph</code>).</p>
@@ -4149,6 +4211,9 @@ is still saved and the reason appears in <code>last_error</code>.</p>
 <p><strong>There is no create route.</strong> Domains come into existence only through
 <code>registrar/quote</code> → <code>registrar/purchase</code>, <code>registrar/adopt</code>, or
 <code>registrar/register-existing</code>.</p>
+<p><code>group</code> is <strong>not</strong> writable here. A domain with no group is platform-scoped and
+invisible to tenants; assigning it to one is a superuser action through
+<code>registrar/assign-group</code>, and it cannot be moved again afterwards.</p>
 <p><code>status</code> is one of <code>pending</code>, <code>registering</code>, <code>active</code>, <code>failed</code>. In practice you
 will never see <code>failed</code>: a registration that fails deletes its domain row and
 leaves the failure on the purchase record instead.</p>
@@ -4205,9 +4270,9 @@ proof of control: we ask the provider whether that account actually holds this
 specific domain and that it is active.</p>
 <h2 id="capability-discovery">Capability discovery<a class="headerlink" href="#capability-discovery" title="Permanent link">&para;</a></h2>
 <h3 id="get-apidnsmanconfig"><code>GET /api/dnsman/config</code><a class="headerlink" href="#get-apidnsmanconfig" title="Permanent link">&para;</a></h3>
-<p>Requires <code>view_dns</code>, no group. Report what's currently turned on before
-attempting a gated action — a client should render its purchase and cert UI
-from this, not from probing <code>registrar/quote</code> and reading the refusal.</p>
+<p>Requires <code>view_dns</code>. Optional <code>?group=&lt;id&gt;</code>. Report what's currently turned on
+before attempting a gated action — a client should render its purchase and cert
+UI from this, not from probing <code>registrar/quote</code> and reading the refusal.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;purchase_enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;registrant_contact_configured&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;max_domain_price&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;50.00&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;currency&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;USD&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;quote_ttl_minutes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;allowed_record_types&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;A&quot;</span><span class="p">,</span><span class="s2">&quot;AAAA&quot;</span><span class="p">,</span><span class="s2">&quot;CAA&quot;</span><span class="p">,</span><span class="s2">&quot;CNAME&quot;</span><span class="p">,</span><span class="s2">&quot;MX&quot;</span><span class="p">,</span><span class="s2">&quot;NS&quot;</span><span class="p">,</span><span class="s2">&quot;SRV&quot;</span><span class="p">,</span><span class="s2">&quot;TXT&quot;</span><span class="p">],</span>
@@ -4219,8 +4284,14 @@ from this, not from probing <code>registrar/quote</code> and reading the refusal
 <a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="nt">&quot;acme&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;configured&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;staging&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">},</span>
 <a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span><span class="nt">&quot;cert_renew_days&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
-<p><code>registrant_contact_configured</code> is a boolean — the registrant contact itself
-is PII and is never returned here or anywhere else. <code>acme.staging</code> matters
+<p><code>registrant_contact_configured</code> is a boolean — the registrant contact itself is
+PII and is never returned here. <strong>It is the one field that varies per group:</strong>
+pass <code>?group=&lt;id&gt;</code> and it answers for that group (its own contact if it has one,
+otherwise the one it inherits); omit the group and it answers for the house
+account, exactly as before. So a purchase UI scoped to a group must ask with
+that group, or it will report the wrong availability. To read or edit the
+contact itself, see <a href="#the-registrant-contact">the registrant contact</a> below.
+<code>acme.staging</code> matters
 beyond purchasing: dnsman defaults to Let's Encrypt <strong>staging</strong>, and a
 staging-issued certificate is <strong>not publicly trusted</strong> — do not render a
 staging cert as "active" without surfacing that. <code>search_batch_limit</code> mirrors
@@ -4228,6 +4299,91 @@ staging cert as "active" without surfacing that. <code>search_batch_limit</code>
 calls. <code>suggestions_enabled</code> is always <code>true</code> today — there is no kill switch
 for it; the flag exists purely so a client can feature-detect batch search
 and <code>registrar/suggest</code> against an older backend that predates them.</p>
+<h2 id="the-registrant-contact">The registrant contact<a class="headerlink" href="#the-registrant-contact" title="Permanent link">&para;</a></h2>
+<p>The ICANN contact domains get registered under. <strong>Per group, with a house
+fallback</strong>: a group with its own contact registers under it, a group without one
+inherits the house contact. Both live at one path, selected by <code>?group=</code>.</p>
+<h3 id="get-apidnsmanregistrant-post-apidnsmanregistrant"><code>GET /api/dnsman/registrant</code> · <code>POST /api/dnsman/registrant</code><a class="headerlink" href="#get-apidnsmanregistrant-post-apidnsmanregistrant" title="Permanent link">&para;</a></h3>
+<p>Optional <code>?group=&lt;id&gt;</code>. <strong>Both verbs require <code>manage_dns</code></strong> — including the
+read. The payload is a legal name, street address, phone number and email, so
+<code>view_dns</code> reaches neither scope; hide the whole section from read-only
+operators rather than letting it 403.</p>
+<p><strong>Omitting <code>group</code> addresses the HOUSE contact and requires a platform admin</strong>
+(interactive superuser — an API key is refused). It is the operator's own
+personal data and the registrant of record for every tenant without one. A
+tenant admin gets a 403 from this endpoint, and the refusal discloses nothing.</p>
+<blockquote>
+<p><strong>This endpoint is not the only way to see a registrant contact.</strong> A domain
+registered under the house contact carries it at the registrar, and
+<code>GET /api/dnsman/whois?domain=&lt;pk&gt;</code> returns the registrar-held registrant,
+admin and tech contacts to any <code>manage_dns</code> holder on that domain's group —
+AWS hands them to the account owner regardless of WHOIS privacy. So a tenant
+holding a domain that inherited the house contact can read it there. Treat
+the scope isolation here as "the editor does not disclose it", not as a
+guarantee that the house contact is unreachable by tenants.</p>
+</blockquote>
+<p>A <code>group</code> that is <strong>supplied but does not resolve</strong> (deleted, deactivated, or a
+typo) is a <strong>400</strong> — <code>"...does not exist or is not active..."</code> — not a silent
+fall-through to the house scope. That distinction matters: falling through
+would ask a tenant admin for platform-admin rights they never meant to invoke.</p>
+<p>Both verbs return the same body:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;scope&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;group&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;contact&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;FirstName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;LastName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;ContactType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;PERSON&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">               </span><span class="nt">&quot;AddressLine1&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;City&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;State&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">               </span><span class="nt">&quot;CountryCode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;ZipCode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">               </span><span class="nt">&quot;PhoneNumber&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+1.5035551212&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;Email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;database&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;inherited&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="nt">&quot;effective_configured&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;problems&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p><code>contact</code>, <code>source</code> and <code>problems</code> describe <strong>this scope's own row only</strong> —
+never an inherited contact. A group with nothing of its own gets
+<code>contact: null</code>, <code>source: "none"</code>, <code>problems: []</code>, and <code>inherited: true</code>. That
+is deliberate: reporting which fields of an inherited contact are malformed
+would tell a tenant about the house one.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>source</code></td>
+<td><code>database</code> (a saved row), <code>settings_file</code> (global scope only — a conf-file value that saving will shadow), or <code>none</code></td>
+</tr>
+<tr>
+<td><code>inherited</code></td>
+<td>Group scope with no row of its own, but a contact in effect above it</td>
+</tr>
+<tr>
+<td><code>effective_configured</code></td>
+<td>Whether a quote would succeed for this scope right now — the same answer as <code>config.registrant_contact_configured</code></td>
+</tr>
+<tr>
+<td><code>problems</code></td>
+<td>Field-level complaints about <strong>this</strong> scope's row. Never contains a value, only field names</td>
+</tr>
+</tbody>
+</table>
+<p><strong>POST</strong> takes <code>{"contact": {...}}</code> to save, or <code>{"clear": true}</code> to drop this
+scope's row. Clearing a group reverts it to whatever it inherits; clearing the
+global scope reverts to the deployment's conf file when one is set (<code>source</code>
+then reports <code>settings_file</code>).</p>
+<p>Validation runs before anything is written, so a contact AWS would bounce is a
+readable 400 here rather than a failed registration after money has moved.
+Required: <code>FirstName</code>, <code>LastName</code>, <code>ContactType</code>, <code>AddressLine1</code>, <code>City</code>,
+<code>CountryCode</code>, <code>ZipCode</code>, <code>PhoneNumber</code>, <code>Email</code>, plus <code>State</code> for US/CA. Also
+enforced: <code>ContactType</code> ∈ <code>PERSON | COMPANY | ASSOCIATION | PUBLIC_BODY |
+RESELLER</code>, <code>PhoneNumber</code> as ICANN <code>+&lt;cc&gt;.&lt;number&gt;</code> (e.g. <code>+1.5035551212</code>),
+<code>CountryCode</code> as two letters, and <strong>no unknown keys</strong> — a misspelled field name
+is rejected rather than silently accepted. <code>ExtraParams</code> is allowed through for
+ccTLD registries but its contents are AWS's to validate.</p>
+<p>A saved contact takes effect on the next quote with no restart. Note that a
+<strong>tenant which sets its own contact holds the registrant, admin and technical
+roles</strong> on domains it registers, and that its registrant email starts its own
+ICANN 15-day verification clock — surface that in the UI rather than leaving it
+to be discovered.</p>
 <h2 id="buying-a-domain">Buying a domain<a class="headerlink" href="#buying-a-domain" title="Permanent link">&para;</a></h2>
 <p>Purchasing moves real money and is irreversible. It ships <strong>disabled</strong> — the
 <code>DNSMAN_PURCHASE_ENABLED</code> kill switch defaults to off, reported at
@@ -4235,18 +4391,18 @@ and <code>registrar/suggest</code> against an older backend that predates them.<
 purchase path</strong>.</p>
 <h3 id="post-apidnsmanregistrarsearch"><code>POST /api/dnsman/registrar/search</code><a class="headerlink" href="#post-apidnsmanregistrarsearch" title="Permanent link">&para;</a></h3>
 <p>One name — the flat response, unchanged:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;AVAILABLE&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;available&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;price&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">12.00</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;currency&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;USD&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tld&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tld_supported&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;privacy_supported&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;AVAILABLE&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;available&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;price&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">12.00</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;currency&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;USD&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tld&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tld_supported&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;privacy_supported&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div></p>
 <p>Batch — either shape (never mixed), answered as <code>{ "results": [...] }</code> with
 one row per name <strong>in request order</strong>, each row exactly the single-name
 object above:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;nativemojo&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tlds&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;dev&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;io&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;app&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;nativemojo&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tlds&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;dev&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;io&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;app&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domains&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;nativemojo.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;nativemojo.dev&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domains&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;nativemojo.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;nativemojo.dev&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 - Send one shape or the other. Mixing them — <code>tlds</code> together with <code>domains</code>,
   or <code>domain</code> together with <code>domains</code> — is refused with <code>400</code> before
@@ -4266,7 +4422,7 @@ or a per-name failure inside a batch — <code>reason</code> says which) — ret
 not present it to a user as unavailable. <code>tld_supported: false</code> means the
 registrar does not sell that TLD at all.</p>
 <h3 id="post-apidnsmanregistrarsuggest"><code>POST /api/dnsman/registrar/suggest</code><a class="headerlink" href="#post-apidnsmanregistrarsuggest" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;nativemojo.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;only_available&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;nativemojo.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;only_available&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 Alternate-name ideas from the registrar, answered as <code>{ "results": [...] }</code>
 with rows in exactly the search shape — render one grid for both. <code>count</code>
@@ -4279,7 +4435,7 @@ being dropped. If the registrar call itself fails (throttle, missing IAM
 grant), the endpoint answers a clean <code>400</code> asking to retry — never provider
 internals. Requires <code>view_dns</code>, like search.</p>
 <h3 id="post-apidnsmanregistrarquote-step-1-of-2"><code>POST /api/dnsman/registrar/quote</code> → step 1 of 2<a class="headerlink" href="#post-apidnsmanregistrarquote-step-1-of-2" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;years&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;years&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 Returns the price and a single-use <code>confirm_token</code> with a short expiry. <strong>The
 raw token is shown exactly once and is never retrievable again</strong> — we store only
@@ -4289,7 +4445,7 @@ registrant contact is not configured, the TLD is unsupported, the name is
 already tracked, availability is not a definite yes, or the price exceeds the
 configured cap.</p>
 <h3 id="post-apidnsmanregistrarpurchase-step-2-of-2"><code>POST /api/dnsman/registrar/purchase</code> → step 2 of 2<a class="headerlink" href="#post-apidnsmanregistrarpurchase-step-2-of-2" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;purchase&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">31</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;confirm_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;purchase&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">31</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;confirm_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 Spends money. A quote can be redeemed exactly once — a second attempt gets a
 uniform <code>400</code> that deliberately does not say which check failed.</p>
@@ -4301,10 +4457,57 @@ removed — so a failed attempt never blocks a later retry of the same name.</p>
 <h3 id="get-apidnsmanpurchase-get-apidnsmanpurchasepk"><code>GET /api/dnsman/purchase</code> · <code>GET /api/dnsman/purchase/&lt;pk&gt;</code><a class="headerlink" href="#get-apidnsmanpurchase-get-apidnsmanpurchasepk" title="Permanent link">&para;</a></h3>
 <p>The purchase ledger: who bought what, price, our cost, status, registrar
 operation id, and any error. Read-only. <code>confirm_token</code> is never returned.</p>
+<h3 id="get-apidnsmanregistrardiscover"><code>GET /api/dnsman/registrar/discover</code><a class="headerlink" href="#get-apidnsmanregistrardiscover" title="Permanent link">&para;</a></h3>
+<p>Superuser only. Everything the <strong>house AWS account</strong> holds, whether or not
+dnsman tracks it — the answer to "what do we own that isn't in here?". Creates
+nothing, changes nothing, spends nothing.</p>
+<p>Optional <code>?untracked=1</code> returns only the rows dnsman does not already have.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;truncated&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domains&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;registered&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;hosted_zone&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span><span class="nt">&quot;hosted_zone_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Z1ABCDEF&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;record_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">14</span><span class="p">,</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">    </span><span class="nt">&quot;expires&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2027-03-01T00:00:00Z&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;auto_renew&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">    </span><span class="nt">&quot;tracked&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;adoptable&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;legacy.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;registered&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;hosted_zone&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">    </span><span class="nt">&quot;hosted_zone_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;record_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">    </span><span class="nt">&quot;expires&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-11-02T00:00:00Z&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;auto_renew&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">    </span><span class="nt">&quot;tracked&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;adoptable&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">    </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;already tracked by this system&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="p">]}</span>
+</code></pre></div>
+<p>Route53 registers domains and hosts DNS zones through two separate APIs and the
+sets do not match, so <code>registered</code> and <code>hosted_zone</code> are independent: a name can
+be one, the other, or both.</p>
+<ul>
+<li><strong><code>tracked</code></strong> means <em>some</em> <code>Domain</code> row already has this name. <code>Domain.name</code> is
+  globally unique, so a name held as a GoDaddy BYO domain reads as tracked here
+  too — this flag is not provider-aware, and <code>adopt</code> would refuse the name.</li>
+<li><strong><code>adoptable: false</code></strong> — don't offer an adopt control. <code>reason</code> says why:
+  already tracked, the name will not normalize, or its only hosted zone is
+  private (VPC-internal, resolves nowhere public).</li>
+<li><strong><code>truncated: true</code></strong> means the page bound was reached and <strong>the list is
+  incomplete</strong>. Surface it; do not render a partial inventory as the whole
+  account.</li>
+</ul>
 <h3 id="post-apidnsmanregistraradopt"><code>POST /api/dnsman/registrar/adopt</code><a class="headerlink" href="#post-apidnsmanregistraradopt" title="Permanent link">&para;</a></h3>
 <p>Superuser only. Brings an existing house-account hosted zone under management
 with no purchase and no money — the path by which DNS management is useful on
 day one, before anything has been bought.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;create_zone&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p><code>group</code> is <strong>optional</strong>. Omit it and the domain is adopted <em>platform-scoped</em> —
+it belongs to no tenant, appears in no tenant's list, and is assigned later with
+<code>registrar/assign-group</code>. That is the normal flow out of <code>discover</code>.</p>
+<p>Supplying a <code>group</code> that does not resolve (deleted, or deactivated) is an
+<strong>error</strong>, not a silent platform-scoped adopt — so a typo'd group id fails loudly
+instead of quietly producing a house domain.</p>
+<p>Refused when the name's only hosted zone is private.</p>
+<h3 id="post-apidnsmanregistrarassign-group"><code>POST /api/dnsman/registrar/assign-group</code><a class="headerlink" href="#post-apidnsmanregistrarassign-group" title="Permanent link">&para;</a></h3>
+<p>Superuser only. Hands a platform-scoped domain to a group.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p><strong>Assign only.</strong> A domain that already belongs to a group is refused — moving a
+domain from one tenant to another is not supported. Build the UI as a one-time
+action on unassigned domains, not as an editable field.</p>
 <h2 id="whois-and-privacy">WHOIS and privacy<a class="headerlink" href="#whois-and-privacy" title="Permanent link">&para;</a></h2>
 <p><strong>All three of these require <code>manage_dns</code> — including the GET.</strong> See the
 permissions section above: the registrar hands back real registrant PII to the
@@ -4323,7 +4526,7 @@ refused up front with a reason naming the TLD, rather than appearing to succeed.
 <p>Certificates are issued centrally over ACME DNS-01 and held here. Because
 DNS-01 only needs a TXT record, this works for <strong>both</strong> providers.</p>
 <h3 id="post-apidnsmancertificaterequest"><code>POST /api/dnsman/certificate/request</code><a class="headerlink" href="#post-apidnsmancertificaterequest" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;names&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;*.example.com&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;names&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;*.example.com&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 Defaults to the apex plus its wildcard. Issuance runs as a background job and
 takes minutes — this returns immediately with a <code>pending</code> certificate.</p>
@@ -4335,8 +4538,8 @@ takes minutes — this returns immediately with a <code>pending</code> certifica
 <h3 id="get-apidnsmancertificatematerialpk"><code>GET /api/dnsman/certificate/material/&lt;pk&gt;</code><a class="headerlink" href="#get-apidnsmancertificatematerialpk" title="Permanent link">&para;</a></h3>
 <p>The only way to obtain key material. Requires <code>manage_dns</code>; every release is
 logged.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;common_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;sans&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;*.example.com&quot;</span><span class="p">],</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">&quot;not_after&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cert_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;chain_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;private_key_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;common_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;sans&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;*.example.com&quot;</span><span class="p">],</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span><span class="nt">&quot;not_after&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cert_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;chain_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;private_key_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p>A <code>503</code> here means the custody layer (KMS) is temporarily unavailable — <strong>not</strong>
 that the certificate has no key. Retry; do not reissue.</p>

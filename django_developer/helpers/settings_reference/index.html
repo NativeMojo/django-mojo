@@ -5639,7 +5639,11 @@
   call (default <code>False</code>). Defaults and meanings for the whole family:
   <a href="../../dnsman/#settings">dnsman README settings table</a>.</li>
 <li><code>DNSMAN_QUOTE_TTL_MINUTES</code></li>
-<li><code>DNSMAN_REGISTRANT_CONTACT</code></li>
+<li><code>DNSMAN_REGISTRANT_CONTACT</code> — <strong>group-scopable and DB-backed.</strong> A <code>Setting</code>
+  row per group overrides the global row, which overrides the conf file; stored
+  <code>is_secret</code> so it never reaches a REST graph. Edited through
+  <code>/api/dnsman/registrant</code>, not here:
+  <a href="../../dnsman/Registrar/#the-registrant-contact">the registrant contact</a>.</li>
 <li><code>DNSMAN_SEARCH_BATCH_LIMIT</code></li>
 </ul>
 <h3 id="docit_kb">DOCIT_KB<a class="headerlink" href="#docit_kb" title="Permanent link">&para;</a></h3>

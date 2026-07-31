@@ -3795,6 +3795,28 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#finding-what-to-adopt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Finding what to adopt
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#group-assignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group assignment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#the-no-failed-rows-invariant" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3902,23 +3924,26 @@ on top. What lives here is the part every product would otherwise rebuild.</p>
 <p>REST reference for API consumers: <a href="../../web_developer/dnsman/">web_developer/dnsman</a>.</p>
 <h2 id="layout">Layout<a class="headerlink" href="#layout" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>mojo/helpers/aws/route53.py      Route53 Domains + hosted-zone primitives (model-free)
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>mojo/helpers/acme/               Minimal ACMEv2 DNS-01 client (jws.py, client.py)
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>mojo/helpers/dns/godaddy.py      GoDaddy record API (pre-existing; gained raise_on_error)
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>mojo/helpers/dns/probe.py        Authoritative TXT probe — &quot;is this record live yet?&quot;
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>mojo/apps/dnsman/
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  models/        DnsCredential, Domain, DomainPurchase, AcmeAccount, Certificate
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>  services/
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    naming.py    Domain/record normalization — the single source of truth
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    dns.py       Provider dispatch (UNGATED mechanism)
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    providers/   route53_provider.py, godaddy_provider.py behind one interface
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    onboarding.py  link a credential, adopt a zone, claim a BYO domain
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    registrar.py   search / quote / purchase / poll / WHOIS / privacy
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    certs.py       ACME DNS-01 issuance, renewal, revocation, sync broadcast
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    email.py       provider-dispatched SES record application
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>  rest/          thin handlers — this is where permissions are enforced
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>  cronjobs.py    thin dispatchers — poll registrations (5m), renew certs (6h)
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>  asyncjobs.py   issue/renew certificate job handlers
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>                                 incl. list_registered_domains() / list_hosted_zones()
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>                                 — paginated account inventory, report `truncated`
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>mojo/helpers/acme/               Minimal ACMEv2 DNS-01 client (jws.py, client.py)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>mojo/helpers/dns/godaddy.py      GoDaddy record API (pre-existing; gained raise_on_error)
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>mojo/helpers/dns/probe.py        Authoritative TXT probe — &quot;is this record live yet?&quot;
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>mojo/apps/dnsman/
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>  models/        DnsCredential, Domain, DomainPurchase, AcmeAccount, Certificate
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>  services/
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    naming.py    Domain/record normalization — the single source of truth
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    dns.py       Provider dispatch (UNGATED mechanism)
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    providers/   route53_provider.py, godaddy_provider.py behind one interface
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    onboarding.py  link a credential, adopt a zone, claim a BYO domain,
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                   discover the house AWS account&#39;s inventory
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    registrar.py   search / quote / purchase / poll / WHOIS / privacy
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    certs.py       ACME DNS-01 issuance, renewal, revocation, sync broadcast
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    email.py       provider-dispatched SES record application
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>  rest/          thin handlers — this is where permissions are enforced
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>  cronjobs.py    thin dispatchers — poll registrations (5m), renew certs (6h)
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>  asyncjobs.py   issue/renew certificate job handlers
 </code></pre></div>
 <p>The helpers are model-free and Django-free on purpose: <code>ses_domain.py</code> can call
 <code>route53.py</code> without importing this app, and both are unit-testable with no
@@ -3984,10 +4009,16 @@ account holds many domains and rotation has to happen in exactly one place.</p>
 <p><code>services/dns.get_adapter()</code> is the single fail-closed gate: a <code>godaddy</code> domain
 whose credential is null, inactive, or unverified raises <strong>before any network
 call</strong>. Call sites do not repeat this check.</p>
-<p>A provider key is account-wide, so blast radius is deliberately contained:
-nothing in this app exposes "list every domain in the linked account". Ownership
-is proven per-name at registration, so a member can only ever confirm a domain
-they already knew to name.</p>
+<p>A <strong>tenant's</strong> provider key is account-wide, so blast radius is deliberately
+contained: nothing in this app exposes "list every domain in a linked
+credential's account". Ownership is proven per-name at registration, so a member
+can only ever confirm a domain they already knew to name.</p>
+<p>There is exactly one account-wide listing, and it is a different account:
+<code>onboarding.discover_house_domains()</code> lists the <strong>house AWS account</strong>, which the
+platform owns outright and already hands zones out of via <code>adopt_route53</code>. It
+never touches a <code>DnsCredential</code>, so no tenant key is enumerated by it, and its
+REST gate is platform superuser (<code>rest/gates.require_platform_admin</code>). The BYO
+rule above is unchanged and still pinned by a test.</p>
 <h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
 <p><code>view_dns</code> / <code>manage_dns</code>, with <strong><code>security</code></strong> as the domain-category umbrella
 (<code>.claude/rules/models.md</code> requires the category alongside fine-grained perms).</p>
@@ -4012,6 +4043,43 @@ gate a custom pk-fetching endpoint.</p>
    cross-tenant zone-claim primitive.</li>
 <li><strong>BYO</strong> — <code>onboarding.register_existing()</code>, proven by the linked credential</li>
 </ol>
+<h3 id="finding-what-to-adopt">Finding what to adopt<a class="headerlink" href="#finding-what-to-adopt" title="Permanent link">&para;</a></h3>
+<p>Adoption is exact-name only, so it can only ever bring in a domain somebody
+already remembered. <code>onboarding.discover_house_domains()</code> is the inventory that
+makes it usable: it lists the house AWS account's <strong>registrations</strong> and <strong>hosted
+zones</strong> — two separate APIs whose sets do not match — merged into one row per
+name, each flagged <code>registered</code> / <code>hosted_zone</code> / <code>tracked</code> / <code>adoptable</code>.</p>
+<p>It creates nothing. Ingest stays an explicit <code>adopt</code> call, never a side effect
+of looking.</p>
+<p>Two things it deliberately refuses to hide:</p>
+<ul>
+<li><strong><code>truncated</code></strong> — the page walk is bounded (<code>max_pages</code>), and a bounded walk
+  that reports as complete is a wrong answer, not a small one.</li>
+<li><strong>Private zones</strong> — VPC-internal, so they resolve nowhere public and are
+  excluded. A name whose <em>only</em> zone is private still appears when it is also
+  registered, flagged un-adoptable, because <code>find_zone_id</code> would otherwise fall
+  back to that private zone. <code>adopt_route53</code> refuses it at the other end too.</li>
+</ul>
+<h3 id="group-assignment">Group assignment<a class="headerlink" href="#group-assignment" title="Permanent link">&para;</a></h3>
+<p>A domain adopted with <code>group=None</code> is <strong>platform-scoped</strong>: no tenant can list or
+fetch it (the framework filters group-scoped lists to the caller's groups, and a
+null group falls through to a check on the caller's <em>global</em> permissions, which
+a <code>GroupMember</code> grant is not).</p>
+<p><code>registrar/assign-group</code> moves such a domain into a group. It is superuser-only
+and <strong>assign-only</strong> — a domain that already has a group is refused, because
+re-homing between tenants is a cross-tenant transfer primitive that nothing
+needs.</p>
+<blockquote>
+<p><strong>Rows that hang off a house domain need their own guard.</strong> <code>Certificate</code>
+scopes through <code>RestMeta.GROUP_FIELD = "domain__group"</code>, and the framework
+skips its <code>request.group</code> rebind when that path resolves to <code>None</code> — so a
+caller-supplied <code>?group=</code> survives into a membership check that honors
+<code>GroupMember</code> grants. A direct <code>group</code> FK does not behave this way (it rebinds
+to <code>None</code> and falls through to global permissions). <code>rest/certificate.py</code>
+therefore guards its per-instance routes explicitly via
+<code>_guard_house_certificate</code>. Any future model scoped through a <code>GROUP_FIELD</code>
+path needs the same treatment.</p>
+</blockquote>
 <h3 id="the-no-failed-rows-invariant">The no-failed-rows invariant<a class="headerlink" href="#the-no-failed-rows-invariant" title="Permanent link">&para;</a></h3>
 <p><strong>A <code>failed</code> Domain row never persists.</strong> Every failure path deletes it and
 leaves <code>DomainPurchase</code> as the audit trail.</p>
@@ -4104,7 +4172,7 @@ order, no rate-limit exposure, and hosts stay disposable.</p>
 <tr>
 <td><code>DNSMAN_REGISTRANT_CONTACT</code></td>
 <td><code>{}</code></td>
-<td>ICANN contact; purchase refuses when incomplete</td>
+<td>ICANN contact; purchase refuses when incomplete. <strong>DB-backed and group-scopable</strong> — edit via <code>/api/dnsman/registrant</code>, not the conf file (<a href="Registrar/#the-registrant-contact">details</a>)</td>
 </tr>
 <tr>
 <td><code>DNSMAN_ALLOWED_RECORD_TYPES</code></td>

@@ -3806,6 +3806,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#when-there-is-no-real-actor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When there is no real actor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#security-implications" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4114,7 +4125,7 @@
 <tr>
 <td><code>UPDATED_BY_OWNER_FIELD</code></td>
 <td><code>"modified_by"</code></td>
-<td>FK field set to <code>request.user</code> on every update. Unlike <code>CREATED_BY_OWNER_FIELD</code>, the update-path stamp always overwrites — "who last modified" is an actor fact, not a body fact.</td>
+<td>FK field set to <code>request.user</code> on every update. Unlike <code>CREATED_BY_OWNER_FIELD</code>, the update-path stamp always overwrites — "who last modified" is an actor fact, not a body fact. Both are skipped entirely when there is no real actor; see "When there is no real actor" below.</td>
 </tr>
 <tr>
 <td><code>DENY_AI</code></td>
@@ -4164,6 +4175,29 @@
 <a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># Explicit null / 0 / &quot;&quot; → coerced to None → auto-stamp still kicks in.</span>
 <a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="n">POST</span> <span class="o">/</span><span class="n">api</span><span class="o">/</span><span class="n">shortlink</span><span class="o">/</span><span class="n">shortlink</span>   <span class="n">body</span><span class="p">:</span> <span class="p">{</span><span class="n">user</span><span class="p">:</span> <span class="n">null</span><span class="p">}</span>           <span class="err">→</span> <span class="n">user</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">user</span>
 </code></pre></div>
+<h3 id="when-there-is-no-real-actor">When there is no real actor<a class="headerlink" href="#when-there-is-no-real-actor" title="Permanent link">&para;</a></h3>
+<p>The stamp needs someone real to attribute the write to. It resolves, in order:</p>
+<ol>
+<li><code>request.acting_user</code> — the member an <code>ApiKey</code> acts as, when the key is linked.</li>
+<li><code>request.user</code>, <strong>only when it is an actual model instance</strong>.</li>
+</ol>
+<p>Anything else — an unlinked <code>ApiKey</code>, an anonymous caller, or the
+<code>system_request()</code> pseudo-user used by jobs, crons and management commands —
+yields no actor, and the field is <strong>left as it is</strong>: null on create, unchanged
+on update. It is never assigned a non-<code>User</code> value, which would raise
+<code>ValueError: Cannot assign ... must be a "User" instance</code>.</p>
+<p>A background caller that needs its writes attributed to a real user should bind
+one for the duration of the work with <code>ACTIVE_REQUEST.set(...)</code> — see
+<a href="../../core/mojo_model/#the-system-request">Programmatic (Non-HTTP) Usage</a>. Note
+that a model whose owner field is <strong>not</strong> nullable will now fail at the database
+instead, since there is nothing to put in it.</p>
+<p><strong>Audit caveat on the update path.</strong> Leaving <code>UPDATED_BY_OWNER_FIELD</code> alone
+means the <em>previous</em> editor stays in it, while a <code>modified</code> timestamp
+(<code>auto_now</code>) still advances — so a system-context write leaves the row reading
+"modified at T by user X" for a change X did not make. <code>modified_by</code> feeds no
+permission decision, so this is audit fidelity rather than access control, but
+bind a request for any system-context write to a row whose edit history is
+meant to be trustworthy.</p>
 <h3 id="security-implications">Security implications<a class="headerlink" href="#security-implications" title="Permanent link">&para;</a></h3>
 <p>This default is permissive: <strong>any caller with <code>SAVE_PERMS</code> on the model can designate another user as the record's owner by including <code>user</code> in the body</strong>, provided they also pass the per-FK <code>VIEW_PERMS</code> check on <code>account.User</code> (<code>view_users</code> / <code>manage_users</code> / <code>users</code>). The framework does not enforce "admin-only" semantics on the owner field — that is per-model policy.</p>
 <p>If you need strict self-ownership for a model (i.e. the framework must guarantee <code>user == request.user</code> on create regardless of body), disable the auto-stamp and re-assert in <code>on_rest_pre_save</code>:</p>

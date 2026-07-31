@@ -3828,6 +3828,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#the-registrant-contact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The registrant contact
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#do-the-canary-purchase-first" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3876,6 +3887,17 @@
     <span class="md-ellipsis">
       
         Routine checks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auditing-the-house-aws-account" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auditing the house AWS account
       
     </span>
   </a>
@@ -4001,14 +4023,41 @@ TLD that cannot have it would be nonsense.</p>
 <h2 id="ops-runbook">Ops runbook<a class="headerlink" href="#ops-runbook" title="Permanent link">&para;</a></h2>
 <h3 id="enabling-purchases">Enabling purchases<a class="headerlink" href="#enabling-purchases" title="Permanent link">&para;</a></h3>
 <ol>
-<li>Set <code>DNSMAN_REGISTRANT_CONTACT</code> — a complete ICANN contact. Required:
-   <code>FirstName</code>, <code>LastName</code>, <code>ContactType</code>, <code>AddressLine1</code>, <code>City</code>,
-   <code>CountryCode</code>, <code>ZipCode</code>, <code>PhoneNumber</code>, <code>Email</code>, plus <code>State</code> for US/CA.
-   Quotes refuse while it is incomplete.</li>
+<li>Set the <strong>house registrant contact</strong> — a complete ICANN contact. This is
+   portal-managed, not a deploy: <code>POST /api/dnsman/registrant</code> with no <code>group</code>,
+   as a platform admin. Quotes refuse while it is incomplete.</li>
 <li>Confirm the AWS credentials can reach <code>route53domains</code> in <strong>us-east-1</strong>.</li>
 <li>Review <code>DNSMAN_MAX_DOMAIN_PRICE</code> (default 50.00).</li>
 <li>Set <code>DNSMAN_PURCHASE_ENABLED = True</code>.</li>
 </ol>
+<h3 id="the-registrant-contact">The registrant contact<a class="headerlink" href="#the-registrant-contact" title="Permanent link">&para;</a></h3>
+<p>Stored as a <code>Setting</code> row under <code>DNSMAN_REGISTRANT_CONTACT</code>, resolved through
+the normal settings chain: <strong>the group's own row → its parent chain → the
+global row → the deployment's conf file</strong>. So a group that sets its own contact
+registers under it, and one that does not inherits the house contact. A
+deployment that still sets the key in <code>django.conf</code> keeps working untouched
+until someone saves a DB row over it.</p>
+<p>Required fields: <code>FirstName</code>, <code>LastName</code>, <code>ContactType</code>, <code>AddressLine1</code>,
+<code>City</code>, <code>CountryCode</code>, <code>ZipCode</code>, <code>PhoneNumber</code>, <code>Email</code>, plus <code>State</code> for
+US/CA. Shape is checked too, not just presence — <code>ContactType</code> against the AWS
+enum (<code>PERSON</code>, <code>COMPANY</code>, <code>ASSOCIATION</code>, <code>PUBLIC_BODY</code>, <code>RESELLER</code>),
+<code>PhoneNumber</code> against ICANN <code>+&lt;cc&gt;.&lt;number&gt;</code>, <code>CountryCode</code> as two letters, and
+every key against the full AWS <code>ContactDetail</code> member list. That last one
+matters: botocore raises <code>ParamValidationError</code> on an unknown key, so a typo'd
+field name in a hand-written setting used to be accepted silently and detonate
+at purchase time, after durable intent. It is now a 400 at save time.</p>
+<p><code>ExtraParams</code> is accepted for ccTLD registries but its <em>contents</em> are not
+shape-checked here — AWS validates those.</p>
+<p>The row is written with <code>is_secret=True</code>, which puts it in <code>mojo_secrets</code> and
+keeps it out of every REST graph including the unknown-graph fallback. That is
+<strong>REST masking, not encryption at rest</strong>: <code>MojoSecrets</code> derives the secrets
+password from the row's own non-secret columns, so it protects nothing against
+someone holding the database.</p>
+<p><strong>Migration note.</strong> A deployment whose conf-file contact has a non-conforming
+phone number, an unknown key, or a bad <code>ContactType</code> starts refusing quotes
+instead of failing at AWS. Fail-closed, and visible:
+<code>registrant_contact_configured</code> reports <code>false</code> and <code>GET /api/dnsman/registrant</code>
+names the offending field.</p>
 <h3 id="do-the-canary-purchase-first">Do the canary purchase first<a class="headerlink" href="#do-the-canary-purchase-first" title="Permanent link">&para;</a></h3>
 <p><strong>Route53 Domains has no sandbox.</strong> There is no way to exercise the real
 purchase path without spending money, so the first registration after enabling
@@ -4019,15 +4068,46 @@ the first one.</p>
 <p>The first use of a new registrant email triggers an ICANN verification message.
 <strong>If it is not verified within 15 days the domain is suspended.</strong> The mailbox in
 <code>DNSMAN_REGISTRANT_CONTACT</code> must be monitored by a human, not a black hole.</p>
+<p>Per-group contacts multiply this, and it is the sharpest operational edge of the
+feature. Every tenant that sets its own contact starts its <strong>own</strong> 15-day clock,
+on a mailbox <strong>the operator does not monitor and cannot check</strong>. The domain that
+gets suspended is one the operator owns and pays for. Before enabling tenant
+contacts, decide who chases an unverified registrant email — there is no signal
+in this system that will tell you it happened.</p>
 <h3 id="the-60-day-transfer-lock">The 60-day transfer lock<a class="headerlink" href="#the-60-day-transfer-lock" title="Permanent link">&para;</a></h3>
 <p>ICANN locks a newly registered domain against transfer for <strong>60 days</strong>. This is
 registry policy — no API changes it. Anyone promising a customer a transfer-out
 inside that window is promising something that cannot be delivered.</p>
 <h3 id="custody">Custody<a class="headerlink" href="#custody" title="Permanent link">&para;</a></h3>
-<p>Domains are registered with the operator's contact as registrant of record and
-held on behalf of the tenant. That is a real obligation: state it in
-product-facing terms, honour transfer-out on request as a manual process, and do
-not let it read as ownership.</p>
+<p>Custody depends on whose contact was filed, and the answer is no longer always
+the operator's.</p>
+<ul>
+<li><strong>A group with no contact of its own</strong> inherits the house contact. The
+  operator is registrant of record and holds the domain on behalf of the
+  tenant. That is a real obligation: state it in product-facing terms, honour
+  transfer-out on request as a manual process, and do not let it read as
+  ownership.</li>
+<li><strong>A group that sets its own contact</strong> becomes the registrant of record on the
+  domains it registers — and, because <code>route53.register()</code> sends the one
+  contact block as <code>AdminContact</code>, <code>RegistrantContact</code> <strong>and</strong> <code>TechContact</code>,
+  also the administrative and technical contact. Those are the addresses that
+  receive transfer-approval and change-of-registrant mail. So a tenant
+  <code>manage_dns</code> holder holds all three roles on an asset the operator owns and
+  pays for. This is deliberate; it is not a side effect to discover later.</li>
+</ul>
+<p>A quote does <strong>not</strong> pin the contact. <code>purchase()</code> re-reads it at confirmation
+time, resolving from the <strong>quote's own group</strong> (<code>row.group</code>) — never from the
+group the confirming request happened to name, which is optional attribution and
+is <code>None</code> whenever that group went inactive between the two calls. An edit
+between quote and confirm therefore changes what gets filed, by design: the TTL
+is 15 minutes, the price is unaffected, and refusing a redeemed quote over a
+benign contact edit would be worse.</p>
+<p>Because the answer is now tenant-editable, the ledger records it.
+<code>DomainPurchase.metadata</code> carries <code>registrant_scope</code> (the group id the contact
+was resolved for, or <code>"house"</code>) and <code>registrant_fingerprint</code>, a SECRET_KEY-salted
+SHA-256 of the contact that was actually sent. <code>metadata</code> is in neither REST
+graph, so this is an audit trail, not a second PII store — and the fingerprint
+is not reversible into a contact.</p>
 <h3 id="routine-checks">Routine checks<a class="headerlink" href="#routine-checks" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>poll_domain_operations</code> (every 5 min) must be running, or registrations never
@@ -4041,6 +4121,50 @@ not let it read as ownership.</p>
 <li>Domains have <code>auto_renew=True</code> by default; expiries accrue on the house
   account. Watch <code>Domain.expires</code>.</li>
 </ul>
+<h3 id="auditing-the-house-aws-account">Auditing the house AWS account<a class="headerlink" href="#auditing-the-house-aws-account" title="Permanent link">&para;</a></h3>
+<p><code>GET /api/dnsman/registrar/discover</code> (superuser) answers "what is in our AWS
+account that dnsman does not know about?" — merged across the registrar and
+hosted-zone APIs, one row per name.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/dnsman/registrar/discover?untracked=1
+</code></pre></div>
+<p>Worth running after any manual console work, and before assuming an outage is a
+dnsman bug — a domain nobody adopted is a domain nobody is renewing, monitoring
+or issuing certificates for.</p>
+<p>Reading the flags:</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>registered: false, hosted_zone: true</code></td>
+<td>Registered elsewhere, DNS hosted here. Adoptable; renewal is somebody else's problem.</td>
+</tr>
+<tr>
+<td><code>registered: true, hosted_zone: false</code></td>
+<td>We own it, no zone exists. Adopt with <code>create_zone: true</code>.</td>
+</tr>
+<tr>
+<td><code>tracked: true</code></td>
+<td>A <code>Domain</code> row already has this name — <strong>any provider</strong>, since <code>Domain.name</code> is globally unique. <code>adopt</code> will refuse it.</td>
+</tr>
+<tr>
+<td><code>adoptable: false</code></td>
+<td>Already tracked, or the name will not normalize, or its only zone is private. <code>reason</code> says which.</td>
+</tr>
+<tr>
+<td><code>truncated: true</code></td>
+<td>The page bound was hit. <strong>The list is incomplete</strong> — do not treat it as an inventory.</td>
+</tr>
+</tbody>
+</table>
+<p>Ingest is deliberately two steps: <code>discover</code> never creates anything, and each
+<code>adopt</code> is its own call. Adopt without a <code>group</code> for anything that is not yet a
+specific tenant's, then <code>registrar/assign-group</code> when it is. Assignment is
+one-way — a domain that already has a group is never re-homed.</p>
 
 
 
