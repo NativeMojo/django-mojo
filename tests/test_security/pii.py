@@ -53,7 +53,20 @@ def test_pii_fields_cleared(opts):
     assert_eq(user.display_name, None, "display_name should be None")
     assert_eq(user.first_name, "", "first_name should be empty")
     assert_eq(user.last_name, "", "last_name should be empty")
-    assert_eq(user.metadata, {}, "metadata should be wiped")
+    # Metadata is not emptied — it is REDUCED to the anonymization audit record.
+    # pii_anonymize satisfies GDPR Art. 17 "while preserving the row for FK
+    # integrity and audit trail", and record_anonymize "writes a fresh metadata
+    # dict containing only the disable namespace (wiping any other PII-bearing
+    # metadata keys)". Asserting {} demanded the erasure destroy its own proof.
+    assert_true("ip" not in user.metadata and "dob" not in user.metadata,
+                f"PII metadata keys must be wiped, got {user.metadata}")
+    assert_eq(set(user.metadata), {"protected"},
+              f"nothing but the protected/disable audit namespace may survive, "
+              f"got {sorted(user.metadata)}")
+    disable_record = user.metadata["protected"]["disable"]
+    assert_eq(disable_record.get("reason"), "anonymized",
+              f"the surviving record must say why the row was disabled, "
+              f"got {disable_record}")
     assert_eq(user.permissions, {}, "permissions should be wiped")
     assert_true(not user.is_active, "user should be deactivated")
     assert_true(not user.is_staff, "is_staff should be False")

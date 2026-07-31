@@ -14,6 +14,8 @@ def _get_domain(request, perms):
 
 
 @md.GET('whois')
+@md.custom_security("_get_domain gates on the resolved Domain via "
+                    "rest_check_permission_or_raise")
 @md.requires_params("domain")
 def on_whois_get(request):
     """
@@ -29,6 +31,8 @@ def on_whois_get(request):
 
 
 @md.POST('whois')
+@md.custom_security("_get_domain gates on the resolved Domain via "
+                    "rest_check_permission_or_raise")
 @md.requires_params("domain", "contact")
 def on_whois_update(request):
     domain = _get_domain(request, ["SAVE_PERMS", "VIEW_PERMS"])
@@ -39,6 +43,8 @@ def on_whois_update(request):
 
 
 @md.POST('whois/privacy')
+@md.custom_security("_get_domain gates on the resolved Domain via "
+                    "rest_check_permission_or_raise")
 @md.requires_params("domain", "enabled")
 def on_whois_privacy(request):
     """Toggle WHOIS privacy. Refused up front for TLDs that do not offer it,

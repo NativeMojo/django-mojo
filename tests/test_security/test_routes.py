@@ -7,20 +7,37 @@ import json
 import os
 
 
+def _join_route(prefix, pattern):
+    """Join an include prefix to a child pattern with exactly one separator.
+
+    The include prefixes registered here do NOT carry a trailing slash, so
+    plain concatenation welds parent onto child: 'api/dnsman' + 'dns/delete'
+    came out as 'api/dnsmandns/delete', a string matching no registered route.
+    Every such phantom then failed the function lookup in get_endpoint_info,
+    was classified as a non-MOJO endpoint, and got reported as an undecorated
+    public endpoint — a fabricated finding that hid the real ones.
+    """
+    parent, child = str(prefix), str(pattern)
+    if parent and child and not parent.endswith('/') and not child.startswith('/'):
+        return f"{parent}/{child}"
+    return f"{parent}{child}"
+
+
 def get_routes(urlpatterns, prefix=''):
     """Extract all URL patterns from Django's URL configuration"""
     output = []
     for pattern in urlpatterns:
         if isinstance(pattern, URLPattern):
             route_info = {
-                'pattern': f"{prefix}{pattern.pattern}",
+                'pattern': _join_route(prefix, pattern.pattern),
                 'view_func': getattr(pattern.callback, '__name__', 'unknown'),
                 'module': getattr(pattern.callback, '__module__', 'unknown'),
                 'view': pattern.callback
             }
             output.append(route_info)
         elif isinstance(pattern, URLResolver):
-            output.extend(get_routes(pattern.url_patterns, prefix + str(pattern.pattern)))
+            output.extend(get_routes(pattern.url_patterns,
+                                     _join_route(prefix, pattern.pattern)))
     return output
 
 
@@ -230,7 +247,12 @@ def get_endpoint_info(route_info):
             func_key = f"{mojo_function.__module__}.{mojo_function.__name__}"
             if func_key in SECURITY_REGISTRY:
                 registry_info = SECURITY_REGISTRY[func_key]
-                security_type = registry_info['type']
+                # An entry with no 'type' is an endpoint that registered
+                # something (a geofence, a key-session denial) but never
+                # declared what secures it. Report it as unclassified rather
+                # than dying on a KeyError — the crash used to hide which
+                # endpoint was at fault, which is the opposite of the job.
+                security_type = registry_info.get('type', 'unclassified')
                 requires_auth = registry_info.get('requires_auth', False)
 
                 if security_type == 'permissions':
@@ -282,7 +304,9 @@ def get_endpoint_info(route_info):
         func_key = f"{view_func.__module__}.{view_func.__name__}"
         if func_key in SECURITY_REGISTRY:
             registry_info = SECURITY_REGISTRY[func_key]
-            security_type = registry_info['type']
+            # See the note on the other registry read: an entry without 'type'
+            # is unclassified, not a reason to crash.
+            security_type = registry_info.get('type', 'unclassified')
             requires_auth = registry_info.get('requires_auth', False)
 
             if security_type == 'permissions':

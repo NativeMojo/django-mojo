@@ -95,6 +95,10 @@ def _payload(group):
 
 
 @md.GET('registrant')
+@md.custom_security("_authorize gates both verbs in a deliberate order: "
+                    "authentication first (so group resolution cannot be used "
+                    "as an anonymous enumeration oracle), then group "
+                    "resolution, then manage_dns")
 def on_registrant_get(request):
     """The contact this scope owns, for editing. PII — manage_dns, not view_dns."""
     group = _authorize(request)
@@ -102,6 +106,10 @@ def on_registrant_get(request):
 
 
 @md.POST('registrant')
+@md.custom_security("_authorize gates both verbs in a deliberate order: "
+                    "authentication first (so group resolution cannot be used "
+                    "as an anonymous enumeration oracle), then group "
+                    "resolution, then manage_dns")
 def on_registrant_save(request):
     """
     Save or clear this scope's contact. `{"contact": {...}}` or `{"clear": true}`.

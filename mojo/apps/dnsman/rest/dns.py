@@ -33,6 +33,9 @@ def _record_values(request):
 
 
 @md.GET('dns')
+@md.custom_security("_get_domain gates on the resolved Domain via "
+                    "rest_check_permission_or_raise; services/dns.py is "
+                    "deliberately ungated mechanism")
 @md.requires_params("domain")
 def on_dns_list(request):
     """List the live records for a domain. Reads through to the provider —
@@ -44,6 +47,9 @@ def on_dns_list(request):
 
 
 @md.POST('dns')
+@md.custom_security("_get_domain gates on the resolved Domain via "
+                    "rest_check_permission_or_raise; services/dns.py is "
+                    "deliberately ungated mechanism")
 @md.requires_params("domain", "type", "name")
 def on_dns_upsert(request):
     domain = _get_domain(request, ["SAVE_PERMS", "VIEW_PERMS"])
@@ -58,6 +64,9 @@ def on_dns_upsert(request):
 
 
 @md.POST('dns/delete')
+@md.custom_security("_get_domain gates on the resolved Domain via "
+                    "rest_check_permission_or_raise; services/dns.py is "
+                    "deliberately ungated mechanism")
 @md.requires_params("domain", "type", "name")
 def on_dns_delete(request):
     domain = _get_domain(request, ["SAVE_PERMS", "VIEW_PERMS"])

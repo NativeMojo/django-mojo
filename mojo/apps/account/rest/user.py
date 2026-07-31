@@ -143,6 +143,9 @@ def on_refresh_token(request):
 @md.POST("login")
 @md.POST("auth/login")
 @md.POST('account/jwt/login')
+@md.public_endpoint("password login must be reachable unauthenticated; guarded "
+                    "by bouncer token, geofence and strict per-ip/muid/duid "
+                    "rate limits rather than by auth")
 @md.strict_rate_limit("login", ip_limit=100,
                       muid_limit=10, muid_window=300,
                       duid_limit=10, duid_window=300)
