@@ -1,5 +1,12 @@
 ## Unreleased
 
+## v1.2.64 - July 31, 2026
+
+fix: knowledge-base search can finally report "nothing matched" — the vector leg gains an optional relevance floor (`max_distance`, or the `DOCIT_KB_MAX_DISTANCE` setting), both shipping off.
+fix: the FTS leg's `rank__gt=0` bound admitted the entire corpus, because `ts_rank` returns 1e-20 rather than 0 for a non-matching document. `_fts_leg` and `search_pages` now bound on the tsvector `@@` match operator — **this changes results for every docit install, not just those enabling the floor**.
+test: full suite green — 3067 passed, 0 failed, 56 skipped.
+
+
 fix (docit): neither leg of knowledge-base search bounded itself, so on any install with embeddings configured **no query was ever "unmatched"** — an off-topic search returned confident irrelevant chunks and the empty result set was unreachable. Two separate causes, both fixed.
 
 The vector leg was an unbounded kNN: it returns the nearest `k` chunks by cosine distance with no relevance ceiling, so once it runs every search yields results however unrelated. It now accepts a `max_distance` ceiling — `knowledge.search(query, max_distance=...)` and `search_any(query, max_distance=...)`, or the **`DOCIT_KB_MAX_DISTANCE`** setting for callers that cannot pass one (`/api/docit/search`, the assistant's `search_docs` tool). Both ship **off**: the setting is unset by default, so omitting the parameter reproduces previous behavior and emits identical SQL. `0.80` is the value calibrated for Titan V2 at 1024 dims. Read [Relevance floor](docs/django_developer/docit/knowledge.md#relevance-floor) before enabling it — the floor converts a retrieval miss into an *empty result*, and recall depends on HNSW query settings this framework does not set.
