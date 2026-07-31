@@ -200,7 +200,7 @@
 {% endblock %}
 
 {% block page_script %}
-<script>
+<script nonce="{{ csp_nonce }}">
 (function () {
     var m = window._mat;
     var $ = m.$;

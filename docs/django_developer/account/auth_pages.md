@@ -178,6 +178,41 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 | `switcher` | Bottom link (e.g., "Don't have an account? Create one") |
 | `page_script` | Page-specific JavaScript |
 
+### Content Security Policy — nonce your inline scripts
+
+The four hosted pages (`/auth`, `/register`, `/passkey`, `/contact`) **can** be
+served with a nonce-based `Content-Security-Policy`, where `script-src` carries a
+fresh per-request nonce and **no `'unsafe-inline'`**, so any `<script>` without
+that nonce will not execute.
+
+**The header is opt-in and off by default** — `AUTH_CSP_ENABLED` ships `False`,
+so nothing below binds until a deployment sets it `True`. The
+`nonce="{{ csp_nonce }}"` attributes are stamped into the shipped templates
+regardless; a nonce with no CSP is inert.
+
+Stamp the nonce anyway when you override one of the templates above, or add
+JavaScript through `{% block page_script %}` / `{% block extra_css %}` — it costs
+nothing today and is what lets the deployment turn the header on later:
+
+```html
+{% block page_script %}
+<script nonce="{{ csp_nonce }}">
+  // your page script
+</script>
+{% endblock %}
+```
+
+`csp_nonce` is always present in the context of these pages. Leave
+`{{ x|json_script:"id" }}` tags alone — Django emits them as
+`type="application/json"` data blocks, which CSP never checks. Style attributes
+and `<style>` tags need nothing: `style-src` keeps `'unsafe-inline'` so the
+tenant `custom_css` override keeps working.
+
+To enable it, set `AUTH_CSP_ENABLED = True` — together with
+`AUTH_CSP_REPORT_ONLY = True` first if you already ship template overrides, so
+violations are reported instead of enforced. Full policy, rationale, rollout and
+settings: [Content Security Policy](../security/csp.md).
+
 ### Overriding the hero panel
 
 Create `templates/account/auth_hero.html` in your project:

@@ -180,8 +180,14 @@ minted at the auth origin. The handoff is an authorization-code flow:
 **POST** `/api/auth/handoff`
 
 ```json
-{}
+{
+  "redirect_uri": "https://app.example.com/dashboard"
+}
 ```
+
+| Field | Required | Notes |
+|---|---|---|
+| `redirect_uri` | **optional by default, required where the server enforces** | The absolute URL the code will be handed to. **Always send it.** |
 
 **Response:**
 
@@ -195,8 +201,11 @@ minted at the auth origin. The handoff is an authorization-code flow:
 }
 ```
 
-The auth-page JS does this automatically when `?redirect=` points to a different
-origin — apps usually don't call it directly. Rate-limited to 30 requests/IP.
+Whether the destination is checked is a server-side opt-in — see
+[below](#destination-enforcement-is-a-server-side-opt-in). The auth-page JS
+calls this automatically when `?redirect=` points to a different origin, so apps
+usually don't call it directly. When the mint is refused, the auth page shows an
+error and **does not navigate**. Rate-limited to 30 requests/IP.
 
 **Step 2 — Exchange the code (app origin, public)**
 
@@ -226,6 +235,50 @@ MojoAuth.handleAuthCodeFromURL().then(function (data) {
 `handleAuthCodeFromURL()` reads `?auth_code=` from `location.search`, calls
 `/api/auth/exchange`, stores the tokens, and replaces the URL with the param
 removed. Resolves to `null` if no `auth_code` is present.
+
+### Destination enforcement is a server-side opt-in
+
+Whether `/api/auth/handoff` checks `redirect_uri` against an allowlist depends
+on the deployment, and it is **off unless the operator turned it on**
+(`AUTH_HANDOFF_ALLOWED_URLS` or `AUTH_HANDOFF_RESOLVER` in the server settings):
+
+| Server state | `redirect_uri` | Destination not allowed |
+|---|---|---|
+| Neither setting configured — **the default** | optional | the code is **minted anyway**; the server files an internal incident naming the destination |
+| Either setting configured | **required** (`400` when missing) | `400`, **no code minted** |
+
+**Send `redirect_uri` on every call regardless of what the server does today.**
+It is forward-compatible — the same client keeps working when the deployment
+turns enforcement on — and it is what makes the server's audit trail and its
+monitor-mode incidents useful. A client that omits it works now and breaks the
+day an operator adds the setting.
+
+The destination is decided at mint time, before a credential exists, and is
+never re-checked at exchange time. `/api/auth/exchange` is unaffected by any of
+this.
+
+**The two `400` shapes**, both only reachable on a deployment that enforces:
+
+```json
+{
+  "status": false,
+  "code": 400,
+  "error": "redirect_uri is required for auth handoff"
+}
+```
+
+```json
+{
+  "status": false,
+  "code": 400,
+  "error": "redirect_uri is not permitted for auth handoff"
+}
+```
+
+Treat either as "do not navigate to the destination" — there is no code, and
+sending the user on without one just lands them logged out. If your origin is a
+legitimate destination that gets refused, the operator has to add it to the
+server's allowlist; there is nothing a client can do.
 
 See [Auth Pages — Cross-Origin Redirect Handoff](auth_pages.md#cross-origin-redirect-handoff)
 for end-to-end flow and security trade-offs.

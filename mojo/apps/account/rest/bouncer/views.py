@@ -252,7 +252,24 @@ def on_passkey_enroll_page(request):
     # auto-redirect so they land on the enrollment step instead of being
     # bounced straight to success_redirect.
     ctx['skip_session_check'] = True
-    return render(request, 'account/passkey_enroll.html', ctx)
+    return _render_with_csp(request, 'account/passkey_enroll.html', ctx)
+
+
+def _render_with_csp(request, template, ctx, frame_ancestors="'none'"):
+    """Render a hosted auth page and stamp its Content-Security-Policy.
+
+    Header and markup read the same `ctx['csp_nonce']`, so they can never
+    disagree. `frame_ancestors` is per-page: `'none'` on the token-holding
+    pages, `""` (drop the directive) on /contact, which is documented as
+    iframe-embeddable from an external marketing site. See
+    `mojo.apps.account.services.csp`.
+    """
+    from mojo.apps.account.services import csp
+
+    response = render(request, template, ctx)
+    return csp.apply(response, ctx.get('csp_nonce', ''),
+                     api_base=ctx.get('api_base', ''),
+                     frame_ancestors=frame_ancestors)
 
 
 def _auth_context(request, group=None):
@@ -317,6 +334,10 @@ def _auth_context(request, group=None):
         register_fields)
 
     return {
+        # Per-request CSP nonce. Every inline <script> in a template extending
+        # account/auth_base.html carries it; _render_with_csp puts the same
+        # value in the header. See mojo.apps.account.services.csp.
+        'csp_nonce': secrets.token_hex(16),
         'api_base': theme.api_base or '',
         'success_redirect': theme.success_redirect or '/',
         'logo_url': theme.logo_url or '',
@@ -360,10 +381,10 @@ def _serve_login(request, page_mode='login', group=None):
     if page_mode == 'register':
         ctx['page_title'] = 'Create Account'
         ctx['subtitle'] = 'Create your account'
-        return render(request, 'account/register.html', ctx)
+        return _render_with_csp(request, 'account/register.html', ctx)
     ctx['page_title'] = 'Sign In'
     ctx['subtitle'] = 'Sign in to your account'
-    return render(request, 'account/login.html', ctx)
+    return _render_with_csp(request, 'account/login.html', ctx)
 
 
 def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
@@ -495,7 +516,10 @@ def _serve_contact(request, kind='', group=None):
     ctx['page_title'] = kind_ctx['kind_title']
     ctx['subtitle'] = kind_ctx['kind_subtitle']
     ctx['contact_submit_url'] = 'account/bouncer/message'
-    return render(request, 'account/contact.html', ctx)
+    # frame_ancestors="" drops the directive: embedding /contact?kind=<kind> in
+    # an iframe is the documented integration for an external marketing site
+    # (docs/web_developer/account/public_messages.md).
+    return _render_with_csp(request, 'account/contact.html', ctx, frame_ancestors="")
 
 
 # ---------------------------------------------------------------------------

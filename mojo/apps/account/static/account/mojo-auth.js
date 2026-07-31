@@ -859,12 +859,26 @@
         /**
          * Mint a short-lived handoff code on behalf of the current authenticated
          * session. Requires a stored access token — sends it as Bearer auth.
+         *
+         * A destination is required by THIS CLIENT and always sent. Whether the
+         * server also enforces it is a deployment opt-in: with no allowlist
+         * configured the server mints for any destination and files a monitor
+         * incident; with AUTH_HANDOFF_ALLOWED_URLS or AUTH_HANDOFF_RESOLVER set
+         * it refuses an unlisted one with a 400. Always sending the destination
+         * is what makes the monitor incidents and the audit trail useful, and
+         * keeps this client correct on a deployment that later opts in.
+         *
+         * A rejection here means "do not navigate" — never fall back to sending
+         * the user to the destination anyway.
+         *
+         * @param {string} destination - absolute URL the code will be handed to
          * @returns {Promise<{code: string, expires_in: number}>}
          */
-        requestHandoffCode: function () {
+        requestHandoffCode: function (destination) {
             var authHeader = MojoAuth.getAuthHeader();
             if (!authHeader) return Promise.reject(new Error('Not authenticated'));
-            return post(ep('handoff'), {}, { 'Authorization': authHeader })
+            if (!destination) return Promise.reject(new Error('No handoff destination provided'));
+            return post(ep('handoff'), { redirect_uri: destination }, { 'Authorization': authHeader })
                 .then(function (resp) {
                     var d = (resp && resp.data) ? resp.data : resp;
                     if (!d || !d.code) throw new Error('No code in handoff response');

@@ -179,6 +179,139 @@ key linked to a superuser member inherited platform authority it was never issue
 for. Any integration driving `registrar/adopt` with an API key must move to an
 interactive superuser session.
 
+**feat (account/security)** — **an opt-in nonce-based Content-Security-Policy for
+the hosted auth pages (maestro item 945).** The framework sets **no** security
+headers on these pages today — no CSP, no `X-Frame-Options` — so the
+highest-value pages it serves, the ones holding access and refresh tokens in
+`localStorage`, are framable by any origin. `AUTH_CSP_ENABLED = True` now closes
+that, sending `frame-ancestors 'none'` on `/auth`, `/register` and `/passkey`.
+**`/contact` deliberately omits `frame-ancestors`** even when enabled, so the
+documented "embed `/contact?kind=<kind>` in an iframe" marketing-site
+integration keeps working.
+
+**Nothing changes on upgrade — `AUTH_CSP_ENABLED` ships `False`.** A CSP can
+only ever break things (an overridden auth template with its own inline
+`<script>`, a page you frame), and that is not a cost to impose on a deployment
+that never asked for the header. The `nonce="{{ csp_nonce }}"` attributes are
+stamped into the templates either way; a nonce with no CSP is inert, so the
+default is a genuine no-op.
+
+The rest of the policy:
+
+```
+default-src 'self'; base-uri 'none'; object-src 'none';
+frame-ancestors 'none'; form-action 'self';
+script-src 'self' 'nonce-<32 hex>'; style-src 'self' 'unsafe-inline' https: [<api_origin>];
+img-src * data:; font-src 'self' data:; connect-src 'self' [<api_origin>]
+```
+
+`script-src` is nonce-locked — no `'unsafe-inline'`, no wildcard, no bare
+scheme — so an injected `<script>` cannot execute. `style-src` and `img-src` stay
+permissive on purpose: tenant `custom_css`, `logo_url`, `hero_image_url` and
+`favicon_url` are arbitrary-origin by design, and a nonce in `style-src` would
+make browsers ignore `'unsafe-inline'` and break every style attribute on the
+page. Scope is deliberately narrow — the bouncer challenge/decoy pages, the
+email-confirm pages and every JSON API response are unchanged, and this is not
+framework-wide middleware.
+
+**Turning it on, if you override the auth templates.** Set `AUTH_CSP_ENABLED =
+True` **and** `AUTH_CSP_REPORT_ONLY = True` first: any inline `<script>` in your
+own `account/auth_base.html`, `login.html`, `register.html`,
+`passkey_enroll.html` or `contact.html` — or added through
+`{% block page_script %}` / `{% block extra_css %}` — has no nonce and would
+stop executing under enforcement. Report-only shows you which. Fix by stamping
+`nonce="{{ csp_nonce }}"` on the `<script>` open tag; the context key is always
+present. `{{ x|json_script:"id" }}` tags need nothing (Django emits them as
+`type="application/json"` data blocks, which CSP never checks), and style
+attributes need nothing. Then drop `AUTH_CSP_REPORT_ONLY`.
+
+Three new optional settings, all **file-only** (`settings.get_static`, so a
+DB/Redis `Setting` row can never weaken the header) and all read **per request**:
+`AUTH_CSP_ENABLED` (default `False`) is the switch; `AUTH_CSP_REPORT_ONLY = True`
+sends `Content-Security-Policy-Report-Only` instead; `AUTH_CSP_DIRECTIVES`
+merges per directive (a present key replaces, an empty value drops, an unknown
+key is emitted as-is, so you can add `report-uri`). The per-request nonce is
+always appended to the final `script-src` and cannot be removed. Full reference:
+`docs/django_developer/security/csp.md`.
+
+**feat (account/security)** — **an opt-in destination allowlist for
+`POST /api/auth/handoff` (maestro item 943).** The endpoint mints a code that
+`POST /api/auth/exchange` trades for an access **and** refresh token pair, and
+recorded nothing about where the code was going; `mojo-auth.js` posted an empty
+body, and the destination was chosen entirely by client-side JS reading the
+`?redirect=` param. A crafted link opened by an already-signed-in user hands
+that user's refresh token to any origin. `docs/django_developer/account/auth.md`
+documented this as intentional and delegated the fix to deployments; that text
+has been rewritten.
+
+**The setting is the switch, and there is no flag day** — same shape as
+`JOBS_ALLOWED_CHANNELS` below:
+
+- **Neither setting configured** (what every deployment upgrades into) —
+  **monitor mode**. `redirect_uri` is optional and the handoff mints exactly as
+  it always has, for any destination. A destination that is not on the allowlist
+  files a suppressed `auth:handoff_destination_unlisted` incident naming it, one
+  per destination host per hour. The incident feed writes your allowlist for you.
+- **Either setting configured** (a resolver path, or a list — even `[]`) —
+  **enforcement**. `redirect_uri` becomes required, an unlisted destination gets
+  `400` with **no code minted**, and a suppressed
+  `auth:handoff_destination_refused` incident is filed.
+
+The destination is decided at **issuance**, where nothing spoofable
+participates — checked before a code exists. `auth/exchange` is deliberately
+unchanged: it is a server-to-server call from the consuming app's backend, which
+sets its own headers, so an attacker holding the code holds those too.
+
+**What enforcement buys, stated honestly.** It closes a one-click leak: a link
+to *your own* auth page carrying `?redirect=https://attacker.example/`, opened by
+an already-signed-in user, mints a code straight to the attacker's origin. A
+password manager, a passkey and a 2FA prompt do **not** stop that — the victim
+types nothing and the URL bar shows your real domain throughout. What it does
+**not** buy is protection from someone building their own login page against the
+public REST API and phishing your users; that is always available, and against a
+password-only population it yields the attacker more (the password itself). Turn
+it on for the first attack; do not mistake it for a general anti-phishing control.
+
+Two new settings, checked in order:
+
+- **`AUTH_HANDOFF_RESOLVER`** — dotted path to `fn(url, request=None) -> bool`,
+  loaded via `mojo.helpers.modules.load_function()` and cached. When set it
+  decides. This is the answer for a multi-tenant platform whose destinations
+  live in a DB rather than a settings file. It is security-critical deployment
+  code: the framework wraps the call and treats an exception — or a dotted path
+  that fails to import — as **refused**, logged. Unlike `USER_LOGIN_HANDLER`,
+  which swallows errors, a broken resolver never opens the gate.
+- **`AUTH_HANDOFF_ALLOWED_URLS`** — static list, matched on **exact host + path
+  prefix**. `https://*.example.com/` admits `example.com` and one extra
+  dot-free label (`a.example.com`), not `a.b.example.com` and not
+  `example.com.evil.tld`; `/app` does not admit `/application`; an `https://`
+  entry never admits an `http://` destination. Host-only matching was rejected —
+  it would make every open redirector, query reflector and analytics beacon on
+  an allowed host a token-deposit site.
+
+Same-origin and relative redirects are unaffected either way (they never mint a
+code). This deliberately does **not** inherit `ALLOWED_REDIRECT_URLS`: operators
+wrote those values under different semantics — wildcards are inert there and
+live here — so reusing them would silently change what they mean.
+`create_handoff_code()` gains a `destination=` argument and stores `dest`
+alongside `uid`/`ip`, for audit only — neither is enforced on consume.
+
+Client-side, `MojoAuth.requestHandoffCode(destination)` now takes the
+destination and always sends it — which is what makes the monitor incidents and
+the audit trail useful, and keeps the client correct on a deployment that later
+opts in. The auth page's failure path shows an error and **navigates nowhere**;
+it used to fall back to the raw target, which would have defeated the check.
+
+**fix (account/security)** — **`?back=` on the hosted auth pages can no longer
+carry a `javascript:` URL.** `auth_base.html` assigned the raw query param
+straight to the "Back to website" link's `href` (and published it on
+`_matConfig.backUrl`, which page scripts read into an href), so
+`?back=javascript:…` executed on the auth origin the moment a visitor clicked
+Back — a live XSS sink with no CSP behind it. Both sinks now resolve the value
+and accept only `http`/`https`. The host is deliberately **not** allowlisted:
+"back to the marketing site" is legitimately cross-origin, and the scheme check
+is what closes the hole.
+
 ## v1.2.62 - July 30, 2026
 
 

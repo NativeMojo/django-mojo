@@ -12,7 +12,7 @@ from mojo.apps.account.services import auth_config
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
 from mojo.apps.shortlink import maybe_shorten_url
-from mojo.helpers import dates, crypto
+from mojo.helpers import dates, crypto, logit
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
 
@@ -223,9 +223,42 @@ def on_auth_handoff(request):
     Issue a short-lived, single-use handoff code for the authenticated user.
     The auth-origin page calls this when redirecting to a different-origin app
     so the app can exchange the code for a JWT without the JWT touching the URL.
+
+    `redirect_uri` names where the code is going. Destination ENFORCEMENT IS
+    OPT-IN and off until a deployment sets `AUTH_HANDOFF_ALLOWED_URLS` or
+    `AUTH_HANDOFF_RESOLVER`:
+
+      * monitor mode (neither set) — mints exactly as it always has;
+        `redirect_uri` is optional, and one that is not on the allowlist files
+        an `auth:handoff_destination_unlisted` incident instead of refusing.
+        The incident feed names every destination you would have to allowlist,
+        so it writes the setting for you.
+      * enforced (either set) — `redirect_uri` is required and must be allowed
+        by `mojo.apps.account.services.redirect_allowlist`, else 400, no code
+        minted, and an `auth:handoff_destination_refused` incident.
+
+    The check is here, at issuance, and never at exchange time: the code buys
+    an access AND refresh token pair, and an attacker holding it also controls
+    every header on the exchange call (see that module's docstring).
     """
-    from mojo.apps.account.services import auth_handoff
-    code = auth_handoff.create_handoff_code(request.user, ip=request.ip)
+    from mojo.apps.account.services import auth_handoff, redirect_allowlist
+    destination = request.DATA.get("redirect_uri")
+    if redirect_allowlist.is_enforced():
+        if not destination:
+            raise merrors.ValueException(
+                "redirect_uri is required for auth handoff")
+        if not redirect_allowlist.is_allowed_destination(destination, request):
+            redirect_allowlist.report_unlisted_destination(
+                destination, request=request, enforced=True)
+            raise merrors.ValueException("redirect_uri is not permitted for auth handoff")
+    elif destination and not redirect_allowlist.is_allowed_destination(destination, request):
+        # Monitor mode: mint anyway — that is the pre-existing behavior and an
+        # upgrade must not change it — but file an incident naming the
+        # destination, so the feed builds the allowlist before anyone opts in.
+        redirect_allowlist.report_unlisted_destination(
+            destination, request=request, enforced=False)
+    code = auth_handoff.create_handoff_code(
+        request.user, destination=destination, ip=request.ip)
     return JsonResponse({
         "status": True,
         "data": {

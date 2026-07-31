@@ -150,13 +150,28 @@ the auth origin. The handoff service mints a short-lived, single-use code that
 the auth page appends to the redirect URL; the app exchanges it for a JWT.
 
 ```python
-from mojo.apps.account.services import auth_handoff
+from mojo.apps.account.services import auth_handoff, redirect_allowlist
 
-# Issued from the authenticated POST /api/auth/handoff handler
-code = auth_handoff.create_handoff_code(request.user, ip=request.ip)
+# Issued from the authenticated POST /api/auth/handoff handler. Destination
+# ENFORCEMENT IS OPT-IN and off until a deployment configures it — see below.
+destination = request.DATA.get("redirect_uri")
+if redirect_allowlist.is_enforced():
+    if not destination:
+        raise merrors.ValueException("redirect_uri is required for auth handoff")
+    if not redirect_allowlist.is_allowed_destination(destination, request):
+        redirect_allowlist.report_unlisted_destination(
+            destination, request=request, enforced=True)
+        raise merrors.ValueException("redirect_uri is not permitted for auth handoff")
+elif destination and not redirect_allowlist.is_allowed_destination(destination, request):
+    # Monitor mode: mint anyway — that is the pre-existing behavior — but file
+    # an incident naming the destination.
+    redirect_allowlist.report_unlisted_destination(
+        destination, request=request, enforced=False)
+code = auth_handoff.create_handoff_code(request.user, destination=destination, ip=request.ip)
 
 # Consumed by the public POST /api/auth/exchange handler
-data = auth_handoff.consume_handoff_code(code)  # {"uid": <id>, "ip": "..."} or None
+data = auth_handoff.consume_handoff_code(code)
+# -> {"uid": <id>, "ip": "...", "dest": "https://app.example.com/"} or None
 ```
 
 Codes are 32-hex random strings stored under Redis key `auth:handoff:<code>`,
@@ -167,15 +182,162 @@ exchange attempts cannot both win. The exchange endpoint reuses
 tracking, last-login bump, and webapp-URL metadata all fire on the handoff
 exchange.
 
+### The destination is decided at issuance
+
+A handoff code buys an access **and** refresh token pair, so where it is going
+is decided when it is minted, and nowhere else. Neither `dest` nor `ip` is
+re-checked on consume: `POST /api/auth/exchange` is a server-to-server call from
+the consuming app's own backend, which chooses its own egress IP and its own
+headers, so an `Origin`/`Referer` check there would reject honest callers and
+stop nobody who already holds the code. Both stored fields are audit records.
+
+### Enforcement is OPT-IN — the setting is the switch
+
+Whether that decision is *binding* is a deployment choice, and it is **off until
+you make it**. As with [`JOBS_ALLOWED_CHANNELS`](../jobs/settings.md#channels),
+the setting itself is the switch — there is no flag day:
+
+| State | `redirect_uri` | Destination not on the allowlist | Incident filed |
+|---|---|---|---|
+| **Neither `AUTH_HANDOFF_ALLOWED_URLS` nor `AUTH_HANDOFF_RESOLVER` set** — *monitor mode*, what every deployment upgrades into | optional | code is **minted anyway**, exactly as before | `auth:handoff_destination_unlisted`, level 3 |
+| **Either one set** — a resolver dotted path, or a list, **even an empty one** — *enforced* | **required**, `400` when missing | `400`, **no code minted** | `auth:handoff_destination_refused`, level 3 |
+
+Both incidents are suppressed to **one per destination host per hour**, so a
+crafted-link flood cannot spam the incident plane — the host is the useful unit,
+since that is what goes in the allowlist. The body names the destination, so in
+monitor mode the incident feed writes `AUTH_HANDOFF_ALLOWED_URLS` for you.
+
+Expect noise on day one: in monitor mode there is no list, so **every**
+destination is unlisted and each distinct destination host produces one incident
+per hour until you list it. That is the feature — the feed converges on exactly
+the set of hosts you need to allow. A handoff with no `redirect_uri` at all
+reports nothing (there is no destination to name) and still mints.
+
+`redirect_allowlist.is_enforced()` is the mode predicate.
+`is_allowed_destination()` answers allow/deny **only** and never considers the
+mode — callers pair the two, which is why a `False` in monitor mode is reported
+rather than acted on.
+
+Same-origin and relative redirects are unaffected in either mode — they never
+mint a code, because the tokens already live in `localStorage` on the
+destination origin.
+
+#### Rolling enforcement out
+
+1. **Upgrade.** Nothing breaks. With neither setting present you are in monitor
+   mode and the endpoint mints exactly as it always has.
+2. **Watch the incident feed** for `auth:handoff_destination_unlisted`. Each one
+   names a destination that is currently receiving token-buying codes.
+3. **Add the legitimate ones** to `AUTH_HANDOFF_ALLOWED_URLS` (or write a
+   resolver, below).
+4. **You are now enforcing.** The setting exists, so anything unlisted is
+   refused with a `400` instead of reported. There is no third setting to flip.
+
+Turning enforcement back off means removing **both** settings.
+`AUTH_HANDOFF_ALLOWED_URLS = []` is not "no opinion" — it is "enforce, and allow
+nothing".
+
+#### What enforcement actually buys you — and what it does not
+
+Worth being honest about, because the answer is narrower than "stops phishing".
+
+**It closes a specific one-click token leak.** An attacker sends an
+already-signed-in user a link to *your own* auth page carrying
+`?redirect=https://attacker.example/`. The page has a live session, so it mints
+a handoff code — good for an access **and** refresh token pair — and the browser
+navigates straight to the attacker's origin with that code in the URL. The
+victim types nothing, the URL bar shows your real domain the whole time, and
+there is no credential prompt to be suspicious of. **A password manager, a
+passkey and a 2FA prompt do not stop this**, because none of them is involved:
+the user is already authenticated and never enters anything.
+
+**It is not a general anti-phishing control.** Nothing here stops an attacker
+from building their own login page against your public REST API and phishing
+your users directly. That attack is always available, needs no `?redirect=`
+param, and against a password-only user population it yields the attacker *more*
+than a handoff code does — the password itself, reusable and not expiring in 60
+seconds.
+
+So: worth turning on, cheap once the incident feed has named your destinations,
+and a narrow, specific hardening rather than a category of protection.
+
+### Settings
+
 | Setting | Default | Purpose |
 |---|---|---|
 | `AUTH_HANDOFF_CODE_TTL` | `60` | Seconds before a handoff code expires |
+| `AUTH_HANDOFF_ALLOWED_URLS` | **unset** (monitor mode) | Static list of allowed destination URLs. **Setting it — even to `[]` — turns enforcement on** |
+| `AUTH_HANDOFF_RESOLVER` | `""` | Dotted path to `fn(url, request=None) -> bool`. **When set it decides**, the static list is not consulted, and enforcement is on |
 
-**Security trade-off.** The redirect destination is **not** allowlisted — by
-design, per the request scope. A malicious `?redirect=evil.example.com` link
-opened by an already-signed-in user will hand a JWT to `evil` after
-auto-session-resume. Deployments needing tighter control should layer their
-own allowlist over the `?redirect=` param before the bouncer.
+The matching rules below define what "allowed" means. They run in **both**
+modes — in monitor mode the same evaluation decides whether an incident is
+filed, it just does not decide whether the code is minted.
+
+Static entries match on **exact host + path prefix**:
+
+```python
+AUTH_HANDOFF_ALLOWED_URLS = [
+    "https://app.example.com/",        # any path on that host
+    "https://portal.example.com/app",  # /app and /app/... only, not /application
+    "https://*.tenants.example.com/",  # one extra dot-free label, plus the base host
+]
+```
+
+- Scheme must be `http`/`https` **and must match the entry** — an `https://`
+  entry never admits an `http://` destination. This is also how `javascript:`
+  and `data:` are refused: they have no hostname.
+- Host comparison is case-folded and exact. `*.example.com` admits
+  `example.com` and `a.example.com`, but **not** `a.b.example.com` and **not**
+  `example.com.evil.tld`.
+- Path matching stops at a segment boundary, so `/app` does not admit
+  `/application`. Query strings are ignored. Host-only matching was
+  deliberately rejected — it would turn every open redirector, query reflector
+  and analytics beacon on an allowed host into a token-deposit site.
+- Hostnames must be plain ASCII host characters; list IDN destinations in
+  punycode. That closes the parser-differential class where Python keeps a
+  character inside the host that a browser treats as an authority terminator.
+
+`AUTH_HANDOFF_ALLOWED_URLS` is deliberately **separate** from
+`ALLOWED_REDIRECT_URLS` (the OAuth `redirect_uri` allowlist). Operators wrote
+those values under different semantics — notably, wildcards are inert there and
+live here — so handoff destinations are never inherited from them. Note the
+side effect of the opt-in design: an existing `ALLOWED_REDIRECT_URLS` does not
+put you into handoff enforcement, and adding a handoff entry for the first time
+does.
+
+### Supplying a resolver instead of a list
+
+A multi-tenant platform that cannot enumerate destinations in a settings file
+implements one function against its own domain registry:
+
+```python
+# myapp/services/handoff.py
+def allow_tenant_destination(url, request=None):
+    from urllib.parse import urlsplit
+    parts = urlsplit(url)
+    if parts.scheme != "https":
+        return False
+    return TenantDomain.objects.filter(
+        hostname=(parts.hostname or "").lower(), is_active=True).exists()
+```
+
+```python
+AUTH_HANDOFF_RESOLVER = "myapp.services.handoff.allow_tenant_destination"
+```
+
+Loaded once via `mojo.helpers.modules.load_function()` and cached by dotted
+path. **Setting it also turns enforcement on** — a resolver is one of the two
+opt-in switches, so `redirect_uri` becomes required and a `False` answer is a
+`400` rather than an incident.
+
+**A resolver is security-critical code in your deployment**: compare hosts
+exactly, never substring- or prefix-match a hostname, and check the scheme. The
+framework fails closed around it — a resolver that raises, or a dotted path that
+fails to import, refuses **everything** and is logged. Unlike
+`USER_LOGIN_HANDLER`, which swallows errors so a failing analytics hook cannot
+lock users out, a broken resolver must never open the gate. (Fail-closed here is
+about the *resolver*, not about the feature: with no resolver and no list
+configured at all, the deployment is in monitor mode and nothing is refused.)
 
 See [Auth Pages — Cross-Origin Redirect Handoff](../../web_developer/account/auth_pages.md#cross-origin-redirect-handoff)
 for the end-to-end client-side flow.

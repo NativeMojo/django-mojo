@@ -265,12 +265,37 @@ https://app.example.com/portal?auth_code=<32-hex>
 
 The flow:
 1. Auth page completes login.
-2. Detects cross-origin redirect, POSTs `/api/auth/handoff` → gets `code`.
+2. Detects cross-origin redirect, POSTs `/api/auth/handoff` with
+   `{"redirect_uri": "<resolved destination>"}` → gets `code`.
 3. Browser navigates to `<redirect>?auth_code=<code>`.
 4. The app calls `MojoAuth.handleAuthCodeFromURL()` on bootstrap — strips the
    param, POSTs `/api/auth/exchange`, stores resulting tokens.
 
 Codes are single-use and expire after `AUTH_HANDOFF_CODE_TTL` seconds (default 60).
+
+**The destination may be allowlisted server-side — that is an operator
+choice.** `?redirect=` is attacker-supplied and the code buys an access +
+refresh token pair, so a deployment can restrict which destinations get one.
+**The check is opt-in and off by default:** with neither
+`AUTH_HANDOFF_ALLOWED_URLS` nor `AUTH_HANDOFF_RESOLVER` configured the server
+mints for any destination (and records an internal incident naming it); with
+either configured it returns `400` and mints nothing for anything unlisted. See
+[Cross-Origin Auth Handoff](authentication.md#cross-origin-auth-handoff).
+
+Either way, **when the mint is refused the auth page shows an error and stays
+put** — it does not fall back to navigating to the destination without a code.
+If your app's origin is a legitimate destination, ask the operator to add it
+before pointing `?redirect=` at it on a deployment that enforces; on one that
+does not, it works today but shows up in their incident feed as a destination to
+allowlist.
+
+`MojoAuth.requestHandoffCode(destination)` takes the destination as a required
+argument and rejects without one, regardless of what the server enforces. Treat
+a rejection as "do not navigate".
+
+**`?back=`** (the "Back to website" link) accepts only `http`/`https` URLs and
+same-origin relative paths — a `javascript:`/`data:` value is dropped and the
+link stays hidden.
 
 ```html
 <script src="https://auth.example.com/api/account/static/mojo-auth.js"></script>
@@ -297,6 +322,36 @@ GET /api/account/static/mojo-auth.js          → MojoAuth library
 ```
 
 Served with `Cache-Control: public, max-age=86400` in production.
+
+---
+
+## Embedding — `/auth`, `/register` and `/passkey` may refuse to be framed
+
+**Do not frame them.** On a deployment that has enabled the hosted-page
+Content-Security-Policy, these three pages are served with
+`Content-Security-Policy: … frame-ancestors 'none' …`, so a browser refuses to
+render them inside an `<iframe>`, `<frame>`, `<embed>` or `<object>` from any
+origin, including your own. They hold access and refresh tokens in
+`localStorage`; framing them is a clickjacking surface with no legitimate use.
+
+**The header is opt-in and off by default** (`AUTH_CSP_ENABLED` ships `False`),
+so on a stock deployment no CSP header is sent at all and these pages can still
+be framed. Treat that as an accident of configuration, not a supported
+integration — an operator can turn the header on at any time and a framed
+embed breaks that day.
+
+Link or redirect to them instead — see
+[Linking to Auth Pages](#linking-to-auth-pages) and
+[Cross-Origin Redirect Handoff](#cross-origin-redirect-handoff).
+
+`/contact` is **never** affected: even with the policy enabled it deliberately
+omits `frame-ancestors` so it can stay embeddable from an external marketing
+site. See [Public Messages](public_messages.md).
+
+No REST endpoint, request payload, response body or status code is affected
+either way. The policy, when enabled, also locks `script-src` to a per-request
+nonce, which matters only if your deployment overrides the page templates — see
+the backend note in `docs/django_developer/security/csp.md`.
 
 ---
 
