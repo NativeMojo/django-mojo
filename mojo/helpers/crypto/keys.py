@@ -42,9 +42,20 @@ def build_key_list(primary, fallbacks):
     elif not isinstance(fallbacks, (list, tuple)):
         fallbacks = [fallbacks]
     keys = [primary]
+    dropped = 0
     for key in fallbacks:
         if not key or not isinstance(key, str):
+            dropped += 1
             continue
         if key not in keys:
             keys.append(key)
+    if dropped:
+        # Dropping is fail-closed (the fallback never takes effect), but the
+        # operator would otherwise learn only via unreadable files — same
+        # unset-vs-garbage distinction _warn_coercion makes for settings.
+        # logit is imported lazily; this module loads very early.
+        from mojo.helpers import logit
+        logit.warning(
+            "crypto",
+            f"SECRET_KEY_FALLBACKS: dropped {dropped} empty/non-string entries")
     return keys

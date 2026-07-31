@@ -343,7 +343,7 @@ Django is already configured in the test process.
 def test_token_expired(opts):
     import time, hmac, hashlib, json
     from mojo.apps.account.services.bouncer.token_manager import (
-        TokenManager, _b64url_encode, _get_signing_key,
+        TokenManager, _b64url_encode, _signing_keys,
     )
     # Craft an expired token directly — no server needed
     payload = {
@@ -353,7 +353,7 @@ def test_token_expired(opts):
         'nonce': 'expired-nonce',
     }
     p64 = _b64url_encode(json.dumps(payload, separators=(',', ':')))
-    sig = hmac.new(_get_signing_key(), p64.encode(), hashlib.sha256).digest()
+    sig = hmac.new(_signing_keys()[0], p64.encode(), hashlib.sha256).digest()
     token = f"{p64}.{_b64url_encode(sig)}"
 
     try:
