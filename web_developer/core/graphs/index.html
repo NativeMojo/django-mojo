@@ -3979,6 +3979,17 @@
 </tbody>
 </table>
 <p>The default graph used when no <code>graph</code> param is provided is <code>default</code> for single objects and <code>list</code> for lists.</p>
+<p><strong>A misspelled or unsupported <code>graph</code> value does not error.</strong> If you request
+a graph name a resource doesn't define, the response falls back to <code>default</code>
+silently — <code>200 OK</code>, with <code>default</code>'s fields rather than the ones you
+expected. The response envelope's <code>graph</code> key still echoes back whatever name
+you requested, even when a fallback happened, so it is <strong>not</strong> a reliable way
+to detect the typo — compare the fields you got against the resource's
+documented <code>default</code> graph instead. This also means a resource that gates a
+sensitive field behind an opt-in graph (see e.g.
+<a href="../../account/api_keys/#security-notes">account/api_keys.md</a>) will quietly
+omit that field on a typo'd graph name rather than telling you it doesn't
+exist.</p>
 <h2 id="nested-objects">Nested Objects<a class="headerlink" href="#nested-objects" title="Permanent link">&para;</a></h2>
 <p>Some graphs include nested related objects. For example, a <code>default</code> graph for a book might include the author object:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>

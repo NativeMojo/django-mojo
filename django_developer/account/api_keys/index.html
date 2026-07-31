@@ -4116,7 +4116,7 @@ a valid state.</p>
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;view_orders&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;create_orders&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
 <a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="p">}</span>
 </code></pre></div>
-<p>The raw token is included in the creation response under <code>data.token</code>. It is <strong>also stored encrypted</strong> via <code>MojoSecrets</code>, so it can be retrieved at any time — <code>ApiKey.get_token()</code> server-side, and the <code>default</code> graph re-serializes it as <code>token</code> on <strong>every</strong> read (<code>GET /api/group/apikey</code> and <code>/api/group/apikey/&lt;id&gt;</code>), to any caller holding <code>manage_group</code> / <code>manage_groups</code> / <code>groups</code>. This is not a "shown once" credential. See <a href="#security-notes">Security Notes</a>.</p>
+<p>The raw token is included in the creation response under <code>data.token</code>. It is <strong>also stored encrypted</strong> via <code>MojoSecrets</code>, so it can be retrieved later — <code>ApiKey.get_token()</code> server-side, and over REST through the <strong>opt-in</strong> <code>token</code> graph (<code>GET /api/group/apikey/&lt;id&gt;?graph=token</code>), which is audited. This is not a "shown once" credential, but the secret is <strong>not</strong> on the <code>default</code> graph: ordinary reads and list responses never carry it. See <a href="#security-notes">Security Notes</a>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
@@ -4152,7 +4152,12 @@ a valid state.</p>
 <tr>
 <td><code>GET</code></td>
 <td><code>/api/group/apikey</code></td>
-<td>List keys for a group</td>
+<td>List keys for a group (no tokens)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/group/apikey?graph=token</code></td>
+<td>List keys <strong>with their live raw tokens</strong> (bulk read, audited)</td>
 </tr>
 <tr>
 <td><code>POST</code></td>
@@ -4162,7 +4167,12 @@ a valid state.</p>
 <tr>
 <td><code>GET</code></td>
 <td><code>/api/group/apikey/&lt;id&gt;</code></td>
-<td>Get key details</td>
+<td>Get key details (no token)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/group/apikey/&lt;id&gt;?graph=token</code></td>
+<td>Get key details <strong>plus the live raw token</strong> (audited)</td>
 </tr>
 <tr>
 <td><code>POST</code></td>
@@ -4225,7 +4235,7 @@ permissions, and limits — a brand-new token. The <strong>previous</strong> tok
 invalidated immediately (its hash <em>and</em> its encrypted copy are overwritten)
 and cannot be recovered. The <strong>new</strong> token is returned in this response; it is
 not write-once — like any ApiKey token it stays readable afterwards via
-<code>ApiKey.get_token()</code> and the default graph until the next rotation.</p>
+<code>ApiKey.get_token()</code> and the opt-in <code>token</code> graph until the next rotation.</p>
 <ul>
 <li>Authenticate with <code>Authorization: apikey &lt;token&gt;</code> (the key being rotated).</li>
 <li>Self-service: no management permission — the caller already holds the secret
@@ -4266,11 +4276,15 @@ equivalent.)</p>
 <ul>
 <li><strong>The raw token is stored, not just hashed.</strong> <code>token_hash</code> (SHA-256) is for indexed lookup; the raw token itself lives in <code>mojo_secrets</code>, encrypted via <code>MojoSecrets</code> (AES-256-GCM, key via PBKDF2). <code>ApiKey.get_token()</code> recovers it.</li>
 <li><strong>Key-derivation caveat.</strong> <code>MojoSecrets._get_secrets_password()</code> derives the key from <code>{created}{pk}{ClassName}</code> — all plaintext columns on the same row, with no server-side secret mixed in. This protects against exfiltration of the <code>mojo_secrets</code> column on its own; it does <strong>not</strong> protect against a row-level or full-table dump. Treat <code>account_apikey</code> as a table of live credentials and protect it like one. (<code>KSMSecrets</code> — the KMS-backed base in the same module — is a stronger option; <code>ApiKey</code> does not use it today.)</li>
-<li><strong>The default graph returns the live token on every read.</strong> <code>GRAPHS["default"]</code> carries <code>("get_token", "token")</code>, so any caller with <code>manage_group</code> / <code>manage_groups</code> / <code>groups</code> gets the raw token back on list and detail, not only at creation. The <code>me</code> graph omits it, and <code>/rotate</code> uses the forced <code>me</code> graph plus an explicit token field. Whether the default graph <em>should</em> expose it is an open question tracked as maestro item 424 — the behavior described here is the current one.</li>
+<li><strong>Token read-back is opt-in and audited.</strong> The secret is on the <code>token</code> graph only — <code>GRAPHS["token"]</code> carries <code>("rest_get_token", "token")</code>. <code>default</code> (which list responses fall back to, since <code>ApiKey</code> defines no <code>list</code> graph) and <code>me</code> both omit it, and <code>/rotate</code> uses the forced <code>me</code> graph plus an explicit token field. Every export through <code>rest_get_token()</code> writes an <code>api_key:token_read</code> <code>logit.Log</code> row — one per serialized key, so a bulk read via <code>?graph=token</code> on a list is visible once per credential. <strong>The permission bar is unchanged</strong>: <code>graph=token</code> is open to the same <code>manage_group</code> / <code>manage_groups</code> / <code>groups</code> holders as any other read. What changed is that the credential no longer rides along on requests that never asked for it — not who may ask.</li>
+<li><strong>An unrecognized graph name falls back to <code>default</code>.</strong> A typo like <code>?graph=tokens</code> returns the key <em>without</em> the token rather than erroring — it fails closed, but it is a confusing silence if you are expecting the field.</li>
+<li><strong>The opt-in read works on lists too.</strong> <code>GET /api/group/apikey?graph=token</code> returns a live token for every key in the group, so it is a bulk credential read. It is audited once per key, but the list endpoint has no maximum page size — size the blast radius of a <code>groups</code> grant accordingly.</li>
+<li><strong>File-based request logging is not masked.</strong> With <code>LOGIT_FILE_ALL</code> / <code>LOGIT_DEBUG_ALL</code> enabled, <code>mojo/middleware/logging.py</code> writes small response bodies verbatim to <code>requests.log</code>, so a <code>?graph=token</code> response lands there in the clear. The DB-backed <code>logit.Log</code> path <em>is</em> masked (<code>mask_sensitive_data</code> matches <code>"token": "..."</code>). This predates the opt-in change — which strictly improves it, since previously <em>every</em> read did this — but it is the one place the "the secret only travels where it was asked for" property does not hold.</li>
+<li><strong><code>DENY_AI = True</code>.</strong> The assistant's model tools cannot read this table at all. <code>query_model</code> takes a caller-supplied graph and does not filter sensitive values out of serialized output, so nothing else would stop it asking for the <code>token</code> graph.</li>
 <li><code>sys.*</code> permissions are unconditionally denied</li>
 <li>Expired or inactive keys return 401</li>
 <li>Group scope is enforced at the dispatcher level — keys cannot access groups outside their hierarchy</li>
-<li>The raw <code>token_hash</code> and <code>mojo_secrets</code> <strong>columns</strong> are never serialized — but note that the decrypted token is exposed via the <code>token</code> extra above, so "the secret columns are hidden" is not the same as "the secret is hidden"</li>
+<li>The raw <code>token_hash</code> and <code>mojo_secrets</code> <strong>columns</strong> are never serialized — but note that the decrypted token is still reachable via the <code>token</code> graph above, so "the secret columns are hidden" is not the same as "the secret is unreachable"</li>
 </ul>
 
 
