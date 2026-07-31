@@ -226,10 +226,16 @@ class ApiKey(MojoSecrets, MojoModel):
         Prevents a group admin from self-minting a key with arbitrary powerful
         permissions.
         """
+        from mojo.helpers.request import is_override_user_session
         user = getattr(request, "user", None)
         if user is None:
             return False
-        if user.has_permission(["manage_groups", "manage_users"]):
+        # Skipped for a session that ASSUMES a member (override ApiKey /
+        # GroupScopedToken) — see GroupMember.can_change_permission for the
+        # reasoning. Reference-mode and unlinked keys read their own dict here
+        # and are unaffected.
+        if not is_override_user_session(request) and user.has_permission(
+                ["manage_groups", "manage_users"]):
             return True
         # On REST create the group FK is auto-stamped AFTER the field loop, so
         # self.group may still be None while set_permissions runs — fall back to

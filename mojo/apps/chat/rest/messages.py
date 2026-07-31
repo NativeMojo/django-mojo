@@ -1,6 +1,8 @@
 from mojo import decorators as md
 from mojo import errors as merrors
 from mojo.helpers import dates
+from mojo.helpers.request import is_override_user_session
+from .rooms import _deny_cross_tenant_room
 from ..models import (
     ChatRoom, ChatMessage, ChatMembership,
     ChatReadReceipt,
@@ -19,12 +21,16 @@ def on_chat_room_messages(request):
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
 
+    _deny_cross_tenant_room(request, room)
+
     # Must be a member
     membership = ChatMembership.objects.filter(
         room=room, user=request.user, status__in=["active", "muted"],
     ).first()
     if not membership:
-        if not (room.group and room.group.user_has_permission(request.user, ["chat", "manage_chat"])):
+        if not (room.group and room.group.user_has_permission(
+                request.user, ["chat", "manage_chat"],
+                not is_override_user_session(request))):
             raise merrors.PermissionDeniedException()
 
     qs = ChatMessage.objects.filter(room=room, is_flagged=False)
@@ -82,6 +88,8 @@ def on_chat_room_flagged(request):
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
 
+    _deny_cross_tenant_room(request, room)
+
     # Check moderator permission
     from .rooms import _check_room_moderator
     _check_room_moderator(request, room)
@@ -99,6 +107,12 @@ def on_chat_dm(request):
     Returns the existing room if one already exists.
     """
     from mojo.apps.account.models import User
+
+    # A DM room is groupless by construction, so no confined credential
+    # (ApiKey / GroupScopedToken) may open or reach one — the same
+    # None-group deny every room-resolving endpoint applies, enforced up front
+    # so the create and reuse paths agree.
+    _deny_cross_tenant_room(request, None)
 
     target_user_id = int(request.DATA.user_id)
     if target_user_id == request.user.pk:
@@ -142,6 +156,8 @@ def on_chat_room_read(request):
     room = ChatRoom.objects.filter(pk=request.DATA.room_id).first()
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
+
+    _deny_cross_tenant_room(request, room)
 
     membership = ChatMembership.objects.filter(room=room, user=request.user).first()
     if not membership:

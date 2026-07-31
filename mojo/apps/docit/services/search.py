@@ -29,9 +29,12 @@ def visible_groups(user=None, api_key=None):
     the caller is narrowed to the groups where they hold a read permission
     ('member' satisfies that for any membership — see Book.RestMeta).
 
-    An ApiKey is NEVER unrestricted, even holding a read perm: a key is issued
-    for one tenant, and its group tree is the boundary. Anonymous callers get
-    an empty queryset — the public endpoints, not search, are the public path.
+    A confined credential is NEVER unrestricted, even holding a read perm: it
+    is issued for one tenant, and its group tree is the boundary. The
+    `api_key` parameter is duck-typed — the REST call site passes
+    `restricted_identity(request)`, so a GroupScopedToken lands here too and is
+    narrowed to its signed group. Anonymous callers get an empty queryset — the
+    public endpoints, not search, are the public path.
     """
     from mojo.apps.account.models import Group
     from mojo.apps.docit.models import Book

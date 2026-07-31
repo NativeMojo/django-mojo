@@ -82,7 +82,17 @@ class GroupMember(models.Model, MojoModel):
         return self.user.email
 
     def can_change_permission(self, perm, value, request):
-        if request.user.has_permission(["manage_groups", "manage_users"]):
+        # The global short-circuit is skipped for a session that ASSUMES a
+        # member (an override ApiKey, or any GroupScopedToken): request.user is
+        # a real User there and this reads their untenanted platform-wide dict,
+        # which would let tenant-page JS driving a staff visitor's token assign
+        # member permissions inside the gated group. Authority falls through to
+        # the requester's own member row. A reference-mode or unlinked ApiKey
+        # is unaffected — request.user IS the key, so this reads the key's own
+        # group-bounded dict.
+        from mojo.helpers.request import is_override_user_session
+        if not is_override_user_session(request) and request.user.has_permission(
+                ["manage_groups", "manage_users"]):
             return True
         req_member = self.group.get_member_for_user(request.user, check_parents=True)
         if req_member is not None:
