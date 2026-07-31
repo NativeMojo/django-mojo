@@ -996,6 +996,21 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         # satisfy the global perm grant here — otherwise a key self-claiming
         # manage_users could read/edit any tenant's user by pk. Deny unless the
         # model explicitly opts in (RestMeta.ALLOW_API_KEY_GLOBAL, default False).
+        #
+        # A GroupScopedToken gets READ-ONLY SELF and nothing else. GET
+        # /api/user/me is the documented client bootstrap and must keep
+        # working; every write is refused so tenant-page JS can never mutate
+        # the platform account (password, email, revoke_sessions, every other
+        # POST_SAVE_ACTION, DELETE). Method-sniffing is sound here:
+        # on_rest_request dispatches strictly on request.method, User has no
+        # CAN_BATCH, and POST_SAVE_ACTIONS only run inside the save path — so
+        # an FK-attach VIEW check during a save arrives with the outer write
+        # verb and denies, which is the fail-closed direction. Reading another
+        # user by pk fails the self check. `request` is passed explicitly
+        # rather than relying on the active_request context var.
+        if getattr(request, "group_token", None) is not None:
+            return (request.method == "GET" and "owner" in perms
+                    and self.is_request_user(request))
         api_key = getattr(request, "api_key", None)
         if api_key is not None:
             return (type(self).get_rest_meta_prop("ALLOW_API_KEY_GLOBAL", False)

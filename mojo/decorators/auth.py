@@ -32,10 +32,11 @@ def _register_security(func, **info):
 def _deny_machine_identity_without_active_group(request, perms):
     """The ONE machine-identity gate for requires_perms/requires_group_perms.
 
-    A non-User identity (a group-scoped ApiKey, or any custom bearer identity)
-    is trusted only within an ACTIVE group context — validate_token strips
-    request.group when the key's group is deactivated, so this fails closed the
-    moment a tenant is suspended (ITEM-037). Without it, the has_permission
+    A confined identity (a group-scoped ApiKey, a GroupScopedToken, or any
+    custom bearer identity) is trusted only within an ACTIVE group context —
+    validate_token strips request.group when the key's group is deactivated,
+    and a group token cannot validate at all without one, so this fails closed
+    the moment a tenant is suspended (ITEM-037). Without it, the has_permission
     short-circuit in the decorators would trust the identity's self-claimed
     perms with no group consideration at all. Platform-global machine access
     uses requires_global_perms (which ignores request.group) instead.
@@ -62,7 +63,8 @@ def _deny_machine_identity_without_active_group(request, perms):
 
 
 def denies_key_backed_session(methods=None):
-    """Refuse any request authenticated with an ApiKey, linked or not.
+    """Refuse any request authenticated with a CONFINED bearer credential — an
+    ApiKey (linked or not) or a GroupScopedToken.
 
     `methods` restricts the refusal to the listed HTTP methods — use it on
     combined CRUD endpoints where only the mutating verbs change credentials
@@ -79,7 +81,10 @@ def denies_key_backed_session(methods=None):
 
     Applies in both key modes. A reference-mode or unlinked key has no business
     on these endpoints either — it simply used to fail later, messily, on a
-    type error instead of cleanly here.
+    type error instead of cleanly here. A GroupScopedToken is refused for the
+    same reason and one more: it is delivered to a browser on a tenant-
+    controlled page, so any credential it could mint would outlive both the
+    token and the tenant relationship.
 
     NOT interchangeable with requires_fresh_auth(): fresh_auth deliberately
     returns True for every non-bearer caller
@@ -259,6 +264,10 @@ def requires_global_perms(*required_perms, allow_api_keys=False):
     are themselves a federation / machine-ingest surface (e.g. the geoip sync
     receiver), where an ApiKey holding the perm is the intended caller; the
     member/group fallback is still never consulted.
+
+    ``allow_api_keys`` means exactly "ApiKey". A ``GroupScopedToken``
+    (``Authorization: grouptoken <token>``) is refused unconditionally — see
+    the guard in the wrapper.
     """
     perm_set = set(required_perms)
 
@@ -280,6 +289,15 @@ def requires_global_perms(*required_perms, allow_api_keys=False):
         def wrapper(request, *args, **kwargs):
             user = getattr(request, "user", None)
             if user is None or not getattr(user, "is_authenticated", False):
+                raise mojo.errors.PermissionDeniedException()
+            if getattr(request, "group_token", None) is not None:
+                # A GroupScopedToken NEVER satisfies a platform-global gate,
+                # not even with allow_api_keys=True. That flag means "a
+                # provisioned ApiKey is the intended caller" (the federation
+                # ingest surfaces); a visitor-grade group token is not that,
+                # and the has_permission check below reads the REAL user's
+                # untenanted global dict — exactly what a group token must
+                # never reach.
                 raise mojo.errors.PermissionDeniedException()
             if not allow_api_keys and is_key_backed_session(request):
                 # A group-scoped ApiKey must not satisfy a platform-global

@@ -11,7 +11,8 @@ import objict
 import datetime
 from mojo.helpers import dates, logit
 from mojo.helpers.request import (
-    is_request_user, is_key_backed_session, is_override_user_session)
+    is_request_user, is_key_backed_session, is_override_user_session,
+    restricted_identity)
 from contextvars import ContextVar
 
 
@@ -392,7 +393,7 @@ class MojoModel:
             # manage an inactive descendant group's rows" carve-out (see
             # planning item apikey-parent-key-inactive-descendant-one-way-door)
             # belongs HERE, not in the hooks.
-            if is_group_scoped and getattr(request, "api_key", None):
+            if is_group_scoped and restricted_identity(request) is not None:
                 # Same resolver as the re-bind below — see _instance_group.
                 inst_group = cls._instance_group(instance)
                 # Effective activeness (DM-048): an active group under a
@@ -488,7 +489,8 @@ class MojoModel:
             request.group = inst_group
 
         if request.group and is_group_scoped:
-            if is_key_backed_session(request):
+            identity = restricted_identity(request)
+            if identity is not None:
                 # TENANT BOUND. The instance re-bind above sets request.group
                 # from the ROW's group, which is what stops a caller-supplied
                 # ?group= from widening access. For a key that assumes a member
@@ -499,8 +501,9 @@ class MojoModel:
                 # boundary in BOTH modes — a key issued for one tenant must
                 # never become a cross-tenant credential because of who it acts
                 # as. is_group_allowed covers "the key's group or a descendant,
-                # and effectively active".
-                if not request.api_key.is_group_allowed(request.group):
+                # and effectively active" for an ApiKey; for a GroupScopedToken
+                # it is the signed group alone, no descendants.
+                if not identity.is_group_allowed(request.group):
                     return False, objict.objict(
                         branch="api_key.cross_tenant_denied",
                         event_type="user_permission_denied",
@@ -522,12 +525,14 @@ class MojoModel:
                         event_type="user_permission_denied",
                         status=403,
                     )
-                # A key that ASSUMES a member falls through to the normal
+                # A credential that ASSUMES a member falls through to the normal
                 # GroupMember check below — that is the whole point of
-                # override_user: one place to manage access. A reference-mode
-                # or unlinked key keeps using its own permissions dict.
-                if not request.api_key.override_user:
-                    allowed = request.api_key.has_permission(perms)
+                # override_user: one place to manage access, and it is how a
+                # GroupScopedToken resolves too (its own has_permission is
+                # always False). A reference-mode or unlinked key keeps using
+                # its own permissions dict.
+                if not identity.override_user:
+                    allowed = identity.has_permission(perms)
                     if allowed:
                         return True, None
                     return False, objict.objict(
@@ -552,7 +557,7 @@ class MojoModel:
                 event_type="group_member_permission_denied",
                 status=403,
             )
-        elif hasattr(request, 'api_key') and request.api_key:
+        elif restricted_identity(request) is not None:
             # Reaching this branch means the request is NOT confined to a group
             # (a groupless model, or a null-group instance of a group-FK model).
             # A group-scoped ApiKey must not get unconfined/cross-tenant access:
@@ -562,6 +567,20 @@ class MojoModel:
             # (parallel to the requires_global_perms decorator's allow_api_keys).
             # Group-scoped models take the Branch above (request.group +
             # hasattr(cls,"group")) and are unaffected.
+            #
+            # A GroupScopedToken is denied HERE, before ALLOW_API_KEY_GLOBAL is
+            # even read: that flag is an ApiKey-specific opt-in (a provisioned
+            # server credential is the intended caller) and a visitor-grade
+            # token must not inherit it. Without this elif covering group
+            # tokens at all, one would fall past the branch to the flat
+            # request.user.has_permission below and a visitor holding any
+            # global grant would read every groupless model.
+            if getattr(request, "group_token", None) is not None:
+                return False, objict.objict(
+                    branch="group_token.groupless_denied",
+                    event_type="user_permission_denied",
+                    status=403,
+                )
             allow_global = cls.get_rest_meta_prop("ALLOW_API_KEY_GLOBAL", False)
             if allow_global and is_group_scoped:
                 # Misconfiguration: a group-scoped model must never opt into
@@ -802,10 +821,7 @@ class MojoModel:
             # validate_token leaves request.group None, so on_rest_list applies
             # NO group filter and those other tenants' rows would be served.
             # Suspension would become a cross-tenant reader.
-            identity = request.user
-            api_key = getattr(request, "api_key", None)
-            if api_key is not None:
-                identity = api_key
+            identity = restricted_identity(request) or request.user
             groups_with_perms = identity.get_groups_with_permission(perms)
             if groups_with_perms.exists():
                 # Filter queryset to only include objects from groups where user has permission
