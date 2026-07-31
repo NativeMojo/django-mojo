@@ -4407,6 +4407,12 @@ callers; request-facing callers pass <code>visible_groups()</code>:</p>
 <p><code>visible_groups()</code> mirrors the list path: a global <code>view_docit</code> / <code>manage_docit</code>
 / <code>docs</code> holder gets <code>None</code> (unrestricted), anyone else is narrowed to their own
 groups, an <code>ApiKey</code> is never unrestricted, and an anonymous caller gets nothing.</p>
+<p><code>search_any()</code> also takes <code>max_distance</code> — the knowledge base's vector
+relevance floor, with <code>DOCIT_KB_MAX_DISTANCE</code> as the operator-level equivalent
+for callers that cannot pass it (the REST endpoint, the assistant tool). Both
+ship off; the page-level fallback has no vectors and ignores it. See
+<a href="knowledge/#relevance-floor">knowledge.md → Relevance floor</a> for how to
+choose a value and what to verify first.</p>
 <h2 id="render-endpoint">Render Endpoint<a class="headerlink" href="#render-endpoint" title="Permanent link">&para;</a></h2>
 <p><code>POST /api/docit/render</code> renders arbitrary Markdown to HTML server-side. Requires authentication.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.docit.services.markdown</span><span class="w"> </span><span class="kn">import</span> <span class="n">MarkdownRenderer</span>

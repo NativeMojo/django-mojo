@@ -3777,6 +3777,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#relevance-floor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relevance floor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#notes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3868,6 +3879,11 @@ Postgres full-text search with no extra schema or dependencies.</p>
 <td></td>
 </tr>
 <tr>
+<td><code>DOCIT_KB_MAX_DISTANCE</code></td>
+<td><em>unset</em> (no floor)</td>
+<td>Cosine-distance relevance ceiling for the vector leg. Unset means the leg is an unbounded kNN. <code>0.80</code> is the value calibrated for Titan V2 at 1024 dims — read <a href="#relevance-floor">Relevance floor</a> before setting it.</td>
+</tr>
+<tr>
 <td><code>DOCIT_KB_RECONCILE_ENABLED</code></td>
 <td><code>True</code></td>
 <td>Kill switch for the reconciliation cron dispatcher. False = no sweep is queued (the job itself still runs if published by hand).</td>
@@ -3926,15 +3942,18 @@ search degrades to full-text only — nothing errors.</p>
   <strong>Operator prerequisite:</strong> the deployment's cron runner must call
   <code>mojo.helpers.cron.load_app_cron()</code> and then <code>run_now()</code> on a schedule —
   nothing sweeps if cron is not wired up.
-- <strong>Search</strong> — <code>knowledge.search(query, book=None, limit=10, groups=None)</code>
-  runs two legs over published pages of active books: pgvector
-  <code>CosineDistance</code> (when a provider is available) and Postgres FTS
-  (<code>SearchVector('heading','content')</code>, websearch syntax), fused with
-  reciprocal-rank fusion (k=60). <code>groups</code> confines results to those tenants
-  (<code>None</code> is unrestricted — internal/system callers only); see
+- <strong>Search</strong> — <code>knowledge.search(query, book=None, limit=10, groups=None,
+  max_distance=None)</code> runs two legs over published pages of active books:
+  pgvector <code>CosineDistance</code> (when a provider is available) and Postgres FTS
+  (<code>SearchVector('heading','content')</code>, websearch syntax, bounded by the
+  tsvector match operator <code>@@</code>), fused with reciprocal-rank fusion (k=60).
+  <code>groups</code> confines results to those tenants (<code>None</code> is unrestricted —
+  internal/system callers only); see
   <a href="../#knowledge-base-search">docit/README.md</a> for
-  <code>visible_groups()</code>, which request-facing callers must pass. Returns
-  <code>objict(mode, results)</code> — mode <code>"hybrid"</code> or <code>"fts"</code>.
+  <code>visible_groups()</code>, which request-facing callers must pass. <code>max_distance</code>
+  is the vector leg's relevance ceiling and ships off — see
+  <a href="#relevance-floor">Relevance floor</a>. Returns <code>objict(mode, results)</code> — mode
+  <code>"hybrid"</code> or <code>"fts"</code>.
 - <strong>Fallback dispatch</strong> — <code>mojo/apps/docit/services/search.py::search_any</code>
   routes to the KB when the app is installed, else to page-level FTS
   (<code>search_pages</code>, mode <code>"pages"</code>). The REST endpoint and assistant tool
@@ -3951,11 +3970,94 @@ docit:</p>
 <p>Providers: <code>bedrock</code> (Titan V2 — one invoke per text; batches loop) and
 <code>mock</code> (hash-derived deterministic unit vectors — no network, used by the
 test suite via <code>EMBEDDINGS_PROVIDER = "mock"</code>).</p>
+<h2 id="relevance-floor">Relevance floor<a class="headerlink" href="#relevance-floor" title="Permanent link">&para;</a></h2>
+<p>A pure kNN always returns <code>k</code> rows. Without a ceiling the vector leg has no
+notion of "too far", so on any install with an embeddings provider <strong>no query
+is ever unmatched</strong> — an off-topic search returns its nearest neighbours with
+the same confidence as a real hit, and the empty result set is unreachable.</p>
+<p>Supply a cosine-distance ceiling to make it reachable:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">found</span> <span class="o">=</span> <span class="n">knowledge</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">max_distance</span><span class="o">=</span><span class="mf">0.80</span><span class="p">)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">found</span> <span class="o">=</span> <span class="n">search_any</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="n">groups</span><span class="p">,</span> <span class="n">max_distance</span><span class="o">=</span><span class="mf">0.80</span><span class="p">)</span>   <span class="c1"># same parameter</span>
+</code></pre></div>
+<p>Omitting the parameter falls back to the <strong><code>DOCIT_KB_MAX_DISTANCE</code></strong> setting,
+which ships <strong>unset</strong> — so the default is no floor and existing callers are
+unaffected. To force <em>no</em> floor on an install where the setting is on, pass
+<code>2.0</code> (the cosine-distance maximum). The setting is the remedy for
+<code>/api/docit/search</code> and the assistant <code>search_docs</code> tool, neither of which
+takes a per-request parameter.</p>
+<p><strong>Choosing a value.</strong> <code>0.80</code> is calibrated for Titan V2 at 1024 dims from two
+independent lines that agree: measured separation on a 179-chunk corpus of real
+doc pages (on-topic best hits 0.34–0.71, off-topic 0.86–0.93 — the floor sits
+mid-gap), and maestro's production-calibrated <code>1 - 0.20</code> similarity threshold
+on a different corpus with the same model. It is deliberately <strong>not</strong> the
+shipped default: that evidence is 12 queries against one homogeneous English
+technical corpus.</p>
+<p>Raising the ceiling costs precision — junk comes back. Lowering it costs
+recall, and the shapes that sample never probed are exactly the ones at risk:</p>
+<ul>
+<li><strong>Non-English queries.</strong> The FTS leg's <code>websearch</code> tokenization returns
+  nothing across languages, so the vector leg is the <em>only</em> leg that can serve
+  them; too tight a floor silently disables search for those users.</li>
+<li><strong>Very short chunks.</strong> The chunker enforces a maximum and no minimum, so a
+  two-word page embeds far from any full-sentence query.</li>
+<li><strong>Other models or dimensions.</strong> <code>EMBEDDINGS_DIM</code> and <code>BEDROCK_EMBED_MODEL</code>
+  are settings; Titan V2's 256/512 MRL truncations have different
+  distributions.</li>
+</ul>
+<p>If you ever default it on, measure ≥50 queries per class across at least two
+real tenant corpora and set the value from the on-topic 95th percentile.</p>
+<p><strong>Verify vector recall before enabling this.</strong> The floor converts a retrieval
+miss into an <em>empty result</em>. Today a chunk the index fails to surface merely
+ranks low and is usually rescued by the FTS leg; with a floor on and no lexical
+match, the same miss returns nothing — and consumers that read "empty" as "we
+cannot answer this" will act on it. Recall is governed by the HNSW query knobs
+<code>hnsw.ef_search</code> and <code>hnsw.iterative_scan</code>, which <strong>this framework does not
+set</strong> — docit_kb inherits whatever the deployment's PostgreSQL provides
+(pgvector's defaults are <code>ef_search = 40</code>, <code>iterative_scan = off</code>).</p>
+<p><strong>Implementation notes</strong> for anyone changing <code>_vector_leg</code>:</p>
+<ul>
+<li>The floor is applied <strong>in Python, after the slice is materialised</strong> — never
+  as a SQL <code>WHERE</code>. An HNSW <em>iterative</em> scan treats a <code>WHERE</code> predicate as
+  something it must satisfy and keeps widening when it cannot, on precisely the
+  unmatched queries the floor exists to make cheap; maestro measured p95 60.1 ms
+  versus 2.1 ms for that mistake. Because no SQL changes, the query plan cannot
+  change either — floored and unfloored calls emit identical SQL.</li>
+<li>The substitution is exact, not approximate: rows arrive in non-decreasing
+  distance order and the predicate is monotonic in it, so the filter removes a
+  suffix and survivors keep their RRF rank positions. That ordering holds at
+  <code>iterative_scan = off</code> and <code>strict_order</code>; a server-side <code>relaxed_order</code>
+  breaks it, and the floor stays <em>safe</em> there (every kept row still satisfies
+  the predicate) but exact rank preservation lapses.</li>
+<li>Compare <code>distance &lt;= ceiling</code>, never <code>1 - distance &gt;= threshold</code> — identical
+  algebraically, not in IEEE 754 (at 0.20 a distance of exactly 0.8 gives
+  <code>0.8 &lt;= 0.8</code> True but <code>1 - 0.8 = 0.19999999999999996 &gt;= 0.2</code> False).</li>
+<li>An emptied leg returns <code>[]</code>, never <code>None</code>: <code>search()</code> reads <code>None</code> as "no
+  provider" and would misreport <code>mode</code> as <code>"fts"</code>. When the floor removes every
+  row, <code>mode</code> stays <code>"hybrid"</code> and <code>results</code> is empty — that is the honest
+  report.</li>
+<li>No keyword resurrection. Nothing above the floor means an honestly empty
+  result; the FTS leg must not be widened to refill it. An FTS-only result set
+  is not resurrection — that leg runs unconditionally on its own merits and
+  carries its own <code>@@</code> match bound.</li>
+</ul>
+<p>Under <code>EMBEDDINGS_PROVIDER=mock</code> every distance <strong>between unrelated texts</strong> is
+≈ 1.0 (hash-derived unit vectors, σ ≈ 0.031), so any practical floor empties
+the vector leg. A chunk whose text is byte-identical to the query still
+measures ≈ 0.</p>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Vector search returns nearest neighbors without a relevance threshold —
-  a query matching nothing textually still returns weak neighbors. RRF
-  fusion keeps textual matches on top when they exist.</li>
+<li>Both legs bound themselves, and neither did before: the vector leg had no
+  ceiling at all (above), and the FTS leg's bound was <code>rank__gt=0</code>, which
+  bounded nothing — <code>ts_rank</code> returns <strong>1e-20</strong>, not 0, for a non-matching
+  document on a multi-term query. Measured on a 6-chunk book, a three-token
+  nonsense query returned all 6 chunks; it now returns none. The bound is the
+  tsvector match operator (<code>@@</code>); rank remains only the ordering key. The same
+  fix applies to <code>search_pages</code>, the no-<code>docit_kb</code> fallback.</li>
+<li><strong>A score of exactly <code>1/61 ≈ 0.016393</code> is no longer an off-topic signal.</strong>
+  It is the single-leg RRF floor, and it used to imply "the vector leg
+  contributed this alone, with nothing confirming it". Now that either leg can
+  legitimately come back empty, a genuine FTS-only hit scores exactly the same.
+  Do not build a relevance heuristic on it.</li>
 <li>Unpublishing a page or deactivating a book hides its chunks from search
   immediately (query-time filters); the rows remain and reappear on
   republish. Deleting a page cascades to its chunks.</li>
