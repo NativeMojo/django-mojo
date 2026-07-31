@@ -22,6 +22,23 @@ def apikey(token):
     return {"Authorization": f"apikey {token}"}
 
 
+def _make_page(Page, book, title, owner, content):
+    """Create a fixture Page WITHOUT queueing a docit_kb embed job.
+
+    Page.save() publishes one fire-and-forget. Test modules run as parallel
+    threads in one process, and other modules mock.patch `jobs.publish`
+    globally for their own assertions — a stray publish from a fixture lands in
+    someone else's mock. This test embeds its pages explicitly instead (see the
+    docit search test), so the job is pure noise. Suppressed per INSTANCE, never
+    on the class: a class-level patch would be the same cross-thread hazard.
+    """
+    page = Page(book=book, title=title, user=owner, created_by=owner,
+                content=content)
+    page._publish_embed_job = lambda: None
+    page.save()
+    return page
+
+
 @th.django_unit_setup()
 def setup_group_tokens(opts):
     from mojo.apps.account.models import User, Group, ApiKey
@@ -106,12 +123,10 @@ def setup_group_tokens(opts):
                                  user=staff, created_by=staff)
     book_child = Book.objects.create(title="gt_book_child", slug="gt-book-child",
                                      group=child_a, user=staff, created_by=staff)
-    Page.objects.create(
-        book=book_a, title="gt_page_a", user=staff, created_by=staff,
-        content="# A\n\nThe marker GTSEARCHMARKER77 lives in tenant A.\n")
-    Page.objects.create(
-        book=book_b, title="gt_page_b", user=staff, created_by=staff,
-        content="# B\n\nThe marker GTSEARCHMARKER77 lives in tenant B.\n")
+    _make_page(Page, book_a, "gt_page_a", staff,
+               "# A\n\nThe marker GTSEARCHMARKER77 lives in tenant A.\n")
+    _make_page(Page, book_b, "gt_page_b", staff,
+               "# B\n\nThe marker GTSEARCHMARKER77 lives in tenant B.\n")
 
     # --- chat rooms ---------------------------------------------------------
     room_a = ChatRoom.objects.create(name="gt_room_a", kind="channel", group=group_a)
