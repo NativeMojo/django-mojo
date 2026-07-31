@@ -42,9 +42,10 @@ def on_group_apikey_rotate(request):
     Same key id / name / permissions / limits, a new secret. The previous
     token is invalidated immediately — its hash and its encrypted copy are
     both overwritten — and cannot be recovered. The new token is returned
-    here, and it also stays readable afterwards through the default graph
-    (`GET /api/group/apikey/<id>`) for callers holding manage_group /
-    manage_groups / groups; this endpoint is not the only way to see it.
+    here, and it also stays readable afterwards through the opt-in token
+    graph (`GET /api/group/apikey/<id>?graph=token`) for callers holding
+    manage_group / manage_groups / groups; this endpoint is not the only way
+    to see it.
 
     Self-service by design: the key rotates itself, identified by the auth
     header, so no management permission is required (the caller already holds

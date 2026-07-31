@@ -1,5 +1,13 @@
 ## Unreleased
 
+**BREAKING (security)** — **`ApiKey` no longer returns the live raw token on ordinary reads.** `GET /api/group/apikey` and `GET /api/group/apikey/<id>` previously included a working credential in every response, list included, to any caller holding `manage_group` / `manage_groups` / `groups`. The `token` extra has moved off the `default` graph onto a new opt-in `token` graph:
+
+- **Migrate:** read the token with `GET /api/group/apikey/<id>?graph=token`. Same permission bar as before — this narrows where the secret travels, not who may ask for it.
+- Each opt-in read writes an `api_key:token_read` `logit.Log` row (one per serialized key).
+- **Unchanged:** the creation response (`POST /api/group/apikey`) still returns `data.token`, and `POST /api/group/apikey/rotate` still returns the new token. `GET /api/group/apikey/me` never returned one.
+- An unrecognized graph name still falls back to `default`, so `?graph=tokens` returns `200` with no `token` field rather than an error.
+- `ApiKey` now sets `DENY_AI = True`: the assistant's model tools cannot read the table at all. `query_model` accepts a caller-supplied graph and does not filter sensitive values out of serialized output, so it could otherwise request the `token` graph.
+
 feat: `SECRET_KEY_FALLBACKS` is now honored by mojo's own crypto — bouncer token/pass-cookie verification and filevault unwrap/token-validation accept material produced under a rotated-out key, so a `SECRET_KEY` rotation no longer invalidates issued tokens or bricks stored files.
 fix (security): filevault read `SECRET_KEY` through the DB-overridable settings path — a `Setting` row named `SECRET_KEY` (writable over REST with `manage_settings`) could silently re-key per-file wrapping at runtime. It now reads file-based settings only.
 
