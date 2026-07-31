@@ -20,6 +20,18 @@ group's rows (the framework's group-scoped list fallback), so a member
 RuleSets, IPSets, and platform-wide summaries (e.g. Health Summary below)
 have no group field and require a **global** grant.
 
+**A row with no tenant needs a global grant, and passing `?group=` will not
+help.** Whenever you fetch a single record, the server binds the permission
+check to *that row's* owning tenant, not to the `?group=` / `?group_uuid=` you
+sent. If the row belongs to no tenant — a platform-level record, or one whose
+tenant link is null — the check falls through to your **global** permissions
+only, and a GroupMember-scoped grant is refused with a `403`. Sending
+`?group=<a group you belong to>` has never widened access and now cannot appear
+to: it is discarded before the check. List endpoints are unaffected — they have
+always filtered to your own groups, and tenant-less rows never appeared in them.
+If a detail fetch that used to return `200` now returns `403`, the record has no
+tenant and the fix is a global grant, not a different `?group=`.
+
 ## The Security Pipeline
 
 ```

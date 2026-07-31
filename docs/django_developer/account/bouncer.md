@@ -724,6 +724,18 @@ RestMeta:
 - `DELETE_PERMS = ["manage_support"]`
 - `GROUP_FIELD = "group"` — admins with only group-scoped perms see just their group's messages.
 
+**Tenant-less messages need a GLOBAL grant.** `PublicMessage.group` is null
+whenever the submission did not resolve to a white-label group — which is every
+message submitted on the main platform domain, so null is the normal state, not
+an edge case. A row with no tenant is reachable only through the flat
+`request.user.has_permission` check, so triaging those messages (read, status
+update, delete) requires `support` / `view_support` / `manage_support` as a
+**global** grant; the same permission held only on a `GroupMember` row will not
+reach them. Notification emails carry the full message content regardless, so a
+group-scoped admin still sees submissions — they just cannot triage tenant-less
+ones through the API. See [REST permissions](../rest/permissions.md) (maestro
+item 953).
+
 ### Notifications
 
 Every flagged user receives a templated email when a message is submitted.

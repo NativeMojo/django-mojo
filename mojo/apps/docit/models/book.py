@@ -215,16 +215,23 @@ class Book(models.Model, MojoModel):
     def on_rest_pre_save(self, changed_fields, created):
         """A book must belong to a tenant, on create AND on every update.
 
-        GROUP_FIELD confines reads to the owning group, so a group-less book
-        sits outside that confinement entirely: with no group to resolve, the
-        detail check keeps whatever `?group=` the caller supplied, and any
-        member of any tenant passes it. The framework stamps `group` from
-        request.group on create when the body omits it (this hook runs after
-        that), so on create this only fires when there was nothing to infer.
+        This is a DATA-INTEGRITY invariant, not a security guard. It used to be
+        both: a group-less book once fell outside GROUP_FIELD confinement
+        entirely, because the detail check kept whatever `?group=` the caller
+        supplied and any member of any tenant passed it. Maestro item 953 fixed
+        that in the framework — `_evaluate_permission` now binds request.group
+        to the row's owning tenant unconditionally, so a null tenant clears the
+        binding and the check falls through to the caller's GLOBAL permissions.
+
+        What remains is the modelling rule: docit books are tenant-owned, and a
+        group-less one is a broken row rather than a platform-wide one. The
+        framework stamps `group` from request.group on create when the body
+        omits it (this hook runs after that), so on create this only fires when
+        there was nothing to infer.
 
         The check is deliberately NOT `if created` — `{"group": 0}` (or null,
         or "") on an update clears the FK with no permission gate of its own,
-        which would re-open exactly that hole on an existing book.
+        which would leave an unowned book behind.
         """
         import mojo.errors as me
         if not self.group_id:

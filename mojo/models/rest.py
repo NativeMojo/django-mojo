@@ -340,10 +340,8 @@ class MojoModel:
             # planning item apikey-parent-key-inactive-descendant-one-way-door)
             # belongs HERE, not in the hooks.
             if is_group_scoped and getattr(request, "api_key", None):
-                if GROUP_FIELD:
-                    inst_group = cls._resolve_group_from_instance(instance, GROUP_FIELD)
-                else:
-                    inst_group = getattr(instance, "group", None)
+                # Same resolver as the re-bind below — see _instance_group.
+                inst_group = cls._instance_group(instance)
                 # Effective activeness (DM-048): an active group under a
                 # deactivated ancestor is inactive too.
                 if inst_group is not None and not inst_group.is_effectively_active():
@@ -413,12 +411,28 @@ class MojoModel:
             # membership check runs against the row's true tenant, not a
             # caller-supplied ?group=. GROUP_FIELD wins (and may be a related
             # path); a direct `.group` attribute is the legacy fallback.
-            if GROUP_FIELD:
-                inst_group = cls._resolve_group_from_instance(instance, GROUP_FIELD)
-                if inst_group is not None:
-                    request.group = inst_group
-            elif hasattr(instance, "group"):
-                request.group = getattr(instance, "group", None)
+            #
+            # UNCONDITIONAL, INCLUDING None (maestro item 953). A row whose
+            # tenant path resolves to null belongs to NO tenant, so the correct
+            # binding is None: the group branch below is skipped and the check
+            # falls through to request.user.has_permission — the caller's GLOBAL
+            # permissions only. Re-binding only when non-null (what GROUP_FIELD
+            # used to do) left the caller's ?group= standing, and
+            # Group.user_has_permission honors GroupMember grants, so any tenant
+            # admin could read another tenant's — or the platform's — null-parent
+            # rows. The direct-FK branch always assigned unconditionally; this is
+            # that same fail-closed behavior, now for both shapes.
+            inst_group = cls._instance_group(instance)
+            if request.group and inst_group is None and not getattr(
+                    request, "_mojo_group_rebind_logged", False):
+                request._mojo_group_rebind_logged = True
+                logit.warning(
+                    "rest.permission",
+                    f"{cls.__name__}(pk={getattr(instance, 'pk', None)}) has no owning "
+                    f"group; clearing caller-supplied group "
+                    f"{getattr(request.group, 'pk', request.group)} before the "
+                    f"permission check")
+            request.group = inst_group
 
         if request.group and is_group_scoped:
             if is_key_backed_session(request):
@@ -2285,6 +2299,26 @@ class MojoModel:
     @classmethod
     def has_field(cls, field_name):
         return cls.get_model_field(field_name) is not None
+
+    @classmethod
+    def _instance_group(cls, instance):
+        """Resolve the owning Group for an instance, GROUP_FIELD or direct FK.
+
+        The single answer to "which tenant does this row belong to?". Both seams
+        in `_evaluate_permission` — the ApiKey pre-gate and the `request.group`
+        re-bind — go through here so they cannot drift apart.
+
+        Returns None when the row has no owning tenant, which is a real answer
+        and not an absence of one: callers MUST treat None as "no group" and
+        fall through to the flat user/superuser check. They must NOT skip the
+        re-bind and leave a caller-supplied ?group= standing — that was the
+        GROUP_FIELD branch's bug (maestro item 953), and it let a GroupMember
+        grant in an unrelated tenant authorize a read of a null-tenant row.
+        """
+        group_field = cls.get_rest_meta_prop("GROUP_FIELD", None)
+        if group_field:
+            return cls._resolve_group_from_instance(instance, group_field)
+        return getattr(instance, "group", None)
 
     @classmethod
     def _resolve_group_from_instance(cls, instance, group_field):

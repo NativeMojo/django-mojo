@@ -55,11 +55,17 @@ def on_certificate_material(request, pk=None):
     Certificate.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"], certificate)
 
     # Group scoping resolves through GROUP_FIELD = "domain__group". When the
-    # owning domain has NO group (a house/platform domain), that resolution
-    # yields None, request.group is never rebound to the instance, and the
-    # check degrades to the caller's own group — which any tenant admin with
-    # manage_dns would pass. For a house certificate that means handing over a
-    # private key, so require a platform superuser explicitly.
+    # owning domain has NO group (a house/platform domain) that resolution
+    # yields None, and the permission check falls through to the caller's
+    # GLOBAL permissions — so any holder of a global manage_dns grant passes.
+    # For a house certificate that means handing over a private key, so require
+    # a platform superuser explicitly. This guard is LOAD-BEARING, not
+    # redundant with the framework check.
+    #
+    # (Before maestro item 953 it was load-bearing for a second, worse reason:
+    # a null tenant left request.group at whatever ?group= the caller supplied,
+    # so a tenant-level manage_dns grant passed too. The framework now binds
+    # the row's tenant unconditionally and that hole is closed.)
     if certificate.domain.group_id is None and not getattr(request.user, "is_superuser", False):
         raise me.PermissionDeniedException(
             "House certificate material is restricted to platform administrators")

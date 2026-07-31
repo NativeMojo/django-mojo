@@ -257,6 +257,21 @@ class AgentTask(models.Model, MojoModel):
 Notes:
 - The path is traversed null-safe hop-by-hop; a null link along the way yields
   "no group" (fail-closed — the flat user/superuser check still applies).
+- **"No group" is a real answer, and it is binding.** Before a per-instance
+  permission check, `request.group` is re-bound to the row's owning tenant
+  **unconditionally** — including to `None`. A row whose tenant path resolves to
+  null belongs to no tenant, so any `?group=` / `?group_uuid=` the caller sent is
+  discarded, the group-membership branch is skipped, and authorization falls
+  through to the caller's **global** permissions. A `GroupMember` grant is not a
+  global permission, so tenant-level access never reaches a null-tenant row.
+  This is identical for a direct `group` FK and for a `GROUP_FIELD` (plain or
+  related path) — the two shapes cannot diverge, because both resolve through
+  one helper. Declaring `GROUP_FIELD = "group"` on a model that already has a
+  direct `group` FK is therefore an exact no-op.
+  (Until maestro item 953 the `GROUP_FIELD` branch re-bound only when the
+  resolution was non-null, which left the caller's `?group=` standing and let a
+  tenant-level grant read null-tenant rows. Any downstream model declaring its
+  own `GROUP_FIELD`, or subclassing one that does, inherited that exposure.)
 - **Create-time auto-assign** stamps a **direct**-FK `GROUP_FIELD` from
   `request.group` when the body omits it (body wins), mirroring the historical
   `group` behavior. A **related-path** `GROUP_FIELD` has no local field to
