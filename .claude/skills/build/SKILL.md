@@ -95,7 +95,8 @@ and `git commit`.
 6. Update relevant docs (`docs/django_developer/`, `docs/web_developer/`).
 7. Git commit (NO push). Stage specific files by name — never `git add -A`.
 8. Spawn the post-build agents in parallel and report their results:
-   - **test-runner** — full test suite, beyond your targeted tests
+   - **test-runner** — runs the scoped suite (whole suite only on an escalation
+     trigger — see `.claude/rules/build-baseline.md`), beyond your targeted tests
    - **docs-updater** — read the diff, update both doc tracks
    - **security-review** — review the diff for permission/injection/auth issues
 9. Fill `tests added:` in the item's Resolution block, then run
