@@ -32,7 +32,10 @@ def on_bouncer_event(request):
     duid = request.DATA.get('duid') or request.duid or ''
     msid = request.msid or ''
     mtab = request.mtab or ''
-    page_type = request.DATA.get('page_type', 'login')
+    # Clamped to BouncerSignal.page_type's max_length, and type-guarded: a bare
+    # slice raises TypeError/KeyError on non-string attacker JSON. See assess.py.
+    _pt = request.DATA.get('page_type')
+    page_type = _pt[:32] if isinstance(_pt, str) and _pt else 'login'
     session_id = request.DATA.get('session_id') or uuid.uuid4().hex
     events = request.DATA.get('events')
 

@@ -2,8 +2,15 @@
 MaxMind GeoIP2 provider for GeoIP lookups.
 https://www.maxmind.com/en/geoip2-precision-services
 """
+from mojo.helpers import logit
 from mojo.helpers.location.countries import get_country_name
 from .config import get_api_key
+
+
+# The 'geoip2' package is an optional extra. Python does not cache failed
+# imports, so this branch re-executes on every lookup — warn only once per
+# process. Gates logging only, never control flow.
+_geoip2_warned = False
 
 
 def fetch(ip_address, api_key=None):
@@ -20,18 +27,26 @@ def fetch(ip_address, api_key=None):
     Returns:
         dict: Normalized geolocation data, or None on failure
     """
+    global _geoip2_warned
     try:
         import geoip2.webservice
+        import geoip2.errors
     except ImportError:
-        print("[GeoIP Error] MaxMind provider requires the 'geoip2' package. Install with: pip install geoip2")
+        if not _geoip2_warned:
+            _geoip2_warned = True
+            logit.warning(
+                "[GeoIP] MaxMind provider disabled: optional package 'geoip2' is not "
+                "installed (pip install geoip2). Falling back to the next configured "
+                "provider. Logged once per process.")
         return None
 
     account_id = get_api_key('maxmind_account_id')
     license_key = get_api_key('maxmind_license_key')
 
     if not account_id or not license_key:
-        print("[GeoIP Error] MaxMind provider requires GEOIP_API_KEY_MAXMIND_ACCOUNT_ID and "
-              "GEOIP_API_KEY_MAXMIND_LICENSE_KEY to be set in settings.")
+        logit.warning(
+            "[GeoIP] MaxMind provider requires GEOIP_API_KEY_MAXMIND_ACCOUNT_ID and "
+            "GEOIP_API_KEY_MAXMIND_LICENSE_KEY to be set in settings.")
         return None
 
     try:
@@ -86,17 +101,17 @@ def fetch(ip_address, api_key=None):
             }
 
     except geoip2.errors.AddressNotFoundError:
-        print(f"[GeoIP Error] MaxMind: Address {ip_address} not found in database")
+        logit.debug(f"[GeoIP] MaxMind: Address {ip_address} not found in database")
         return None
     except geoip2.errors.AuthenticationError:
-        print("[GeoIP Error] MaxMind: Authentication failed. Check your account ID and license key.")
+        logit.error("[GeoIP] MaxMind: Authentication failed. Check your account ID and license key.")
         return None
     except geoip2.errors.InsufficientFundsError:
-        print("[GeoIP Error] MaxMind: Insufficient funds in account")
+        logit.error("[GeoIP] MaxMind: Insufficient funds in account")
         return None
     except geoip2.errors.PermissionRequiredError:
-        print("[GeoIP Error] MaxMind: Permission required for this service")
+        logit.error("[GeoIP] MaxMind: Permission required for this service")
         return None
     except Exception as e:
-        print(f"[GeoIP Error] Failed to fetch from MaxMind for IP {ip_address}: {e}")
+        logit.error(f"[GeoIP] Failed to fetch from MaxMind for IP {ip_address}: {e}")
         return None

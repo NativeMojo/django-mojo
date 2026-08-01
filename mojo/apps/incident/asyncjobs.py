@@ -233,6 +233,69 @@ def sweep_expired_blocks(job):
     job.add_log(f"Swept {len(expired)} expired blocks: {expired}")
 
 
+# Daily decay pass. Nothing else ever recomputes threat_level downward:
+# update_threat_from_incident() and block() only ratchet up, so before this a
+# single level-8 event stamped an address 'medium' forever — including every
+# user behind a shared egress. Re-running check_threats() lets a recomputed
+# lower level replace the stored one.
+#
+# mojo-provider records are excluded on purpose: their never-downgrade rule is
+# the federation contract with the upstream, not a local scoring decision.
+RECHECK_THREATS_MAX = settings.get_static("GEOLOCATION_RECHECK_THREATS_MAX", 500)
+
+
+def recheck_active_threats(job):
+    """Recompute threat_level for recently-active, non-clean IPs."""
+    from mojo.apps.account.models import GeoLocatedIP
+    from mojo.helpers.geoip import threat_intel
+    from mojo.helpers import dates
+
+    window_hours = settings.get(
+        "GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS",
+        threat_intel.INTERNAL_THREAT_WINDOW_HOURS, kind="int")
+    limit = settings.get("GEOLOCATION_RECHECK_THREATS_MAX",
+                         RECHECK_THREATS_MAX, kind="int")
+
+    # Most recently active first — if the bound clips the tail it should clip
+    # the quietest addresses, not the busiest.
+    cutoff = dates.utcnow() - timedelta(hours=window_hours)
+    candidates = list(
+        GeoLocatedIP.objects.filter(
+            last_seen__gte=cutoff,
+            threat_level__isnull=False,
+        ).exclude(
+            provider="mojo",
+        ).order_by("-last_seen")[:limit]
+    )
+
+    if not candidates:
+        job.add_log("recheck_active_threats: nothing active to recheck")
+        return
+
+    lowered = 0
+    failed = 0
+    order = GeoLocatedIP.THREAT_LEVEL_ORDER
+    for geo in candidates:
+        before = geo.threat_level
+        try:
+            # skip_external: this pass is about decaying LOCAL evidence, and a
+            # daily outbound lookup per row is not affordable. A recorded
+            # blocklist hit is carried forward by check_threats().
+            geo.check_threats(skip_external=True)
+        except Exception:
+            failed += 1
+            logit.exception(f"recheck_active_threats failed for {geo.ip_address}")
+            continue
+        before_idx = order.index(before) if before in order else 0
+        after_idx = order.index(geo.threat_level) if geo.threat_level in order else 0
+        if after_idx < before_idx:
+            lowered += 1
+
+    job.add_log(
+        f"recheck_active_threats: rechecked {len(candidates)} IPs, "
+        f"{lowered} decayed, {failed} errored")
+
+
 def broadcast_sync_ipset(data):
     """Broadcast handler — receives plain dict from pub/sub, not a Job.
 

@@ -3,6 +3,7 @@ IP-API.com provider for GeoIP lookups.
 http://ip-api.com/
 """
 import requests
+from mojo.helpers import logit
 from mojo.helpers.location.countries import get_country_name
 
 
@@ -26,7 +27,7 @@ def fetch(ip_address, api_key=None):
 
         if data.get('status') == 'fail':
             error_info = data.get('message', 'Unknown error')
-            print(f"[GeoIP Error] ip-api.com API error: {error_info}")
+            logit.warning(f"[GeoIP] ip-api.com API error: {error_info}")
             return None
 
         country_code = data.get('countryCode')
@@ -64,5 +65,5 @@ def fetch(ip_address, api_key=None):
             'data': data
         }
     except Exception as e:
-        print(f"[GeoIP Error] Failed to fetch from ip-api.com for IP {ip_address}: {e}")
+        logit.error(f"[GeoIP] Failed to fetch from ip-api.com for IP {ip_address}: {e}")
         return None

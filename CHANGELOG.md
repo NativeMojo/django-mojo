@@ -1,3 +1,17 @@
+# Changelog — FROZEN
+
+> **This file is no longer maintained.** As of **2026-07-31** the changelog lives on the
+> **maestro board**, where each work item carries its own workspec, plan, review, commits
+> and verification — a richer record than this file ever held.
+>
+> **Do not add entries here.** Record behavior and API changes in the maestro item's
+> comment trail instead. See `.claude/rules/docs.md`.
+>
+> Everything below is retained as the historical record: releases through **v1.2.64**,
+> plus the unreleased work of 2026-07-31 (the last entries written to this file).
+
+---
+
 ## Unreleased
 
 **chore (tests)** — **three test-hygiene cleanups; the auth-page `escapejs` audit
@@ -546,7 +560,59 @@ chat through the member it assumes, issue that tenant its own key.
 
 feat: `SECRET_KEY_FALLBACKS` is now honored by mojo's own crypto — bouncer token/pass-cookie verification and filevault unwrap/token-validation accept material produced under a rotated-out key, so a `SECRET_KEY` rotation no longer invalidates issued tokens or bricks stored files.
 fix (security): filevault read `SECRET_KEY` through the DB-overridable settings path — a `Setting` row named `SECRET_KEY` (writable over REST with `manage_settings`) could silently re-key per-file wrapping at runtime. It now reads file-based settings only.
+fix (geoip, security): geoip threat detection was inert framework-wide — `is_known_attacker`/`is_known_abuser` were permanently `False` and blocklist hits never reached `threat_level`. Three separate breaks fixed; `geolocate_ip()` results gain a top-level `is_blocklisted`.
+chore (geoip): the geoip helpers now log through `logit` (level-tagged, routed to `mojo.log`/`error.log`/`debug.log`) instead of printing to stdout, and the missing-`geoip2` notice is warned once per process instead of on every lookup. `mojo.helpers.ua` — an empty stub that never had an implementation — was removed along with its documentation.
+feat (bouncer): **credentialed cross-origin access to the public bouncer API is now on by default.** New file-only setting `BOUNCER_ALLOW_ANY_ORIGIN` (default `True`) — the three public endpoints (`assess`/`event`/`message`) answer credentialed requests from any well-formed origin without consulting `BOUNCER_ALLOWED_ORIGINS`. This is a behavior change on upgrade: a deployment that populates `BOUNCER_ALLOWED_ORIGINS` will also answer unlisted origins unless it explicitly sets `BOUNCER_ALLOW_ANY_ORIGIN = False`, which restores strict allowlist enforcement. `verify_pass` and the permission-gated admin endpoints are never covered either way, and `null`/malformed origins are always refused.
+fix (bouncer): `page_type` on `assess`/`event` is clamped to 32 chars and type-guarded — a non-string value returned a 500 plus a level-12 incident from an unauthenticated endpoint, and an overlong one silently lost its `BouncerSignal` audit row.
 
+
+**fix (geoip, security)** — **threat detection never actually ran.** Three
+independent breaks each made the feature inert, and all three had to be fixed:
+
+1. `check_internal_threats()` used `models.Avg` on a line *above* its
+   `from django.db import models`, so the import made `models` a function-local
+   and every call raised `UnboundLocalError`. The blanket `except Exception`
+   turned that into a silent `is_known_attacker=False, is_known_abuser=False`.
+   It only fired past the `total_events == 0` early return — i.e. exclusively on
+   addresses that had actually attacked you, which is why it survived to a
+   release tag. That handler now logs with `logit.exception` so a traceback
+   reaches `error.log` instead of looking like a transient failure.
+2. `geolocate_ip(check_threats=True)` computed threat results and then never
+   consulted them when setting `threat_level` — it passed only the
+   provider-native `data['threat']` blob, a hook no built-in provider
+   populates. Threat intelligence is now folded in through
+   `recalculate_threat_level()` (the same weight table
+   `GeoLocatedIP.check_threats()` uses, so the two paths cannot disagree), and
+   the fold is **escalate-only**: it can raise `threat_level`, never lower it.
+   `check_threats=False` behavior is unchanged.
+3. `perform_threat_check()` wrote `is_blocklisted` only at the top level, while
+   `recalculate_threat_level()` reads it from *inside* `threat_data` — the only
+   part consumers persist. The +30 blocklist weight had therefore never fired
+   on the `threat_analysis` / `refresh` REST path either. `threat_data` now
+   carries the flag.
+
+`geolocate_ip()` results gain a top-level `is_blocklisted` bool on every branch
+(private/reserved, `mojo` provider, normal providers). Additive; it is not a
+model field and is not persisted. `GET /api/system/geoip/<pk>?graph=detailed`
+responses gain `data.threat_data.is_blocklisted`.
+
+**New setting `GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES`** (default
+`['login:unknown', 'reset:unknown', 'totp:login_unknown', 'sms:login_unknown',
+'token:unknown']`) — account-enumeration and user-typo events are reported at
+level 8, the same level as a real attack, so on a shared NAT/CGNAT/corporate
+egress a handful of mistyped usernames over the 90-day window would mark that
+address a known attacker for every user behind it. These categories no longer
+count toward `is_known_attacker`. They still count toward `total_events`,
+`avg_level`, `top_categories` and `is_known_abuser`. Set it to `[]` for the old
+count-everything behavior.
+
+**Operational note.** Nothing changes on upgrade — `check_threats()` runs only
+from the `threat_analysis` / `refresh` REST actions, never from a cron or the
+auto-refresh path. But the first such action against an IP with real incident
+history or a blocklist hit can now flip it to `high`/`critical`, which raises
+the bouncer's bot score for that address and feeds the federation push loop for
+`provider='mojo'` records. Review your event mix before running a bulk
+`threat_analysis`.
 
 **feat (crypto)** — **a `SECRET_KEY` rotation is now survivable.** Django's own
 `SECRET_KEY_FALLBACKS` only covers Django signing (sessions, signed cookies,
@@ -581,6 +647,59 @@ every other `SECRET_KEY` consumer. **Before upgrading**, check for an existing
 wrapped under the row's value, so move that value into `SECRET_KEY_FALLBACKS`
 to keep those files readable, then delete the row.
 
+**feat (bouncer)** — **`BOUNCER_ALLOW_ANY_ORIGIN`, for tenants whose domains you
+cannot know at deploy time.** `BOUNCER_ALLOWED_ORIGINS` is a settings-file list,
+so a multi-tenant platform whose customers point their own domains at their
+sites can never populate it correctly — and the failure is silent, because
+`mojo-bouncer.js` sends `credentials: 'include'` on every fetch, the browser
+rejects the response against `Access-Control-Allow-Origin: *` before the page
+sees it, and the JS falls through to `_allowThrough()`. The gate becomes a
+no-op. Set `BOUNCER_ALLOW_ANY_ORIGIN = True` and the request `Origin` is echoed
+back with `Access-Control-Allow-Credentials: true` instead of being tested
+against the allowlist.
+
+Deliberately bounded, in four ways:
+
+1. **Three endpoints only** — `assess`, `event`, `message`. `verify_pass` is
+   excluded: it is the sole carrier of `X-Bouncer-Muid` (a stable device id),
+   and it exists for nginx `auth_request`, which is server-to-server and ignores
+   CORS, so no browser client needs it. The permission-gated admin endpoints
+   (`device`, `signal`, `signature`) are excluded for the obvious reason — they
+   return device fingerprints, IPs, muids and geo. The public-path test is
+   derived from the route prefix plus a segment set rather than hardcoded
+   absolute paths, so `MOJO_APPEND_SLASH` cannot silently turn it into a no-op.
+2. **The allowlist is still tested first, unconditionally**, so an unset
+   deployment behaves exactly as before and allowlist entries that are not
+   well-formed http(s) origins (`chrome-extension://…`, `capacitor://localhost`)
+   keep working. The two are additive, not one shadowing the other.
+3. **`Origin: null` and malformed origins are still refused**, and
+   `Access-Control-Allow-Origin: *` can never co-occur with
+   `Access-Control-Allow-Credentials: true`.
+4. **Read with `settings.get_static(..., kind='bool')`** — file-based settings
+   only, so a `Setting` row cannot arm a CORS bypass at runtime, and an
+   uncoercible value fails closed with a warning. Enabling it logs a warning
+   once per worker at startup.
+
+**Understand the tradeoff before enabling it.** Any website a visitor loads can
+then drive the bouncer inside that visitor's browser: mint bouncer tokens bound
+to the visitor's IP, burn the visitor's per-IP rate-limit budget, and — from any
+page same-site with the bouncer host, such as another tenant's subdomain — read
+that visitor's own `decision`/`risk_score`/`risk_action` back as a per-visitor
+bot-reputation oracle. `BOUNCER_PASS_COOKIE_DOMAIN` widens "same-site" to every
+subdomain it covers. Turning it back off is not immediate:
+`Access-Control-Max-Age: 86400` keeps cached preflights credentialed for up to
+24 hours. Prefer `BOUNCER_ALLOWED_ORIGINS` whenever the domains are knowable.
+
+**fix (bouncer)** — **`page_type` on `assess`/`event` was neither length- nor
+type-checked.** `BouncerSignal.page_type` is `CharField(max_length=32)` and the
+audit-row insert is wrapped in `try/except`, so a value over 32 characters
+issued the token but silently lost its audit row. It is now clamped. The clamp
+is type-guarded rather than a bare slice: `page_type` is attacker-controlled
+JSON on an unauthenticated endpoint, and `5[:32]` raises `TypeError` out of the
+view into `dispatch_error_handler` — a 500 *plus* a level-12 `rest_error`
+incident carrying `request_data` and a stack trace, triggerable 60 times per IP
+per window. A non-string `page_type` now falls back to `'login'`, as it
+effectively did before.
 **fix (account/security)** — **the two server-rendered account confirm pages
 rendered an unvalidated `?redirect=` straight into an `<a href>`.** A
 `javascript:` value therefore became a one-click script-execution sink on the

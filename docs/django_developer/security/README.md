@@ -787,6 +787,7 @@ Default health rules are auto-created on first health check run. They send notif
 | `sync_firewall` | Hourly | Restores all ipsets from DB truth; skips unchanged sets; startup recovery after reboot |
 | `refresh_ipsets` | Weekly (Sunday 3 AM) | Re-fetches IPSet source URLs and syncs CIDRs to fleet |
 | `refresh_threat_lists` | Every 6 hours | Refreshes the cache-only `tor_exits`/`blocklist_de` IPSet rows (`refresh_from_source()` only — never synced to the firewall); see [account/geoip.md](../account/geoip.md#threat-list-caches-tor-exit-list-blocklistde) |
+| `recheck_active_threats` | Daily 4:20 AM | Re-scores up to `GEOLOCATION_RECHECK_THREATS_MAX` (500) recently-active `GeoLocatedIP` rows so a stale `threat_level` can **decay** — everything else only ratchets up. Skips `provider='mojo'` records and external blocklist lookups; see [account/geoip.md](../account/geoip.md#decay) |
 | `check_system_health` | Every 3 minutes | Checks runner health, system metrics (if `HEALTH_MONITORING_ENABLED`) |
 
 ### Async Jobs (Broadcast)
@@ -891,18 +892,22 @@ These rules are auto-created by `RuleSet.ensure_default_rules()` and serve as th
 
 ### Auth Rules
 
-| Rule | Category | Matches | Handler | Bundle |
-|------|----------|---------|---------|--------|
-| Credential Stuffing | `login:unknown` | level >= 8 | `block://?ttl=1800` | SOURCE_IP, 15min |
-| Bouncer Token Abuse | `security:bouncer:token_invalid` | level >= 7 | `block://?ttl=1800` | SOURCE_IP, 30min |
+| Rule | Category | Matches | Trigger | Handler | Bundle |
+|------|----------|---------|---------|---------|--------|
+| Credential Stuffing | `login:unknown` | level >= 8 | 25 events / 60min | `block://?ttl=1800` | SOURCE_IP, 60min |
+| Password Brute Force | `invalid_password` | level >= 5 | 5 events / 15min | `block://?ttl=1800` | SOURCE_IP, 15min |
+| Bouncer Token Abuse | `security:bouncer:token_invalid` | level >= 7 | 10 events / 30min | `block://?ttl=1800` | SOURCE_IP, 30min |
 
 ### Bouncer Rules
 
-| Rule | Category | Matches | Handler | Bundle |
-|------|----------|---------|---------|--------|
-| Honeypot Detection | `security:bouncer:honeypot` | level >= 9 | `block://?ttl=3600` | SOURCE_IP, 30min |
-| Bot Campaign | `security:bouncer:campaign` | level >= 10 | `block://?ttl=86400,notify://perm@manage_security` | SOURCE_IP, 60min |
-| High Confidence Bot | `security:bouncer:block` | risk_score >= 80 | `block://?ttl=3600` | SOURCE_IP, 30min |
+| Rule | Category | Matches | Trigger | Handler | Bundle |
+|------|----------|---------|---------|---------|--------|
+| Honeypot Detection | `security:bouncer:honeypot_post` | level >= 9 | first event | `block://?ttl=3600` | SOURCE_IP, 30min |
+| Bot Campaign | `security:bouncer:campaign` | level >= 10 | first event | `block://?ttl=86400,notify://perm@manage_security` | SOURCE_IP, 60min |
+| High Confidence Bot | `security:bouncer:block` | risk_score >= 80 | 3 events / 30min | `block://?ttl=3600` | SOURCE_IP, 30min |
+| In-Session Freeze | `security:bouncer:session_freeze` | level >= 9 | 3 events / 60min | `block://?ttl=86400,notify://perm@manage_security` | SOURCE_IP, 60min |
+
+Every blocking rule a legitimate user could trip carries a `trigger_count`, so one mistyped username or one expired token can never firewall a shared NAT egress. Honeypot and campaign stay on "first event" because no legitimate user can produce their match. See [Default auth and bouncer rulesets](../logging/incidents.md#default-auth-and-bouncer-rulesets) for the reasoning and for how to retune a deployment bootstrapped before the gates existed.
 
 ### Health Rules
 

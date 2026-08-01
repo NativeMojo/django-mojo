@@ -680,13 +680,16 @@ Bouncer scores request → block decision
 
 | Category | Level | Creates Incident | Default Rule Action |
 |----------|-------|-----------------|-------------------|
-| `security:bouncer:block` | 8 | Yes | Score >= 80: block IP 1hr |
-| `security:bouncer:honeypot_post` | 9 | Yes | Block IP 1hr |
-| `security:bouncer:campaign` | 10 | Yes | Block IP 24hr + notify admin |
-| `security:bouncer:token_invalid` | 7 | Yes | Block IP 30min |
+| `security:bouncer:block` | 8 | Yes | Score >= 80, **3 in 30min**: block IP 1hr |
+| `security:bouncer:honeypot_post` | 9 | Yes | Block IP 1hr on the first event |
+| `security:bouncer:campaign` | 10 | Yes | Block IP 24hr + notify admin, on the first event |
+| `security:bouncer:token_invalid` | 4 or 7 | Yes | **10 level-7 events in 30min**: block IP 30min |
+| `security:bouncer:session_freeze` | 9 | Yes | **3 in 60min**: block IP 24hr + notify admin |
 | `security:bouncer:monitor` | 5 | No | — |
 | `security:bouncer:event` | 5–7 | Conditional | — |
 | `security:bouncer:token_missing` | 6 | No | — |
+
+`security:bouncer:token_invalid` is reported at **level 4** when the failure is a normal part of the token lifecycle — `expired` (the 15-minute TTL ran out while the user read the page), `nonce_consumed` (a double-submitted form), or `ip_mismatch` (a cellular or CGNAT handoff changed the egress IP). Only tampering — `invalid_format`, `invalid_signature`, `page_type_mismatch`, `duid_mismatch` — reports at level 7 and can reach the blocking rule. While the deployment is in log-only mode (`BOUNCER_REQUIRE_TOKEN` off) every cause is capped at level 4, so nothing gets blocked.
 
 ### Querying Bouncer Incidents
 
@@ -848,9 +851,32 @@ in the background streaming behavioral signals to
 | `data-flush-size` | `25` | Force flush when buffer hits this size |
 
 Both scripts include `credentials: 'include'` on every fetch so the HttpOnly
-`mbp` pass cookie sets cross-origin. The bouncer's allowlist
-(`BOUNCER_ALLOWED_ORIGINS` on the server) must contain your page's origin
-for credentialed CORS to work.
+`mbp` pass cookie sets cross-origin. **This works from any origin by default** —
+the server echoes any well-formed `http(s)` origin back with credentials on
+`/assess`, `/event` and `/message`, so you do not need to be listed anywhere and
+there is nothing to request from the backend team.
+
+Two standing exceptions, in every configuration: `/verify_pass` and the
+permission-gated admin endpoints are not covered (no browser client calls them),
+and `Origin: null` — a sandboxed iframe, `data:` or `file://` page — is refused.
+
+The one case that needs backend coordination is a server that has **opted out**
+with `BOUNCER_ALLOW_ANY_ORIGIN = False`. There, only origins listed in
+`BOUNCER_ALLOWED_ORIGINS` get credentialed headers, and yours must be added.
+
+If your origin is not covered, the server answers with
+`Access-Control-Allow-Origin: *`, and the browser rejects your
+`credentials: 'include'` fetch **before your page sees the response**.
+`mojo-bouncer.js` treats that as a failure and calls `_allowThrough()` — so the
+gate silently becomes a no-op rather than throwing. If your gate appears to pass
+instantly on a tenant domain, this is the first thing to check.
+
+Two things to know either way. A change to this setting is not immediate for
+clients that have already preflighted: `Access-Control-Max-Age: 86400` means a
+browser may act on a cached preflight decision for up to 24 hours. And the `mbp`
+pass cookie is `SameSite=Lax`, so a page on a *different registrable domain* from
+the bouncer host never stores it — the token flow works cross-site; the
+repeat-visit challenge skip does not.
 
 **Identity continuity** — both scripts share the `mojo_device_uid`
 localStorage key with `mojo-auth.js`, so a user authenticated via the gate
@@ -970,7 +996,13 @@ host. Two shapes work:
 | B | `app.example.com` | `auth.example.com` | set `BOUNCER_PASS_COOKIE_DOMAIN='.example.com'` on the bouncer's Django settings |
 
 Cross-domain deployments (e.g. `marketing.com` gated by `auth.example.com`)
-are not supported in v1 — browser cookie policy blocks the share.
+are not supported for nginx `auth_request` gating — browser cookie policy
+blocks the `mbp` share, and the permissive cross-origin default does not change
+that. `BOUNCER_ALLOW_ANY_ORIGIN` only affects CORS response headers on the public
+JSON endpoints; the `mbp` cookie is `SameSite=Lax` and `verify_pass` is never
+covered by the any-origin echo (nginx `auth_request` is server-to-server and
+ignores CORS anyway). A tenant-owned domain can therefore use the **token** flow
+cross-origin, but not the cookie-gated one.
 
 ### Capacity & latency
 

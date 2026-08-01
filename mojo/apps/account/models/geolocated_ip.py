@@ -260,7 +260,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.save()
         return True
 
-    def check_threats(self, from_sync=False):
+    def check_threats(self, from_sync=False, skip_external=False):
         """
         Perform comprehensive threat intelligence checks on this IP.
         Updates is_known_attacker, is_known_abuser, and threat_level fields.
@@ -271,10 +271,18 @@ class GeoLocatedIP(models.Model, MojoModel):
         Args:
             from_sync: When True, suppress outbound push-back to the upstream
                 mojo provider (the trigger arrived via the federation endpoint).
+            skip_external: When True, skip the third-party blocklist lookups and
+                re-score on local incident evidence alone. Used by the daily
+                recheck_active_threats decay pass, which would otherwise do an
+                outbound check per row every day. A previously recorded
+                blocklist hit is carried forward rather than erased — skipping
+                the lookup must not be read as "not listed".
         """
         from mojo.helpers.geoip import threat_intel
 
         prev_snapshot = self._abuse_snapshot()
+        prior_blocklisted = bool(
+            (self.data or {}).get('threat_data', {}).get('is_blocklisted'))
 
         # For records sourced from a mojo upstream, the upstream already ran
         # external blocklist checks — only re-run the local internal-events
@@ -290,9 +298,16 @@ class GeoLocatedIP(models.Model, MojoModel):
                 self.is_known_abuser or threat_results['is_known_abuser']
             )
         else:
-            threat_results = threat_intel.perform_threat_check(self.ip_address)
+            threat_results = threat_intel.perform_threat_check(
+                self.ip_address, skip_external=skip_external)
             self.is_known_attacker = threat_results['is_known_attacker']
             self.is_known_abuser = threat_results['is_known_abuser']
+
+        # An unrun external check is not a clean external check.
+        if prior_blocklisted and not threat_results['is_blocklisted']:
+            if skip_external or self.provider == 'mojo':
+                threat_results['is_blocklisted'] = True
+                threat_results['threat_data']['is_blocklisted'] = True
 
         # Store detailed threat data
         if not self.data:

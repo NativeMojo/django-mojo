@@ -41,4 +41,5 @@ Before closing any task:
 2. If models changed, run `bin/create_testproject` then `bin/run_tests`
 3. Tests added/updated where needed
 4. Docs updated for both audiences when applicable
-5. Do NOT edit `CHANGELOG.md` — concurrent sessions collide on it and cause merge issues. Behavior notes go in commit messages and the two doc tracks.
+5. Behavior or guidance changes recorded on the maestro item — **never** in `CHANGELOG.md`
+   (see `.claude/rules/docs.md`)

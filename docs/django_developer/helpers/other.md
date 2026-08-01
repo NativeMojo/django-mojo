@@ -95,15 +95,6 @@ info = sysinfo.get()
 # {"hostname": "server1", "cpu_count": 4, "memory_gb": 16, ...}
 ```
 
-## ua (User Agent Parsing)
-
-```python
-from mojo.helpers import ua
-
-parsed = ua.parse("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...")
-# {"browser": "Chrome", "os": "macOS", "device": "desktop"}
-```
-
 ## paths
 
 `configure_paths(base_dir)` (called once from Django settings) sets module-level

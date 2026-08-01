@@ -25,7 +25,7 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `connection_type` | `residential`, `business`, `hosting`, `cellular`, etc. |
 | `last_seen` | Last time this IP was encountered in the system |
 | `provider` | Source of the geolocation data |
-| `data` | JSON bag for raw provider data and threat check results |
+| `data` | JSON bag for raw provider data and threat check results. `data.threat_data` holds `internal` (event stats), `blocklists` (per-source hits) and `is_blocklisted`. See [Threat Intelligence](#threat-intelligence). |
 | `expires_at` | Cache expiration (internal records never expire) |
 
 ### Blocking Fields
@@ -347,6 +347,197 @@ decision.
 The Tor row honors `source_url` (falling back to the `TOR_EXIT_NODE_LIST_URL`
 setting); blocklist.de defaults to `https://lists.blocklist.de/lists/all.txt`.
 
+### Threat Intelligence
+
+`mojo.helpers.geoip.threat_intel.perform_threat_check(ip, skip_external=False)`
+is the single entry point. It combines **internal** incident history with
+**external** blocklists and returns:
+
+```python
+{
+    'is_known_attacker': False,   # internal high-severity events
+    'is_known_abuser': False,     # internal volume/mid-severity pattern
+    'is_blocklisted': False,      # listed on any enabled external blocklist
+    'threat_data': {
+        'internal': {...},        # see "Internal analysis" below
+        'blocklists': [...],      # per-source hit records
+        'is_blocklisted': False,  # mirror of the top-level flag
+    },
+}
+```
+
+`threat_data` is the sub-dict consumers persist (`GeoLocatedIP.data['threat_data']`,
+`geolocate_ip()`'s `data['threat_data']`), and `recalculate_threat_level()` reads
+the blocklist flag from **inside** it — that is why the flag appears in both
+places.
+
+#### Internal analysis
+
+`check_internal_threats(ip)` reads `incident.Event` rows with a matching
+`source_ip`. It uses **two different windows**:
+
+| Window | Setting | Default | Used for |
+|---|---|---|---|
+| Predicate | `GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS` | `24` | `is_known_attacker`, `is_known_abuser`, and every count that drives them |
+| Display | `GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS` | `90` | `total_events`, `avg_level`, `top_categories`, `last_seen_event` |
+
+The predicate answers "is this address hostile **right now**", and the
+enforcement it feeds is measured in minutes. The 90-day count answered "has
+anything ever gone wrong here", which on a shared egress is always yes. The long
+window is kept for the admin UI only — it drives no boolean.
+
+**`is_known_attacker` is a two-tier allowlist.** A category that is on neither
+list counts toward **nothing**, whatever its level:
+
+*Tier 1 — confirmed.* `GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_CATEGORIES`
+(default `security:bouncer:honeypot_post`, `security:bouncer:campaign`,
+`sensitive_field_probe`). No legitimate user produces these — a honeypot field
+is invisible to a human. `GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_THRESHOLD`
+(3) events at `level >= GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD` (7) is
+enough. Never suppressed.
+
+*Tier 2 — suspect.* `GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_CATEGORIES` (default
+`login:unknown`, `reset:unknown`, `magic:unknown`, `totp:login_unknown`,
+`sms:login_unknown`, `token:unknown`, `invalid_password`). A real user *can*
+produce one of these by fumbling a credential, so volume alone proves nothing.
+All three of these must hold:
+
+1. at least `GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_THRESHOLD` (25) events in the
+   window, **and**
+2. spread across at least `GEOLOCATION_INTERNAL_ATTACKER_MIN_TARGETS` (10)
+   distinct user accounts, **and**
+3. the address is not a shared egress (below).
+
+The level floor does **not** apply to this tier — the category allowlist
+replaces it, which is how `invalid_password` (reported at level 5, and the
+single strongest credential-stuffing signal in the codebase) finally counts.
+
+Breadth is measured as `COUNT(DISTINCT model_id)` over events whose `model_name`
+names a user. Instance reporting (`user.report_incident(...)`, e.g.
+`invalid_password`) stamps both; class-level reporting
+(`User.class_report_incident`, e.g. `login:unknown` — the username does not
+resolve to an account) leaves `model_id` NULL. **An event that names no account
+is not a target**, so a burst of mistyped usernames from an office egress can
+never satisfy the breadth gate on its own. That is deliberate: one person
+fumbling their own password scores 1 target; a stuffing run scores many.
+
+**Shared-egress suppressor.** If at least
+`GEOLOCATION_INTERNAL_SHARED_EGRESS_MIN_DEVICES` (25) distinct
+`BouncerSignal.muid` values were seen for the address inside the window, the
+**suspect** tier is suppressed — that address fronts many independent browsers,
+i.e. a NAT. `muid` is a server-set HttpOnly cookie present pre-auth, so page JS
+cannot forge it. Two guards:
+
+- Only muids whose `BouncerDevice.first_seen` **predates** the window count, so
+  an attacker cycling fresh cookies on one address cannot fake a NAT.
+- If the address has no `BouncerSignal` rows at all (deployment does not run the
+  bouncer JS), the suppressor is skipped entirely rather than defaulting either
+  way. `internal_stats['distinct_devices']` is `None` in that case — never `0`.
+
+The confirmed tier is never suppressed: an attacker behind a corporate NAT is
+still an attacker.
+
+**`is_known_abuser` means sustained rate-limit tripping.** At least
+`GEOLOCATION_INTERNAL_ABUSER_EVENT_THRESHOLD` (60) events whose category starts
+with `GEOLOCATION_INTERNAL_ABUSER_CATEGORY_PREFIX` (`rate_limit:`) inside the
+window. Each `rate_limit:*` event is deduped to one per key+IP per 60 seconds in
+Redis, so 60 events is roughly an hour of the day spent over the limits. This is
+a **semantic change to a federated field** — the old definition (≥10 events with
+a mean level in `[4, 8)` over 90 days) effectively counted "has this IP ever used
+the API", and `avg_level` no longer participates in any predicate.
+
+**What counts for nothing.** Everything not named above: `rest_error`
+(level **12**, emitted by `mojo/decorators/http.py` for *any* unhandled 500 and
+attributed to the caller's IP), `assistant:error:*`, `system:health:*`,
+`traffic:*`, `rate_limit:*` (abuse, not attack), every permission-denied
+category, and — critically — `security:bouncer:block` and
+`security:bouncer:session_*`. Excluding the bouncer's own decisions is what
+breaks the self-confirming loop: a block emitted a level-8 event, which made
+`is_known_attacker` true, which added +40 to the next risk score, which made the
+next block more likely.
+
+The tradeoff is deliberate: a new attack category next quarter counts for
+nothing until someone adds it to a list. That fails toward missing an attacker
+rather than toward blocking a real user, which is the direction these platforms
+want. Add your own categories to either setting.
+
+`internal_stats` carries the numbers behind the verdict:
+
+```python
+{
+  'total_events': 412,           # 90d, display only
+  'high_severity_events': 30,    # in-window attack evidence (confirmed+suspect)
+  'confirmed_events': 0,
+  'suspect_events': 30,
+  'distinct_targets': 12,
+  'distinct_devices': 3,         # None when the deployment has no bouncer data
+  'shared_egress_suppressed': False,
+  'abuse_events': 0,
+  'avg_level': 5.4,              # 90d, display only
+  'top_categories': [...],       # 90d, display only
+  'last_seen_event': '...',      # 90d, display only
+  'lookback_days': 90,
+  'window_hours': 24,
+}
+```
+
+#### Tuning and dry run
+
+Every `GEOLOCATION_INTERNAL_*` threshold is re-read on **every call** through
+`settings.get()`, so a DB-backed `Setting` row retunes detection with no code
+change and no restart. (Before this they were captured at import via
+`get_static()`, which reads file-based settings only.)
+
+```bash
+# Raise the suspect bar for one deployment, live.
+curl -X POST https://api.example.com/api/account/setting \
+  -H "Authorization: Bearer $TOKEN" \
+  -d 'key=GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_THRESHOLD' -d 'value=50'
+```
+
+Set `GEOLOCATION_INTERNAL_THREAT_DRY_RUN=True` to compute the verdict and log it
+via `logit.info` (with the counts that drove it, to `mojo.log`) while returning
+`False/False`. `internal_stats` still carries `dry_run: True` plus
+`dry_run_is_known_attacker` / `dry_run_is_known_abuser`. On a busy deployment,
+run a week in dry run before letting a retune act.
+
+**Deprecated:** `GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES` was the old
+denylist. It is still honored if set — the named categories are subtracted from
+both allowlists — and logs a deprecation warning. Its shape was the underlying
+bug: every *new* level-8+ category silently became attack evidence, which is how
+`magic:unknown` and then `rest_error` became "attacks". Remove it and edit the
+allowlists instead.
+
+#### Decay
+
+`update_threat_from_incident()` and `block()` only ratchet `threat_level` up, so
+a single level-8 event used to stamp an address `medium` forever. The incident
+app's `recheck_active_threats` cron (daily, 04:20) re-runs `check_threats()` for
+up to `GEOLOCATION_RECHECK_THREATS_MAX` (500) `GeoLocatedIP` rows whose
+`last_seen` falls inside the predicate window, letting a recomputed **lower**
+level replace the stored one. It runs with `skip_external=True` — the pass is
+about decaying local evidence, and a daily outbound blocklist lookup per row is
+not affordable. A previously recorded blocklist hit is carried forward rather
+than erased: an unrun lookup is not a clean lookup.
+
+Records with `provider == 'mojo'` are excluded. Their never-downgrade rule is the
+federation contract with the upstream, not a local scoring decision.
+
+**Threat level.** `geolocate_ip(check_threats=True)` folds threat intelligence
+into `threat_level`, using the same `recalculate_threat_level()` weight table
+that `GeoLocatedIP.check_threats()` uses, so the helper path and the model path
+score identical evidence identically. The fold is **escalate-only** — it can
+raise `threat_level` but never lower it, so provider-derived levels (Tor →
+`high`) survive untouched, and `check_threats=False` behavior is unchanged.
+A bare blocklist hit scores 30 → `medium`; a known attacker scores 50 → `high`;
+both together → `critical`.
+
+`geolocate_ip()` results also carry a top-level `is_blocklisted` bool on every
+branch (private/reserved, `mojo` provider, and normal providers) so callers
+don't have to reach into the raw blob. It is **not** persisted — `GeoLocatedIP`
+has no such field, and `refresh()`'s `hasattr`-gated copy loop drops it. The
+stored copy lives in `data['threat_data']['is_blocklisted']`.
+
 ### `mojo` Provider
 
 Use another django-mojo instance as a GeoIP data source. The downstream instance calls the upstream's `GET /api/system/geoip/lookup?graph=detailed` with an ApiKey token and caches the result locally.
@@ -435,6 +626,23 @@ URL or api key.
 |---|---|---|
 | `GEOLOCATION_ALLOW_SUBNET_LOOKUP` | `False` | Allow fallback to subnet match when exact IP not found |
 | `GEOLOCATION_CACHE_DURATION_DAYS` | `90` | Days before a cached record expires |
+| `GEOLOCATION_ENABLE_INTERNAL_THREAT_CHECK` | `True` | Run the internal incident-history analysis |
+| `GEOLOCATION_ENABLE_BLOCKLIST_CHECK` | `True` | Run the external blocklist checks |
+| `GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS` | `90` | **Display-only** stat window (`total_events`, `avg_level`, `top_categories`, `last_seen_event`). Drives no boolean. |
+| `GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS` | `24` | **Predicate** window — every count that drives `is_known_attacker` / `is_known_abuser` |
+| `GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD` | `7` | Secondary severity floor, **confirmed tier only**. Was `8`; lowered because `sensitive_field_probe` is emitted at exactly 7. |
+| `GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_CATEGORIES` | `['security:bouncer:honeypot_post', 'security:bouncer:campaign', 'sensitive_field_probe']` | Tier 1 — no legitimate user produces these |
+| `GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_THRESHOLD` | `3` | Tier 1 events needed for `is_known_attacker` |
+| `GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_CATEGORIES` | `['login:unknown', 'reset:unknown', 'magic:unknown', 'totp:login_unknown', 'sms:login_unknown', 'token:unknown', 'invalid_password']` | Tier 2 — a real user can produce one; needs volume **and** breadth |
+| `GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_THRESHOLD` | `25` | Tier 2 events needed in the window |
+| `GEOLOCATION_INTERNAL_ATTACKER_MIN_TARGETS` | `10` | Distinct user accounts tier 2 must hit |
+| `GEOLOCATION_INTERNAL_SHARED_EGRESS_MIN_DEVICES` | `25` | Distinct pre-existing `BouncerSignal.muid`s that mark the address a NAT and suppress tier 2 |
+| `GEOLOCATION_INTERNAL_ABUSER_CATEGORY_PREFIX` | `'rate_limit:'` | Category prefix that counts toward `is_known_abuser` |
+| `GEOLOCATION_INTERNAL_ABUSER_EVENT_THRESHOLD` | `60` | Prefixed events in the window needed for `is_known_abuser` |
+| `GEOLOCATION_INTERNAL_THREAT_DRY_RUN` | `False` | Compute and log the verdict but always return `False/False` |
+| `GEOLOCATION_RECHECK_THREATS_MAX` | `500` | Max `GeoLocatedIP` rows the daily decay cron rechecks |
+| `GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD` | `5` | **Deprecated / unused.** No predicate reads it. |
+| `GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES` | unset | **Deprecated denylist.** Still honored when set (subtracted from both allowlists) and logs a warning. See [Threat Intelligence](#threat-intelligence). |
 | `GEOIP_MOJO_PROVIDER_URL` | `None` | Base URL of upstream mojo instance (enables mojo provider) |
 | `GEOIP_API_KEY_MOJO` | — | ApiKey token for upstream mojo instance |
 | `GEOIP_MOJO_SYNC_ENABLED` | `True` | Enable outbound abuse-signal federation push |

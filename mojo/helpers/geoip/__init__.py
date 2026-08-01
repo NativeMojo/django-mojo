@@ -8,6 +8,8 @@ Public API:
     - geolocate_ip(ip_address, check_threats=False)
 """
 import ipaddress
+from objict import objict
+from mojo.helpers import logit
 from . import config
 from . import detection
 from . import ipinfo
@@ -69,6 +71,7 @@ def geolocate_ip(ip_address, check_threats=False):
             'mobile_carrier': None,
             'is_known_attacker': False,
             'is_known_abuser': False,
+            'is_blocklisted': False,
             'threat_level': 'low',
             'data': {...}  # Raw provider response
         }
@@ -92,6 +95,7 @@ def geolocate_ip(ip_address, check_threats=False):
                 'mobile_carrier': None,
                 'is_known_attacker': False,
                 'is_known_abuser': False,
+                'is_blocklisted': False,
                 'threat_level': 'low',
             }
     except ValueError:
@@ -166,6 +170,10 @@ def geolocate_ip(ip_address, check_threats=False):
                     geo_data['data']['threat_data'] = threat_results['threat_data']
                 except ImportError:
                     pass
+            # Uniform result shape regardless of provider. setdefault, not a
+            # plain assign: the upstream may already have supplied the flag,
+            # and skip_external=True means our local check never sets it.
+            geo_data.setdefault('is_blocklisted', False)
             return geo_data
 
         # Perform Tor detection
@@ -199,12 +207,14 @@ def geolocate_ip(ip_address, check_threats=False):
         geo_data.update(vpn_proxy_cloud)
 
         # Perform threat intelligence checks if requested
+        threat_results = None
         if check_threats:
             try:
                 from . import threat_intel
                 threat_results = threat_intel.perform_threat_check(ip_address)
                 geo_data['is_known_attacker'] = threat_results['is_known_attacker']
                 geo_data['is_known_abuser'] = threat_results['is_known_abuser']
+                geo_data['is_blocklisted'] = threat_results['is_blocklisted']
 
                 # Store threat data in the data field
                 if 'data' not in geo_data:
@@ -214,11 +224,16 @@ def geolocate_ip(ip_address, check_threats=False):
                 # threat_intel module not available
                 geo_data['is_known_attacker'] = False
                 geo_data['is_known_abuser'] = False
+                geo_data['is_blocklisted'] = False
         else:
             geo_data['is_known_attacker'] = False
             geo_data['is_known_abuser'] = False
+            geo_data['is_blocklisted'] = False
 
-        # Calculate threat level
+        # Calculate threat level. `data['threat']` is the provider-native
+        # threat blob contract (is_threat / threat_score) — a hook no built-in
+        # provider populates today. Our own threat intelligence has a different
+        # shape and is folded in separately below.
         geo_data['threat_level'] = detection.calculate_threat_level(
             is_tor,
             vpn_proxy_cloud['is_vpn'],
@@ -226,10 +241,32 @@ def geolocate_ip(ip_address, check_threats=False):
             geo_data.get('data', {}).get('threat', None)
         )
 
+        # Fold in our own threat intelligence (internal incident history +
+        # external blocklists). Escalate-only, so nothing that scores high
+        # above (Tor) is ever downgraded and check_threats=False behavior is
+        # unchanged. Scored by recalculate_threat_level() — the same weight
+        # table GeoLocatedIP.check_threats() uses — via a duck-typed shim, so
+        # the two paths cannot disagree about the same evidence.
+        # threat_results is non-None only when the lazy import above succeeded.
+        if threat_results is not None:
+            from . import threat_intel
+            shim = objict(
+                is_known_attacker=geo_data.get('is_known_attacker', False),
+                is_known_abuser=geo_data.get('is_known_abuser', False),
+                is_tor=geo_data.get('is_tor', False),
+                is_vpn=geo_data.get('is_vpn', False),
+                is_proxy=geo_data.get('is_proxy', False),
+                data=geo_data.get('data') or {},
+            )
+            geo_data['threat_level'] = threat_intel.escalate_threat_level(
+                geo_data['threat_level'],
+                threat_intel.recalculate_threat_level(shim),
+            )
+
         return geo_data
     else:
         # All providers failed
-        print(f"[GeoIP Error] All providers failed for IP {ip_address}: {'; '.join(errors)}")
+        logit.error(f"[GeoIP] All providers failed for IP {ip_address}: {'; '.join(errors)}")
         return None
 
 

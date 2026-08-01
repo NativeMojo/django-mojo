@@ -66,16 +66,16 @@ def fetch(ip_address, api_key=None):
         response.raise_for_status()
         body = response.json()
     except Exception as e:
-        logit.warning("[GeoIP] mojo provider fetch failed for %s: %s", ip_address, e)
+        logit.warning(f"[GeoIP] mojo provider fetch failed for {ip_address}: {e}")
         return None
 
     if not isinstance(body, dict) or not body.get("status"):
-        logit.warning("[GeoIP] mojo provider returned non-success for %s: %r", ip_address, body)
+        logit.warning(f"[GeoIP] mojo provider returned non-success for {ip_address}: {body!r}")
         return None
 
     upstream = body.get("data") or {}
     if not isinstance(upstream, dict):
-        logit.warning("[GeoIP] mojo provider returned non-dict data for %s", ip_address)
+        logit.warning(f"[GeoIP] mojo provider returned non-dict data for {ip_address}")
         return None
 
     result = {"provider": "mojo"}

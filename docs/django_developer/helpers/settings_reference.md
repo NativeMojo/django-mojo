@@ -207,6 +207,25 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 ### BOUNCER
 
 - `BOUNCER_ACCENT_COLOR`
+- `BOUNCER_ALLOWED_ORIGINS` — list of origins allowed to call the bouncer
+  endpoints with credentials (`Access-Control-Allow-Credentials: true` plus a
+  specific `Access-Control-Allow-Origin`). Consulted first and unconditionally,
+  in both origin modes; it is the mechanism that names the permitted origins
+  once `BOUNCER_ALLOW_ANY_ORIGIN` is `False`. Matched by exact string, so
+  non-http entries such as `capacitor://localhost` are valid. **File-only**
+  (`settings.get_static`).
+- `BOUNCER_ALLOW_ANY_ORIGIN` — **file-only** (`settings.get_static`, default
+  `True`). By default the three public bouncer endpoints (`assess`, `event`,
+  `message`) echo any well-formed `http(s)` request `Origin` with credentials —
+  this is an open API platform and third-party callers are expected. Set it
+  `False` to restrict those endpoints to `BOUNCER_ALLOWED_ORIGINS`. `verify_pass`
+  and the permission-gated admin endpoints (`device`, `signal`, `signature`) are
+  never covered either way; `Origin: null` and malformed origins are always
+  refused. An uncoercible value degrades to the declared default (`True`), so a
+  typo'd opt-out does not silently take effect. See
+  [account/bouncer.md](../account/bouncer.md#cross-origin-embedding).
+  Deliberately not readable from the DB/Redis settings plane, so a `Setting` row
+  cannot change the origin policy at runtime.
 - `BOUNCER_CHALLENGE_BRAND`
 - `BOUNCER_CHALLENGE_LOGO_URL`
 - `BOUNCER_CONTACT_PATH`
@@ -221,6 +240,10 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `BOUNCER_LEARN_UA_TTL`
 - `BOUNCER_LOGIN_PATH`
 - `BOUNCER_LOGO_URL`
+- `BOUNCER_PASS_COOKIE_DOMAIN` — `Domain` attribute for the `mbp` pass cookie
+  (e.g. `'.example.com'`), so a subdomain deployment shares it between the app
+  host and the bouncer host. It also widens the set of subdomains the cookie
+  rides along on for credentialed same-site calls.
 - `BOUNCER_PASS_COOKIE_TTL`
 - `BOUNCER_PUBLIC_MESSAGE_MAX_LENGTH`
 - `BOUNCER_REGISTER_PATH`
@@ -340,9 +363,28 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `GEOLOCATION_DEVICE_LOCATION_AGE`
 - `GEOLOCATION_ENABLE_BLOCKLIST_CHECK`
 - `GEOLOCATION_ENABLE_INTERNAL_THREAT_CHECK`
+- `GEOLOCATION_INTERNAL_ABUSER_CATEGORY_PREFIX`
+- `GEOLOCATION_INTERNAL_ABUSER_EVENT_THRESHOLD`
+- `GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_CATEGORIES`
+- `GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_THRESHOLD`
 - `GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD`
-- `GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD`
+- `GEOLOCATION_INTERNAL_ATTACKER_MIN_TARGETS`
+- `GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_CATEGORIES`
+- `GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_THRESHOLD`
+- `GEOLOCATION_INTERNAL_SHARED_EGRESS_MIN_DEVICES`
+- `GEOLOCATION_INTERNAL_THREAT_DRY_RUN`
 - `GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS`
+- `GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS`
+- `GEOLOCATION_RECHECK_THREATS_MAX`
+- `GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES` *(deprecated — replaced by
+  the CONFIRMED/SUSPECT allowlists; still honored, logs a warning)*
+- `GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD` *(deprecated — no predicate
+  reads it)*
+
+Every `GEOLOCATION_INTERNAL_*` name above is read through `settings.get()` on
+each call, so a DB-backed `Setting` row retunes threat detection without a
+restart. See
+[account/geoip.md](../account/geoip.md#threat-intelligence).
 
 ### GITHUB
 

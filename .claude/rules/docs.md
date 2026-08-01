@@ -15,5 +15,10 @@ A new endpoint or behavior change typically needs docs in **both** places.
 
 ## What to Update
 - Update root indexes (`README.md` in each doc folder) when adding new doc files
-- Do NOT edit `CHANGELOG.md` — concurrent sessions collide on it and cause merge issues. Record behavior notes in commit messages and the two doc tracks instead.
 - Read `docs/django_developer/README.md` before building — do not reinvent existing features
+
+## Do NOT write to `CHANGELOG.md`
+The maestro board is the changelog. Record behavior and API changes in the work item's
+comment trail there, not in a file. The board already carries richer history (plan,
+challenge, commits, verification), and the file was the most common git collision between
+concurrent sessions — every session appending to the same `## Unreleased` block.
