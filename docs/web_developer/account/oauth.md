@@ -45,7 +45,7 @@ Steps 3–4 are invisible to your JS — your page still receives `?code=` and `
 
 | Parameter | Description |
 |---|---|
-| `redirect_uri` | Override the default callback URL. Must be on the server's allowlist (`ALLOWED_REDIRECT_URLS`). Returns `400` if provided but not allowed. |
+| `redirect_uri` | Override the default callback URL. Must be on the server's allowlist (`ALLOWED_REDIRECT_URLS`). Returns `400` if provided but not allowed. The allowlist is server-configured and fixed — passing `group_uuid` (or `group`) does **not** widen it, so a landing URL that 400s without group context still 400s with it. |
 
 **Response:**
 
@@ -279,7 +279,7 @@ GitHub Sign In uses the standard redirect flow — identical to Google. Replace 
 |---|---|---|
 | `GOOGLE_SCOPES` | `"openid email profile"` | OAuth scopes requested from Google |
 | `OAUTH_STATE_TTL` | `600` | Seconds a CSRF state token is valid before it expires |
-| `ALLOWED_REDIRECT_URLS` | `[]` | URL prefixes permitted as `redirect_uri` on the `begin` endpoint |
+| `ALLOWED_REDIRECT_URLS` | `[]` | URL prefixes permitted as `redirect_uri` on the `begin` endpoint. Server-side deployment config and the only source of the allowlist — a per-group `allowed_redirect_urls` in group metadata is no longer read, so nothing a client sends can extend it. |
 | `OAUTH_ALLOW_REGISTRATION` | `True` | Allow new accounts to be created via OAuth. Set to `False` for invite-only or closed deployments — the complete endpoint returns `403` if no existing account matches. |
 
 ---

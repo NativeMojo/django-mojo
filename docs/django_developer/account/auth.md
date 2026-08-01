@@ -326,7 +326,11 @@ those values under different semantics — notably, wildcards are inert there an
 live here — so handoff destinations are never inherited from them. Note the
 side effect of the opt-in design: an existing `ALLOWED_REDIRECT_URLS` does not
 put you into handoff enforcement, and adding a handoff entry for the first time
-does.
+does. One thing the two lists now share: both are **deployment** configuration
+only. `ALLOWED_REDIRECT_URLS` used to be combined with a per-group
+`Group.metadata["allowed_redirect_urls"]`; that source is gone, because the
+group applied was chosen by the (anonymous) caller — see
+[OAuth](oauth.md#why-there-is-no-per-group-allowlist).
 
 ### Supplying a resolver instead of a list
 

@@ -742,7 +742,8 @@
          *                                 query string (minus code/state) and stripping the
          *                                 hash — so ?redirect= survives the OAuth round-trip.
          *                                 Must be registered in the provider's console AND
-         *                                 allowed by the backend (ALLOWED_REDIRECT_URLS or per-group).
+         *                                 allowed by the backend (ALLOWED_REDIRECT_URLS —
+         *                                 server-configured; group context does not widen it).
          * @returns {Promise<void>}
          */
         startOAuthLogin: function (provider, callbackUrl) {

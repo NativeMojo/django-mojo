@@ -26,7 +26,12 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### ALLOWED
 
-- `ALLOWED_REDIRECT_URLS`
+- `ALLOWED_REDIRECT_URLS` — URL prefixes accepted as the OAuth `redirect_uri`
+  landing page. **Deployment configuration only, and the sole source of that
+  allowlist**: `Group.metadata["allowed_redirect_urls"]` is no longer read, so
+  no tenant-writable value and no caller-supplied `?group=` / `?group_uuid=`
+  can widen it. See
+  [OAuth](../account/oauth.md#why-there-is-no-per-group-allowlist).
 
 ### API
 

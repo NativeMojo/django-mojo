@@ -94,7 +94,7 @@ GitHub does not always return an email on the `/user` endpoint — if the user h
 
 ## Per-Request redirect_uri
 
-For multi-app deployments (portal, urtiny, etc.) where each frontend has its own callback URL, the `begin` endpoint accepts an optional `redirect_uri` query parameter.
+For multi-app deployments (a portal and a marketing site, say) where each frontend has its own callback URL, the `begin` endpoint accepts an optional `redirect_uri` query parameter.
 
 ```
 GET /api/auth/oauth/google/begin?redirect_uri=https://portal.example.com/auth/callback
@@ -104,25 +104,14 @@ GET /api/auth/oauth/google/begin?redirect_uri=https://portal.example.com/auth/ca
 
 A `redirect_uri` is accepted only if it starts with a prefix on the allowlist. If no allowlist is configured and a `redirect_uri` is provided, the request returns `400`.
 
-**Project-wide allowlist** (`settings.py`):
+The allowlist has exactly **one** source — `ALLOWED_REDIRECT_URLS` in `settings.py`:
 
 ```python
 ALLOWED_REDIRECT_URLS = [
     "https://portal.example.com/",
-    "https://urtiny.example.com/",
-]
-```
-
-**Per-group allowlist** (`Group.metadata["allowed_redirect_urls"]`):
-
-```python
-group.metadata["allowed_redirect_urls"] = [
     "https://tenant-a.example.com/",
 ]
-group.save()
 ```
-
-The group list is retrieved via `get_metadata_value()`, which traverses the parent chain. Project-wide and group lists are combined at validation time.
 
 A `redirect_uri` may carry its own query string (e.g. an app passing
 `?redirect=/workspaces/` through the login page). The allowlist is a **prefix**
@@ -134,6 +123,49 @@ lets a `?redirect=` target survive the OAuth round-trip. (The bundled
 `mojo-auth.js` cooperates: when no explicit callback URL is given, its default
 return URL keeps the current page's query string — minus any stale `code`/`state`
 — and strips only the hash.)
+
+### Why there is no per-group allowlist
+
+`Group.metadata["allowed_redirect_urls"]` used to be a second source, combined
+with the setting at validation time and inherited up the parent chain. It is no
+longer read at all, because it was never a per-tenant boundary:
+
+- Plain `metadata` is writable by any holder of `manage_group` on that group
+  (only `metadata["protected"]` is gated by `PROTECTED_JSON_PERMS`).
+- `begin` is a public endpoint, and **any anonymous caller** picks which group
+  applies by passing `?group=<id>` / `?group_uuid=<uuid>`.
+
+So an entry blessed by one tenant became a legal OAuth landing origin for every
+user on the platform — the split gave the appearance of tenant isolation while
+behaving as one global list. Writes to the key are still accepted (it is an
+ordinary metadata key); nothing reads it.
+
+The effective allowlist is now a pure function of deployment configuration: it
+does not vary with `?group=`, `?group_uuid=`, or anything else a caller
+controls. `ALLOWED_REDIRECT_URLS` is read through `settings.get`, so it may be
+set in `settings.py` **or** as a global `Setting` row — but a group-scoped row
+never applies to it.
+
+### Migration
+
+If a deployment kept landing origins **only** in group metadata, those OAuth
+logins now fail with:
+
+```
+400  redirect_uri is not permitted: no ALLOWED_REDIRECT_URLS configured
+```
+
+(or `400 redirect_uri is not on the allowlist` when the global list is
+non-empty but does not cover the origin). Move every such prefix into
+`ALLOWED_REDIRECT_URLS`. Because it is read through `settings.get`, a **global**
+`Setting` row carries it too — so the move can be made without a deploy if
+editing `settings.py` is not immediately possible.
+
+The bundled hosted auth pages were never affected: `mojo-auth.js` folds the
+page's query string *inside* the encoded `redirect_uri`, so `group_uuid` never
+becomes a top-level parameter on `begin` and no group is ever resolved there.
+Only a custom frontend that deliberately passed group context could have relied
+on the per-group list.
 
 ### Security
 

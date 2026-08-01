@@ -47,23 +47,25 @@ def _get_redirect_uri(request, provider_name):
     return f"{origin}/auth/oauth/{provider_name}/complete"
 
 
-def _validate_redirect_uri(request, redirect_uri):
+def _validate_redirect_uri(redirect_uri):
     """
     Validate redirect_uri against the allowlist.
 
-    Sources (combined):
-      - ALLOWED_REDIRECT_URLS setting (list of allowed URL prefixes)
-      - group.metadata["allowed_redirect_urls"] (traverses parent chain)
+    ONE source: the ALLOWED_REDIRECT_URLS setting (a list of allowed URL
+    prefixes), which is deployment configuration.
+
+    `group.metadata["allowed_redirect_urls"]` is deliberately NOT a source, and
+    this function deliberately takes no `request` so it cannot become one. Plain
+    `metadata` is writable by any holder of `manage_group` on that group, and
+    `request.group` is selectable by ANY anonymous caller via `?group=<id>` /
+    `?group_uuid=<uuid>` on this public endpoint — so a per-group list was not a
+    per-tenant allowlist at all: whoever could write any group's metadata could
+    authorize an OAuth landing origin for every user on the platform.
 
     Raises ValueException (400) if the URI is not on the allowlist or if no
     allowlist is configured at all.
     """
     allowed = list(settings.get("ALLOWED_REDIRECT_URLS", []) or [])
-    group = getattr(request, "group", None)
-    if group:
-        group_allowed = group.get_metadata_value("allowed_redirect_urls")
-        if group_allowed:
-            allowed.extend(group_allowed)
 
     if not allowed:
         raise merrors.ValueException(
@@ -277,8 +279,9 @@ def on_oauth_begin(request, provider):
 
     Optional query parameter:
       redirect_uri — frontend URL the browser should land on after the OAuth
-                     callback completes. Must be on the allowlist
-                     (ALLOWED_REDIRECT_URLS setting or group.metadata["allowed_redirect_urls"]).
+                     callback completes. Must be on the allowlist, which is the
+                     ALLOWED_REDIRECT_URLS setting and nothing else — group
+                     context does not widen it (see _validate_redirect_uri).
                      Defaults to _get_redirect_uri().
 
     All providers redirect to the backend callback endpoint
@@ -300,7 +303,7 @@ def on_oauth_begin(request, provider):
     # frontend_uri = where the browser lands after the callback bounce
     custom_frontend_uri = request.DATA.get("redirect_uri", "")
     if custom_frontend_uri:
-        _validate_redirect_uri(request, custom_frontend_uri)
+        _validate_redirect_uri(custom_frontend_uri)
         frontend_uri = custom_frontend_uri
     else:
         frontend_uri = _get_redirect_uri(request, provider)
