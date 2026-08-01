@@ -104,7 +104,11 @@ def _refusal(redirect_uri, entries=ENTRIES):
     installed = list(entries) if isinstance(entries, (list, tuple)) else entries
     with _entries(installed):
         try:
-            oauth._validate_redirect_uri(redirect_uri)
+            # `request=None` = no group context, so the group-metadata source
+            # contributes nothing and `entries` IS the whole allowlist. The
+            # per-group source has its own module
+            # (tests/test_oauth/redirect_allowlist_group_source.py).
+            oauth._validate_redirect_uri(None, redirect_uri)
         except merrors.ValueException as exc:
             return str(exc.reason)
     return None

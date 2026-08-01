@@ -45,7 +45,7 @@ Steps 3–4 are invisible to your JS — your page still receives `?code=` and `
 
 | Parameter | Description |
 |---|---|
-| `redirect_uri` | Override the default callback URL. Must be on the server's allowlist (`ALLOWED_REDIRECT_URLS`). Returns `400` if provided but not allowed. It is matched as a **URL** — same scheme, same host (case-insensitive), same port, and a path at or under the allowlisted path on a `/` boundary; the query string is ignored, so you may append your own. Sharing a string prefix with an allowlisted URL is *not* enough. The allowlist is server-configured and fixed — passing `group_uuid` (or `group`) does **not** widen it, so a landing URL that 400s without group context still 400s with it. |
+| `redirect_uri` | Override the default callback URL. Must be on the server's allowlist. Returns `400` if provided but not allowed. It is matched as a **URL** — same scheme, same host (case-insensitive), same port, and a path at or under the allowlisted path on a `/` boundary; the query string is ignored, so you may append your own. Sharing a string prefix with an allowlisted URL is *not* enough. The allowlist is the server's `ALLOWED_REDIRECT_URLS` **plus** the `allowed_redirect_urls` registered on the group you name — so passing `group_uuid` (or `group`) can admit a landing URL that would 400 without it. |
 
 **Response:**
 
@@ -303,7 +303,7 @@ GitHub Sign In uses the standard redirect flow — identical to Google. Replace 
 |---|---|---|
 | `GOOGLE_SCOPES` | `"openid email profile"` | OAuth scopes requested from Google |
 | `OAUTH_STATE_TTL` | `600` | Seconds a CSRF state token is valid before it expires |
-| `ALLOWED_REDIRECT_URLS` | `[]` | URLs permitted as `redirect_uri` on the `begin` endpoint, matched by scheme + host + port + segment-bounded path prefix (not by string prefix). Server-side deployment config and the only source of the allowlist — a per-group `allowed_redirect_urls` in group metadata is no longer read, so nothing a client sends can extend it. |
+| `ALLOWED_REDIRECT_URLS` | `[]` | URLs permitted as `redirect_uri` on the `begin` endpoint, matched by scheme + host + port + segment-bounded path prefix (not by string prefix). Combined at request time with the `allowed_redirect_urls` list in the metadata of the group you pass as `group_uuid` / `group` (inherited up its parent chain), so a tenant can register its own landing origin without a server deploy. |
 | `OAUTH_ALLOW_REGISTRATION` | `True` | Allow new accounts to be created via OAuth. Set to `False` for invite-only or closed deployments — the complete endpoint returns `403` if no existing account matches. |
 
 ---

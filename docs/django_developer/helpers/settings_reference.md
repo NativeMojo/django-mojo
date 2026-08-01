@@ -33,15 +33,16 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   or under the entry path on a `/` segment boundary. Query and fragment are
   ignored on both sides; `*.` wildcards are **not** supported and are skipped as
   unusable entries; list IDN hosts in punycode. Empty (or unset) refuses any
-  `redirect_uri` outright. **Deployment configuration only, and the sole source
-  of that allowlist**: `Group.metadata["allowed_redirect_urls"]` is no longer
-  read, so no tenant-writable value and no caller-supplied `?group=` /
-  `?group_uuid=` can widen it. Read through `settings.get` with `kind="list"`,
-  so a **global** `Setting` row works — it holds text, and both a JSON array and
-  a comma-separated string are coerced correctly. A group-scoped row is never
-  consulted. See
+  `redirect_uri` outright. **Not the only source**: the group this request
+  resolved (`?group=` / `?group_uuid=`) contributes its own
+  `Group.metadata["allowed_redirect_urls"]`, inherited up the parent chain, so
+  the effective allowlist is this setting plus that tenant-writable list. Read
+  through `settings.get` with `kind="list"`, so a **global** `Setting` row works
+  — it holds text, and both a JSON array and a comma-separated string are
+  coerced correctly. A group-scoped `Setting` row is never consulted (per-group
+  entries live in group metadata instead). See
   [OAuth](../account/oauth.md#allowlist-configuration) and
-  [why there is no per-group allowlist](../account/oauth.md#why-there-is-no-per-group-allowlist).
+  [the per-group source](../account/oauth.md#the-per-group-source).
 
 ### API
 

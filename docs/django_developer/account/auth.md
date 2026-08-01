@@ -326,15 +326,17 @@ those values under different semantics — notably, wildcards are inert there an
 live here — so handoff destinations are never inherited from them. Note the
 side effect of the opt-in design: an existing `ALLOWED_REDIRECT_URLS` does not
 put you into handoff enforcement, and adding a handoff entry for the first time
-does. Two things the lists now share: both are **deployment** configuration
-only, and both are matched by the same parsed-URL matcher
-(`redirect_allowlist.matches_allowlist`) — the rules above apply verbatim to
+does. What the lists share is the matcher: both go through
+`redirect_allowlist.matches_allowlist`, so the rules above apply verbatim to
 `ALLOWED_REDIRECT_URLS`, minus wildcard support. Separate *values*, one
 implementation, so the next hardening lands on both.
-`ALLOWED_REDIRECT_URLS` used to be combined with a per-group
-`Group.metadata["allowed_redirect_urls"]`; that source is gone, because the
-group applied was chosen by the (anonymous) caller — see
-[OAuth](oauth.md#why-there-is-no-per-group-allowlist).
+Where they differ is the source. `AUTH_HANDOFF_ALLOWED_URLS` is **deployment
+configuration only**; `ALLOWED_REDIRECT_URLS` is combined with a per-group
+`Group.metadata["allowed_redirect_urls"]`, which is tenant-writable and selected
+by the caller's `?group=` — deliberate, so a white-label tenant can self-serve
+its OAuth landing origin. See
+[OAuth](oauth.md#the-per-group-source). A handoff destination is never inherited
+from either of those.
 
 ### Supplying a resolver instead of a list
 

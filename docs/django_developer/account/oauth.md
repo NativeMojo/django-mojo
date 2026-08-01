@@ -104,7 +104,9 @@ GET /api/auth/oauth/google/begin?redirect_uri=https://portal.example.com/auth/ca
 
 A `redirect_uri` is matched as a **URL**, not as a string prefix. If no allowlist is configured and a `redirect_uri` is provided, the request returns `400`.
 
-The allowlist has exactly **one** source — `ALLOWED_REDIRECT_URLS` in `settings.py`:
+The allowlist has **two** sources, combined at validation time.
+
+**Project-wide allowlist** (`settings.py`):
 
 ```python
 ALLOWED_REDIRECT_URLS = [
@@ -112,6 +114,23 @@ ALLOWED_REDIRECT_URLS = [
     "https://tenant-a.example.com/",
 ]
 ```
+
+**Per-group allowlist** (`Group.metadata["allowed_redirect_urls"]`):
+
+```python
+group.metadata["allowed_redirect_urls"] = [
+    "https://tenant-b.example.com/",
+]
+group.save()
+```
+
+The group list is read with `get_metadata_value()`, which traverses the parent
+chain — so a child group inherits whatever its ancestors registered, and a
+tenant with a group tree configures its landing origin once, at the top. The
+group consulted is the one this request resolved (`?group=<id>` /
+`?group_uuid=<uuid>`); with no group context, only the project-wide list
+applies. See [The per-group source](#the-per-group-source) for what that means
+and why it is kept.
 
 ### Matching rules
 
@@ -175,42 +194,34 @@ Entries that cannot be parsed as an absolute `http(s)` URL — `""`, `"h"`,
 match anything. Under the prefix test they replaced, an entry of `"h"` admitted
 every `http(s)://` URL in existence.
 
-### Why there is no per-group allowlist
+### The per-group source
 
-`Group.metadata["allowed_redirect_urls"]` used to be a second source, combined
-with the setting at validation time and inherited up the parent chain. It is no
-longer read at all, because it was never a per-tenant boundary:
+`Group.metadata["allowed_redirect_urls"]` exists so a white-label tenant can
+self-serve the origin its own login page lands on, without a deploy of the
+platform. Two properties of it are worth stating plainly, because they are
+deliberate and were decided with eyes open:
 
 - Plain `metadata` is writable by any holder of `manage_group` on that group
-  (only `metadata["protected"]` is gated by `PROTECTED_JSON_PERMS`).
-- `begin` is a public endpoint, and **any anonymous caller** picks which group
-  applies by passing `?group=<id>` / `?group_uuid=<uuid>`.
+  (only `metadata["protected"]` is gated by `PROTECTED_JSON_PERMS`), so the
+  value is **tenant-writable**.
+- `begin` is a public endpoint, and the caller — including an anonymous one —
+  picks which group applies by passing `?group=<id>` / `?group_uuid=<uuid>`, so
+  the list that applies is **caller-selectable**.
 
-So an entry blessed by one tenant became a legal OAuth landing origin for every
-user on the platform — the split gave the appearance of tenant isolation while
-behaving as one global list. Writes to the key are still accepted (it is an
-ordinary metadata key); nothing reads it.
+Together those mean a tenant can authorize an OAuth landing origin and any
+caller can select that tenant's list. That residual risk is accepted. What
+bounds it is the matcher: entries from *both* sources go through the same
+parsed-URL match, so an entry authorizes the **exact host it names** and nothing
+that merely begins with it. A tenant blesses an origin it already controls; it
+cannot reach a neighbour's. Domain verification, moving the key under
+`metadata["protected"]`, and scoping the read to group members were each
+considered and declined — the last is not even available on a public endpoint
+whose whole purpose is a signed-out white-label login page.
 
-The effective allowlist is now a pure function of deployment configuration: it
-does not vary with `?group=`, `?group_uuid=`, or anything else a caller
-controls. `ALLOWED_REDIRECT_URLS` is read through `settings.get`, so it may be
-set in `settings.py` **or** as a global `Setting` row — but a group-scoped row
-never applies to it.
-
-### Migration
-
-If a deployment kept landing origins **only** in group metadata, those OAuth
-logins now fail with:
-
-```
-400  redirect_uri is not permitted: no ALLOWED_REDIRECT_URLS configured
-```
-
-(or `400 redirect_uri is not on the allowlist` when the global list is
-non-empty but does not cover the origin). Move every such origin into
-`ALLOWED_REDIRECT_URLS`. Because it is read through `settings.get`, a **global**
-`Setting` row carries it too — so the move can be made without a deploy if
-editing `settings.py` is not immediately possible:
+The two sources are combined, never substituted: the project-wide list always
+applies, and the group's entries are added on top when a group resolved.
+`ALLOWED_REDIRECT_URLS` itself is read through `settings.get`, so it may be set
+in `settings.py` **or** as a global `Setting` row:
 
 ```python
 from mojo.apps.account.models.setting import Setting
@@ -220,15 +231,20 @@ Setting.set("ALLOWED_REDIRECT_URLS",
 
 A `Setting` row holds text, so the value is read with `kind="list"`: a JSON
 array (above) and a comma-separated string (`"https://a.example/,https://b.example/"`)
-both work. Do **not** store a bare single URL and expect a one-entry list to be
-obvious — it works, but the JSON form says what it means. A group-scoped row is
-never consulted for this key.
+both work. A **group-scoped** `Setting` row is never consulted for this key —
+per-group entries live in group metadata, not in a scoped setting.
 
-The bundled hosted auth pages were never affected: `mojo-auth.js` folds the
-page's query string *inside* the encoded `redirect_uri`, so `group_uuid` never
-becomes a top-level parameter on `begin` and no group is ever resolved there.
-Only a custom frontend that deliberately passed group context could have relied
-on the per-group list.
+Write the group value as a **list**. A bare string is stored happily (`metadata`
+is a JSONField and nothing coerces it), but it is then spread one character at
+a time into the combined list, where every character is refused as an unusable
+entry — so the tenant silently gets no entry at all rather than the one it
+meant.
+
+The bundled hosted auth pages do not exercise this path: `mojo-auth.js` folds
+the page's query string *inside* the encoded `redirect_uri`, so `group_uuid`
+never becomes a top-level parameter on `begin` and no group is resolved there.
+The per-group list is for a custom frontend that deliberately passes group
+context.
 
 ### Security
 

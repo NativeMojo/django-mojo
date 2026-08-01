@@ -12,6 +12,12 @@ receives the victim's access + refresh pair. Matching now goes through
 `redirect_allowlist.matches_allowlist` — the same parsed-URL matcher the
 auth-handoff destination allowlist uses.
 
+- **BOTH sources are matched this way.** The effective allowlist is
+  `ALLOWED_REDIRECT_URLS` plus the resolved group's
+  `Group.metadata["allowed_redirect_urls"]` (inherited up the parent chain), and
+  the parsed-URL match applies to entries from either — so everything below
+  applies to a tenant's per-group entries as well as to the setting. Audit both
+  when you upgrade.
 - **Before upgrading, audit `ALLOWED_REDIRECT_URLS` for non-`http(s)` entries.**
   A mobile deep link (`myapp://callback`) is now an unusable entry, and every
   OAuth flow landing on it starts returning `400` with only a log line to say
@@ -62,38 +68,6 @@ allow/deny answer changes. Not a live OAuth theft today — `on_oauth_callback`
 returns an `HttpResponseRedirect` and Django's `iri_to_uri` percent-encodes the
 backslash, restoring agreement — but that leg was saved by Django's encoding,
 not by the matcher.
-
-**BREAKING (security)** — **the OAuth `redirect_uri` allowlist no longer reads
-group metadata.** `GET /api/auth/oauth/<provider>/begin` used to combine
-`ALLOWED_REDIRECT_URLS` with `Group.metadata["allowed_redirect_urls"]`
-(inherited up the parent chain). That was never a per-tenant boundary: plain
-`metadata` is writable by any holder of `manage_group` on that group, `begin` is
-public, and **any anonymous caller** chose which group applied by passing
-`?group=<id>` / `?group_uuid=<uuid>`. So one tenant's entry authorized an OAuth
-landing origin for every user on the platform. The effective allowlist is now a
-pure function of deployment configuration and does not vary with anything the
-caller sends.
-
-- **Who breaks:** a deployment that kept landing origins **only** in group
-  metadata. Its OAuth logins fail with `400 "redirect_uri is not permitted: no
-  ALLOWED_REDIRECT_URLS configured"` (or `400 "redirect_uri is not on the
-  allowlist"` when the global list exists but does not cover the origin) — every
-  such login, not a subset.
-- **Migrate:** move those origins into `ALLOWED_REDIRECT_URLS` (matched as
-  URLs — see the entry above). It is read through `settings.get` with
-  `kind="list"`, so a **global** `Setting` row carries it without a deploy: the
-  row holds text, and both a JSON array and a comma-separated string are coerced
-  correctly.
-- **Who does not break:** the bundled hosted auth pages. `mojo-auth.js` folds
-  the page's query string *inside* the encoded `redirect_uri`, so `group_uuid`
-  never becomes a top-level parameter on `begin` and no group was ever resolved
-  there. Only a custom frontend that deliberately passed group context could
-  have relied on the per-group list.
-- **Unchanged:** the refusal strings (both are reused verbatim by the gated
-  destination refusal, so gated-versus-unlisted stays indistinguishable), the
-  status codes, the response shape, and writes to
-  `Group.metadata["allowed_redirect_urls"]` — the key is still accepted as
-  ordinary metadata, nothing reads it.
 
 **feat (account/security)** — **A handoff destination can be *gated*: it
 receives a group-scoped token instead of a platform JWT.** Opt-in, default

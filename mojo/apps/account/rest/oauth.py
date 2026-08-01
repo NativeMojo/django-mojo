@@ -48,28 +48,38 @@ def _get_redirect_uri(request, provider_name):
     return f"{origin}/auth/oauth/{provider_name}/complete"
 
 
-def _validate_redirect_uri(redirect_uri):
+def _validate_redirect_uri(request, redirect_uri):
     """
     Validate redirect_uri against the allowlist, matched as a URL.
 
-    ONE source: the ALLOWED_REDIRECT_URLS setting (a list of allowed URLs),
-    which is deployment configuration.
+    TWO sources, combined:
+      - the ALLOWED_REDIRECT_URLS setting — deployment configuration;
+      - `group.metadata["allowed_redirect_urls"]` for the group this request
+        resolved to, read with `get_metadata_value`, which walks the parent
+        chain so a child group inherits an ancestor's entries.
 
-    `group.metadata["allowed_redirect_urls"]` is deliberately NOT a source, and
-    this function deliberately takes no `request` so it cannot become one. Plain
-    `metadata` is writable by any holder of `manage_group` on that group, and
-    `request.group` is selectable by ANY anonymous caller via `?group=<id>` /
-    `?group_uuid=<uuid>` on this public endpoint — so a per-group list was not a
-    per-tenant allowlist at all: whoever could write any group's metadata could
-    authorize an OAuth landing origin for every user on the platform.
+    The per-group source is tenant-writable and caller-selectable, and that is a
+    deliberate, accepted decision — not an oversight. Plain `metadata` is
+    writable by any holder of `manage_group` on that group, and `request.group`
+    is chosen by the caller via `?group=<id>` / `?group_uuid=<uuid>` on this
+    public endpoint. It is kept because django-mojo is a REST platform third
+    parties integrate with: a white-label tenant has to be able to self-serve
+    the origin its own login page lands on, without a deploy of the platform.
+    What bounds the residual risk is the matcher below — an entry authorizes the
+    exact host it names and nothing else, so a tenant can bless an origin it
+    already controls and cannot reach any other. Domain verification, moving the
+    key under `metadata["protected"]`, and scoping the read to group members
+    were each considered and declined (the last is impossible anyway on a public
+    endpoint whose whole purpose is a signed-out white-label login page).
 
     Matching is `redirect_allowlist.matches_allowlist` — the same parsed-URL
-    matcher the handoff destination allowlist uses. It replaced a bare
-    `redirect_uri.startswith(entry)`, which terminated on nothing: an entry of
-    `https://app.example.com` admitted `https://app.example.com.evil.tld/`, a
-    host the attacker registers, and this endpoint is public, so the resulting
-    token-theft chain needed no credential to start. Wildcard (`*.`) entries are
-    NOT honored here — see the module docstring in the service.
+    matcher the handoff destination allowlist uses, and it applies to BOTH
+    sources. It replaced a bare `redirect_uri.startswith(entry)`, which
+    terminated on nothing: an entry of `https://app.example.com` admitted
+    `https://app.example.com.evil.tld/`, a host the attacker registers, and this
+    endpoint is public, so the resulting token-theft chain needed no credential
+    to start. Wildcard (`*.`) entries are NOT honored here — see the module
+    docstring in the service.
 
     `kind="list"` is load-bearing, not cosmetic. This key resolves through
     `settings.get`, which reads a DB-backed `Setting` row BEFORE the file
@@ -79,10 +89,22 @@ def _validate_redirect_uri(redirect_uri):
     on earth; the coercion turns both the JSON-array and bare-string forms into
     the list they spell.
 
+    The `list(...)` copy is load-bearing too. `settings.get(kind="list")` hands
+    back the live settings list object when the value is already a list, so
+    extending it in place would append the group's entries to the deployment's
+    global setting — permanently, and growing on every request.
+
     Raises ValueException (400) if the URI is not on the allowlist or if no
     allowlist is configured at all.
     """
-    allowed = settings.get("ALLOWED_REDIRECT_URLS", [], kind="list") or []
+    allowed = list(settings.get("ALLOWED_REDIRECT_URLS", [], kind="list") or [])
+    # getattr + truthiness, never hasattr: request.group may be an objict-shaped
+    # stand-in, and objict answers hasattr True for every name.
+    group = getattr(request, "group", None)
+    if group:
+        group_allowed = group.get_metadata_value("allowed_redirect_urls")
+        if group_allowed:
+            allowed.extend(group_allowed)
 
     if not allowed:
         raise merrors.ValueException(
@@ -303,10 +325,12 @@ def on_oauth_begin(request, provider):
     Optional query parameter:
       redirect_uri — frontend URL the browser should land on after the OAuth
                      callback completes. Matched as a URL (scheme, host, port
-                     and a segment-bounded path prefix) against the allowlist,
-                     which is the ALLOWED_REDIRECT_URLS setting and nothing else
-                     — group context does not widen it, and neither does a
-                     shared string prefix (see _validate_redirect_uri).
+                     and a segment-bounded path prefix) against the allowlist:
+                     the ALLOWED_REDIRECT_URLS setting, plus — when this request
+                     resolved a group — that group's
+                     metadata["allowed_redirect_urls"], inherited up the parent
+                     chain. A shared string prefix is not enough (see
+                     _validate_redirect_uri).
                      Defaults to _get_redirect_uri().
 
     All providers redirect to the backend callback endpoint
@@ -328,7 +352,7 @@ def on_oauth_begin(request, provider):
     # frontend_uri = where the browser lands after the callback bounce
     custom_frontend_uri = request.DATA.get("redirect_uri", "")
     if custom_frontend_uri:
-        _validate_redirect_uri(custom_frontend_uri)
+        _validate_redirect_uri(request, custom_frontend_uri)
         frontend_uri = custom_frontend_uri
     else:
         frontend_uri = _get_redirect_uri(request, provider)
