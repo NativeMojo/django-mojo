@@ -120,15 +120,16 @@ def test_oauth_callback_redirects(opts):
 def test_oauth_begin_preserves_query_in_frontend_uri(opts):
     """
     Regression (ITEM-034), guard leg: a frontend redirect_uri that already
-    carries a query (e.g. ?redirect=/workspaces/) must pass the allowlist
-    (prefix match) and be stored verbatim as frontend_uri, so the post-login
-    redirect target survives the OAuth round-trip. The JS default now keeps the
-    page's query string; this locks in that the server does not strip it.
+    carries a query (e.g. ?redirect=/workspaces/) must pass the allowlist (the
+    match ignores the query) and be stored verbatim as frontend_uri, so the
+    post-login redirect target survives the OAuth round-trip. The JS default now
+    keeps the page's query string; this locks in that the server does not strip
+    it.
     """
     from urllib.parse import quote
     from mojo.apps.account.services.oauth import get_provider
 
-    # Must sit under the pinned allowlist prefix "https://example.com/".
+    # Must sit under the pinned allowlist entry "https://example.com/".
     # quote(..., safe='') so the inner ?/#/% are not parsed as top-level params.
     frontend_uri = "https://example.com/auth?redirect=%2Fworkspaces%2F%23%2F"
     resp = opts.client.get(
@@ -198,11 +199,12 @@ def test_oauth_callback_preserves_frontend_query(opts):
 @th.django_unit_test("oauth: callback strips a smuggled code/state from frontend_uri")
 def test_oauth_callback_strips_smuggled_params(opts):
     """
-    Security (ITEM-034): frontend_uri passes only an allowlist *prefix* check,
-    so an attacker could smuggle ?code=EVIL into an allowed URL. URLSearchParams
-    .get() returns the FIRST match, so a duplicate placed before the real value
-    would shadow it and sabotage the victim's login. The callback must drop
-    caller-supplied copies of code/state so only the server-set values remain.
+    Security (ITEM-034): the allowlist match ignores the query entirely (it
+    compares scheme, host, port and path), so an attacker can smuggle ?code=EVIL
+    into an otherwise allowed URL. URLSearchParams.get() returns the FIRST
+    match, so a duplicate placed before the real value would shadow it and
+    sabotage the victim's login. The callback must drop caller-supplied copies
+    of code/state so only the server-set values remain.
     """
     from urllib.parse import urlsplit, parse_qs
     from mojo.apps.account.services.oauth import get_provider

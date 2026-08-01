@@ -12,10 +12,11 @@ is the actual attack shape: the caller, not the server, picks the group.
 
 `ALLOWED_REDIRECT_URLS` is pinned to `["https://example.com/"]` in the test
 project settings, so no `th.server_settings` reload is needed anywhere in this
-module (parallel-safe). The attacker origin below deliberately does NOT
-prefix-collide with that pinned entry — the allowlist match is still a bare
-`startswith`, so a host like `https://example.com.attacker.tld/` would pass the
-GLOBAL check and turn these tests green for the wrong reason.
+module (parallel-safe). The attacker origin below is deliberately unrelated to
+that pinned entry — nothing about it can satisfy the GLOBAL check, so a green
+result here can only mean the per-group source is gone. (The global check is now
+a parsed-URL match; when this module was written it was a bare `startswith`,
+which is why the origin also avoids sharing a string prefix.)
 
 Assertions target the 400 and the absence of `state`, never the contents of
 `auth_url`: `auth_url` always points at the provider, and the landing URL only

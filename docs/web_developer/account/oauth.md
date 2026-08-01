@@ -45,7 +45,7 @@ Steps 3–4 are invisible to your JS — your page still receives `?code=` and `
 
 | Parameter | Description |
 |---|---|
-| `redirect_uri` | Override the default callback URL. Must be on the server's allowlist (`ALLOWED_REDIRECT_URLS`). Returns `400` if provided but not allowed. The allowlist is server-configured and fixed — passing `group_uuid` (or `group`) does **not** widen it, so a landing URL that 400s without group context still 400s with it. |
+| `redirect_uri` | Override the default callback URL. Must be on the server's allowlist (`ALLOWED_REDIRECT_URLS`). Returns `400` if provided but not allowed. It is matched as a **URL** — same scheme, same host (case-insensitive), same port, and a path at or under the allowlisted path on a `/` boundary; the query string is ignored, so you may append your own. Sharing a string prefix with an allowlisted URL is *not* enough. The allowlist is server-configured and fixed — passing `group_uuid` (or `group`) does **not** widen it, so a landing URL that 400s without group context still 400s with it. |
 
 **Response:**
 
@@ -229,8 +229,32 @@ The backend stores that URL and, after the provider callback, bounces the browse
 back to it with `code`/`state` appended (merged into any existing query with `&`).
 The bundled `mojo-auth.js` `startOAuthLogin()` already does exactly this when you
 don't pass an explicit callback URL. `returnUrl` must still sit under the backend
-allowlist (`ALLOWED_REDIRECT_URLS`); the appended query does not affect the prefix
-match.
+allowlist (`ALLOWED_REDIRECT_URLS`); the appended query does not affect the
+match, which compares scheme, host, port and path only.
+
+### If your `redirect_uri` started returning 400
+
+The `begin` endpoint used to accept any `redirect_uri` that shared a **string
+prefix** with an allowlist entry. It now parses both sides and compares them as
+URLs, which refuses some values that used to pass. Check yours against this list
+before assuming a server outage:
+
+- **Port** — `https://app.example.com:8443/...` needs its own entry now; an
+  entry without a port means the scheme default (443/80).
+- **Path boundary** — an entry of `.../app` admits `/app` and `/app/inner`, not
+  `/application`. Add a trailing `/` to the entry to admit a whole host.
+- **Scheme** — must be `http` or `https`, and must match the entry exactly. A
+  custom scheme (`myapp://callback`, a mobile deep link) is no longer accepted;
+  move that flow to an HTTPS universal/app link.
+- **Host spelling** — a trailing dot (`app.example.com.`), a unicode IDN host
+  (list it in punycode instead), a bracketed IPv6 literal, or anything with a
+  backslash or percent-encoding in the authority is refused.
+- **Wildcards** — `*.example.com` is not supported in `ALLOWED_REDIRECT_URLS`
+  and never was; it is skipped as an unusable entry. List each host.
+
+What did **not** change: the status code (`400`), the error strings, the
+response shape, and host case-insensitivity — in fact case now matches *more*
+(`https://APP.Example.com/x` is admitted against `https://app.example.com`).
 
 ---
 
@@ -279,7 +303,7 @@ GitHub Sign In uses the standard redirect flow — identical to Google. Replace 
 |---|---|---|
 | `GOOGLE_SCOPES` | `"openid email profile"` | OAuth scopes requested from Google |
 | `OAUTH_STATE_TTL` | `600` | Seconds a CSRF state token is valid before it expires |
-| `ALLOWED_REDIRECT_URLS` | `[]` | URL prefixes permitted as `redirect_uri` on the `begin` endpoint. Server-side deployment config and the only source of the allowlist — a per-group `allowed_redirect_urls` in group metadata is no longer read, so nothing a client sends can extend it. |
+| `ALLOWED_REDIRECT_URLS` | `[]` | URLs permitted as `redirect_uri` on the `begin` endpoint, matched by scheme + host + port + segment-bounded path prefix (not by string prefix). Server-side deployment config and the only source of the allowlist — a per-group `allowed_redirect_urls` in group metadata is no longer read, so nothing a client sends can extend it. |
 | `OAUTH_ALLOW_REGISTRATION` | `True` | Allow new accounts to be created via OAuth. Set to `False` for invite-only or closed deployments — the complete endpoint returns `403` if no existing account matches. |
 
 ---

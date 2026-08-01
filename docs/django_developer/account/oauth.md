@@ -102,7 +102,7 @@ GET /api/auth/oauth/google/begin?redirect_uri=https://portal.example.com/auth/ca
 
 ### Allowlist Configuration
 
-A `redirect_uri` is accepted only if it starts with a prefix on the allowlist. If no allowlist is configured and a `redirect_uri` is provided, the request returns `400`.
+A `redirect_uri` is matched as a **URL**, not as a string prefix. If no allowlist is configured and a `redirect_uri` is provided, the request returns `400`.
 
 The allowlist has exactly **one** source — `ALLOWED_REDIRECT_URLS` in `settings.py`:
 
@@ -113,16 +113,67 @@ ALLOWED_REDIRECT_URLS = [
 ]
 ```
 
-A `redirect_uri` may carry its own query string (e.g. an app passing
-`?redirect=/workspaces/` through the login page). The allowlist is a **prefix**
-match, so an appended query does not affect validation. The full URI — query
-included — is stored as `frontend_uri` and reproduced when the callback bounces
-the browser back: the callback merges its `code`/`state` (and any `group_uuid`)
-into the existing query with `&` rather than appending a second `?`. This is what
-lets a `?redirect=` target survive the OAuth round-trip. (The bundled
-`mojo-auth.js` cooperates: when no explicit callback URL is given, its default
-return URL keeps the current page's query string — minus any stale `code`/`state`
-— and strips only the hash.)
+### Matching rules
+
+An entry admits a `redirect_uri` when **all four** hold. This is the same
+matcher the auth-handoff destination allowlist uses
+(`mojo/apps/account/services/redirect_allowlist.py`), with wildcards turned off.
+
+1. **Scheme** — `http` or `https` on both, and the *same* one. An `https://`
+   entry never admits an `http://` landing URL; the OAuth `code` and `state`
+   would otherwise travel in cleartext.
+2. **Host** — equal after case-folding. `https://APP.Example.com/x` matches an
+   entry of `https://app.example.com` (hosts are case-insensitive per RFC 3986);
+   `https://app.example.com.evil.tld/` does not.
+3. **Port** — equal, with the scheme default filled in when absent. So
+   `https://app.example.com` and `https://app.example.com:443` are the same
+   origin, and `https://app.example.com:8443` is a different one.
+4. **Path** — the entry path, or a path underneath it terminating on a segment
+   boundary. `/app` admits `/app` and `/app/inner`, and refuses `/application`.
+   An entry ending in `/` admits every path on that host.
+
+Query and fragment are ignored on **both** sides. A `redirect_uri` may therefore
+carry its own query (e.g. an app passing `?redirect=/workspaces/` through the
+login page) — and so, less usefully, may an entry, where it is simply dead
+weight. The full URI — query included — is stored as `frontend_uri` and
+reproduced when the callback bounces the browser back: the callback merges its
+`code`/`state` (and any `group_uuid`) into the existing query with `&` rather
+than appending a second `?`. This is what lets a `?redirect=` target survive the
+OAuth round-trip. (The bundled `mojo-auth.js` cooperates: when no explicit
+callback URL is given, its default return URL keeps the current page's query
+string — minus any stale `code`/`state` — and strips only the hash.)
+
+Against an entry of `https://app.example.com`:
+
+| `redirect_uri` | Result |
+|---|---|
+| `https://app.example.com/callback` | admitted |
+| `https://APP.Example.com/callback` | admitted — hosts are case-insensitive |
+| `https://app.example.com:443/x` | admitted — explicit default port |
+| `https://app.example.com/x?to=%2Fhome` | admitted — the query is not matched |
+| `https://app.example.com.evil.tld/` | **refused** — a different host that merely begins with the entry |
+| `https://app.example.com@evil.tld/` | **refused** — userinfo; the real host is `evil.tld` |
+| `https://evil.tld\@app.example.com/` | **refused** — backslash; a browser reads the host as `evil.tld` |
+| `https://app.example.com%2Eevil.tld/` | **refused** — percent-encoded host separator |
+| `https://app.example.com./` | **refused** — the trailing dot is not normalized away |
+| `https://app.example.com:8443/x` | **refused** — different port |
+| `http://app.example.com/x` | **refused** — no scheme downgrade |
+| `//app.example.com/x` | **refused** — no scheme to compare |
+
+Two further rules:
+
+- **List IDN hosts in punycode** (`https://xn--80ak6aa92e.example/`). A unicode
+  host is refused rather than guessed at, along with bracketed IPv6 literals —
+  a host this deployment cannot read the same way a browser does is not a host
+  it should be sending tokens to.
+- **Wildcards are not supported here.** A `*.example.com` entry is skipped as
+  unusable, with a log line naming it. (`AUTH_HANDOFF_ALLOWED_URLS` *does*
+  support `*.`; this list deliberately does not — see the CHANGELOG entry.)
+
+Entries that cannot be parsed as an absolute `http(s)` URL — `""`, `"h"`,
+`"/relative"`, `"myapp://callback"` — are skipped with a warning and can never
+match anything. Under the prefix test they replaced, an entry of `"h"` admitted
+every `http(s)://` URL in existence.
 
 ### Why there is no per-group allowlist
 
@@ -156,10 +207,22 @@ logins now fail with:
 ```
 
 (or `400 redirect_uri is not on the allowlist` when the global list is
-non-empty but does not cover the origin). Move every such prefix into
+non-empty but does not cover the origin). Move every such origin into
 `ALLOWED_REDIRECT_URLS`. Because it is read through `settings.get`, a **global**
 `Setting` row carries it too — so the move can be made without a deploy if
-editing `settings.py` is not immediately possible.
+editing `settings.py` is not immediately possible:
+
+```python
+from mojo.apps.account.models.setting import Setting
+Setting.set("ALLOWED_REDIRECT_URLS",
+            '["https://portal.example.com/", "https://tenant-a.example.com/"]')
+```
+
+A `Setting` row holds text, so the value is read with `kind="list"`: a JSON
+array (above) and a comma-separated string (`"https://a.example/,https://b.example/"`)
+both work. Do **not** store a bare single URL and expect a one-entry list to be
+obvious — it works, but the JSON form says what it means. A group-scoped row is
+never consulted for this key.
 
 The bundled hosted auth pages were never affected: `mojo-auth.js` folds the
 page's query string *inside* the encoded `redirect_uri`, so `group_uuid` never
@@ -172,11 +235,13 @@ on the per-group list.
 - The validated `redirect_uri` is stored in the Redis state token (single-use, TTL-bound).
 - The `complete` endpoint retrieves it from the state — the client never re-sends it.
 - This prevents an attacker from substituting a different `redirect_uri` in the callback.
-- Because the allowlist is a **prefix** match, the query part of a `frontend_uri`
-  is not validated. So the callback strips any `code`/`state`/`group_uuid` the
-  caller smuggled into that query before appending the server's own — otherwise a
-  duplicate `?code=` placed first would shadow the real value (`URLSearchParams
-  .get()` returns the first match) and sabotage the victim's login.
+- The match compares scheme, host, port and path, so the query part of a
+  `frontend_uri` is **not** validated. That is why the callback strips any
+  `code`/`state`/`group_uuid` the caller smuggled into that query before
+  appending the server's own — otherwise a duplicate `?code=` placed first would
+  shadow the real value (`URLSearchParams.get()` returns the first match) and
+  sabotage the victim's login. Tightening the host match did not retire that
+  strip; an allowlisted URL can still carry any query at all.
 
 ---
 

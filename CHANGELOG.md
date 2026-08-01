@@ -1,5 +1,68 @@
 ## Unreleased
 
+**BREAKING (security)** — **the OAuth `redirect_uri` allowlist matches a URL,
+not a string prefix.** `GET /api/auth/oauth/<provider>/begin` validated a
+caller-supplied `redirect_uri` with `redirect_uri.startswith(entry)`. A prefix
+test terminates nowhere, so an entry of `https://app.example.com` admitted
+`https://app.example.com.evil.tld/` — a host the attacker registers. `/begin` is
+public, so the whole chain was pre-auth: call `/begin` server-side with your own
+landing URL, hand the victim the returned provider `auth_url`, and the callback
+302s their `code` + `state` to your page, which posts them to `/complete` and
+receives the victim's access + refresh pair. Matching now goes through
+`redirect_allowlist.matches_allowlist` — the same parsed-URL matcher the
+auth-handoff destination allowlist uses.
+
+- **Before upgrading, audit `ALLOWED_REDIRECT_URLS` for non-`http(s)` entries.**
+  A mobile deep link (`myapp://callback`) is now an unusable entry, and every
+  OAuth flow landing on it starts returning `400` with only a log line to say
+  why. Move those flows to an HTTPS universal/app link first.
+- **Newly refused** (a `redirect_uri` that used to pass): a host that merely
+  begins with an entry (the fix); a non-default port unless listed
+  (`https://app.example.com:8443`); a path prefix not terminating on a `/`
+  boundary (`/application` under an entry of `/app`); a non-`http(s)` scheme on
+  either side; a host this deployment cannot read the same way a browser does —
+  backslash, percent-encoding, unicode IDN (list punycode), bracketed IPv6,
+  trailing dot.
+- **Newly admitted:** host case variation (`https://APP.Example.com/x` against
+  `https://app.example.com` — RFC-correct), and entries carrying a query or
+  fragment, which are now ignored on both sides instead of making the entry
+  unmatchable.
+- **`*.` wildcard entries stay inert here.** Nothing could `startswith("*")`, so
+  such an entry was already dead config; it is now skipped with a log line
+  naming it. `AUTH_HANDOFF_ALLOWED_URLS` still supports `*.` — activating it in
+  the OAuth list inside a change that tightens everything else would widen an
+  allowlist no operator re-consented to.
+- **Also fixed, and independently total: a string-valued `Setting` row is no
+  longer *no allowlist at all*.** `ALLOWED_REDIRECT_URLS` resolves through
+  `settings.get`, which reads a DB-backed `Setting` row **before** the file
+  setting, and `Setting.value` is a `TextField`. The old code called `list()` on
+  that string, shattering it into single characters — after which
+  `startswith('h')` was true for every `http(s)://` URL on earth, and
+  `https://totally.evil.tld/steal` was admitted. It is now read with
+  `kind="list"`, which coerces both the JSON-array and the comma-separated form
+  into the list they spell. Any deployment configuring this key via a `Setting`
+  row was running with the allowlist effectively disabled.
+- **Unchanged:** both refusal strings byte-for-byte (`"redirect_uri is not on
+  the allowlist"` is reused verbatim by the gated-destination refusal, so
+  gated-versus-unlisted stays indistinguishable), the `400` status, the response
+  shape, the no-`redirect_uri` branch, and `/callback` + `/complete` — including
+  the callback's `code`/`state` smuggle-strip, which is still load-bearing
+  because the match ignores the query.
+
+**fix (security)** — **the shared destination matcher refuses a backslash
+anywhere in a URL.** `redirect_allowlist._split` applied its host-charset test
+to `parts.hostname`, which has already discarded the userinfo — so
+`https://evil.tld\@app.example.com/` reached it as a clean `app.example.com`
+while a WHATWG browser terminates the authority at the backslash and navigates
+to `evil.tld`. The mirror form (`app.example.com\.evil.tld`) was already
+refused, so the hole was one-sided. The sibling `handoff_group._bare_host`
+already carried this guard; the matcher now does too, which closes the
+**auth-handoff** destination allowlist for that shape as well. No other
+allow/deny answer changes. Not a live OAuth theft today — `on_oauth_callback`
+returns an `HttpResponseRedirect` and Django's `iri_to_uri` percent-encodes the
+backslash, restoring agreement — but that leg was saved by Django's encoding,
+not by the matcher.
+
 **BREAKING (security)** — **the OAuth `redirect_uri` allowlist no longer reads
 group metadata.** `GET /api/auth/oauth/<provider>/begin` used to combine
 `ALLOWED_REDIRECT_URLS` with `Group.metadata["allowed_redirect_urls"]`
@@ -16,9 +79,11 @@ caller sends.
   ALLOWED_REDIRECT_URLS configured"` (or `400 "redirect_uri is not on the
   allowlist"` when the global list exists but does not cover the origin) — every
   such login, not a subset.
-- **Migrate:** move those prefixes into `ALLOWED_REDIRECT_URLS`. It is read
-  through `settings.get`, so a **global** `Setting` row carries it without a
-  deploy.
+- **Migrate:** move those origins into `ALLOWED_REDIRECT_URLS` (matched as
+  URLs — see the entry above). It is read through `settings.get` with
+  `kind="list"`, so a **global** `Setting` row carries it without a deploy: the
+  row holds text, and both a JSON array and a comma-separated string are coerced
+  correctly.
 - **Who does not break:** the bundled hosted auth pages. `mojo-auth.js` folds
   the page's query string *inside* the encoded `redirect_uri`, so `group_uuid`
   never becomes a top-level parameter on `begin` and no group was ever resolved

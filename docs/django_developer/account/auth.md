@@ -326,8 +326,12 @@ those values under different semantics — notably, wildcards are inert there an
 live here — so handoff destinations are never inherited from them. Note the
 side effect of the opt-in design: an existing `ALLOWED_REDIRECT_URLS` does not
 put you into handoff enforcement, and adding a handoff entry for the first time
-does. One thing the two lists now share: both are **deployment** configuration
-only. `ALLOWED_REDIRECT_URLS` used to be combined with a per-group
+does. Two things the lists now share: both are **deployment** configuration
+only, and both are matched by the same parsed-URL matcher
+(`redirect_allowlist.matches_allowlist`) — the rules above apply verbatim to
+`ALLOWED_REDIRECT_URLS`, minus wildcard support. Separate *values*, one
+implementation, so the next hardening lands on both.
+`ALLOWED_REDIRECT_URLS` used to be combined with a per-group
 `Group.metadata["allowed_redirect_urls"]`; that source is gone, because the
 group applied was chosen by the (anonymous) caller — see
 [OAuth](oauth.md#why-there-is-no-per-group-allowlist).
@@ -567,14 +571,18 @@ the page's own URL and are served white-label on the tenant's own host, so
 without the carve-out a zone-wide entry would refuse a tenant's own Google
 button.
 
-> **The OAuth half is a deny-list with no allow-list backstop.**
-> `_validate_redirect_uri` is a bare `startswith` prefix check, so with
-> `ALLOWED_REDIRECT_URLS = ["https://gated.example.com"]` an
-> attacker-registered `gated.example.com.evil.tld` passes it — and gating
-> correctly reports *that* host as not gated. The headline property survives
-> literally, the tenant-facing intent does not. **Write
-> `ALLOWED_REDIRECT_URLS` prefixes so they terminate on a path boundary**
-> (`https://gated.example.com/`), and treat that list as security-critical.
+> **The OAuth half is a deny-list, and its allow-list backstop is only as
+> good as your entries.** `_validate_redirect_uri` now matches a parsed URL —
+> so with `ALLOWED_REDIRECT_URLS = ["https://gated.example.com"]` an
+> attacker-registered `gated.example.com.evil.tld` is refused by the allowlist
+> before gating is consulted. (It used to be a bare `startswith`, which
+> admitted it; gating then correctly reported *that* host as not gated, so the
+> headline property survived literally while the tenant-facing intent did
+> not.) The residual risk is ordinary allowlist hygiene: every host you list is
+> a place tokens can land, so keep that list minimal and treat it as
+> security-critical. Gating entries cover a host **and all its subdomains**;
+> allowlist entries do not, which is the asymmetry that keeps a deny rule from
+> being narrowed by a missing star.
 
 #### Rolling gating out
 

@@ -203,6 +203,17 @@ def test_allowlist_refuses_confusable_hosts(opts):
                      "a suffix-extended host must not be admitted (example.com.evil.tld)")
         assert_false(ra.is_allowed_destination("https://example.com@evil.tld/"),
                      "userinfo confusable must not be admitted (real host is evil.tld)")
+        # The one-sided parser differential: `_HOST_CHARS` is applied to
+        # `parts.hostname`, which has ALREADY discarded the userinfo, so a
+        # backslash hidden before the `@` never reaches it. Python reads the
+        # host as example.com; a WHATWG browser terminates the authority at the
+        # backslash and navigates to evil.tld. The mirror form below (backslash
+        # inside the host) was always refused — this one was not.
+        assert_false(ra.is_allowed_destination("https://evil.tld\\@example.com/"),
+                     "a backslash before the @ must not be admitted — Python "
+                     "parses the host as example.com, a browser as evil.tld")
+        assert_false(ra.is_allowed_destination("https://example.com\\.evil.tld/"),
+                     "a backslash inside the authority must not be admitted")
         assert_false(ra.is_allowed_destination("https://evil.tld/?to=https://example.com/"),
                      "an allowed URL in the query string must not admit a foreign host")
         assert_false(ra.is_allowed_destination("https://notexample.com/"),

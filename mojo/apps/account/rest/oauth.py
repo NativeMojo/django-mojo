@@ -23,6 +23,7 @@ from mojo.apps.account.models.oauth import OAuthConnection
 from mojo.apps.account.rest.user import jwt_login
 from mojo.apps.account.services import extensions as account_extensions
 from mojo.apps.account.services import auth_config
+from mojo.apps.account.services import redirect_allowlist
 from mojo.apps.account.services.oauth import get_provider
 from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
@@ -49,10 +50,10 @@ def _get_redirect_uri(request, provider_name):
 
 def _validate_redirect_uri(redirect_uri):
     """
-    Validate redirect_uri against the allowlist.
+    Validate redirect_uri against the allowlist, matched as a URL.
 
-    ONE source: the ALLOWED_REDIRECT_URLS setting (a list of allowed URL
-    prefixes), which is deployment configuration.
+    ONE source: the ALLOWED_REDIRECT_URLS setting (a list of allowed URLs),
+    which is deployment configuration.
 
     `group.metadata["allowed_redirect_urls"]` is deliberately NOT a source, and
     this function deliberately takes no `request` so it cannot become one. Plain
@@ -62,20 +63,42 @@ def _validate_redirect_uri(redirect_uri):
     per-tenant allowlist at all: whoever could write any group's metadata could
     authorize an OAuth landing origin for every user on the platform.
 
+    Matching is `redirect_allowlist.matches_allowlist` — the same parsed-URL
+    matcher the handoff destination allowlist uses. It replaced a bare
+    `redirect_uri.startswith(entry)`, which terminated on nothing: an entry of
+    `https://app.example.com` admitted `https://app.example.com.evil.tld/`, a
+    host the attacker registers, and this endpoint is public, so the resulting
+    token-theft chain needed no credential to start. Wildcard (`*.`) entries are
+    NOT honored here — see the module docstring in the service.
+
+    `kind="list"` is load-bearing, not cosmetic. This key resolves through
+    `settings.get`, which reads a DB-backed `Setting` row BEFORE the file
+    setting, and `Setting.value` is a `TextField` — so a deployment configuring
+    the key that way holds a STRING. The old `list(...)` shattered it into
+    single characters, leaving `startswith('h')` true for every `http(s)://` URL
+    on earth; the coercion turns both the JSON-array and bare-string forms into
+    the list they spell.
+
     Raises ValueException (400) if the URI is not on the allowlist or if no
     allowlist is configured at all.
     """
-    allowed = list(settings.get("ALLOWED_REDIRECT_URLS", []) or [])
+    allowed = settings.get("ALLOWED_REDIRECT_URLS", [], kind="list") or []
 
     if not allowed:
         raise merrors.ValueException(
             "redirect_uri is not permitted: no ALLOWED_REDIRECT_URLS configured"
         )
 
-    for prefix in allowed:
-        if redirect_uri.startswith(prefix):
-            return
+    if redirect_allowlist.matches_allowlist(
+            redirect_uri, allowed, source="ALLOWED_REDIRECT_URLS"):
+        return
 
+    # ONE line per refused request, with the value bounded: /begin is public and
+    # unauthenticated, and the DM-042 throttle short-circuits for anonymous
+    # callers, so an unbounded per-request log line is free amplification.
+    logit.warning(
+        "oauth",
+        f"refused redirect_uri {redirect_uri!r:.200} — not on ALLOWED_REDIRECT_URLS")
     raise merrors.ValueException("redirect_uri is not on the allowlist")
 
 
@@ -279,9 +302,11 @@ def on_oauth_begin(request, provider):
 
     Optional query parameter:
       redirect_uri — frontend URL the browser should land on after the OAuth
-                     callback completes. Must be on the allowlist, which is the
-                     ALLOWED_REDIRECT_URLS setting and nothing else — group
-                     context does not widen it (see _validate_redirect_uri).
+                     callback completes. Matched as a URL (scheme, host, port
+                     and a segment-bounded path prefix) against the allowlist,
+                     which is the ALLOWED_REDIRECT_URLS setting and nothing else
+                     — group context does not widen it, and neither does a
+                     shared string prefix (see _validate_redirect_uri).
                      Defaults to _get_redirect_uri().
 
     All providers redirect to the backend callback endpoint
@@ -400,12 +425,14 @@ def on_oauth_callback(request, provider):
     # frontend_uri may already carry a query (e.g. the app's ?redirect=), so
     # merge rather than naively concatenating a second "?". Preserving that
     # query is what lets the post-login redirect target survive the OAuth
-    # round-trip. Drop any caller-supplied copies of the keys we set here:
-    # frontend_uri passed only an allowlist *prefix* check, so an attacker
-    # could smuggle e.g. ?code=EVIL into an allowed URL; since URLSearchParams
-    # .get() returns the first match, a duplicate placed before the real value
-    # would shadow it and sabotage the victim's login. Stripping them makes the
-    # server-set values the only ones present.
+    # round-trip. Drop any caller-supplied copies of the keys we set here: the
+    # allowlist match ignores the query entirely (it compares scheme, host,
+    # port and path), so an attacker can smuggle e.g. ?code=EVIL into an
+    # otherwise allowed URL; since URLSearchParams.get() returns the first
+    # match, a duplicate placed before the real value would shadow it and
+    # sabotage the victim's login. Stripping them makes the server-set values
+    # the only ones present. Still load-bearing after the matcher was
+    # tightened — do not remove it.
     parts = urlsplit(frontend_uri)
     preserved = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
                  if k not in redirect_params]

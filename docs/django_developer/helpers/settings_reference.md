@@ -26,12 +26,22 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### ALLOWED
 
-- `ALLOWED_REDIRECT_URLS` — URL prefixes accepted as the OAuth `redirect_uri`
-  landing page. **Deployment configuration only, and the sole source of that
-  allowlist**: `Group.metadata["allowed_redirect_urls"]` is no longer read, so
-  no tenant-writable value and no caller-supplied `?group=` / `?group_uuid=`
-  can widen it. See
-  [OAuth](../account/oauth.md#why-there-is-no-per-group-allowlist).
+- `ALLOWED_REDIRECT_URLS` — list, default `[]`. URLs accepted as the OAuth
+  `redirect_uri` landing page on `GET /api/auth/oauth/<provider>/begin`. Matched
+  as a **URL**, not a string prefix: same scheme (`http`/`https`, no downgrade),
+  same host case-folded, same port (scheme default when absent), and a path at
+  or under the entry path on a `/` segment boundary. Query and fragment are
+  ignored on both sides; `*.` wildcards are **not** supported and are skipped as
+  unusable entries; list IDN hosts in punycode. Empty (or unset) refuses any
+  `redirect_uri` outright. **Deployment configuration only, and the sole source
+  of that allowlist**: `Group.metadata["allowed_redirect_urls"]` is no longer
+  read, so no tenant-writable value and no caller-supplied `?group=` /
+  `?group_uuid=` can widen it. Read through `settings.get` with `kind="list"`,
+  so a **global** `Setting` row works — it holds text, and both a JSON array and
+  a comma-separated string are coerced correctly. A group-scoped row is never
+  consulted. See
+  [OAuth](../account/oauth.md#allowlist-configuration) and
+  [why there is no per-group allowlist](../account/oauth.md#why-there-is-no-per-group-allowlist).
 
 ### API
 
