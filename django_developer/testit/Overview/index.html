@@ -3811,13 +3811,30 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#opt-in-modules" class="md-nav__link">
+  <a href="#tiers-default-slow-extended" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Opt-in Modules
+        Tiers — default, slow, extended
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Tiers — default, slow, extended">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#deciding-the-tier" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deciding the tier
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -3848,6 +3865,17 @@
   
     <nav class="md-nav" aria-label="TESTIT Module Config">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-server_settings-waits-a-readiness-signal-not-a-sleep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How server_settings() waits — a readiness signal, not a sleep
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#how-server_settings-restores-subtractive-and-one-at-a-time" class="md-nav__link">
@@ -4150,35 +4178,69 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>./bin/run_tests<span class="w"> </span>--plain
 </code></pre></div>
 <h3 id="agent-mode">Agent Mode<a class="headerlink" href="#agent-mode" title="Permanent link">&para;</a></h3>
-<p><code>--agent</code> writes <code>var/test_failures.json</code> after the run — a structured JSON report designed for LLM agents and CI pipelines. The report includes:</p>
+<p><code>--agent</code> writes <code>testproject/var/test_failures.json</code> after the run — a structured JSON report designed for LLM agents and CI pipelines. The report includes:</p>
 <ul>
-<li><strong>Top-level</strong>: <code>status</code> (passed/failed), <code>total</code>, <code>passed</code>, <code>failed</code>, <code>skipped</code>, <code>duration</code></li>
-<li><strong><code>modules</code></strong>: per-module breakdown — <code>tests</code>, <code>passed</code>, <code>failed</code>, <code>skipped</code>, <code>duration</code> for each test module</li>
+<li><strong>Top-level</strong>: <code>status</code> (passed/failed), <code>total</code>, <code>passed</code>, <code>failed</code>, <code>skipped</code>, <code>duration</code> — summed across every module, <strong>including modules skipped whole</strong> (<code>requires_apps</code>/<code>requires_extra</code>). This is the baseline-comparison number.</li>
+<li><strong><code>ran</code></strong>: the same shape (<code>total</code>, <code>passed</code>, <code>failed</code>, <code>skipped</code>) but restricted to what this invocation actually <em>executed</em> — whole-skipped modules contribute to the top-level totals but not to <code>ran</code>. Use <code>ran</code> when you need "how much work did this run really do," e.g. distinguishing a default-tier run from one that also pulled in <code>--extra</code> modules.</li>
+<li><strong><code>modules</code></strong>: per-module breakdown — <code>tests</code>, <code>passed</code>, <code>failed</code>, <code>skipped</code>, <code>duration</code> for each test module, plus <code>skipped_reason</code> when the whole module was skipped</li>
+<li><strong><code>slowest</code></strong>: the 25 slowest individual tests, sorted descending by <code>duration</code> — <code>test_name</code>, <code>module</code>, <code>test_file</code>, <code>status</code>, <code>duration</code>. Module-level <code>duration</code> alone can't say which test inside a slow module is the cost; every executed test records its own <code>duration</code> (seconds) and this is ranked from it.</li>
 <li><strong><code>failures</code></strong>: per-failure entries with <code>test_name</code>, <code>function</code>, <code>status</code>, <code>assertion</code>, <code>test_source</code>, <code>file_path</code>, <code>line</code>, <code>traceback</code> (errors only), and <code>server_log_tail</code></li>
 <li><strong><code>conf_drift</code></strong>: names of any <code>var/django.conf</code> keys that changed across the run — normally empty. A non-empty list means a <code>th.server_settings()</code> context did not restore cleanly and the key is now stranded. Key <strong>names only</strong>; values are never reported, since an override may be a credential.</li>
 </ul>
-<p>LLM agents should always use <code>--agent</code> and read the JSON report instead of parsing terminal output. Never use <code>--plain</code> for full suite runs — it disables the rich UI but doesn't improve agent output.</p>
-<h3 id="opt-in-modules">Opt-in Modules<a class="headerlink" href="#opt-in-modules" title="Permanent link">&para;</a></h3>
-<p>Modules with <code>"requires_extra": ["slow"]</code> in their TESTIT config are skipped by default. Include them with <code>--full</code> (shortcut for <code>--extra slow</code>):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>./bin/run_tests<span class="w"> </span>--full<span class="w">          </span><span class="c1"># include all opt-in modules</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>./bin/run_tests<span class="w"> </span>--extra<span class="w"> </span>slow<span class="w">    </span><span class="c1"># equivalent</span>
+<p>LLM agents should always use <code>--agent</code> and read the JSON report instead of parsing terminal output. Never use <code>--plain</code> — it disables the rich UI but doesn't improve agent output.</p>
+<h3 id="tiers-default-slow-extended">Tiers — default, <code>slow</code>, <code>extended</code><a class="headerlink" href="#tiers-default-slow-extended" title="Permanent link">&para;</a></h3>
+<p>Two opt-in tiers; <code>--full</code> turns on both.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>./bin/run_tests<span class="w">                        </span><span class="c1"># default tier only</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>./bin/run_tests<span class="w"> </span>--full<span class="w">                 </span><span class="c1"># + slow + extended</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>./bin/run_tests<span class="w"> </span>--extra<span class="w"> </span>extended<span class="w">       </span><span class="c1"># + just one tier</span>
 </code></pre></div>
-<p>Currently opt-in:</p>
 <table>
 <thead>
 <tr>
-<th>Module</th>
-<th>Reason</th>
+<th>Tier</th>
+<th>Tag</th>
+<th>Meaning</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>test_security</code></td>
-<td>Bouncer/rate-limiting tests (~20s, serial)</td>
+<td>default</td>
+<td><em>(none)</em></td>
+<td>Critical. Runs on every invocation.</td>
+</tr>
+<tr>
+<td><code>slow</code></td>
+<td><code>requires_extra: ["slow"]</code></td>
+<td>Expensive, or only meaningful before a release.</td>
+</tr>
+<tr>
+<td><code>extended</code></td>
+<td><code>@th.requires_extra("extended")</code></td>
+<td>Correct and worth keeping, but not a critical contract.</td>
 </tr>
 </tbody>
 </table>
-<p>To make a module opt-in, add <code>"requires_extra": ["slow"]</code> to its <code>__init__.py</code> TESTIT config.</p>
+<p>Two words rather than one because they are chosen on different grounds — <code>slow</code> is a
+statement about cost, <code>extended</code> about criticality — and "why is this opt-in?" should be
+answerable from the tag alone.</p>
+<p>Currently <code>slow</code>: <code>test_security</code> (bouncer/rate-limiting, serial), <code>test_incident</code>, the
+live-assistant tests.</p>
+<h4 id="deciding-the-tier">Deciding the tier<a class="headerlink" href="#deciding-the-tier" title="Permanent link">&para;</a></h4>
+<p>A test belongs in the <strong>default tier regardless of cost</strong> if it covers a security boundary
+(permissions, auth, tenant isolation, secrets), a core framework contract (model
+save/serialize, REST dispatch, graphs, <code>request.DATA</code>), a bug that has already shipped
+once, or anything whose failure means the framework is broken for <em>every</em> consumer. The
+slowest single test in the suite is a shortlink scheme-injection test and it stays in the
+default tier — cost alone never demotes a security test.</p>
+<p><strong><code>extended</code></strong> is for exhaustive input matrices past the first representative case, deep
+feature-internal variants of one app, coverage already asserted elsewhere, and tests whose
+cost <em>is</em> a timeout — an assertion that nothing arrives can only pass by waiting, so keep
+the positive path in the default tier and demote the negative one.</p>
+<p><strong>Not a reason to demote:</strong> the app is optional. <code>requires_apps</code> already skips a module
+whole when the project has not installed that app.</p>
+<p>Tag at authoring time; auditing it back out later is far more expensive.</p>
+<p>To move a whole module, add <code>"requires_extra": ["slow"]</code> (or <code>["extended"]</code>) to its
+<code>__init__.py</code> TESTIT config. For a single test, use the decorator.</p>
 <h3 id="json-config">JSON Config<a class="headerlink" href="#json-config" title="Permanent link">&para;</a></h3>
 <p>CLI flags always win, but you can seed defaults through a JSON file:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>./bin/testit.py<span class="w"> </span>--config<span class="w"> </span>docs/testit/examples/testit.config.json<span class="w"> </span>--extra<span class="w"> </span>run-backfill
@@ -4244,6 +4306,36 @@ bound to the main thread, as in <code>test_job_engine</code>).</p>
 already holding the exclusive hold is granted the shared hold immediately
 (it is the restarter — it cannot tear down its own socket behind its own back).</p>
 </blockquote>
+<h3 id="how-server_settings-waits-a-readiness-signal-not-a-sleep">How <code>server_settings()</code> waits — a readiness signal, not a sleep<a class="headerlink" href="#how-server_settings-waits-a-readiness-signal-not-a-sleep" title="Permanent link">&para;</a></h3>
+<p>Both reloads (applying overrides, then restoring them) used to be fixed sleeps —
+1.5s in, 3s out — sized to outlast the OLD uvicorn worker, since a plain socket
+poll answers from a dying worker just as readily as a fresh one; "the server
+responds" never meant "the server responds with my config."</p>
+<p>The generated <code>_asgi.py</code> now writes <code>testproject/var/asgi_ready.json</code> (<code>{"pid":
+..., "conf": sha256(django.conf)}</code>) once Django finishes loading. <code>server_settings()</code>
+waits for a signal reporting <strong>both</strong> a different pid and the fingerprint of the
+config it just wrote, then confirms the socket answers — an exact answer to "is
+the new worker up with my config" instead of a timed guess, so the wait costs
+what the reload actually costs. A write that leaves <code>django.conf</code> byte-identical
+(e.g. restoring a value the file already held) skips the wait entirely: uvicorn
+reloads on the write event, not a content diff, so rewriting identical bytes
+would only queue a restart the fingerprint check already considers satisfied.</p>
+<p>That skip is guarded rather than assumed. When no write was needed, the running
+worker's own fingerprint must still match the file — if it does not, someone else
+wrote <code>django.conf</code> or a previous context stranded a key, and the context raises
+instead of running your test against settings nobody chose.</p>
+<p><strong>A failed wait undoes its own write.</strong> The overrides are on disk before the wait
+begins, and the wait raises before the context's restore block is reached — so it
+restores explicitly on the way out. Without that, a timed-out wait would leave the
+override in <code>django.conf</code>, and uvicorn (<code>--reload-include '*.conf'</code>) would serve it
+to every later test in the run.</p>
+<p><strong>Falls back automatically</strong> to the old sleep-based wait when
+<code>testproject/var/asgi_ready.json</code> does not exist — an older testproject, or a
+downstream project whose <code>_asgi.py</code> predates this convention. There is nothing
+to configure; testit checks for the file on every call.</p>
+<p>Assumes a single uvicorn worker, which is what <code>bin/asgi_local</code> starts. Under
+multiple workers a probe answered by a different, un-restarted worker could
+satisfy "different pid" while the old settings were still live on another one.</p>
 <h3 id="how-server_settings-restores-subtractive-and-one-at-a-time">How <code>server_settings()</code> restores — subtractive, and one at a time<a class="headerlink" href="#how-server_settings-restores-subtractive-and-one-at-a-time" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>It removes only the keys it set.</strong> The context captures the exact source
@@ -4294,7 +4386,7 @@ already holding the exclusive hold is granted the shared hold immediately
 <tr>
 <td><code>requires_extra</code></td>
 <td><code>[]</code></td>
-<td>List of <code>--extra</code> flags. The module is skipped unless at least one flag is present. Use <code>["slow"]</code> for opt-in modules included by <code>--full</code>.</td>
+<td>List of <code>--extra</code> flags. The module is skipped unless at least one flag is present. Use <code>["slow"]</code> or <code>["extended"]</code> for opt-in modules included by <code>--full</code> — see Tiers above.</td>
 </tr>
 </tbody>
 </table>
@@ -4334,11 +4426,13 @@ already holding the exclusive hold is granted the shared hold immediately
 <blockquote>
 <p><strong>Collection is by function-name PREFIX, not by decorator, and there is no
 teardown phase.</strong> The runner collects <code>setup_*</code> for the setup phase and
-<code>test_*</code> / <code>quick_*</code> for the test phase — nothing else. A <code>cleanup_*</code> or
-<code>teardown_*</code> function is therefore dead code no matter how it is decorated
-(even <code>@django_unit_setup()</code>): it is never collected and never runs. Put
-per-module cleanup at the <strong>top of <code>setup_</code></strong> instead — delete any leftover
-rows/secrets there before creating fixtures, since the database is long-lived.</p>
+<code>test_*</code> for the test phase — nothing else. (The historical <code>quick_*</code> test
+prefix and its <code>-q</code>/<code>--quick</code> selector were removed; use the <code>slow</code>/<code>extended</code>
+tiers above to opt tests in or out instead.) A <code>cleanup_*</code> or <code>teardown_*</code>
+function is therefore dead code no matter how it is decorated (even
+<code>@django_unit_setup()</code>): it is never collected and never runs. Put per-module
+cleanup at the <strong>top of <code>setup_</code></strong> instead — delete any leftover rows/secrets
+there before creating fixtures, since the database is long-lived.</p>
 </blockquote>
 <p>See <code>docs/testit/examples/1_test_models.py</code> for a full reference module.</p>
 <hr />
@@ -4408,13 +4502,15 @@ rows/secrets there before creating fixtures, since the database is long-lived.</
 <hr />
 <h2 id="outputs-tooling">Outputs &amp; Tooling<a class="headerlink" href="#outputs-tooling" title="Permanent link">&para;</a></h2>
 <ul>
-<li>A structured run report is written to <code>var/test_results.json</code>:</li>
+<li>A structured run report is written to <code>testproject/var/test_results.json</code>:</li>
 <li><code>total</code>, <code>passed</code>, <code>failed</code></li>
-<li><code>records[]</code> with module, file, function, status (<code>passed</code>, <code>failed</code>, <code>error</code>, <code>skipped</code>)</li>
+<li><code>records[]</code> with module, file, function, status (<code>passed</code>, <code>failed</code>, <code>error</code>, <code>skipped</code>), and <code>duration</code> (seconds, when the test actually ran)</li>
 <li>timestamps (<code>started_at</code>, <code>finished_at</code>, <code>duration</code>)</li>
-<li>Agent report (written when <code>--agent</code> is passed): <code>var/test_failures.json</code></li>
-<li>Top-level <code>status</code>, <code>total</code>, <code>passed</code>, <code>failed</code>, <code>skipped</code>, <code>duration</code></li>
-<li>Per-module stats in <code>modules</code> dict (tests, passed, failed, skipped, duration)</li>
+<li>Agent report (written when <code>--agent</code> is passed): <code>testproject/var/test_failures.json</code></li>
+<li>Top-level <code>status</code>, <code>total</code>, <code>passed</code>, <code>failed</code>, <code>skipped</code>, <code>duration</code> — summed across all modules, including ones skipped whole</li>
+<li><code>ran</code> — the same counts restricted to what actually executed this run (excludes whole-skipped modules)</li>
+<li>Per-module stats in <code>modules</code> dict (tests, passed, failed, skipped, duration, plus <code>skipped_reason</code> when the module was skipped whole)</li>
+<li><code>slowest</code> — the 25 slowest individual tests, sorted descending by <code>duration</code></li>
 <li>Per-failure diagnostics in <code>failures</code> list (test_source, file_path, line, traceback, server_log_tail)</li>
 <li><code>conf_drift</code> — names of <code>var/django.conf</code> keys stranded by a settings override (empty on a clean run)</li>
 <li>HTTP helper: <code>testit.client.RestClient</code></li>
