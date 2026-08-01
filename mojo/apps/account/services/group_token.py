@@ -61,8 +61,13 @@ INVALID_TOKEN = "Invalid group token"
 EXPIRED_TOKEN = "Group token expired"
 
 
-def _ttl():
-    return settings.get_static("GROUP_TOKEN_TTL", 3600)
+def get_ttl():
+    """Return the group-token lifetime in seconds.
+
+    Public because the handoff delivery path reports it to the destination app
+    as `expires_in` (mirrors `auth_handoff.get_ttl()`).
+    """
+    return settings.get_static("GROUP_TOKEN_TTL", 3600, kind="int")
 
 
 class GroupScopedToken:
@@ -138,8 +143,13 @@ class GroupScopedToken:
         return Group.objects.filter(pk=self.group_id)
 
 
-def mint(user, group, issued_at=None):
-    """Issue a group token for `user` confined to `group`. Raises on refusal.
+def can_mint(user, group):
+    """Would `mint(user, group)` be permitted? READ-ONLY — no writes, no token.
+
+    The guard list lives here, and `mint` is its only other caller, so a
+    pre-flight can never drift from the real bar. Read-only matters: `mint`
+    signs with `user.get_auth_key()`, which lazily generates and SAVES an
+    auth_key, so "call mint and discard the token" is not side-effect free.
 
     Guards mirror ApiKey.validate_acting_user:
       * never a superuser — a bearer token in a browser must not be a route to
@@ -149,19 +159,32 @@ def mint(user, group, issued_at=None):
       * DIRECT active membership (check_parents=False) — delegation must not
         exceed the delegator, so a member of the parent gets no token for a
         child group.
+    """
+    if user is None or group is None:
+        return False
+    if getattr(user, "is_superuser", False):
+        return False
+    if not getattr(user, "is_active", False):
+        return False
+    if not group.is_effectively_active():
+        return False
+    if group.get_member_for_user(user, check_parents=False) is None:
+        return False
+    return True
+
+
+def mint(user, group, issued_at=None):
+    """Issue a group token for `user` confined to `group`. Raises on refusal.
+
+    The refusal bar is `can_mint()` — see it for the guards and why they are
+    those. ONE bare PermissionDeniedException for every refusal: a caller that
+    could tell "not a member" from "group is dark" holds an account/group-state
+    oracle.
 
     `issued_at` (unix seconds) is for tests and for callers that need a
     deterministic clock; leave it None in production.
     """
-    if user is None or group is None:
-        raise merrors.PermissionDeniedException()
-    if getattr(user, "is_superuser", False):
-        raise merrors.PermissionDeniedException()
-    if not getattr(user, "is_active", False):
-        raise merrors.PermissionDeniedException()
-    if not group.is_effectively_active():
-        raise merrors.PermissionDeniedException()
-    if group.get_member_for_user(user, check_parents=False) is None:
+    if not can_mint(user, group):
         raise merrors.PermissionDeniedException()
 
     if issued_at is None:
@@ -237,7 +260,7 @@ def _validate_token(token, request):
         return None, INVALID_TOKEN
 
     now = int(dates.utcnow().timestamp())
-    if now - issued_at > _ttl():
+    if now - issued_at > get_ttl():
         # The ONE distinct message: a client that can tell "expired" from
         # "rejected" can re-mint instead of prompting a full re-auth, and
         # expiry discloses nothing about account or group state.
