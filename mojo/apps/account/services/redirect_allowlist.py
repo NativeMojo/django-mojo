@@ -763,6 +763,13 @@ def report_unlisted_destination(destination, request=None, enforced=False):
             return
         redis.set(notice_key, "1", ex=_RENOTIFY_SEC)
     except Exception as exc:
+        # DELIBERATELY a file log, not an incident. This IS the suppression
+        # machinery's own degraded path (Redis is unreachable). Filing an
+        # incident here is unsuppressible-by-construction — the suppression it
+        # would need is the very thing that just failed — and would recurse on
+        # any report_event fault. Execution falls through and reports the
+        # destination UNSUPPRESSED on purpose while Redis is down. A later
+        # log-to-incident sweep must leave this line as a file log.
         logit.warning(
             "account.redirect_allowlist",
             f"handoff destination suppression check failed: {exc}")

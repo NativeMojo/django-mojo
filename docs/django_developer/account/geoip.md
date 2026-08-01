@@ -405,9 +405,27 @@ Pass `from_sync=True` to suppress the push (used by the sync endpoint receiver t
 
 ### Push is always async
 
-`_maybe_push_abuse_signals()` enqueues via `jobs.publish` — HTTP is never made inline. `block()` return latency is unaffected by upstream availability. Retries on 5xx with backoff; 4xx (auth, permission, validation) logs and drops without retry.
+`_maybe_push_abuse_signals()` enqueues via `jobs.publish` — HTTP is never made inline. `block()` return latency is unaffected by upstream availability. Retries on 5xx with backoff; 4xx (auth, permission, validation) drops without retry.
 
 The async job is `mojo.apps.account.asyncjobs.push_abuse_signals`. It posts `{ip, threat_level?, is_known_attacker?, is_known_abuser?}` to `POST /api/system/geoip/sync` on the upstream.
+
+### Drop-path incidents
+
+Each way the push can drop files a Redis-suppressed incident (via
+`report_event_suppressed`, one per hour per unit) instead of a file-log warning,
+so a broken federation surfaces in the incident feed:
+
+| Category | Level | Suppression unit | When |
+|---|---|---|---|
+| `geoip:abuse_push_unconfigured` | 5 | global | `GEOIP_MOJO_PROVIDER_URL` or `GEOIP_API_KEY_MOJO` unset (names the settings, never their values) |
+| `geoip:abuse_push_rejected` | 4 | per HTTP status | Upstream returned a 4xx (carries ip, status, response body) |
+| `geoip:abuse_push_missing_ip` | 4 | global | Job payload had no `ip` (body lists payload KEY names only) |
+| `geoip:abuse_push_no_signals` | 4 | global | Job payload had an ip but no signal fields (KEY names only) |
+
+The payload can carry abuse state (`threat_level`, the `is_known_*` flags), so the
+missing-ip / no-signals incidents name the payload's **key names only** — never
+their values — and the unconfigured incident names the settings, never the secret
+URL or api key.
 
 ---
 

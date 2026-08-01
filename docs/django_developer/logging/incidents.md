@@ -942,6 +942,36 @@ RuleSet.objects.create(
 
 ---
 
+## Account observability categories
+
+The account app routes eight operational diagnostics through
+`report_event_suppressed` (window = 3600s, no budget, `fail_open=True`) instead
+of file-log warnings, so a misconfiguration surfaces as a suppressed, correlatable
+incident rather than a line in `mojo.log` that no one reads. None is `>= 7`, so
+none auto-creates an incident on its own — they are signal for rules and the feed,
+not pages.
+
+| Category | Level | Suppression unit (per hour) | Meaning |
+|---|---|---|---|
+| `auth:handoff_group_token_inert` | 6 | global (`inert`) | The gating map/resolver is configured but `AUTH_HANDOFF_GROUP_TOKEN_MODE` is `off` — a security control switched off while configured on. Every destination receives a platform JWT. |
+| `auth:handoff_group_token_entry_widened` | 3 | per derived host | A gating-map entry carried a scheme, port or path; all were **dropped**. The bare-host DENY rule now covers the host **AND all of its subdomains** (more, not less). List the bare host. |
+| `account:realtime_disconnect_failed` | 6 | per user pk | A disabled/revoked user's live websocket could not be force-closed. `auth_key` was still rotated (outstanding JWTs are dead); the socket may persist until it drops naturally. |
+| `account:login_no_client_ip` | 5 | global (**not** per-user) | A login was recorded with no resolved client IP — a reverse-proxy/ingress that is not forwarding the client address, affecting **every** request. A per-user key would flood the plane, so the key is deliberately global. |
+| `geoip:abuse_push_unconfigured` | 5 | global | Outbound abuse-signal push-back is enabled but `GEOIP_MOJO_PROVIDER_URL` or `GEOIP_API_KEY_MOJO` is unset — every push is dropped. Names the settings, never their (secret) values. |
+| `geoip:abuse_push_rejected` | 4 | per HTTP status | The upstream provider rejected an abuse-signal push with a 4xx; not retried. Carries the ip, status and response body. |
+| `geoip:abuse_push_missing_ip` | 4 | global | An abuse-signal push job carried no `ip`; dropped. Body names the payload KEYS only — never the values, which are abuse state. |
+| `geoip:abuse_push_no_signals` | 4 | global | An abuse-signal push job carried an ip but no signal fields; dropped. Body names the payload KEYS only. |
+
+**Two deliberately-unconverted file logs.** `handoff_group._should_report` and
+`redirect_allowlist.report_unlisted_destination` each keep a `logit.warning` in
+the `except` around their own Redis suppression call. That branch **is** the
+suppression machinery's degraded path (Redis unreachable); filing an incident
+there is unsuppressible-by-construction and would recurse on any `report_event`
+fault, so it stays a file log and the caller reports UNSUPPRESSED on purpose. A
+later log-to-incident sweep must leave both alone.
+
+---
+
 ## Why Consistency Matters
 
 The incident system gets more valuable as more components use it. A RuleSet configured to detect brute force across `auth:failed` events only works if every authentication path reports `auth:failed` consistently.

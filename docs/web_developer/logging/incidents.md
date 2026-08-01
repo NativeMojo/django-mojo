@@ -292,6 +292,17 @@ GET /api/incident/event?category=auth:failed&sort=-created&size=50
 
 Events with `metadata.dedup_count > 1` represent multiple identical events that were deduplicated. Check this field to get true event volume.
 
+### Account observability categories
+
+The account app files these suppressed operational categories (filterable by
+`category=`): `auth:handoff_group_token_inert` (level 6),
+`auth:handoff_group_token_entry_widened` (level 3),
+`account:realtime_disconnect_failed` (level 6),
+`account:login_no_client_ip` (level 5), `geoip:abuse_push_unconfigured` (level 5),
+and `geoip:abuse_push_rejected` / `geoip:abuse_push_missing_ip` /
+`geoip:abuse_push_no_signals` (level 4). Each is Redis-suppressed (at most one per
+hour per unit), so counts reflect distinct conditions, not raw volume.
+
 ## Tickets
 
 Tickets are the bridge between automated systems and human operators.

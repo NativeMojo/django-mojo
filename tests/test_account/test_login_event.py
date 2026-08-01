@@ -199,3 +199,73 @@ def test_source_field_recorded(opts):
         request = objict(ip="203.0.113.45", user_agent="Mozilla/5.0", device=None)
         event = UserLoginEvent.track(request, opts.user, source=src)
         assert event.source == src, f"Expected source {src}, got {event.source}"
+
+
+@th.django_unit_test()
+def test_no_client_ip_files_one_global_incident(opts):
+    """Item 1100: a login with no resolved client IP still creates the login row
+    (the report is filed AFTER the row), and files exactly ONE suppressed
+    incident that is GLOBAL, not per-user (a per-user key would flood the plane
+    when an ingress strips the IP from every request)."""
+    from mojo.apps.account.models.login_event import UserLoginEvent
+    from mojo.apps.incident.models import Event
+    from mojo.apps.incident import notice_key
+    from mojo.helpers.redis import get_connection
+    from objict import objict
+
+    category = "account:login_no_client_ip"
+    notice = "account:login_event:no_ip_alerted"
+    Event.objects.filter(category=category).delete()
+    try:
+        get_connection().delete(notice_key(category, notice))
+    except Exception:
+        pass
+
+    # report_event reads path/method/META/user off the request; supply them so
+    # the report path (request=the real request) exercises cleanly.
+    no_ip = objict(
+        ip=None, user_agent="Mozilla/5.0", device=None,
+        path="/api/login", method="POST",
+        META=objict(), user=objict(is_authenticated=False),
+    )
+
+    before = UserLoginEvent.objects.filter(user=opts.user).count()
+    first_login = None
+    for _ in range(3):
+        event = UserLoginEvent.track(no_ip, opts.user, source="password")
+        assert event is not None, "track() must still create the login row with no IP"
+        assert event.ip_address is None, f"expected null ip, got {event.ip_address!r}"
+        if first_login is None:
+            first_login = event
+    after = UserLoginEvent.objects.filter(user=opts.user).count()
+    assert after - before == 3, (
+        f"three no-IP logins must create three rows — the report never costs the "
+        f"row — got {after - before}"
+    )
+
+    events = list(Event.objects.filter(category=category))
+    assert len(events) == 1, (
+        f"three no-IP logins must file exactly ONE incident (the key is global, "
+        f"not per-user), got {len(events)}: {[e.title for e in events]}"
+    )
+    assert events[0].level == 5, (
+        f"a client-IP-stripping ingress is a level-5 incident, got {events[0].level}"
+    )
+    details = events[0].details or ""
+    assert "NOT user-specific" in details, (
+        f"the incident must state it is NOT user-specific: {details!r}"
+    )
+    assert str(opts.user.id) in details and str(first_login.id) in details, (
+        f"the incident must name user id and the (first) login row id as "
+        f"EXAMPLES — proving it reports after the row: {details!r}"
+    )
+
+    # A login WITH an IP takes the non-report path — no new incident.
+    real = objict(ip="203.0.113.45", user_agent="Mozilla/5.0", device=None)
+    UserLoginEvent.track(real, opts.user, source="password")
+    events = list(Event.objects.filter(category=category))
+    assert len(events) == 1, (
+        f"a login WITH an IP must not file a no-IP incident, still expected 1, "
+        f"got {len(events)}"
+    )
+    Event.objects.filter(category=category).delete()

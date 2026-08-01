@@ -671,11 +671,21 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 # Matsushita, Harshita, Scunthorpe). Flag for review and allow,
                 # rather than reject the registration. The guard's scoring is
                 # unchanged; only this caller's response to "block" changed.
+                #
+                # DELIBERATELY a file log — NOT an incident and NOT logit.Log.
+                # DM-007 made display-name moderation advisory precisely because
+                # it is false-positive-dominated; routing it into the incident
+                # engine (which escalates threat_level and can fire block
+                # handlers) would re-introduce the exact harm DM-007 removed. It
+                # cannot be a logit.Log either: validate_name_fields runs pre-save
+                # with no pk, so model_id=0 would raise IntegrityError. The two
+                # interpolated values are bounded so a hostile long name or a
+                # large reasons list cannot bloat the log line.
                 logit.warning(
                     "account",
                     f"flagged display-name content (allowed): "
-                    f"user={self.username or self.email or '<new>'} "
-                    f"field={field} reasons={result.reasons}")
+                    f"user={(self.username or self.email or '<new>')[:120]} "
+                    f"field={field} reasons={result.reasons[:5]}")
 
     def validate_username(self):
         if not self.username:
@@ -1103,7 +1113,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         self.auth_key = uuid.uuid4().hex
         self.save(update_fields=["auth_key", "modified"])
         from mojo.apps.account.services.disable import disconnect_realtime
-        disconnect_realtime(self)
+        disconnect_realtime(self, request=self.active_request)
         self.report_incident(f"{self.username} revoked all sessions by {self.active_user.username}", "sessions:revoked")
         return {
             "status": True,

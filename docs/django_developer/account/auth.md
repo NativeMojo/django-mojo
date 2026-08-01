@@ -472,9 +472,12 @@ correct for an **allow** rule and a bypass in a **deny** rule: an entry of
 `https://a.b.gated.example.com` would mint a plain JWT whose code lands right
 back on the gated origin. So the gating matcher is separate and looser:
 
-- **Entries are hosts.** A full URL is accepted and reduced to its host with a
-  warning — scheme, port and path are ignored, because a deny rule must never
-  be narrowed by them.
+- **Entries are hosts.** A full URL is accepted and reduced to its host, and the
+  dropped scheme, port and path file a suppressed
+  `auth:handoff_group_token_entry_widened` incident (level 3, one per derived
+  host per hour). A deny rule must never be narrowed by them — and the notice is
+  explicit that the bare host now covers **MORE, not less**: the host **and every
+  one of its subdomains**. List the bare host to make that intent visible.
 - **Every entry covers the host and all of its subdomains, at any depth.**
   `example.com` and `*.example.com` are the same rule; the `*.` is normalized
   away. A forgotten star is a silent hole, and `app.tenant.example.com` is the
@@ -531,7 +534,8 @@ rollout a safe rehearsal.
 
 | Condition | `monitor` | `enforce` |
 |---|---|---|
-| mode `off` | sources not read at all; plain JWT | — |
+| mode `off`, sources unset | sources not read at all; plain JWT | — |
+| mode `off` **but sources configured** | inert; plain JWT + one `auth:handoff_group_token_inert` incident (level 6) | — |
 | allowlist enforcement missing | n/a | **400 on every handoff**, misconfiguration incident |
 | no `redirect_uri` | plain JWT | plain JWT (the allowlist already required one) |
 | destination matches no entry | plain JWT | plain JWT + `..._unmapped` incident |

@@ -261,3 +261,12 @@ These settings are read at startup. Changes require a server restart.
 | `LOGIN_EVENT_TRACKING_ENABLED` | `true` | Master toggle. When `false`, no events are created |
 | `LOGIN_EVENT_FLAG_NEW_COUNTRY` | `true` | Enable first-time-country detection |
 | `LOGIN_EVENT_FLAG_NEW_REGION` | `true` | Enable first-time-region detection |
+
+---
+
+## Observability
+
+A login recorded with `ip_address = null` also files a suppressed incident
+`account:login_no_client_ip` (level 5), keyed **globally** (not per-user) since a
+null client IP means a reverse-proxy / ingress is not forwarding the client
+address — it affects every request. Filter it via `GET /api/incident/event?category=account:login_no_client_ip`.

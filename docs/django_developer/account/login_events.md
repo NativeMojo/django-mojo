@@ -63,8 +63,22 @@ Call this after a successful authentication. It is already called automatically 
 3. Checks `is_new_country` and `is_new_region` by querying prior events for this user
 4. Parses `request.user_agent` via `rhelper.parse_user_agent()`
 5. Creates the `UserLoginEvent` row
-6. Records metrics (see below)
-7. Returns the created event (or `None` if tracking disabled)
+6. If `request.ip` is `None`, files a suppressed incident (see below) — **after**
+   the row is created, so a reporter fault can never cost the login record
+7. Records metrics (see below)
+8. Returns the created event (or `None` if tracking disabled)
+
+### No-client-IP incident
+
+A login recorded with no resolved client IP files
+`account:login_no_client_ip` (level 5) via `report_event_suppressed`. This is
+almost always a reverse-proxy / ingress that is not forwarding the client
+address, which affects **every** request — so the suppression key is deliberately
+**global, not per-user** (`account:login_event:no_ip_alerted`). A per-user key
+would file one incident per login and flood the plane under exactly the
+misconfiguration the incident exists to surface. The body names a `user.id` /
+`event.id` only as an **example**, with an explicit note that the condition is not
+user-specific.
 
 **Manual call (e.g. custom auth flow):**
 

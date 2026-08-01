@@ -20,6 +20,211 @@ def _mock_response(status_code=200, text=""):
     return resp
 
 
+# ---------------------------------------------------------------------------
+# Incident coverage (item 1100): the four drop paths in push_abuse_signals now
+# file Redis-suppressed incident events instead of file-log warnings. These run
+# with Django configured (setup forces django.setup()) and observe Event rows
+# directly, since report_event is synchronous.
+# ---------------------------------------------------------------------------
+
+_PUSH_CATEGORIES = [
+    "geoip:abuse_push_unconfigured",
+    "geoip:abuse_push_rejected",
+    "geoip:abuse_push_missing_ip",
+    "geoip:abuse_push_no_signals",
+]
+
+
+@th.django_unit_setup()
+def setup_pushback_incidents(opts):
+    """Force django.setup() and sweep the four abuse-push incident categories
+    plus their fixed Redis suppression keys, so the incident assertions run
+    clean against the long-lived DB and Redis. Per-status 'rejected' keys are
+    cleared by the test that uses them."""
+    from mojo.apps.incident.models import Event
+    from mojo.apps.incident import notice_key
+    from mojo.helpers.redis import get_connection
+
+    Event.objects.filter(category__in=_PUSH_CATEGORIES).delete()
+    try:
+        redis = get_connection()
+    except Exception:
+        return
+    fixed = {
+        "geoip:abuse_push_unconfigured": ["geoip:abuse_push_alerted:unconfigured"],
+        "geoip:abuse_push_missing_ip": ["geoip:abuse_push_alerted:missing_ip"],
+        "geoip:abuse_push_no_signals": ["geoip:abuse_push_alerted:no_signals"],
+    }
+    for category, keys in fixed.items():
+        for key in keys:
+            try:
+                redis.delete(notice_key(category, key))
+            except Exception:
+                pass
+
+
+def _clear_push_incident(category, keys):
+    """Delete a push category's Event rows and its notice keys (best-effort)."""
+    from mojo.apps.incident.models import Event
+    from mojo.apps.incident import notice_key
+    from mojo.helpers.redis import get_connection
+
+    Event.objects.filter(category=category).delete()
+    try:
+        redis = get_connection()
+    except Exception:
+        return
+    for key in keys:
+        try:
+            redis.delete(notice_key(category, key))
+        except Exception:
+            pass
+
+
+@th.django_unit_test()
+def test_push_unconfigured_files_one_suppressed_incident(opts):
+    """Missing upstream config files ONE level-5 incident per window, naming the
+    settings but never their (secret) values."""
+    from mojo.apps.account import asyncjobs
+    from mojo.apps.incident.models import Event
+
+    category = "geoip:abuse_push_unconfigured"
+    _clear_push_incident(category, ["geoip:abuse_push_alerted:unconfigured"])
+
+    job = _FakeJob({"ip": "203.0.113.60", "threat_level": "high"})
+    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", None), \
+         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="topsecretkey"), \
+         mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
+        asyncjobs.push_abuse_signals(job)
+        asyncjobs.push_abuse_signals(job)
+        assert not m_post.called, "unconfigured must short-circuit before any HTTP call"
+
+    events = list(Event.objects.filter(category=category))
+    assert len(events) == 1, (
+        f"missing config must file exactly one suppressed incident per window, "
+        f"got {len(events)}: {[e.title for e in events]}"
+    )
+    assert events[0].level == 5, f"config-rot is level 5, got {events[0].level}"
+    details = events[0].details or ""
+    assert "GEOIP_MOJO_PROVIDER_URL" in details and "GEOIP_API_KEY_MOJO" in details, (
+        f"the incident must name both settings: {details!r}"
+    )
+    assert "topsecretkey" not in details, (
+        f"the incident must NOT echo the api key value: {details!r}"
+    )
+    _clear_push_incident(category, ["geoip:abuse_push_alerted:unconfigured"])
+
+
+@th.django_unit_test()
+def test_push_rejected_files_per_status_with_literal_body(opts):
+    """A 4xx rejection files one level-4 incident PER status code, with the ip,
+    status and response body interpolated (the printf regression guard) and the
+    api key never leaked."""
+    from mojo.apps.account import asyncjobs
+    from mojo.apps.incident.models import Event
+
+    category = "geoip:abuse_push_rejected"
+    _clear_push_incident(category, [
+        "geoip:abuse_push_alerted:rejected:403",
+        "geoip:abuse_push_alerted:rejected:400",
+    ])
+
+    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
+         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="topsecretkey"):
+        with mock.patch("mojo.apps.account.asyncjobs.requests.post",
+                        return_value=_mock_response(403, "forbidden-body-403")):
+            asyncjobs.push_abuse_signals(_FakeJob({"ip": "203.0.113.61", "threat_level": "high"}))
+        with mock.patch("mojo.apps.account.asyncjobs.requests.post",
+                        return_value=_mock_response(400, "bad-request-body-400")):
+            asyncjobs.push_abuse_signals(_FakeJob({"ip": "203.0.113.62", "threat_level": "high"}))
+
+    events = list(Event.objects.filter(category=category))
+    assert len(events) == 2, (
+        f"a distinct status code must file its own incident (per-status key), "
+        f"got {len(events)}: {[e.title for e in events]}"
+    )
+    for event in events:
+        assert event.level == 4, f"an upstream rejection is level 4, got {event.level}"
+
+    by_403 = [e for e in events if "203.0.113.61" in (e.details or "")]
+    assert len(by_403) == 1, f"the 403 incident must name its ip: {[e.details for e in events]}"
+    d403 = by_403[0].details or ""
+    assert "403" in d403, f"the 403 incident must carry the status: {d403!r}"
+    assert "forbidden-body-403" in d403, f"the 403 incident must carry the response body: {d403!r}"
+    for token in ("%s", "%d", "%r"):
+        assert token not in d403, (
+            f"printf regression: {token!r} must not appear literally — the body "
+            f"must be interpolated, got {d403!r}"
+        )
+    assert "topsecretkey" not in d403, f"the incident must NOT leak the api key: {d403!r}"
+    _clear_push_incident(category, [
+        "geoip:abuse_push_alerted:rejected:403",
+        "geoip:abuse_push_alerted:rejected:400",
+    ])
+
+
+@th.django_unit_test()
+def test_push_missing_ip_files_one_incident_key_names_only(opts):
+    """A payload with no ip files ONE level-4 incident naming the payload KEYS,
+    never their (abuse-state) values."""
+    from mojo.apps.account import asyncjobs
+    from mojo.apps.incident.models import Event
+
+    category = "geoip:abuse_push_missing_ip"
+    _clear_push_incident(category, ["geoip:abuse_push_alerted:missing_ip"])
+
+    job = _FakeJob({"threat_level": "high"})  # no ip; the value must not leak
+    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
+         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="topsecretkey"), \
+         mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
+        asyncjobs.push_abuse_signals(job)
+        asyncjobs.push_abuse_signals(job)
+        assert not m_post.called, "missing ip must short-circuit before any HTTP call"
+
+    events = list(Event.objects.filter(category=category))
+    assert len(events) == 1, (
+        f"missing ip must file exactly one incident per window, got {len(events)}"
+    )
+    assert events[0].level == 4, f"a payload defect is level 4, got {events[0].level}"
+    details = events[0].details or ""
+    assert "threat_level" in details, f"the incident must name the payload keys: {details!r}"
+    assert "high" not in details, (
+        f"the incident must NOT echo the abuse-state VALUE 'high': {details!r}"
+    )
+    _clear_push_incident(category, ["geoip:abuse_push_alerted:missing_ip"])
+
+
+@th.django_unit_test()
+def test_push_no_signals_files_one_incident_key_names_only(opts):
+    """A payload with an ip but no signal fields files ONE level-4 incident
+    naming the payload KEYS, never their values."""
+    from mojo.apps.account import asyncjobs
+    from mojo.apps.incident.models import Event
+
+    category = "geoip:abuse_push_no_signals"
+    _clear_push_incident(category, ["geoip:abuse_push_alerted:no_signals"])
+
+    job = _FakeJob({"ip": "203.0.113.63", "random_extra": "SENSITIVE_VALUE"})
+    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
+         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="topsecretkey"), \
+         mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
+        asyncjobs.push_abuse_signals(job)
+        asyncjobs.push_abuse_signals(job)
+        assert not m_post.called, "no signal fields must short-circuit before any HTTP call"
+
+    events = list(Event.objects.filter(category=category))
+    assert len(events) == 1, (
+        f"no-signals must file exactly one incident per window, got {len(events)}"
+    )
+    assert events[0].level == 4, f"a payload defect is level 4, got {events[0].level}"
+    details = events[0].details or ""
+    assert "random_extra" in details, f"the incident must name the payload keys: {details!r}"
+    assert "SENSITIVE_VALUE" not in details, (
+        f"the incident must NOT echo the payload VALUE: {details!r}"
+    )
+    _clear_push_incident(category, ["geoip:abuse_push_alerted:no_signals"])
+
+
 @th.unit_test("push_job_posts_correct_body_and_headers")
 def test_push_job_posts_correct_body_and_headers(opts):
     from mojo.apps.account import asyncjobs

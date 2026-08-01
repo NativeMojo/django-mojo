@@ -119,3 +119,20 @@ class RestMeta:
 - `LOG_CHANGES = True` provides automatic audit trails with no extra code
 - Sensitive fields are automatically masked in change diffs — the full key list is `SENSITIVE_KEYS` in `mojo/helpers/logit.py` (single source of truth, see `docs/django_developer/helpers/logit.md`)
 - The `payload` field is automatically sanitized before storage via `sanitize_dict()`, which shares the same `SENSITIVE_KEYS` list — plaintext credentials are never written to the Log table
+
+## File-logging helpers (`logit.info` / `logit.warning`) — argument semantics
+
+The file-logging helpers (`logit.info(*args)`, `logit.warning(*args)`,
+`logit.error(*args)`, etc.) are **not** printf and do **not** route by channel.
+Internally `_build_log(*args)` simply `"\n".join(str(arg) …)`s every argument, so:
+
+- **Arg 0 is a cosmetic pseudo-channel, not a router.** `logit.warning("account",
+  "message")` writes two lines — `account` then `message`. The first argument does
+  not select a log file or a logger; it is just the first line of the record. (To
+  write to a *named* file, get a logger explicitly:
+  `logger = logit.get_logger(name, "app.log")`.)
+- **`%`-placeholders never interpolate.** `logit.info("did %s -> %s", a, b)` does
+  **not** format — it emits three separate lines `did %s -> %s`, `str(a)`,
+  `str(b)`, and the `%s` stay literal. Always build the message with an f-string:
+  `logit.info(f"did {a} -> {b}")`. (This exact bug lived in
+  `account.asyncjobs.push_abuse_signals`; item 1100 fixed both its printf lines.)

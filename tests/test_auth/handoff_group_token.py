@@ -242,7 +242,16 @@ def test_mode_normalization(opts):
 
 @th.django_unit_test("gating: configured-but-off is inert, and says so")
 def test_configured_but_off_is_inert(opts):
+    from mojo.apps.incident.models import Event
     from mojo.apps.account.services import handoff_group as hg
+    from mojo.helpers.redis import get_connection
+
+    category = "auth:handoff_group_token_inert"
+    Event.objects.filter(category=category).delete()
+    try:
+        get_connection().delete(hg._notice_key("inert"))
+    except Exception:
+        pass
 
     # A deliberately fatal map: if 'off' consulted the sources at all, this
     # would refuse rather than sit inert.
@@ -261,6 +270,32 @@ def test_configured_but_off_is_inert(opts):
                      "the mode is checked by its caller, which short-circuits "
                      "before the sources are ever compiled. Section E pins that "
                      "end to end against the shipped defaults.)")
+
+        # The inert footgun is now a suppressed incident, not just a file log.
+        events = list(Event.objects.filter(category=category))
+        assert_eq(len(events), 1,
+                  f"configured-but-off must file exactly one inert-map incident, "
+                  f"got {[e.title for e in events]}")
+        assert_eq(events[0].level, 6,
+                  f"a security control that is switched off while configured on "
+                  f"is a level-6 incident, got {events[0].level}")
+        assert_true("AUTH_HANDOFF_GROUP_TOKEN_MODE" in (events[0].details or ""),
+                    f"the incident must name the mode switch that is off: "
+                    f"{events[0].details!r}")
+
+        # Survives the in-process one-shot drop: _reset_cache_for_tests() clears
+        # the _WARNED_INERT flag (as a fresh worker/process would), but the Redis
+        # suppression key persists, so a second get_mode() does NOT file again —
+        # the "survives restarts/workers" property the incident buys over a
+        # per-process warning.
+        hg._reset_cache_for_tests()
+        assert_eq(hg.get_mode(), hg.MODE_OFF, "still inert after the cache drop")
+        events = list(Event.objects.filter(category=category))
+        assert_eq(len(events), 1,
+                  f"the inert incident survives an in-process cache drop — the "
+                  f"Redis key keeps it to one per window across workers and "
+                  f"restarts, got {len(events)}")
+    Event.objects.filter(category=category).delete()
 
 
 @th.django_unit_test("gating: enforce hard-requires destination-allowlist enforcement")
@@ -398,9 +433,19 @@ def test_defective_entries_refuse_everything(opts):
 
 @th.django_unit_test("gating: a full-URL entry is accepted and reduced to its host")
 def test_full_url_entry_is_host_only(opts):
+    from mojo.apps.incident.models import Event
     from mojo.apps.account.services import handoff_group as hg
+    from mojo.helpers.redis import get_connection
 
-    with _gating(mode="enforce", hosts={f"https://{GATED_HOST}:9443/app": opts.group_a_uuid}):
+    category = "auth:handoff_group_token_entry_widened"
+    raw_entry = f"https://{GATED_HOST}:9443/app"
+    Event.objects.filter(category=category).delete()
+    try:
+        get_connection().delete(hg._notice_key("url_entry", GATED_HOST))
+    except Exception:
+        pass
+
+    with _gating(mode="enforce", hosts={raw_entry: opts.group_a_uuid}):
         for dest, why in ((f"https://{GATED_HOST}/", "the bare root"),
                           (f"http://{GATED_HOST}/elsewhere", "another scheme and path")):
             ok, group = hg.resolve_group(dest)
@@ -409,6 +454,36 @@ def test_full_url_entry_is_host_only(opts):
                         f"entry — a DENY rule must never be narrowed by the "
                         f"scheme, port or path an operator happened to paste. "
                         f"Got ok={ok} group={group!r}")
+
+        # The widening (scheme/port/path dropped) is now a suppressed incident.
+        events = list(Event.objects.filter(category=category))
+        assert_eq(len(events), 1,
+                  f"a full-URL gating entry must file exactly one entry-widened "
+                  f"notice, got {[e.title for e in events]}")
+        event = events[0]
+        assert_eq(event.level, 3,
+                  f"the entry-widened notice is a level-3 signal, got {event.level}")
+        details = event.details or ""
+        assert_true(GATED_HOST in details,
+                    f"the notice must name the derived bare host: {details!r}")
+        assert_true(raw_entry in details,
+                    f"the notice must quote the raw entry that was widened: {details!r}")
+        assert_true("MORE" in details,
+                    f"the notice must say the bare-host deny rule now covers MORE "
+                    f"(the host AND all its subdomains), not less: {details!r}")
+
+        # Survives an in-process cache drop: _reset_cache_for_tests() clears the
+        # compiled table (as a fresh worker would), so _entry_host re-runs on the
+        # next resolve — but the Redis suppression key persists, so no second
+        # notice is filed.
+        hg._reset_cache_for_tests()
+        hg.resolve_group(f"https://{GATED_HOST}/")
+        events = list(Event.objects.filter(category=category))
+        assert_eq(len(events), 1,
+                  f"the entry-widened notice survives an in-process cache drop — "
+                  f"the Redis key keeps it to one per window across workers and "
+                  f"restarts, got {len(events)}")
+    Event.objects.filter(category=category).delete()
 
 
 @th.django_unit_test("gating: an unknown or dark group refuses, it never falls back to a JWT")

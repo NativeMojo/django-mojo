@@ -1,7 +1,7 @@
 from django.db import models
 from mojo.models import MojoModel
 from mojo.helpers.settings import settings
-from mojo.helpers import dates, logit, request as rhelper
+from mojo.helpers import dates, request as rhelper
 from mojo.apps import metrics
 
 
@@ -88,9 +88,6 @@ class UserLoginEvent(models.Model, MojoModel):
         if not LOGIN_EVENT_TRACKING_ENABLED:
             return None
 
-        if request.ip is None:
-            logit.warning("login_event: recording login with no resolved client IP for user %s" % user.id)
-
         from .geolocated_ip import GeoLocatedIP
         geo = GeoLocatedIP.objects.filter(ip_address=request.ip).first()
 
@@ -139,6 +136,31 @@ class UserLoginEvent(models.Model, MojoModel):
             is_new_country=is_new_country,
             is_new_region=is_new_region,
         )
+
+        if request.ip is None:
+            # A request reaching the app without a resolved client IP is almost
+            # always a reverse-proxy / ingress that is not forwarding the client
+            # address — a condition that affects EVERY request, not one user. The
+            # suppression key is therefore deliberately GLOBAL, never per-user: a
+            # per-user key would file one incident per login and flood the plane
+            # under exactly the misconfiguration this is meant to surface.
+            # Reported AFTER the row is created so a reporter fault can never cost
+            # the login record, and so the body can name the row. user.id/event.id
+            # are EXAMPLES only.
+            from mojo.apps.incident import report_event_suppressed
+            report_event_suppressed(
+                f"A login was recorded with no resolved client IP. The request "
+                f"reached the server without one — commonly a reverse proxy or "
+                f"ingress that is not forwarding the client address. This "
+                f"condition is NOT user-specific: it affects every request "
+                f"behind the same misconfiguration, so it is reported once "
+                f"globally, not per user. Most recent example only: user id "
+                f"{user.id}, login event id {event.id}.",
+                key="account:login_event:no_ip_alerted",
+                title="Login recorded with no client IP",
+                category="account:login_no_client_ip",
+                level=5,
+                request=request)
 
         # Record metrics
         if country_code:

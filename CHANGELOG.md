@@ -1,5 +1,49 @@
 ## Unreleased
 
+**chore (account)** — **eight operational `logit.warning` sites in the account
+app are now Redis-suppressed incident events (`report_event_suppressed`, window
+3600s), so a misconfiguration surfaces in the incident feed instead of scrolling
+past in `mojo.log`.** Each is suppressed to at most one event per hour per unit;
+none is `>= 7`, so none auto-creates an incident on its own.
+
+- **The eight new categories (level · suppression unit):**
+  `auth:handoff_group_token_inert` (6 · global) — gating map configured but
+  `AUTH_HANDOFF_GROUP_TOKEN_MODE` is `off`;
+  `auth:handoff_group_token_entry_widened` (3 · per host) — a map entry's
+  scheme/port/path were dropped and the bare-host deny rule now covers the host
+  **and all subdomains** (more, not less);
+  `account:realtime_disconnect_failed` (6 · per user pk) — a disabled/revoked
+  user's live websocket could not be force-closed (`auth_key` rotation is still
+  the guarantee; the socket may persist until it drops);
+  `account:login_no_client_ip` (5 · **global, not per-user**) — a login recorded
+  with no resolved client IP (proxy/ingress misconfig affecting every request);
+  `geoip:abuse_push_unconfigured` (5 · global), `geoip:abuse_push_rejected`
+  (4 · per HTTP status), `geoip:abuse_push_missing_ip` (4 · global),
+  `geoip:abuse_push_no_signals` (4 · global) — the four `push_abuse_signals` drop
+  paths (settings/key-names only; abuse-state values and the api key are never
+  echoed).
+- **Two sites stay file logs, on purpose.** The `except` around the Redis
+  suppression call in `handoff_group._should_report` and
+  `redirect_allowlist.report_unlisted_destination` remain `logit.warning`: that
+  branch *is* the suppression machinery's own degraded path (Redis down), so
+  filing an incident there is unsuppressible-by-construction and would recurse on
+  any `report_event` fault. A later log-to-incident sweep must leave both.
+- **The display-name moderation warning stays a file log too.**
+  `User.validate_name_fields` (user.py) keeps its `logit.warning` — DM-007 made
+  that check *advisory* precisely because it is false-positive-dominated
+  (Matsushita/Harshita/Scunthorpe score `block`); routing it into the incident
+  engine (which escalates `threat_level` and can fire block handlers) would
+  re-introduce the exact harm DM-007 removed, and it cannot be a `logit.Log`
+  either (it runs pre-save with no pk → `model_id=0` IntegrityError). Its two
+  interpolated values are now bounded (`[:120]` / `[:5]`).
+- **printf fix.** `push_abuse_signals` had two `logit` calls using `%s/%d/%r`
+  templates that never interpolated — `logit._build_log` newline-joins its args,
+  so arg-0 is a cosmetic pseudo-channel and `%`-placeholders are literal. Both are
+  now f-strings; documented under [logit](docs/django_developer/logging/logit.md).
+- **Breaking for log scrapers only.** Eight warning strings no longer appear in
+  `mojo.log`; anything grepping `mojo.log` for them must read the incident feed
+  (`GET /api/incident/event?category=…`) instead. No API or behavior change.
+
 **fix (account)** — **the per-group OAuth redirect-allowlist source is now
 coerced with the same `kind="list"` rules as the deployment setting, fixing a 500
 on the public `/begin`.** `_validate_redirect_uri` read the deployment list via

@@ -199,6 +199,16 @@ Payloads containing `is_blocked`, `is_whitelisted`, `blocked_*`, or `whitelisted
 
 `applied` contains only fields whose values changed. An empty `applied` means the incoming signals were already met or exceeded on this instance.
 
+### Push-side observability
+
+On the **sending** side, each way the `push_abuse_signals` job can drop files a
+suppressed incident (filter via `GET /api/incident/event?category=…`):
+`geoip:abuse_push_unconfigured` (level 5, upstream URL/api key unset),
+`geoip:abuse_push_rejected` (level 4, per HTTP status),
+`geoip:abuse_push_missing_ip` and `geoip:abuse_push_no_signals` (level 4). The
+incidents name payload key names and settings only — never signal values or the
+api key.
+
 ### Error Responses
 
 | Condition | Response |

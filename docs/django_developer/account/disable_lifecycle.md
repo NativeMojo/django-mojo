@@ -120,6 +120,16 @@ disable itself). Consequences:
 - `User.revoke_sessions` (rotate `auth_key` without disabling) also drops
   live websockets via the same `disconnect_realtime` call.
 
+**`auth_key` rotation is the guarantee, not the socket drop.** `disconnect_realtime`
+is hygiene: WS auth happens once at connect, so a disabled user may keep a live
+websocket until it drops naturally, but every *new* request (including the next
+WS reconnect) fails on the rotated key. If the disconnect itself fails (Redis /
+realtime unavailable), it is swallowed — the disable never fails — and files a
+suppressed `account:realtime_disconnect_failed` incident (level 6, one per user
+per hour) carrying the user pk and the bound exception. `disable_entity` and
+`revoke_sessions` both pass their `request` through so the incident is
+request-attributed.
+
 `Group` entities are unaffected by the key rotation (`hasattr(entity,
 "auth_key")` gates it to `User`); `Group.is_active` is already checked
 per-request — and since DM-048, so is every ancestor's, via

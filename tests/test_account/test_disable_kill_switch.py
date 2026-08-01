@@ -140,3 +140,59 @@ def test_revoke_sessions_still_rotates(opts):
         f"old JWT must be dead after revoke_sessions, got {resp.status_code}"
     )
     opts.client.logout()
+
+
+@th.django_unit_test()
+def test_realtime_disconnect_failure_files_suppressed_incident(opts):
+    """Item 1100: a realtime disconnect failure during disable/revoke files ONE
+    suppressed level-6 incident (per user per window) and NEVER raises — the
+    kill-switch guarantee is auth_key rotation, not the socket drop."""
+    from unittest import mock
+
+    from mojo.apps.account.services import disable as disable_service
+    from mojo.apps.incident.models import Event
+    from mojo.apps.incident import notice_key
+    from mojo.helpers.redis import get_connection
+
+    user, email, password = _make_user("dm042_rtfail")
+    category = "account:realtime_disconnect_failed"
+    key = f"account:disable:realtime_alerted:{user.pk}"
+
+    Event.objects.filter(category=category, model_id=user.pk).delete()
+    try:
+        get_connection().delete(notice_key(category, key))
+    except Exception:
+        pass
+
+    with mock.patch("mojo.apps.realtime.manager.disconnect_user",
+                    side_effect=RuntimeError("realtime down")):
+        # Must not raise — a realtime failure is hygiene loss, never an auth hole.
+        raised = False
+        try:
+            disable_service.disconnect_realtime(user)
+            disable_service.disconnect_realtime(user)
+        except Exception as exc:
+            raised = True
+            last = exc
+        assert not raised, (
+            f"disconnect_realtime must swallow a realtime failure, but it raised "
+            f"{last!r}"
+        )
+
+    events = list(Event.objects.filter(category=category, model_id=user.pk))
+    assert len(events) == 1, (
+        f"a realtime disconnect failure must file exactly ONE suppressed incident "
+        f"per user per window, got {len(events)}: {[e.title for e in events]}"
+    )
+    assert events[0].level == 6, (
+        f"a partial kill switch (auth_key rotated, socket not dropped) is a "
+        f"level-6 incident, got level {events[0].level}"
+    )
+    details = events[0].details or ""
+    assert str(user.pk) in details, (
+        f"the incident must name the affected user pk: {details!r}"
+    )
+    assert "RuntimeError" in details and "realtime down" in details, (
+        f"the incident must bind the exception type and message: {details!r}"
+    )
+    Event.objects.filter(category=category, model_id=user.pk).delete()

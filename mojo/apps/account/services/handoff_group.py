@@ -105,7 +105,6 @@ _RENOTIFY_SEC = 3600
 # path that failed to import caches as None so it is logged once.
 _CACHE = {}
 _WARNED_INERT = "warned:configured_but_off"
-_WARNED_URL_ENTRY = "warned:url_entry"
 
 
 # ---------------------------------------------------------------------------
@@ -124,12 +123,20 @@ def get_mode():
             f"treating it as {MODE_ENFORCE!r}")
         return MODE_ENFORCE
     if mode == MODE_OFF and not _CACHE.get(_WARNED_INERT) and _sources_configured():
+        # Keep the per-process one-shot IN FRONT of the Redis suppression check:
+        # it holds a Redis round-trip off the hot public get_mode() path, a test
+        # pins it, and it stops re-entrancy. The suppressed incident below is the
+        # durable, cross-worker signal; this flag is only the per-process fast-out.
         _CACHE[_WARNED_INERT] = True
-        logit.warning(
-            "account.handoff_group",
-            "AUTH_HANDOFF_GROUP_TOKEN_HOSTS/_RESOLVER is configured but "
-            "AUTH_HANDOFF_GROUP_TOKEN_MODE is 'off' — the gating map is inert "
-            "and every destination receives a platform JWT")
+        if _should_report("inert"):
+            _report(
+                "AUTH_HANDOFF_GROUP_TOKEN_HOSTS/AUTH_HANDOFF_GROUP_TOKEN_RESOLVER "
+                "is configured but AUTH_HANDOFF_GROUP_TOKEN_MODE is 'off' — the "
+                "gating map is inert and every destination receives a platform "
+                "JWT instead of a group-scoped token. This is a security-control "
+                "that is switched off while configured to be on.",
+                "Auth handoff gating map is configured but inert",
+                "auth:handoff_group_token_inert", 6, request=None)
     return mode
 
 
@@ -276,17 +283,18 @@ def _entry_host(raw):
     if not entry or "\\" in entry:
         return None
 
+    carries_extra = False
     if "//" in entry:
         try:
             entry = urlsplit(entry).hostname or ""
         except ValueError:
             return None
-        _warn_url_entry(raw)
+        carries_extra = True
     else:
         # A bare "host/path" or "host:port" entry. A deny rule is never
         # narrowed by a path or a port, so both are dropped, loudly.
         if "/" in entry or ":" in entry:
-            _warn_url_entry(raw)
+            carries_extra = True
             entry = entry.split("/", 1)[0].split(":", 1)[0]
 
     if entry.startswith("*."):
@@ -295,18 +303,20 @@ def _entry_host(raw):
         entry = entry[:-1]
     if not entry or not _is_host_shaped(entry):
         return None
+    # Report only AFTER a usable host is derived — a defective entry returns
+    # None above and is reported once by `_compiled()` as a map defect, so it
+    # must not ALSO file a widening notice here. `entry` is _ENTRY_CHARS-clean,
+    # so it is a safe suppression key. request=None: this is a config event.
+    if carries_extra and _should_report("url_entry", entry):
+        _report(
+            f"AUTH_HANDOFF_GROUP_TOKEN_HOSTS entry {raw[:200]!r} carries a "
+            f"scheme, port or path — all of which were DROPPED. The entry is a "
+            f"DENY rule and reduces to the bare host {entry!r}, which now covers "
+            f"MORE, not less: {entry!r} AND every one of its subdomains, at any "
+            f"depth. List the bare host to make that explicit.",
+            f"Auth handoff gating entry widened to a bare host: {entry}",
+            "auth:handoff_group_token_entry_widened", 3, request=None)
     return entry
-
-
-def _warn_url_entry(raw):
-    if _CACHE.get(_WARNED_URL_ENTRY) == raw:
-        return
-    _CACHE[_WARNED_URL_ENTRY] = raw
-    logit.warning(
-        "account.handoff_group",
-        f"AUTH_HANDOFF_GROUP_TOKEN_HOSTS entry {raw!r} carries a scheme, port "
-        f"or path — only its host is used. A deny rule must not be narrowed "
-        f"by them; list the bare host instead.")
 
 
 def _compiled():
@@ -489,6 +499,13 @@ def _should_report(*parts):
             return False
         redis.set(key, "1", ex=_RENOTIFY_SEC)
     except Exception as exc:
+        # DELIBERATELY a file log, not an incident. This IS the suppression
+        # machinery's own degraded path (Redis is unreachable). Filing an
+        # incident here is unsuppressible-by-construction — the suppression it
+        # would need is the very thing that just failed — and would recurse on
+        # any report_event fault. Execution falls through to `return True`, so
+        # the caller reports UNSUPPRESSED on purpose while Redis is down. A later
+        # log-to-incident sweep must leave this line as a file log.
         logit.warning(
             "account.handoff_group",
             f"gating suppression check failed: {exc}")

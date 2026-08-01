@@ -100,7 +100,7 @@ def _write_metadata(entity, new_metadata, *, atomic_with_active=None, extra_upda
     ).update(is_active=target_state, metadata=new_metadata, **(extra_updates or {}))
 
 
-def disconnect_realtime(entity):
+def disconnect_realtime(entity, request=None):
     """Best-effort: force-close a disabled/revoked User's live websockets
     (cross-process via the realtime pub/sub disconnect channel). WS auth
     happens once at connect, so without this a disabled user's sockets would
@@ -112,8 +112,28 @@ def disconnect_realtime(entity):
     try:
         from mojo.apps.realtime import manager
         manager.disconnect_user("user", entity.pk)
-    except Exception:
-        logit.warning(f"disable_service: realtime disconnect failed for user pk={entity.pk}")
+    except Exception as exc:
+        # A failure here is hygiene loss, never an auth hole: the kill-switch
+        # guarantee is auth_key rotation, not this socket drop. But it means a
+        # disabled user may keep a live websocket until it drops on its own,
+        # which is worth surfacing. Suppressed per user per window so a mass
+        # disable cannot flood the incident plane; report_event_suppressed
+        # never raises, so the disable/revoke path stays intact.
+        from mojo.apps.incident import report_event_suppressed
+        prefix = _category_prefix(entity)
+        report_event_suppressed(
+            f"Realtime websocket disconnect failed for user pk={entity.pk} "
+            f"during disable/revoke: {type(exc).__name__}: {str(exc)[:200]}. "
+            f"The auth_key was still rotated (outstanding JWTs are dead), but "
+            f"any currently-open websocket for this user may persist until it "
+            f"drops naturally.",
+            key=f"{prefix}:disable:realtime_alerted:{entity.pk}",
+            title=f"Realtime disconnect failed for user {entity.pk}",
+            category="account:realtime_disconnect_failed",
+            level=6,
+            request=request,
+            model_name="account.User",
+            model_id=entity.pk)
 
 
 def disable_entity(entity, *, reason, by_user=None, note=None, request=None):
@@ -162,7 +182,7 @@ def disable_entity(entity, *, reason, by_user=None, note=None, request=None):
         raise merrors.ValueException(f"{Model.__name__} is already disabled")
 
     entity.refresh_from_db()
-    disconnect_realtime(entity)
+    disconnect_realtime(entity, request=request)
 
     prefix = _category_prefix(entity)
     kind = "auto_disabled" if reason == "inactive" else "disabled"
