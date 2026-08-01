@@ -2895,6 +2895,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#guest-members-view-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guest Members (view-only)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4100,6 +4111,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#guest-members-view-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guest Members (view-only)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4388,22 +4410,41 @@ membership here."</p>
 <a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="p">}</span>
 <a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">}</span>
 </code></pre></div>
+<h3 id="guest-members-view-only">Guest Members (view-only)<a class="headerlink" href="#guest-members-view-only" title="Permanent link">&para;</a></h3>
+<p>Setting the <code>guest</code> marker makes a member view-only for any endpoint whose
+write tier checks <code>full_member</code> (requires manage-level permissions to set):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;permissions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;guest&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="p">}</span>
+</code></pre></div>
+<ul>
+<li>A guest still passes plain <code>member</code> (view) checks; only <code>full_member</code>
+  (write-tier) checks fail. Send <code>{"permissions": {"guest": false}}</code> to
+  restore full membership.</li>
+<li><code>full_member</code> cannot be granted directly on a member — it is derived from
+  the absence of the <code>guest</code> marker.</li>
+<li><strong>Demoting an existing manager requires removing their manage grants too</strong>
+  (e.g. <code>{"permissions": {"guest": true, "manage_group": false}}</code>) — the
+  marker alone does not strip other permissions, and a member who retains a
+  manage-level grant can still edit members, including clearing their own
+  marker.</li>
+</ul>
 <h2 id="hierarchical-groups">Hierarchical Groups<a class="headerlink" href="#hierarchical-groups" title="Permanent link">&para;</a></h2>
 <p>Groups can have a parent group. Child groups inherit parent-level permissions for members. Use <code>parent=&lt;id&gt;</code> to filter by parent:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/group?parent=7
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/group?parent=7
 </code></pre></div>
 <hr />
 <h2 id="disable-lifecycle">Disable Lifecycle<a class="headerlink" href="#disable-lifecycle" title="Permanent link">&para;</a></h2>
 <p>Admins manage group <code>is_active</code> state through two named POST_SAVE_ACTIONS. Writing the bare <code>is_active</code> field directly still works but does not populate the disable namespace or emit audit events. The actions below are the recommended path for any new code. Requires a global <code>manage_groups</code> grant (the combined <code>groups</code> term includes it) — stricter than the rest of the Group <code>SAVE_PERMS</code> since disable is destructive: a member-level grant is not sufficient.</p>
 <h3 id="disable-a-group">Disable a group<a class="headerlink" href="#disable-a-group" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/group/&lt;id&gt;</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="nt">&quot;disable&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;archived&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Project sunset 2026 Q2&quot;</span><span class="p">}}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="nt">&quot;disable&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;archived&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Project sunset 2026 Q2&quot;</span><span class="p">}}</span>
 </code></pre></div>
 <p><code>reason</code> must be one of: <code>admin</code>, <code>abuse</code>, <code>archived</code>. Server-set reasons (<code>inactive</code>) are rejected from REST.</p>
 <p>Effect: <code>is_active=False</code>, populates <code>metadata.protected.disable</code> with <code>{reason, at, by_user_id, by_username, note}</code>. Members are unaffected — <code>GroupMember.is_active</code> does not cascade.</p>
 <h3 id="reactivate-a-group">Reactivate a group<a class="headerlink" href="#reactivate-a-group" title="Permanent link">&para;</a></h3>
 <p><strong>POST</strong> <code>/api/group/&lt;id&gt;</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="nt">&quot;reactivate&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Project resumed&quot;</span><span class="p">}}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span><span class="nt">&quot;reactivate&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Project resumed&quot;</span><span class="p">}}</span>
 </code></pre></div>
 <p>Effect: <code>is_active=True</code>. Appends a history entry to <code>disable.history</code> (FIFO cap 20) with the prior disable context and <code>reactivated_*</code> fields.</p>
 <h3 id="read-disable-state">Read disable state<a class="headerlink" href="#read-disable-state" title="Permanent link">&para;</a></h3>
