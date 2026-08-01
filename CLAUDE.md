@@ -44,15 +44,37 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
 
 ## Planning
 
-Work items live on a **single maestro board** — **Inbox**, board id 11 in the
-`NativeMojo` workspace, shared with web-mojo (see `.claude/maestro.json`).
-File everything there: bugs, feature requests, chores. An item's *kind* is
-carried by its workspec, not by which board it sits on.
+Work items live on **two maestro boards** in the `NativeMojo` workspace, both
+shared with web-mojo (see `.claude/maestro.json`):
+
+| Board | Id | Holds |
+|-------|----|-------|
+| **Inbox** | 11 | Everything that is not security — bugs, features, chores. |
+| **Security** | 37 | All security work: exploitable weaknesses, defense-in-depth hardening, and features whose purpose is a security control. |
+
+`.claude/maestro.json` names **one** board (11) — that is the filing default,
+not the whole queue. Routing to Security, and the rest of the two-board
+protocol, lives in the workspace `nativemojo-board-conventions` rule doc, which
+every `maestro-*` skill fetches via `get_workspace_context`. Read it before
+filing, scoping or building. Three things it says that bite if you miss them:
+
+- **Enumerate both boards.** Any time you list work — pick something to scope
+  or build, report what's open, check WIP — call `get_board(11)` *and*
+  `get_board(37)`. Listing only 11 hides all in-flight security work.
+- **Match stage options by value, per board.** Both boards label a stage
+  "Accepted", but Inbox backs it with `scoped` and Security with `accepted`.
+  A cross-board move of an item at `scoped` silently lands it at `inbox`.
+- **WIP = 1 per project is summed across both boards**, not per board.
+
+An item's bug/feature/chore *kind* is still carried by its workspec, not by
+which board it sits on. Security is routed as a cross-cutting concern — a
+different axis from kind.
 
 > The separate **Bugs** and **Feature Requests** intake boards were
-> consolidated into this one on 2026-07-30 and archived. There is no longer
-> any routing-by-kind at filing time and no promotion step at scoping time —
-> if you find a doc describing three boards, it predates the merge.
+> consolidated into board 11 on 2026-07-30 and archived; **Security** (37) was
+> split out on 2026-07-31. If you find a doc describing three intake boards, or
+> one describing a single board with no routing, it predates one of those
+> changes — the workspace rule doc wins.
 
 A board item's markdown
 description is the workspec; its `stage` column value is inbox → scoped →
