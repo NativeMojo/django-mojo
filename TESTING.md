@@ -25,7 +25,7 @@ Use `bin/run_tests` — it starts the server, runs the suite, and stops the serv
 ```bash
 ./bin/run_tests                        # run all tests (skips opt-in modules)
 ./bin/run_tests --full                 # run all tests including opt-in modules
-./bin/run_tests --agent                # run all tests, write structured report to var/test_failures.json
+./bin/run_tests --agent                # write structured report to testproject/var/test_failures.json
 ./bin/run_tests -t test_accounts       # run one module
 ./bin/run_tests -t test_accounts.login # run one test file
 ./bin/run_tests -q                     # quick tests only
@@ -71,7 +71,7 @@ To add more opt-in modules, set `"requires_extra": ["slow"]` in the module's `__
 
 ## Agent Mode
 
-`--agent` writes `var/test_failures.json` — a structured JSON report designed for LLM agents and CI pipelines. It includes:
+`--agent` writes `testproject/var/test_failures.json` — a structured JSON report designed for LLM agents and CI pipelines. It includes:
 
 - **Top-level**: `status` (passed/failed), total, passed, failed, skipped, duration
 - **modules**: per-module breakdown with tests/passed/failed/skipped/duration

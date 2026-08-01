@@ -26,9 +26,10 @@ Read `CLAUDE.md` for conventions. Read the item file in `planning/confirmed/`.
 - Run `scripts/ready.sh <file>`. If it reports `BLOCKED`, stop and say so; only
   proceed on `READY`.
 - **Establish a green baseline BEFORE the first edit** (see
-  `.claude/rules/build-baseline.md`): run `bin/run_tests --agent` (the default
-  suite — NOT `--full`, which runs only on explicit user request), read
-  `var/test_failures.json`, and record total/passed/failed + any pre-existing
+  `.claude/rules/build-baseline.md`): run the scope your change can affect
+  (`bin/run_tests --agent -t <module> ...`; whole suite only on an escalation
+  trigger, and NOT `--full` unless the user asks), read
+  `testproject/var/test_failures.json`, and record the scope + total/passed/failed + any pre-existing
   failures in the item's `## Notes`. If the baseline is not all-green, STOP and tell
   the user — do not build on red unless they say to. A green baseline means every
   failure after your change is yours to fix.
@@ -61,7 +62,7 @@ and `git commit`.
   `.claude/rules/git.md`); never push; if the baseline is red, STOP and report
   back instead of building. While it runs, the orchestrator stays
   hands-off the working tree — no edits, no test runs. On completion, verify
-  (item Resolution, `var/test_failures.json`, `git log -p` spot-check) and relay.
+  (item Resolution, `testproject/var/test_failures.json`, `git log -p` spot-check) and relay.
   If the sub-agent cannot spawn the post-build agents itself, it performs those
   three passes inline, sequentially.
 - **fanout** — L/XL items ONLY, and only when the plan defines **disjoint file
@@ -88,7 +89,7 @@ and `git commit`.
 4. Implement — one logical unit at a time. The `.claude/rules/` files load
    automatically; follow them.
 5. Write/finish tests immediately after implementation, not at the end.
-   - Run with `bin/run_tests --agent -t <target>`; read `var/test_failures.json`
+   - Run with `bin/run_tests --agent -t <target>`; read `testproject/var/test_failures.json`
      for diagnostics. Fix failures in your code, not the tests.
    - For a bug, confirm the regression test now passes and others still do.
 6. Update relevant docs (`docs/django_developer/`, `docs/web_developer/`).

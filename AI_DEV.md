@@ -60,7 +60,7 @@ marker — run `/scope` first) and `scripts/ready.sh` gates on `depends_on`. It 
 **in place** (no branch/worktree — see below). It first **claims** the item with
 `scripts/start.sh` (`confirmed/ → in_progress/`, WIP = 1, resume-safe), then
 implements (a failing regression test first, for bugs), runs tests, commits (no
-push), spawns three agents in parallel — full test suite, docs, security review —
+push), spawns three agents in parallel — tests (scoped, see `.claude/rules/build-baseline.md`), docs, security review —
 and runs `scripts/close.sh`, which stamps the Resolution block (closed/branch/files
 changed) and moves the file `in_progress/ → done/`.
 
@@ -98,7 +98,7 @@ new work
   |  scripts/start.sh: claim confirmed/ -> in_progress/ (WIP=1, resume-safe)
   |  scripts/ready.sh pre-flight (READY/BLOCKED); refuses UNPLANNED
   |  implements, writes/runs tests, commits, then spawns 3 agents in parallel:
-  |    - test-runner: runs full test suite, fixes trivial errors, reports complex ones
+  |    - test-runner: runs the scoped suite, fixes trivial errors, reports complex ones
   |    - docs-updater: reads git diff, updates django_developer/ and web_developer/ docs
   |    - security-review: checks diff for permission gaps, injection, auth bypasses
   |  scripts/close.sh: stamp Resolution + in_progress/ -> done/
@@ -186,7 +186,7 @@ Agents in `.claude/agents/` run in isolated context windows. The `/build` skill 
 
 | Agent | Purpose |
 |---|---|
-| `test-runner` | Runs full test suite. Fixes trivial errors (syntax, imports). Reports complex failures without fixing them. |
+| `test-runner` | Runs the scoped suite (whole suite only on an escalation trigger — see `.claude/rules/build-baseline.md`). Fixes trivial errors (syntax, imports). Reports complex failures without fixing them. |
 | `docs-updater` | Reads git diff. Updates `docs/django_developer/` and `docs/web_developer/` to match code changes. |
 | `security-review` | Reviews git diff for permission gaps, data exposure, injection risks, auth bypasses, secret leakage. |
 
