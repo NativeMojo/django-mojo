@@ -81,7 +81,13 @@ def on_bouncer_assess(request):
     msid = request.msid or ''
     mtab = request.mtab or ''
     fingerprint_id = request.DATA.get('fingerprint_id', '')
-    page_type = request.DATA.get('page_type', 'login')
+    # BouncerSignal.page_type is CharField(max_length=32) and the insert below
+    # is wrapped in try/except, so an overlong value silently loses its audit
+    # row. Type-guard rather than a bare slice: this is unauthenticated,
+    # attacker-controlled JSON, and `5[:32]` / `{}[:32]` would raise out of the
+    # view into dispatch_error_handler as a 500 plus a level-12 incident.
+    _pt = request.DATA.get('page_type')
+    page_type = _pt[:32] if isinstance(_pt, str) and _pt else 'login'
     session_id = request.DATA.get('session_id') or uuid.uuid4().hex
     client_signals = request.DATA.get('signals') or {}
 

@@ -27,6 +27,14 @@ TEST_MUID = 'bouncer-test-muid-001'
 TEST_MUID_B = 'bouncer-test-muid-002'
 TEST_IP = '127.0.0.1'
 
+PAGE_TYPE_LONG_SESSION = 'sess-page-type-long-001'
+PAGE_TYPE_ODD_SESSIONS = (
+    'sess-page-type-odd-int',
+    'sess-page-type-odd-bool',
+    'sess-page-type-odd-dict',
+    'sess-page-type-odd-list',
+)
+
 
 @th.django_unit_setup()
 def setup_bouncer(opts):
@@ -38,6 +46,9 @@ def setup_bouncer(opts):
     ).delete()
     BouncerSignal.objects.filter(
         muid__in=[TEST_MUID, TEST_MUID_B]
+    ).delete()
+    BouncerSignal.objects.filter(
+        session_id__in=(PAGE_TYPE_LONG_SESSION,) + PAGE_TYPE_ODD_SESSIONS
     ).delete()
 
 
@@ -143,6 +154,66 @@ def test_bouncer_signal_logged(opts):
     assert_eq(sig.page_type, 'login', "expected page_type=login")
     assert_true(sig.muid, "expected muid on BouncerSignal")
     assert_eq(sig.duid, TEST_DUID, "expected duid=TEST_DUID on BouncerSignal")
+
+
+@th.django_unit_test()
+def test_assess_clamps_overlong_page_type(opts):
+    """page_type is clamped to BouncerSignal.page_type's 32-char max_length.
+
+    The audit-row insert is wrapped in try/except, so before the clamp an
+    overlong value failed OPEN: the token was still issued but the BouncerSignal
+    row was silently lost.
+    """
+    from mojo.apps.account.models import BouncerSignal
+    long_page_type = 'p' * 60
+    resp = opts.client.post('/api/account/bouncer/assess', {
+        'duid': TEST_DUID,
+        'page_type': long_page_type,
+        'session_id': PAGE_TYPE_LONG_SESSION,
+        'signals': {'environment': {}, 'behavior': {'mouse_move_count': 9}},
+    })
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}")
+    sig = BouncerSignal.objects.filter(session_id=PAGE_TYPE_LONG_SESSION).first()
+    assert_true(sig is not None,
+                "expected the BouncerSignal audit row to survive an overlong page_type")
+    assert_eq(len(sig.page_type), 32,
+              f"expected page_type clamped to 32 chars, got {len(sig.page_type)}")
+    assert_eq(sig.page_type, long_page_type[:32],
+              f"expected the leading 32 chars preserved, got {sig.page_type!r}")
+
+
+@th.django_unit_test()
+def test_assess_non_string_page_type_falls_back(opts):
+    """A non-string page_type falls back to the default instead of erroring.
+
+    assess is unauthenticated, so page_type is attacker-controlled JSON. A bare
+    `value[:32]` slice raises TypeError on an int/bool and KeyError on a dict;
+    that escapes the endpoint's own try/except into dispatch_error_handler as a
+    500 PLUS a level-12 rest_error incident carrying request_data and a stack
+    trace — reachable 60 times per IP per window by any page on the internet.
+    """
+    from mojo.apps.account.models import BouncerSignal
+    cases = [
+        (5, PAGE_TYPE_ODD_SESSIONS[0]),
+        (True, PAGE_TYPE_ODD_SESSIONS[1]),
+        ({'nested': 'dict'}, PAGE_TYPE_ODD_SESSIONS[2]),
+        (['a', 'b'], PAGE_TYPE_ODD_SESSIONS[3]),
+    ]
+    for value, session_id in cases:
+        resp = opts.client.post('/api/account/bouncer/assess', {
+            'duid': TEST_DUID,
+            'page_type': value,
+            'session_id': session_id,
+            'signals': {'environment': {}, 'behavior': {'mouse_move_count': 9}},
+        })
+        assert_eq(resp.status_code, 200,
+                  f"page_type={value!r} must not error the endpoint, got "
+                  f"{resp.status_code} ({resp.json})")
+        sig = BouncerSignal.objects.filter(session_id=session_id).first()
+        assert_true(sig is not None,
+                    f"page_type={value!r}: expected a BouncerSignal audit row")
+        assert_eq(sig.page_type, 'login',
+                  f"page_type={value!r} should fall back to 'login', got {sig.page_type!r}")
 
 
 # ---------------------------------------------------------------------------

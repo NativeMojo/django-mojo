@@ -546,7 +546,7 @@ is always empty (nginx `auth_request` discards it).
 |---|---|---|---|
 | A — Same domain | `example.com/protected` | `example.com/auth` | Yes — natural cookie sharing |
 | B — Subdomains | `app.example.com` | `auth.example.com` | Yes — set `BOUNCER_PASS_COOKIE_DOMAIN='.example.com'` |
-| C — Separate eTLD+1 | `marketing.com` | `auth.example.com` | **Not in v1.** Browsers will not share cookies across registrable domains. Would require a signed-token redirect dance — separate request when a real consumer surfaces. |
+| C — Separate eTLD+1 | `marketing.com` | `auth.example.com` | **Token flow only.** With `BOUNCER_ALLOW_ANY_ORIGIN` the credentialed `assess`/`event`/`message` calls work, so `@md.requires_bouncer_token` is usable from a tenant-owned domain. The `mbp` pass cookie still is not: `_set_pass_cookie` uses `samesite='Lax'`, so browsers refuse to store it cross-site and the repeat-visit challenge skip never engages. |
 
 ### nginx drop-in
 
@@ -580,6 +580,81 @@ OPTIONS preflights from allowlisted origins return 200 with the same
 credentialed headers, so JS clients can `fetch(..., credentials: 'include')`
 without ceremony.
 
+### `BOUNCER_ALLOW_ANY_ORIGIN` — when the caller domains are unknowable
+
+`BOUNCER_ALLOWED_ORIGINS` is a deploy-time list. A multi-tenant platform whose
+customers point their own domains at their sites cannot enumerate it: the right
+values are not known when the settings file is written. For that case only:
+
+```python
+BOUNCER_ALLOW_ANY_ORIGIN = True     # default False
+```
+
+When enabled, the request `Origin` is echoed back with
+`Access-Control-Allow-Credentials: true` instead of being tested against the
+allowlist — but **only on the three public bouncer API endpoints**:
+
+| Path | Bypass applies? |
+|---|---|
+| `/api/account/bouncer/assess` | **Yes** |
+| `/api/account/bouncer/event` | **Yes** |
+| `/api/account/bouncer/message` | **Yes** |
+| `/api/account/bouncer/verify_pass` | No — server-to-server (nginx `auth_request`), and the sole carrier of `X-Bouncer-Muid` |
+| `/api/account/bouncer/device`, `/signal`, `/signature` | No — permission-gated admin endpoints returning fingerprints, IPs, muids and geo |
+| `/account/static/mojo-*` | No — `<script src>` is not a CORS request, and the `*` fallback already serves it |
+
+The bypass is deliberately **strictly narrower** than the allowlist. An operator
+who lists an origin explicitly is making a per-origin decision; the flag is a
+blanket grant, so it must not reach anything the allowlist could.
+
+Still refused with the flag on:
+
+- `Origin: null` — a sandboxed iframe, `data:` document or `file://` page.
+  Echoing it with credentials would give an unattributable context the same
+  access as a named one.
+- Anything that is not a bare `http(s)://host[:port]` — a path, query, fragment,
+  a non-http scheme, or any value carrying CR, LF, tab or a space.
+- `Access-Control-Allow-Origin: *` is never sent together with
+  `Access-Control-Allow-Credentials: true`, before or after this change.
+
+The flag is read with `settings.get_static(..., kind='bool')` — **file-based
+settings only**. A DB/Redis-backed `Setting` row (writable over REST with
+`manage_settings`) cannot arm it. An uncoercible value such as `"maybe"` fails
+closed to `False` and logs a coercion warning.
+
+The allowlist is still consulted **first**, so the two are additive rather than
+one shadowing the other: an allowlisted origin is echoed exactly as before, and
+entries that are not well-formed http(s) origins — `chrome-extension://…`,
+`capacitor://localhost` — keep working, because the well-formedness guard only
+applies to the arbitrary-echo branch.
+
+Enabling it logs a warning once per worker process at startup, alongside the
+existing `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` notice.
+
+**What an attacker gains.** With `BOUNCER_ALLOW_ANY_ORIGIN = True`, any website
+a visitor loads can drive the bouncer inside that visitor's browser: it can mint
+bouncer tokens bound to the visitor's IP, burn the visitor's per-IP rate-limit
+budget on `assess`/`event`/`message`, and — from any page that is same-site with
+the bouncer host, such as another tenant's subdomain — read that visitor's own
+risk assessment back, since `assess` returns `decision` and `risk_score` and
+`event` returns a `risk_action` derived from the device's `risk_tier`. That is a
+per-visitor bot-reputation oracle. `BOUNCER_PASS_COOKIE_DOMAIN` widens
+"same-site" to every subdomain it covers. Turning the flag back off is not
+immediate: `Access-Control-Max-Age: 86400` means already-cached preflights keep
+sending credentialed requests for up to 24 hours. Enable it only when your
+application validates the calling domain itself, and prefer
+`BOUNCER_ALLOWED_ORIGINS` whenever the set of domains is knowable.
+
+Two things the flag does **not** change, so they are not later misattributed to
+it. Every mojo cookie is `SameSite=Lax` and mojo REST auth is header-based
+(`Authorization`, never a cookie), so a genuinely cross-*site* caller sends
+`credentials: 'include'` requests that carry no cookies at all — the flag does
+not let anyone impersonate anyone. And the three public endpoints are already
+reachable and readable cross-origin today via the `*` fallback with
+`credentials: 'omit'`; a simple unpreflighted form POST can already reach them.
+The genuinely new exposure is same-site-different-origin, which is exactly the
+subdomain-tenant case.
+
 **Identity stitching across origins** — `mojo_device_uid` localStorage is
 per-origin. A static site at `marketing.example.com` embedding sentinel
 served from `auth.example.com` cannot read the auth host's localStorage —
@@ -612,7 +687,11 @@ volume.
 
 To onboard a new consumer:
 
-1. Add its origin to `BOUNCER_ALLOWED_ORIGINS` in the bouncer's settings.
+1. Add its origin to `BOUNCER_ALLOWED_ORIGINS` in the bouncer's settings. If
+   consumers bring their own domains and the set is not knowable at deploy
+   time, set `BOUNCER_ALLOW_ANY_ORIGIN = True` instead and read the security
+   tradeoff in "Cross-Origin Embedding" above first — prefer the allowlist
+   whenever the domains *are* knowable.
 2. (Optional) Create a `Group` with `auth_domain` set to the consumer's
    bouncer-page host, or instruct the consumer to pass `?group_uuid=<uuid>`
    on bouncer redirects. Configure per-group branding via the standard

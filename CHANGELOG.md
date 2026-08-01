@@ -4,6 +4,8 @@ feat: `SECRET_KEY_FALLBACKS` is now honored by mojo's own crypto — bouncer tok
 fix (security): filevault read `SECRET_KEY` through the DB-overridable settings path — a `Setting` row named `SECRET_KEY` (writable over REST with `manage_settings`) could silently re-key per-file wrapping at runtime. It now reads file-based settings only.
 fix (geoip, security): geoip threat detection was inert framework-wide — `is_known_attacker`/`is_known_abuser` were permanently `False` and blocklist hits never reached `threat_level`. Three separate breaks fixed; `geolocate_ip()` results gain a top-level `is_blocklisted`.
 chore (geoip): the geoip helpers now log through `logit` (level-tagged, routed to `mojo.log`/`error.log`/`debug.log`) instead of printing to stdout, and the missing-`geoip2` notice is warned once per process instead of on every lookup. `mojo.helpers.ua` — an empty stub that never had an implementation — was removed along with its documentation.
+feat (bouncer): new file-only setting `BOUNCER_ALLOW_ANY_ORIGIN` (default `False`) stops `BOUNCER_ALLOWED_ORIGINS` being consulted on the three public bouncer endpoints, for multi-tenant deployments whose caller domains are unknowable at deploy time. Unset behavior is unchanged. `verify_pass` and the admin endpoints are never covered.
+fix (bouncer): `page_type` on `assess`/`event` is clamped to 32 chars and type-guarded — a non-string value returned a 500 plus a level-12 incident from an unauthenticated endpoint, and an overlong one silently lost its `BouncerSignal` audit row.
 
 
 **fix (geoip, security)** — **threat detection never actually ran.** Three
@@ -86,6 +88,60 @@ every other `SECRET_KEY` consumer. **Before upgrading**, check for an existing
 `Setting` row named `SECRET_KEY`: any file wrapped while such a row was live is
 wrapped under the row's value, so move that value into `SECRET_KEY_FALLBACKS`
 to keep those files readable, then delete the row.
+
+**feat (bouncer)** — **`BOUNCER_ALLOW_ANY_ORIGIN`, for tenants whose domains you
+cannot know at deploy time.** `BOUNCER_ALLOWED_ORIGINS` is a settings-file list,
+so a multi-tenant platform whose customers point their own domains at their
+sites can never populate it correctly — and the failure is silent, because
+`mojo-bouncer.js` sends `credentials: 'include'` on every fetch, the browser
+rejects the response against `Access-Control-Allow-Origin: *` before the page
+sees it, and the JS falls through to `_allowThrough()`. The gate becomes a
+no-op. Set `BOUNCER_ALLOW_ANY_ORIGIN = True` and the request `Origin` is echoed
+back with `Access-Control-Allow-Credentials: true` instead of being tested
+against the allowlist.
+
+Deliberately bounded, in four ways:
+
+1. **Three endpoints only** — `assess`, `event`, `message`. `verify_pass` is
+   excluded: it is the sole carrier of `X-Bouncer-Muid` (a stable device id),
+   and it exists for nginx `auth_request`, which is server-to-server and ignores
+   CORS, so no browser client needs it. The permission-gated admin endpoints
+   (`device`, `signal`, `signature`) are excluded for the obvious reason — they
+   return device fingerprints, IPs, muids and geo. The public-path test is
+   derived from the route prefix plus a segment set rather than hardcoded
+   absolute paths, so `MOJO_APPEND_SLASH` cannot silently turn it into a no-op.
+2. **The allowlist is still tested first, unconditionally**, so an unset
+   deployment behaves exactly as before and allowlist entries that are not
+   well-formed http(s) origins (`chrome-extension://…`, `capacitor://localhost`)
+   keep working. The two are additive, not one shadowing the other.
+3. **`Origin: null` and malformed origins are still refused**, and
+   `Access-Control-Allow-Origin: *` can never co-occur with
+   `Access-Control-Allow-Credentials: true`.
+4. **Read with `settings.get_static(..., kind='bool')`** — file-based settings
+   only, so a `Setting` row cannot arm a CORS bypass at runtime, and an
+   uncoercible value fails closed with a warning. Enabling it logs a warning
+   once per worker at startup.
+
+**Understand the tradeoff before enabling it.** Any website a visitor loads can
+then drive the bouncer inside that visitor's browser: mint bouncer tokens bound
+to the visitor's IP, burn the visitor's per-IP rate-limit budget, and — from any
+page same-site with the bouncer host, such as another tenant's subdomain — read
+that visitor's own `decision`/`risk_score`/`risk_action` back as a per-visitor
+bot-reputation oracle. `BOUNCER_PASS_COOKIE_DOMAIN` widens "same-site" to every
+subdomain it covers. Turning it back off is not immediate:
+`Access-Control-Max-Age: 86400` keeps cached preflights credentialed for up to
+24 hours. Prefer `BOUNCER_ALLOWED_ORIGINS` whenever the domains are knowable.
+
+**fix (bouncer)** — **`page_type` on `assess`/`event` was neither length- nor
+type-checked.** `BouncerSignal.page_type` is `CharField(max_length=32)` and the
+audit-row insert is wrapped in `try/except`, so a value over 32 characters
+issued the token but silently lost its audit row. It is now clamped. The clamp
+is type-guarded rather than a bare slice: `page_type` is attacker-controlled
+JSON on an unauthenticated endpoint, and `5[:32]` raises `TypeError` out of the
+view into `dispatch_error_handler` — a 500 *plus* a level-12 `rest_error`
+incident carrying `request_data` and a stack trace, triggerable 60 times per IP
+per window. A non-string `page_type` now falls back to `'login'`, as it
+effectively did before.
 
 ## v1.2.64 - July 31, 2026
 
