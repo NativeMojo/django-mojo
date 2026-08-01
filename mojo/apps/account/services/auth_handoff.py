@@ -7,7 +7,8 @@ the URL.
 
 Token shape in Redis:
     key:   auth:handoff:<code>
-    value: JSON { "uid": <user_id>, "ip": <issuing_ip>, "dest": <destination> }
+    value: JSON { "uid": <user_id>, "ip": <issuing_ip>, "dest": <destination>,
+                  "gid": <group_id or absent> }
     TTL:   AUTH_HANDOFF_CODE_TTL seconds (default 60)
 
 The destination is validated at ISSUANCE — see
@@ -28,7 +29,7 @@ def get_ttl():
     return settings.get("AUTH_HANDOFF_CODE_TTL", 60, kind="int")
 
 
-def create_handoff_code(user, destination=None, ip=None):
+def create_handoff_code(user, destination=None, ip=None, group_id=None):
     """
     Issue a short-lived handoff code for a fully authenticated user.
 
@@ -37,6 +38,17 @@ def create_handoff_code(user, destination=None, ip=None):
         destination: The already-validated destination URL this code was minted
                      for. Recorded for audit only.
         ip:          Optional issuing IP for audit only — not enforced on consume.
+        group_id:    Confine this code's delivery to one group — it exchanges
+                     into a GroupScopedToken package instead of a JWT pair.
+                     UNLIKE `destination` and `ip`, this IS enforced on consume.
+
+    `gid` is the ONE encoding of the gating decision, and it is decided HERE,
+    at issuance, from the server-validated destination — never re-derived at
+    exchange. Re-resolving would let a resolver that breaks inside the code's
+    TTL turn a gated code back into a platform JWT. A code minted before a mode
+    flip is therefore honored under the decision that was taken when it was
+    minted, in both directions, for at most AUTH_HANDOFF_CODE_TTL seconds. A
+    code minted before this feature existed simply has no `gid` key.
 
     Returns:
         code string (32 hex chars).
@@ -51,7 +63,10 @@ def create_handoff_code(user, destination=None, ip=None):
     stored here answers "where was this code sent?" after the fact.
     """
     code = uuid.uuid4().hex
-    data = json.dumps({"uid": user.id, "ip": ip or "", "dest": destination or ""})
+    payload = {"uid": user.id, "ip": ip or "", "dest": destination or ""}
+    if group_id:
+        payload["gid"] = int(group_id)
+    data = json.dumps(payload)
     get_connection().setex(f"{_KEY_PREFIX}{code}", get_ttl(), data)
     return code
 

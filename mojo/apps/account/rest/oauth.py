@@ -23,6 +23,7 @@ from mojo.apps.account.models.oauth import OAuthConnection
 from mojo.apps.account.rest.user import jwt_login
 from mojo.apps.account.services import extensions as account_extensions
 from mojo.apps.account.services import auth_config
+from mojo.apps.account.services import redirect_allowlist
 from mojo.apps.account.services.oauth import get_provider
 from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
@@ -49,16 +50,56 @@ def _get_redirect_uri(request, provider_name):
 
 def _validate_redirect_uri(request, redirect_uri):
     """
-    Validate redirect_uri against the allowlist.
+    Validate redirect_uri against the allowlist, matched as a URL.
 
-    Sources (combined):
-      - ALLOWED_REDIRECT_URLS setting (list of allowed URL prefixes)
-      - group.metadata["allowed_redirect_urls"] (traverses parent chain)
+    TWO sources, combined:
+      - the ALLOWED_REDIRECT_URLS setting — deployment configuration;
+      - `group.metadata["allowed_redirect_urls"]` for the group this request
+        resolved to, read with `get_metadata_value`, which walks the parent
+        chain so a child group inherits an ancestor's entries.
+
+    The per-group source is tenant-writable and caller-selectable, and that is a
+    deliberate, accepted decision — not an oversight. Plain `metadata` is
+    writable by any holder of `manage_group` on that group, and `request.group`
+    is chosen by the caller via `?group=<id>` / `?group_uuid=<uuid>` on this
+    public endpoint. It is kept because django-mojo is a REST platform third
+    parties integrate with: a white-label tenant has to be able to self-serve
+    the origin its own login page lands on, without a deploy of the platform.
+    What bounds the residual risk is the matcher below — an entry authorizes the
+    exact host it names and nothing else, so a tenant can bless an origin it
+    already controls and cannot reach any other. Domain verification, moving the
+    key under `metadata["protected"]`, and scoping the read to group members
+    were each considered and declined (the last is impossible anyway on a public
+    endpoint whose whole purpose is a signed-out white-label login page).
+
+    Matching is `redirect_allowlist.matches_allowlist` — the same parsed-URL
+    matcher the handoff destination allowlist uses, and it applies to BOTH
+    sources. It replaced a bare `redirect_uri.startswith(entry)`, which
+    terminated on nothing: an entry of `https://app.example.com` admitted
+    `https://app.example.com.evil.tld/`, a host the attacker registers, and this
+    endpoint is public, so the resulting token-theft chain needed no credential
+    to start. Wildcard (`*.`) entries are NOT honored here — see the module
+    docstring in the service.
+
+    `kind="list"` is load-bearing, not cosmetic. This key resolves through
+    `settings.get`, which reads a DB-backed `Setting` row BEFORE the file
+    setting, and `Setting.value` is a `TextField` — so a deployment configuring
+    the key that way holds a STRING. The old `list(...)` shattered it into
+    single characters, leaving `startswith('h')` true for every `http(s)://` URL
+    on earth; the coercion turns both the JSON-array and bare-string forms into
+    the list they spell.
+
+    The `list(...)` copy is load-bearing too. `settings.get(kind="list")` hands
+    back the live settings list object when the value is already a list, so
+    extending it in place would append the group's entries to the deployment's
+    global setting — permanently, and growing on every request.
 
     Raises ValueException (400) if the URI is not on the allowlist or if no
     allowlist is configured at all.
     """
-    allowed = list(settings.get("ALLOWED_REDIRECT_URLS", []) or [])
+    allowed = list(settings.get("ALLOWED_REDIRECT_URLS", [], kind="list") or [])
+    # getattr + truthiness, never hasattr: request.group may be an objict-shaped
+    # stand-in, and objict answers hasattr True for every name.
     group = getattr(request, "group", None)
     if group:
         group_allowed = group.get_metadata_value("allowed_redirect_urls")
@@ -70,11 +111,77 @@ def _validate_redirect_uri(request, redirect_uri):
             "redirect_uri is not permitted: no ALLOWED_REDIRECT_URLS configured"
         )
 
-    for prefix in allowed:
-        if redirect_uri.startswith(prefix):
-            return
+    if redirect_allowlist.matches_allowlist(
+            redirect_uri, allowed, source="ALLOWED_REDIRECT_URLS"):
+        return
 
+    # ONE line per refused request, with the value bounded: /begin is public and
+    # unauthenticated, and the DM-042 throttle short-circuits for anonymous
+    # callers, so an unbounded per-request log line is free amplification.
+    logit.warning(
+        "oauth",
+        f"refused redirect_uri {redirect_uri!r:.200} — not on ALLOWED_REDIRECT_URLS")
     raise merrors.ValueException("redirect_uri is not on the allowlist")
+
+
+def _refuse_gated_destination(request, url):
+    """Refuse an OAuth landing URL that sits on a GATED destination host.
+
+    Two gated surfaces, two answers. The handoff leg DELIVERS a group-scoped
+    token to a gated destination; this leg REFUSES, because it cannot safely
+    deliver one. `on_oauth_complete` ends at `jwt_login` and hands a full
+    access+refresh pair to whichever origin posted to it, and routing it
+    through a scoped delivery instead is not available: `_find_or_create_user`
+    can create a brand-new account, add a GroupMember from the client-supplied
+    `state.group_uuid`, fire USER_REGISTERED_HANDLER and persist provider
+    tokens BEFORE a membership pre-flight could fail — a 403 after four side
+    effects — and auto-joining the visitor to avoid that would be a membership
+    grant driven by a URL.
+
+    So under `enforce` a gated site that runs its OWN OAuth callback page loses
+    OAuth login and must move that flow to the hosted auth pages, where OAuth
+    already works and already routes through the gated handoff. `monitor` files
+    an incident and proceeds, so a deployment learns which destinations that
+    hits BEFORE it binds.
+
+    Same-host is exempt: the hosted auth pages' OAuth buttons set the landing
+    URL to the page's own URL, and those pages are served white-label on the
+    tenant's own host — so with a zone-wide gating entry this would otherwise
+    refuse a tenant's own Google button. A JWT landing in the auth origin's own
+    storage is exactly the outcome the refusal reasons is safe.
+
+    The refusal message is the string `/begin` ALREADY emits for an unlisted
+    URI, so gated-versus-unlisted is not an oracle.
+    """
+    from mojo.apps.account.services import handoff_group
+    mode = handoff_group.get_mode()
+    if mode == handoff_group.MODE_OFF:
+        return
+    enforcing = mode == handoff_group.MODE_ENFORCE
+
+    if handoff_group.is_own_host(request, url):
+        ok, group = handoff_group.resolve_group(url, request=request)
+        if ok and group is not None:
+            reason = (
+                f"AUTH_HANDOFF_GROUP_TOKEN_HOSTS gates {url!r}, which is the "
+                f"auth origin serving this very request. An auth-page origin "
+                f"must never be gated — the OAuth flow that lands there is the "
+                f"hosted one, and the visitor's tokens already live in this "
+                f"origin's storage. Remove the entry.")
+            logit.error("oauth", reason)
+            handoff_group.report_misconfigured(
+                reason, "own_host", destination=url, request=request)
+        return
+
+    ok, group = handoff_group.resolve_group(url, request=request)
+    if ok and group is None:
+        return
+    if ok:
+        handoff_group.report_oauth(url, group, request=request, enforced=enforcing)
+    else:
+        handoff_group.report_refusal(url, request=request, enforced=enforcing)
+    if enforcing:
+        raise merrors.ValueException("redirect_uri is not on the allowlist")
 
 
 def _resolve_state_group(state_data):
@@ -217,8 +324,13 @@ def on_oauth_begin(request, provider):
 
     Optional query parameter:
       redirect_uri — frontend URL the browser should land on after the OAuth
-                     callback completes. Must be on the allowlist
-                     (ALLOWED_REDIRECT_URLS setting or group.metadata["allowed_redirect_urls"]).
+                     callback completes. Matched as a URL (scheme, host, port
+                     and a segment-bounded path prefix) against the allowlist:
+                     the ALLOWED_REDIRECT_URLS setting, plus — when this request
+                     resolved a group — that group's
+                     metadata["allowed_redirect_urls"], inherited up the parent
+                     chain. A shared string prefix is not enough (see
+                     _validate_redirect_uri).
                      Defaults to _get_redirect_uri().
 
     All providers redirect to the backend callback endpoint
@@ -244,6 +356,11 @@ def on_oauth_begin(request, provider):
         frontend_uri = custom_frontend_uri
     else:
         frontend_uri = _get_redirect_uri(request, provider)
+    # Covers BOTH branches deliberately. The `else` one is the load-bearing
+    # case: it derives the landing URL from the UNVALIDATED HTTP_ORIGIN header
+    # and never calls _validate_redirect_uri, so a caller with no redirect_uri
+    # param picks the destination with a request header.
+    _refuse_gated_destination(request, frontend_uri)
 
     # callback_uri = where the provider redirects (always our backend)
     origin = _get_origin(request)
@@ -290,6 +407,13 @@ def on_oauth_callback(request, provider):
 
     Peeks at state to find the frontend_uri, then bounces the browser there
     with code + state as query params. The frontend JS then calls /complete.
+
+    Deliberately NOT gated (see `_refuse_gated_destination`), and stated here
+    so it does not read as an oversight: this only 302s the browser with the
+    provider's authorization code, which is useless without our client secret.
+    The only actor who can spend it is our own /complete, which refuses. A
+    check here would replace a navigation with a raw JSON error for no
+    security gain.
     """
     # Google sends GET query params, Apple sends POST form data
     code = request.GET.get("code") or request.POST.get("code", "")
@@ -325,12 +449,14 @@ def on_oauth_callback(request, provider):
     # frontend_uri may already carry a query (e.g. the app's ?redirect=), so
     # merge rather than naively concatenating a second "?". Preserving that
     # query is what lets the post-login redirect target survive the OAuth
-    # round-trip. Drop any caller-supplied copies of the keys we set here:
-    # frontend_uri passed only an allowlist *prefix* check, so an attacker
-    # could smuggle e.g. ?code=EVIL into an allowed URL; since URLSearchParams
-    # .get() returns the first match, a duplicate placed before the real value
-    # would shadow it and sabotage the victim's login. Stripping them makes the
-    # server-set values the only ones present.
+    # round-trip. Drop any caller-supplied copies of the keys we set here: the
+    # allowlist match ignores the query entirely (it compares scheme, host,
+    # port and path), so an attacker can smuggle e.g. ?code=EVIL into an
+    # otherwise allowed URL; since URLSearchParams.get() returns the first
+    # match, a duplicate placed before the real value would shadow it and
+    # sabotage the victim's login. Stripping them makes the server-set values
+    # the only ones present. Still load-bearing after the matcher was
+    # tightened — do not remove it.
     parts = urlsplit(frontend_uri)
     preserved = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
                  if k not in redirect_params]
@@ -359,6 +485,13 @@ def on_oauth_complete(request, provider):
     state_data = svc.consume_state(state)
     if state_data is None:
         raise merrors.PermissionDeniedException("Invalid or expired OAuth state", 401, 401)
+
+    # The AUTHORITATIVE gating check, and it runs BEFORE any provider call.
+    # It survives a mode flip inside the state's TTL, covers a legacy state
+    # with no frontend_uri, and re-checks the caller's own origin — which is
+    # where the response body physically goes.
+    _refuse_gated_destination(request, state_data.get("frontend_uri"))
+    _refuse_gated_destination(request, _get_origin(request))
 
     code = request.DATA.get("code")
     # redirect_uri is bound to the state — use it for the token exchange.

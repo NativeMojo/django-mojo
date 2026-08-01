@@ -1,8 +1,28 @@
 from mojo.apps import metrics
 from mojo.apps.metrics import utils
 from mojo.helpers.settings import settings
+from mojo.helpers.request import identity_allows_group, is_override_user_session
 from objict import nobjict
 import mojo.errors
+
+
+def _global_perm(request, permission):
+    """`request.user.has_permission`, skipped for an assumed-member session.
+
+    TWO DIFFERENT RULES live in this module and must not be conflated:
+
+      * the tenant bound (identity_allows_group) applies to EVERY restricted
+        identity, unconditionally;
+      * this global short-circuit is skipped ONLY when the session ASSUMES a
+        member (an override ApiKey, or any group token) — exactly the case
+        where request.user is a real User whose untenanted platform-wide dict
+        would be consulted. For a reference-mode or unlinked ApiKey
+        request.user IS the ApiKey, so this read is the KEY's own
+        group-bounded dict; skipping it there would break working deployments.
+    """
+    if is_override_user_session(request):
+        return False
+    return request.user.has_permission(permission)
 
 
 def _check_group_account_permission(request, account, permission):
@@ -10,15 +30,21 @@ def _check_group_account_permission(request, account, permission):
         return False
     if not request.user.is_authenticated:
         raise mojo.errors.PermissionDeniedException()
-    if request.user.has_permission(permission):
-        return True
+    from mojo.apps.account.models import Group
     try:
-        from mojo.apps.account.models import Group
         group_id = int(account.split("-", 1)[1])
-        group = Group.objects.filter(id=group_id).first()
-        if group is None or not group.user_has_permission(request.user, permission, False):
-            raise mojo.errors.PermissionDeniedException()
     except (ValueError, TypeError):
+        raise mojo.errors.PermissionDeniedException()
+    group = Group.objects.filter(id=group_id).first()
+    # TENANT BOUND, before either grant path. This endpoint authorizes against
+    # an arbitrary caller-named group with no model-security instance re-bind,
+    # so a confined credential has to be pinned to its own group here or it
+    # reads any tenant its acting member can reach.
+    if not identity_allows_group(request, group):
+        raise mojo.errors.PermissionDeniedException()
+    if _global_perm(request, permission):
+        return True
+    if group is None or not group.user_has_permission(request.user, permission, False):
         raise mojo.errors.PermissionDeniedException()
     return True
 
@@ -29,7 +55,7 @@ def _check_user_account_permission(request, account, permission):
     if not request.user.is_authenticated:
         raise mojo.errors.PermissionDeniedException()
     # system-level permission can access user accounts
-    if request.user.has_permission(permission):
+    if _global_perm(request, permission):
         return True
     account_user_id = account.split("-", 1)[1]
     if str(request.user.pk) != account_user_id:
@@ -49,7 +75,7 @@ def check_view_permissions(request, account="public"):
         PermissionDeniedException: If user doesn't have proper permissions
     """
     if account == "global":
-        if not request.user.is_authenticated or not request.user.has_permission(["view_metrics", "metrics"]):
+        if not request.user.is_authenticated or not _global_perm(request, ["view_metrics", "metrics"]):
             raise mojo.errors.PermissionDeniedException()
     elif _check_group_account_permission(request, account, ["view_metrics", "metrics"]):
         return
@@ -60,7 +86,7 @@ def check_view_permissions(request, account="public"):
         if not perms:
             raise mojo.errors.PermissionDeniedException()
         if perms != "public":
-            if not request.user.is_authenticated or not request.user.has_permission(perms):
+            if not request.user.is_authenticated or not _global_perm(request, perms):
                 raise mojo.errors.PermissionDeniedException()
 
 
@@ -76,7 +102,7 @@ def check_write_permissions(request, account="public"):
         PermissionDeniedException: If user doesn't have proper permissions
     """
     if account == "global":
-        if not request.user.is_authenticated or not request.user.has_permission(["write_metrics", "metrics"]):
+        if not request.user.is_authenticated or not _global_perm(request, ["write_metrics", "metrics"]):
             raise mojo.errors.PermissionDeniedException()
     elif _check_group_account_permission(request, account, ["write_metrics", "metrics"]):
         return
@@ -87,7 +113,7 @@ def check_write_permissions(request, account="public"):
         if not perms:
             raise mojo.errors.PermissionDeniedException()
         if perms != "public":
-            if not request.user.is_authenticated or not request.user.has_permission(perms):
+            if not request.user.is_authenticated or not _global_perm(request, perms):
                 raise mojo.errors.PermissionDeniedException()
     else:
         # "public" reads are open, but writes are not: every distinct slug is a
@@ -99,7 +125,7 @@ def check_write_permissions(request, account="public"):
         if perms == "public":
             return
         required = perms if perms else ["write_metrics", "metrics"]
-        if not request.user.is_authenticated or not request.user.has_permission(required):
+        if not request.user.is_authenticated or not _global_perm(request, required):
             raise mojo.errors.PermissionDeniedException()
 
 

@@ -203,6 +203,17 @@ def test_allowlist_refuses_confusable_hosts(opts):
                      "a suffix-extended host must not be admitted (example.com.evil.tld)")
         assert_false(ra.is_allowed_destination("https://example.com@evil.tld/"),
                      "userinfo confusable must not be admitted (real host is evil.tld)")
+        # The one-sided parser differential: `_HOST_CHARS` is applied to
+        # `parts.hostname`, which has ALREADY discarded the userinfo, so a
+        # backslash hidden before the `@` never reaches it. Python reads the
+        # host as example.com; a WHATWG browser terminates the authority at the
+        # backslash and navigates to evil.tld. The mirror form below (backslash
+        # inside the host) was always refused — this one was not.
+        assert_false(ra.is_allowed_destination("https://evil.tld\\@example.com/"),
+                     "a backslash before the @ must not be admitted — Python "
+                     "parses the host as example.com, a browser as evil.tld")
+        assert_false(ra.is_allowed_destination("https://example.com\\.evil.tld/"),
+                     "a backslash inside the authority must not be admitted")
         assert_false(ra.is_allowed_destination("https://evil.tld/?to=https://example.com/"),
                      "an allowed URL in the query string must not admit a foreign host")
         assert_false(ra.is_allowed_destination("https://notexample.com/"),
@@ -648,11 +659,68 @@ def test_back_param_is_scheme_guarded(opts):
     assert_true("backUrl: paramBack," not in src,
                 "the raw ?back= value must not be published on _matConfig either — "
                 "page scripts read backUrl straight into an href")
-    assert_true("function safeBackHref(" in src,
-                "auth_base.html must define the safeBackHref guard")
+    assert_true("function safeNavUrl(" in src,
+                "auth_base.html must define the safeNavUrl guard")
     assert_true('resolved.protocol !== "http:"' in src and 'resolved.protocol !== "https:"' in src,
-                "safeBackHref must decide on the RESOLVED protocol, so javascript:, "
+                "safeNavUrl must decide on the RESOLVED protocol, so javascript:, "
                 "data: and protocol-relative URLs are all refused")
-    assert_eq(src.count("safeBackHref(paramBack)"), 2,
+    assert_eq(src.count("safeNavUrl(paramBack)"), 2,
               "both ?back= sinks (the hero link href and _matConfig.backUrl) must "
-              "run through safeBackHref")
+              "run through safeNavUrl")
+
+
+# ---------------------------------------------------------------------------
+# ?redirect= XSS regression
+#
+# Same shape as the ?back= test above, and for the same reason: the sink is
+# client-side JS with no JS runtime in the suite, so the template source is
+# what is checkable and what actually regressed. The difference is that the
+# post-login destination reaches window.location.href at TWO sinks inside
+# _mat.redirect() — direct navigation and post-handoff — so the assertions
+# below pin that ONE guard runs before either of them, not two copies that
+# can drift apart.
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("?redirect= cannot carry a javascript: URL (XSS regression)")
+def test_redirect_param_is_scheme_guarded(opts):
+    from pathlib import Path
+    import mojo
+
+    tpl = (Path(mojo.__file__).resolve().parent
+           / "apps" / "account" / "templates" / "account" / "auth_base.html")
+    assert_true(tpl.exists(), f"auth_base.html should exist at {tpl}")
+    src = tpl.read_text(encoding="utf-8")
+
+    assert_true("function safeNavUrl(" in src,
+                "auth_base.html must define the shared safeNavUrl guard")
+    assert_true("safeBackHref" not in src,
+                "the ?back= guard must be generalized in place, not left behind "
+                "alongside a second copy for ?redirect= to drift from")
+    assert_eq(src.count('resolved.protocol !== "http:"'), 1,
+              "there must be exactly ONE scheme check in the template — a second "
+              "implementation is what drifts")
+    assert_true('resolved.protocol !== "http:"' in src and 'resolved.protocol !== "https:"' in src,
+                "safeNavUrl must decide on the RESOLVED protocol, so javascript:, "
+                "data:, scheme-case and tab-padded variants are all refused")
+    assert_true("var target = redirectTo;" not in src,
+                "the raw ?redirect=/?next=/?returnTo= value must never become the "
+                "navigation target — a javascript: URL there executes on the auth "
+                "origin, whose localStorage holds the visitor's tokens")
+
+    body = src.split("redirect: function ()", 1)[1].split("onAuthSuccess:", 1)[0]
+    guard_at = body.find("safeNavUrl(redirectTo)")
+    first_sink = body.find("window.location.href = ")
+    assert_true(0 <= guard_at < first_sink,
+                "the scheme guard must run BEFORE the first window.location.href "
+                f"sink in _mat.redirect() (guard at {guard_at}, sink at {first_sink})")
+    assert_true("showMessage" in body[guard_at:first_sink]
+                and '"error"' in body[guard_at:first_sink],
+                "a refused destination must show an error, not silently do nothing")
+    assert_eq(body.count("window.location.href = target"),
+              body.count("window.location.href = "),
+              "EVERY navigation sink in _mat.redirect() must go to the guarded "
+              "target — a new sink on the raw value reopens the hole")
+
+    assert_true('params.get("redirect")' in src and 'params.get("next")' in src
+                and 'params.get("returnTo")' in src,
+                "all three destination aliases must still feed the guarded path")

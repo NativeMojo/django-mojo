@@ -14,6 +14,342 @@
 
 ## Unreleased
 
+**fix (account)** — **a group-scoped auth portal no longer drops the forwarded
+`?redirect=` on the hop to passkey enrollment.** `auth_base.html` interpolated
+the server-built `auth_url` / `register_url` / `passkey_url`, `api_base` and
+`theme.success_redirect` into JS string literals with no `|escapejs`. `<script>`
+is a raw-text element, so the HTML parser never decodes entities inside it: once
+a URL carried two or more query params, the `&` joining them was autoescaped to
+`&amp;` and the literal reached the browser holding that verbatim. All five now
+carry `|escapejs`.
+
+- **What was actually broken:** the register → passkey-enrollment hop, which
+  assigns `cfg.passkeyUrl` straight to `window.location.href`. The destination
+  parsed `amp;redirect=` instead of `redirect=` and silently dropped the
+  forwarded param, so the visitor landed on the group's `success_redirect` (or
+  `/`) rather than where they came from. Also the post-auth destination
+  (`ON_SUCCESS`) whenever a group configures a `theme.success_redirect` that
+  itself carries two or more query params.
+- **Not broken, and deliberately unchanged:** the login ↔ register switcher
+  links. Those are `<a href>` attributes, which the HTML parser *does*
+  entity-decode, so they always navigated correctly. They stay on plain
+  autoescaping — adding `escapejs` to an attribute would inject a literal
+  backslash-u escape into the link.
+- **The common case is untouched.** With `?group_uuid=` as the only param there
+  is no `&` at all; the rendered page source now spells `=` and `-` as JS
+  escapes, but the string the browser builds is byte-identical to before.
+- **For out-of-tree consumers:** `window._matConfig.authUrl` / `.registerUrl` /
+  `.passkeyUrl` and the post-auth `redirectTo` now hold the real URL — a reader
+  that had learned to expect `&amp;` there will now see `&`. And anything
+  scraping the rendered page source with a naive regex must decode the JS
+  escapes first.
+- **Not a security fix.** Autoescaping still neutralized `<` and `"`, so there
+  was never a string or tag breakout — this was a correctness bug.
+- **If you override `auth_base.html`**, the same rule applies to any context
+  value you interpolate into a JS string literal — written up in
+  [auth_pages.md § Interpolating context into inline JS](docs/django_developer/account/auth_pages.md#interpolating-context-into-inline-js--always-escapejs).
+
+**fix (account)** — **a custom URL scheme is a usable allowlist entry again
+(mobile deep links).** The parsed-URL matcher below accepted only `http` and
+`https`, which quietly made `myapp://callback` an unusable entry and 400'd every
+native-app OAuth flow that landed on one. A custom scheme is matched under its
+own, deliberately narrower rules — **exact case-folded scheme + exact
+case-folded authority, compared byte-for-byte, + the same segment-bounded path
+prefix**. There is no default-port logic (custom schemes have no default ports),
+no DNS-shaped hostname rules (an authority there is an app-registered label, not
+a host), and no `*.` wildcards — a `*.` in a custom-scheme entry is just an
+authority nothing equals. Query and fragment are ignored, and the backslash
+guard applies to every scheme.
+
+- **Supported shapes:** `myapp://callback` (authority `callback`, whole-path),
+  `myapp://callback/path` (that path and anything under it on a `/` boundary),
+  and `com.example.app:/oauth` — which is the **same value** as
+  `com.example.app:///oauth`, both being an empty authority with path `/oauth`.
+  An empty authority is a real value, not a wildcard: it never equals
+  `callback`.
+- **Refused, fail-closed:** the opaque form with no `//` and no leading `/`
+  (`myapp:callback`, `mailto:a@b`) — there is no way to tell an authority from a
+  path there; a bare `myapp:` or `myapp://` with neither authority nor path,
+  which as an entry would authorize a whole scheme; and `javascript:`, `data:`,
+  `vbscript:`, which are a navigation sink and never a destination.
+- **The two families never cross.** A custom-scheme entry cannot admit an
+  `http(s)` URL and an `http(s)` entry cannot admit a deep link, so the web path
+  is behaviorally identical to what the entry below shipped — not one URL wider.
+- **Applies to both allowlists**, since they share one matcher:
+  `ALLOWED_REDIRECT_URLS` and `AUTH_HANDOFF_ALLOWED_URLS`. Intended — the
+  alternative is a per-caller scheme policy, which is the drift the shared
+  implementation exists to prevent. A handoff code is a bearer credential, so
+  treat a deep-link handoff entry with the same care as a web one: the OS
+  decides which installed app receives that scheme.
+- **The bundled hosted auth pages still refuse a custom scheme on
+  `?redirect=`.** This changes the server-side *matcher* only; `auth_base.html`'s
+  `safeNavUrl` guard is unchanged and admits `http`/`https`/relative only, so it
+  refuses a custom-scheme post-login destination — and a custom-scheme
+  `theme.success_redirect` — in the browser, before any request. Listing
+  `myapp://callback` in `AUTH_HANDOFF_ALLOWED_URLS` therefore buys a valid
+  destination for a **custom frontend** calling `POST /api/auth/handoff` itself,
+  not for the shipped pages. The OAuth `redirect_uri` on `/begin` is a different
+  parameter on a different endpoint and never passes through that browser guard,
+  so a native-app OAuth flow does work.
+- **No `http(s)` migration is needed.** An interim build of the entry below
+  carried a pre-upgrade action item telling operators to audit
+  `ALLOWED_REDIRECT_URLS` for non-`http(s)` entries and move those flows to
+  HTTPS universal/app links. That advice never shipped in a release; it is
+  withdrawn, and it has been removed from the entry below rather than reworded.
+
+**BREAKING (security)** — **the OAuth `redirect_uri` allowlist matches a URL,
+not a string prefix.** `GET /api/auth/oauth/<provider>/begin` validated a
+caller-supplied `redirect_uri` with `redirect_uri.startswith(entry)`. A prefix
+test terminates nowhere, so an entry of `https://app.example.com` admitted
+`https://app.example.com.evil.tld/` — a host the attacker registers. `/begin` is
+public, so the whole chain was pre-auth: call `/begin` server-side with your own
+landing URL, hand the victim the returned provider `auth_url`, and the callback
+302s their `code` + `state` to your page, which posts them to `/complete` and
+receives the victim's access + refresh pair. Matching now goes through
+`redirect_allowlist.matches_allowlist` — the same parsed-URL matcher the
+auth-handoff destination allowlist uses.
+
+- **BOTH sources are matched this way.** The effective allowlist is
+  `ALLOWED_REDIRECT_URLS` plus the resolved group's
+  `Group.metadata["allowed_redirect_urls"]` (inherited up the parent chain), and
+  the parsed-URL match applies to entries from either — so everything below
+  applies to a tenant's per-group entries as well as to the setting. Audit both
+  when you upgrade.
+- **Custom-scheme entries keep working** — see the entry above. A mobile deep
+  link (`myapp://callback`) is still a usable entry; it is matched on exact
+  scheme + exact authority + the same segment-bounded path prefix. No audit or
+  migration is needed for those.
+- **Newly refused** (a `redirect_uri` that used to pass): a host that merely
+  begins with an entry (the fix); a non-default port unless listed
+  (`https://app.example.com:8443`); a path prefix not terminating on a `/`
+  boundary (`/application` under an entry of `/app`); a host this deployment
+  cannot read the same way a browser does — backslash, percent-encoding,
+  unicode IDN (list punycode), bracketed IPv6, trailing dot; and, among
+  non-`http(s)` values, the opaque form with no `//` and no leading `/`
+  (`myapp:callback`, `mailto:a@b`), a bare `myapp:` / `myapp://`, and
+  `javascript:` / `data:` / `vbscript:`.
+- **Newly admitted:** host case variation (`https://APP.Example.com/x` against
+  `https://app.example.com` — RFC-correct), and entries carrying a query or
+  fragment, which are now ignored on both sides instead of making the entry
+  unmatchable.
+- **`*.` wildcard entries stay inert here.** Nothing could `startswith("*")`, so
+  such an entry was already dead config; it is now skipped with a log line
+  naming it. `AUTH_HANDOFF_ALLOWED_URLS` still supports `*.` — activating it in
+  the OAuth list inside a change that tightens everything else would widen an
+  allowlist no operator re-consented to.
+- **Also fixed, and independently total: a string-valued `Setting` row is no
+  longer *no allowlist at all*.** `ALLOWED_REDIRECT_URLS` resolves through
+  `settings.get`, which reads a DB-backed `Setting` row **before** the file
+  setting, and `Setting.value` is a `TextField`. The old code called `list()` on
+  that string, shattering it into single characters — after which
+  `startswith('h')` was true for every `http(s)://` URL on earth, and
+  `https://totally.evil.tld/steal` was admitted. It is now read with
+  `kind="list"`, which coerces both the JSON-array and the comma-separated form
+  into the list they spell. Any deployment configuring this key via a `Setting`
+  row was running with the allowlist effectively disabled.
+- **Unchanged:** both refusal strings byte-for-byte (`"redirect_uri is not on
+  the allowlist"` is reused verbatim by the gated-destination refusal, so
+  gated-versus-unlisted stays indistinguishable), the `400` status, the response
+  shape, the no-`redirect_uri` branch, and `/callback` + `/complete` — including
+  the callback's `code`/`state` smuggle-strip, which is still load-bearing
+  because the match ignores the query.
+
+**fix (security)** — **the shared destination matcher refuses a backslash
+anywhere in a URL.** `redirect_allowlist._split` applied its host-charset test
+to `parts.hostname`, which has already discarded the userinfo — so
+`https://evil.tld\@app.example.com/` reached it as a clean `app.example.com`
+while a WHATWG browser terminates the authority at the backslash and navigates
+to `evil.tld`. The mirror form (`app.example.com\.evil.tld`) was already
+refused, so the hole was one-sided. The sibling `handoff_group._bare_host`
+already carried this guard; the matcher now does too, which closes the
+**auth-handoff** destination allowlist for that shape as well. No other
+allow/deny answer changes. Not a live OAuth theft today — `on_oauth_callback`
+returns an `HttpResponseRedirect` and Django's `iri_to_uri` percent-encodes the
+backslash, restoring agreement — but that leg was saved by Django's encoding,
+not by the matcher.
+
+**feat (account/security)** — **A handoff destination can be *gated*: it
+receives a group-scoped token instead of a platform JWT.** Opt-in, default
+**off**, and no existing response changes. When a deployment declares a
+destination host gated, a code minted for it exchanges into a `gt1.` package —
+`access_token`, `token_type`, `expires_in`, `group`, `user`, and **no
+`refresh_token` key at all** — confined to one group, with no route back to a
+platform JWT. Every other destination, and every deployment that sets nothing,
+behaves byte-for-byte as before.
+
+```python
+AUTH_HANDOFF_GROUP_TOKEN_MODE  = "enforce"      # off (default) / monitor / enforce
+AUTH_HANDOFF_GROUP_TOKEN_HOSTS = {"tenant-a.example.com": "<group uuid>"}
+```
+
+- **Decided at the mint, honored at the exchange, never re-derived.** The
+  gating decision is taken in `POST /api/auth/handoff` from the
+  already-validated `redirect_uri`, stamped into the Redis payload, and read
+  back at `POST /api/auth/exchange` without consulting the mode or the
+  destination again — so a resolver that breaks inside the code's TTL cannot
+  turn a gated code back into a JWT. A code minted before a mode flip is
+  honored under the old decision, in both directions. **Deploy the whole fleet
+  before setting the mode**: an older server ignores the stamp.
+- **The matcher is a deny rule and deliberately not the destination
+  allowlist's.** Entries are hosts (scheme, port and path are ignored), and one
+  entry covers the host and every subdomain at any depth — so gating an apex
+  gates the whole zone. A host that cannot be read unambiguously (backslash,
+  unicode IDN, bracketed IPv6, any IP-literal encoding, a single label) is
+  refused rather than treated as ungated, and a defective entry refuses every
+  handoff until it is fixed. List IDN hosts in punycode.
+- **`enforce` requires `AUTH_HANDOFF_ALLOWED_URLS` or `AUTH_HANDOFF_RESOLVER`
+  and refuses EVERY handoff without one** (400 + a level-2 incident). A deny
+  map cannot enumerate "every host that is not mine", so that combination would
+  ship JWT pairs while the operator believed gating was on. Necessary but not
+  sufficient — an allowlist-admitted destination that matches no gating entry
+  files `auth:handoff_group_token_unmapped`; gating is complete only when the
+  two are co-extensive per tenant zone.
+- **OAuth completion refuses a gated destination** rather than handing it a JWT
+  pair, reusing `/begin`'s existing `"redirect_uri is not on the allowlist"`.
+  A gated site running its **own** OAuth callback page loses OAuth login under
+  `enforce` and must move that flow to the hosted auth pages — the one place
+  where turning gating on can break a working integration, which is why
+  `monitor` names every such destination in the feed first. The auth origin's
+  own host is exempt, so a zone-wide entry cannot refuse a tenant's own
+  white-label Google button.
+- **Superusers can never receive a group token**, so they cannot sign into a
+  gated destination through this flow at all (403 at the mint). Realtime /
+  WebSocket is out too — bearer handlers there are called with no request, and
+  group-token validation fails closed on exactly that.
+- **A gated exchange is a login**: geofence, `last_login`, a `UserLoginEvent`
+  with `source="handoff:grouptoken"`, and `USER_LOGIN_HANDLER` all fire. It
+  deliberately performs **no** `webapp_url` metadata write — `webapp_base_url`
+  and `Origin` on an exchange come from the gated site's own backend, so
+  honoring them would let a tenant overwrite platform-account metadata for
+  every visitor. `GROUP_TOKEN_TTL` governs `expires_in`;
+  `org.metadata["access_token_expiry"]` is ignored.
+- **All three settings are file-only** (`settings.get_static`) on purpose: a
+  DB-backed `Setting` row is writable through the settings REST plane, and a
+  remotely-writable mode would let settings-write access silently downgrade
+  every gated destination.
+- **Gating is forward-only.** It does not evict JWTs already sitting in a
+  newly-gated origin's storage; use `POST /api/auth/sessions/revoke` or wait
+  out `JWT_REFRESH_TOKEN_EXPIRY`.
+- **Client (`mojo-auth.js`)**: `saveTokens()` now **clears** the stored refresh
+  token when a response carries none (verified behavior-neutral against every
+  current caller, but a real semantic change — it is what stops a stale refresh
+  token from upgrading a scoped session); two new `localStorage` keys
+  `token_type` and `token_expires_at`, cleared by `logout()` along with the
+  other two; new `getTokenType()`; `getAuthHeader()` emits `grouptoken` for a
+  `gt1.` token; `isTokenExpired()` is kind-aware and fails closed; and
+  `refreshToken()` / `requestHandoffCode()` reject under a group session.
+  `token_type` is deliberately **absent** from JWT responses — `/api/login` and
+  `/api/refresh_token` keep their exact key sets.
+- Honest scope: gating is least-privilege for a cooperating tenant and
+  containment for a compromised one (XSS on a tenant page reaches a scoped
+  token, not a platform JWT). It is **not** a defense against a malicious
+  tenant, who can host their own login form and collect the password outright.
+
+**fix (account/security)** — **`?redirect=` on the hosted auth pages can no
+longer carry a `javascript:` URL.** `auth_base.html` read
+`?redirect=`/`?next=`/`?returnTo=` straight from the query string and assigned
+it to `window.location.href` at **both** sinks in `_mat.redirect()` — the
+direct-navigation branch, which does not consult the server, and the
+post-handoff one — with no protocol check. On the shipped default the server
+mints a handoff code for any destination (monitor mode), so a crafted link ran
+attacker script on the auth origin: the origin whose `localStorage` holds the
+visitor's tokens. `?back=`'s scheme guard is now **shared** by both parameters
+rather than copied — one implementation, generalized in place and renamed
+`safeNavUrl` — and it is applied once at the destination-resolution point, so a
+value that does not resolve to `http`/`https` is refused, the page navigates
+nowhere, and it shows an error. A malformed URL is refused now too; it used to
+fall through and navigate to the raw string. The host is deliberately **not**
+allowlisted: a cross-origin destination is legitimate and the scheme check is
+what closes the hole — host restriction remains the separate opt-in
+`AUTH_HANDOFF_ALLOWED_URLS`.
+
+- **Non-web schemes are refused too** — `mailto:`, `tel:`, and custom app
+  schemes such as `myapp://home`. A deployment that used `?redirect=` to bounce
+  a visitor into a native app must point it at an `https` universal/app link.
+- **This also covers the group's `theme.success_redirect`**, which is the
+  destination when no param is present and is tenant-writable and unvalidated. A
+  group whose success redirect uses a custom app scheme dead-ends sign-in on
+  **every** attempt, not just on crafted links. Enforcing deployments already
+  behaved this way, because a custom scheme was then unmatchable against any
+  allowlist entry — as of the custom-scheme entry above it *is* matchable, so
+  this browser-side guard is now the only thing refusing it, in both modes and
+  regardless of what the allowlist says.
+
+**feat (account)** — **`Authorization: grouptoken <t>` — a bearer that
+authenticates as a real user but is capped at ONE group.** The only bearer that
+authenticated as a person was a platform JWT, which grants everything that
+account can reach in every group it belongs to; handing one to JavaScript on a
+tenant-controlled page hands the tenant a platform credential for every visitor.
+A group token resolves authorization **only** through that user's membership in
+one signed group.
+
+- Format `gt1.<b64payload>.<sig>`, HMAC-SHA256 over `"gt1." + payload` with
+  `user.get_auth_key()`. Stateless — no table, no row per token, no migration.
+- **Not a JWT, deliberately:** `jwt.decode` cannot parse the format, so neither
+  a `bearer` replay nor `POST /api/refresh_token` can trade one up.
+- Minting is **service-level only** — `group_token.mint(user, group)`. No REST
+  endpoint mints one; login and `auth/handoff` are unchanged. `mint` refuses
+  superusers, inactive users, effectively-inactive groups, and anything but
+  direct active membership.
+- Revocation: `group.bump_group_token_epoch()` (also the new
+  `revoke_group_tokens` POST_SAVE_ACTION on `Group`) kills every token for that
+  group; rotating `auth_key` kills every token for that user. Membership
+  removal, group/ancestor deactivation and user deactivation all revoke
+  immediately. The epoch lives in `metadata.protected`, so a tenant group admin
+  cannot rewind it over REST.
+- **Opt-in per deployment.** Nothing changes until `AUTH_BEARER_HANDLERS` gains
+  `{"grouptoken": "mojo.apps.account.services.group_token.validate_token"}` and
+  `AUTH_BEARER_NAME_MAP` gains `"grouptoken": "user"`. Both settings replace
+  their defaults **wholesale** — always write the complete NAME_MAP
+  (`{"bearer": "user", "apikey": "user", "grouptoken": "user"}`); declaring only
+  the new entry silently un-maps JWT and apikey auth.
+- New setting `GROUP_TOKEN_TTL` (default `3600`). No refresh path.
+- Confinement: strict equality with the signed group (**no descendants**, unlike
+  an ApiKey). `Group` records are opaque — detail *and* list, own group
+  included. Groupless models are denied outright, `ALLOW_API_KEY_GLOBAL`
+  included. `requires_global_perms` refuses one even with `allow_api_keys=True`.
+  Every `denies_key_backed_session` endpoint refuses one. `GET /api/user/me`
+  works; every User write is refused. WebSocket auth is refused.
+- See [Group-Scoped Tokens](docs/django_developer/account/auth.md#group-scoped-tokens),
+  including the "writing group-token-safe endpoints" guidance and its known gap
+  for third-party apps that read `request.user.has_permission` directly.
+
+**fix (security)** — **an ApiKey with `override_user=True` no longer inherits
+its acting member's untenanted global grants at the gates that bypass model
+security.** These endpoints authorize against a caller-named group and never get
+model security's instance re-bind, so a key issued for tenant A could reach
+tenant B whenever the member it assumes also belonged to B:
+
+- **metrics** — `account=group-<id>` reads/writes are now bounded by
+  `is_group_allowed` in addition to the grant check, and the
+  `request.user.has_permission` short-circuits are skipped for assumed-member
+  sessions. **Reference-mode and unlinked keys are unaffected** — there
+  `request.user` IS the key, so that read is the key's own group-bounded dict.
+- **chat** — every room-resolving endpoint in `rooms.py` and `messages.py` is
+  now tenant-bound, not just the two admin helpers. `room/join` was a
+  cross-tenant *write* (membership row, system message, realtime publish);
+  `room/members` and `room/messages` served rosters and bodies through the
+  groupless membership/message models. A room with no group (DMs) refuses a
+  confined credential. `GET /api/chat/rooms` is filtered to the credential's own
+  groups.
+- **`POST /api/group/member/invite`**, `GroupMember.can_change_permission` and
+  `ApiKey.can_change_permission` no longer honor the acting member's global
+  `manage_groups`/`manage_users`; authority falls through to the requester's own
+  member row in the group.
+- **docit search** derives visible groups from the request's confined credential
+  rather than only `request.api_key`.
+
+If a deployment relied on an override key reaching a second tenant's metrics or
+chat through the member it assumes, issue that tenant its own key.
+
+**BREAKING (security)** — **`ApiKey` no longer returns the live raw token on ordinary reads.** `GET /api/group/apikey` and `GET /api/group/apikey/<id>` previously included a working credential in every response, list included, to any caller holding `manage_group` / `manage_groups` / `groups`. The `token` extra has moved off the `default` graph onto a new opt-in `token` graph:
+
+- **Migrate:** read the token with `GET /api/group/apikey/<id>?graph=token`. Same permission bar as before — this narrows where the secret travels, not who may ask for it.
+- Each opt-in read writes an `api_key:token_read` `logit.Log` row (one per serialized key).
+- **Unchanged:** the creation response (`POST /api/group/apikey`) still returns `data.token`, and `POST /api/group/apikey/rotate` still returns the new token. `GET /api/group/apikey/me` never returned one.
+- An unrecognized graph name still falls back to `default`, so `?graph=tokens` returns `200` with no `token` field rather than an error.
+- `ApiKey` now sets `DENY_AI = True`: the assistant's model tools cannot read the table at all. `query_model` accepts a caller-supplied graph and does not filter sensitive values out of serialized output, so it could otherwise request the `token` graph.
+
 feat: `SECRET_KEY_FALLBACKS` is now honored by mojo's own crypto — bouncer token/pass-cookie verification and filevault unwrap/token-validation accept material produced under a rotated-out key, so a `SECRET_KEY` rotation no longer invalidates issued tokens or bricks stored files.
 fix (security): filevault read `SECRET_KEY` through the DB-overridable settings path — a `Setting` row named `SECRET_KEY` (writable over REST with `manage_settings`) could silently re-key per-file wrapping at runtime. It now reads file-based settings only.
 fix (geoip, security): geoip threat detection was inert framework-wide — `is_known_attacker`/`is_known_abuser` were permanently `False` and blocklist hits never reached `threat_level`. Three separate breaks fixed; `geolocate_ip()` results gain a top-level `is_blocklisted`.
@@ -156,6 +492,56 @@ view into `dispatch_error_handler` — a 500 *plus* a level-12 `rest_error`
 incident carrying `request_data` and a stack trace, triggerable 60 times per IP
 per window. A non-string `page_type` now falls back to `'login'`, as it
 effectively did before.
+**fix (account/security)** — **the two server-rendered account confirm pages
+rendered an unvalidated `?redirect=` straight into an `<a href>`.** A
+`javascript:` value therefore became a one-click script-execution sink on the
+auth origin — `<a href="javascript:alert(1)" ...>Go back</a>` — the
+server-side sibling of the same bug class already fixed for `?back=`/`?redirect=`
+on the hosted auth pages. **Both** entry points were affected and both are
+fixed: `GET /api/auth/verify/email/confirm` (`_render_verify` in
+`mojo/apps/account/rest/verify.py`) and `GET /api/auth/email/change/confirm`
+(`_render_confirm` in `mojo/apps/account/rest/user.py`). The destination is now
+scheme-guarded by the new `mojo.helpers.urls.safe_nav_url` at the point it
+enters the template context, which covers all three sinks per page (the
+`<meta http-equiv=refresh>`, the success **Continue** anchor and the error **Go
+back** anchor) with one check, and covers deployment template overrides too —
+both templates are documented as overridable, so a template-level filter would
+have protected only the shipped ones.
+
+- **Refusal shape: the link is OMITTED, not rendered dead.** A refused value
+  becomes `""`, the `{% if redirect_url %}` wrapper is false, and the page falls
+  back to its existing *"You can close this tab"* copy. No meta refresh is
+  emitted. Status codes, page copy, every other context variable and the outcome
+  of the flow itself (the email is still verified / the change still commits)
+  are unchanged.
+- **Newly refused:** any scheme that is not `http`/`https` — `javascript:`,
+  `data:`, `vbscript:`, `mailto:`, `tel:`, and **custom app schemes** such as
+  `myapp://home`. A deployment putting a deep link in `?redirect=` on these two
+  links loses the button and must switch to an https universal/app link — the
+  same consequence the browser-side fix shipped. Case, tab and C0/leading-space
+  padding (`JaVaScRiPt:`, `java<TAB>script:`) are refused as the schemes they
+  are, and a value whose authority cannot be parsed (`http://[::1/x`) is refused
+  rather than raising.
+- **Unchanged, deliberately: the host is NOT allowlisted.** A legitimate
+  cross-origin `https://` destination and a relative path both render
+  **byte-identically** — the value is returned verbatim, never normalized to an
+  absolute URL. Note the precise contract: **scheme-relative and path-relative
+  values pass through unchanged and may still resolve off-origin** (`//evil.test/x`,
+  `/\evil.test/x`). Host restriction stays the separate opt-in concern of
+  `ALLOWED_REDIRECT_URLS` / `AUTH_HANDOFF_ALLOWED_URLS`.
+- **`?redirect=` is now read via `request.DATA`** (`verify.py` previously used
+  `request.GET`, against repo convention). One behavior consequence: a repeated
+  `?redirect=a&redirect=b` arrives as a **list** and is refused, where
+  `request.GET.get()` used to take the last value. Fail-closed is the intended
+  answer.
+- **Template-context guarantee for downstream overrides:** `redirect_url` is now
+  always either `""` or a vetted `http(s)`/relative value. Keep custom templates'
+  links inside the `{% if redirect_url %}` wrapper.
+- New helper documented in
+  [helpers/other.md § urls](docs/django_developer/helpers/other.md#urls),
+  including why it deliberately admits protocol-relative values while the
+  sibling `_safe_home_url` in `mojo/apps/shortlink/rest/redirect.py` refuses
+  them, and why that sibling is not migrated to it.
 
 ## v1.2.64 - July 31, 2026
 

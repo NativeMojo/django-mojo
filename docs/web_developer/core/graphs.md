@@ -25,6 +25,18 @@ Most models provide these standard graphs:
 
 The default graph used when no `graph` param is provided is `default` for single objects and `list` for lists.
 
+**A misspelled or unsupported `graph` value does not error.** If you request
+a graph name a resource doesn't define, the response falls back to `default`
+silently — `200 OK`, with `default`'s fields rather than the ones you
+expected. The response envelope's `graph` key still echoes back whatever name
+you requested, even when a fallback happened, so it is **not** a reliable way
+to detect the typo — compare the fields you got against the resource's
+documented `default` graph instead. This also means a resource that gates a
+sensitive field behind an opt-in graph (see e.g.
+[account/api_keys.md](../account/api_keys.md#security-notes)) will quietly
+omit that field on a typo'd graph name rather than telling you it doesn't
+exist.
+
 ## Nested Objects
 
 Some graphs include nested related objects. For example, a `default` graph for a book might include the author object:

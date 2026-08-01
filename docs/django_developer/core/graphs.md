@@ -32,6 +32,7 @@ class RestMeta:
 | `exclude` | list | Fields to always exclude (useful in full graphs) |
 | `graphs` | dict | Nested graphs: `{"field_name": "graph_name"}` |
 | `localize` | dict | Timezone localization config for datetime fields |
+| `extra` | list | Computed fields, sourced from a method/property instead of a column: `[("method_name", "output_key")]`, or a bare `"method_name"` to use the method name as the key. Called on the instance for every row serialized under that graph — put anything with a side effect (an audit write, a decrypt) here rather than in `fields`, since `extra` runs per-graph, not globally. |
 
 ## Standard Graph Names
 
@@ -43,6 +44,19 @@ Use these names consistently across models:
 | `default` | Standard single-instance response |
 | `basic` | Minimal for use as a nested graph in other models |
 | `full` | All fields (use `exclude` to protect sensitive fields) |
+
+### Fallback for Unrecognized or Missing Graphs
+
+If `?graph=<name>` names a graph the model doesn't define, the serializer falls
+back to `default` — silently, with a `200` and no error. This applies whether
+the name is a typo or simply undefined; only a model's own `GRAPHS` dict
+decides what exists. The same fallback happens for **list** responses: `on_rest_list`
+requests graph `"list"`, and if the model defines no `"list"` graph, the
+serializer falls back to `"default"` — so a model without an explicit `list`
+graph exposes its full `default` field set (and any `extra` values on it) on
+every list response too. If a `default` graph carries something you don't want
+on lists, either define an explicit `list` graph or keep that field off
+`default` (see [Opt-In Sensitive Graphs](#opt-in-sensitive-graphs) below).
 
 ## Nested Graphs
 
@@ -81,6 +95,41 @@ Also use `NO_SHOW_FIELDS` in RestMeta to globally exclude fields from all graphs
 class RestMeta:
     NO_SHOW_FIELDS = ["mojo_secrets", "internal_notes"]
 ```
+
+### Opt-In Sensitive Graphs
+
+`exclude` and `NO_SHOW_FIELDS` hide a field everywhere. Sometimes a field
+should be readable, just not on every ordinary read — a live credential that
+a caller may deliberately ask for, but that shouldn't ride along on a list or
+a routine detail fetch (and, because of the [fallback](#fallback-for-unrecognized-or-missing-graphs)
+above, defining no `list` graph means `default` doubles as the list response
+too). The pattern: leave the sensitive value off `default`/`list`, and expose
+it only from a dedicated graph the caller must name explicitly, via an
+`extra` method — which also gives you a hook to audit-log the read:
+
+```python
+class ApiKey(MojoSecrets, MojoModel):   # secrets model — stores the token via MojoSecrets
+    def rest_get_token(self):
+        # decrypt + write an audit log row here; see mojo/apps/account/models/api_key.py
+        ...
+
+    class RestMeta:
+        GRAPHS = {
+            "default": {
+                "fields": ["id", "name", "is_active"],   # no token
+            },
+            "token": {
+                "fields": ["id", "name", "is_active"],
+                "extra": [("rest_get_token", "token")],  # only here, and audited
+            },
+        }
+```
+
+The permission bar for `?graph=token` is whatever `VIEW_PERMS` already grants
+— this pattern narrows *where* a value travels, not *who* may ask for it. See
+[account/api_keys.md](../account/api_keys.md#security-notes) for the full
+worked example, including why creation and `/rotate` responses attach the
+token explicitly rather than relying on a request-selected graph.
 
 ## Programmatic Serialization
 

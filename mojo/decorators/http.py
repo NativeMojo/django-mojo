@@ -3,6 +3,7 @@ import traceback
 from mojo.helpers.settings import settings
 from mojo.helpers import modules as jm
 from mojo.helpers import logit
+from mojo.helpers.request import restricted_identity
 import mojo.errors
 from django.urls import path, re_path
 # from django.http import JsonResponse
@@ -101,8 +102,13 @@ def dispatcher(request, *args, **kwargs):
             request.group = Group.get_active(int(request.DATA.group))
             if request.group is not None:
                 request.group.touch()
-            api_key = getattr(request, "api_key", None)
-            if api_key and request.group and not api_key.is_group_allowed(request.group):
+            # A confined credential (ApiKey or GroupScopedToken) may not rebind
+            # request.group outside its own scope. Keep the truthiness
+            # structure: `ident and request.group and ...` — calling
+            # is_group_allowed unconditionally would 500 every ?group= request
+            # from an ordinary JWT user (ident is None there).
+            ident = restricted_identity(request)
+            if ident and request.group and not ident.is_group_allowed(request.group):
                 return JsonResponse({"error": "Group not accessible with this API key", "code": 403}, status=403)
         except (TypeError, ValueError):
             # TypeError: int() on a non-scalar (client sent a list/dict/null).
@@ -137,8 +143,8 @@ def dispatcher(request, *args, **kwargs):
             if grp is not None:
                 request.group = grp
                 grp.touch()
-                api_key = getattr(request, "api_key", None)
-                if api_key and not api_key.is_group_allowed(grp):
+                ident = restricted_identity(request)
+                if ident and not ident.is_group_allowed(grp):
                     return JsonResponse({"error": "Group not accessible with this API key", "code": 403}, status=403)
     method_key = f"{key}__{request.method}"
     if method_key not in URLPATTERN_METHODS:

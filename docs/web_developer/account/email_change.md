@@ -149,6 +149,8 @@ Append `&redirect=https://yourapp.com/login` to the link in the confirmation ema
 GET /api/auth/email/change/confirm?token=ec:4e6f...&redirect=https://app.example.com/login
 ```
 
+**The destination must be `http`, `https`, or scheme-less.** Anything else — `javascript:`, `data:`, or a custom app scheme such as `myapp://home` — is dropped: **no button is rendered at all** (the page falls back to *"You can close this tab"*) and no automatic redirect is emitted. Status code, page copy and every other context value are unchanged, and the email change itself still commits. Point deep links at an https universal/app link instead. The **host is deliberately not restricted** — a cross-origin `https://` destination works — and scheme-relative or path-relative values pass through unchanged and may still resolve off-origin. Passing the parameter more than once (`?redirect=a&redirect=b`) is refused rather than taking the last value.
+
 ---
 
 ### Option C — Link confirm via frontend (SPA / mobile)
@@ -282,8 +284,10 @@ Template context variables:
 | `new_email` | string | The newly committed email address (on success) |
 | `error_title` | string | Short error heading (on failure) |
 | `error_message` | string | Descriptive error text (on failure) |
-| `redirect_url` | string | Value of the `?redirect=` param (may be empty) |
+| `redirect_url` | string | Vetted value of the `?redirect=` param — always either `""` or an `http`/`https`/relative URL (see **Optional redirect parameter** under Option B). May be empty. |
 | `redirect_delay` | int | Seconds before automatic redirect (3 on success, 0 on error) |
+
+`redirect_url` is scheme-guarded **before** it reaches the context, so an overridden template inherits the guard for free: it is never a `javascript:`/`data:`/custom-app value, and a refused destination arrives as `""`. Keep the link inside a `{% if redirect_url %}` wrapper so a refused destination omits the button rather than rendering a dead one.
 
 Two email templates must also be defined in your project's email template system:
 

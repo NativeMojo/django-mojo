@@ -10,6 +10,7 @@
 - [OAuth / Social Login](oauth.md) — Provider setup, auto-link logic, email verification, MFA behaviour, adding new providers
 - [Email Change](email_change.md) — Self-service email address change flow
 - [API Keys](api_keys.md) — Group-scoped programmatic access, permissions, token lifecycle
+- [Group-Scoped Tokens](auth.md#group-scoped-tokens) — `Authorization: grouptoken` — a stateless bearer that authenticates as a real user but is capped at one group; `group_token.mint()`, epoch revocation, opt-in registration, writing group-token-safe endpoints
 - [Webhook Signing](webhook_signing.md) — Per-Group HMAC primitive for outbound webhooks, auto-signing via `jobs.publish_webhook(group=...)`, receiver verification helper
 - [Webhook Subscriptions](webhook_subscriptions.md) — Per-Group subscription registry, async fan-out dispatcher, signed delivery via the existing webhook primitive
 - [Notifications](notifications.md) — User inbox, WebSocket + push delivery, expiry

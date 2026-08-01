@@ -12,7 +12,7 @@ from mojo.apps.account.services import auth_config
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
 from mojo.apps.shortlink import maybe_shorten_url
-from mojo.helpers import dates, crypto, logit
+from mojo.helpers import dates, crypto, logit, urls
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
 
@@ -216,6 +216,74 @@ def on_user_login(request):
 # Cross-origin auth handoff (authorization-code style)
 # -----------------------------------------------------------------
 
+def _gate_handoff_destination(request, destination):
+    """Return the group pk this handoff code must be confined to, else None.
+
+    Off by default. See `mojo.apps.account.services.handoff_group` for the
+    sources, the deny matcher and why gating is decided HERE — at the delivery
+    boundary, from the already-validated destination — rather than at login or
+    from anything the client sends.
+
+    Raises under `enforce`; under `monitor` it only reports and every caller
+    still receives the platform JWT it receives today.
+    """
+    from mojo.apps.account.services import handoff_group
+    mode = handoff_group.get_mode()
+    if mode == handoff_group.MODE_OFF:
+        return None
+    enforcing = mode == handoff_group.MODE_ENFORCE
+
+    ok, group = handoff_group.resolve_group(destination, request=request)
+    if not ok:
+        # Suspicious host, broken resolver, unknown/inactive group, defective
+        # map. Fail CLOSED: the same 400 an unlisted destination gets, so
+        # gated-vs-unlisted-vs-misconfigured is not an oracle.
+        handoff_group.report_refusal(destination, request=request, enforced=enforcing)
+        if enforcing:
+            raise merrors.ValueException("redirect_uri is not permitted for auth handoff")
+        return None
+
+    if group is None:
+        # Not gated — an ordinary destination, and it gets an ordinary JWT.
+        # Worth naming under enforcement: the allowlist already decided this is
+        # somewhere this deployment sends tokens, so the feed can write the
+        # gating map the way it already writes the allowlist.
+        if enforcing:
+            handoff_group.report_unmapped(destination, request=request)
+        return None
+
+    if handoff_group.is_own_host(request, destination):
+        # Listing an auth-page origin in the gating map is a config error: the
+        # page short-circuits a same-origin redirect to direct navigation and
+        # the JWT is already in this origin's storage.
+        reason = (
+            f"AUTH_HANDOFF_GROUP_TOKEN_HOSTS gates {destination!r}, which is "
+            f"the auth origin serving this very request. An auth-page origin "
+            f"must never be gated — a same-origin redirect never mints a code "
+            f"at all, and the visitor's JWT already lives in this origin's "
+            f"storage. Remove the entry.")
+        logit.error("account.handoff_group", reason)
+        handoff_group.report_misconfigured(
+            reason, "own_host", destination=destination, request=request)
+        if enforcing:
+            raise merrors.ValueException("redirect_uri is not permitted for auth handoff")
+        return None
+
+    eligible = handoff_group.can_deliver(request.user, group)
+    if not enforcing:
+        handoff_group.report_preview(
+            destination, group, would_refuse=not eligible, request=request)
+        return None
+    if not eligible:
+        # A distinct 403, deliberately: this one is read by a real human at the
+        # auth origin, and it discloses only what the visitor already knows
+        # about their own membership. (Superusers land here too — they can
+        # never hold a group token.)
+        raise merrors.PermissionDeniedException(
+            "You are not a member of the group that owns this destination", 403, 403)
+    return group.pk
+
+
 @md.POST("auth/handoff")
 @md.denies_key_backed_session()
 @md.requires_auth()
@@ -243,8 +311,31 @@ def on_auth_handoff(request):
     The check is here, at issuance, and never at exchange time: the code buys
     an access AND refresh token pair, and an attacker holding it also controls
     every header on the exchange call (see that module's docstring).
+
+    A deployment may additionally declare destination hosts GATED
+    (`AUTH_HANDOFF_GROUP_TOKEN_MODE`, off by default): a code minted for one
+    exchanges into a group-scoped token instead of a JWT pair. See
+    `mojo.apps.account.services.handoff_group`.
     """
-    from mojo.apps.account.services import auth_handoff, redirect_allowlist
+    from mojo.apps.account.services import auth_handoff, handoff_group, redirect_allowlist
+
+    # Gating enforcement without destination enforcement cannot deliver the
+    # property it advertises — a deny map cannot enumerate "every host that is
+    # not mine", so an unlisted host would simply collect a platform JWT.
+    # Refuse EVERY handoff: a loud outage from a two-line settings mistake
+    # beats silently shipping JWTs while the operator believes gating is on.
+    if not handoff_group.prerequisite_ok():
+        reason = (
+            "AUTH_HANDOFF_GROUP_TOKEN_MODE is 'enforce' but the destination "
+            "allowlist is not enforced (neither AUTH_HANDOFF_ALLOWED_URLS nor "
+            "AUTH_HANDOFF_RESOLVER is set). Gating cannot bind without it: any "
+            "host simply absent from the gating map would receive a full "
+            "platform access+refresh pair. EVERY auth handoff is refused until "
+            "one of them is set.")
+        logit.error("account.handoff_group", reason)
+        handoff_group.report_misconfigured(reason, "prerequisite", request=request)
+        raise merrors.ValueException("redirect_uri is not permitted for auth handoff")
+
     destination = request.DATA.get("redirect_uri")
     if redirect_allowlist.is_enforced():
         if not destination:
@@ -260,8 +351,9 @@ def on_auth_handoff(request):
         # destination, so the feed builds the allowlist before anyone opts in.
         redirect_allowlist.report_unlisted_destination(
             destination, request=request, enforced=False)
+    group_id = _gate_handoff_destination(request, destination)
     code = auth_handoff.create_handoff_code(
-        request.user, destination=destination, ip=request.ip)
+        request.user, destination=destination, ip=request.ip, group_id=group_id)
     return JsonResponse({
         "status": True,
         "data": {
@@ -280,6 +372,12 @@ def on_auth_exchange(request):
     """
     Exchange a handoff code for an access + refresh token pair. Public so the
     consuming app can call it without an existing JWT, single-use, rate-limited.
+
+    A code minted for a GATED destination carries a `gid` and exchanges into a
+    group-scoped token package instead — no refresh token, no JWT. The gating
+    decision is READ here, never re-taken: neither the mode nor the destination
+    is consulted again, so a resolver that breaks inside the code's TTL cannot
+    turn a gated code back into a platform JWT.
     """
     from mojo.apps.account.services import auth_handoff
     data = auth_handoff.consume_handoff_code(request.DATA.get("code"))
@@ -290,7 +388,22 @@ def on_auth_exchange(request):
         raise merrors.PermissionDeniedException("Invalid or expired handoff code", 401, 401)
     if not user.is_active:
         raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
-    return jwt_login(request, user, source="handoff")
+
+    gid = data.get("gid")
+    if gid is None:
+        # No stamp — an ungated destination, or a code minted before this
+        # feature existed. Unchanged behavior.
+        return jwt_login(request, user, source="handoff")
+    # A malformed stamp is a corrupt code, not a licence to fall back to a JWT.
+    # bool is an int subclass in Python, hence the explicit exclusion.
+    if not isinstance(gid, int) or isinstance(gid, bool) or gid <= 0:
+        raise merrors.PermissionDeniedException("Invalid or expired handoff code", 401, 401)
+    from mojo.apps.account.models.group import Group
+    group = Group.objects.filter(pk=gid).first()
+    if group is None:
+        raise merrors.PermissionDeniedException(
+            "You do not have access to this destination", 403, 403)
+    return group_token_login(request, user, group)
 
 
 @md.POST("auth/register")
@@ -748,6 +861,86 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
     return JsonResponse(dict(status=True, data=response_data))
 
 
+# Login source recorded for a gated handoff exchange. A visitor signing into a
+# gated destination IS a login and is recorded as one — an auth path that
+# leaves no login event would be an invisible one.
+GROUP_TOKEN_HANDOFF_SOURCE = "handoff:grouptoken"
+
+
+def group_token_login(request, user, group):
+    """Deliver a GROUP-SCOPED token package for a gated handoff destination.
+
+    A sibling of `jwt_login`, not a branch inside it: the JWT pair is never
+    constructed, so there is no code path here that could return one by
+    accident. The side effects are jwt_login's, performed explicitly and in the
+    same order, with two deliberate differences noted below.
+
+    Response shape (NO `refresh_token` key at all — its absence is what makes
+    the client clear a stale one):
+
+        {"access_token": "gt1.…", "token_type": "grouptoken",
+         "expires_in": …, "group": {id, uuid, name}, "user": …}
+    """
+    from mojo.apps.account.services import group_token
+    from mojo.apps.account.services.geofence import enforcement
+
+    blocked = enforcement.enforce(request, scope="auth", user=user)
+    if blocked is not None:
+        return blocked
+
+    # Mint FIRST, before any side effect: a refused mint must leave no
+    # last_login and no login event behind. It raises PermissionDenied (403),
+    # and that exception must never be caught into a jwt_login fallback —
+    # membership can have been removed, the group deactivated, or the user
+    # promoted to superuser inside the code's TTL.
+    token = group_token.mint(user, group)
+
+    now = dates.utcnow()
+    user.last_login = now
+    # Persisted EXPLICITLY. `user.track()` only writes last_activity; in
+    # jwt_login the last_login assignment reaches the database as a side effect
+    # of the webapp_url protected-metadata save, which this path deliberately
+    # does not perform (see below). A targeted update mirrors User.touch()'s own
+    # idiom and keeps a full save() off the login path.
+    User.objects.filter(pk=user.pk).update(last_login=now)
+    user.track()
+    try:
+        from mojo.apps.account.models.login_event import UserLoginEvent
+        UserLoginEvent.track(request, user, device=request.device,
+                             source=GROUP_TOKEN_HANDOFF_SOURCE)
+    except Exception:
+        logit.exception("Failed to record login event")
+
+    # NO webapp_url protected-metadata write, unlike jwt_login. `webapp_base_url`
+    # and HTTP_ORIGIN on an exchange call come from the GATED destination's own
+    # backend, so honoring them would let a tenant origin overwrite
+    # orig_webapp_url / last_webapp_url on the platform account of anyone who
+    # visits its site — precisely what gating exists to prevent. Declining is
+    # safe: orig_webapp_url is one step of a longer resolution chain (see
+    # mojo/apps/account/utils/webapp_url.py), never the only one.
+
+    # USER_LOGIN_HANDLER fires — this IS a login. It swallows handler
+    # exceptions internally, so a JWT-assuming handler cannot break the flow.
+    account_extensions.fire_user_login(
+        user=user, request=request, source=GROUP_TOKEN_HANDOFF_SOURCE,
+        is_new_user=False)
+
+    return JsonResponse({
+        "status": True,
+        "data": {
+            "access_token": token,
+            "token_type": "grouptoken",
+            # GROUP_TOKEN_TTL governs here, deliberately — not the org's
+            # `access_token_expiry`, which tunes JWT lifetimes only.
+            "expires_in": group_token.get_ttl(),
+            # Hand-built, not a graph: coupling this to Group.GRAPHS would let
+            # a future graph edit leak tenant internals to a destination app.
+            "group": {"id": group.pk, "uuid": group.get_uuid(), "name": group.name},
+            "user": user.to_dict("basic"),
+        },
+    })
+
+
 @md.POST("auth/forgot")
 @md.strict_rate_limit("auth_forgot", ip_limit=5, ip_window=300)
 @md.public_endpoint()
@@ -1192,8 +1385,18 @@ def _render_confirm(request, template, ctx):
       - after a short delay via <meta http-equiv=refresh> otherwise
     Downstream projects can override the templates by placing their own versions
     under templates/account/<name>.html with higher priority in TEMPLATES.DIRS.
+
+    The destination is scheme-guarded by `urls.safe_nav_url` BEFORE it reaches
+    either the redirect branch below or the template context: only http/https
+    and scheme-less (relative or scheme-relative) values survive; a
+    javascript:/data:/custom-app scheme becomes "" and the template's
+    `{% if redirect_url %}` wrapper omits the link entirely. The host is
+    deliberately not restricted. There is no raw-query fallback here on
+    purpose — `safe_nav_url` returns "" for exactly the hostile inputs, so an
+    `or request.GET.get("redirect", "")` tail would fall through to the
+    unguarded value and invert the guard into a pass-through.
     """
-    redirect_url = request.DATA.get("redirect") or request.GET.get("redirect", "")
+    redirect_url = urls.safe_nav_url(request.DATA.get("redirect"))
     redirect_delay = 3 if ctx.get("success") else 0
 
     if redirect_url and ctx.get("success") and not redirect_delay:

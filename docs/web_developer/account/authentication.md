@@ -98,6 +98,106 @@ Include the access token in every authenticated request:
 Authorization: Bearer <access_token>
 ```
 
+## Group-Scoped Tokens (`grouptoken`)
+
+Some deployments hand a page a **group-scoped token** instead of a JWT — a
+credential that authenticates as you but is capped at **one group**:
+
+```
+Authorization: grouptoken gt1.<payload>.<signature>
+```
+
+It is opaque: do not parse it, and do not feed it to any JWT helper — it is not
+a JWT and `atob`/`jwt-decode` will fail on it.
+
+**What works**
+
+- `GET /api/user/me` — read-only self, so the usual boot check still works.
+- Any group-scoped resource in the token's own group, subject to your
+  membership permissions **in that group**.
+
+**What is refused (403)** — this is by design, not a bug to work around:
+
+- anything in another group, including a **child** of the token's group, and any
+  `group=` / `group_uuid=` parameter naming a different group;
+- `GET /api/group` (always an empty list) and `GET /api/group/<pk>` (always
+  403 — including the token's own group). Read tenant branding from the auth
+  config endpoints instead;
+- every write to the account: `POST /api/user/me`, password change, email or
+  phone change, `revoke_sessions`;
+- every credential endpoint: passkeys, TOTP setup/confirm/recovery codes, user
+  API keys;
+- `POST /api/auth/handoff` — a group token cannot be traded up.
+
+**No refresh.** `POST /api/refresh_token` does not accept one, and neither does
+`Authorization: Bearer`. When the token expires, obtain a new one from whatever
+flow issued it — do not run your JWT refresh loop against it.
+
+**401 semantics.** Every rejection is
+`401 {"error": "Invalid group token"}` — expiry, a bad signature, a revoked
+group, a removed membership and a deactivated account are deliberately
+indistinguishable. The single exception is
+`401 {"error": "Group token expired"}`, which is your cue to re-mint rather than
+send the user through a full re-authentication.
+
+A deployment that has not registered the scheme answers
+`401 {"error": "Invalid token type: grouptoken"}`.
+
+### Where one comes from: a gated handoff destination
+
+A deployment can declare your app's host **gated**. When it does,
+`POST /api/auth/exchange` answers with a **different shape** — no
+`refresh_token` key at all:
+
+```json
+{
+  "status": true,
+  "data": {
+    "access_token": "gt1.…",
+    "token_type": "grouptoken",
+    "expires_in": 3600,
+    "group": { "id": 7, "uuid": "…", "name": "Tenant A" },
+    "user": { "...": "the same basic user object a JWT login returns" }
+  }
+}
+```
+
+Branch on the token itself, not on a stored flag: **a token starting `gt1.` is
+always a group token.** `mojo-auth.js` does this for you —
+`MojoAuth.getTokenType()` returns `"grouptoken"` or `"bearer"`,
+`getAuthHeader()` emits the right scheme per call, `saveTokens()` **clears any
+stored refresh token when a response carries none**, and `refreshToken()` /
+`requestHandoffCode()` reject immediately under a group session.
+
+**Expiry: re-bounce, do not refresh.** A `gt1.` payload carries no `exp` claim,
+so `expires_in` at exchange time is the only lifetime you get — store it as an
+absolute deadline (`mojo-auth.js` writes `token_expires_at`, and
+`MojoAuth.isTokenExpired()` reads it; a missing or unparsable value counts as
+expired). On expiry, navigate back to the auth origin with
+`?redirect=<current url>` and let the handoff issue a fresh one. There is no
+refresh path and adding one would defeat the point of the credential.
+
+**`403` at handoff or exchange.** Two cases, both deliberate and neither
+retryable by the client:
+
+- `403` from `POST /api/auth/handoff` — *"You are not a member of the group
+  that owns this destination"*. The visitor authenticated fine; they simply
+  are not a member of your tenant. **Superusers land here too** — a superuser
+  can never hold a group token, so they cannot sign into a gated destination
+  through this flow at all.
+- `403` from `POST /api/auth/exchange` — membership, group state or account
+  state changed between the mint and the exchange. Every guard is re-run at
+  exchange, and a refusal **never** falls back to issuing a JWT.
+
+**OAuth is refused for gated destinations.** If your app runs its **own** OAuth
+callback page, `GET /api/auth/oauth/<provider>/begin` and
+`POST /api/auth/oauth/<provider>/complete` answer
+`400 {"error": "redirect_uri is not on the allowlist"}` once gating enforces —
+the completion endpoint can only produce a full JWT pair, so it refuses rather
+than hand one to a gated origin. Move that flow to the hosted auth pages, which
+already offer Google/Apple/GitHub and already route back through the gated
+handoff.
+
 ## Refreshing a Token
 
 **POST** `/api/refresh_token`
@@ -285,12 +385,20 @@ for end-to-end flow and security trade-offs.
 
 ## Logout
 
-On logout, always remove both tokens:
+On logout, always remove every token key you store. The example key names in
+[Token Storage](#token-storage-ui-guidance) are generic UI guidance — pick your
+own:
 
 ```javascript
 localStorage.removeItem("mojo_access_token");
 localStorage.removeItem("mojo_refresh_token");
 ```
+
+If you use `mojo-auth.js`, call `MojoAuth.logout()`. It clears the **four** keys
+that library actually uses — `access_token`, `refresh_token`, `token_type` and
+`token_expires_at`. The last two carry the kind and deadline of a
+[group-scoped token](#group-scoped-tokens-grouptoken); a stale marker or
+deadline left behind outlives the session it described.
 
 ## Security Notes
 

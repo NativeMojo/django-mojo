@@ -58,6 +58,16 @@ def on_assistant_message(request):
 def on_assistant_context(request):
     """Create a conversation pre-loaded with context from any MojoModel instance."""
     from mojo.apps.assistant.services.context import resolve_model, build_context
+    from mojo.helpers.request import is_key_backed_session
+
+    # Refused outright for any confined credential (ApiKey / GroupScopedToken).
+    # The VIEW_PERMS loop below reads only the caller's GLOBAL permission dict
+    # — no tenant bound anywhere — and build_context then reads arbitrary model
+    # rows by pk. requires_global_perms above already denies these sessions;
+    # this is the local statement of the rule so the endpoint stays closed if
+    # that decorator is ever relaxed.
+    if is_key_backed_session(request):
+        return JsonResponse({"status": False, "error": "Permission denied"}, status=403)
 
     model_string = request.DATA.model
     pk = request.DATA.pk

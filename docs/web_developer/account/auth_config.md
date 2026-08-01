@@ -144,7 +144,12 @@ share one auth domain.
 
 The `group_uuid` param is preserved through navigation (login ↔ register
 switcher), the OAuth round-trip (Google/Apple/GitHub callback), and the
-login → passkey enrollment redirect.
+login → passkey enrollment redirect. `redirect`, `next`, `returnTo` and `back`
+ride the same links, so a destination you hand the portal survives the whole
+flow. **Fixed in this release:** the register → passkey hop used to drop every
+param after the first when `group_uuid` was combined with one of them, landing
+the visitor on the group's `success_redirect` instead. A `?group_uuid=` on its
+own was never affected.
 
 Branding includes the **browser tab icon**: when the resolved group sets
 `theme.favicon_url`, that icon is the only one the page declares — the

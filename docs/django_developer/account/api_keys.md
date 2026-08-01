@@ -178,7 +178,7 @@ POST /api/group/apikey
 }
 ```
 
-The raw token is included in the creation response under `data.token`. It is **also stored encrypted** via `MojoSecrets`, so it can be retrieved at any time — `ApiKey.get_token()` server-side, and the `default` graph re-serializes it as `token` on **every** read (`GET /api/group/apikey` and `/api/group/apikey/<id>`), to any caller holding `manage_group` / `manage_groups` / `groups`. This is not a "shown once" credential. See [Security Notes](#security-notes).
+The raw token is included in the creation response under `data.token`. It is **also stored encrypted** via `MojoSecrets`, so it can be retrieved later — `ApiKey.get_token()` server-side, and over REST through the **opt-in** `token` graph (`GET /api/group/apikey/<id>?graph=token`), which is audited. This is not a "shown once" credential, but the secret is **not** on the `default` graph: ordinary reads and list responses never carry it. See [Security Notes](#security-notes).
 
 ```json
 {
@@ -213,9 +213,11 @@ See [Rate Limiting](../core/rate_limiting.md) for full details.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/group/apikey` | List keys for a group |
+| `GET` | `/api/group/apikey` | List keys for a group (no tokens) |
+| `GET` | `/api/group/apikey?graph=token` | List keys **with their live raw tokens** (bulk read, audited) |
 | `POST` | `/api/group/apikey` | Create a key (response includes the raw token) |
-| `GET` | `/api/group/apikey/<id>` | Get key details |
+| `GET` | `/api/group/apikey/<id>` | Get key details (no token) |
+| `GET` | `/api/group/apikey/<id>?graph=token` | Get key details **plus the live raw token** (audited) |
 | `POST` | `/api/group/apikey/<id>` | Update name, permissions, limits, is_active |
 | `DELETE` | `/api/group/apikey/<id>` | Delete key |
 | `GET` | `/api/group/apikey/me` | Whoami — the **calling** key's own identity + permissions |
@@ -266,7 +268,7 @@ permissions, and limits — a brand-new token. The **previous** token is
 invalidated immediately (its hash *and* its encrypted copy are overwritten)
 and cannot be recovered. The **new** token is returned in this response; it is
 not write-once — like any ApiKey token it stays readable afterwards via
-`ApiKey.get_token()` and the default graph until the next rotation.
+`ApiKey.get_token()` and the opt-in `token` graph until the next rotation.
 
 - Authenticate with `Authorization: apikey <token>` (the key being rotated).
 - Self-service: no management permission — the caller already holds the secret
@@ -313,8 +315,12 @@ old_key.delete()
 
 - **The raw token is stored, not just hashed.** `token_hash` (SHA-256) is for indexed lookup; the raw token itself lives in `mojo_secrets`, encrypted via `MojoSecrets` (AES-256-GCM, key via PBKDF2). `ApiKey.get_token()` recovers it.
 - **Key-derivation caveat.** `MojoSecrets._get_secrets_password()` derives the key from `{created}{pk}{ClassName}` — all plaintext columns on the same row, with no server-side secret mixed in. This protects against exfiltration of the `mojo_secrets` column on its own; it does **not** protect against a row-level or full-table dump. Treat `account_apikey` as a table of live credentials and protect it like one. (`KSMSecrets` — the KMS-backed base in the same module — is a stronger option; `ApiKey` does not use it today.)
-- **The default graph returns the live token on every read.** `GRAPHS["default"]` carries `("get_token", "token")`, so any caller with `manage_group` / `manage_groups` / `groups` gets the raw token back on list and detail, not only at creation. The `me` graph omits it, and `/rotate` uses the forced `me` graph plus an explicit token field. Whether the default graph *should* expose it is an open question tracked as maestro item 424 — the behavior described here is the current one.
+- **Token read-back is opt-in and audited.** The secret is on the `token` graph only — `GRAPHS["token"]` carries `("rest_get_token", "token")`. `default` (which list responses fall back to, since `ApiKey` defines no `list` graph) and `me` both omit it, and `/rotate` uses the forced `me` graph plus an explicit token field. Every export through `rest_get_token()` writes an `api_key:token_read` `logit.Log` row — one per serialized key, so a bulk read via `?graph=token` on a list is visible once per credential. **The permission bar is unchanged**: `graph=token` is open to the same `manage_group` / `manage_groups` / `groups` holders as any other read. What changed is that the credential no longer rides along on requests that never asked for it — not who may ask.
+- **An unrecognized graph name falls back to `default`.** A typo like `?graph=tokens` returns the key *without* the token rather than erroring — it fails closed, but it is a confusing silence if you are expecting the field.
+- **The opt-in read works on lists too.** `GET /api/group/apikey?graph=token` returns a live token for every key in the group, so it is a bulk credential read. It is audited once per key, but the list endpoint has no maximum page size — size the blast radius of a `groups` grant accordingly.
+- **File-based request logging is not masked.** With `LOGIT_FILE_ALL` / `LOGIT_DEBUG_ALL` enabled, `mojo/middleware/logging.py` writes small response bodies verbatim to `requests.log`, so a `?graph=token` response lands there in the clear. The DB-backed `logit.Log` path *is* masked (`mask_sensitive_data` matches `"token": "..."`). This predates the opt-in change — which strictly improves it, since previously *every* read did this — but it is the one place the "the secret only travels where it was asked for" property does not hold.
+- **`DENY_AI = True`.** The assistant's model tools cannot read this table at all. `query_model` takes a caller-supplied graph and does not filter sensitive values out of serialized output, so nothing else would stop it asking for the `token` graph.
 - `sys.*` permissions are unconditionally denied
 - Expired or inactive keys return 401
 - Group scope is enforced at the dispatcher level — keys cannot access groups outside their hierarchy
-- The raw `token_hash` and `mojo_secrets` **columns** are never serialized — but note that the decrypted token is exposed via the `token` extra above, so "the secret columns are hidden" is not the same as "the secret is hidden"
+- The raw `token_hash` and `mojo_secrets` **columns** are never serialized — but note that the decrypted token is still reachable via the `token` graph above, so "the secret columns are hidden" is not the same as "the secret is unreachable"

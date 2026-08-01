@@ -14,6 +14,7 @@ JavaScript. These tests assert against the rendered template HTML and the
 static JS source — guarding against an accidental revert of the wiring.
 """
 import os
+import re
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
@@ -761,3 +762,244 @@ def test_switcher_no_params_unchanged_regression(opts):
         f"Plain /auth must yield auth_url='/auth' (regression). "
         f"Got: {ctx['auth_url']!r}",
     )
+
+
+# ---------------------------------------------------------------------------
+# auth_base.html — JS string literals must carry |escapejs
+#
+# The server-built auth/register/passkey URLs and theme.success_redirect are
+# interpolated into JS string literals in auth_base.html's inline <script>.
+# <script> is a raw-text element, so the HTML parser never decodes entities
+# inside it: without |escapejs, autoescape rewrites the `&` joining two query
+# params to `&amp;` and the literal reaches the browser holding `&amp;`
+# verbatim. register.html assigns cfg.passkeyUrl straight to
+# window.location.href, so the destination parses `amp;redirect=` and silently
+# drops the forwarded param on every group-scoped portal.
+#
+# Same bug class already pinned for bouncer_challenge.html above.
+# ---------------------------------------------------------------------------
+
+def _decode_js(s):
+    """Decode the `\\uXXXX` escapes Django's `escapejs` filter emits.
+
+    escapejs rewrites `&`, `=`, `-`, `;`, `<`, `>`, quotes, the backtick and
+    the control range as `\\uXXXX`. A JS engine decodes those when it parses
+    the string literal, so a test that wants to see what the browser sees has
+    to do the same. A blanket `unicode_escape` decode is NOT equivalent — it
+    mangles any non-ASCII character in the value.
+    """
+    return re.sub(r'\\u([0-9a-fA-F]{4})',
+                  lambda m: chr(int(m.group(1), 16)), s)
+
+
+def _js_literal(html, var_name):
+    """Return the contents of the double-quoted JS string assigned to `var_name`."""
+    marker = f'var {var_name} = "'
+    idx = html.find(marker)
+    assert_true(idx != -1,
+                f"rendered auth page must declare `{marker}...` in its inline "
+                f"script — the assignment was not found")
+    start = idx + len(marker)
+    end = html.find('"', start)
+    assert_true(end != -1,
+                f"`var {var_name}` string literal is unterminated in the "
+                f"rendered page (searched from index {start})")
+    return html[start:end]
+
+
+@th.django_unit_test("auth_base.html: forwarded ?redirect= survives autoescape in the JS URL literals")
+def test_auth_base_forwarded_urls_survive_autoescape(opts):
+    """A group-scoped portal forwarding ?redirect= must reach the browser intact.
+
+    Fails on the pre-fix template: the literal holds `&amp;`, so the browser
+    navigates to `?group_uuid=…&amp;redirect=…` and the destination parses
+    `amp;redirect` instead of `redirect`.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    redirect = '/app/dashboard'
+    html, ctx = _render_switcher(
+        'account/register.html', query={'redirect': redirect}, group=opts.group)
+
+    # PRECONDITION — without this the test could pass vacuously against a
+    # broken template. _auth_context derives group_uuid from its `group=`
+    # kwarg ONLY (views.py: `group_uuid = group.uuid if group else ''`); it
+    # never reads group_uuid out of request.DATA, whose forwarding loop
+    # whitelists redirect/next/returnTo/back. So a `group_uuid` query param
+    # with group=None yields ONE forwarded param, no `&`, nothing to corrupt.
+    assert_true(
+        '&' in ctx['register_url'],
+        f"PRECONDITION FAILED: register_url must carry a literal `&` (two or "
+        f"more query params) for this regression to have any teeth. Pass "
+        f"group=opts.group — a group_uuid query param alone will NOT produce "
+        f"one. Got: {ctx['register_url']!r}")
+
+    for var_name, ctx_key in (('AUTH_URL', 'auth_url'),
+                              ('REGISTER_URL', 'register_url'),
+                              ('PASSKEY_URL', 'passkey_url')):
+        literal = _js_literal(html, var_name)
+        assert_true(
+            '&amp;' not in literal,
+            f"auth_base.html `var {var_name}` is a JS string literal, so the "
+            f"interpolation must carry |escapejs. Django's HTML autoescape "
+            f"rewrote `&` to `&amp;`, and <script> is a raw-text element so "
+            f"the parser never decodes it back — the forwarded param is "
+            f"silently dropped at the destination. Got: {literal!r}")
+
+        decoded = _decode_js(literal)
+        assert_eq(
+            decoded, ctx[ctx_key],
+            f"the JS literal for {var_name} must decode to exactly the "
+            f"server-built {ctx_key}. Got {decoded!r}, expected "
+            f"{ctx[ctx_key]!r}")
+
+        params = parse_qs(urlparse(decoded).query)
+        assert_eq(
+            params.get('redirect'), [redirect],
+            f"{var_name} must carry the forwarded redirect param intact so the "
+            f"visitor lands where they came from. Decoded {decoded!r} parsed "
+            f"as {params!r}")
+        assert_eq(
+            params.get('group_uuid'), [opts.group.uuid],
+            f"{var_name} must still carry group_uuid. Decoded {decoded!r} "
+            f"parsed as {params!r}")
+        assert_true(
+            'amp;redirect' not in params,
+            f"{var_name} parsed to an `amp;redirect` key — that IS the "
+            f"&amp; corruption this test guards. Decoded {decoded!r} parsed "
+            f"as {params!r}")
+
+
+@th.django_unit_test("auth_base.html: multi-param theme.success_redirect survives autoescape")
+def test_auth_base_success_redirect_survives_autoescape(opts):
+    """`var ON_SUCCESS` is the post-auth navigation target and is tenant-writable.
+
+    A group configuring a success_redirect with two query params hits the same
+    corruption as the forwarded URLs. Fails on the pre-fix template.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    target = 'https://app.example.com/landing?tenant=acme&view=home'
+    opts.group.metadata = {"auth_config": {"theme": {"success_redirect": target}}}
+    opts.group.save(update_fields=["metadata"])
+    try:
+        html, ctx = _render_switcher('account/login.html', group=opts.group)
+        assert_eq(
+            ctx['success_redirect'], target,
+            f"PRECONDITION: the group's theme.success_redirect must reach the "
+            f"context unchanged (two params, one `&`). Got: "
+            f"{ctx['success_redirect']!r}")
+
+        literal = _js_literal(html, 'ON_SUCCESS')
+        assert_true(
+            '&amp;' not in literal,
+            f"auth_base.html `var ON_SUCCESS` must carry |escapejs — it is a "
+            f"JS string literal that flows to window.location.href, so an "
+            f"`&amp;` here drops every query param after the first. Got: "
+            f"{literal!r}")
+
+        decoded = _decode_js(literal)
+        assert_eq(
+            decoded, target,
+            f"ON_SUCCESS must decode to exactly the configured "
+            f"theme.success_redirect. Got {decoded!r}, expected {target!r}")
+
+        params = parse_qs(urlparse(decoded).query)
+        assert_eq(
+            params.get('view'), ['home'],
+            f"the second query param of theme.success_redirect must survive. "
+            f"Decoded {decoded!r} parsed as {params!r}")
+        assert_true(
+            'amp;view' not in params,
+            f"ON_SUCCESS parsed to an `amp;view` key — the &amp; corruption. "
+            f"Decoded {decoded!r} parsed as {params!r}")
+    finally:
+        opts.group.metadata = {}
+        opts.group.save(update_fields=["metadata"])
+
+
+@th.django_unit_test("auth_base.html: single-param group URLs are unchanged (common-case regression)")
+def test_auth_base_single_param_urls_unchanged(opts):
+    """The overwhelmingly common case is `?group_uuid=` alone — no `&` at all.
+
+    escapejs still rewrites the `=` to `\\u003D` in the HTML SOURCE, but the
+    runtime string a JS engine builds is byte-identical to today's. This test
+    pins that, so the fix cannot be mistaken for a behavior change.
+    """
+    html, ctx = _render_switcher('account/login.html', group=opts.group)
+
+    for var_name, ctx_key, path in (('AUTH_URL', 'auth_url', '/auth'),
+                                    ('REGISTER_URL', 'register_url', '/register'),
+                                    ('PASSKEY_URL', 'passkey_url', '/passkey')):
+        decoded = _decode_js(_js_literal(html, var_name))
+        assert_eq(
+            decoded, ctx[ctx_key],
+            f"{var_name} must decode to exactly the server-built {ctx_key}. "
+            f"Got {decoded!r}, expected {ctx[ctx_key]!r}")
+        assert_eq(
+            decoded, f'{path}?group_uuid={opts.group.uuid}',
+            f"{var_name} must still be the plain single-param group URL — the "
+            f"escapejs fix must not change what the browser navigates to in "
+            f"the common case. Got: {decoded!r}")
+        assert_true(
+            '&' not in decoded,
+            f"{var_name} must contain no `&` when group_uuid is the only "
+            f"forwarded param. Got: {decoded!r}")
+
+
+@th.django_unit_test("auth_base.html: every double-quoted JS-string interpolation carries |escapejs")
+def test_auth_base_script_literals_all_escapejs(opts):
+    """Standing form of the audit criterion — read off the template source.
+
+    SCOPE: double-quoted `{{ }}` interpolations inside the INLINE <script>
+    block only. It structurally cannot see an unquoted interpolation (the
+    `yesno` boolean, which is not a string literal and needs no escaping) or a
+    single-quoted one, so treat it as a guard against the specific omission
+    this item fixed, not as proof of complete coverage.
+    """
+    from pathlib import Path
+    import mojo
+
+    tpl = (Path(mojo.__file__).resolve().parent
+           / "apps" / "account" / "templates" / "account" / "auth_base.html")
+    assert_true(tpl.exists(), f"auth_base.html should exist at {tpl}")
+    src = tpl.read_text(encoding="utf-8")
+
+    # Anchor on the INLINE script opener. The tag immediately above it is the
+    # external `<script ... src="{{ api_base }}...">`, whose double-quoted
+    # interpolation is an ATTRIBUTE — attributes are entity-decoded by the
+    # parser, so that one must NOT carry escapejs. Slicing from the first
+    # `<script` would sweep it in and fail the audit on a correct line.
+    opener = '<script nonce="{{ csp_nonce }}">'
+    start = src.find(opener)
+    assert_true(
+        start != -1,
+        f"auth_base.html must open its inline script with {opener!r} — this "
+        f"audit anchors on it to stay clear of the external <script src=...> "
+        f"tag directly above it")
+    end = src.find('</script>', start)
+    assert_true(end != -1,
+                "auth_base.html's inline <script> block is unterminated")
+    block = src[start + len(opener):end]
+
+    found = re.findall(r'"\{\{(.*?)\}\}"', block)
+    assert_true(
+        len(found) >= 7,
+        f"expected at least the 7 known double-quoted JS-string "
+        f"interpolations in auth_base.html's inline script (api_base, "
+        f"success_redirect, auth_url, register_url, passkey_url, "
+        f"passkey_prompt, group_uuid); the audit found {len(found)}: "
+        f"{found!r}. If one was removed, update this floor — if the slice "
+        f"broke, fix the anchor.")
+
+    for expr in found:
+        assert_true(
+            'escapejs' in expr,
+            f"auth_base.html interpolates `{expr.strip()}` into a "
+            f"double-quoted JS string literal without |escapejs. <script> is "
+            f"a raw-text element, so autoescape's `&amp;` is never decoded "
+            f"back and any value carrying two query params reaches the "
+            f"browser corrupted. Add |escapejs (after any default: filter). "
+            f"Never add it to an href/src attribute — those ARE "
+            f"entity-decoded, and escapejs would inject a literal "
+            f"backslash-u escape into the link.")

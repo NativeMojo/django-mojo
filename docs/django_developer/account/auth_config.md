@@ -45,7 +45,7 @@ rather than appending to it.
 | `terms_url` | string | `""` | Terms & Conditions link on register page |
 | `layout` | string | `"card"` | `"card"` or `"fullscreen"` |
 | `api_base` | string | `""` | API host (empty = same origin) |
-| `success_redirect` | string | `"/"` | Redirect target after login |
+| `success_redirect` | string | `"/"` | Redirect target after login. Must resolve to `http`/`https` (a relative path is fine) — the auth page scheme-guards this value on its way to the browser, so a custom app scheme such as `myapp://home` is refused and sign-in dead-ends on **every** attempt. Point it at an `https` universal/app link instead. Not validated on write (`validate_auth_config` does not check it), so the failure surfaces at login, not at save |
 | `custom_css` | string | `""` | Inline CSS block injected after the theme stylesheet |
 | `custom_css_url` | string | `""` | `https://` URL to an external CSS file |
 

@@ -28,19 +28,22 @@ class ApiKey(MojoSecrets, MojoModel):
         validate_token() for the fast lookup.
       - mojo_secrets — the raw token itself, stored ENCRYPTED via MojoSecrets
         (AES-256-GCM, key derived with PBKDF2). get_token() decrypts and
-        returns it, and the "default" REST graph exports it as `token` on
-        EVERY read (list and detail), not just at creation — any caller
-        holding this model's VIEW_PERMS (manage_group / manage_groups /
-        groups) sees the live raw token. The "me" graph omits it deliberately.
+        returns it. This is NOT a "shown once" credential.
+
+    Read-back over REST is OPT-IN. No ordinary read carries the secret: the
+    "default" graph (which lists fall back to) and the "me" graph both omit
+    it. A caller who genuinely needs the live token asks for graph="token",
+    which exports it through rest_get_token() and writes an
+    `api_key:token_read` audit row. The opt-in is open to the same VIEW_PERMS
+    holders as any other read (manage_group / manage_groups / groups) — what
+    changed is that the credential no longer rides along on requests that
+    never asked for it, not who may ask.
 
     Encryption caveat: MojoSecrets derives its key from
     `{created}{pk}{ClassName}` — every input is a plaintext column on this
     same row, with no server-side secret mixed in. It therefore protects
     against exfiltration of the mojo_secrets column alone, NOT against a row
     or full-table dump. Treat this table as holding live credentials.
-
-    Whether `token` should stay on the default graph is a separate open
-    question — see maestro item 424; deliberately not decided here.
 
     Permissions are explicit (JSON dict, same shape as GroupMember.permissions).
     System-level permissions (sys.*) are always denied regardless of what is in
@@ -96,14 +99,39 @@ class ApiKey(MojoSecrets, MojoModel):
         # every new key to whoever made it.
         CREATED_BY_OWNER_FIELD = None
         SENSITIVE_FIELDS = ["token_hash"]
+        # This table holds live credentials. The assistant's query_model takes a
+        # caller-supplied graph and does not filter sensitive values out of
+        # serialized output, so nothing else would stop it asking for the
+        # "token" graph below.
+        DENY_AI = True
         GRAPHS = {
+            # NOTE: the raw token is deliberately ABSENT here. This is the graph
+            # every ordinary read gets — including lists, which ask for "list",
+            # find no such graph, and fall back to this one. Read-back is opt-in
+            # via graph="token".
             "default": {
                 "fields": [
                     "id", "created", "modified", "name",
                     "is_active", "permissions", "limits",
                     "last_used", "expires_at", "metadata", "override_user"
                 ],
-                "extra": [("get_token", "token")],
+                "graphs": {
+                    "group": "basic",
+                    "user": "basic",
+                }
+            },
+            # Opt-in credential read: same shape as "default" plus the live raw
+            # token. Available to the same VIEW_PERMS holders — the point is
+            # that the secret only ships when a caller asks for it by name, not
+            # that fewer callers may ask. Every read here is audited; see
+            # rest_get_token.
+            "token": {
+                "fields": [
+                    "id", "created", "modified", "name",
+                    "is_active", "permissions", "limits",
+                    "last_used", "expires_at", "metadata", "override_user"
+                ],
+                "extra": [("rest_get_token", "token")],
                 "graphs": {
                     "group": "basic",
                     "user": "basic",
@@ -198,10 +226,16 @@ class ApiKey(MojoSecrets, MojoModel):
         Prevents a group admin from self-minting a key with arbitrary powerful
         permissions.
         """
+        from mojo.helpers.request import is_override_user_session
         user = getattr(request, "user", None)
         if user is None:
             return False
-        if user.has_permission(["manage_groups", "manage_users"]):
+        # Skipped for a session that ASSUMES a member (override ApiKey /
+        # GroupScopedToken) — see GroupMember.can_change_permission for the
+        # reasoning. Reference-mode and unlinked keys read their own dict here
+        # and are unaffected.
+        if not is_override_user_session(request) and user.has_permission(
+                ["manage_groups", "manage_users"]):
             return True
         # On REST create the group FK is auto-stamped AFTER the field loop, so
         # self.group may still be None while set_permissions runs — fall back to
@@ -509,7 +543,7 @@ class ApiKey(MojoSecrets, MojoModel):
         Two writes happen: token_hash gets the SHA-256 (for validate_token's
         indexed lookup) and set_secret("token", ...) puts the RAW token into
         mojo_secrets, encrypted on save. The raw token stays recoverable
-        afterwards via get_token() and is exported by the default REST graph.
+        afterwards via get_token(), and over REST via the opt-in "token" graph.
 
         What this call destroys is the PREVIOUS token — both the old hash and
         the old encrypted copy are overwritten, so any token issued before
@@ -528,9 +562,9 @@ class ApiKey(MojoSecrets, MojoModel):
 
         Returns (api_key, raw_token). The caller does NOT have to persist
         raw_token in order to see it again — it is stored encrypted on the row
-        and api_key.get_token() returns it (as does the default REST graph).
-        It is still a live credential: hand it to the client over a secure
-        channel and treat the stored copy accordingly.
+        and api_key.get_token() returns it (over REST, the opt-in "token"
+        graph). It is still a live credential: hand it to the client over a
+        secure channel and treat the stored copy accordingly.
 
         Args:
             group:       account.Group instance
@@ -651,6 +685,49 @@ class ApiKey(MojoSecrets, MojoModel):
         """Returns the raw token from encrypted storage."""
         return self.get_secret("token")
 
+    def rest_get_token(self):
+        """Graph export for the opt-in "token" graph — audited.
+
+        get_token() stays quiet for server-side use; this is the REST boundary,
+        where handing back a live credential is worth a trail. One Log row per
+        serialized key, so a bulk read (graph=token on a list) is visible once
+        per credential — that is the intent, and no ordinary traffic reaches
+        this path.
+
+        The audit guards itself: the serializer turns ANY exception raised by a
+        graph extra into `"token": null` with a 200, which is indistinguishable
+        from "this key has no token". A failing audit write must never be able
+        to reach that.
+        """
+        try:
+            self.log(f"API Key '{self.name}' token read", "api_key:token_read")
+        except Exception:
+            logit.exception("failed to audit api_key token read")
+        return self.get_token()
+
+    def on_rest_get(self, request, graph="default"):
+        """A freshly created key still hands back its raw token.
+
+        on_rest_handle_create responds through this method, and the token is no
+        longer on the default graph. The creation echo must NOT be routed
+        through a request-selected graph: Group.check_view_permission rewrites
+        request.DATA["graph"] to "basic" for member-level callers, which would
+        silently drop the token for exactly the callers least able to recover
+        it. So the just-minted value is attached explicitly, the same way
+        group/apikey/rotate does it.
+
+        The hardcoded "default" is safe only because this model defines no
+        "basic" or "list" graph, so the downgrade would land on "default"
+        anyway. Adding either one means revisiting this line — otherwise the
+        create echo starts bypassing a narrowing the caller was meant to get.
+        """
+        raw = getattr(self, "_raw_token", None)
+        if raw is None:
+            return super().on_rest_get(request, graph=graph)
+        data = self.to_dict(graph="default")
+        data["token"] = raw
+        return dict(status=True, data=data, graph="default")
+
     def on_rest_created(self):
         """Generate token, store hash for lookup, store raw token encrypted."""
         self._raw_token = self.generate_token()
@@ -667,10 +744,10 @@ class ApiKey(MojoSecrets, MojoModel):
         encrypted copy is replaced, not kept.
 
         The NEW token is not write-once: like any ApiKey token it remains
-        readable through ``get_token()`` and the default REST graph until the
-        next rotation. It is returned here for convenience, not because this
-        is the only chance to see it. No new row, so existing references stay
-        valid.
+        readable through ``get_token()`` and, over REST, the opt-in "token"
+        graph until the next rotation. It is returned here for convenience,
+        not because this is the only chance to see it. No new row, so existing
+        references stay valid.
         """
         token = self.generate_token()
         self.save()

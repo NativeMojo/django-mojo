@@ -26,7 +26,26 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### ALLOWED
 
-- `ALLOWED_REDIRECT_URLS`
+- `ALLOWED_REDIRECT_URLS` — list, default `[]`. URLs accepted as the OAuth
+  `redirect_uri` landing page on `GET /api/auth/oauth/<provider>/begin`. Matched
+  as a **URL**, not a string prefix: same scheme (`http`/`https` never substitute
+  for each other), same host case-folded, same port (scheme default when
+  absent), and a path at or under the entry path on a `/` segment boundary.
+  Query and fragment are ignored on both sides; `*.` wildcards are **not**
+  supported and are skipped as unusable entries; list IDN hosts in punycode. A
+  **custom scheme** (`myapp://callback`, a mobile deep link) is supported under
+  narrower rules — exact scheme + exact case-folded authority + the same path
+  rule, no default ports and no wildcards. Empty (or unset) refuses any
+  `redirect_uri` outright. **Not the only source**: the group this request
+  resolved (`?group=` / `?group_uuid=`) contributes its own
+  `Group.metadata["allowed_redirect_urls"]`, inherited up the parent chain, so
+  the effective allowlist is this setting plus that tenant-writable list. Read
+  through `settings.get` with `kind="list"`, so a **global** `Setting` row works
+  — it holds text, and both a JSON array and a comma-separated string are
+  coerced correctly. A group-scoped `Setting` row is never consulted (per-group
+  entries live in group metadata instead). See
+  [OAuth](../account/oauth.md#allowlist-configuration) and
+  [the per-group source](../account/oauth.md#the-per-group-source).
 
 ### API
 
@@ -62,8 +81,21 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### AUTH
 
-- `AUTH_BEARER_HANDLERS`
-- `AUTH_BEARER_NAME_MAP`
+- `AUTH_BEARER_HANDLERS` — **file-only** (`settings.get_static`). Dict, default
+  `{}`. Maps an `Authorization` scheme prefix to a `(token, request) ->
+  (instance, error)` handler path. `bearer` and `apikey` are built in and need
+  no entry. **Replaces the default wholesale — there is no merge.** Registering
+  [group-scoped tokens](../account/auth.md#group-scoped-tokens) is opt-in here:
+  `{"grouptoken": "mojo.apps.account.services.group_token.validate_token"}`.
+  An unregistered scheme is answered with `401 Invalid token type`.
+- `AUTH_BEARER_NAME_MAP` — **file-only** (`settings.get_static`). Dict, default
+  `{"bearer": "user", "apikey": "user"}`. Names the request attribute each
+  scheme's resolved instance is assigned to. **Replaces the default wholesale —
+  there is no merge**, so always write the COMPLETE map. Declaring only a new
+  entry silently un-maps `bearer` and `apikey`: `request.user` never populates
+  and every request degrades to anonymous 403s with no diagnostic. With group
+  tokens registered the full map is
+  `{"bearer": "user", "apikey": "user", "grouptoken": "user"}`.
 - `AUTH_CSP_DIRECTIVES` — **file-only** (`settings.get_static`). Dict, default
   `{}`. Per-directive merge over the default Content-Security-Policy on the
   hosted auth pages. A present key replaces that directive wholesale, an empty
@@ -87,7 +119,12 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `AUTH_HANDOFF_ALLOWED_URLS` — list, **unset by default (monitor mode)**.
   Destination URLs `POST /api/auth/handoff` may mint a code for, matched on
   **exact host + path prefix** (`https://*.example.com/` admits one extra
-  dot-free label). **Setting it — any list, even `[]` — turns enforcement on**:
+  dot-free label). A custom scheme (a mobile deep link) is usable here too —
+  same shared matcher, same narrower custom-scheme rules as
+  `ALLOWED_REDIRECT_URLS` — but note that it only serves a **custom frontend**
+  calling `POST /api/auth/handoff` directly: the bundled hosted auth pages
+  scheme-guard `?redirect=` in the browser and refuse a custom scheme before the
+  server is consulted. **Setting it — any list, even `[]` — turns enforcement on**:
   `redirect_uri` becomes required and an unlisted destination gets a `400` with
   no code minted, plus an `auth:handoff_destination_refused` incident. Unset,
   with no resolver either, is monitor mode: the code is minted as always and an
@@ -105,6 +142,34 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   framework wraps the call — a resolver that raises, or a dotted path that fails
   to import, refuses **everything** and is logged. Unlike `USER_LOGIN_HANDLER`,
   it never fails open.
+- `AUTH_HANDOFF_GROUP_TOKEN_MODE` — **file-only** (`settings.get_static`). One
+  of `"off"` (default), `"monitor"`, `"enforce"`. When gating is on, a handoff
+  code minted for a **gated destination host** exchanges into a group-scoped
+  token package instead of a platform JWT pair, and the OAuth completion leg
+  refuses that destination outright. `monitor` predicts both outcomes into the
+  incident feed and binds nothing. An unrecognized string is treated as
+  `enforce` and logged — a typo in a security switch must not disable it.
+  **`enforce` additionally requires `AUTH_HANDOFF_ALLOWED_URLS` or
+  `AUTH_HANDOFF_RESOLVER`**, and refuses every handoff without one. File-only
+  because a DB/Redis-backed `Setting` row is writable through the generic
+  settings REST plane, and a remotely-writable mode would let settings-write
+  access silently downgrade every gated destination back to a platform JWT. See
+  [Gated destinations](../account/auth.md#gated-destinations--deliver-a-group-token-instead-of-a-jwt).
+- `AUTH_HANDOFF_GROUP_TOKEN_HOSTS` — **file-only** (`settings.get_static`,
+  `kind="dict"`). `{host_entry: group_uuid}`, default `{}`. A **deny** rule, so
+  the matching is deliberately looser than the allowlist's: entries are hosts
+  (a full URL is reduced to its host with a warning — scheme, port and path are
+  ignored), and **every entry covers the host and all of its subdomains at any
+  depth** (`example.com` and `*.example.com` are the same rule). List IDN hosts
+  in punycode; IP-literal and single-label entries are refused in every
+  encoding. A defective entry, or two entries normalizing to one host with
+  different groups, refuses every handoff while gating enforces.
+- `AUTH_HANDOFF_GROUP_TOKEN_RESOLVER` — **file-only** (`settings.get_static`).
+  Dotted path to `fn(url, request=None) -> Group | uuid | int pk | None`,
+  default `""`. **When set it decides** and the host map is not consulted.
+  Fails closed exactly like `AUTH_HANDOFF_RESOLVER`: raising, failing to
+  import, naming an unknown or inactive group, or returning a junk type all
+  refuse.
 - `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` — **file-only** (`settings.get_static`). A fixed code accepted in place of the real SMS code during phone verification; never set it in production. Deliberately not readable from the DB/Redis settings plane, so a `Setting` row cannot arm an authentication bypass at runtime.
 
 ### AWS
@@ -325,6 +390,16 @@ restart. See
 ### GROUP
 
 - `GROUP_LAST_ACTIVITY_FREQ`
+- `GROUP_TOKEN_TTL` — **file-only** (`settings.get_static`). Int, default
+  `3600`. Lifetime in seconds of a
+  [group-scoped token](../account/auth.md#group-scoped-tokens). There is no
+  refresh path — expiry means re-mint, and it is the one refusal that reports a
+  distinct message (`"Group token expired"`) so a client can re-mint instead of
+  prompting a full re-auth. Clock-skew tolerance for a future `iat` is a fixed
+  60s module constant, not a setting. It is also the `expires_in` a
+  [gated handoff exchange](../account/auth.md#gated-destinations--deliver-a-group-token-instead-of-a-jwt)
+  reports; `user.org.metadata["access_token_expiry"]` is deliberately **not**
+  consulted, because that knob tunes JWT lifetimes only.
 
 ### INCIDENT
 

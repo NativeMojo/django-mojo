@@ -206,13 +206,80 @@ def test_apikey_rest_create(opts):
 
 @th.unit_test("apikey_rest_get")
 def test_apikey_rest_get(opts):
-    """REST GET returns the api key without the token."""
+    """REST GET returns the api key without the token.
+
+    The live credential is NOT on the default graph — read-back is opt-in via
+    `?graph=token` (see test_apikey_rest_token_graph). An ordinary detail read
+    must never carry the secret along.
+    """
     resp = opts.client.get(f"/api/group/apikey/{opts.rest_key_id}", params={"group": opts.parent_id})
     assert resp.status_code == 200, f"get failed: {resp.status_code}"
     data = resp.response.data
     assert data.id == opts.rest_key_id, "wrong id"
-    assert data.get("token") == opts.rest_raw_token, "token should be retrievable from encrypted storage"
+    assert data.get("token") is None, (
+        f"default graph must NOT return the raw token, got: {data.get('token')!r}"
+    )
     assert "token_hash" not in data, "token_hash must not be exposed"
+
+
+@th.unit_test("apikey_rest_list_omits_token")
+def test_apikey_rest_list_omits_token(opts):
+    """A LIST read must not carry the raw token on any row.
+
+    This is the real-world exposure and it is NOT covered by the detail test:
+    on_rest_list asks for graph "list", ApiKey defines no "list" graph, and the
+    serializer falls back to "default" for any unknown graph name. If the token
+    extra ever returns to "default", this is what catches it.
+    """
+    resp = opts.client.get("/api/group/apikey", params={"group": opts.parent_id})
+    assert resp.status_code == 200, f"list failed: {resp.status_code} {resp.response}"
+    rows = resp.response.data
+    assert len(rows) > 0, "list must return at least the key created earlier"
+    for row in rows:
+        assert row.get("token") is None, (
+            f"list row {row.get('id')} leaked a raw token: {row.get('token')!r}"
+        )
+        assert "token_hash" not in row, f"list row {row.get('id')} exposed token_hash"
+
+
+@th.unit_test("apikey_rest_token_graph")
+def test_apikey_rest_token_graph(opts):
+    """?graph=token is the opt-in read-back, and it writes an audit row."""
+    from mojo.apps.logit.models import Log
+
+    before = Log.objects.filter(
+        kind="api_key:token_read", model_id=opts.rest_key_id).count()
+
+    resp = opts.client.get(
+        f"/api/group/apikey/{opts.rest_key_id}",
+        params={"group": opts.parent_id, "graph": "token"},
+    )
+    assert resp.status_code == 200, f"token-graph get failed: {resp.status_code} {resp.response}"
+    data = resp.response.data
+    assert data.get("token") == opts.rest_raw_token, (
+        f"graph=token must return the live token, got: {data.get('token')!r}"
+    )
+    assert "token_hash" not in data, "token_hash must not be exposed even on the token graph"
+
+    after = Log.objects.filter(
+        kind="api_key:token_read", model_id=opts.rest_key_id).count()
+    assert after == before + 1, (
+        f"reading the token must write exactly one api_key:token_read audit row: "
+        f"before={before} after={after}"
+    )
+
+
+@th.unit_test("apikey_rest_unknown_graph_fails_closed")
+def test_apikey_rest_unknown_graph_fails_closed(opts):
+    """A mistyped graph name falls back to "default" — never to the token."""
+    resp = opts.client.get(
+        f"/api/group/apikey/{opts.rest_key_id}",
+        params={"group": opts.parent_id, "graph": "tokens"},
+    )
+    assert resp.status_code == 200, f"unknown-graph get failed: {resp.status_code}"
+    assert resp.response.data.get("token") is None, (
+        "an unrecognized graph name must fall back to default, not expose the token"
+    )
 
 
 @th.unit_test("apikey_rest_permissions_rejects_non_dict")
@@ -508,6 +575,19 @@ def test_apikey_rest_create_bare_groups_member(opts):
     key = ApiKey.objects.get(pk=resp.response.data.id)
     assert key.permissions.get("view_data") is True, \
         f"permission set by a bare-'groups' member must persist: {key.permissions!r}"
+
+    # The creation echo must reach THIS caller too. A member-level requester
+    # trips Group.check_view_permission's any-member fallthrough during the
+    # `group` FK attach, which rewrites request.DATA["graph"] to "basic" — so a
+    # create response that picked its graph off the request would silently hand
+    # this persona a key with no token and no error. The admin-authenticated
+    # create test cannot catch that: admin holds global manage_group and never
+    # reaches the downgrade.
+    token = resp.response.data.get("token")
+    assert token is not None and len(token) == 48, (
+        f"bare-'groups' member must still receive the raw token on creation: {token!r}"
+    )
+    assert token == key.get_token(), "returned token must be the one stored on the row"
     opts.client.logout()
 
 

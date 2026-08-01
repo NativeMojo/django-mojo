@@ -415,6 +415,39 @@ def test_denial_reports_security_event(opts):
 
 
 # ---------------------------------------------------------------------------
+# Standing flag: ApiKey is permanently off-limits to the assistant
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_apikey_is_denied_to_the_assistant(opts):
+    """account.ApiKey ships DENY_AI = True and must stay that way.
+
+    The row holds a live credential and query_model takes a caller-supplied
+    graph without filtering sensitive values out of serialized output — so
+    without this flag the assistant could ask for ApiKey's opt-in "token"
+    graph and pull working tokens into a model context. Note this test does
+    NOT use _set_flag/_clear_flags: the flag is real, not a fixture.
+    """
+    from mojo.apps.assistant.services.tools.models import _check_ai_access
+    from mojo.apps.account.models import ApiKey
+
+    for verb in ("view", "create", "update", "delete"):
+        result = _check_ai_access(ApiKey, verb, opts.admin)
+        assert result is not None, f"ApiKey must be denied to the assistant for {verb}"
+        assert "not available to the assistant" in result["error"], (
+            f"Expected the AI-policy message for {verb}, got: {result['error']}"
+        )
+
+    result = _handler("query_model")({
+        "app_name": "account", "model_name": "ApiKey",
+    }, opts.admin)
+    assert "error" in result, f"query_model on ApiKey must be blocked, got: {result}"
+    assert "not available to the assistant" in result["error"], (
+        f"Expected the AI-policy message, got: {result['error']}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Distinct-message check: must NOT contain "Permission denied"
 # ---------------------------------------------------------------------------
 

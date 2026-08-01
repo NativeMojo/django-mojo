@@ -1,6 +1,7 @@
 from mojo import decorators as md
 from mojo import errors as merrors
 from mojo.apps.account.models import Group, GroupMember
+from mojo.helpers.request import identity_allows_group, is_override_user_session
 
 
 @md.URL('group')
@@ -51,7 +52,15 @@ def on_group_invite_member(request):
             event_type="user_permission_denied",
         )
     perms = ["manage_users", "manage_members", "manage_group", "manage_groups"]
-    if not request.group.user_has_permission(request.user, perms):
+    # check_user is the untenanted GLOBAL permission dict —
+    # Group.user_has_permission starts with `if check_user and
+    # user.has_permission(perms)`. For a confined credential that assumes a
+    # member (an override ApiKey, or any group token) that read has no tenant
+    # bound: a staff visitor's group token would otherwise be able to invite
+    # members into the gated group straight from tenant-page JS. Authority has
+    # to come from the member row IN THIS GROUP.
+    _check_user = not is_override_user_session(request)
+    if not request.group.user_has_permission(request.user, perms, _check_user):
         raise merrors.PermissionDeniedException()
     ms = request.group.invite(request.DATA.email)
     if "permissions" in request.DATA:
@@ -106,9 +115,15 @@ def on_group_me_member(request, pk=None):
     # contract) and ONE raise site for every non-member outcome — nonexistent,
     # inactive, and not-a-member must be wire-indistinguishable (no existence
     # oracle). No touch until membership is confirmed, so probes cause no writes.
+    #
+    # A confined credential (ApiKey / GroupScopedToken) is additionally bound
+    # to its own group: this endpoint authorizes against a caller-named group
+    # with no model-security instance re-bind, so without the bound a token for
+    # tenant A could read the visitor's member row — and its permissions — in
+    # tenant B. Folded into the SAME raise site to keep the no-oracle contract.
     request.group = Group.get_active(pk)
     member = None
-    if request.group is not None:
+    if request.group is not None and identity_allows_group(request, request.group):
         member = request.group.get_member_for_user(request.user, check_parents=True)
     if member is None:
         raise merrors.PermissionDeniedException(

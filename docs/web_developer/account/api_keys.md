@@ -57,7 +57,25 @@ Requires `manage_group`, `manage_groups`, or the combined `groups` permission (g
 }
 ```
 
-> **The token is not "shown once."** It is stored encrypted server-side and re-serialized on every read of the key: `GET /api/group/apikey` and `GET /api/group/apikey/<id>` both return `token` to callers holding `manage_group` / `manage_groups` / `groups`. Anyone who can list a group's API keys can read their live secrets — grant that permission accordingly. (`GET /api/group/apikey/me` is the exception and never returns a token.)
+> **The token is not "shown once" — but you have to ask for it.** It is stored encrypted server-side and stays retrievable through the `token` graph:
+>
+> ```
+> GET /api/group/apikey/<id>?graph=token
+> ```
+>
+> ```json
+> {
+>   "status": true,
+>   "graph": "token",
+>   "data": { "id": 7, "name": "Mobile App v2", "token": "aB3kR9...48chars", "is_active": true }
+> }
+> ```
+>
+> Ordinary reads never carry the secret: `GET /api/group/apikey` (list), `GET /api/group/apikey/<id>` (detail) and `GET /api/group/apikey/me` all omit `token` unless you pass `?graph=token`.
+>
+> **The list endpoint honors it too.** `GET /api/group/apikey?graph=token` returns a live token for every key in the group in one response — so this is a bulk credential read, not a per-key one. The opt-in changes *where the secret travels*, not *who may ask for it*: it is open to the same `manage_group` / `manage_groups` / `groups` holders as any other read, and every returned token is audited server-side. Read access to a group's API keys remains equivalent to holding those keys — grant it accordingly.
+>
+> **Watch the spelling.** An unrecognized graph name silently falls back to the default graph, so `?graph=tokens` returns `200` with no `token` field rather than an error.
 
 ### Acting as a Member — `user` and `override_user`
 
@@ -156,7 +174,7 @@ Authorization: apikey <token>
 
 ### Rotate a Key — `POST /api/group/apikey/rotate`
 
-Rotates the **calling** API key's secret **in place** — same key, same permissions, a new token. Authenticate with the key being rotated; the previous token stops working immediately and cannot be recovered. Save the new one — though note it is **not** write-once: a caller with `manage_group` / `manage_groups` / `groups` can read it back from `GET /api/group/apikey/<id>` (see Security Notes). No management permission needed to rotate (you already hold the secret); a user/JWT session gets `401`.
+Rotates the **calling** API key's secret **in place** — same key, same permissions, a new token. Authenticate with the key being rotated; the previous token stops working immediately and cannot be recovered. Save the new one — though note it is **not** write-once: a caller with `manage_group` / `manage_groups` / `groups` can read it back from `GET /api/group/apikey/<id>?graph=token` (see Security Notes). No management permission needed to rotate (you already hold the secret); a user/JWT session gets `401`.
 
 ```json
 POST /api/group/apikey/rotate
@@ -178,9 +196,11 @@ Authorization: apikey <current-token>
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/group/apikey` | List keys for a group |
+| `GET` | `/api/group/apikey` | List keys for a group (no tokens) |
+| `GET` | `/api/group/apikey?graph=token` | List keys **with their live raw tokens** (bulk read, audited) |
 | `POST` | `/api/group/apikey` | Create a key |
-| `GET` | `/api/group/apikey/<id>` | Get key details |
+| `GET` | `/api/group/apikey/<id>` | Get key details (no token) |
+| `GET` | `/api/group/apikey/<id>?graph=token` | Get key details **plus the live raw token** (audited) |
 | `POST` | `/api/group/apikey/<id>` | Update name, permissions, limits, is_active |
 | `POST` | `/api/group/apikey/rotate` | Rotate the calling key's secret (returns new token once) |
 | `DELETE` | `/api/group/apikey/<id>` | Delete key |
@@ -256,7 +276,7 @@ The request runs with the user's full permissions. If `allowed_ips` was set, req
 ## Security Notes
 
 - Store all tokens securely — treat them like passwords
-- **API key tokens are recoverable, not write-once.** The raw token is stored encrypted on the record and returned by the default graph on every read (`GET /api/group/apikey`, `GET /api/group/apikey/<id>`). Read access to a group's API keys is equivalent to holding those keys. Rotation does invalidate the *previous* token permanently.
+- **API key tokens are recoverable, not write-once — but read-back is opt-in.** The raw token is stored encrypted on the record and returned only by `GET /api/group/apikey/<id>?graph=token`; plain list and detail reads omit it. Every opt-in read is audited server-side. Read access to a group's API keys is still equivalent to holding those keys — the opt-in narrows *where the secret travels*, not *who may ask for it*. Rotation does invalidate the *previous* token permanently.
 - **API Keys**: scoped to one group, explicit permissions, `sys.*` always denied
 - **User Auth Tokens**: carry full user permissions including `sys.*` — use with caution
 - Set short expiry periods for temporary integrations

@@ -55,9 +55,24 @@ exception is logged and treated as "refused" — a deployment resolver is
 security-critical code, and a broken one must never open the gate. The same
 goes for a dotted path that fails to import.
 
+Two callers share the matcher
+-----------------------------
+`matches_allowlist(url, entries, ...)` is the public, pure form of the rules
+below: no settings, no request, just "does this URL match one of these entries".
+That is what lets two allowlists with different sources share one implementation
+instead of maintaining two `urlsplit` loops that drift apart at the next
+hardening:
+
+  * this module's `AUTH_HANDOFF_ALLOWED_URLS` (`allow_wildcard=True`), and
+  * `rest/oauth.py`'s `ALLOWED_REDIRECT_URLS`, the OAuth landing allowlist on
+    the public `/begin` endpoint (`allow_wildcard=False` — a `*.` entry was
+    dead config under the prefix test it replaced, and activating it inside a
+    change that tightens everything else would widen an allowlist no operator
+    re-consented to).
+
 Static matching rules
 ---------------------
-An entry matches a destination when ALL of:
+An entry matches an ``http(s)`` destination when ALL of:
 
   * scheme is ``http`` or ``https`` on both, and they are the SAME scheme (an
     ``https://`` entry never admits an ``http://`` destination — the code would
@@ -75,12 +90,41 @@ Host-only matching was deliberately rejected: it would make every path on an
 allowed host a token-deposit site (an open redirector, a query reflector, an
 analytics beacon that ships ``location.href``).
 
-Hostnames are additionally required to be plain ASCII host characters. That is
-not cosmetic — it closes the parser-differential class where Python keeps a
-character inside the host that a browser treats as an authority terminator
+Hostnames are additionally required to be plain ASCII host characters, and a URL
+containing a raw backslash anywhere is refused outright. That is not cosmetic —
+it closes the parser-differential class where Python keeps a character inside
+the host that a browser treats as an authority terminator
 (``https://attacker\\.example.com/`` parses here as one host ending in
-``.example.com``, but a browser navigates to ``attacker``). List IDN
-destinations in their punycode form.
+``.example.com``, but a browser navigates to ``attacker``). The charset test
+alone is NOT enough: it runs against ``parts.hostname``, which has already
+discarded the userinfo, so ``https://evil.tld\\@app.example.com/`` reaches it as
+a clean ``app.example.com`` while a browser reads the host as ``evil.tld``. List
+IDN destinations in their punycode form.
+
+Custom URL schemes (mobile deep links)
+--------------------------------------
+An entry may also name a custom scheme — ``myapp://callback``,
+``com.example.app:/oauth`` — so a native app can complete OAuth on its own
+deep link. A custom-scheme URL is not a web origin, so it is matched under its
+own, deliberately narrower rules: exact case-folded **scheme**, exact
+case-folded **authority** compared byte-for-byte, and the same
+segment-bounded **path** prefix. No default-port logic (there are no default
+ports), no ``_HOST_CHARS`` hostname rules (an authority here is an
+app-registered label, not a DNS name), and no wildcards. The backslash guard
+applies to every scheme.
+
+The two families never mix: a custom-scheme entry cannot admit an ``http(s)``
+URL, and an ``http(s)`` entry cannot admit a deep link. `_split_custom_scheme`
+documents exactly which shapes parse and which fail closed —
+``javascript:``/``data:``/``vbscript:`` and the opaque ``myapp:callback`` form
+are refused outright.
+
+This is one matcher, so custom schemes are usable in BOTH allowlists —
+``ALLOWED_REDIRECT_URLS`` and ``AUTH_HANDOFF_ALLOWED_URLS``. That is intended:
+the alternative is a per-caller scheme policy, which is exactly the drift the
+shared implementation exists to prevent. A handoff code is a bearer credential,
+so treat a deep-link handoff entry with the same care as a web one — the OS
+decides which installed app receives that scheme.
 """
 import re
 from urllib.parse import urlsplit
@@ -92,10 +136,27 @@ from mojo.helpers.settings import settings
 _SCHEMES = ("http", "https")
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _HOST_CHARS = re.compile(r"^[a-z0-9._-]+$")
+# RFC 3986 scheme grammar. urlsplit is looser in places, so a custom scheme is
+# tested explicitly rather than assumed well-formed.
+_SCHEME_CHARS = re.compile(r"^[a-z][a-z0-9+.-]*$")
+# Script pseudo-schemes are a navigation sink, never a destination. They cannot
+# match unless an operator lists one, but a matcher that would hand them back is
+# a configuration footgun that ends in stored XSS on the auth origin, so they
+# are refused outright — the same trio `mojo.helpers.urls` refuses.
+_SCRIPT_SCHEMES = ("javascript", "data", "vbscript")
 
 # Incident suppression: one report per destination host per hour, per mode.
 _NOTICE_PREFIX = "account:handoff:dest_alerted"
 _RENOTIFY_SEC = 3600
+
+# Unusable-entry warnings are logged once per distinct entry, not once per
+# request: the OAuth caller sits on a public, unauthenticated endpoint, so a
+# per-request line is a log flood an anonymous caller drives for free. Entries
+# come from deployment configuration, so "per distinct entry" is bounded by the
+# configuration; the cap only guards against a future caller passing a
+# per-request list.
+_WARNED_ENTRY = "warned:entry"
+_WARN_CAP = 256
 
 # Resolver cache keyed by the dotted path, mirroring
 # mojo.apps.account.services.extensions — a settings change (including a test
@@ -172,39 +233,93 @@ def _get_resolver():
     return True, fn
 
 
-def _matches_static_list(url):
+def matches_allowlist(url, entries, source="allowlist", allow_wildcard=False):
+    """Return True when `url` matches any entry in `entries`. Never raises.
+
+    The shared matcher, in its pure form: it reads no settings and takes no
+    request, which is exactly what lets two allowlists with different sources
+    use one implementation (see the module docstring). `entries` is the caller's
+    already-resolved list; `source` names the setting in the unusable-entry
+    warning; `allow_wildcard` decides whether a ``*.host`` entry is honored or
+    dropped as unusable.
+
+    Matching is by parsed URL, never by string prefix — scheme, host and port
+    compared after parsing, path prefix terminating on a segment boundary, query
+    and fragment ignored on both sides. A custom-scheme entry (a mobile deep
+    link) matches on exact scheme + exact authority + the same path rule. See
+    "Static matching rules" and "Custom URL schemes" above.
+    """
     candidate = _split(url)
     if candidate is None:
         return False
-    allowed = settings.get("AUTH_HANDOFF_ALLOWED_URLS", [], kind="list") or []
-    for raw_entry in allowed:
-        entry = _split(raw_entry, allow_wildcard=True)
+    for raw_entry in entries or []:
+        entry = _split(raw_entry, allow_wildcard=allow_wildcard)
         if entry is None:
-            logit.warning(
-                "account.redirect_allowlist",
-                f"ignoring unusable AUTH_HANDOFF_ALLOWED_URLS entry {raw_entry!r}")
+            _warn_unusable_entry(source, raw_entry)
             continue
         if _entry_matches(entry, candidate):
             return True
     return False
 
 
-def _split(url, allow_wildcard=False):
-    """Return (scheme, host, port, path) for an absolute http/https URL, else None.
+def _warn_unusable_entry(source, raw_entry):
+    """Name an entry that can never match — once per distinct entry.
 
-    A wildcard entry keeps its leading ``*.`` in the returned host; only the
-    allowlist side may carry one.
+    An unusable entry is silent config rot: it does not widen anything, it just
+    never matches, so the operator sees a destination refused for no visible
+    reason. Rides the module cache so `_reset_cache_for_tests` re-arms it.
+    """
+    key = (_WARNED_ENTRY, source, repr(raw_entry))
+    if key in _CACHE:
+        return
+    if len(_CACHE) < _WARN_CAP:
+        _CACHE[key] = True
+    logit.warning(
+        "account.redirect_allowlist",
+        f"ignoring unusable {source} entry {raw_entry!r}")
+
+
+def _matches_static_list(url):
+    # The candidate early-out stays AHEAD of the settings read: an unparsable
+    # destination short-circuits before any Redis/DB settings lookup, and this
+    # path is attacker-reachable on the public monitor leg.
+    if _split(url) is None:
+        return False
+    allowed = settings.get("AUTH_HANDOFF_ALLOWED_URLS", [], kind="list") or []
+    return matches_allowlist(
+        url, allowed, source="AUTH_HANDOFF_ALLOWED_URLS", allow_wildcard=True)
+
+
+def _split(url, allow_wildcard=False):
+    """Return (scheme, host, port, path) for an absolute URL, else None.
+
+    http(s) URLs take the branch below: a real DNS hostname, a scheme-default
+    port, and optional ``*.`` wildcard support on the allowlist side (the
+    leading ``*.`` stays in the returned host; only an entry may carry one).
+
+    Anything else with a scheme goes to `_split_custom_scheme`, which returns
+    the same 4-tuple shape with the raw authority in the host slot and None in
+    the port slot. No scheme at all — ``//host/x``, ``/relative`` — refuses.
     """
     if not url or not isinstance(url, str):
         return None
+    raw = url.strip()
+    # Python's urlsplit does not treat a backslash as an authority terminator;
+    # browsers (WHATWG) do. The `_HOST_CHARS` test below cannot cover this on
+    # its own: it runs against `parts.hostname`, which has ALREADY discarded the
+    # userinfo, so `https://evil.tld\@app.example.com/` arrives there as a clean
+    # `app.example.com` while a browser navigates to `evil.tld`. Refusing any
+    # raw backslash is the only safe reading of that disagreement — the sibling
+    # `handoff_group._bare_host` carries the same guard for the same reason.
+    if "\\" in raw:
+        return None
     try:
-        parts = urlsplit(url.strip())
+        parts = urlsplit(raw)
     except ValueError:
         return None
     scheme = (parts.scheme or "").lower()
     if scheme not in _SCHEMES:
-        # Also how ``javascript:`` and ``data:`` are refused — no hostname.
-        return None
+        return _split_custom_scheme(scheme, parts)
     try:
         host = parts.hostname
         port = parts.port
@@ -220,12 +335,59 @@ def _split(url, allow_wildcard=False):
     return scheme, host, port or _DEFAULT_PORTS[scheme], parts.path or "/"
 
 
+def _split_custom_scheme(scheme, parts):
+    """Return (scheme, authority, None, path) for a custom-scheme URL, else None.
+
+    A custom scheme is a mobile deep link — ``myapp://callback``,
+    ``com.example.app:/oauth``. It is not a web origin: the authority is a label
+    the app registered with the OS, not a DNS name, and there is no default
+    port. So NONE of the http(s) rules apply here. The authority is compared
+    byte-for-byte after case-folding (which is also why userinfo and
+    percent-encoding cannot smuggle anything: ``myapp://evil@callback`` is
+    simply a different authority, not a rewriting of ``callback``), the port
+    slot is always None, and ``*.`` is inert — `_entry_matches` never reaches
+    `_host_matches` for a custom scheme.
+
+    Refused, fail-closed, because the shape cannot be read unambiguously:
+
+      * no scheme at all (``//host/x``, ``/relative``), or a scheme `urlsplit`
+        tolerated that is not RFC 3986 scheme syntax;
+      * ``javascript:`` / ``data:`` / ``vbscript:`` — see `_SCRIPT_SCHEMES`;
+      * the opaque form, where a non-empty path does not start with ``/``
+        (``myapp:callback``, ``mailto:a@b``): there is no way to tell an
+        authority from a path there;
+      * a bare ``myapp:`` or ``myapp://`` with neither authority nor path —
+        nothing to match on, and as an entry it would authorize a whole scheme.
+
+    ``com.example.app:/oauth`` and ``com.example.app:///oauth`` are the SAME
+    value: both carry an empty authority and the path ``/oauth``. An empty
+    authority is a real, distinct value — it never equals ``callback``.
+    """
+    if not scheme or not _SCHEME_CHARS.match(scheme):
+        return None
+    if scheme in _SCRIPT_SCHEMES:
+        return None
+    authority = (parts.netloc or "").lower()
+    path = parts.path or ""
+    if path and not path.startswith("/"):
+        return None
+    if not authority and not path:
+        return None
+    return scheme, authority, None, path or "/"
+
+
 def _entry_matches(entry, candidate):
     e_scheme, e_host, e_port, e_path = entry
     c_scheme, c_host, c_port, c_path = candidate
     if e_scheme != c_scheme or e_port != c_port:
         return False
-    if not _host_matches(e_host, c_host):
+    if e_scheme in _SCHEMES:
+        if not _host_matches(e_host, c_host):
+            return False
+    elif e_host != c_host:
+        # Custom scheme: exact, case-folded authority. `_host_matches` is
+        # deliberately not reached, so a ``*.`` inside a custom-scheme entry is
+        # an authority nothing will ever equal rather than a wildcard.
         return False
     if c_path == e_path:
         return True

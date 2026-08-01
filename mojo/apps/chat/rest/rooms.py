@@ -1,7 +1,24 @@
 from mojo import decorators as md
 from mojo import errors as merrors
 from mojo.helpers import dates
+from mojo.helpers.request import (
+    identity_allows_group, is_override_user_session, restricted_identity)
 from ..models import ChatRoom, ChatMembership, ChatMessage
+
+
+def _deny_cross_tenant_room(request, room):
+    """Confine a restricted identity (ApiKey / GroupScopedToken) to rooms in
+    its own group.
+
+    These endpoints authorize against a caller-supplied `room_id` and then
+    serve rosters, bodies and memberships through the GROUPLESS
+    ChatMembership / ChatMessage models — model security never sees a tenant to
+    re-bind to, so the bound has to be applied here. A room with no group
+    (direct messages, personal rooms) denies every restricted identity:
+    fail-closed, since a confined credential has no tenant claim on it.
+    """
+    if not identity_allows_group(request, getattr(room, "group", None)):
+        raise merrors.PermissionDeniedException()
 
 
 @md.URL('room')
@@ -20,6 +37,14 @@ def on_chat_rooms_list(request):
         status__in=["active", "muted"],
     ).values_list("room_id", flat=True)
     qs = ChatRoom.objects.filter(pk__in=room_ids)
+    # Same tenant bound as the room-resolving endpoints below: a confined
+    # credential lists only rooms inside its own group. request.user is a real
+    # User under a group token (and under an override ApiKey), so an unfiltered
+    # membership read would return every tenant's rooms the visitor belongs to.
+    # Groupless rooms (DMs) drop out — consistent with _deny_cross_tenant_room.
+    identity = restricted_identity(request)
+    if identity is not None:
+        qs = qs.filter(group__in=identity.get_groups())
     return ChatRoom.on_rest_list(request, queryset=qs)
 
 
@@ -32,6 +57,8 @@ def on_chat_room_join(request):
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
 
+    _deny_cross_tenant_room(request, room)
+
     if room.kind != "channel":
         return ChatRoom.rest_error_response(
             request, 403, error="Can only join channel rooms",
@@ -39,7 +66,9 @@ def on_chat_room_join(request):
 
     # If group-linked, check group membership
     if room.group:
-        if not room.group.user_has_permission(request.user, ["chat", "manage_chat"]):
+        if not room.group.user_has_permission(
+                request.user, ["chat", "manage_chat"],
+                not is_override_user_session(request)):
             raise merrors.PermissionDeniedException()
 
     membership, created = ChatMembership.objects.get_or_create(
@@ -82,6 +111,8 @@ def on_chat_room_leave(request):
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
 
+    _deny_cross_tenant_room(request, room)
+
     if room.kind == "direct":
         return ChatRoom.rest_error_response(
             request, 400, error="Cannot leave a direct message room",
@@ -119,6 +150,8 @@ def on_chat_room_add_member(request):
     room = ChatRoom.objects.filter(pk=request.DATA.room_id).first()
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
+
+    _deny_cross_tenant_room(request, room)
 
     if room.kind == "direct":
         return ChatRoom.rest_error_response(
@@ -161,6 +194,8 @@ def on_chat_room_remove_member(request):
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
 
+    _deny_cross_tenant_room(request, room)
+
     _check_room_admin(request, room)
 
     membership = ChatMembership.objects.filter(
@@ -181,6 +216,8 @@ def on_chat_room_mute_member(request):
     room = ChatRoom.objects.filter(pk=request.DATA.room_id).first()
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
+
+    _deny_cross_tenant_room(request, room)
 
     _check_room_moderator(request, room)
 
@@ -204,6 +241,8 @@ def on_chat_room_ban_member(request):
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
 
+    _deny_cross_tenant_room(request, room)
+
     _check_room_moderator(request, room)
 
     membership = ChatMembership.objects.filter(
@@ -225,6 +264,8 @@ def on_chat_room_update_rules(request):
     room = ChatRoom.objects.filter(pk=request.DATA.room_id).first()
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
+
+    _deny_cross_tenant_room(request, room)
 
     _check_room_admin(request, room)
 
@@ -252,10 +293,14 @@ def on_chat_room_members(request):
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
 
+    _deny_cross_tenant_room(request, room)
+
     # Must be a member or have manage_chat
     membership = ChatMembership.objects.filter(room=room, user=request.user).first()
     if not membership:
-        if not (room.group and room.group.user_has_permission(request.user, "manage_chat")):
+        if not (room.group and room.group.user_has_permission(
+                request.user, "manage_chat",
+                not is_override_user_session(request))):
             raise merrors.PermissionDeniedException()
 
     qs = ChatMembership.objects.filter(room=room).exclude(status="banned")
@@ -272,6 +317,8 @@ def on_chat_room_online(request):
     room = ChatRoom.objects.filter(pk=request.DATA.room_id).first()
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
+
+    _deny_cross_tenant_room(request, room)
 
     members = ChatMembership.objects.filter(
         room=room, status__in=["active", "muted"],
@@ -291,24 +338,37 @@ def on_chat_room_online(request):
 
 
 def _check_room_admin(request, room):
-    """Check if request user is a room admin or has manage_chat permission. Raises on failure."""
+    """Check if request user is a room admin or has manage_chat permission. Raises on failure.
+
+    `check_user` and the bare global fallback are BOTH skipped for a session
+    that assumes a member (override ApiKey / group token): those reads are the
+    member's untenanted platform-wide dict, which a confined credential must
+    never inherit. Authority comes from the room membership or a member grant
+    in the room's own group.
+    """
     membership = ChatMembership.objects.filter(room=room, user=request.user).first()
     if membership and membership.is_admin:
         return
-    if room.group and room.group.user_has_permission(request.user, "manage_chat"):
+    check_user = not is_override_user_session(request)
+    if room.group and room.group.user_has_permission(request.user, "manage_chat", check_user):
         return
-    if request.user.has_permission("manage_chat"):
+    if check_user and request.user.has_permission("manage_chat"):
         return
     raise merrors.PermissionDeniedException()
 
 
 def _check_room_moderator(request, room):
-    """Check if request user can moderate (admin, moderate_chat, or manage_chat). Raises on failure."""
+    """Check if request user can moderate (admin, moderate_chat, or manage_chat). Raises on failure.
+
+    Same assumed-member discipline as _check_room_admin.
+    """
     membership = ChatMembership.objects.filter(room=room, user=request.user).first()
     if membership and membership.is_admin:
         return
-    if room.group and room.group.user_has_permission(request.user, ["moderate_chat", "manage_chat"]):
+    check_user = not is_override_user_session(request)
+    if room.group and room.group.user_has_permission(
+            request.user, ["moderate_chat", "manage_chat"], check_user):
         return
-    if request.user.has_permission(["moderate_chat", "manage_chat"]):
+    if check_user and request.user.has_permission(["moderate_chat", "manage_chat"]):
         return
     raise merrors.PermissionDeniedException()

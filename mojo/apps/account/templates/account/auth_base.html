@@ -67,12 +67,30 @@
     <script nonce="{{ csp_nonce }}" src="{{ api_base }}/api/account/static/mojo-auth.js"></script>
     <script nonce="{{ csp_nonce }}">
     (function () {
+        {% comment %}
+           Every context value interpolated into a JS string literal below
+           carries |escapejs, and any new one must too. <script> is a raw-text
+           element, so the HTML parser never decodes entities inside it:
+           without the filter, autoescaping rewrites the `&` joining two query
+           params to `&amp;` and the literal reaches the browser holding that
+           verbatim. The destination then parses `amp;redirect=` and silently
+           drops the forwarded param. escapejs emits \uXXXX escapes the JS
+           engine decodes at parse time, and returns a SafeString so
+           autoescape never runs twice. Put it AFTER any default: filter.
+
+           Attribute contexts (href/src, above) are the opposite case — the
+           parser DOES decode entities there, so those interpolations stay on
+           plain autoescaping. Do not add escapejs to one; it would put a
+           literal backslash-u escape in the link. And never reach for |safe
+           here either: it would fix the ampersand by reopening the
+           string-literal breakout that autoescaping currently closes.
+        {% endcomment %}
         // API_BASE: use configured value, fall back to current origin (same-origin API)
-        var API_BASE = "{{ api_base }}" || window.location.origin;
-        var ON_SUCCESS = "{{ success_redirect|default:'/' }}";
-        var AUTH_URL = "{{ auth_url|default:'/auth' }}";
-        var REGISTER_URL = "{{ register_url|default:'/register' }}";
-        var PASSKEY_URL = "{{ passkey_url|default:'/passkey' }}";
+        var API_BASE = "{{ api_base|escapejs }}" || window.location.origin;
+        var ON_SUCCESS = "{{ success_redirect|default:'/'|escapejs }}";
+        var AUTH_URL = "{{ auth_url|default:'/auth'|escapejs }}";
+        var REGISTER_URL = "{{ register_url|default:'/register'|escapejs }}";
+        var PASSKEY_URL = "{{ passkey_url|default:'/passkey'|escapejs }}";
 
         // Portal config — which login methods this group offers, and the
         // passkey-during-registration policy (off / optional / required).
@@ -113,10 +131,10 @@
             loginMethods: LOGIN_METHODS,
             passkeyPrompt: PASSKEY_PROMPT,
             groupUuid: GROUP_UUID,
-            // Sanitized (see safeBackHref below — function declarations hoist).
+            // Sanitized (see safeNavUrl below — function declarations hoist).
             // Page scripts read this straight into an href, so it must never
             // carry a javascript:/data: URL either.
-            backUrl: safeBackHref(paramBack) || "",
+            backUrl: safeNavUrl(paramBack) || "",
             params: params,
         };
 
@@ -162,15 +180,19 @@
                 $("mat-overlay").classList.remove("is-visible");
             },
             redirect: function () {
-                // Same-origin (or relative) redirects don't need a handoff \u2014
+                // Same-origin (or relative) redirects don't need a handoff —
                 // tokens already live in localStorage on the destination origin.
-                var target = redirectTo;
-                var isCrossOrigin = false;
-                try {
-                    var resolved = new URL(target, window.location.href);
-                    isCrossOrigin = resolved.origin !== window.location.origin;
-                    target = resolved.href;
-                } catch (e) { /* malformed URL \u2014 fall back to direct nav */ }
+                var target = safeNavUrl(redirectTo);
+                if (!target) {
+                    window._mat.hideOverlay();
+                    window._mat.showMessage(
+                        "That destination isn't allowed. Please return to the app and try again.",
+                        "error");
+                    return;
+                }
+                // Cannot throw: safeNavUrl already resolved this to an absolute
+                // http(s) href.
+                var isCrossOrigin = new URL(target).origin !== window.location.origin;
 
                 if (!isCrossOrigin || !MojoAuth.isAuthenticated()) {
                     window.location.href = target;
@@ -182,14 +204,23 @@
                         var sep = target.indexOf('?') === -1 ? '?' : '&';
                         window.location.href = target + sep + 'auth_code=' + encodeURIComponent(d.code);
                     })
-                    .catch(function () {
+                    .catch(function (err) {
                         // The server refuses to mint a code for a destination it
                         // does not allow. Navigating anyway would defeat that
                         // check \u2014 it is the same crafted ?redirect= link, just
                         // without the code. Show the error and stay put.
+                        //
+                        // Surface the SERVER's message when it sent one: a
+                        // gated destination answers "you are not a member of
+                        // the group for that site", which a real human at this
+                        // page can act on. The generic string stays as the
+                        // fallback, and is the only thing the client-side
+                        // scheme refusal above ever shows \u2014 so a client-side
+                        // refusal is not distinguishable from a server one.
                         window._mat.hideOverlay();
                         window._mat.showMessage(
-                            "That destination isn't allowed. Please return to the app and try again.",
+                            MojoAuth.getError(err)
+                            || "That destination isn't allowed. Please return to the app and try again.",
                             "error");
                     });
             },
@@ -199,29 +230,35 @@
             },
         };
 
-        // Override "Back to website" link when ?back= param is present.
-        //
-        // ?back= is attacker-controllable, and an href is a script sink: a
-        // javascript: (or data:) URL here executes in the auth origin the
-        // moment the visitor clicks "Back". Only http/https absolute URLs and
-        // same-origin relative paths are accepted. The HOST is deliberately not
-        // allowlisted — "back to the marketing site" is legitimately
-        // cross-origin, and the scheme check is what closes the hole.
-        function safeBackHref(raw) {
+        // The one scheme guard for every attacker-controllable navigation
+        // target on these pages: ?back= (an href) and the post-login
+        // destination ?redirect=/?next=/?returnTo= (window.location.href in
+        // _mat.redirect). Both are script sinks — a javascript: (or data:) URL
+        // executes in the auth origin, the origin whose localStorage holds the
+        // visitor's tokens. Only http/https absolute URLs and same-origin
+        // relative paths are accepted. The HOST is deliberately not
+        // allowlisted — "back to the marketing site" and a cross-origin app
+        // destination are both legitimate, and the scheme check is what closes
+        // the hole. Restricting the host is the separate, opt-in, server-side
+        // handoff allowlist.
+        function safeNavUrl(raw) {
             if (!raw) return null;
             // Leading "//" is protocol-relative — an absolute cross-origin URL
             // wearing a relative URL's clothes. Resolve everything and judge
             // the result's protocol, which is the only thing that decides
-            // whether a click runs script.
+            // whether the navigation runs script. Resolving is also what
+            // lowercases the scheme and strips tab/newline padding, so
+            // JaVaScRiPt: and java<tab>script: are judged as what they are.
             var resolved;
             try { resolved = new URL(raw, window.location.href); }
             catch (e) { return null; }
             if (resolved.protocol !== "http:" && resolved.protocol !== "https:") return null;
             return resolved.href;
-        } // end safeBackHref
+        } // end safeNavUrl
 
+        // Override "Back to website" link when ?back= param is present.
         if (paramBack) {
-            var backHref = safeBackHref(paramBack);
+            var backHref = safeNavUrl(paramBack);
             var backEl = $("mat-hero-back");
             if (backEl && backHref) { backEl.href = backHref; backEl.style.display = ""; }
         }
@@ -232,7 +269,12 @@
         // Session check — skipped on the passkey enrollment page, where the
         // visitor is already authenticated and must not be auto-redirected.
         if (!SKIP_SESSION_CHECK && !params.get("token") && !(params.get("code") && params.get("state"))) {
-            var refreshToken = MojoAuth.getRefreshToken();
+            // A group-scoped session is never refreshed — refreshToken()
+            // rejects, and the .catch below calls MojoAuth.logout(), which
+            // would throw away a perfectly valid group token. The guard has to
+            // precede the call for that reason, not merely to save a request.
+            var isGroupSession = MojoAuth.getTokenType() === "grouptoken";
+            var refreshToken = isGroupSession ? null : MojoAuth.getRefreshToken();
             if (refreshToken) {
                 window._mat.showOverlay("Checking session\u2026", "Verifying your credentials");
                 MojoAuth.refreshToken()

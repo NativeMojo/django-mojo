@@ -31,11 +31,15 @@ def on_search(request):
         limit = DEFAULT_LIMIT
     limit = max(1, min(limit, MAX_LIMIT))
     from mojo.apps.docit.services.search import search_any, visible_groups
+    from mojo.helpers.request import restricted_identity
     # Search reads the same content the list endpoints serve, so it has to be
     # confined the same way — without this it was a cross-tenant snippet feed
-    # for any authenticated caller.
+    # for any authenticated caller. Any confined credential (ApiKey or
+    # GroupScopedToken) wins over request.user here: both duck-type
+    # get_groups_with_permission, and both must stay inside their own group
+    # rather than inherit the acting member's global docit grant.
     groups = visible_groups(
-        user=request.user, api_key=getattr(request, "api_key", None))
+        user=request.user, api_key=restricted_identity(request))
     found = search_any(str(query).strip(), book=request.DATA.get("book", None),
                        limit=limit, groups=groups)
     return {"results": found.results, "mode": found.mode, "count": len(found.results)}

@@ -62,7 +62,7 @@ nothing about whether the number has an account.
 | `?token=ml:...` | Magic login token — auto-consumed on page load |
 | `?token=pr:...` | Password reset token — opens "Set New Password" view |
 | `?code=...&state=...` | OAuth callback — auto-completes the OAuth flow |
-| `?redirect=<url>` | Custom redirect after login (also `?next=` or `?returnTo=`). Preserved through the bouncer challenge **and** the OAuth provider round-trip. |
+| `?redirect=<url>` | Custom redirect after login (also `?next=` or `?returnTo=`). Preserved through the bouncer challenge **and** the OAuth provider round-trip. Only `http`/`https` URLs and same-origin relative paths are accepted — see below. |
 | `?back=<url>` | Override the "Back to website" hero link |
 | `?group_uuid=<uuid>` | Load per-group branding and restrict to the group's enabled methods. Must be `group_uuid` — the framework reserves `?group=` for integer IDs. |
 
@@ -245,6 +245,14 @@ group's auth config. No URL params needed.
 and the param is preserved through navigation (login ↔ register switcher), the
 OAuth round-trip, and the login → passkey enrollment redirect.
 
+`redirect`, `next`, `returnTo` and `back` ride the same links, so a destination
+you hand a group-scoped portal survives the whole flow. **This is fixed in this
+release:** the register → passkey-enrollment hop previously dropped every param
+after the first whenever `group_uuid` was combined with one of them, and the
+visitor landed on the group's `success_redirect` (or `/`) instead of where they
+came from. Nothing changes on your side — links that already worked keep
+working, and a `?group_uuid=` with no second param was never affected.
+
 **Group forwarded on submit** — when the auth page resolves a group, the
 rendered forms automatically include `group_uuid` in the POST body. This
 satisfies servers configured with `REQUIRE_GROUP_ON_REGISTRATION = True`.
@@ -293,22 +301,77 @@ allowlist.
 argument and rejects without one, regardless of what the server enforces. Treat
 a rejection as "do not navigate".
 
-**`?back=`** (the "Back to website" link) accepts only `http`/`https` URLs and
-same-origin relative paths — a `javascript:`/`data:` value is dropped and the
-link stays hidden.
+**Both navigation params are scheme-guarded.** `?back=` (the "Back to website"
+link) and `?redirect=`/`?next=`/`?returnTo=` (the post-login destination) accept
+only `http`/`https` URLs and same-origin relative paths. One guard, two
+different outcomes:
+
+- a refused **`?back=`** value is dropped and the hero link stays hidden;
+- a refused **`?redirect=`** value means the page navigates nowhere and shows
+  "That destination isn't allowed. Please return to the app and try again."
+
+So `javascript:` and `data:` are refused, and so is any non-web scheme —
+`mailto:`, `tel:`, and custom app schemes like `myapp://home`. If you were
+bouncing users into a native app that way, point `?redirect=` at an `https`
+universal/app link instead. The same guard applies to the group's configured
+`success_redirect`, which is where the destination comes from when no param is
+present.
+
+> **A custom scheme *is* accepted as an OAuth `redirect_uri` — different
+> parameter, different endpoint.** `redirect_uri` on
+> `GET /api/auth/oauth/<provider>/begin` is matched server-side against the
+> operator's allowlist and supports mobile deep links (see
+> [OAuth § Native apps](oauth.md#native-apps--custom-url-schemes)). It does not
+> pass through this browser guard. `?redirect=` on the hosted auth pages does,
+> and refuses one no matter what the operator has allowlisted.
+
+This is a **scheme** check only, and it runs in the browser before any request
+is made — the destination **host** is not restricted by it. Host restriction is
+the separate, opt-in, server-side allowlist described above.
+
+**Your origin may be *gated*, which changes what the exchange returns.** A
+deployment can declare certain destination hosts gated: the exchange then
+answers with a [group-scoped token](authentication.md#group-scoped-tokens-grouptoken)
+package — `access_token` starting `gt1.`, `token_type`, `expires_in`, `group`,
+and **no `refresh_token` key at all** — instead of the usual JWT pair. Off by
+default; nothing changes for a deployment that has not opted in. Three
+consequences for a destination app:
+
+- **Never assume `refresh_token` is present.** Branch on the token string
+  (`gt1.` ⇒ group token), not on a stored flag.
+- **There is no refresh.** On expiry, bounce back through the auth origin with
+  `?redirect=<current url>` — the snippet below already does exactly that.
+- **If you run your own OAuth callback page, it stops working** once gating
+  enforces (`400 "redirect_uri is not on the allowlist"`). Use the hosted auth
+  pages' OAuth buttons instead; they route back through this same handoff.
+
+A visitor who is not a member of the group that owns a gated destination gets a
+`403` at the handoff, and the auth page shows the server's message rather than
+the generic one. Superusers get the same `403` — they can never hold a group
+token.
 
 ```html
 <script src="https://auth.example.com/api/account/static/mojo-auth.js"></script>
 <script>
   MojoAuth.init({ baseURL: 'https://auth.example.com' });
+
+  function toAuth() {
+    // No refresh path for a group-scoped session — re-bounce instead.
+    window.location.href = 'https://auth.example.com/auth?redirect=' +
+      encodeURIComponent(window.location.href);
+  }
+
   MojoAuth.handleAuthCodeFromURL().then(function (data) {
-    if (data || MojoAuth.isAuthenticated()) {
-      bootApp();
-    } else {
-      window.location.href = 'https://auth.example.com/auth?redirect=' +
-        encodeURIComponent(window.location.href);
+    if (data) return bootApp();                       // just exchanged a code
+    if (!MojoAuth.isAuthenticated()) return toAuth();
+    // Kind-aware: a JWT is judged on its exp claim, a gt1. token on the
+    // token_expires_at saved from the exchange response.
+    if (MojoAuth.isTokenExpired()) {
+      if (MojoAuth.getTokenType() === 'grouptoken') return toAuth();
+      return MojoAuth.refreshToken().then(bootApp).catch(toAuth);
     }
-  });
+    bootApp();
+  }).catch(toAuth);
 </script>
 ```
 

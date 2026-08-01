@@ -15,7 +15,14 @@
  *   MojoAuth.init({ baseURL: 'https://api.example.com' });
  *
  * localStorage keys (aligned with web-mojo TokenManager):
- *   access_token, refresh_token
+ *   access_token, refresh_token, token_type, token_expires_at
+ *
+ * Two kinds of access token can land in access_token:
+ *   a platform JWT (the default), and a group-scoped token — a "gt1." string
+ *   confined to ONE group, sent as "Authorization: grouptoken <t>". A group
+ *   token has NO refresh token and cannot be traded for a JWT; when it
+ *   expires the app re-bounces through the auth origin. token_expires_at is
+ *   how its lifetime is known, because a gt1. payload carries no exp claim.
  */
 
 (function (root, factory) {
@@ -37,8 +44,15 @@
 
     var KEYS = {
         access:  'access_token',
-        refresh: 'refresh_token'
+        refresh: 'refresh_token',
+        type:    'token_type',
+        expires: 'token_expires_at'
     };
+
+    // Version tag of a group-scoped token (mojo/apps/account/services/
+    // group_token.py TOKEN_VERSION). It is signed as part of the HMAC, not
+    // merely prefixed, so the prefix is a trustworthy kind marker.
+    var GROUP_TOKEN_PREFIX = 'gt1.';
 
     var DEFAULT_ENDPOINTS = {
         login:              '/api/login',
@@ -134,12 +148,38 @@
         return post(url, body, { 'Authorization': auth });
     }
 
+    function _tokenType(t) {
+        // The TOKEN STRING decides the kind, never the stored marker: a marker
+        // left behind by an earlier session must never be able to mislabel a
+        // live token into the wrong Authorization scheme.
+        if (!t) return null;
+        return t.indexOf(GROUP_TOKEN_PREFIX) === 0 ? 'grouptoken' : 'bearer';
+    }
+
     function saveTokens(data) {
         // Response shape: { status, data: { access_token, refresh_token, user } }
+        // or, for a gated destination: { access_token: "gt1.…", token_type,
+        // expires_in, group, user } — with NO refresh_token.
         var d = (data && data.data) ? data.data : data;
         if (!d || !d.access_token) throw new Error('No access_token in response');
         localStorage.setItem(KEYS.access, d.access_token);
+        // CLEAR on absence, never leave the previous one behind. A response
+        // that carries no refresh token is a deliberately non-refreshable
+        // session; a stale refresh token from an earlier JWT session would let
+        // any later refreshToken() trade it for a full platform pair — the
+        // exact upgrade a group-scoped session exists to prevent.
         if (d.refresh_token) localStorage.setItem(KEYS.refresh, d.refresh_token);
+        else localStorage.removeItem(KEYS.refresh);
+        localStorage.setItem(KEYS.type, _tokenType(d.access_token));
+        // Absolute expiry, because a gt1. payload has no exp claim. Same
+        // clear-on-absence rule: a JWT response carries no expires_in and must
+        // not inherit the previous session's deadline.
+        if (d.expires_in > 0) {
+            localStorage.setItem(
+                KEYS.expires, String(Math.floor(Date.now() / 1000) + d.expires_in));
+        } else {
+            localStorage.removeItem(KEYS.expires);
+        }
         return d;
     }
 
@@ -702,7 +742,9 @@
          *                                 query string (minus code/state) and stripping the
          *                                 hash — so ?redirect= survives the OAuth round-trip.
          *                                 Must be registered in the provider's console AND
-         *                                 allowed by the backend (ALLOWED_REDIRECT_URLS or per-group).
+         *                                 allowed by the backend (the ALLOWED_REDIRECT_URLS
+         *                                 setting, or the resolved group's
+         *                                 metadata["allowed_redirect_urls"]).
          * @returns {Promise<void>}
          */
         startOAuthLogin: function (provider, callbackUrl) {
@@ -770,6 +812,8 @@
         logout: function () {
             localStorage.removeItem(KEYS.access);
             localStorage.removeItem(KEYS.refresh);
+            localStorage.removeItem(KEYS.type);
+            localStorage.removeItem(KEYS.expires);
         },
 
         /**
@@ -798,12 +842,25 @@
         },
 
         /**
+         * Which kind of access token is stored: "bearer" (a platform JWT),
+         * "grouptoken" (scoped to one group), or null when none is stored.
+         * @returns {string|null}
+         */
+        getTokenType: function () {
+            return _tokenType(localStorage.getItem(KEYS.access));
+        },
+
+        /**
          * Get the Authorization header value for use in API requests.
-         * @returns {string|null}  e.g. "Bearer eyJhbGci..."
+         * @returns {string|null}  e.g. "Bearer eyJhbGci..." or "grouptoken gt1..."
          */
         getAuthHeader: function () {
             var t = localStorage.getItem(KEYS.access);
-            return t ? 'Bearer ' + t : null;
+            if (!t) return null;
+            // Scheme is derived per call from the CURRENT token, never cached:
+            // a session can change kind mid-page (a JWT replaced by a group
+            // token, or the reverse) and a stale scheme is a 401.
+            return (_tokenType(t) === 'grouptoken' ? 'grouptoken ' : 'Bearer ') + t;
         },
 
         /**
@@ -826,11 +883,24 @@
         },
 
         /**
-         * Check if the stored access token is expired (based on JWT exp claim).
-         * Returns true if expired or if token is missing/undecodable.
+         * Check if the stored access token is expired.
+         *
+         * JWT: the exp claim. Group token: the stored token_expires_at, since
+         * a gt1. payload has no exp — decoding one as a JWT would report a
+         * perfectly valid token as expired.
+         *
+         * Returns true if expired, missing, or undecodable (fail closed).
          * @returns {boolean}
          */
         isTokenExpired: function () {
+            if (MojoAuth.getTokenType() === 'grouptoken') {
+                // Missing or unparsable counts as EXPIRED: one re-bounce
+                // through the auth origin is cheap; a request carrying a dead
+                // group token is a 401 the app has to handle anyway.
+                var expiresAt = parseInt(localStorage.getItem(KEYS.expires), 10);
+                if (!expiresAt) return true;
+                return Math.floor(Date.now() / 1000) >= expiresAt;
+            }
             var payload = MojoAuth.getTokenPayload();
             if (!payload || !payload.exp) return true;
             return Math.floor(Date.now() / 1000) >= payload.exp;
@@ -842,6 +912,14 @@
          * @returns {Promise<object>}
          */
         refreshToken: function () {
+            // A group-scoped session has no refresh path BY DESIGN — the whole
+            // point is that it cannot become a platform JWT. Refuse before the
+            // network call so a refresh token stranded by an earlier session
+            // can never be spent on behalf of this one.
+            if (MojoAuth.getTokenType() === 'grouptoken') {
+                return Promise.reject(
+                    new Error('A group-scoped session cannot be refreshed'));
+            }
             var refreshToken = localStorage.getItem(KEYS.refresh);
             if (!refreshToken) return Promise.reject(new Error('No refresh token stored'));
             return post(ep('refreshToken'), { refresh_token: refreshToken }).then(saveTokens);
@@ -875,6 +953,13 @@
          * @returns {Promise<{code: string, expires_in: number}>}
          */
         requestHandoffCode: function (destination) {
+            // A group-scoped session cannot mint a handoff code — the server
+            // refuses it (denies_key_backed_session), and minting one would be
+            // a route from a confined credential back to a platform JWT pair.
+            if (MojoAuth.getTokenType() === 'grouptoken') {
+                return Promise.reject(
+                    new Error('A group-scoped session cannot mint a handoff code'));
+            }
             var authHeader = MojoAuth.getAuthHeader();
             if (!authHeader) return Promise.reject(new Error('Not authenticated'));
             if (!destination) return Promise.reject(new Error('No handoff destination provided'));
