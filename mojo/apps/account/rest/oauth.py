@@ -14,6 +14,7 @@ Supported providers: google, apple (more can be added to services/oauth/__init__
 """
 from urllib.parse import urlencode, quote, urlsplit, urlunsplit, parse_qsl
 
+from django.core.exceptions import DisallowedRedirect
 from django.http import HttpResponseRedirect
 
 from mojo import decorators as md
@@ -312,6 +313,39 @@ def _find_or_create_user(provider_name, profile, state_data=None, request=None):
     return user, conn, False
 
 
+# The two schemes the callback bounce always permits. A custom deep-link scheme
+# is added on top, per request, only when it was vetted at mint time.
+_BOUNCE_SCHEMES = ("http", "https")
+
+
+def _vetted_bounce_scheme(frontend_uri, allowlisted):
+    """Return the custom scheme the callback bounce may widen to, or "".
+
+    A scheme is trustworthy only from a provenance vetted here, at mint time,
+    where the allowlist decision and `request.group` are in scope. Two qualify:
+
+      * `allowlisted` — the caller's `redirect_uri` cleared
+        `_validate_redirect_uri` against ALLOWED_REDIRECT_URLS (plus the group
+        source), so the allowlist vetted that exact URL, scheme included;
+      * a byte-equal match to this deployment's own `OAUTH_REDIRECT_URI` — an
+        operator-configured value, trusted like an allowlist entry (it may
+        itself be a deep link).
+
+    Everything else is untrusted — above all the else-branch of
+    `on_oauth_begin`, which builds `frontend_uri` from the UNVALIDATED
+    `HTTP_ORIGIN` header. A scheme sourced there never widens the bounce.
+
+    An http(s) scheme also returns "": those never need widening (the stock
+    HttpResponseRedirect already admits them), so an http(s) flow stamps no
+    `frontend_scheme` and its state stays byte-identical to before this change.
+    A non-empty return is therefore always exactly one vetted custom scheme.
+    """
+    if not (allowlisted or frontend_uri == settings.get("OAUTH_REDIRECT_URI", "")):
+        return ""
+    scheme = redirect_allowlist.matchable_scheme(frontend_uri)
+    return "" if scheme in _BOUNCE_SCHEMES else scheme
+
+
 # -----------------------------------------------------------------
 # Begin
 # -----------------------------------------------------------------
@@ -356,11 +390,22 @@ def on_oauth_begin(request, provider):
         frontend_uri = custom_frontend_uri
     else:
         frontend_uri = _get_redirect_uri(request, provider)
+    # `allowlisted` = the caller's redirect_uri cleared _validate_redirect_uri.
+    # It is the load-bearing signal for _vetted_bounce_scheme below: only an
+    # allowlisted (or OAUTH_REDIRECT_URI-matching) frontend_uri may widen the
+    # callback's redirect scheme, never the origin-derived else branch.
+    allowlisted = bool(custom_frontend_uri)
     # Covers BOTH branches deliberately. The `else` one is the load-bearing
     # case: it derives the landing URL from the UNVALIDATED HTTP_ORIGIN header
     # and never calls _validate_redirect_uri, so a caller with no redirect_uri
     # param picks the destination with a request header.
     _refuse_gated_destination(request, frontend_uri)
+    # A custom-scheme landing (mobile deep link) needs the callback to widen its
+    # Django redirect scheme allowlist to exactly that scheme. Derive it HERE, at
+    # mint time, where the allowlist verdict is in scope, and stamp it into state
+    # for the callback to re-check against the final URL. "" for an http(s) or
+    # untrusted frontend_uri, and stamped below only when non-empty.
+    frontend_scheme = _vetted_bounce_scheme(frontend_uri, allowlisted)
 
     # callback_uri = where the provider redirects (always our backend)
     origin = _get_origin(request)
@@ -370,6 +415,10 @@ def on_oauth_begin(request, provider):
         "redirect_uri": callback_uri,
         "frontend_uri": frontend_uri,
     }
+    # Stamp the vetted deep-link scheme only when there is one, so the http(s)
+    # state shape is byte-identical to before this change.
+    if frontend_scheme:
+        state_extra["frontend_scheme"] = frontend_scheme
     # Preserve group context through the OAuth round-trip for white-label
     # branding. Only accept `group_uuid` — the framework dispatcher reserves
     # `?group=` for integer IDs and any UUID passed there is rejected upstream
@@ -394,6 +443,49 @@ def on_oauth_begin(request, provider):
 # -----------------------------------------------------------------
 # Provider callback — receives redirect from provider, bounces to frontend
 # -----------------------------------------------------------------
+
+class _SchemeAwareRedirect(HttpResponseRedirect):
+    """An HttpResponseRedirect whose allowed URL schemes are per-instance.
+
+    Django's HttpResponseRedirectBase reads `self.allowed_schemes` (class
+    default `["http", "https", "ftp"]`) AFTER its own `super().__init__`, so
+    setting the instance attribute BEFORE calling super here shadows the class
+    attribute cleanly — for this instance only. The class attribute is left
+    untouched, so only redirects built through this class are widened; every
+    other HttpResponseRedirect in the process keeps Django's stock default.
+    """
+
+    def __init__(self, redirect_to, *args, allowed_schemes=None, **kwargs):
+        self.allowed_schemes = list(allowed_schemes)
+        super().__init__(redirect_to, *args, **kwargs)
+
+
+def _bounce_to_frontend(location, state_data):
+    """302 the browser to `location`, widening to at most one vetted custom scheme.
+
+    `location` is the FINAL merged URL — code/state already appended. The bounce
+    always permits http(s); it additionally permits the custom scheme recorded in
+    state at mint time (`frontend_scheme`) IFF re-parsing this exact final URL
+    yields the same scheme. Re-parsing `location` (not the stored frontend_uri)
+    re-applies every `_split` refusal — dot segment, backslash, opaque/bare shape
+    — to the precise bytes about to go in the Location header, and derives the
+    scheme already lowercased.
+
+    Anything Django still refuses — a pre-#1102 state carrying no
+    `frontend_scheme`, a scheme that no longer matches the final URL, an
+    over-long or malformed target — floors to a 400 rather than the 500 a raw
+    DisallowedRedirect would raise out of the generic error handler.
+    """
+    schemes = list(_BOUNCE_SCHEMES)
+    vetted = (state_data or {}).get("frontend_scheme") or ""
+    if vetted and vetted == redirect_allowlist.matchable_scheme(location):
+        schemes.append(vetted)
+    try:
+        return _SchemeAwareRedirect(location, allowed_schemes=schemes)
+    except DisallowedRedirect:
+        raise merrors.ValueException(
+            "Cannot return to the redirect_uri in this OAuth state")
+
 
 @md.GET("auth/oauth/<str:provider>/callback")
 @md.POST("auth/oauth/<str:provider>/callback")
@@ -461,8 +553,9 @@ def on_oauth_callback(request, provider):
     preserved = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
                  if k not in redirect_params]
     query = urlencode(preserved + list(redirect_params.items()), quote_via=quote)
-    return HttpResponseRedirect(urlunsplit(
-        (parts.scheme, parts.netloc, parts.path, query, parts.fragment)))
+    return _bounce_to_frontend(
+        urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment)),
+        state_data)
 
 
 # -----------------------------------------------------------------

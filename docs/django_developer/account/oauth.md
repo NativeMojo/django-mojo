@@ -65,7 +65,7 @@ APPLE_PRIVATE_KEY  = "-----BEGIN PRIVATE KEY-----\n..."  # Full PEM content of t
 
 Apple does not use a static client secret. The framework generates a short-lived ES256 JWT from these four values on every token exchange. The `.p8` private key content should be stored as a multiline string (or loaded from an environment variable) — never committed to source control.
 
-If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/auth/oauth/<provider>/complete`. This works for single-origin SPAs but is less reliable for server-rendered or multi-origin setups — prefer the explicit setting in production.
+If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/auth/oauth/<provider>/complete`. This works for single-origin SPAs but is less reliable for server-rendered or multi-origin setups — prefer the explicit setting in production. `OAUTH_REDIRECT_URI` may itself be a custom-scheme deep link; because it is an operator-configured value it is treated as vetted, so the [callback bounce](#the-callback-bounce) will emit its scheme even without an `ALLOWED_REDIRECT_URLS` entry.
 
 ### GitHub Settings
 
@@ -258,6 +258,32 @@ one matcher. That is intended — a per-list scheme policy is exactly the drift
 the shared implementation exists to prevent. A handoff code is a bearer
 credential, so treat a deep-link handoff entry with the same care as a web one:
 the OS decides which installed app receives that scheme.
+
+#### The callback bounce
+
+Admitting a deep link at `/begin` is only half the flow — the browser still has
+to *land* on it. After the provider redirects to `/callback`, the server 302s the
+browser to the `frontend_uri` with `code`/`state` appended, and that redirect
+must carry the custom scheme. Django's stock redirect refuses any scheme outside
+`http`/`https`/`ftp`, so the bounce is widened deliberately and narrowly:
+
+- The bounce always permits `http(s)`. It permits **exactly one** custom scheme
+  on top — the one recorded in the OAuth state at `/begin` time, and only when
+  re-parsing the final `Location` URL yields that same scheme.
+- The recorded scheme is trusted only when it came from a vetted provenance: the
+  caller's `redirect_uri` cleared the allowlist (`ALLOWED_REDIRECT_URLS` plus the
+  group source), **or** the `frontend_uri` byte-equals the deployment's own
+  `OAUTH_REDIRECT_URI`. An **Origin-derived** landing — the default when no
+  `redirect_uri` is passed, built from the unvalidated `Origin` header — is never
+  trusted, so its scheme never widens the bounce.
+- A **pre-upgrade state** (minted before this behavior existed, so carrying no
+  recorded scheme) bounces `http(s)`-only. Deep-link logins in flight at upgrade
+  time fail for at most `OAUTH_STATE_TTL` (default 600s), after which every state
+  is a new one that carries the scheme.
+- Anything else — an unrecorded or mismatched scheme, a URL Django still refuses —
+  returns a **400 `Cannot return to the redirect_uri in this OAuth state`**
+  rather than the 500 a raw `DisallowedRedirect` would produce. `http(s)` landings
+  are byte-for-byte unaffected: they record no scheme and bounce exactly as before.
 
 ### The per-group source
 

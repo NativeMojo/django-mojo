@@ -285,6 +285,17 @@ Refused outright, whichever side they appear on: the opaque form with no `//`
 and no leading `/` (`myapp:callback`, `mailto:a@b`), a bare `myapp:` or
 `myapp://`, and `javascript:` / `data:` / `vbscript:`.
 
+**What the app observes.** Once the deep link is admitted at `/begin`, the
+`/callback` responds with a **302** whose `Location` is your deep link with the
+code and state appended — `Location: myapp://callback?code=…&state=…`. The OS
+hands that URL to your app, which then reads `code` + `state` from the query and
+`POST`s them to `/complete` exactly as a web page would. If the scheme was not
+vetted at `/begin` (for example a state minted before this behavior shipped, or a
+landing derived from the `Origin` header rather than an allowlisted
+`redirect_uri`), the callback returns **400 `Cannot return to the redirect_uri in
+this OAuth state`** instead of the 302 — re-run `/begin` with a `redirect_uri`
+that is on the allowlist.
+
 ---
 
 ## Configuration

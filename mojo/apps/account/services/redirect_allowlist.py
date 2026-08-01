@@ -295,6 +295,28 @@ def matches_allowlist(url, entries, source="allowlist", allow_wildcard=False):
     return False
 
 
+def matchable_scheme(url):
+    """Return the lowercased scheme of `url` IFF `_split` parses it, else "".
+
+    This PARSES; it does NOT authorize. It answers one question — "is this a
+    shape the matcher would even compare, and under what scheme?" — and is
+    non-empty ONLY for a URL `_split` accepts. So every shape `_split` fails
+    closed on comes back "": the script pseudo-schemes (`javascript:`, `data:`,
+    `vbscript:`), the opaque `myapp:callback` form, a bare `myapp://`, a
+    scheme-relative `//host/x`, a backslash-bearing URL, and — inherited through
+    `_split` — any `.`/`..` dot-segment URL. An http(s) URL returns
+    `"http"`/`"https"`; a well-formed custom-scheme deep link returns its scheme.
+
+    It routes through `_split`, so it inherits every refusal `_split` makes (the
+    dot-segment rule from #1101 included) and the scheme is returned already
+    lowercased. It deliberately does NOT call `_warn_unusable_entry`: the caller
+    passes a per-request candidate, not a configured allowlist entry, and warning
+    on a candidate would let an anonymous caller drive the log.
+    """
+    parts = _split(url)
+    return parts[0] if parts is not None else ""
+
+
 def _warn_unusable_entry(source, raw_entry):
     """Name an entry that can never match — once per distinct entry.
 

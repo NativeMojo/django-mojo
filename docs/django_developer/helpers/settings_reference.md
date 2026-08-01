@@ -37,8 +37,10 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   normalized, on both the `redirect_uri` and every entry. A
   **custom scheme** (`myapp://callback`, a mobile deep link) is supported under
   narrower rules — exact scheme + exact case-folded authority + the same path
-  rule, no default ports and no wildcards. Empty (or unset) refuses any
-  `redirect_uri` outright. **Not the only source**: the group this request
+  rule, no default ports and no wildcards — and the `/callback` bounce emits it
+  as the `Location` (the 302 widens to exactly the one custom scheme admitted
+  here, or the deployment's own `OAUTH_REDIRECT_URI`; anything else is a 400).
+  Empty (or unset) refuses any `redirect_uri` outright. **Not the only source**: the group this request
   resolved (`?group=` / `?group_uuid=`) contributes its own
   `Group.metadata["allowed_redirect_urls"]`, inherited up the parent chain, so
   the effective allowlist is this setting plus that tenant-writable list. Read

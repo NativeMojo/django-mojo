@@ -262,9 +262,14 @@ whatever the allowlist says. So listing `myapp://callback` buys a valid handoff
 destination for a **custom frontend** calling `POST /api/auth/handoff` itself —
 not for the shipped pages. The OAuth `redirect_uri` on
 `GET /api/auth/oauth/<provider>/begin` is a different parameter on a different
-endpoint and does not pass through this guard at all, so a native-app OAuth flow
-landing on a deep link is unaffected; see
-[OAuth § Custom URL schemes](oauth.md#custom-url-schemes-mobile-deep-links).
+endpoint and does not pass through this guard at all, so the browser guard never
+touches a native-app OAuth flow landing on a deep link. That guard was only ever
+half the story, though: the server still has to emit the deep-link `Location` on
+the `/callback` bounce, and Django refuses a non-`http(s)` redirect scheme unless
+the scheme was vetted at `/begin` and recorded in the OAuth state. See
+[OAuth § Custom URL schemes](oauth.md#custom-url-schemes-mobile-deep-links) and
+its [callback bounce](oauth.md#the-callback-bounce) subsection for the exact
+rule and the 400 that a non-vetted scheme now returns.
 
 #### Rolling enforcement out
 

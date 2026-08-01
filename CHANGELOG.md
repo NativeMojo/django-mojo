@@ -1,5 +1,39 @@
 ## Unreleased
 
+**fix (account)** — **a custom-scheme OAuth `redirect_uri` now completes the
+round-trip instead of 500-ing at the callback.** Restoring `myapp://callback` as
+an allowlist entry made it pass validation at `/begin`, but that was only half
+the flow: the `/callback` bounce used a stock `HttpResponseRedirect`, whose
+Django default `allowed_schemes` is `['http','https','ftp']`, so the 302 to the
+deep link raised `DisallowedRedirect` — caught by the generic error handler as a
+**500 plus a level-12 incident**, drivable by two anonymous requests. Native-app
+OAuth login was broken end to end.
+
+- **500 → 302 for a vetted deep link; 500 → 400 for everything else.** The
+  callback now emits the custom scheme in the `Location`, or returns
+  `400 Cannot return to the redirect_uri in this OAuth state` — never a 500.
+- **The scheme is vetted at mint time, re-checked at the callback.** `/begin`
+  records a custom scheme in the OAuth state only when the caller's `redirect_uri`
+  cleared the allowlist (`ALLOWED_REDIRECT_URLS` + the group source) **or** it
+  byte-equals the deployment's own `OAUTH_REDIRECT_URI`; the callback widens the
+  redirect to that one scheme only when re-parsing the final URL yields it again.
+  The `Origin`-derived landing (the default when no `redirect_uri` is passed) is
+  built from an unvalidated header, so its scheme is never recorded and never
+  widens the bounce.
+- **The origin-derived branch is narrowed to `http(s)`, closing a pre-existing
+  open redirect.** The bounce's base scheme set is now `("http","https")` — `ftp`
+  is dropped — so a crafted `Origin: ftp://evil` (with no `redirect_uri`), which
+  previously 302'd the `code`+`state` to an `ftp://` destination on Django's
+  default allowance, now returns a 400.
+- **Legacy-state window.** A state minted before this change carries no recorded
+  scheme and bounces `http(s)`-only; a deep-link login in flight at upgrade fails
+  for at most `OAUTH_STATE_TTL` (default 600s), after which every state is a new
+  one that carries the scheme. `http(s)` landings are byte-for-byte unchanged —
+  they record no scheme and bounce exactly as before.
+- **Scope.** Only the OAuth callback bounce changed. The two other
+  `HttpResponseRedirect` sites in the tree are untouched, and no other status
+  code, error string, or response shape changed.
+
 **fix (security)** — **a dot-segment path no longer walks a `redirect_uri` out
 of the allowlist's path boundary.** `redirect_allowlist._split()` returned
 `urlsplit(url).path` unnormalized and the matcher compared it with a
