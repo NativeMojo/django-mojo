@@ -186,14 +186,23 @@
                         var sep = target.indexOf('?') === -1 ? '?' : '&';
                         window.location.href = target + sep + 'auth_code=' + encodeURIComponent(d.code);
                     })
-                    .catch(function () {
+                    .catch(function (err) {
                         // The server refuses to mint a code for a destination it
                         // does not allow. Navigating anyway would defeat that
                         // check \u2014 it is the same crafted ?redirect= link, just
                         // without the code. Show the error and stay put.
+                        //
+                        // Surface the SERVER's message when it sent one: a
+                        // gated destination answers "you are not a member of
+                        // the group for that site", which a real human at this
+                        // page can act on. The generic string stays as the
+                        // fallback, and is the only thing the client-side
+                        // scheme refusal above ever shows \u2014 so a client-side
+                        // refusal is not distinguishable from a server one.
                         window._mat.hideOverlay();
                         window._mat.showMessage(
-                            "That destination isn't allowed. Please return to the app and try again.",
+                            MojoAuth.getError(err)
+                            || "That destination isn't allowed. Please return to the app and try again.",
                             "error");
                     });
             },
@@ -242,7 +251,12 @@
         // Session check — skipped on the passkey enrollment page, where the
         // visitor is already authenticated and must not be auto-redirected.
         if (!SKIP_SESSION_CHECK && !params.get("token") && !(params.get("code") && params.get("state"))) {
-            var refreshToken = MojoAuth.getRefreshToken();
+            // A group-scoped session is never refreshed — refreshToken()
+            // rejects, and the .catch below calls MojoAuth.logout(), which
+            // would throw away a perfectly valid group token. The guard has to
+            // precede the call for that reason, not merely to save a request.
+            var isGroupSession = MojoAuth.getTokenType() === "grouptoken";
+            var refreshToken = isGroupSession ? null : MojoAuth.getRefreshToken();
             if (refreshToken) {
                 window._mat.showOverlay("Checking session\u2026", "Verifying your credentials");
                 MojoAuth.refreshToken()
