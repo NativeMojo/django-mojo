@@ -86,11 +86,14 @@ reporter.report_event(
 
 When an event has a `source_ip`, the system automatically looks up or creates a `GeoLocatedIP` record. This enriches the event with country, city, ISP, threat indicators (Tor, VPN, proxy, known attacker), and block status.
 
-### Deduplication
+### Noise Control
 
-Events are deduplicated within a configurable window (default 60 seconds). If an event with the same `category`, `level`, and optionally `source_ip`/`hostname` was created within the window, the existing event's `metadata.dedup_count` is incremented instead of creating a duplicate.
+There is **no automatic ingestion-time deduplication** — every `report_event()` call inserts its own `Event` row. This is deliberate: rule thresholds (`trigger_count`/`trigger_window`/`retrigger_every`), incident event counts, and metrics all count rows, so rows are the volume signal that tells you something is happening a lot. Noise is controlled at other layers:
 
-**Setting:** `INCIDENT_DEDUP_WINDOW_SECONDS` (default: `60`)
+- **Bundling** — a RuleSet's `bundle_by`/`bundle_minutes` groups many events into one incident without losing rows.
+- **Trigger thresholds** — an incident holds at `pending` until `trigger_count` events arrive within `trigger_window`.
+- **Opt-in suppression** — for diagnostics reachable from attacker-amplifiable paths, [`report_event_suppressed`](../logging/incidents.md#rate-limited-reporting--report_event_suppressed) files at most one event per `(category, key)` per window.
+- **Pruning** — old low-level events are removed after `INCIDENT_EVENT_PRUNE_DAYS`.
 
 ### Event Categories
 
@@ -823,7 +826,6 @@ Single-server job functions follow the engine's calling convention: `func(job)` 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `INCIDENT_LEVEL_THRESHOLD` | `7` | Min event level to auto-create incident without rule match |
-| `INCIDENT_DEDUP_WINDOW_SECONDS` | `60` | Event dedup window in seconds |
 | `INCIDENT_EVENT_PRUNE_DAYS` | `30` | Days to keep low-level events before pruning |
 | `INCIDENT_EVENT_METRICS` | `False` | Enable metrics recording for events |
 | `INCIDENT_METRICS_MIN_GRANULARITY` | `"hours"` | Metrics time granularity |

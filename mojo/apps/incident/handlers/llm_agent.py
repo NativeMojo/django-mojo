@@ -62,12 +62,12 @@ You have access to tools that let you query the system and take actions.
 - For serious incidents (real threats, active intrusions, data exfiltration), set `do_not_delete = true` via update_incident to protect them from auto-deletion and periodic pruning. This overrides any RuleSet delete_on_resolution setting.
 - When in doubt about severity, do NOT set do_not_delete — only use it for confirmed serious threats.
 
-## Event Deduplication & Bundling
+## Event Bundling
 When creating rules, ALWAYS configure bundling to prevent duplicate incidents:
 - bundle_by: groups events into a single incident (4=source_ip is most common)
 - bundle_minutes: time window for grouping (30-60 min is typical)
-- min_count + window_minutes: threshold before handlers fire (e.g., min_count=5, window_minutes=10 means "5 events in 10 min")
-- Events are also deduplicated at ingestion: identical events within 60s increment a counter instead of creating new rows.
+- min_count + window_minutes: recorded on the proposal for reviewer context; thresholds are enforced via trigger_count/trigger_window once set on the RuleSet
+- There is NO ingestion-time dedup: every reported occurrence is its own event row, so row counts reflect true volume. Exception: some diagnostic categories are rate-limited at the call site (at most one event per key per window) — for those, one row can represent many occurrences.
 Without proper bundling, rapid-fire events (like OSSEC bursts) create hundreds of separate incidents.
 """
 
@@ -98,11 +98,11 @@ a RuleSet that will auto-handle this pattern in the future — so no new open in
 - The rule is created DISABLED — a human will review and approve it via a ticket.
 - For noise patterns (bot scanning, brute-force, health blips), set delete_on_resolution=true so incidents are cleaned up automatically on resolution.
 
-## Event Deduplication & Bundling Reference
+## Event Bundling Reference
 - bundle_by: 0=none, 1=hostname, 2=model_name, 3=model_name+id, 4=source_ip, 5=hostname+model_name,
   7=source_ip+model_name, 8=source_ip+model_name+id, 9=source_ip+hostname
 - bundle_minutes: time window for grouping (30-60 min typical)
-- min_count + window_minutes: threshold before handlers fire
+- min_count + window_minutes: recorded on the proposal for reviewer context (enforced thresholds live on the RuleSet as trigger_count/trigger_window)
 """
 
 # Claude API tool definitions
@@ -1493,12 +1493,8 @@ def _build_incident_message(event, incident):
     # Include event metadata
     metadata = event.metadata or {}
     if metadata:
-        dedup_count = metadata.get("dedup_count")
-        if dedup_count and dedup_count > 1:
-            parts.append(f"- **Duplicate count**: {dedup_count} (this event represents {dedup_count} identical events)")
-
         # Include relevant metadata keys
-        skip_keys = {"dedup_count", "server", "request_ip", "http_path", "http_protocol",
+        skip_keys = {"server", "request_ip", "http_path", "http_protocol",
                      "http_method", "http_query_string", "http_user_agent", "http_host"}
         extra = {k: v for k, v in metadata.items() if k not in skip_keys}
         if extra:

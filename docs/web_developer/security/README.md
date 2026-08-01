@@ -655,7 +655,6 @@ See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-ana
 |---------|---------|-------------|
 | `INCIDENT_LEVEL_THRESHOLD` | `7` | Min event level to auto-create incidents |
 | `INCIDENT_EVENT_METRICS` | `True` | Enable incident/event metrics recording |
-| `INCIDENT_DEDUP_WINDOW_SECONDS` | `60` | Dedup window for identical events (0=disabled) |
 | `HEALTH_MONITORING_ENABLED` | `False` | Enable system health monitoring cron |
 | `HEALTH_TCP_MAX` | `2000` | TCP connection threshold per node |
 | `HEALTH_CPU_CRIT` | `90` | CPU % threshold |

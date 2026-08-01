@@ -290,7 +290,10 @@ Returns the audit trail for an incident — every state change, handler executio
 GET /api/incident/event?category=auth:failed&sort=-created&size=50
 ```
 
-Events with `metadata.dedup_count > 1` represent multiple identical events that were deduplicated. Check this field to get true event volume.
+Every reported occurrence is its own event row — there is no ingestion-time
+deduplication, so row counts reflect true volume. The exception is the
+Redis-suppressed operational categories below, which file at most one event
+per unit per window.
 
 ### Account observability categories
 
