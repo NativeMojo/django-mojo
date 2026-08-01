@@ -130,22 +130,50 @@ When `rich` is installed and `-j` is greater than 1, the runner shows a live per
 
 LLM agents should always use `--agent` and read the JSON report instead of parsing terminal output. Never use `--plain` for full suite runs — it disables the rich UI but doesn't improve agent output.
 
-### Opt-in Modules
+### Tiers — default, `slow`, `extended`
 
-Modules with `"requires_extra": ["slow"]` in their TESTIT config are skipped by default. Include them with `--full` (shortcut for `--extra slow`):
+Two opt-in tiers; `--full` turns on both.
 
 ```bash
-./bin/run_tests --full          # include all opt-in modules
-./bin/run_tests --extra slow    # equivalent
+./bin/run_tests                        # default tier only
+./bin/run_tests --full                 # + slow + extended
+./bin/run_tests --extra extended       # + just one tier
 ```
 
-Currently opt-in:
+| Tier | Tag | Meaning |
+|---|---|---|
+| default | *(none)* | Critical. Runs on every invocation. |
+| `slow` | `requires_extra: ["slow"]` | Expensive, or only meaningful before a release. |
+| `extended` | `@th.requires_extra("extended")` | Correct and worth keeping, but not a critical contract. |
 
-| Module | Reason |
-|---|---|
-| `test_security` | Bouncer/rate-limiting tests (~20s, serial) |
+Two words rather than one because they are chosen on different grounds — `slow` is a
+statement about cost, `extended` about criticality — and "why is this opt-in?" should be
+answerable from the tag alone.
 
-To make a module opt-in, add `"requires_extra": ["slow"]` to its `__init__.py` TESTIT config.
+Currently `slow`: `test_security` (bouncer/rate-limiting, serial), `test_incident`, the
+live-assistant tests.
+
+#### Deciding the tier
+
+A test belongs in the **default tier regardless of cost** if it covers a security boundary
+(permissions, auth, tenant isolation, secrets), a core framework contract (model
+save/serialize, REST dispatch, graphs, `request.DATA`), a bug that has already shipped
+once, or anything whose failure means the framework is broken for *every* consumer. The
+slowest single test in the suite is a shortlink scheme-injection test and it stays in the
+default tier — cost alone never demotes a security test.
+
+**`extended`** is for exhaustive input matrices past the first representative case, deep
+feature-internal variants of one app, coverage already asserted elsewhere, and tests whose
+cost *is* a timeout — an assertion that nothing arrives can only pass by waiting, so keep
+the positive path in the default tier and demote the negative one.
+
+**Not a reason to demote:** the app is optional. `requires_apps` already skips a module
+whole when the project has not installed that app.
+
+Tag at authoring time; auditing it back out later is far more expensive.
+
+To move a whole module, add `"requires_extra": ["slow"]` (or `["extended"]`) to its
+`__init__.py` TESTIT config. For a single test, use the decorator.
 
 ### JSON Config
 CLI flags always win, but you can seed defaults through a JSON file:

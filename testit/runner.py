@@ -120,6 +120,9 @@ _DEFAULT_CONFIG = objict(
     requires_extra=[],
 )
 
+# Opt-in tiers that --full turns on. See setup_parser for what each one means.
+FULL_EXTRAS = ("slow", "extended")
+
 
 # ---------------------------------------------------------------------------
 # Run lock — prevents concurrent test runs from colliding
@@ -302,7 +305,6 @@ def apply_config_defaults(parser, config):
         "onlymojo": ("onlymojo", bool),
         "extra": ("extra", str),
         "host": ("host", str),
-        "quick": ("quick", bool),
         "force": ("force", bool),
         "user": ("user", str),
     }
@@ -353,8 +355,6 @@ def setup_parser(argv=None):
                         help="Specify the user the test should run as")
     parser.add_argument("-t", "--test", action="append", dest="test_modules",
                         help="Run specific module or test file: -t module or -t module.testfile (repeatable)")
-    parser.add_argument("-q", "--quick", action="store_true",
-                        help="Run only tests flagged as critical/quick")
     parser.add_argument("-x", "--extra", type=str, default=None,
                         help="Specify extra data to pass to test")
     parser.add_argument("-s", "--stop", action="store_true",
@@ -378,7 +378,7 @@ def setup_parser(argv=None):
     parser.add_argument("--plain", action="store_true",
                         help="Force plain text output (no rich progress UI)")
     parser.add_argument("--full", action="store_true",
-                        help="Include opt-in modules (same as --extra slow)")
+                        help="Include every opt-in tier (same as --extra slow,extended)")
 
     config_args, _ = config_parser.parse_known_args(argv)
     config_data = {}
@@ -395,8 +395,17 @@ def setup_parser(argv=None):
 
     # Normalize extras for both config defaults and CLI input.
     extra_values = _normalize_extra_value(opts.extra)
-    if opts.full and "slow" not in extra_values:
-        extra_values.append("slow")
+    if opts.full:
+        # --full means "everything", so it must imply every opt-in tier. Two
+        # tiers exist because they mean different things and are chosen on
+        # different grounds:
+        #   slow     — expensive or only meaningful before a release
+        #   extended — correct and cheap enough, but not a critical contract
+        # Overloading one word for both would make "why is this opt-in?"
+        # unanswerable from the tag alone.
+        for tier in FULL_EXTRAS:
+            if tier not in extra_values:
+                extra_values.append(tier)
     opts.extra_list = extra_values
     opts.extra = ",".join(extra_values) if extra_values else ""
 
@@ -475,9 +484,9 @@ def _sort_key(name):
     return (int(prefix), name) if prefix.isdigit() else (float("inf"), name)
 
 
-def _count_tests_in_file(file_path, quick=False):
+def _count_tests_in_file(file_path):
     """Count test functions in a file via AST scan (no import)."""
-    prefix = "quick_" if quick else "test_"
+    prefix = "test_"
     try:
         with open(file_path, "r", encoding="utf-8") as fh:
             tree = ast.parse(fh.read(), filename=file_path)
@@ -519,7 +528,7 @@ def run_module_tests_by_name(opts, module_name, test_name):
     skipped = run_module_setup(opts, module, test_name, module_name)
     if skipped:
         # Count all tests in this file as skipped so totals stay consistent
-        prefix = "quick_" if opts.quick else "test_"
+        prefix = "test_"
         functions = inspect.getmembers(module, inspect.isfunction)
         for func_name, func in functions:
             if func_name.startswith(prefix):
@@ -571,7 +580,7 @@ def run_module_tests(opts, module, test_name, module_name):
     if not helpers._get_display_fn():
         logit.color_print(f"\nRUNNING TEST: {test_key}", logit.ConsoleLogger.BLUE)
     started = time.time()
-    prefix = "test_" if not opts.quick else "quick_"
+    prefix = "test_"
 
     functions = inspect.getmembers(module, inspect.isfunction)
     functions = sorted(
@@ -1286,12 +1295,12 @@ def _collect_modules(opts, test_root, parent_test_root):
     return modules
 
 
-def _count_module_tests(module_name, test_root, parent_test_root, quick=False):
+def _count_module_tests(module_name, test_root, parent_test_root):
     """Count total tests in a module by scanning all test files."""
     test_files, module_path = _discover_test_files(module_name, test_root, parent_test_root)
     total = 0
     for test_name, file_path in test_files:
-        total += _count_tests_in_file(file_path, quick=quick)
+        total += _count_tests_in_file(file_path)
     return total
 
 
@@ -1413,7 +1422,7 @@ def main(opts):
                         missing_app = app_label
                         break
                 if skip:
-                    total = _count_module_tests(name, test_root, parent_test_root, quick=opts.quick)
+                    total = _count_module_tests(name, test_root, parent_test_root)
                     skipped_modules.append((name, f"requires app: {missing_app}", total))
                     continue
             except Exception:
@@ -1424,7 +1433,7 @@ def main(opts):
             required = set(_normalize_extra_value(config.requires_extra))
             provided = set(opts.extra_list or [])
             if not required.intersection(provided):
-                total = _count_module_tests(name, test_root, parent_test_root, quick=opts.quick)
+                total = _count_module_tests(name, test_root, parent_test_root)
                 flags = ", ".join(sorted(required))
                 skipped_modules.append((name, f"requires --extra {flags}", total))
                 continue
@@ -1443,12 +1452,12 @@ def main(opts):
 
         # Add trackers for parallel modules
         for name in parallel_modules:
-            total = _count_module_tests(name, test_root, parent_test_root, quick=opts.quick)
+            total = _count_module_tests(name, test_root, parent_test_root)
             display.add_module(name, total)
 
         # Add trackers for serial modules
         for name in serial_modules:
-            total = _count_module_tests(name, test_root, parent_test_root, quick=opts.quick)
+            total = _count_module_tests(name, test_root, parent_test_root)
             display.add_module(name, total)
 
         # Add trackers for skipped modules — count tests and mark all as skipped

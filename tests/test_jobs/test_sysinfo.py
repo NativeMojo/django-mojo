@@ -117,6 +117,9 @@ def test_rest_specific_runner_unauthenticated(opts):
 # REST: unknown runner returns 404
 # ------------------------------------------------------------------
 
+# extended: ~5s, all of it spent waiting for a Redis round-trip to a runner that
+# does not exist. A 404-on-unknown-id detail, not a framework contract.
+@th.requires_extra("extended")
 @th.unit_test("sysinfo_rest_unknown_runner_404")
 def test_rest_unknown_runner_404(opts):
     """Requesting sysinfo for a non-existent runner must return 404."""
@@ -132,6 +135,8 @@ def test_rest_unknown_runner_404(opts):
 # Python API: get_sysinfo() returns a list always
 # ------------------------------------------------------------------
 
+# extended: ~5s of runner-discovery timeout to assert a return type.
+@th.requires_extra("extended")
 @th.unit_test("sysinfo_api_returns_list")
 def test_api_returns_list(opts):
     """get_sysinfo() always returns a list (may be empty when no runners)."""
