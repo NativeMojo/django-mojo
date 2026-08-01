@@ -1,5 +1,37 @@
 ## Unreleased
 
+**fix (account)** — **a group-scoped auth portal no longer drops the forwarded
+`?redirect=` on the hop to passkey enrollment.** `auth_base.html` interpolated
+the server-built `auth_url` / `register_url` / `passkey_url`, `api_base` and
+`theme.success_redirect` into JS string literals with no `|escapejs`. `<script>`
+is a raw-text element, so the HTML parser never decodes entities inside it: once
+a URL carried two or more query params, the `&` joining them was autoescaped to
+`&amp;` and the literal reached the browser holding that verbatim. All five now
+carry `|escapejs`.
+
+- **What was actually broken:** the register → passkey-enrollment hop, which
+  assigns `cfg.passkeyUrl` straight to `window.location.href`. The destination
+  parsed `amp;redirect=` instead of `redirect=` and silently dropped the
+  forwarded param, so the visitor landed on the group's `success_redirect` (or
+  `/`) rather than where they came from. Also the post-auth destination
+  (`ON_SUCCESS`) whenever a group configures a `theme.success_redirect` that
+  itself carries two or more query params.
+- **Not broken, and deliberately unchanged:** the login ↔ register switcher
+  links. Those are `<a href>` attributes, which the HTML parser *does*
+  entity-decode, so they always navigated correctly. They stay on plain
+  autoescaping — adding `escapejs` to an attribute would inject a literal
+  backslash-u escape into the link.
+- **The common case is untouched.** With `?group_uuid=` as the only param there
+  is no `&` at all; the rendered page source now spells `=` and `-` as JS
+  escapes, but the string the browser builds is byte-identical to before.
+- **For out-of-tree consumers:** `window._matConfig.authUrl` / `.registerUrl` /
+  `.passkeyUrl` and the post-auth `redirectTo` now hold the real URL — a reader
+  that had learned to expect `&amp;` there will now see `&`. And anything
+  scraping the rendered page source with a naive regex must decode the JS
+  escapes first.
+- **Not a security fix.** Autoescaping still neutralized `<` and `"`, so there
+  was never a string or tag breakout — this was a correctness bug.
+
 **fix (account)** — **a custom URL scheme is a usable allowlist entry again
 (mobile deep links).** The parsed-URL matcher below accepted only `http` and
 `https`, which quietly made `myapp://callback` an unusable entry and 400'd every

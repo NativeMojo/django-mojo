@@ -67,12 +67,30 @@
     <script nonce="{{ csp_nonce }}" src="{{ api_base }}/api/account/static/mojo-auth.js"></script>
     <script nonce="{{ csp_nonce }}">
     (function () {
+        {% comment %}
+           Every context value interpolated into a JS string literal below
+           carries |escapejs, and any new one must too. <script> is a raw-text
+           element, so the HTML parser never decodes entities inside it:
+           without the filter, autoescaping rewrites the `&` joining two query
+           params to `&amp;` and the literal reaches the browser holding that
+           verbatim. The destination then parses `amp;redirect=` and silently
+           drops the forwarded param. escapejs emits \uXXXX escapes the JS
+           engine decodes at parse time, and returns a SafeString so
+           autoescape never runs twice. Put it AFTER any default: filter.
+
+           Attribute contexts (href/src, above) are the opposite case — the
+           parser DOES decode entities there, so those interpolations stay on
+           plain autoescaping. Do not add escapejs to one; it would put a
+           literal backslash-u escape in the link. And never reach for |safe
+           here either: it would fix the ampersand by reopening the
+           string-literal breakout that autoescaping currently closes.
+        {% endcomment %}
         // API_BASE: use configured value, fall back to current origin (same-origin API)
-        var API_BASE = "{{ api_base }}" || window.location.origin;
-        var ON_SUCCESS = "{{ success_redirect|default:'/' }}";
-        var AUTH_URL = "{{ auth_url|default:'/auth' }}";
-        var REGISTER_URL = "{{ register_url|default:'/register' }}";
-        var PASSKEY_URL = "{{ passkey_url|default:'/passkey' }}";
+        var API_BASE = "{{ api_base|escapejs }}" || window.location.origin;
+        var ON_SUCCESS = "{{ success_redirect|default:'/'|escapejs }}";
+        var AUTH_URL = "{{ auth_url|default:'/auth'|escapejs }}";
+        var REGISTER_URL = "{{ register_url|default:'/register'|escapejs }}";
+        var PASSKEY_URL = "{{ passkey_url|default:'/passkey'|escapejs }}";
 
         // Portal config — which login methods this group offers, and the
         // passkey-during-registration policy (off / optional / required).
