@@ -179,19 +179,34 @@ def _has_dot_segment(path):
 _NOTICE_PREFIX = "account:handoff:dest_alerted"
 _RENOTIFY_SEC = 3600
 
-# Unusable-entry warnings are logged once per distinct entry, not once per
-# request: the OAuth caller sits on a public, unauthenticated endpoint, so a
-# per-request line is a log flood an anonymous caller drives for free. Entries
-# come from deployment configuration, so "per distinct entry" is bounded by the
-# configuration; the cap only guards against a future caller passing a
-# per-request list.
-_WARNED_ENTRY = "warned:entry"
-_WARN_CAP = 256
+# Redis-suppressed incident categories for the redirect allowlist. The two
+# unusable-entry diagnostics and the refusal diagnostic used to be
+# `logit.warning` lines; on the public `/begin` endpoint they were free
+# amplification, since `group.metadata["allowed_redirect_urls"]` is
+# `manage_group`-writable and `request.group` is anonymously selectable. They now
+# file through `incident.report_event_suppressed` — Redis-suppressed, budgeted,
+# never-raising. See `docs/django_developer/account/oauth.md` for the table.
+CATEGORY_UNUSABLE_ENTRY = "auth:redirect_allowlist_unusable_entry"
+CATEGORY_TENANT_ENTRY = "auth:redirect_allowlist_tenant_entry_unusable"
+CATEGORY_REDIRECT_REFUSED = "auth:oauth_redirect_refused"
+
+# At most this many raw entries are quoted in an unusable-entry incident body;
+# the incident still reports the true total count.
+_UNUSABLE_SAMPLES = 5
+# Per-hour budget on DISTINCT tenant groups that may each file an unusable-entry
+# incident, so a tenant that mints many groups cannot turn per-group suppression
+# into an unbounded event flood. The operator (deployment) category is
+# self-bounding (one source name) and is not budgeted.
+_TENANT_BUDGET = 25
+# Per-hour budget on DISTINCT refused-redirect hosts, so an anonymous caller
+# cannot mint one incident per fabricated host.
+_REFUSAL_BUDGET = 50
 
 # Resolver cache keyed by the dotted path, mirroring
 # mojo.apps.account.services.extensions — a settings change (including a test
 # server_settings override) naturally lands on a different key. A path that
 # failed to import caches as None so the error is logged once, not per request.
+# Resolver cache ONLY — the unusable-entry diagnostics no longer ride it.
 _CACHE = {}
 
 
@@ -263,15 +278,18 @@ def _get_resolver():
     return True, fn
 
 
-def matches_allowlist(url, entries, source="allowlist", allow_wildcard=False):
+def matches_allowlist(url, entries, source="allowlist", allow_wildcard=False,
+                      request=None, tenant=False):
     """Return True when `url` matches any entry in `entries`. Never raises.
 
-    The shared matcher, in its pure form: it reads no settings and takes no
-    request, which is exactly what lets two allowlists with different sources
-    use one implementation (see the module docstring). `entries` is the caller's
-    already-resolved list; `source` names the setting in the unusable-entry
-    warning; `allow_wildcard` decides whether a ``*.host`` entry is honored or
-    dropped as unusable.
+    The shared matcher, in its pure form: it reads no settings, which is exactly
+    what lets two allowlists with different sources use one implementation (see
+    the module docstring). `entries` is the caller's already-resolved list;
+    `source` names the origin of the list (the setting name, or `group:<pk>` for
+    a tenant list) and is the suppression key for the unusable-entry incident;
+    `allow_wildcard` decides whether a ``*.host`` entry is honored or dropped as
+    unusable. `request` and `tenant` only steer the unusable-entry incident
+    (which category, level, budget and provenance) — they never change the match.
 
     Matching is by parsed URL, never by string prefix — scheme, host and port
     compared after parsing, path prefix terminating on a segment boundary, query
@@ -281,18 +299,140 @@ def matches_allowlist(url, entries, source="allowlist", allow_wildcard=False):
     custom-scheme entry (a mobile deep link) matches on exact scheme + exact
     authority + the same path rule. See "Static matching rules" and "Custom URL
     schemes" above.
+
+    Unusable entries (an entry `_split` rejects) are counted and, if there are
+    any, reported ONCE via a Redis-suppressed incident after the scan — never a
+    per-request log line, because these lists are attacker-amplifiable on the
+    public `/begin` endpoint. The scan does NOT early-out on the first match: a
+    broken entry sitting AFTER the matching one is still a deployment bug the
+    operator should learn about, and a clean list (the common case) does zero
+    extra Redis/DB work either way (the `if unusable_count` guard below).
     """
     candidate = _split(url)
     if candidate is None:
         return False
+    matched = False
+    unusable_count = 0
+    unusable = []
     for raw_entry in entries or []:
         entry = _split(raw_entry, allow_wildcard=allow_wildcard)
         if entry is None:
-            _warn_unusable_entry(source, raw_entry)
+            unusable_count += 1
+            if len(unusable) < _UNUSABLE_SAMPLES:
+                unusable.append(raw_entry)
             continue
-        if _entry_matches(entry, candidate):
-            return True
-    return False
+        if not matched and _entry_matches(entry, candidate):
+            matched = True
+    if unusable_count:
+        try:
+            _report_unusable_entries(
+                source, unusable, unusable_count, request=request, tenant=tenant)
+        except Exception as exc:
+            # The module contract is "never raises". A broken incident plane must
+            # not turn an allowlist check into a 500 on the public endpoint.
+            logit.error(
+                "account.redirect_allowlist",
+                f"failed to report unusable {source} entries: {exc}")
+    return matched
+
+
+def _report_unusable_entries(source, samples, total, request=None, tenant=False):
+    """File a Redis-suppressed incident naming entries that can never match.
+
+    An unusable entry is silent config rot: it widens nothing, it just never
+    matches, so a destination is refused for no visible reason. Two provenances,
+    two postures:
+
+      * tenant list (`group.metadata["allowed_redirect_urls"]`, `tenant=True`) —
+        a tenant self-service value, so it is a low-severity (level 1) TENANT
+        incident, BUDGETED (`_TENANT_BUDGET` distinct groups/hour) and
+        FAIL-CLOSED, because `request.group` is anonymously selectable and the
+        list is `manage_group`-writable — a Redis outage must not let it flood
+        the incident table. `request` is passed so the auto-stamp attaches the
+        tenant group.
+      * deployment list (`ALLOWED_REDIRECT_URLS`, `AUTH_HANDOFF_ALLOWED_URLS`,
+        `tenant=False`) — an operator config bug, so a higher-severity (level 3)
+        UNUSABLE incident, self-bounding (one source name ⇒ no budget) and
+        FAIL-OPEN, with `group=None` so it is never group-scoped even when the
+        request that tripped it carried a group.
+
+    Suppression key is `source`, so the whole list reports at most once per
+    window regardless of how many entries are broken. Never raises.
+    """
+    from mojo.apps import incident
+
+    shown = ", ".join(f"{s!r:.200}" for s in samples)
+    plural = "entry" if total == 1 else "entries"
+    if tenant:
+        body = (
+            f"The tenant redirect allowlist ({source}) has {total} unusable "
+            f"{plural} that can never match any URL and were skipped. This list "
+            f"is `metadata['allowed_redirect_urls']` on the group, writable by a "
+            f"holder of manage_group; fix or remove the broken entries. "
+            f"First {len(samples)}: {shown}.")
+        incident.report_event_suppressed(
+            body,
+            key=source,
+            title=f"Unusable tenant redirect allowlist entries: {source}",
+            category=CATEGORY_TENANT_ENTRY,
+            level=1,
+            request=request,
+            window=_RENOTIFY_SEC,
+            budget=_TENANT_BUDGET,
+            fail_open=False,
+            allowlist_source=source,
+            unusable_total=total)
+    else:
+        body = (
+            f"The redirect allowlist setting {source} has {total} unusable "
+            f"{plural} that can never match any URL and were skipped, so a "
+            f"legitimate destination they were meant to admit is being refused. "
+            f"Fix or remove them. First {len(samples)}: {shown}.")
+        incident.report_event_suppressed(
+            body,
+            key=source,
+            title=f"Unusable redirect allowlist entries: {source}",
+            category=CATEGORY_UNUSABLE_ENTRY,
+            level=3,
+            request=request,
+            window=_RENOTIFY_SEC,
+            fail_open=True,
+            group=None,
+            allowlist_source=source,
+            unusable_total=total)
+
+
+def report_refused_redirect_uri(redirect_uri, request=None):
+    """File a Redis-suppressed incident for a redirect_uri `/begin` refused.
+
+    Replaces the per-request `logit.warning` refusal line, which was free
+    amplification on the public, unauthenticated `/begin` endpoint. Keyed by the
+    refused HOST (the useful unit — that is what an operator would allowlist or
+    block) and BUDGETED (`_REFUSAL_BUDGET` distinct hosts/hour) and FAIL-CLOSED,
+    so an anonymous caller cannot mint one incident per fabricated host and a
+    Redis outage does not open that floodgate. Never raises.
+    """
+    from mojo.apps import incident
+
+    parts = _split(redirect_uri)
+    host = parts[1] if parts else "unparsable"
+    body = (
+        f"OAuth /begin refused redirect_uri {redirect_uri!r:.200}: it is not on "
+        f"ALLOWED_REDIRECT_URLS and did not match the resolved group's "
+        f"allowed_redirect_urls. On this public endpoint a refusal is a probe or "
+        f"a misconfigured client; the host is what to allowlist or block.")
+    incident.report_event_suppressed(
+        body,
+        key=host or "unparsable",
+        title=f"Refused OAuth redirect_uri: {host or 'unparsable'}",
+        category=CATEGORY_REDIRECT_REFUSED,
+        level=3,
+        request=request,
+        window=_RENOTIFY_SEC,
+        budget=_REFUSAL_BUDGET,
+        fail_open=False,
+        redirect_uri=redirect_uri,
+        redirect_host=host)
 
 
 def matchable_scheme(url):
@@ -309,29 +449,13 @@ def matchable_scheme(url):
 
     It routes through `_split`, so it inherits every refusal `_split` makes (the
     dot-segment rule from #1101 included) and the scheme is returned already
-    lowercased. It deliberately does NOT call `_warn_unusable_entry`: the caller
-    passes a per-request candidate, not a configured allowlist entry, and warning
-    on a candidate would let an anonymous caller drive the log.
+    lowercased. It deliberately does NOT file an unusable-entry incident: the
+    caller passes a per-request candidate, not a configured allowlist entry, and
+    reporting on a candidate would let an anonymous caller drive the incident
+    plane.
     """
     parts = _split(url)
     return parts[0] if parts is not None else ""
-
-
-def _warn_unusable_entry(source, raw_entry):
-    """Name an entry that can never match — once per distinct entry.
-
-    An unusable entry is silent config rot: it does not widen anything, it just
-    never matches, so the operator sees a destination refused for no visible
-    reason. Rides the module cache so `_reset_cache_for_tests` re-arms it.
-    """
-    key = (_WARNED_ENTRY, source, repr(raw_entry))
-    if key in _CACHE:
-        return
-    if len(_CACHE) < _WARN_CAP:
-        _CACHE[key] = True
-    logit.warning(
-        "account.redirect_allowlist",
-        f"ignoring unusable {source} entry {raw_entry!r}")
 
 
 def _matches_static_list(url):
@@ -485,6 +609,11 @@ def report_unlisted_destination(destination, request=None, enforced=False):
     """
     File a SUPPRESSED incident for a handoff destination that is not allowed.
 
+    NOTE: this predates `incident.report_event_suppressed` and hand-rolls the
+    same Redis suppression. New code should use `report_event_suppressed`
+    (see `report_refused_redirect_uri` above); this one is left as-is because a
+    test pins its exact `_NOTICE_PREFIX` key shape and per-mode bucketing.
+
     This is what makes monitor mode useful rather than merely harmless: the
     incidents name every destination a deployment would have to allowlist, so
     the incident feed writes `AUTH_HANDOFF_ALLOWED_URLS` for you. Turn
@@ -559,5 +688,12 @@ def report_unlisted_destination(destination, request=None, enforced=False):
 
 
 def _reset_cache_for_tests():
-    """Test-only helper to drop the cached resolver. Production never calls this."""
+    """Test-only helper to drop the cached resolver. Production never calls this.
+
+    `_CACHE` holds ONLY the AUTH_HANDOFF_RESOLVER lookup now; the unusable-entry
+    diagnostics moved to Redis-suppressed incidents and no longer ride it, so
+    this clears the resolver cache and nothing else. Incident suppression is
+    reset by clearing the Redis notice/budget keys (see `incident.notice_key` /
+    `incident.budget_key`), not this helper.
+    """
     _CACHE.clear()

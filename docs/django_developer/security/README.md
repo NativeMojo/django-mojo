@@ -121,6 +121,13 @@ Categories are hierarchical strings using `:` as separator. The rule engine matc
 | `traffic:concentration` | Incident cron | One identity dominating traffic (DM-042) |
 | `traffic:ws_connect` | Realtime | Per-IP websocket connect-rate storm (DM-042) |
 | `traffic:ws_maxconn` | Realtime | Identity exceeded concurrent websocket cap (DM-042) |
+| `auth:redirect_allowlist_unusable_entry` | OAuth `/begin` | A **deployment** redirect-allowlist entry (`ALLOWED_REDIRECT_URLS` or `AUTH_HANDOFF_ALLOWED_URLS`) can never match — operator config bug. Level 3, suppressed per source per hour, fail-open |
+| `auth:redirect_allowlist_tenant_entry_unusable` | OAuth `/begin` | A **tenant** `Group.metadata["allowed_redirect_urls"]` entry can never match. Level 1, suppressed per `group:<pk>` per hour, budgeted (25 groups/h), fail-closed |
+| `auth:oauth_redirect_refused` | OAuth `/begin` | A `redirect_uri` matched no allowlist source. Level 3, suppressed per host per hour, budgeted (50 hosts/h), fail-closed |
+
+The three redirect-allowlist categories are Redis-suppressed via
+`incident.report_event_suppressed` — see
+[OAuth › redirect allowlist incidents](../account/oauth.md#redirect-allowlist-incidents).
 
 ### Event Levels
 

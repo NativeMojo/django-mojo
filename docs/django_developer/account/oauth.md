@@ -104,7 +104,10 @@ GET /api/auth/oauth/google/begin?redirect_uri=https://portal.example.com/auth/ca
 
 A `redirect_uri` is matched as a **URL**, not as a string prefix. If no allowlist is configured and a `redirect_uri` is provided, the request returns `400`.
 
-The allowlist has **two** sources, combined at validation time.
+The allowlist has **two** sources, matched **separately** at validation time (a
+match in either admits the URL). They are matched under distinct sources so an
+unusable entry is attributed to the right party — see
+[Redirect allowlist incidents](#redirect-allowlist-incidents).
 
 **Project-wide allowlist** (`settings.py`):
 
@@ -309,8 +312,12 @@ cannot reach a neighbour's. Domain verification, moving the key under
 considered and declined — the last is not even available on a public endpoint
 whose whole purpose is a signed-out white-label login page.
 
-The two sources are combined, never substituted: the project-wide list always
-applies, and the group's entries are added on top when a group resolved.
+The two sources are matched separately, never substituted: the project-wide list
+is checked first, and the group's entries are checked on their own when a group
+resolved and the deployment list did not match. Matching them apart (rather than
+concatenating into one list) is what lets a broken deployment entry and a broken
+tenant entry file *different* incident categories — the tenant list is
+low-trust, so its junk must not drive the operator's category.
 `ALLOWED_REDIRECT_URLS` itself is read through `settings.get`, so it may be set
 in `settings.py` **or** as a global `Setting` row:
 
@@ -349,6 +356,45 @@ context.
   shadow the real value (`URLSearchParams.get()` returns the first match) and
   sabotage the victim's login. Tightening the host match did not retire that
   strip; an allowlisted URL can still carry any query at all.
+
+### Redirect allowlist incidents
+
+The allowlist check runs on the public, unauthenticated `/begin`. Its two
+diagnostics — an unusable allowlist entry, and a refused `redirect_uri` — used to
+be `logit.warning` lines. Both were **attacker-amplifiable**: the tenant list is
+`manage_group`-writable and `request.group` is anonymously selectable, and every
+refused request wrote a line. They now file through
+[`incident.report_event_suppressed`](../logging/incidents.md#rate-limited-reporting--report_event_suppressed)
+— Redis-suppressed, budgeted, never-raising.
+
+| Category | Level | Suppression key | Window | Budget | On Redis outage | When |
+|---|---|---|---|---|---|---|
+| `auth:redirect_allowlist_unusable_entry` | 3 | source name (`ALLOWED_REDIRECT_URLS`, `AUTH_HANDOFF_ALLOWED_URLS`) | 1h | none | **fail-open** (file unsuppressed) | A **deployment** allowlist entry can never match — an operator config bug. |
+| `auth:redirect_allowlist_tenant_entry_unusable` | 1 | `group:<pk>` | 1h | 25 groups/h | **fail-closed** (drop) | A **tenant** `metadata["allowed_redirect_urls"]` entry can never match. Low-trust provenance, so budgeted and fail-closed. |
+| `auth:oauth_redirect_refused` | 3 | refused host | 1h | 50 hosts/h | **fail-closed** (drop) | A `redirect_uri` matched no source — a probe or a misconfigured client. The host is the unit an operator would allowlist or block. |
+
+The unusable-entry category is **shared** with the auth-handoff allowlist: because
+one matcher backs both `ALLOWED_REDIRECT_URLS` and `AUTH_HANDOFF_ALLOWED_URLS`, a
+broken `AUTH_HANDOFF_ALLOWED_URLS` entry files the same operator category — an
+unusable handoff entry is equally a deployment bug.
+
+**Tuning the noise with a RuleSet.** These are `report_event`-backed events, so a
+`RuleSet` with `handler="ignore"` on the category stops them from becoming
+incidents or notifications:
+
+```python
+from mojo.apps.incident.models import RuleSet
+RuleSet.objects.create(
+    name="Ignore tenant redirect junk",
+    category="auth:redirect_allowlist_tenant_entry_unusable",
+    handler="ignore")
+```
+
+> `handler="ignore"` stops incident creation and notifications, but **not** the
+> Event row itself — the row is saved *before* `publish()` runs the rule engine.
+> What actually bounds the number of rows is the in-code `window`/`budget` above,
+> not the RuleSet. Use `ignore` to quiet a category you have decided to tolerate,
+> not as the mechanism that stops a flood.
 
 ---
 

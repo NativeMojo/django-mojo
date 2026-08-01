@@ -218,16 +218,26 @@ reports nothing (there is no destination to name) and still mints.
 mode — callers pair the two, which is why a `False` in monitor mode is reported
 rather than acted on.
 
-`matches_allowlist(url, entries, source="allowlist", allow_wildcard=False)` is
-the matcher underneath, in its pure form: it reads no settings and takes no
-request, just "does this URL match one of these entries". It never raises.
-Reach for it when you already hold the entries — the OAuth `redirect_uri`
+`matches_allowlist(url, entries, source="allowlist", allow_wildcard=False,
+request=None, tenant=False)` is the matcher underneath, in its pure form: it
+reads no settings, just "does this URL match one of these entries". It never
+raises. Reach for it when you already hold the entries — the OAuth `redirect_uri`
 allowlist is the second in-tree caller, which is what keeps one implementation
 behind two lists. Reach for `is_allowed_destination()` instead when you want the
-handoff list *plus* any configured resolver. `source` only names the setting in
-the "ignoring unusable entry" warning (logged once per distinct entry, not once
-per request); `allow_wildcard` decides whether a `*.host` entry is honored or
-dropped as unusable.
+handoff list *plus* any configured resolver. `allow_wildcard` decides whether a
+`*.host` entry is honored or dropped as unusable.
+
+`source` names the origin of the list (the setting name, or `group:<pk>` for a
+tenant list) and is the **suppression key** for the unusable-entry incident it
+files when an entry can never match: an unusable entry no longer logs a
+per-request line (that was free amplification on the public `/begin`), it files a
+Redis-suppressed `auth:redirect_allowlist_unusable_entry` incident (level 3, one
+per source per hour). Because the handoff list shares this matcher, a broken
+`AUTH_HANDOFF_ALLOWED_URLS` entry files that **same** operator category — an
+unusable handoff entry is equally a deployment bug. `request`/`tenant` only steer
+which category and posture that incident uses (see
+[OAuth › redirect allowlist incidents](oauth.md#redirect-allowlist-incidents));
+they never change the match.
 
 Same-origin and relative redirects are unaffected in either mode — they never
 mint a code, because the tokens already live in `localStorage` on the

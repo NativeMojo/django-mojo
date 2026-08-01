@@ -262,6 +262,14 @@ What did **not** change: the status code (`400`), the error strings, the
 response shape, and host case-insensitivity — in fact case now matches *more*
 (`https://APP.Example.com/x` is admitted against `https://app.example.com`).
 
+**A refusal is now visible to the operator.** A refused `redirect_uri` files a
+server-side security event (`auth:oauth_redirect_refused`), suppressed to one per
+host per hour. Nothing about the client response changes — you still get the same
+`400` with the same body — but if your integration is refusing in production, the
+operator can see the host and fix the allowlist without you shipping them a log.
+An **unusable** allowlist entry (one that can never match) is likewise surfaced as
+an event instead of a silent skip.
+
 ### Native apps — custom URL schemes
 
 A mobile deep link works as a `redirect_uri`, against an allowlist entry naming

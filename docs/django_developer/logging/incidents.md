@@ -325,6 +325,86 @@ incident.report_event(
 
 To suppress group derivation even when `request.group` is set, pass `group=None` explicitly.
 
+### Rate-limited reporting — `report_event_suppressed`
+
+`report_event` files unconditionally — one call, one row. That is wrong when the
+diagnostic sits on an **attacker-amplifiable** path: a public endpoint, or a
+value a low-trust party (a tenant) can write. There, an anonymous caller can
+drive the rate at which you file events, turning your incident table into a flood
+sink. `report_event_suppressed` is the reusable answer.
+
+```python
+from mojo.apps import incident
+
+filed = incident.report_event_suppressed(
+    "refused redirect_uri 'https://evil.example/x' — not on any allowlist",
+    key=host,                       # the suppression unit (host, source, group id)
+    title="Refused redirect_uri",
+    category="auth:oauth_redirect_refused",
+    level=3,
+    request=request,
+    window=3600,                    # seconds; one event per (category, key) per window
+    budget=50,                      # optional: cap DISTINCT keys per window
+    fail_open=False,                # drop on a Redis outage (see below)
+    redirect_host=host,             # extra kwargs -> event metadata
+)
+```
+
+Signature:
+
+```python
+report_event_suppressed(details, key, title=None, category="api_error", level=1,
+                        request=None, scope="global", window=3600, budget=None,
+                        fail_open=True, **kwargs) -> bool
+```
+
+- **Returns `bool`** — `True` when an event was filed, `False` when it was
+  suppressed (already reported this window), dropped (over budget), or the report
+  itself failed. It **never raises**: every failure mode is swallowed, so a
+  broken incident plane can never turn a check on a public endpoint into a 500.
+- **`key`** is the suppression unit. `(category, key)` is filed at most **once per
+  `window`**. Choose the unit that is useful to an operator and bounded by
+  something other than the attacker — a host, a config source name, a group id —
+  never the raw attacker-controlled string.
+- **`window`** (default 3600s) is the suppression period. It is a **rolling** TTL:
+  the notice key is written with `ex=window` on the first report and refreshed
+  only on the next window, so a pair reported once stays quiet for up to `window`.
+- **`budget`** (default `None` = unlimited) caps the number of **distinct keys** a
+  category may file in one fixed wall-clock bucket. Use it when the caller can mint
+  unbounded distinct keys (many hosts, many groups) so per-key suppression alone
+  would still let the total grow without bound. When the budget is first exceeded,
+  **one** `level=4` "budget exhausted" marker event is filed (so the cap is
+  visible) and further keys are dropped silently until the bucket rolls over.
+- **`fail_open`** decides Redis-outage behavior. `True` (default) files
+  **without** suppression and logs a single warning per process — right for a
+  low-rate, trusted-provenance diagnostic that must not be lost. `False` **drops**
+  the event when Redis is unreachable — right for a public, amplifiable category,
+  where an outage must not become an open floodgate into the incident table.
+- **`group=None`** in `kwargs` is honored exactly as in `report_event` (suppresses
+  the request-group auto-stamp); any other extra kwarg lands in event metadata.
+
+**Atomicity.** The notice key is claimed with `redis.set(key, "1", nx=True,
+ex=window)` — a single atomic round-trip, so two concurrent workers can never both
+pass the check for the same `(category, key)`. There is no read-then-write race.
+
+**Test helpers.** `incident.notice_key(category, key)` and
+`incident.budget_key(category, window)` return the exact Redis keys the helper
+uses, so a test can clear precisely the keys it will exercise (the DB and Redis
+are long-lived) instead of flushing Redis:
+
+```python
+from mojo.apps.incident import notice_key, budget_key
+from mojo.helpers.redis import get_connection
+
+redis = get_connection()
+redis.delete(notice_key("auth:oauth_redirect_refused", "app.example.com"))
+redis.delete(budget_key("auth:oauth_redirect_refused", 3600))
+```
+
+> The older `redirect_allowlist.report_unlisted_destination` hand-rolls the same
+> Redis suppression and predates this helper; new code should use
+> `report_event_suppressed`.
+
 ### From a MojoModel instance
 
 ```python

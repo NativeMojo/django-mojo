@@ -1,5 +1,49 @@
 ## Unreleased
 
+**fix (account)** — **the two OAuth redirect-allowlist diagnostics on the public
+`/begin` are now Redis-suppressed incidents, not attacker-amplifiable log
+lines.** The unusable-entry warning (`_warn_unusable_entry`) and the refusal line
+in `_validate_redirect_uri` were `logit.warning` calls on a
+`@md.public_endpoint()`. Both were free amplification: `Group.metadata`
+(`allowed_redirect_urls`) is `manage_group`-writable and `request.group` is
+anonymously selectable via `?group=` / `?group_uuid=`, so a tenant writes N junk
+entries and any anonymous caller drives one log line per entry per request, and
+every refused request wrote another. They now file through a new reusable helper,
+`incident.report_event_suppressed`, which never raises and bounds the rate.
+
+- **Three categories, three postures.** The deployment vs tenant split is the
+  point — a low-trust tenant list must not drive the operator's category.
+
+  | Category | Level | Suppression key | Window | Budget | Redis outage |
+  |---|---|---|---|---|---|
+  | `auth:redirect_allowlist_unusable_entry` | 3 | source name (`ALLOWED_REDIRECT_URLS` / `AUTH_HANDOFF_ALLOWED_URLS`) | 1h | none | fail-open |
+  | `auth:redirect_allowlist_tenant_entry_unusable` | 1 | `group:<pk>` | 1h | 25 groups/h | fail-closed |
+  | `auth:oauth_redirect_refused` | 3 | refused host | 1h | 50 hosts/h | fail-closed |
+
+- **New reusable helper.** `incident.report_event_suppressed(details, key, …,
+  window=3600, budget=None, fail_open=True)` returns a bool, never raises, and
+  claims its notice key atomically (`set nx=True ex=window`). An optional
+  `budget` caps distinct keys per window and files one level-4 marker when first
+  exceeded. `incident.notice_key` / `incident.budget_key` expose the exact Redis
+  keys for tests. See `docs/django_developer/logging/incidents.md`.
+- **`_validate_redirect_uri` now matches the two sources separately** (deployment
+  under `ALLOWED_REDIRECT_URLS`, group under `group:<pk>`) instead of
+  concatenating them, so an unusable entry is attributed to the party that wrote
+  it. A match in either source still admits the URL; the "no allowlist
+  configured" and "not on the allowlist" messages and the `400` are unchanged.
+  The pre-existing string char-explosion / `TypeError` shape of a
+  bare-string/non-list group value is intentionally unchanged here.
+- **The handoff allowlist gains the same operator incident.** Because one matcher
+  backs both `ALLOWED_REDIRECT_URLS` and `AUTH_HANDOFF_ALLOWED_URLS`, a broken
+  `AUTH_HANDOFF_ALLOWED_URLS` entry files `auth:redirect_allowlist_unusable_entry`
+  too — an unusable handoff entry is equally a deployment bug.
+- **Breaking for log scrapers.** The strings `ignoring unusable <source> entry …`
+  and `refused redirect_uri … — not on ALLOWED_REDIRECT_URLS` **no longer appear
+  in `mojo.log`**. Anything alerting on those lines must move to the incident
+  categories above (or a `RuleSet` on them). A `RuleSet` with `handler="ignore"`
+  quiets a category but does **not** stop the Event row — the in-code
+  `window`/`budget` is what bounds rows.
+
 **fix (account)** — **a custom-scheme OAuth `redirect_uri` now completes the
 round-trip instead of 500-ing at the callback.** Restoring `myapp://callback` as
 an allowlist entry made it pass validation at `/begin`, but that was only half

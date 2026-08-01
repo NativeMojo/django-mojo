@@ -47,9 +47,15 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   through `settings.get` with `kind="list"`, so a **global** `Setting` row works
   — it holds text, and both a JSON array and a comma-separated string are
   coerced correctly. A group-scoped `Setting` row is never consulted (per-group
-  entries live in group metadata instead). See
-  [OAuth](../account/oauth.md#allowlist-configuration) and
-  [the per-group source](../account/oauth.md#the-per-group-source).
+  entries live in group metadata instead). An entry that can never match is
+  skipped and files a Redis-suppressed incident rather than a per-request log
+  line: `auth:redirect_allowlist_unusable_entry` (level 3) for a broken entry in
+  this setting, `auth:redirect_allowlist_tenant_entry_unusable` (level 1,
+  budgeted) for a broken group entry, and `auth:oauth_redirect_refused` (level 3,
+  budgeted) when a `redirect_uri` matches nothing. See
+  [OAuth](../account/oauth.md#allowlist-configuration),
+  [redirect allowlist incidents](../account/oauth.md#redirect-allowlist-incidents),
+  and [the per-group source](../account/oauth.md#the-per-group-source).
 
 ### API
 

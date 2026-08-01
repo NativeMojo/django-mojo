@@ -50,7 +50,7 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | API | Path | What it provides |
 |-----|------|-----------------|
 | Incidents | `/api/incident/incident` | Security incidents with status, priority, category |
-| Events | `/api/incident/event` | Raw security events that feed into incidents |
+| Events | `/api/incident/event` | Raw security events that feed into incidents — includes the OAuth redirect-allowlist categories `auth:oauth_redirect_refused`, `auth:redirect_allowlist_unusable_entry`, and `auth:redirect_allowlist_tenant_entry_unusable` (Redis-suppressed, so at most one per host/source/group per hour) |
 | History | `/api/incident/incident/history` | Audit trail for each incident |
 | Health Summary | `/api/incident/health/summary` | Latest event per `system:health:*` category — one row per subsystem |
 | Tickets | `/api/incident/ticket` | Human review items, LLM conversation threads |

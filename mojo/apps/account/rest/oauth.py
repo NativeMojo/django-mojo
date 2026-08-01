@@ -53,11 +53,22 @@ def _validate_redirect_uri(request, redirect_uri):
     """
     Validate redirect_uri against the allowlist, matched as a URL.
 
-    TWO sources, combined:
+    TWO sources, matched SEPARATELY (not concatenated into one list):
       - the ALLOWED_REDIRECT_URLS setting — deployment configuration;
       - `group.metadata["allowed_redirect_urls"]` for the group this request
         resolved to, read with `get_metadata_value`, which walks the parent
         chain so a child group inherits an ancestor's entries.
+
+    They are matched under DISTINCT sources (`ALLOWED_REDIRECT_URLS` vs
+    `group:<pk>`) so an unusable entry is attributed to the right party: a broken
+    deployment entry files an operator incident, while a tenant's broken
+    `metadata["allowed_redirect_urls"]` files a lower-severity, budgeted,
+    fail-closed TENANT incident. The two lists carry very different trust — the
+    tenant one is `manage_group`-writable and `request.group` is anonymously
+    selectable via `?group=` / `?group_uuid=` on this public endpoint — so
+    collapsing them into one source (as the old `allowed.extend(...)` did) would
+    let a tenant's junk drive the operator's incident category. A match in EITHER
+    source admits the URL. See `redirect_allowlist.matches_allowlist`.
 
     The per-group source is tenant-writable and caller-selectable, and that is a
     deliberate, accepted decision — not an oversight. Plain `metadata` is
@@ -98,30 +109,38 @@ def _validate_redirect_uri(request, redirect_uri):
     Raises ValueException (400) if the URI is not on the allowlist or if no
     allowlist is configured at all.
     """
-    allowed = list(settings.get("ALLOWED_REDIRECT_URLS", [], kind="list") or [])
+    deployment = list(settings.get("ALLOWED_REDIRECT_URLS", [], kind="list") or [])
     # getattr + truthiness, never hasattr: request.group may be an objict-shaped
     # stand-in, and objict answers hasattr True for every name.
     group = getattr(request, "group", None)
+    group_entries = []
     if group:
-        group_allowed = group.get_metadata_value("allowed_redirect_urls")
-        if group_allowed:
-            allowed.extend(group_allowed)
+        value = group.get_metadata_value("allowed_redirect_urls")
+        if value:
+            # `list(value)` intentionally preserves the pre-existing shape: a
+            # bare-string value char-explodes (each char is an unusable entry the
+            # matcher drops) and a non-iterable raises — UNCHANGED here, fixed
+            # separately in #1103.
+            group_entries = list(value)
 
-    if not allowed:
+    if not deployment and not group_entries:
         raise merrors.ValueException(
             "redirect_uri is not permitted: no ALLOWED_REDIRECT_URLS configured"
         )
 
     if redirect_allowlist.matches_allowlist(
-            redirect_uri, allowed, source="ALLOWED_REDIRECT_URLS"):
+            redirect_uri, deployment, source="ALLOWED_REDIRECT_URLS", request=request):
+        return
+    # `group.pk` is reached only inside this guard, so `group` is truthy here.
+    if group_entries and redirect_allowlist.matches_allowlist(
+            redirect_uri, group_entries, source=f"group:{group.pk}",
+            request=request, tenant=True):
         return
 
-    # ONE line per refused request, with the value bounded: /begin is public and
-    # unauthenticated, and the DM-042 throttle short-circuits for anonymous
-    # callers, so an unbounded per-request log line is free amplification.
-    logit.warning(
-        "oauth",
-        f"refused redirect_uri {redirect_uri!r:.200} — not on ALLOWED_REDIRECT_URLS")
+    # A Redis-suppressed, budgeted, host-keyed incident replaces the per-request
+    # log line: /begin is public and unauthenticated, so an unbounded per-request
+    # line (or a raw event) is free amplification an anonymous caller drives.
+    redirect_allowlist.report_refused_redirect_uri(redirect_uri, request=request)
     raise merrors.ValueException("redirect_uri is not on the allowlist")
 
 

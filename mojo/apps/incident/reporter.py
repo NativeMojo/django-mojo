@@ -1,4 +1,5 @@
 import socket
+import time
 
 
 def report_event(details, title=None, category="api_error", level=1, request=None, scope="global", **kwargs):
@@ -8,6 +9,177 @@ def report_event(details, title=None, category="api_error", level=1, request=Non
     event.sync_metadata()
     event.save()
     event.publish()
+
+
+# Set True the first time the Redis suppression path fails while fail_open is on,
+# so the "filing without suppression" fallback warning is logged once per process
+# instead of once per amplifiable request. Re-armed (set back to False) on the
+# next Redis round-trip that answers, so a transient outage warns again.
+_REDIS_WARNED = False
+
+
+def notice_key(category, key):
+    """Redis key for the once-per-window suppression flag of a (category, key) pair.
+
+    Rolling TTL: written with ``ex=window`` and set only on the FIRST report of
+    each window (``nx=True``), so a pair reported once stays suppressed for up to
+    ``window`` seconds after that first report. This is the unit of "have I
+    already told the operator about this exact thing recently".
+
+    Exposed (with ``budget_key``) so a test can clear the precise keys it will
+    exercise instead of flushing Redis.
+    """
+    return f"incident:notice:{category}:{key}"
+
+
+def budget_key(category, window):
+    """Redis key for a category's per-window event budget, in a fixed wall-clock bucket.
+
+    Unlike ``notice_key``'s rolling TTL, the budget bucket is pinned to a
+    wall-clock boundary (``floor(now/window)*window``) so every distinct key in a
+    category shares ONE counter for the bucket — that is what lets a budget cap
+    the number of *distinct* keys filed per window, not just repeats of one key.
+
+    The TTL mismatch between the two keys is deliberate and fail-safe: a key that
+    passes its own rolling notice check but is then rejected by the fixed-bucket
+    budget stays notice-suppressed for up to ``window``. The worst case is FEWER
+    events than a naive reading would predict, never more.
+    """
+    bucket = int(time.time()) // window * window
+    return f"incident:budget:{category}:{bucket}"
+
+
+def report_event_suppressed(details, key, title=None, category="api_error", level=1,
+                            request=None, scope="global", window=3600, budget=None,
+                            fail_open=True, **kwargs):
+    """File an incident Event at most once per ``(category, key)`` per ``window``. Returns bool.
+
+    The reusable Redis-suppressed reporter. Reach for it — not bare
+    ``report_event`` — anywhere a diagnostic is reachable from an
+    attacker-amplifiable path (a public endpoint, a tenant-writable list), where
+    a raw log line or a raw event is free amplification. It mirrors the
+    hand-rolled suppression in ``account.services.redirect_allowlist`` and
+    generalizes it.
+
+    Returns ``True`` when an event was filed, ``False`` when it was
+    suppressed (already reported this window), dropped (over budget), or the
+    report itself failed. It **NEVER raises** — every failure mode is swallowed.
+
+    Two independent limiters, both keyed in Redis:
+
+      * ``notice_key(category, key)`` — the primary suppression. Set with
+        ``nx=True, ex=window``; the ``nx`` makes "have I reported this pair this
+        window" a single atomic round-trip (no read-then-write race between
+        concurrent workers). A pair is filed at most once per ``window``.
+      * ``budget_key(category, window)`` — an OPTIONAL ceiling (pass ``budget=``)
+        on how many *distinct* keys a category may file in one fixed bucket, so a
+        caller that mints unbounded distinct keys (many hosts, many groups)
+        cannot turn per-key suppression into an unbounded event flood. When the
+        budget is first exceeded a single "budget exhausted" event is filed
+        (level 4) so the cap itself is visible; further keys are dropped silently.
+
+    ``fail_open`` decides Redis-outage behavior. Fail-open (the default) files
+    WITHOUT suppression and warns once per process — right for a low-rate,
+    trusted-provenance diagnostic that must not be lost. Fail-CLOSED
+    (``fail_open=False``) drops the event when Redis is unreachable — right for a
+    public, attacker-amplifiable category, where a Redis outage must not become
+    an open floodgate into the incident table.
+
+    ``key`` is the suppression unit (a host, a source name, a group id).
+    ``group=None`` in ``kwargs`` is honored by ``report_event`` to suppress the
+    request-group auto-stamp. Extra ``kwargs`` land in the event metadata.
+    """
+    from mojo.helpers import logit
+
+    try:
+        from mojo.helpers.redis import get_connection
+        redis = get_connection()
+        nk = notice_key(category, key)
+        # nx=True: atomic "claim this window" — set only if absent, so two
+        # concurrent workers can never both pass. First real round-trip.
+        fresh = redis.set(nk, "1", nx=True, ex=window)
+        _note_redis_ok()
+        if not fresh:
+            return False
+        if budget is not None:
+            bk = budget_key(category, window)
+            used = redis.incr(bk)
+            if used == 1:
+                redis.expire(bk, window)
+            if used > budget:
+                # File the "budget exhausted" marker exactly once (on the first
+                # key past the cap), then drop this and every further key.
+                if used == budget + 1:
+                    _report_budget_exhausted(category, key, budget, window)
+                return False
+    except Exception as exc:
+        if not fail_open:
+            # Fail closed: a Redis outage must not let an anonymous caller flood
+            # the incident DB on a public, amplifiable category. Drop it.
+            return False
+        _warn_redis_unavailable(category, exc)
+        # fall through and report without suppression
+
+    try:
+        from mojo.apps import incident
+        incident.report_event(details, title=title, category=category, level=level,
+                              request=request, scope=scope, **kwargs)
+        return True
+    except Exception as exc:
+        logit.error(
+            "incident.report_event_suppressed",
+            f"failed to file {category}: {exc}")
+        return False
+
+
+def _note_redis_ok():
+    """Re-arm the fail-open warning after a Redis round-trip answers."""
+    global _REDIS_WARNED
+    _REDIS_WARNED = False
+
+
+def _warn_redis_unavailable(category, exc):
+    """Log the fail-open fallback once per process (until Redis recovers)."""
+    global _REDIS_WARNED
+    if _REDIS_WARNED:
+        return
+    _REDIS_WARNED = True
+    from mojo.helpers import logit
+    logit.warning(
+        "incident.report_event_suppressed",
+        f"redis suppression unavailable ({exc}); filing {category} WITHOUT "
+        f"suppression until redis recovers")
+
+
+def _report_budget_exhausted(category, key, budget, window):
+    """File ONE event when a category first exhausts its per-window budget.
+
+    Fired exactly once per category per bucket (the caller guards it with
+    ``used == budget + 1``) so the operator learns the cap is now dropping rows
+    without the flood that tripped it becoming a flood of its own. Calls
+    ``report_event`` DIRECTLY — never ``report_event_suppressed`` — so it cannot
+    recurse through the budget path. ``request=None`` and ``group=None`` keep it
+    deployment-scoped and unstamped. Never raises.
+    """
+    from mojo.helpers import logit
+    try:
+        from mojo.apps import incident
+        body = (
+            f"Incident suppression budget exhausted for category {category!r}: "
+            f"more than {budget} distinct keys filed in a {window}s window. "
+            f"Further events in this window are being DROPPED (not filed) to "
+            f"bound the incident table. Most recent dropped key: {key!r:.200}.")
+        incident.report_event(
+            body,
+            title=f"Incident budget exhausted: {category}",
+            category=category,
+            level=4,
+            request=None,
+            group=None)
+    except Exception as exc:
+        logit.error(
+            "incident.report_event_suppressed",
+            f"failed to file budget-exhausted marker for {category}: {exc}")
 
 
 def _resolve_event_group(kwargs, request):
