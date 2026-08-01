@@ -3,6 +3,7 @@ IPStack.com provider for GeoIP lookups.
 https://ipstack.com/
 """
 import requests
+from mojo.helpers import logit
 from mojo.helpers.location.countries import get_country_name
 from .config import get_api_key
 
@@ -22,7 +23,7 @@ def fetch(ip_address, api_key=None):
         api_key = get_api_key('ipstack')
 
     if not api_key:
-        print("[GeoIP Error] ipstack provider requires an API key (GEOIP_API_KEY_IPSTACK).")
+        logit.warning("[GeoIP] ipstack provider requires an API key (GEOIP_API_KEY_IPSTACK).")
         return None
 
     try:
@@ -33,7 +34,7 @@ def fetch(ip_address, api_key=None):
 
         if data.get('success') is False:
             error_info = data.get('error', {}).get('info', 'Unknown error')
-            print(f"[GeoIP Error] ipstack API error: {error_info}")
+            logit.warning(f"[GeoIP] ipstack API error: {error_info}")
             return None
 
         country_code = data.get('country_code')
@@ -58,5 +59,5 @@ def fetch(ip_address, api_key=None):
             'data': data
         }
     except Exception as e:
-        print(f"[GeoIP Error] Failed to fetch from ipstack.com for IP {ip_address}: {e}")
+        logit.error(f"[GeoIP] Failed to fetch from ipstack.com for IP {ip_address}: {e}")
         return None

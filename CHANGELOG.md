@@ -3,6 +3,7 @@
 feat: `SECRET_KEY_FALLBACKS` is now honored by mojo's own crypto — bouncer token/pass-cookie verification and filevault unwrap/token-validation accept material produced under a rotated-out key, so a `SECRET_KEY` rotation no longer invalidates issued tokens or bricks stored files.
 fix (security): filevault read `SECRET_KEY` through the DB-overridable settings path — a `Setting` row named `SECRET_KEY` (writable over REST with `manage_settings`) could silently re-key per-file wrapping at runtime. It now reads file-based settings only.
 fix (geoip, security): geoip threat detection was inert framework-wide — `is_known_attacker`/`is_known_abuser` were permanently `False` and blocklist hits never reached `threat_level`. Three separate breaks fixed; `geolocate_ip()` results gain a top-level `is_blocklisted`.
+chore (geoip): the geoip helpers now log through `logit` (level-tagged, routed to `mojo.log`/`error.log`/`debug.log`) instead of printing to stdout, and the missing-`geoip2` notice is warned once per process instead of on every lookup. `mojo.helpers.ua` — an empty stub that never had an implementation — was removed along with its documentation.
 
 
 **fix (geoip, security)** — **threat detection never actually ran.** Three

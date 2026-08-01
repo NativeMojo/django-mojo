@@ -9,6 +9,7 @@ Public API:
 """
 import ipaddress
 from objict import objict
+from mojo.helpers import logit
 from . import config
 from . import detection
 from . import ipinfo
@@ -265,7 +266,7 @@ def geolocate_ip(ip_address, check_threats=False):
         return geo_data
     else:
         # All providers failed
-        print(f"[GeoIP Error] All providers failed for IP {ip_address}: {'; '.join(errors)}")
+        logit.error(f"[GeoIP] All providers failed for IP {ip_address}: {'; '.join(errors)}")
         return None
 
 

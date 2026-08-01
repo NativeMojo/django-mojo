@@ -3,6 +3,7 @@ IPInfo.io provider for GeoIP lookups.
 https://ipinfo.io/
 """
 import requests
+from mojo.helpers import logit
 from mojo.helpers.location.countries import get_country_name
 from .config import get_api_key
 
@@ -72,5 +73,5 @@ def fetch(ip_address, api_key=None):
         }
 
     except Exception as e:
-        print(f"[GeoIP Error] Failed to fetch from ipinfo.io for IP {ip_address}: {e}")
+        logit.error(f"[GeoIP] Failed to fetch from ipinfo.io for IP {ip_address}: {e}")
         return None
