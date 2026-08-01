@@ -291,6 +291,14 @@ def test_admin_can_login(opts):
 - Import Django models inside `@django_unit_setup` / `@django_unit_test` only.
 - Tests run in definition order; keep related assertions grouped.
 
+> **Collection is by function-name PREFIX, not by decorator, and there is no
+> teardown phase.** The runner collects `setup_*` for the setup phase and
+> `test_*` / `quick_*` for the test phase — nothing else. A `cleanup_*` or
+> `teardown_*` function is therefore dead code no matter how it is decorated
+> (even `@django_unit_setup()`): it is never collected and never runs. Put
+> per-module cleanup at the **top of `setup_`** instead — delete any leftover
+> rows/secrets there before creating fixtures, since the database is long-lived.
+
 See `docs/testit/examples/1_test_models.py` for a full reference module.
 
 ---

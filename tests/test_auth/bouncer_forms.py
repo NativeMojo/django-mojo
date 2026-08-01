@@ -765,7 +765,8 @@ def test_switcher_no_params_unchanged_regression(opts):
 
 
 # ---------------------------------------------------------------------------
-# auth_base.html — JS string literals must carry |escapejs
+# Raw-text <script>/<style> interpolations must be escape-safe — in auth_base.html
+# and in every shipped template.
 #
 # The server-built auth/register/passkey URLs and theme.success_redirect are
 # interpolated into JS string literals in auth_base.html's inline <script>.
@@ -776,7 +777,10 @@ def test_switcher_no_params_unchanged_regression(opts):
 # window.location.href, so the destination parses `amp;redirect=` and silently
 # drops the forwarded param on every group-scoped portal.
 #
-# Same bug class already pinned for bouncer_challenge.html above.
+# The first three tests pin that fix for auth_base.html specifically. The last
+# test generalizes the criterion into a standing audit over EVERY shipped
+# template — the same bug class was already pinned for bouncer_challenge.html
+# above — so the next omission, in any template, is caught automatically.
 # ---------------------------------------------------------------------------
 
 def _decode_js(s):
@@ -947,59 +951,143 @@ def test_auth_base_single_param_urls_unchanged(opts):
             f"forwarded param. Got: {decoded!r}")
 
 
-@th.django_unit_test("auth_base.html: every double-quoted JS-string interpolation carries |escapejs")
-def test_auth_base_script_literals_all_escapejs(opts):
-    """Standing form of the audit criterion — read off the template source.
+# Reviewed <style> interpolations. A <style> element is raw-text like <script>,
+# but there is no `escapecss` filter, so every {{ }} interpolated into one must
+# be individually justified here as not attacker-influenced. Keyed by
+# (template_filename, normalized_expression). Adding an entry is a security
+# decision — make the safety argument in the comment before adding it.
+_STYLE_INTERPOLATIONS_REVIEWED = {
+    # auth_base.html injects a tenant's custom stylesheet verbatim. |safe is
+    # deliberate (the value IS CSS) and it is admin-set group config, not
+    # visitor input — the same trust level as uploading a .css file.
+    ("auth_base.html", "custom_css|safe"),
+    # bouncer_challenge.html suffixes every generated class/keyframe name with a
+    # per-render nonce (secrets.token_hex(6) — hex only, no CSS metacharacters)
+    # so selectors cannot be cached across renders. Not attacker-influenced.
+    ("bouncer_challenge.html", "render_ctx.css_nonce"),
+    # bouncer_decoy.html paints one accent colour, sourced from
+    # settings.get_static (conf-file-only, never DB/Redis-writable), into a
+    # :root custom property. Operator config, not request input.
+    ("bouncer_decoy.html", "accent_color"),
+}
 
-    SCOPE: double-quoted `{{ }}` interpolations inside the INLINE <script>
-    block only. It structurally cannot see an unquoted interpolation (the
-    `yesno` boolean, which is not a string literal and needs no escaping) or a
-    single-quoted one, so treat it as a guard against the specific omission
-    this item fixed, not as proof of complete coverage.
+
+@th.django_unit_test("shipped templates: raw-text <script>/<style> interpolations are escape-safe")
+def test_shipped_templates_raw_text_interpolations_are_safe(opts):
+    """Codebase-wide standing audit — the generalized form of the #1092 fix.
+
+    Walks EVERY shipped template (no hardcoded list), extracts <script>/<style>
+    BODIES only (an external `<script src="{{ }}">` attribute is never swept),
+    and for each `{{ }}` interpolation:
+
+      * <script>, inside a JS string literal -> the expression MUST carry
+        |escapejs. <script> is a raw-text element, so autoescape's `&amp;` is
+        never decoded back; a value with two query params reaches the browser
+        corrupted (`amp;redirect=`) and the forwarded param is dropped.
+      * <script>, OUTSIDE a literal -> no requirement (an unquoted boolean or
+        numeric interpolation is not a string).
+      * <style> -> there is no `escapecss`, so it must appear in the reviewed
+        allowlist above, each entry carrying a written safety argument.
     """
     from pathlib import Path
     import mojo
 
-    tpl = (Path(mojo.__file__).resolve().parent
-           / "apps" / "account" / "templates" / "account" / "auth_base.html")
-    assert_true(tpl.exists(), f"auth_base.html should exist at {tpl}")
-    src = tpl.read_text(encoding="utf-8")
+    root = Path(mojo.__file__).resolve().parent
+    templates = sorted(p for p in root.rglob("*.html") if "/templates/" in str(p))
+    assert_true(bool(templates), f"no shipped templates found under {root}")
 
-    # Anchor on the INLINE script opener. The tag immediately above it is the
-    # external `<script ... src="{{ api_base }}...">`, whose double-quoted
-    # interpolation is an ATTRIBUTE — attributes are entity-decoded by the
-    # parser, so that one must NOT carry escapejs. Slicing from the first
-    # `<script` would sweep it in and fail the audit on a correct line.
-    opener = '<script nonce="{{ csp_nonce }}">'
-    start = src.find(opener)
+    comment_re = re.compile(r'\{%\s*comment\s*%\}.*?\{%\s*endcomment\s*%\}', re.S)
+    block_re = re.compile(r'<(script|style)\b[^>]*>(.*?)</\1>', re.S | re.I)
+    tag_re = re.compile(r'\{\{.*?\}\}', re.S)
+
+    def mask_tags(text):
+        # Replace each {{ ... }} span with an equal-length, quote-free filler
+        # (newlines preserved so per-line quote counting stays aligned). This is
+        # what stops a quote INSIDE a tag (e.g. default:'login', yesno:"a,b")
+        # from toggling the literal state computed from the surrounding JS.
+        return tag_re.sub(
+            lambda m: "".join("\n" if ch == "\n" else "x" for ch in m.group(0)),
+            text)
+
+    def in_js_string_literal(masked_body, tag_start):
+        line_start = masked_body.rfind("\n", 0, tag_start) + 1
+        prefix = masked_body[line_start:tag_start]
+        for quote in ('"', "'", "`"):
+            count = 0
+            for i, ch in enumerate(prefix):
+                if ch == quote and (i == 0 or prefix[i - 1] != "\\"):
+                    count += 1
+            if count % 2 == 1:
+                return True
+        return False
+
+    def expr_of(tag):
+        return tag[2:-2].strip()
+
+    failures = []               # (template, expr) <script> literals missing escapejs
+    style_unreviewed = []       # (template, expr) <style> interpolations not allowlisted
+    script_required = {}        # template -> count of required <script>-literal interps
+    total_required = 0
+
+    for tpl in templates:
+        name = tpl.name
+        src = comment_re.sub("", tpl.read_text(encoding="utf-8"))
+        for block in block_re.finditer(src):
+            kind = block.group(1).lower()
+            body = block.group(2)
+            if kind == "style":
+                for tag in tag_re.finditer(body):
+                    pair = (name, expr_of(tag.group(0)))
+                    if pair not in _STYLE_INTERPOLATIONS_REVIEWED:
+                        style_unreviewed.append(pair)
+                continue
+            # kind == "script"
+            masked = mask_tags(body)
+            for tag in tag_re.finditer(body):
+                if not in_js_string_literal(masked, tag.start()):
+                    continue    # unquoted boolean/numeric — not a string literal
+                script_required[name] = script_required.get(name, 0) + 1
+                total_required += 1
+                if "escapejs" not in expr_of(tag.group(0)):
+                    failures.append((name, expr_of(tag.group(0))))
+
+    # <style> gate — a raw-text <style> has no escapejs equivalent.
     assert_true(
-        start != -1,
-        f"auth_base.html must open its inline script with {opener!r} — this "
-        f"audit anchors on it to stay clear of the external <script src=...> "
-        f"tag directly above it")
-    end = src.find('</script>', start)
-    assert_true(end != -1,
-                "auth_base.html's inline <script> block is unterminated")
-    block = src[start + len(opener):end]
+        not style_unreviewed,
+        f"unreviewed <style> interpolation(s): {style_unreviewed!r}. A <style> "
+        f"element is raw-text and has no `escapecss` filter. Add each "
+        f"(template, expression) pair to _STYLE_INTERPOLATIONS_REVIEWED in this "
+        f"file ONLY after arguing the value is not attacker-influenced (admin "
+        f"config, a hex nonce, a conf-only setting) — never a visitor-supplied "
+        f"value.")
 
-    found = re.findall(r'"\{\{(.*?)\}\}"', block)
+    # <script> gate — every JS-string-literal interpolation carries |escapejs.
     assert_true(
-        len(found) >= 7,
-        f"expected at least the 7 known double-quoted JS-string "
-        f"interpolations in auth_base.html's inline script (api_base, "
-        f"success_redirect, auth_url, register_url, passkey_url, "
-        f"passkey_prompt, group_uuid); the audit found {len(found)}: "
-        f"{found!r}. If one was removed, update this floor — if the slice "
-        f"broke, fix the anchor.")
+        not failures,
+        f"shipped template(s) interpolate a value into a raw-text <script> JS "
+        f"string literal without |escapejs: {failures!r}. <script> is a "
+        f"raw-text element, so autoescape's `&amp;` is never decoded back and a "
+        f"value carrying two query params reaches the browser corrupted. Add "
+        f"|escapejs (AFTER any default: filter). NEVER add it to an href/src "
+        f"attribute — those ARE entity-decoded, and escapejs would inject a "
+        f"literal backslash-u escape into the link.")
 
-    for expr in found:
-        assert_true(
-            'escapejs' in expr,
-            f"auth_base.html interpolates `{expr.strip()}` into a "
-            f"double-quoted JS string literal without |escapejs. <script> is "
-            f"a raw-text element, so autoescape's `&amp;` is never decoded "
-            f"back and any value carrying two query params reaches the "
-            f"browser corrupted. Add |escapejs (after any default: filter). "
-            f"Never add it to an href/src attribute — those ARE "
-            f"entity-decoded, and escapejs would inject a literal "
-            f"backslash-u escape into the link.")
+    # Floors — prove the audit actually walked the known surface (a broken
+    # slice would make every gate above pass vacuously).
+    assert_true(
+        "auth_base.html" in script_required,
+        f"auth_base.html must be among the walked templates and contribute "
+        f"required <script>-literal interpolations; the audit saw "
+        f"{sorted(script_required)!r}")
+    assert_true(
+        script_required.get("auth_base.html", 0) >= 7,
+        f"auth_base.html must contribute >= 7 required <script>-literal "
+        f"interpolations (api_base, success_redirect, auth_url, register_url, "
+        f"passkey_url, passkey_prompt, group_uuid); saw "
+        f"{script_required.get('auth_base.html', 0)}")
+    assert_true(
+        total_required >= 14,
+        f"expected >= 14 required <script>-literal interpolations across all "
+        f"shipped templates; saw {total_required}. If sites were genuinely "
+        f"removed, lower this floor deliberately; if the slice broke, fix the "
+        f"extraction.")

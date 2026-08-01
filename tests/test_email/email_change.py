@@ -53,6 +53,18 @@ TEST_NEW_EMAIL = "email_change_new@example.com"
 
 @th.django_unit_setup()
 def setup_email_change(opts):
+    """Reset both fixture users and clear leftover email-change secrets.
+
+    This module has NO teardown function, by design. The testit runner collects
+    functions by name PREFIX only — `setup_` for the setup phase, `test_`/`quick_`
+    for the test phase — and has no teardown phase at all, so a `cleanup_*` /
+    `teardown_*` function is never collected regardless of how it is decorated
+    (see docs/django_developer/testit/Overview.md). Cleanup therefore lives here
+    at the top of setup: the two fixture users are reset (not merely created) and
+    the leftover pending-email / OTP / JTI secret keys are cleared before any
+    test runs, which is what keeps this long-lived database idempotent across
+    repeated runs.
+    """
     from mojo.apps.account.models import User
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
@@ -1592,14 +1604,3 @@ def test_change_confirm_get_keeps_relative_redirect(opts):
     assert_true(f'href="{destination}"' in body,
                 f"A relative destination must render unchanged — no normalization to an absolute URL; "
                 f"expected href=\"{destination}\" in the page")
-
-
-# ===========================================================================
-# Teardown
-# ===========================================================================
-
-@th.django_unit_setup()
-def cleanup_email_change(opts):
-    from mojo.apps.account.models import User
-    User.objects.filter(pk=opts.user_id).delete()
-    User.objects.filter(pk=opts.collision_id).delete()

@@ -176,13 +176,13 @@
 
   <script>
   (function() {
-    var N = "{{ render_ctx.css_nonce }}";
+    var N = "{{ render_ctx.css_nonce|escapejs }}";
     var CFG = {
-      assessUrl: ("{{ api_base }}" || window.location.origin) + "/api/account/bouncer/assess",
-      hpField: "{{ render_ctx.hp_field }}",
-      btnSeed: "{{ render_ctx.btn_seed }}",
+      assessUrl: ("{{ api_base|escapejs }}" || window.location.origin) + "/api/account/bouncer/assess",
+      hpField: "{{ render_ctx.hp_field|escapejs }}",
+      btnSeed: "{{ render_ctx.btn_seed|escapejs }}",
       redirectUrl: "{{ login_url|escapejs }}",
-      pageType: "{{ page_type|default:'login' }}",
+      pageType: "{{ page_type|default:'login'|escapejs }}",
       tier: {{ render_ctx.challenge_tier }}
     };
 

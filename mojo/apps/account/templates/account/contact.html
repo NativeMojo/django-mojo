@@ -63,10 +63,10 @@
     if (!form) return;
     var submitBtn = document.getElementById("btn-contact-submit");
     var submitUrl = (window._matConfig && window._matConfig.apiBase ? window._matConfig.apiBase : "")
-        + "/api/{{ contact_submit_url }}";
+        + "/api/{{ contact_submit_url|escapejs }}";
 
     function collect() {
-        var data = { kind: form.dataset.kind || "{{ kind }}" };
+        var data = { kind: form.dataset.kind || "{{ kind|escapejs }}" };
         var inputs = form.querySelectorAll("input, textarea, select");
         for (var i = 0; i < inputs.length; i++) {
             data[inputs[i].name] = inputs[i].value;

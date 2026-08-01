@@ -240,9 +240,25 @@ Two things not to do:
 - **Do not reach for `|safe`** in a script literal. It fixes the ampersand by
   reopening the string-literal breakout that autoescaping currently closes.
 
-The shipped `auth_base.html` interpolates five values this way — `api_base`,
-`success_redirect`, `auth_url`, `register_url`, `passkey_url` — and carries the
-same note as a `{% comment %}` beside them.
+This rule is codebase-wide, not a property of one file. Every shipped template
+that interpolates a value into a `<script>` string literal carries `|escapejs`
+(`auth_base.html`, `bouncer_challenge.html`, `contact.html`, `login.html`);
+`auth_base.html` also keeps the same note as a `{% comment %}` beside its block.
+
+A `<style>` block is raw-text too — and there is no `escapecss` filter. So a
+`{{ }}` interpolated into a `<style>` element cannot be made safe by any filter:
+it must instead be a value that is provably **not attacker-influenced** (admin-set
+config, a per-render hex nonce, a conf-file-only setting). The three that ship
+this way — `auth_base.html`'s `custom_css|safe`, `bouncer_challenge.html`'s
+`render_ctx.css_nonce`, `bouncer_decoy.html`'s `accent_color` — are enumerated in
+a reviewed allowlist; adding another is a security decision, not a formatting one.
+
+Both rules are enforced by a standing audit:
+`test_shipped_templates_raw_text_interpolations_are_safe`
+(`tests/test_auth/bouncer_forms.py`) walks **every** shipped template and fails
+the build when a `<script>` string-literal interpolation is missing `|escapejs`,
+or a `<style>` interpolation is not in the reviewed allowlist. There is no
+per-file list to maintain — a new template is covered the moment it ships.
 
 ### Overriding the hero panel
 

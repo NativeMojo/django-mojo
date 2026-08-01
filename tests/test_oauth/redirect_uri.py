@@ -260,12 +260,17 @@ def test_redirect_uri_wildcard_entry_is_inert(opts):
 
 @th.django_unit_test("oauth: unusable entries are skipped and can never match")
 def test_redirect_uri_unusable_entries_are_skipped(opts):
-    """A truncated, relative or non-http(s) entry is dropped, not stretched.
+    """A truncated or relative entry is dropped, not stretched.
 
     The old prefix test did the opposite: an entry of `"h"` admitted every
     `http(s)://` URL in existence.
+
+    Custom-scheme entries are NOT junk — they became first-class in 7ba05075.
+    Their supported shapes are covered by the DEEP_ENTRY tests below, and their
+    fail-closed shapes (`myapp:callback`, `myapp:`, `myapp://`) by
+    test_redirect_uri_custom_scheme_shapes_that_fail_closed.
     """
-    junk = [None, "", "h", "/relative", "myapp://callback", "https://"]
+    junk = [None, "", "h", "/relative", "https://"]
     _assert_refused("https://totally.evil.tld/steal",
                     "an unusable entry must never admit anything",
                     entries=junk)

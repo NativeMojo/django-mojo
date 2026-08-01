@@ -1,5 +1,27 @@
 ## Unreleased
 
+**chore (tests)** — **three test-hygiene cleanups; the auth-page `escapejs` audit
+is now codebase-wide.** (1) Deleted the dead `cleanup_email_change` teardown in
+`tests/test_email/email_change.py` — the testit runner collects by function-name
+prefix (`setup_` / `test_` / `quick_`) and has **no teardown phase**, so a
+`cleanup_*` function never runs regardless of decorator; that module's cleanup
+already lives at the top of `setup_`. (2) Dropped a stale `myapp://callback`
+entry and a `non-http(s)` docstring clause from `tests/test_oauth/redirect_uri.py`'s
+unusable-entries test — custom URL schemes became first-class allowlist entries in
+`7ba05075`, so they belong with the deep-link tests, not the junk list. (3) Replaced
+the auth_base-only `escapejs` audit with
+`test_shipped_templates_raw_text_interpolations_are_safe`, which walks **every**
+shipped template: a `<script>` string-literal interpolation must carry `|escapejs`,
+and a `<style>` interpolation (no `escapecss` exists) must be in a reviewed
+allowlist. The generalized audit flagged seven previously-unescaped `<script>`
+sites — two in `contact.html`, five in `bouncer_challenge.html` — now fixed with
+`|escapejs`. No runtime behavior change: `escapejs` emits `\uXXXX` escapes the JS
+engine decodes at parse time, so the string each page builds at runtime is
+unchanged; only multi-query-param values (silently corrupted by `&amp;`) are
+actually repaired. Docs: `docs/django_developer/account/auth_pages.md` (the rule is
+now codebase-wide + a `<style>` review gate) and
+`docs/django_developer/testit/Overview.md` (no teardown phase).
+
 **chore (account)** — **eight operational `logit.warning` sites in the account
 app are now Redis-suppressed incident events (`report_event_suppressed`, window
 3600s), so a misconfiguration surfaces in the incident feed instead of scrolling
