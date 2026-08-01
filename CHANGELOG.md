@@ -1,3 +1,17 @@
+# Changelog — FROZEN
+
+> **This file is no longer maintained.** As of **2026-07-31** the changelog lives on the
+> **maestro board**, where each work item carries its own workspec, plan, review, commits
+> and verification — a richer record than this file ever held.
+>
+> **Do not add entries here.** Record behavior and API changes in the maestro item's
+> comment trail instead. See `.claude/rules/docs.md`.
+>
+> Everything below is retained as the historical record: releases through **v1.2.64**,
+> plus the unreleased work of 2026-07-31 (the last entries written to this file).
+
+---
+
 ## Unreleased
 
 feat: `SECRET_KEY_FALLBACKS` is now honored by mojo's own crypto — bouncer token/pass-cookie verification and filevault unwrap/token-validation accept material produced under a rotated-out key, so a `SECRET_KEY` rotation no longer invalidates issued tokens or bricks stored files.
