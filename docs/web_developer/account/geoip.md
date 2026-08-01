@@ -88,6 +88,15 @@ Returns a paginated list of cached GeoIP records. Supports standard query parame
 | `basic` | Core location and threat fields only |
 | `detailed` | All fields including raw data |
 
+Only `detailed` includes the `data` blob. When threat checks have run,
+`data.threat_data` carries:
+
+| Key | Type | Description |
+|---|---|---|
+| `internal` | object | Incident-event stats for this IP: `total_events`, `high_severity_events`, `avg_level`, `top_categories`, `last_seen_event`, `lookback_days` |
+| `blocklists` | array | Per-source hit records (e.g. `{"source": "blocklist.de", "is_listed": true}`) |
+| `is_blocklisted` | bool | `true` when any enabled external blocklist lists this IP |
+
 ---
 
 ## `GET system/geoip/<pk>` — GeoIP Detail
@@ -114,6 +123,15 @@ Returns a single GeoIP record. Supports `?graph=` parameter.
 Actions are gated by the model's `SAVE_PERMS`: `manage_users`,
 `manage_security`, or `security` — and the combined `users` term (it includes
 `manage_users` by definition).
+
+**`threat_level` after `refresh` / `threat_analysis`.** Both actions run the
+threat-intelligence pass, and the resulting `threat_level` now reflects
+blocklist and known-attacker signals in addition to Tor/VPN/proxy detection.
+A blocklisted IP comes back at least `medium`; a known attacker at least
+`high`; both, `critical`. The level is escalate-only — these actions never
+lower a record's `threat_level`. Expect records that previously read `low` to
+move up the first time either action is run against an IP with incident
+history or a blocklist hit.
 
 See [firewall.md](firewall.md) for full firewall management and security dashboard guide.
 

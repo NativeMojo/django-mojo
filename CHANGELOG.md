@@ -2,7 +2,56 @@
 
 feat: `SECRET_KEY_FALLBACKS` is now honored by mojo's own crypto — bouncer token/pass-cookie verification and filevault unwrap/token-validation accept material produced under a rotated-out key, so a `SECRET_KEY` rotation no longer invalidates issued tokens or bricks stored files.
 fix (security): filevault read `SECRET_KEY` through the DB-overridable settings path — a `Setting` row named `SECRET_KEY` (writable over REST with `manage_settings`) could silently re-key per-file wrapping at runtime. It now reads file-based settings only.
+fix (geoip, security): geoip threat detection was inert framework-wide — `is_known_attacker`/`is_known_abuser` were permanently `False` and blocklist hits never reached `threat_level`. Three separate breaks fixed; `geolocate_ip()` results gain a top-level `is_blocklisted`.
 
+
+**fix (geoip, security)** — **threat detection never actually ran.** Three
+independent breaks each made the feature inert, and all three had to be fixed:
+
+1. `check_internal_threats()` used `models.Avg` on a line *above* its
+   `from django.db import models`, so the import made `models` a function-local
+   and every call raised `UnboundLocalError`. The blanket `except Exception`
+   turned that into a silent `is_known_attacker=False, is_known_abuser=False`.
+   It only fired past the `total_events == 0` early return — i.e. exclusively on
+   addresses that had actually attacked you, which is why it survived to a
+   release tag. That handler now logs with `logit.exception` so a traceback
+   reaches `error.log` instead of looking like a transient failure.
+2. `geolocate_ip(check_threats=True)` computed threat results and then never
+   consulted them when setting `threat_level` — it passed only the
+   provider-native `data['threat']` blob, a hook no built-in provider
+   populates. Threat intelligence is now folded in through
+   `recalculate_threat_level()` (the same weight table
+   `GeoLocatedIP.check_threats()` uses, so the two paths cannot disagree), and
+   the fold is **escalate-only**: it can raise `threat_level`, never lower it.
+   `check_threats=False` behavior is unchanged.
+3. `perform_threat_check()` wrote `is_blocklisted` only at the top level, while
+   `recalculate_threat_level()` reads it from *inside* `threat_data` — the only
+   part consumers persist. The +30 blocklist weight had therefore never fired
+   on the `threat_analysis` / `refresh` REST path either. `threat_data` now
+   carries the flag.
+
+`geolocate_ip()` results gain a top-level `is_blocklisted` bool on every branch
+(private/reserved, `mojo` provider, normal providers). Additive; it is not a
+model field and is not persisted. `GET /api/system/geoip/<pk>?graph=detailed`
+responses gain `data.threat_data.is_blocklisted`.
+
+**New setting `GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES`** (default
+`['login:unknown', 'reset:unknown', 'totp:login_unknown', 'sms:login_unknown',
+'token:unknown']`) — account-enumeration and user-typo events are reported at
+level 8, the same level as a real attack, so on a shared NAT/CGNAT/corporate
+egress a handful of mistyped usernames over the 90-day window would mark that
+address a known attacker for every user behind it. These categories no longer
+count toward `is_known_attacker`. They still count toward `total_events`,
+`avg_level`, `top_categories` and `is_known_abuser`. Set it to `[]` for the old
+count-everything behavior.
+
+**Operational note.** Nothing changes on upgrade — `check_threats()` runs only
+from the `threat_analysis` / `refresh` REST actions, never from a cron or the
+auto-refresh path. But the first such action against an IP with real incident
+history or a blocklist hit can now flip it to `high`/`critical`, which raises
+the bouncer's bot score for that address and feeds the federation push loop for
+`provider='mojo'` records. Review your event mix before running a bulk
+`threat_analysis`.
 
 **feat (crypto)** — **a `SECRET_KEY` rotation is now survivable.** Django's own
 `SECRET_KEY_FALLBACKS` only covers Django signing (sessions, signed cookies,

@@ -13,6 +13,25 @@ INTERNAL_THREAT_LOOKBACK_DAYS = settings.get_static('GEOLOCATION_INTERNAL_THREAT
 INTERNAL_THREAT_EVENT_THRESHOLD = settings.get_static('GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD', 5)
 INTERNAL_ATTACKER_LEVEL_THRESHOLD = settings.get_static('GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD', 8)
 
+# Event categories excluded from the "known attacker" high-severity count.
+#
+# These are user-error / account-enumeration events (a mistyped username, a
+# password reset for an address that was never registered) that the auth code
+# reports at level 8 — the same level as a genuine attack. On a shared NAT,
+# CGNAT, or corporate egress a single address fronts hundreds of legitimate
+# users, so a handful of typos over the 90-day window would otherwise brand
+# that address a known attacker and feed the bouncer's scoring for everyone
+# behind it.
+#
+# Tradeoff: genuine credential stuffing from one address no longer trips
+# is_known_attacker on these categories alone. It still shows up in
+# total_events, avg_level, top_categories, and is_known_abuser, all of which
+# deliberately keep counting every event.
+INTERNAL_ATTACKER_EXCLUDED_CATEGORIES = settings.get_static(
+    'GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES',
+    ['login:unknown', 'reset:unknown', 'totp:login_unknown',
+     'sms:login_unknown', 'token:unknown'])
+
 
 def _get_blocklist_config():
     """Build blocklist config at call time so API keys come from DB."""
@@ -47,6 +66,10 @@ def check_internal_threats(ip_address):
     try:
         from mojo.apps.incident.models.event import Event
         from datetime import timedelta
+        # Lazy on purpose (see detection._cached_ip_set) — but it MUST be bound
+        # before its first use below, or every call past the early return dies
+        # with UnboundLocalError inside the blanket except.
+        from django.db import models
 
         lookback_date = dates.utcnow() - timedelta(days=INTERNAL_THREAT_LOOKBACK_DAYS)
 
@@ -65,12 +88,16 @@ def check_internal_threats(ip_address):
                 'internal_stats': {'total_events': 0}
             }
 
-        # Calculate threat metrics
-        high_severity_events = events.filter(level__gte=INTERNAL_ATTACKER_LEVEL_THRESHOLD).count()
+        # Calculate threat metrics. The attacker count — and ONLY that count —
+        # drops the enumeration/typo categories (see
+        # INTERNAL_ATTACKER_EXCLUDED_CATEGORIES above).
+        high_sev = events.filter(level__gte=INTERNAL_ATTACKER_LEVEL_THRESHOLD)
+        if INTERNAL_ATTACKER_EXCLUDED_CATEGORIES:
+            high_sev = high_sev.exclude(category__in=INTERNAL_ATTACKER_EXCLUDED_CATEGORIES)
+        high_severity_events = high_sev.count()
         avg_level = events.aggregate(avg_level=models.Avg('level'))['avg_level'] or 0
 
         # Get category breakdown
-        from django.db import models
         category_counts = events.values('category').annotate(
             count=models.Count('id')
         ).order_by('-count')[:5]
@@ -104,7 +131,11 @@ def check_internal_threats(ip_address):
         }
 
     except Exception as e:
-        logit.error("geoip", f"Error checking internal threats for {ip_address}: {e}")
+        # exception() (not error()) so the traceback reaches error.log — this
+        # blanket guard legitimately covers a missing incident app and DB
+        # errors, and without a traceback a programming error in here reads
+        # like a transient failure.
+        logit.exception("geoip", f"Error checking internal threats for {ip_address}: {e}")
         return {
             'is_known_attacker': False,
             'is_known_abuser': False,
@@ -244,7 +275,10 @@ def perform_threat_check(ip_address, skip_external=False):
     - is_known_attacker: Based on internal high-severity events
     - is_known_abuser: Based on internal abuse patterns
     - is_blocklisted: Listed on external blocklists
-    - threat_data: Detailed threat intelligence
+    - threat_data: Detailed threat intelligence — `internal` (stats),
+      `blocklists` (per-source hits) and `is_blocklisted` (mirror of the
+      top-level flag; this is the copy that survives being persisted into
+      GeoLocatedIP.data and is what recalculate_threat_level() reads)
     """
     # Check internal incident database
     internal_threats = check_internal_threats(ip_address)
@@ -263,11 +297,33 @@ def perform_threat_check(ip_address, skip_external=False):
         'is_blocklisted': blocklist_results['is_blocklisted'],
         'threat_data': {
             'internal': internal_threats['internal_stats'],
-            'blocklists': blocklist_results['blocklist_hits']
+            'blocklists': blocklist_results['blocklist_hits'],
+            # Consumers persist only this sub-dict (GeoLocatedIP.check_threats,
+            # geolocate_ip), and recalculate_threat_level() reads the flag from
+            # here — without this copy the +30 blocklist weight can never fire.
+            'is_blocklisted': blocklist_results['is_blocklisted'],
         }
     }
 
     return result
+
+
+THREAT_LEVEL_ORDER = ('low', 'medium', 'high', 'critical')
+
+
+def escalate_threat_level(current, candidate):
+    """Return the higher of two threat levels — never downgrades.
+
+    Unknown/None values sort below 'low', so a missing level is always
+    replaced by a real one.
+    """
+    def rank(level):
+        try:
+            return THREAT_LEVEL_ORDER.index(level)
+        except ValueError:
+            return -1
+
+    return candidate if rank(candidate) > rank(current) else current
 
 
 def recalculate_threat_level(geo_ip):
@@ -275,8 +331,15 @@ def recalculate_threat_level(geo_ip):
     Recalculate threat level based on all available data including
     internal threats and blocklists.
 
+    Duck-typed on purpose: only `.is_known_attacker`, `.is_known_abuser`,
+    `.is_tor`, `.is_vpn`, `.is_proxy` and `.data` (a dict) are touched — never
+    a manager, field or pk. `geolocate_ip()` calls this with a plain objict
+    shim so the helper path and the GeoLocatedIP.check_threats() path score the
+    same evidence with one weight table. Keep it that way; a second copy of
+    these weights would drift.
+
     Args:
-        geo_ip: GeoLocatedIP instance with threat data populated
+        geo_ip: GeoLocatedIP instance (or shim) with threat data populated
 
     Returns:
         str: 'low', 'medium', 'high', or 'critical'

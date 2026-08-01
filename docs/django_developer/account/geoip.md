@@ -25,7 +25,7 @@ Caches geolocation results per IP to reduce redundant API calls. Tracks security
 | `connection_type` | `residential`, `business`, `hosting`, `cellular`, etc. |
 | `last_seen` | Last time this IP was encountered in the system |
 | `provider` | Source of the geolocation data |
-| `data` | JSON bag for raw provider data and threat check results |
+| `data` | JSON bag for raw provider data and threat check results. `data.threat_data` holds `internal` (event stats), `blocklists` (per-source hits) and `is_blocklisted`. See [Threat Intelligence](#threat-intelligence). |
 | `expires_at` | Cache expiration (internal records never expire) |
 
 ### Blocking Fields
@@ -347,6 +347,74 @@ decision.
 The Tor row honors `source_url` (falling back to the `TOR_EXIT_NODE_LIST_URL`
 setting); blocklist.de defaults to `https://lists.blocklist.de/lists/all.txt`.
 
+### Threat Intelligence
+
+`mojo.helpers.geoip.threat_intel.perform_threat_check(ip, skip_external=False)`
+is the single entry point. It combines **internal** incident history with
+**external** blocklists and returns:
+
+```python
+{
+    'is_known_attacker': False,   # internal high-severity events
+    'is_known_abuser': False,     # internal volume/mid-severity pattern
+    'is_blocklisted': False,      # listed on any enabled external blocklist
+    'threat_data': {
+        'internal': {...},        # total_events, high_severity_events,
+                                  # avg_level, top_categories, last_seen_event,
+                                  # lookback_days
+        'blocklists': [...],      # per-source hit records
+        'is_blocklisted': False,  # mirror of the top-level flag
+    },
+}
+```
+
+`threat_data` is the sub-dict consumers persist (`GeoLocatedIP.data['threat_data']`,
+`geolocate_ip()`'s `data['threat_data']`), and `recalculate_threat_level()` reads
+the blocklist flag from **inside** it — that is why the flag appears in both
+places.
+
+**Internal analysis** (`check_internal_threats`) looks at `incident.Event` rows
+with a matching `source_ip` over `GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS`
+(90 by default):
+
+- `is_known_attacker` — at least `GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD`
+  (5) events at `level >= GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD` (8),
+  **excluding** the categories in
+  `GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES`.
+- `is_known_abuser` — at least twice the event threshold (10) with an average
+  level in `[4, 8)`. Counts **every** category.
+
+The exclusion list defaults to the account-enumeration / user-typo categories,
+which the auth code reports at level 8 — the same level as a real attack:
+
+```
+login:unknown, reset:unknown, totp:login_unknown, sms:login_unknown, token:unknown
+```
+
+A single NAT/CGNAT/corporate egress address fronts many legitimate users, so a
+handful of mistyped usernames over 90 days would otherwise mark that address a
+known attacker for everyone behind it — and `is_known_attacker` feeds the
+bouncer's bot score. The tradeoff: credential stuffing that only ever produces
+these categories no longer trips `is_known_attacker` on its own. It still shows
+in `total_events`, `avg_level`, `top_categories` and `is_known_abuser`, all of
+which deliberately keep counting every event. Set the setting to `[]` to count
+every category, or extend it with your own.
+
+**Threat level.** `geolocate_ip(check_threats=True)` folds threat intelligence
+into `threat_level`, using the same `recalculate_threat_level()` weight table
+that `GeoLocatedIP.check_threats()` uses, so the helper path and the model path
+score identical evidence identically. The fold is **escalate-only** — it can
+raise `threat_level` but never lower it, so provider-derived levels (Tor →
+`high`) survive untouched, and `check_threats=False` behavior is unchanged.
+A bare blocklist hit scores 30 → `medium`; a known attacker scores 50 → `high`;
+both together → `critical`.
+
+`geolocate_ip()` results also carry a top-level `is_blocklisted` bool on every
+branch (private/reserved, `mojo` provider, and normal providers) so callers
+don't have to reach into the raw blob. It is **not** persisted — `GeoLocatedIP`
+has no such field, and `refresh()`'s `hasattr`-gated copy loop drops it. The
+stored copy lives in `data['threat_data']['is_blocklisted']`.
+
 ### `mojo` Provider
 
 Use another django-mojo instance as a GeoIP data source. The downstream instance calls the upstream's `GET /api/system/geoip/lookup?graph=detailed` with an ApiKey token and caches the result locally.
@@ -417,6 +485,12 @@ The async job is `mojo.apps.account.asyncjobs.push_abuse_signals`. It posts `{ip
 |---|---|---|
 | `GEOLOCATION_ALLOW_SUBNET_LOOKUP` | `False` | Allow fallback to subnet match when exact IP not found |
 | `GEOLOCATION_CACHE_DURATION_DAYS` | `90` | Days before a cached record expires |
+| `GEOLOCATION_ENABLE_INTERNAL_THREAT_CHECK` | `True` | Run the internal incident-history analysis |
+| `GEOLOCATION_ENABLE_BLOCKLIST_CHECK` | `True` | Run the external blocklist checks |
+| `GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS` | `90` | Event window for internal analysis |
+| `GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD` | `5` | Events needed for `is_known_attacker` (×2 for `is_known_abuser`) |
+| `GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD` | `8` | Event level that counts as high severity |
+| `GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES` | `['login:unknown', 'reset:unknown', 'totp:login_unknown', 'sms:login_unknown', 'token:unknown']` | Event categories that never count toward `is_known_attacker`. See [Threat Intelligence](#threat-intelligence). |
 | `GEOIP_MOJO_PROVIDER_URL` | `None` | Base URL of upstream mojo instance (enables mojo provider) |
 | `GEOIP_API_KEY_MOJO` | — | ApiKey token for upstream mojo instance |
 | `GEOIP_MOJO_SYNC_ENABLED` | `True` | Enable outbound abuse-signal federation push |
