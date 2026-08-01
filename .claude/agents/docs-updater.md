@@ -37,7 +37,7 @@ You read the git diff of recent changes and update documentation automatically.
    | Bug fix | Usually no | No (unless it changes API behavior) |
 
 4. Read existing docs before editing — match the existing style and structure
-5. Update `CHANGELOG.md` if the change is meaningful (new feature, API change, behavior change)
+5. Do NOT edit `CHANGELOG.md` — concurrent sessions collide on it and cause merge issues; behavior notes belong in commit messages and the two doc tracks
 6. Update `README.md` indexes if you added new doc files
 
 ## Rules

@@ -177,7 +177,7 @@ Rules in `.claude/rules/` are loaded automatically. You do not invoke them — C
 | `models.md` | `mojo/**/models/` | MojoModel inheritance, created/modified, RestMeta, one-per-file |
 | `rest.md` | `mojo/**/rest/` | URL patterns, CRUD handlers, POST_SAVE_ACTIONS |
 | `testing.md` | `tests/` | testit framework, server process isolation, assert messages |
-| `docs.md` | Always | Both doc tracks, indexes, CHANGELOG |
+| `docs.md` | Always | Both doc tracks, indexes; no CHANGELOG.md edits |
 | `performance.md` | `mojo/` | N+1 queries, missing indexes, unbounded querysets |
 
 ## Agents (Automatic Post-Build)

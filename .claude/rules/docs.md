@@ -15,5 +15,5 @@ A new endpoint or behavior change typically needs docs in **both** places.
 
 ## What to Update
 - Update root indexes (`README.md` in each doc folder) when adding new doc files
-- Update `CHANGELOG.md` for meaningful behavior or API changes
+- Do NOT edit `CHANGELOG.md` — concurrent sessions collide on it and cause merge issues. Record behavior notes in commit messages and the two doc tracks instead.
 - Read `docs/django_developer/README.md` before building — do not reinvent existing features
