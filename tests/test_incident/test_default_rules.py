@@ -67,7 +67,9 @@ def test_auth_credential_stuffing_rule(opts):
     rule = RuleSet.objects.filter(category="login:unknown").first()
     assert rule is not None, "Should create login:unknown rule"
     assert "block://" in rule.handler, f"Should block, got {rule.handler}"
-    assert rule.bundle_minutes == 15, f"Should bundle for 15 min, got {rule.bundle_minutes}"
+    # Bundles over the same hour it counts over — see the trigger gate assertions
+    # in test_blocking_defaults_require_repeat_offences.
+    assert rule.bundle_minutes == 60, f"Should bundle for 60 min, got {rule.bundle_minutes}"
     assert rule.rules.count() >= 1, "Should have at least 1 rule"
 
     # Cleanup
@@ -376,3 +378,126 @@ def test_health_runner_rule_matches_event(opts):
     # Cleanup
     event.delete()
     RuleSet.objects.filter(category__startswith="system:health:").delete()
+
+
+# ---------------------------------------------------------------------------
+# Trigger gates on the defaults that firewall an IP
+# ---------------------------------------------------------------------------
+#
+# A block:// handler with no trigger_count fires on the FIRST matching event
+# (mojo/apps/incident/models/event.py — `trigger_count is None` short-circuits
+# the threshold check). Every default whose match a legitimate person can
+# produce — a mistyped username, an expired token, a 404 — must therefore
+# require repetition, or one fumbled login firewalls a whole office or CGNAT
+# egress.
+
+# ruleset name -> (trigger_count, trigger_window minutes)
+GATED_BLOCKING_DEFAULTS = {
+    "Auth - Credential Stuffing": (25, 60),
+    "Auth - Password Brute Force": (5, 15),
+    "Auth - Bouncer Token Abuse": (10, 30),
+    "Bouncer - High Confidence Bot Block": (3, 30),
+    "Bouncer - In-Session Freeze": (3, 60),
+    "OSSEC - Generic Web Errors": (10, 10),
+}
+
+# Unambiguous attacks — no legitimate user produces one, so a single event is
+# already proof and these stay ungated on purpose.
+UNGATED_BY_DESIGN = [
+    "Bouncer - Honeypot Credential Stuffing",
+    "Bouncer - Bot Campaign Detection",
+]
+
+PROBE_IP = "203.0.113.77"
+
+
+@th.django_unit_test()
+def test_blocking_defaults_require_repeat_offences(opts):
+    """Defaults a real user can trip must need N events before they block."""
+    from mojo.apps.incident.models.rule import RuleSet
+
+    RuleSet.objects.all().delete()
+    RuleSet.ensure_default_rules()
+
+    for name, (count, window) in GATED_BLOCKING_DEFAULTS.items():
+        ruleset = RuleSet.objects.filter(name=name).first()
+        assert ruleset is not None, \
+            f"ensure_default_rules() should install the '{name}' ruleset"
+        assert ruleset.trigger_count == count, (
+            f"'{name}' must not fire on a single event — expected trigger_count={count}, "
+            f"got {ruleset.trigger_count}"
+        )
+        assert ruleset.trigger_window == window, (
+            f"'{name}' expected trigger_window={window} minutes, got {ruleset.trigger_window}"
+        )
+        # The threshold counts events on ONE incident. If events do not bundle
+        # over at least the counting window they each land on their own
+        # incident, the count never climbs, and the gate silently disables the
+        # rule instead of loosening it.
+        assert ruleset.bundle_minutes and ruleset.bundle_minutes >= window, (
+            f"'{name}' counts events over {window} min but bundles them over "
+            f"{ruleset.bundle_minutes} — events cannot accumulate on one incident, "
+            "so the trigger would never be reached"
+        )
+
+    RuleSet.objects.all().delete()
+
+
+@th.django_unit_test()
+def test_unambiguous_attack_defaults_still_fire_immediately(opts):
+    """Honeypot POSTs and campaign detection stay ungated — one event is proof."""
+    from mojo.apps.incident.models.rule import RuleSet
+
+    RuleSet.objects.all().delete()
+    RuleSet.ensure_default_rules()
+
+    for name in UNGATED_BY_DESIGN:
+        ruleset = RuleSet.objects.filter(name=name).first()
+        assert ruleset is not None, \
+            f"ensure_default_rules() should install the '{name}' ruleset"
+        assert ruleset.trigger_count is None, (
+            f"'{name}' must keep firing on the first event — no legitimate user produces "
+            f"one, got trigger_count={ruleset.trigger_count}"
+        )
+
+    RuleSet.objects.all().delete()
+
+
+@th.django_unit_test()
+def test_single_login_unknown_does_not_block(opts):
+    """One mistyped username holds at pending and fires no block handler."""
+    from unittest import mock
+    from mojo.apps.incident.models import Event, Incident, RuleSet
+
+    Incident.objects.filter(source_ip=PROBE_IP).delete()
+    Event.objects.filter(source_ip=PROBE_IP).delete()
+    RuleSet.objects.all().delete()
+    RuleSet.ensure_default_rules()
+
+    with mock.patch.object(RuleSet, "run_handler", autospec=True, return_value=True) as fired:
+        event = Event.objects.create(
+            category="login:unknown",
+            level=8,
+            scope="account",
+            title="Unknown user attempted login",
+            details="Unknown user attempted login",
+            source_ip=PROBE_IP,
+        )
+        event.sync_metadata()
+        event.publish()
+
+        assert fired.call_count == 0, (
+            f"A single login:unknown event must not fire the fleet-wide block handler, "
+            f"fired {fired.call_count} time(s)"
+        )
+
+    incident = Incident.objects.filter(category="login:unknown", source_ip=PROBE_IP).first()
+    assert incident is not None, "The event should still be recorded on a pending incident"
+    assert incident.status == "pending", (
+        f"Incident should hold at pending until the trigger count is reached, "
+        f"got status={incident.status}"
+    )
+
+    Incident.objects.filter(source_ip=PROBE_IP).delete()
+    Event.objects.filter(source_ip=PROBE_IP).delete()
+    RuleSet.objects.all().delete()

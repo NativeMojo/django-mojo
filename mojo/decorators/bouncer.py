@@ -21,6 +21,18 @@ logger = logit.get_logger('bouncer', 'bouncer.log')
 
 __all__ = ['requires_bouncer_token']
 
+# Token validation failures a legitimate user produces without doing anything
+# wrong: the 15-minute TTL running out while they read the page, a
+# double-submitted form (the nonce is single-use), or a cellular/CGNAT handoff
+# that changed their egress IP mid-session. Reported for visibility, never at a
+# level a blocking ruleset acts on.
+BENIGN_TOKEN_ERRORS = frozenset({'expired', 'nonce_consumed', 'ip_mismatch'})
+
+# Below every default block rule — recorded, never enforced on.
+TOKEN_INVALID_BENIGN_LEVEL = 4
+# The token was forged, malformed, or replayed outside its scope.
+TOKEN_INVALID_SUSPICIOUS_LEVEL = 7
+
 
 def requires_bouncer_token(page_type='login'):
     """
@@ -30,8 +42,12 @@ def requires_bouncer_token(page_type='login'):
     duid binding, and single-use nonce.
 
     BOUNCER_REQUIRE_TOKEN=False (default): invalid/missing token is logged but
-    the request proceeds. Safe for gradual rollout.
-    BOUNCER_REQUIRE_TOKEN=True: invalid/missing token returns 403.
+    the request proceeds, and every token_invalid event is capped at level 4 so
+    no blocking ruleset can act on a deployment that has not enabled
+    enforcement. Safe for gradual rollout.
+    BOUNCER_REQUIRE_TOKEN=True: invalid/missing token returns 403. Tampering
+    (bad signature, malformed, wrong page_type, wrong duid) reports at level 7;
+    benign lifecycle failures stay at 4 — see _token_invalid_level.
 
     Test-mode override: when the test-mode gate passes (see
     mojo.helpers.test_mode: env var + loopback + no proxy chain), the
@@ -86,7 +102,8 @@ def requires_bouncer_token(page_type='login'):
                 error = str(exc)
                 _report_token_event(
                     request, page_type, 'security:bouncer:token_invalid',
-                    f"Bouncer token invalid ({error})", level=7, error=error,
+                    f"Bouncer token invalid ({error})",
+                    level=_token_invalid_level(error, require), error=error,
                 )
                 if require:
                     raise mojo.errors.PermissionDeniedException(
@@ -100,6 +117,25 @@ def requires_bouncer_token(page_type='login'):
             return func(request, *args, **kwargs)
         return wrapper
     return decorator
+
+
+def _token_invalid_level(error, require):
+    """
+    Severity to report a security:bouncer:token_invalid event at.
+
+    ``error`` is the ValueError string raised by TokenManager (invalid_format,
+    invalid_signature, expired, ip_mismatch, duid_mismatch, nonce_consumed) or
+    page_type_mismatch from the scope check above.
+
+    ``require`` False means this deployment is still in log-only mode and has
+    not enabled enforcement — so nothing observed here may be strong enough to
+    get an address firewalled, whatever the cause.
+    """
+    if not require:
+        return TOKEN_INVALID_BENIGN_LEVEL
+    if error in BENIGN_TOKEN_ERRORS:
+        return TOKEN_INVALID_BENIGN_LEVEL
+    return TOKEN_INVALID_SUSPICIOUS_LEVEL
 
 
 def _report_token_event(request, page_type, category, details, level, **kwargs):

@@ -16,7 +16,15 @@
 | POST | `/api/incident/incident/<id>` | Update incident |
 | GET | `/api/incident/incident/history` | List incident history |
 | GET | `/api/incident/event/ruleset` | List rule sets |
+| GET | `/api/incident/event/ruleset/<id>` | Get rule set |
+| POST | `/api/incident/event/ruleset` | Create rule set |
+| POST | `/api/incident/event/ruleset/<id>` | Update rule set |
+| DELETE | `/api/incident/event/ruleset/<id>` | Delete rule set |
 | GET | `/api/incident/event/ruleset/rule` | List rules |
+| GET | `/api/incident/event/ruleset/rule/<id>` | Get rule |
+| POST | `/api/incident/event/ruleset/rule` | Create rule |
+| POST | `/api/incident/event/ruleset/rule/<id>` | Update rule |
+| DELETE | `/api/incident/event/ruleset/rule/<id>` | Delete rule |
 | GET | `/api/incident/ticket` | List tickets |
 | GET | `/api/incident/ticket/<id>` | Get ticket |
 | POST | `/api/incident/ticket` | Create ticket |
@@ -327,14 +335,29 @@ Tickets with `metadata.llm_enabled=true` (legacy `llm_linked` also honored) are 
 
 ## RuleSet Fields
 
-When reading or writing rules via `/api/incident/event/ruleset`, these fields control threshold and retrigger behavior:
+Rule sets are read and written via `/api/incident/event/ruleset`, and their individual conditions via `/api/incident/event/ruleset/rule`. Reading needs `view_security` (or `security`); creating, updating and deleting need **`manage_security` (or `security`)**.
 
 | Field | Type | Description |
 |---|---|---|
 | `trigger_count` | int or null | Fire the handler when the incident reaches this many events. `null` = fire immediately on the first event. |
 | `trigger_window` | int or null | Only count events within this many minutes when evaluating `trigger_count`. `null` = count all events on the incident. |
 | `retrigger_every` | int or null | Re-fire the handler every N additional events after the initial trigger. `null` = fire once only. |
+| `is_active` | bool | `false` takes the rule set out of evaluation entirely without deleting it or losing its rules. Use this to park a rule set you may want back. |
+| `bundle_minutes` | int or null | Time window for grouping events onto one incident. `0` = disabled (every event gets its own incident), `null` = unlimited. |
 | `metadata.delete_on_resolution` | bool | When `true`, incidents created by this RuleSet are auto-deleted the moment they transition to `resolved` or `closed`. Intended for noise patterns (bot scanners, brute-force probes) where the incident has no long-term value. Overridden per-incident by `metadata.do_not_delete`. |
+
+> **`bundle_minutes` must be at least `trigger_window`.** The threshold counts events on a single incident. With `bundle_minutes: 0` each event lands on its own incident, so the count never climbs past 1 and a `trigger_count` silently **disables** the rule set instead of deferring it.
+
+A rule set whose `handler` contains `block://` and whose `trigger_count` is `null` firewalls the source IP on the **first** matching event. That is only appropriate when no legitimate user can produce the match — on a corporate NAT or CGNAT one address fronts many unrelated people. To retune a rule set that is already installed, POST just the fields you want to change:
+
+```
+POST /api/incident/event/ruleset/12
+{
+  "trigger_count": 25,
+  "trigger_window": 60,
+  "bundle_minutes": 60
+}
+```
 
 ### `bundle_by` values
 

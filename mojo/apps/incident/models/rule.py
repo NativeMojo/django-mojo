@@ -415,13 +415,21 @@ class RuleSet(models.Model, MojoModel):
         # Not targeted attacks, just internet background noise. Short block and discard.
         # This runs AFTER the bot/scanner URL pattern check (priority 1) so specific
         # URL patterns that deserve a longer block are already handled above.
+        # Gate: 10 web 4xx from one IP in 10 minutes. A single 404 is a stale
+        # bookmark, a dead link in an email, or a mis-typed URL — it is not
+        # evidence of anything. A sweep produces dozens in seconds.
+        # bundle_minutes must cover the counting window: with bundling disabled
+        # every event lands on its own incident, the count never climbs past 1,
+        # and the gate would disable the rule instead of loosening it.
         cls._create_ruleset(
             category="ossec",
             name="OSSEC - Generic Web Errors",
             priority=6,
             match_by=MatchBy.ALL,
             bundle_by=BundleBy.SOURCE_IP,
-            bundle_minutes=0,
+            bundle_minutes=10,
+            trigger_count=10,
+            trigger_window=10,
             handler="block://?ttl=300&fleet_wide=1",
             rules=[
                 {"name": "Web 400/404/405 in details",
@@ -474,14 +482,19 @@ class RuleSet(models.Model, MojoModel):
         """
 
         # Credential stuffing — unknown usernames at level 8.
-        # If the username doesn't exist, there's no legitimate reason to keep trying.
+        # Gate: 25 unknown-username attempts from one IP in an hour. A single
+        # typo — or a person who forgot which email they signed up with — must
+        # never block an office, a school, or a CGNAT egress, and one event is
+        # exactly what that looks like. 25 in an hour is a list being worked.
         cls._create_ruleset(
             category="login:unknown",
             name="Auth - Credential Stuffing",
             priority=5,
             match_by=MatchBy.ALL,
             bundle_by=BundleBy.SOURCE_IP,
-            bundle_minutes=15,
+            bundle_minutes=60,
+            trigger_count=25,
+            trigger_window=60,
             handler="block://?ttl=1800&fleet_wide=1",
             rules=[
                 {"name": "Level >= 8", "field_name": "level",
@@ -509,8 +522,11 @@ class RuleSet(models.Model, MojoModel):
             ],
         )
 
-        # Bouncer token abuse — replay, IP mismatch, expired reuse.
-        # These are deliberate probing attempts, not accidents.
+        # Bouncer token abuse — forged, malformed or out-of-scope tokens.
+        # Only tampering reaches level 7 (mojo/decorators/bouncer.py); expiry,
+        # double-submit and IP handoff report at level 4 and never match here.
+        # Gate: 10 tampered tokens from one IP in 30 minutes — a stale browser
+        # tab retrying must never be enough.
         cls._create_ruleset(
             category="security:bouncer:token_invalid",
             name="Auth - Bouncer Token Abuse",
@@ -518,6 +534,8 @@ class RuleSet(models.Model, MojoModel):
             match_by=MatchBy.ALL,
             bundle_by=BundleBy.SOURCE_IP,
             bundle_minutes=30,
+            trigger_count=10,
+            trigger_window=30,
             handler="block://?ttl=1800&fleet_wide=1",
             rules=[
                 {"name": "Level >= 7", "field_name": "level",
@@ -653,6 +671,10 @@ class RuleSet(models.Model, MojoModel):
 
         # High-confidence bouncer block (score 80+) — block IP.
         # Score 60-79 is handled by LLM/human triage (no rule created).
+        # Gate: 3 high-score blocks from one IP in 30 minutes. The score is a
+        # heuristic on browser signals, so one hit can be a privacy extension,
+        # an odd corporate browser build, or a headless integration test — the
+        # firewall should wait for the pattern to repeat.
         cls._create_ruleset(
             category="security:bouncer:block",
             name="Bouncer - High Confidence Bot Block",
@@ -660,6 +682,8 @@ class RuleSet(models.Model, MojoModel):
             match_by=MatchBy.ALL,
             bundle_by=BundleBy.SOURCE_IP,
             bundle_minutes=30,
+            trigger_count=3,
+            trigger_window=30,
             handler="block://?ttl=3600&fleet_wide=1",
             rules=[
                 {"name": "Risk score >= 80", "field_name": "risk_score",
@@ -670,6 +694,10 @@ class RuleSet(models.Model, MojoModel):
         # ── In-session enforcement rules (continuous stream scorer) ──
         # Freeze band — confirmed bot inside an authenticated session.
         # Block IP fleet-wide for 24h.
+        # Gate: 3 freeze-band sessions from one IP in an hour. The penalty here
+        # is a full day of firewall, so one scorer verdict — which a paused
+        # laptop or an accessibility tool can produce — is far too cheap a
+        # trigger for it.
         cls._create_ruleset(
             category="security:bouncer:session_freeze",
             name="Bouncer - In-Session Freeze",
@@ -677,6 +705,8 @@ class RuleSet(models.Model, MojoModel):
             match_by=MatchBy.ALL,
             bundle_by=BundleBy.SOURCE_IP,
             bundle_minutes=60,
+            trigger_count=3,
+            trigger_window=60,
             handler="block://?ttl=86400&fleet_wide=1,notify://perm@manage_security",
             rules=[
                 {"name": "Level >= 9", "field_name": "level",

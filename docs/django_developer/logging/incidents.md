@@ -510,6 +510,10 @@ RuleSet.objects.create(
 
 Until 10 events accumulate within the window, the incident sits at `pending`. Once the threshold is crossed, it transitions to `new` and the handler fires — blocking the IP fleet-wide and creating a ticket.
 
+> **`bundle_minutes` must cover `trigger_window`.** The count is per-incident. With `bundle_minutes=0` (bundling disabled) every event creates its own incident, so the count never climbs past 1 and the `trigger_count` **disables the ruleset** instead of deferring it. Set `bundle_minutes` to at least `trigger_window`.
+
+Any RuleSet with a `block://` handler and no `trigger_count` fires on the **first** matching event. That is correct only when no legitimate user can produce the match — see [Default auth and bouncer rulesets](#default-auth-and-bouncer-rulesets) for how the shipped defaults draw that line.
+
 ### Retriggering (retrigger_every)
 
 Set `retrigger_every` to re-fire the handler after additional events beyond the initial trigger. This is useful for escalating alerts on incidents that keep growing:
@@ -713,7 +717,7 @@ These rulesets exist to absorb the high-volume, low-value events that OSSEC gene
 | 2 | OSSEC - Login Session Noise | `details` regex matches `Login session (opened\|closed).` | `ignore`, no incident |
 | 3 | OSSEC - SSH Single Probe (5710) | `rule_id == 5710` | `block://?ttl=3600&fleet_wide=1`, no incident |
 | 5 | OSSEC - SSH Brute Force | `rule_id` in `[5712, 5720, 5551, 5758]` | `block://?ttl=3600&fleet_wide=1`, no incident |
-| 6 | OSSEC - Generic Web Errors | `details` regex matches `Web (Attack )?4(00\|04\|05)` | `block://?ttl=300&fleet_wide=1`, no incident |
+| 6 | OSSEC - Generic Web Errors | `details` regex matches `Web (Attack )?4(00\|04\|05)` | `block://?ttl=300&fleet_wide=1` after **10 events in 10 minutes**, no incident |
 | 10 | OSSEC 31104 - Web Attack Detection | `rule_id == 31104` | `block://?ttl=3600&fleet_wide=1`, no incident |
 | 50 | OSSEC - Critical Severity | `level >= 12` | `block://?ttl=3600&fleet_wide=1` + incident created for review |
 
@@ -723,7 +727,7 @@ These rulesets exist to absorb the high-volume, low-value events that OSSEC gene
 - **Priority 2 — Login Session Noise**: PAM `session opened` / `session closed` log entries have no source IP and are pure local audit bookkeeping. They are not attacks. Without this ruleset, OSSEC level 3 events for these messages were hitting the catch-all and generating admin-visible incidents at the rate of hundreds per day.
 - **Priority 3 — SSH Single Probe (5710)**: OSSEC rule 5710 fires on the first SSH attempt with a non-existent username. Scanners typically probe once and move on, so they never accumulate enough events to trip the multi-attempt brute-force rule (priority 5). Without this ruleset, each single-probe scanner IP created its own unmatched incident. Block it immediately.
 - **Priority 5 — SSH Brute Force**: Multi-attempt SSH brute force (rules 5712/5720/5551/5758). Immediate block, no incident.
-- **Priority 6 — Generic Web Errors**: Any Web 400/404/405 that is not already caught by the bot/scanner URL pattern check (priority 1). Catches phpunit/vendor scanner sweeps and other generic HTTP probers. Short block (5 minutes) — these are internet noise, not targeted attacks.
+- **Priority 6 — Generic Web Errors**: Any Web 400/404/405 that is not already caught by the bot/scanner URL pattern check (priority 1). Catches phpunit/vendor scanner sweeps and other generic HTTP probers. Short block (5 minutes) — these are internet noise, not targeted attacks. Gated at 10 events in 10 minutes: one 404 is a stale bookmark or a dead link in an email, while a sweep produces dozens in seconds. `bundle_minutes` is 10 rather than 0 so the events land on one incident and the count can actually climb — see the warning under [Retuning an already-bootstrapped ruleset](#retuning-an-already-bootstrapped-ruleset).
 - **Priority 10 — Web Attack Detection**: OSSEC rule 31104 specifically. One-hour block, no incident.
 - **Priority 50 — Critical Severity**: Level 12+ is unusual. Only this default creates an incident — something genuinely unexpected happened and warrants human review.
 
@@ -737,6 +741,116 @@ RuleSet.ensure_ossec_rules()
 ```
 
 Rulesets installed by `ensure_ossec_rules()` are identified by name. If you need to modify a default ruleset's behavior (e.g., change a TTL or priority), edit it via the admin interface or REST API after installation — the method will not overwrite existing records.
+
+---
+
+## Default auth and bouncer rulesets
+
+These are the defaults that firewall real people. `ensure_auth_rules()` and `ensure_bouncer_rules()` install them; both are idempotent and both are called by `ensure_default_rules()`.
+
+### The design rule
+
+django-mojo is an open REST platform — anyone can call it, and a large share of callers sit behind a corporate NAT, a school, or carrier-grade NAT where one address fronts thousands of unrelated people. Reactive blocking of a demonstrated bad actor is wanted. **False positives are the thing to avoid.** So the bar for every one of these rulesets is "highly probable bad actor", never "a user fumbled their credentials."
+
+Mechanically that means: **any default whose match a legitimate person can produce must carry a `trigger_count`.** A `block://` handler with no `trigger_count` fires on the *first* matching event — one mistyped username would firewall the whole egress. The two rulesets below that stay ungated do so because no legitimate user can produce their match at all.
+
+### Auth — `ensure_auth_rules()`
+
+| Name | Category | Matches | Gate | Action |
+|---|---|---|---|---|
+| Auth - Credential Stuffing | `login:unknown` | `level >= 8` | **25 events / 60 min** | `block://?ttl=1800&fleet_wide=1` |
+| Auth - Password Brute Force | `invalid_password` | `level >= 5` | **5 events / 15 min** | `block://?ttl=1800&fleet_wide=1` |
+| Auth - Bouncer Token Abuse | `security:bouncer:token_invalid` | `level >= 7` | **10 events / 30 min** | `block://?ttl=1800&fleet_wide=1` |
+
+- **Credential Stuffing** — a `login:unknown` event means the submitted username does not exist. One is a typo, or someone who forgot which email they signed up with. 25 in an hour from one address is a list being worked. `bundle_minutes` is 60 to match the counting window.
+- **Password Brute Force** — the login view emits `invalid_password` at level 5 only after a username has resolved, so this counts failed guesses against *known* accounts. Note the per-account sliding window in `mojo/decorators/limits.py` is the control that survives IP rotation; this ruleset is the per-address complement, not a replacement.
+- **Bouncer Token Abuse** — see the level split below. Only tampering reaches level 7, so ordinary token lifecycle failures never match this ruleset at all, and 10 tampered tokens in 30 minutes are still required before it blocks.
+
+#### Bouncer token failure levels
+
+`@md.requires_bouncer_token()` (`mojo/decorators/bouncer.py`) reports `security:bouncer:token_invalid` at a level that depends on *why* validation failed:
+
+| Cause | Level | Why |
+|---|---|---|
+| `expired` | 4 | The 15-minute TTL ran out while the user read the page. |
+| `nonce_consumed` | 4 | Double-submitted form — the nonce is single-use. |
+| `ip_mismatch` | 4 | Cellular or CGNAT handoff changed the egress IP mid-session. |
+| `invalid_format` | 7 | Not a well-formed token. |
+| `invalid_signature` | 7 | Forged or tampered with. |
+| `page_type_mismatch` | 7 | A valid token replayed against a different endpoint. |
+| `duid_mismatch` | 7 | A valid token replayed from a different device. |
+
+**Log-only mode caps every cause at level 4.** When `BOUNCER_REQUIRE_TOKEN` is False the deployment has not enabled enforcement, so nothing the bouncer observes may get an address firewalled — whatever the cause. Turning enforcement on is what makes the level-7 causes able to reach a blocking rule.
+
+### Bouncer — `ensure_bouncer_rules()`
+
+| Name | Category | Matches | Gate | Action |
+|---|---|---|---|---|
+| Bouncer - Honeypot Credential Stuffing | `security:bouncer:honeypot_post` | `level >= 9` | **none — first event** | `block://?ttl=3600&fleet_wide=1` |
+| Bouncer - Bot Campaign Detection | `security:bouncer:campaign` | `level >= 10` | **none — first event** | `block://?ttl=86400&fleet_wide=1` + notify |
+| Bouncer - High Confidence Bot Block | `security:bouncer:block` | `risk_score >= 80` | **3 events / 30 min** | `block://?ttl=3600&fleet_wide=1` |
+| Bouncer - In-Session Freeze | `security:bouncer:session_freeze` | `level >= 9` | **3 events / 60 min** | `block://?ttl=86400&fleet_wide=1` + notify |
+| Bouncer - In-Session Shadow Ban | `security:bouncer:session_shadow_ban` | `level >= 8` | n/a — no block | `notify://perm@manage_security` |
+| Bouncer - In-Session Step-Up Required | `security:bouncer:session_step_up` | `level >= 6` | n/a — no block | no handler; bundles for visibility |
+| Bouncer - In-Session Suspect | `security:bouncer:session_suspect` | (no rules) | n/a — no block | no handler; bundles for visibility |
+
+- **Honeypot and Campaign stay ungated deliberately.** A honeypot POST means credentials were submitted to a page no real user can reach; campaign detection already requires 5+ distinct blocks sharing a signal pattern. Both are proof on their own — adding a trigger gate would only delay a certain block.
+- **High Confidence Bot Block** is a heuristic on browser signals. One 80+ score can be a privacy extension, an unusual corporate browser build, or somebody's headless integration test, so the firewall waits for the pattern to repeat.
+- **In-Session Freeze** costs the address a full day of firewall. One scorer verdict — which a paused laptop or an assistive tool can produce — is far too cheap a trigger for that penalty.
+
+### Retuning an already-bootstrapped ruleset
+
+`_create_ruleset()` uses `get_or_create(defaults=...)`. **Changing a default in code only affects deployments that have not bootstrapped yet.** An existing deployment keeps whatever rows it already has — deliberately, so a framework upgrade can never silently rewrite security policy an operator tuned by hand. The trade-off is that upgrading does not fix an existing deployment for you; the REST calls below do.
+
+**Which deployments are affected.** Any deployment bootstrapped before the trigger gates were added has these five rulesets with `trigger_count = null`, meaning each one firewalls an IP **fleet-wide on a single event**:
+
+| Ruleset | One event means |
+|---|---|
+| Auth - Credential Stuffing | One mistyped username → the whole egress blocked for 30 minutes |
+| Auth - Bouncer Token Abuse | One expired token → the whole egress blocked for 30 minutes |
+| Bouncer - High Confidence Bot Block | One heuristic bot score → 1 hour |
+| Bouncer - In-Session Freeze | One risk-90 session → 24 hours |
+| OSSEC - Generic Web Errors | One 404 → 5 minutes |
+
+On a corporate NAT or CGNAT, "the whole egress" is everybody behind that address.
+
+**Check what you have:**
+
+```
+GET /api/incident/event/ruleset?size=100
+```
+
+Look for any ruleset whose `handler` contains `block://` and whose `trigger_count` is `null`.
+
+**Apply the current defaults.** POST to the ruleset's id with the fields to change (requires `manage_security` or `security`):
+
+```
+POST /api/incident/event/ruleset/<id>
+{"trigger_count": 25, "trigger_window": 60, "bundle_minutes": 60}
+```
+
+The five, with the values the framework now ships:
+
+| Ruleset | `trigger_count` | `trigger_window` | `bundle_minutes` |
+|---|---|---|---|
+| Auth - Credential Stuffing | 25 | 60 | 60 |
+| Auth - Bouncer Token Abuse | 10 | 30 | 30 (already) |
+| Bouncer - High Confidence Bot Block | 3 | 30 | 30 (already) |
+| Bouncer - In-Session Freeze | 3 | 60 | 60 (already) |
+| OSSEC - Generic Web Errors | 10 | 10 | **10 — was 0** |
+
+> **`bundle_minutes` must cover `trigger_window`.** The threshold counts events on *one* incident. `bundle_minutes = 0` disables bundling, so every event lands on its own incident, the count never climbs past 1, and adding a `trigger_count` **disables the rule** rather than loosening it. This is why OSSEC - Generic Web Errors needs its `bundle_minutes` raised alongside the gate.
+
+Equivalent from a Django shell or a deployment script:
+
+```python
+from mojo.apps.incident.models import RuleSet
+
+RuleSet.objects.filter(name="Auth - Credential Stuffing").update(
+    trigger_count=25, trigger_window=60, bundle_minutes=60)
+```
+
+To verify a retune took effect, publish a single matching event and confirm the incident sits at `status="pending"` rather than transitioning to `new`.
 
 ---
 

@@ -680,13 +680,16 @@ Bouncer scores request → block decision
 
 | Category | Level | Creates Incident | Default Rule Action |
 |----------|-------|-----------------|-------------------|
-| `security:bouncer:block` | 8 | Yes | Score >= 80: block IP 1hr |
-| `security:bouncer:honeypot_post` | 9 | Yes | Block IP 1hr |
-| `security:bouncer:campaign` | 10 | Yes | Block IP 24hr + notify admin |
-| `security:bouncer:token_invalid` | 7 | Yes | Block IP 30min |
+| `security:bouncer:block` | 8 | Yes | Score >= 80, **3 in 30min**: block IP 1hr |
+| `security:bouncer:honeypot_post` | 9 | Yes | Block IP 1hr on the first event |
+| `security:bouncer:campaign` | 10 | Yes | Block IP 24hr + notify admin, on the first event |
+| `security:bouncer:token_invalid` | 4 or 7 | Yes | **10 level-7 events in 30min**: block IP 30min |
+| `security:bouncer:session_freeze` | 9 | Yes | **3 in 60min**: block IP 24hr + notify admin |
 | `security:bouncer:monitor` | 5 | No | — |
 | `security:bouncer:event` | 5–7 | Conditional | — |
 | `security:bouncer:token_missing` | 6 | No | — |
+
+`security:bouncer:token_invalid` is reported at **level 4** when the failure is a normal part of the token lifecycle — `expired` (the 15-minute TTL ran out while the user read the page), `nonce_consumed` (a double-submitted form), or `ip_mismatch` (a cellular or CGNAT handoff changed the egress IP). Only tampering — `invalid_format`, `invalid_signature`, `page_type_mismatch`, `duid_mismatch` — reports at level 7 and can reach the blocking rule. While the deployment is in log-only mode (`BOUNCER_REQUIRE_TOKEN` off) every cause is capped at level 4, so nothing gets blocked.
 
 ### Querying Bouncer Incidents
 
