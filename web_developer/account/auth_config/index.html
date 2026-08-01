@@ -3941,7 +3941,12 @@ share one auth domain.</p>
 </code></pre></div>
 <p>The <code>group_uuid</code> param is preserved through navigation (login ↔ register
 switcher), the OAuth round-trip (Google/Apple/GitHub callback), and the
-login → passkey enrollment redirect.</p>
+login → passkey enrollment redirect. <code>redirect</code>, <code>next</code>, <code>returnTo</code> and <code>back</code>
+ride the same links, so a destination you hand the portal survives the whole
+flow. <strong>Fixed in this release:</strong> the register → passkey hop used to drop every
+param after the first when <code>group_uuid</code> was combined with one of them, landing
+the visitor on the group's <code>success_redirect</code> instead. A <code>?group_uuid=</code> on its
+own was never affected.</p>
 <p>Branding includes the <strong>browser tab icon</strong>: when the resolved group sets
 <code>theme.favicon_url</code>, that icon is the only one the page declares — the
 deployment's default <code>/favicon/*</code> links and web manifest are suppressed, so the

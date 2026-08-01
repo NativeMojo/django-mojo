@@ -3869,6 +3869,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="JavaScript Example">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#if-your-redirect_uri-started-returning-400" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        If your redirect_uri started returning 400
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#native-apps-custom-url-schemes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Native apps — custom URL schemes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4049,7 +4077,7 @@ pages render a button for each enabled provider. See
 <tbody>
 <tr>
 <td><code>redirect_uri</code></td>
-<td>Override the default callback URL. Must be on the server's allowlist (<code>ALLOWED_REDIRECT_URLS</code>). Returns <code>400</code> if provided but not allowed.</td>
+<td>Override the default callback URL. Must be on the server's allowlist. Returns <code>400</code> if provided but not allowed. It is matched as a <strong>URL</strong> — same scheme, same host (case-insensitive), same port, and a path at or under the allowlisted path on a <code>/</code> boundary; the query string is ignored, so you may append your own. Sharing a string prefix with an allowlisted URL is <em>not</em> enough. The allowlist is the server's <code>ALLOWED_REDIRECT_URLS</code> <strong>plus</strong> the <code>allowed_redirect_urls</code> registered on the group you name — so passing <code>group_uuid</code> (or <code>group</code>) can admit a landing URL that would 400 without it.</td>
 </tr>
 </tbody>
 </table>
@@ -4186,8 +4214,90 @@ survives the provider round-trip:</p>
 back to it with <code>code</code>/<code>state</code> appended (merged into any existing query with <code>&amp;</code>).
 The bundled <code>mojo-auth.js</code> <code>startOAuthLogin()</code> already does exactly this when you
 don't pass an explicit callback URL. <code>returnUrl</code> must still sit under the backend
-allowlist (<code>ALLOWED_REDIRECT_URLS</code>); the appended query does not affect the prefix
-match.</p>
+allowlist (<code>ALLOWED_REDIRECT_URLS</code>); the appended query does not affect the
+match, which compares scheme, host, port and path only.</p>
+<h3 id="if-your-redirect_uri-started-returning-400">If your <code>redirect_uri</code> started returning 400<a class="headerlink" href="#if-your-redirect_uri-started-returning-400" title="Permanent link">&para;</a></h3>
+<p>The <code>begin</code> endpoint used to accept any <code>redirect_uri</code> that shared a <strong>string
+prefix</strong> with an allowlist entry. It now parses both sides and compares them as
+URLs, which refuses some values that used to pass. Check yours against this list
+before assuming a server outage:</p>
+<ul>
+<li><strong>Port</strong> — <code>https://app.example.com:8443/...</code> needs its own entry now; an
+  entry without a port means the scheme default (443/80).</li>
+<li><strong>Path boundary</strong> — an entry of <code>.../app</code> admits <code>/app</code> and <code>/app/inner</code>, not
+  <code>/application</code>. Add a trailing <code>/</code> to the entry to admit a whole host.</li>
+<li><strong>Scheme</strong> — must match the entry exactly, and <code>http</code>/<code>https</code> never
+  substitute for each other. A custom scheme (<code>myapp://callback</code>, a mobile deep
+  link) <strong>is</strong> still accepted — see below.</li>
+<li><strong>Host spelling</strong> — a trailing dot (<code>app.example.com.</code>), a unicode IDN host
+  (list it in punycode instead), a bracketed IPv6 literal, or anything with a
+  backslash or percent-encoding in the authority is refused.</li>
+<li><strong>Wildcards</strong> — <code>*.example.com</code> is not supported in <code>ALLOWED_REDIRECT_URLS</code>
+  and never was; it is skipped as an unusable entry. List each host.</li>
+</ul>
+<p>What did <strong>not</strong> change: the status code (<code>400</code>), the error strings, the
+response shape, and host case-insensitivity — in fact case now matches <em>more</em>
+(<code>https://APP.Example.com/x</code> is admitted against <code>https://app.example.com</code>).</p>
+<h3 id="native-apps-custom-url-schemes">Native apps — custom URL schemes<a class="headerlink" href="#native-apps-custom-url-schemes" title="Permanent link">&para;</a></h3>
+<p>A mobile deep link works as a <code>redirect_uri</code>, against an allowlist entry naming
+the same scheme. It is matched under narrower rules than a web URL: <strong>exact
+scheme + exact authority (compared character for character, case-insensitive) +
+the same <code>/</code>-boundary path prefix</strong>. There are no default ports and no wildcards,
+and the query string is still ignored.</p>
+<table>
+<thead>
+<tr>
+<th>Entry</th>
+<th><code>redirect_uri</code></th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>myapp://callback</code></td>
+<td><code>myapp://callback</code></td>
+<td>admitted</td>
+</tr>
+<tr>
+<td><code>myapp://callback</code></td>
+<td><code>myapp://callback/oauth?code=…</code></td>
+<td>admitted — any path, query ignored</td>
+</tr>
+<tr>
+<td><code>myapp://callback</code></td>
+<td><code>MyApp://CallBack</code></td>
+<td>admitted — case-insensitive</td>
+</tr>
+<tr>
+<td><code>myapp://callback</code></td>
+<td><code>myapp://other</code></td>
+<td><strong>refused</strong> — different authority</td>
+</tr>
+<tr>
+<td><code>myapp://callback</code></td>
+<td><code>myapp://callback.evil</code></td>
+<td><strong>refused</strong> — merely begins with the entry</td>
+</tr>
+<tr>
+<td><code>myapp://callback</code></td>
+<td><code>otherapp://callback</code></td>
+<td><strong>refused</strong> — different scheme</td>
+</tr>
+<tr>
+<td><code>myapp://callback/oauth</code></td>
+<td><code>myapp://callback/oauthdone</code></td>
+<td><strong>refused</strong> — not on a <code>/</code> boundary</td>
+</tr>
+<tr>
+<td><code>com.example.app:/oauth</code></td>
+<td><code>com.example.app:///oauth</code></td>
+<td>admitted — the same value (empty authority, path <code>/oauth</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>Refused outright, whichever side they appear on: the opaque form with no <code>//</code>
+and no leading <code>/</code> (<code>myapp:callback</code>, <code>mailto:a@b</code>), a bare <code>myapp:</code> or
+<code>myapp://</code>, and <code>javascript:</code> / <code>data:</code> / <code>vbscript:</code>.</p>
 <hr />
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
 <p>Add to your Django settings:</p>
@@ -4240,7 +4350,7 @@ match.</p>
 <tr>
 <td><code>ALLOWED_REDIRECT_URLS</code></td>
 <td><code>[]</code></td>
-<td>URL prefixes permitted as <code>redirect_uri</code> on the <code>begin</code> endpoint</td>
+<td>URLs permitted as <code>redirect_uri</code> on the <code>begin</code> endpoint, matched by scheme + host + port + segment-bounded path prefix (not by string prefix). Combined at request time with the <code>allowed_redirect_urls</code> list in the metadata of the group you pass as <code>group_uuid</code> / <code>group</code> (inherited up its parent chain), so a tenant can register its own landing origin without a server deploy.</td>
 </tr>
 <tr>
 <td><code>OAUTH_ALLOW_REGISTRATION</code></td>

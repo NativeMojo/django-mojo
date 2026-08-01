@@ -1122,6 +1122,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#urls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        urls
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4025,6 +4036,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#urls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        urls
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4140,6 +4162,80 @@ to let <code>var/dev_server.conf</code> override the committed <code>config/dev_
 <a href="../../testit/Overview/#dev-server-hostport-dev_serverconf">testit Overview § Dev-server host/port</a>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">conf_path</span> <span class="o">=</span> <span class="n">paths</span><span class="o">.</span><span class="n">resolve_conf</span><span class="p">(</span><span class="s2">&quot;dev_server.conf&quot;</span><span class="p">)</span>
 </code></pre></div>
+<h2 id="urls">urls<a class="headerlink" href="#urls" title="Permanent link">&para;</a></h2>
+<p><code>safe_nav_url(value, default="")</code> — the scheme guard for a caller-supplied
+navigation target that the server is about to render into an <code>href</code> (or a
+<code>&lt;meta http-equiv=refresh&gt;</code>). Django autoescaping stops attribute breakout but
+does <strong>not</strong> neutralize a scheme-based payload, so <code>javascript:alert(1)</code> would
+otherwise survive into the attribute and execute on click.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">urls</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">redirect_url</span> <span class="o">=</span> <span class="n">urls</span><span class="o">.</span><span class="n">safe_nav_url</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">DATA</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;redirect&quot;</span><span class="p">))</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1"># &quot;&quot; when refused — wrap the link in {% if redirect_url %} so it is OMITTED</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="c1"># rather than rendered dead.</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>https://example.com/x</code>, <code>http://localhost:3000/cb</code></td>
+<td>returned <strong>unchanged</strong></td>
+</tr>
+<tr>
+<td><code>/dashboard</code>, <code>/a?b=c#d</code>, <code>dashboard/settings</code></td>
+<td>returned <strong>unchanged</strong> (no scheme)</td>
+</tr>
+<tr>
+<td><code>//example.com/x</code></td>
+<td>returned <strong>unchanged</strong> — see the off-origin note below</td>
+</tr>
+<tr>
+<td><code>javascript:</code>, <code>data:</code>, <code>vbscript:</code>, <code>mailto:</code>, <code>tel:</code>, <code>myapp://home</code></td>
+<td><code>default</code></td>
+</tr>
+<tr>
+<td><code>JaVaScRiPt:</code>, <code>java&lt;TAB&gt;script:</code>, leading-space/C0 <code>javascript:</code></td>
+<td><code>default</code></td>
+</tr>
+<tr>
+<td><code>None</code>, <code>""</code>, a <code>list</code>, a <code>dict</code>, an <code>int</code></td>
+<td><code>default</code></td>
+</tr>
+<tr>
+<td><code>http://[::1/x</code> (unparsable authority)</td>
+<td><code>default</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>A value that passes is returned byte-identically</strong> — it is never normalized to
+an absolute URL, so relative destinations keep working for callers that depend
+on them. Normalization happens only <em>inside</em> the judgment.</p>
+<p><strong>The host is deliberately not restricted.</strong> A legitimate cross-origin <code>https://</code>
+destination must keep working. Host restriction is the separate, opt-in concern
+of <code>ALLOWED_REDIRECT_URLS</code> / <code>AUTH_HANDOFF_ALLOWED_URLS</code> (see
+<code>mojo.apps.account.services.redirect_allowlist</code>). Do not fold a host check in
+here.</p>
+<p><strong>Scheme-relative and path-relative values pass through unchanged and may still
+resolve off-origin</strong> — <code>//evil.test/x</code>, <code>/\evil.test/x</code> and <code>\\evil.test/x</code> all
+parse scheme-less. That is coherent with the point above: a cross-origin
+<code>https://evil.test</code> is explicitly permitted, so refusing its equivalent spelling
+would not add a boundary. This is the one place the guard is looser than the
+in-tree sibling <code>_safe_home_url</code> in <code>mojo/apps/shortlink/rest/redirect.py</code>, which
+refuses protocol-relative and is deliberately <strong>not</strong> migrated to this helper —
+its input is an admin-writable setting naming that deployment's own home page,
+where an off-site value is genuinely unwanted.</p>
+<p><strong>Browser-side twin.</strong> <code>safeNavUrl()</code> in
+<code>mojo/apps/account/templates/account/auth_base.html</code> is the same contract for the
+hosted auth pages. The two must keep agreeing on what is refused; they differ
+only in that the browser twin returns the resolved absolute href.</p>
+<p>Current callers: <code>_render_verify</code> (<code>mojo/apps/account/rest/verify.py</code>) and
+<code>_render_confirm</code> (<code>mojo/apps/account/rest/user.py</code>) — the two server-rendered
+account confirm pages.</p>
 
 
 

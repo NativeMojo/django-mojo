@@ -4066,6 +4066,7 @@
 <p><strong>Option A — Link clicks directly to the API (recommended for simple setups)</strong></p>
 <p>The email link points to <code>GET /api/auth/verify/email/confirm?token=ev:...</code>. The server validates the token, marks the email verified, and renders a clean HTML page confirming success or describing the error. No frontend JavaScript is required.</p>
 <p>Append <code>&amp;redirect=https://yourapp.com/dashboard</code> to the link in the email. On success the page shows a <strong>Continue</strong> button and automatically navigates there after 3 seconds. On error the redirect URL is shown as a <strong>Go back</strong> button only.</p>
+<p><strong>The destination must be <code>http</code>, <code>https</code>, or scheme-less.</strong> Anything else — <code>javascript:</code>, <code>data:</code>, or a custom app scheme such as <code>myapp://home</code> — is dropped: <strong>no button is rendered at all</strong> (the page falls back to <em>"You can close this tab"</em>) and no automatic redirect is emitted. Status code, page copy and every other context value are unchanged. Point deep links at an https universal/app link instead. The <strong>host is deliberately not restricted</strong> — a cross-origin <code>https://</code> destination works — and scheme-relative or path-relative values pass through unchanged and may still resolve off-origin. Passing the parameter more than once (<code>?redirect=a&amp;redirect=b</code>) is refused rather than taking the last value.</p>
 <p><strong>Option B — Frontend handles the token (SPA / mobile apps)</strong></p>
 <p>The email link points to a frontend route (e.g. <code>/verify-email?token=ev:...</code>). The frontend extracts the token and submits it via API.</p>
 <p><strong>POST</strong> <code>/api/auth/email/verify</code></p>
@@ -4274,7 +4275,7 @@
 <tr>
 <td><code>redirect_url</code></td>
 <td>string</td>
-<td>Value of the <code>?redirect=</code> param (may be empty)</td>
+<td>Vetted value of the <code>?redirect=</code> param — always either <code>""</code> or an <code>http</code>/<code>https</code>/relative URL (see below). May be empty.</td>
 </tr>
 <tr>
 <td><code>redirect_delay</code></td>
@@ -4283,6 +4284,7 @@
 </tr>
 </tbody>
 </table>
+<p><code>redirect_url</code> is scheme-guarded <strong>before</strong> it reaches the context, so an overridden template inherits the guard for free: it is never a <code>javascript:</code>/<code>data:</code>/custom-app value, and a refused destination arrives as <code>""</code>. Keep the link inside a <code>{% if redirect_url %}</code> wrapper so a refused destination omits the button rather than rendering a dead one.</p>
 <p>Append <code>?redirect=https://yourapp.com/dashboard</code> to the verification link in the email to add a <strong>Continue</strong> button and an automatic 3-second redirect on success.</p>
 <hr />
 <h2 id="settings-reference">Settings Reference<a class="headerlink" href="#settings-reference" title="Permanent link">&para;</a></h2>

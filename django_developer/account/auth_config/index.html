@@ -3996,7 +3996,7 @@ rather than appending to it.</p>
 <td><code>success_redirect</code></td>
 <td>string</td>
 <td><code>"/"</code></td>
-<td>Redirect target after login</td>
+<td>Redirect target after login. Must resolve to <code>http</code>/<code>https</code> (a relative path is fine) — the auth page scheme-guards this value on its way to the browser, so a custom app scheme such as <code>myapp://home</code> is refused and sign-in dead-ends on <strong>every</strong> attempt. Point it at an <code>https</code> universal/app link instead. Not validated on write (<code>validate_auth_config</code> does not check it), so the failure surfaces at login, not at save</td>
 </tr>
 <tr>
 <td><code>custom_css</code></td>

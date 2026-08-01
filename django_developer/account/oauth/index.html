@@ -3828,6 +3828,39 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#matching-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Matching rules
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-url-schemes-mobile-deep-links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom URL schemes (mobile deep links)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-per-group-source" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The per-group source
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#security" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4140,60 +4173,267 @@ auth pages render a button for each enabled provider — see
 </table>
 <hr />
 <h2 id="per-request-redirect_uri">Per-Request redirect_uri<a class="headerlink" href="#per-request-redirect_uri" title="Permanent link">&para;</a></h2>
-<p>For multi-app deployments (portal, urtiny, etc.) where each frontend has its own callback URL, the <code>begin</code> endpoint accepts an optional <code>redirect_uri</code> query parameter.</p>
+<p>For multi-app deployments (a portal and a marketing site, say) where each frontend has its own callback URL, the <code>begin</code> endpoint accepts an optional <code>redirect_uri</code> query parameter.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET /api/auth/oauth/google/begin?redirect_uri=https://portal.example.com/auth/callback
 </code></pre></div>
 <h3 id="allowlist-configuration">Allowlist Configuration<a class="headerlink" href="#allowlist-configuration" title="Permanent link">&para;</a></h3>
-<p>A <code>redirect_uri</code> is accepted only if it starts with a prefix on the allowlist. If no allowlist is configured and a <code>redirect_uri</code> is provided, the request returns <code>400</code>.</p>
+<p>A <code>redirect_uri</code> is matched as a <strong>URL</strong>, not as a string prefix. If no allowlist is configured and a <code>redirect_uri</code> is provided, the request returns <code>400</code>.</p>
+<p>The allowlist has <strong>two</strong> sources, combined at validation time.</p>
 <p><strong>Project-wide allowlist</strong> (<code>settings.py</code>):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">ALLOWED_REDIRECT_URLS</span> <span class="o">=</span> <span class="p">[</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s2">&quot;https://portal.example.com/&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s2">&quot;https://urtiny.example.com/&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s2">&quot;https://tenant-a.example.com/&quot;</span><span class="p">,</span>
 <a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">]</span>
 </code></pre></div>
 <p><strong>Per-group allowlist</strong> (<code>Group.metadata["allowed_redirect_urls"]</code>):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">group</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;allowed_redirect_urls&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="s2">&quot;https://tenant-a.example.com/&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="s2">&quot;https://tenant-b.example.com/&quot;</span><span class="p">,</span>
 <a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="p">]</span>
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">group</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
-<p>The group list is retrieved via <code>get_metadata_value()</code>, which traverses the parent chain. Project-wide and group lists are combined at validation time.</p>
-<p>A <code>redirect_uri</code> may carry its own query string (e.g. an app passing
-<code>?redirect=/workspaces/</code> through the login page). The allowlist is a <strong>prefix</strong>
-match, so an appended query does not affect validation. The full URI — query
-included — is stored as <code>frontend_uri</code> and reproduced when the callback bounces
-the browser back: the callback merges its <code>code</code>/<code>state</code> (and any <code>group_uuid</code>)
-into the existing query with <code>&amp;</code> rather than appending a second <code>?</code>. This is what
-lets a <code>?redirect=</code> target survive the OAuth round-trip. (The bundled
-<code>mojo-auth.js</code> cooperates: when no explicit callback URL is given, its default
-return URL keeps the current page's query string — minus any stale <code>code</code>/<code>state</code>
-— and strips only the hash.)</p>
+<p>The group list is read with <code>get_metadata_value()</code>, which traverses the parent
+chain — so a child group inherits whatever its ancestors registered, and a
+tenant with a group tree configures its landing origin once, at the top. The
+group consulted is the one this request resolved (<code>?group=&lt;id&gt;</code> /
+<code>?group_uuid=&lt;uuid&gt;</code>); with no group context, only the project-wide list
+applies. See <a href="#the-per-group-source">The per-group source</a> for what that means
+and why it is kept.</p>
+<h3 id="matching-rules">Matching rules<a class="headerlink" href="#matching-rules" title="Permanent link">&para;</a></h3>
+<p>An <code>http(s)</code> entry admits a <code>redirect_uri</code> when <strong>all four</strong> hold. This is the
+same matcher the auth-handoff destination allowlist uses
+(<code>mojo/apps/account/services/redirect_allowlist.py</code>), with wildcards turned off.
+Custom schemes — mobile deep links — have their own narrower rules; see
+<a href="#custom-url-schemes-mobile-deep-links">Custom URL schemes</a> below.</p>
+<ol>
+<li><strong>Scheme</strong> — <code>http</code> or <code>https</code> on both, and the <em>same</em> one. An <code>https://</code>
+   entry never admits an <code>http://</code> landing URL; the OAuth <code>code</code> and <code>state</code>
+   would otherwise travel in cleartext.</li>
+<li><strong>Host</strong> — equal after case-folding. <code>https://APP.Example.com/x</code> matches an
+   entry of <code>https://app.example.com</code> (hosts are case-insensitive per RFC 3986);
+   <code>https://app.example.com.evil.tld/</code> does not.</li>
+<li><strong>Port</strong> — equal, with the scheme default filled in when absent. So
+   <code>https://app.example.com</code> and <code>https://app.example.com:443</code> are the same
+   origin, and <code>https://app.example.com:8443</code> is a different one.</li>
+<li><strong>Path</strong> — the entry path, or a path underneath it terminating on a segment
+   boundary. <code>/app</code> admits <code>/app</code> and <code>/app/inner</code>, and refuses <code>/application</code>.
+   An entry ending in <code>/</code> admits every path on that host.</li>
+</ol>
+<p>Query and fragment are ignored on <strong>both</strong> sides. A <code>redirect_uri</code> may therefore
+carry its own query (e.g. an app passing <code>?redirect=/workspaces/</code> through the
+login page) — and so, less usefully, may an entry, where it is simply dead
+weight. The full URI — query included — is stored as <code>frontend_uri</code> and
+reproduced when the callback bounces the browser back: the callback merges its
+<code>code</code>/<code>state</code> (and any <code>group_uuid</code>) into the existing query with <code>&amp;</code> rather
+than appending a second <code>?</code>. This is what lets a <code>?redirect=</code> target survive the
+OAuth round-trip. (The bundled <code>mojo-auth.js</code> cooperates: when no explicit
+callback URL is given, its default return URL keeps the current page's query
+string — minus any stale <code>code</code>/<code>state</code> — and strips only the hash.)</p>
+<p>Against an entry of <code>https://app.example.com</code>:</p>
+<table>
+<thead>
+<tr>
+<th><code>redirect_uri</code></th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>https://app.example.com/callback</code></td>
+<td>admitted</td>
+</tr>
+<tr>
+<td><code>https://APP.Example.com/callback</code></td>
+<td>admitted — hosts are case-insensitive</td>
+</tr>
+<tr>
+<td><code>https://app.example.com:443/x</code></td>
+<td>admitted — explicit default port</td>
+</tr>
+<tr>
+<td><code>https://app.example.com/x?to=%2Fhome</code></td>
+<td>admitted — the query is not matched</td>
+</tr>
+<tr>
+<td><code>https://app.example.com.evil.tld/</code></td>
+<td><strong>refused</strong> — a different host that merely begins with the entry</td>
+</tr>
+<tr>
+<td><code>https://app.example.com@evil.tld/</code></td>
+<td><strong>refused</strong> — userinfo; the real host is <code>evil.tld</code></td>
+</tr>
+<tr>
+<td><code>https://evil.tld\@app.example.com/</code></td>
+<td><strong>refused</strong> — backslash; a browser reads the host as <code>evil.tld</code></td>
+</tr>
+<tr>
+<td><code>https://app.example.com%2Eevil.tld/</code></td>
+<td><strong>refused</strong> — percent-encoded host separator</td>
+</tr>
+<tr>
+<td><code>https://app.example.com./</code></td>
+<td><strong>refused</strong> — the trailing dot is not normalized away</td>
+</tr>
+<tr>
+<td><code>https://app.example.com:8443/x</code></td>
+<td><strong>refused</strong> — different port</td>
+</tr>
+<tr>
+<td><code>http://app.example.com/x</code></td>
+<td><strong>refused</strong> — no scheme downgrade</td>
+</tr>
+<tr>
+<td><code>//app.example.com/x</code></td>
+<td><strong>refused</strong> — no scheme to compare</td>
+</tr>
+</tbody>
+</table>
+<p>Two further rules:</p>
+<ul>
+<li><strong>List IDN hosts in punycode</strong> (<code>https://xn--80ak6aa92e.example/</code>). A unicode
+  host is refused rather than guessed at, along with bracketed IPv6 literals —
+  a host this deployment cannot read the same way a browser does is not a host
+  it should be sending tokens to.</li>
+<li><strong>Wildcards are not supported here.</strong> A <code>*.example.com</code> entry is skipped as
+  unusable, with a log line naming it. (<code>AUTH_HANDOFF_ALLOWED_URLS</code> <em>does</em>
+  support <code>*.</code>; this list deliberately does not — see the CHANGELOG entry.)</li>
+</ul>
+<p>Entries that cannot be parsed as an absolute URL — <code>""</code>, <code>"h"</code>, <code>"/relative"</code> —
+are skipped with a warning and can never match anything. Under the prefix test
+they replaced, an entry of <code>"h"</code> admitted every <code>http(s)://</code> URL in existence.</p>
+<h3 id="custom-url-schemes-mobile-deep-links">Custom URL schemes (mobile deep links)<a class="headerlink" href="#custom-url-schemes-mobile-deep-links" title="Permanent link">&para;</a></h3>
+<p>An entry may name a custom scheme, so a native app can complete OAuth on its own
+deep link:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">ALLOWED_REDIRECT_URLS</span> <span class="o">=</span> <span class="p">[</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="s2">&quot;https://portal.example.com/&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="s2">&quot;myapp://callback&quot;</span><span class="p">,</span>              <span class="c1"># the app&#39;s registered deep link</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="s2">&quot;com.example.app:/oauth&quot;</span><span class="p">,</span>        <span class="c1"># the reverse-DNS form, empty authority</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="p">]</span>
+</code></pre></div>
+<p>A custom-scheme URL is <strong>not</strong> a web origin, so none of the four rules above
+apply to it. It matches when all three hold:</p>
+<ol>
+<li><strong>Scheme</strong> — equal after case-folding, and <em>not</em> <code>http</code>/<code>https</code>. Schemes are
+   compared before anything else, so a custom-scheme entry can never admit an
+   <code>http(s)</code> URL and an <code>http(s)</code> entry can never admit a deep link.</li>
+<li><strong>Authority</strong> — equal after case-folding, compared <strong>byte-for-byte</strong>. There
+   is no default-port logic (a custom scheme has no default port) and no
+   hostname rules (the authority is a label the app registered with the OS, not
+   a DNS name). Byte comparison is also what makes the web confusables inert
+   here: <code>myapp://evil@callback</code> is simply a <em>different authority</em>, not a
+   rewriting of <code>callback</code>.</li>
+<li><strong>Path</strong> — the same segment-bounded prefix rule as above. <code>myapp://callback</code>
+   (path <code>/</code>) admits every path under that authority; <code>myapp://callback/oauth</code>
+   admits <code>/oauth</code> and <code>/oauth/done</code> but not <code>/oauthdone</code>.</li>
+</ol>
+<p>Query and fragment are ignored, exactly as for <code>http(s)</code>, and the backslash
+guard applies to every scheme.</p>
+<p><code>com.example.app:/oauth</code> and <code>com.example.app:///oauth</code> are the <strong>same value</strong> —
+both parse to an empty authority with the path <code>/oauth</code>. An empty authority is a
+real value, not a wildcard: it never equals <code>callback</code>.</p>
+<p>Refused, fail-closed:</p>
+<table>
+<thead>
+<tr>
+<th>Entry or <code>redirect_uri</code></th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>myapp:callback</code>, <code>mailto:a@b</code></td>
+<td>the opaque form — no <code>//</code> and no leading <code>/</code>, so there is no way to tell an authority from a path</td>
+</tr>
+<tr>
+<td><code>myapp:</code>, <code>myapp://</code></td>
+<td>neither authority nor path; as an entry it would authorize a whole scheme</td>
+</tr>
+<tr>
+<td><code>javascript:…</code>, <code>data:…</code>, <code>vbscript:…</code></td>
+<td>a navigation sink, never a destination — refused even if an operator lists one</td>
+</tr>
+<tr>
+<td><code>myapp://*.callback</code></td>
+<td><code>*.</code> is not a wildcard here; it is an authority nothing equals</td>
+</tr>
+</tbody>
+</table>
+<p>The same rules apply to <code>AUTH_HANDOFF_ALLOWED_URLS</code>, since the two lists share
+one matcher. That is intended — a per-list scheme policy is exactly the drift
+the shared implementation exists to prevent. A handoff code is a bearer
+credential, so treat a deep-link handoff entry with the same care as a web one:
+the OS decides which installed app receives that scheme.</p>
+<h3 id="the-per-group-source">The per-group source<a class="headerlink" href="#the-per-group-source" title="Permanent link">&para;</a></h3>
+<p><code>Group.metadata["allowed_redirect_urls"]</code> exists so a white-label tenant can
+self-serve the origin its own login page lands on, without a deploy of the
+platform. Two properties of it are worth stating plainly, because they are
+deliberate and were decided with eyes open:</p>
+<ul>
+<li>Plain <code>metadata</code> is writable by any holder of <code>manage_group</code> on that group
+  (only <code>metadata["protected"]</code> is gated by <code>PROTECTED_JSON_PERMS</code>), so the
+  value is <strong>tenant-writable</strong>.</li>
+<li><code>begin</code> is a public endpoint, and the caller — including an anonymous one —
+  picks which group applies by passing <code>?group=&lt;id&gt;</code> / <code>?group_uuid=&lt;uuid&gt;</code>, so
+  the list that applies is <strong>caller-selectable</strong>.</li>
+</ul>
+<p>Together those mean a tenant can authorize an OAuth landing origin and any
+caller can select that tenant's list. That residual risk is accepted. What
+bounds it is the matcher: entries from <em>both</em> sources go through the same
+parsed-URL match, so an entry authorizes the <strong>exact host it names</strong> and nothing
+that merely begins with it. A tenant blesses an origin it already controls; it
+cannot reach a neighbour's. Domain verification, moving the key under
+<code>metadata["protected"]</code>, and scoping the read to group members were each
+considered and declined — the last is not even available on a public endpoint
+whose whole purpose is a signed-out white-label login page.</p>
+<p>The two sources are combined, never substituted: the project-wide list always
+applies, and the group's entries are added on top when a group resolved.
+<code>ALLOWED_REDIRECT_URLS</code> itself is read through <code>settings.get</code>, so it may be set
+in <code>settings.py</code> <strong>or</strong> as a global <code>Setting</code> row:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models.setting</span><span class="w"> </span><span class="kn">import</span> <span class="n">Setting</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">Setting</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="s2">&quot;ALLOWED_REDIRECT_URLS&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>            <span class="s1">&#39;[&quot;https://portal.example.com/&quot;, &quot;https://tenant-a.example.com/&quot;]&#39;</span><span class="p">)</span>
+</code></pre></div>
+<p>A <code>Setting</code> row holds text, so the value is read with <code>kind="list"</code>: a JSON
+array (above) and a comma-separated string (<code>"https://a.example/,https://b.example/"</code>)
+both work. A <strong>group-scoped</strong> <code>Setting</code> row is never consulted for this key —
+per-group entries live in group metadata, not in a scoped setting.</p>
+<p>Write the group value as a <strong>list</strong>. A bare string is stored happily (<code>metadata</code>
+is a JSONField and nothing coerces it), but it is then spread one character at
+a time into the combined list, where every character is refused as an unusable
+entry — so the tenant silently gets no entry at all rather than the one it
+meant.</p>
+<p>The bundled hosted auth pages do not exercise this path: <code>mojo-auth.js</code> folds
+the page's query string <em>inside</em> the encoded <code>redirect_uri</code>, so <code>group_uuid</code>
+never becomes a top-level parameter on <code>begin</code> and no group is resolved there.
+The per-group list is for a custom frontend that deliberately passes group
+context.</p>
 <h3 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h3>
 <ul>
 <li>The validated <code>redirect_uri</code> is stored in the Redis state token (single-use, TTL-bound).</li>
 <li>The <code>complete</code> endpoint retrieves it from the state — the client never re-sends it.</li>
 <li>This prevents an attacker from substituting a different <code>redirect_uri</code> in the callback.</li>
-<li>Because the allowlist is a <strong>prefix</strong> match, the query part of a <code>frontend_uri</code>
-  is not validated. So the callback strips any <code>code</code>/<code>state</code>/<code>group_uuid</code> the
-  caller smuggled into that query before appending the server's own — otherwise a
-  duplicate <code>?code=</code> placed first would shadow the real value (<code>URLSearchParams
-  .get()</code> returns the first match) and sabotage the victim's login.</li>
+<li>The match compares scheme, host, port and path, so the query part of a
+  <code>frontend_uri</code> is <strong>not</strong> validated. That is why the callback strips any
+  <code>code</code>/<code>state</code>/<code>group_uuid</code> the caller smuggled into that query before
+  appending the server's own — otherwise a duplicate <code>?code=</code> placed first would
+  shadow the real value (<code>URLSearchParams.get()</code> returns the first match) and
+  sabotage the victim's login. Tightening the host match did not retire that
+  strip; an allowlisted URL can still carry any query at all.</li>
 </ul>
 <hr />
 <h2 id="oauthconnection-model">OAuthConnection Model<a class="headerlink" href="#oauthconnection-model" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># mojo/apps/account/models/oauth.py</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">OAuthConnection</span><span class="p">(</span><span class="n">MojoSecrets</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="n">user</span>         <span class="o">=</span> <span class="n">ForeignKey</span><span class="p">(</span><span class="n">User</span><span class="p">,</span> <span class="n">related_name</span><span class="o">=</span><span class="s2">&quot;oauth_connections&quot;</span><span class="p">)</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="n">provider</span>     <span class="o">=</span> <span class="n">CharField</span><span class="p">(</span><span class="n">max_length</span><span class="o">=</span><span class="mi">32</span><span class="p">)</span>      <span class="c1"># e.g. &quot;google&quot;</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="n">provider_uid</span> <span class="o">=</span> <span class="n">CharField</span><span class="p">(</span><span class="n">max_length</span><span class="o">=</span><span class="mi">255</span><span class="p">)</span>     <span class="c1"># provider&#39;s stable user ID (e.g. Google &quot;sub&quot;)</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="n">email</span>        <span class="o">=</span> <span class="n">EmailField</span><span class="p">(</span><span class="n">null</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>         <span class="c1"># email as reported by provider at link time</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="n">is_active</span>    <span class="o">=</span> <span class="n">BooleanField</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    <span class="n">created</span>      <span class="o">=</span> <span class="n">DateTimeField</span><span class="p">(</span><span class="n">auto_now_add</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    <span class="n">modified</span>     <span class="o">=</span> <span class="n">DateTimeField</span><span class="p">(</span><span class="n">auto_now</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>
-<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>    <span class="k">class</span><span class="w"> </span><span class="nc">Meta</span><span class="p">:</span>
-<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>        <span class="n">unique_together</span> <span class="o">=</span> <span class="p">[(</span><span class="s2">&quot;provider&quot;</span><span class="p">,</span> <span class="s2">&quot;provider_uid&quot;</span><span class="p">)]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># mojo/apps/account/models/oauth.py</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">OAuthConnection</span><span class="p">(</span><span class="n">MojoSecrets</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">user</span>         <span class="o">=</span> <span class="n">ForeignKey</span><span class="p">(</span><span class="n">User</span><span class="p">,</span> <span class="n">related_name</span><span class="o">=</span><span class="s2">&quot;oauth_connections&quot;</span><span class="p">)</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">provider</span>     <span class="o">=</span> <span class="n">CharField</span><span class="p">(</span><span class="n">max_length</span><span class="o">=</span><span class="mi">32</span><span class="p">)</span>      <span class="c1"># e.g. &quot;google&quot;</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="n">provider_uid</span> <span class="o">=</span> <span class="n">CharField</span><span class="p">(</span><span class="n">max_length</span><span class="o">=</span><span class="mi">255</span><span class="p">)</span>     <span class="c1"># provider&#39;s stable user ID (e.g. Google &quot;sub&quot;)</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="n">email</span>        <span class="o">=</span> <span class="n">EmailField</span><span class="p">(</span><span class="n">null</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>         <span class="c1"># email as reported by provider at link time</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>    <span class="n">is_active</span>    <span class="o">=</span> <span class="n">BooleanField</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>    <span class="n">created</span>      <span class="o">=</span> <span class="n">DateTimeField</span><span class="p">(</span><span class="n">auto_now_add</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>    <span class="n">modified</span>     <span class="o">=</span> <span class="n">DateTimeField</span><span class="p">(</span><span class="n">auto_now</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>    <span class="k">class</span><span class="w"> </span><span class="nc">Meta</span><span class="p">:</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>        <span class="n">unique_together</span> <span class="o">=</span> <span class="p">[(</span><span class="s2">&quot;provider&quot;</span><span class="p">,</span> <span class="s2">&quot;provider_uid&quot;</span><span class="p">)]</span>
 </code></pre></div>
 <p>Access/refresh tokens from the provider are stored encrypted in <code>mojo_secrets</code> (via <code>MojoSecrets</code>). They are refreshed on every successful OAuth login. They are never exposed in REST graphs.</p>
 <p><strong>One connection per (user, provider) pair.</strong> A user who has connected Google once will always reuse that connection on subsequent logins.</p>
@@ -4238,61 +4478,61 @@ return URL keeps the current page's query string — minus any stale <code>code<
 <ol>
 <li>Create <code>mojo/apps/account/services/oauth/&lt;provider&gt;.py</code> subclassing <code>OAuthProvider</code>:</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># services/oauth/myprovider.py</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">requests</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">urllib.parse</span><span class="w"> </span><span class="kn">import</span> <span class="n">urlencode</span><span class="p">,</span> <span class="n">quote</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">logit</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.settings</span><span class="w"> </span><span class="kn">import</span> <span class="n">settings</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="kn">from</span><span class="w"> </span><span class="nn">.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">OAuthProvider</span>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="n">AUTH_URL</span>  <span class="o">=</span> <span class="s2">&quot;https://provider.example.com/oauth/authorize&quot;</span>
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="n">TOKEN_URL</span> <span class="o">=</span> <span class="s2">&quot;https://provider.example.com/oauth/token&quot;</span>
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="n">USER_URL</span>  <span class="o">=</span> <span class="s2">&quot;https://api.provider.example.com/user&quot;</span>
-<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>
-<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>
-<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyOAuthProvider</span><span class="p">(</span><span class="n">OAuthProvider</span><span class="p">):</span>
-<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>
-<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>    <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;myprovider&quot;</span>
-<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a>
-<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">get_auth_url</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">redirect_uri</span><span class="p">):</span>
-<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a>        <span class="n">params</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a>            <span class="s2">&quot;client_id&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MYPROVIDER_CLIENT_ID&quot;</span><span class="p">),</span>
-<a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a>            <span class="s2">&quot;redirect_uri&quot;</span><span class="p">:</span> <span class="n">redirect_uri</span><span class="p">,</span>
-<a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a>            <span class="s2">&quot;state&quot;</span><span class="p">:</span> <span class="n">state</span><span class="p">,</span>
-<a id="__codelineno-8-23" name="__codelineno-8-23" href="#__codelineno-8-23"></a>            <span class="s2">&quot;scope&quot;</span><span class="p">:</span> <span class="s2">&quot;user email&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-24" name="__codelineno-8-24" href="#__codelineno-8-24"></a>        <span class="p">}</span>
-<a id="__codelineno-8-25" name="__codelineno-8-25" href="#__codelineno-8-25"></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">AUTH_URL</span><span class="si">}</span><span class="s2">?</span><span class="si">{</span><span class="n">urlencode</span><span class="p">(</span><span class="n">params</span><span class="p">,</span><span class="w"> </span><span class="n">quote_via</span><span class="o">=</span><span class="n">quote</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
-<a id="__codelineno-8-26" name="__codelineno-8-26" href="#__codelineno-8-26"></a>
-<a id="__codelineno-8-27" name="__codelineno-8-27" href="#__codelineno-8-27"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">exchange_code</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">code</span><span class="p">,</span> <span class="n">redirect_uri</span><span class="p">):</span>
-<a id="__codelineno-8-28" name="__codelineno-8-28" href="#__codelineno-8-28"></a>        <span class="n">resp</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="n">TOKEN_URL</span><span class="p">,</span> <span class="n">json</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-8-29" name="__codelineno-8-29" href="#__codelineno-8-29"></a>            <span class="s2">&quot;client_id&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MYPROVIDER_CLIENT_ID&quot;</span><span class="p">),</span>
-<a id="__codelineno-8-30" name="__codelineno-8-30" href="#__codelineno-8-30"></a>            <span class="s2">&quot;client_secret&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MYPROVIDER_CLIENT_SECRET&quot;</span><span class="p">),</span>
-<a id="__codelineno-8-31" name="__codelineno-8-31" href="#__codelineno-8-31"></a>            <span class="s2">&quot;code&quot;</span><span class="p">:</span> <span class="n">code</span><span class="p">,</span>
-<a id="__codelineno-8-32" name="__codelineno-8-32" href="#__codelineno-8-32"></a>        <span class="p">},</span> <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;Accept&quot;</span><span class="p">:</span> <span class="s2">&quot;application/json&quot;</span><span class="p">},</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
-<a id="__codelineno-8-33" name="__codelineno-8-33" href="#__codelineno-8-33"></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">resp</span><span class="o">.</span><span class="n">ok</span><span class="p">:</span>
-<a id="__codelineno-8-34" name="__codelineno-8-34" href="#__codelineno-8-34"></a>            <span class="n">logit</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;oauth.myprovider&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Token exchange failed: </span><span class="si">{</span><span class="n">resp</span><span class="o">.</span><span class="n">status_code</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-<a id="__codelineno-8-35" name="__codelineno-8-35" href="#__codelineno-8-35"></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Failed to exchange code&quot;</span><span class="p">)</span>
-<a id="__codelineno-8-36" name="__codelineno-8-36" href="#__codelineno-8-36"></a>        <span class="k">return</span> <span class="n">resp</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
-<a id="__codelineno-8-37" name="__codelineno-8-37" href="#__codelineno-8-37"></a>
-<a id="__codelineno-8-38" name="__codelineno-8-38" href="#__codelineno-8-38"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">get_profile</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tokens</span><span class="p">):</span>
-<a id="__codelineno-8-39" name="__codelineno-8-39" href="#__codelineno-8-39"></a>        <span class="n">resp</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">USER_URL</span><span class="p">,</span> <span class="n">headers</span><span class="o">=</span><span class="p">{</span>
-<a id="__codelineno-8-40" name="__codelineno-8-40" href="#__codelineno-8-40"></a>            <span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;Bearer </span><span class="si">{</span><span class="n">tokens</span><span class="p">[</span><span class="s1">&#39;access_token&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-41" name="__codelineno-8-41" href="#__codelineno-8-41"></a>            <span class="s2">&quot;Accept&quot;</span><span class="p">:</span> <span class="s2">&quot;application/json&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-42" name="__codelineno-8-42" href="#__codelineno-8-42"></a>        <span class="p">},</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
-<a id="__codelineno-8-43" name="__codelineno-8-43" href="#__codelineno-8-43"></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">resp</span><span class="o">.</span><span class="n">ok</span><span class="p">:</span>
-<a id="__codelineno-8-44" name="__codelineno-8-44" href="#__codelineno-8-44"></a>            <span class="n">logit</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;oauth.myprovider&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Profile fetch failed: </span><span class="si">{</span><span class="n">resp</span><span class="o">.</span><span class="n">status_code</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-<a id="__codelineno-8-45" name="__codelineno-8-45" href="#__codelineno-8-45"></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Failed to fetch profile&quot;</span><span class="p">)</span>
-<a id="__codelineno-8-46" name="__codelineno-8-46" href="#__codelineno-8-46"></a>        <span class="n">data</span> <span class="o">=</span> <span class="n">resp</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
-<a id="__codelineno-8-47" name="__codelineno-8-47" href="#__codelineno-8-47"></a>        <span class="n">email</span> <span class="o">=</span> <span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;email&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
-<a id="__codelineno-8-48" name="__codelineno-8-48" href="#__codelineno-8-48"></a>        <span class="c1"># Some providers don&#39;t return email directly — add a fallback here if needed</span>
-<a id="__codelineno-8-49" name="__codelineno-8-49" href="#__codelineno-8-49"></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">email</span><span class="p">:</span>
-<a id="__codelineno-8-50" name="__codelineno-8-50" href="#__codelineno-8-50"></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Could not retrieve verified email from provider&quot;</span><span class="p">)</span>
-<a id="__codelineno-8-51" name="__codelineno-8-51" href="#__codelineno-8-51"></a>        <span class="k">return</span> <span class="p">{</span>
-<a id="__codelineno-8-52" name="__codelineno-8-52" href="#__codelineno-8-52"></a>            <span class="s2">&quot;uid&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">]),</span>
-<a id="__codelineno-8-53" name="__codelineno-8-53" href="#__codelineno-8-53"></a>            <span class="s2">&quot;email&quot;</span><span class="p">:</span> <span class="n">email</span><span class="p">,</span>
-<a id="__codelineno-8-54" name="__codelineno-8-54" href="#__codelineno-8-54"></a>            <span class="s2">&quot;display_name&quot;</span><span class="p">:</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">),</span>
-<a id="__codelineno-8-55" name="__codelineno-8-55" href="#__codelineno-8-55"></a>        <span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># services/oauth/myprovider.py</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">requests</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">urllib.parse</span><span class="w"> </span><span class="kn">import</span> <span class="n">urlencode</span><span class="p">,</span> <span class="n">quote</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">logit</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.settings</span><span class="w"> </span><span class="kn">import</span> <span class="n">settings</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="kn">from</span><span class="w"> </span><span class="nn">.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">OAuthProvider</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="n">AUTH_URL</span>  <span class="o">=</span> <span class="s2">&quot;https://provider.example.com/oauth/authorize&quot;</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="n">TOKEN_URL</span> <span class="o">=</span> <span class="s2">&quot;https://provider.example.com/oauth/token&quot;</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="n">USER_URL</span>  <span class="o">=</span> <span class="s2">&quot;https://api.provider.example.com/user&quot;</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyOAuthProvider</span><span class="p">(</span><span class="n">OAuthProvider</span><span class="p">):</span>
+<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a>
+<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a>    <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;myprovider&quot;</span>
+<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a>
+<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">get_auth_url</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">redirect_uri</span><span class="p">):</span>
+<a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a>        <span class="n">params</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a>            <span class="s2">&quot;client_id&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MYPROVIDER_CLIENT_ID&quot;</span><span class="p">),</span>
+<a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a>            <span class="s2">&quot;redirect_uri&quot;</span><span class="p">:</span> <span class="n">redirect_uri</span><span class="p">,</span>
+<a id="__codelineno-10-22" name="__codelineno-10-22" href="#__codelineno-10-22"></a>            <span class="s2">&quot;state&quot;</span><span class="p">:</span> <span class="n">state</span><span class="p">,</span>
+<a id="__codelineno-10-23" name="__codelineno-10-23" href="#__codelineno-10-23"></a>            <span class="s2">&quot;scope&quot;</span><span class="p">:</span> <span class="s2">&quot;user email&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-24" name="__codelineno-10-24" href="#__codelineno-10-24"></a>        <span class="p">}</span>
+<a id="__codelineno-10-25" name="__codelineno-10-25" href="#__codelineno-10-25"></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">AUTH_URL</span><span class="si">}</span><span class="s2">?</span><span class="si">{</span><span class="n">urlencode</span><span class="p">(</span><span class="n">params</span><span class="p">,</span><span class="w"> </span><span class="n">quote_via</span><span class="o">=</span><span class="n">quote</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-10-26" name="__codelineno-10-26" href="#__codelineno-10-26"></a>
+<a id="__codelineno-10-27" name="__codelineno-10-27" href="#__codelineno-10-27"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">exchange_code</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">code</span><span class="p">,</span> <span class="n">redirect_uri</span><span class="p">):</span>
+<a id="__codelineno-10-28" name="__codelineno-10-28" href="#__codelineno-10-28"></a>        <span class="n">resp</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="n">TOKEN_URL</span><span class="p">,</span> <span class="n">json</span><span class="o">=</span><span class="p">{</span>
+<a id="__codelineno-10-29" name="__codelineno-10-29" href="#__codelineno-10-29"></a>            <span class="s2">&quot;client_id&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MYPROVIDER_CLIENT_ID&quot;</span><span class="p">),</span>
+<a id="__codelineno-10-30" name="__codelineno-10-30" href="#__codelineno-10-30"></a>            <span class="s2">&quot;client_secret&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MYPROVIDER_CLIENT_SECRET&quot;</span><span class="p">),</span>
+<a id="__codelineno-10-31" name="__codelineno-10-31" href="#__codelineno-10-31"></a>            <span class="s2">&quot;code&quot;</span><span class="p">:</span> <span class="n">code</span><span class="p">,</span>
+<a id="__codelineno-10-32" name="__codelineno-10-32" href="#__codelineno-10-32"></a>        <span class="p">},</span> <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;Accept&quot;</span><span class="p">:</span> <span class="s2">&quot;application/json&quot;</span><span class="p">},</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<a id="__codelineno-10-33" name="__codelineno-10-33" href="#__codelineno-10-33"></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">resp</span><span class="o">.</span><span class="n">ok</span><span class="p">:</span>
+<a id="__codelineno-10-34" name="__codelineno-10-34" href="#__codelineno-10-34"></a>            <span class="n">logit</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;oauth.myprovider&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Token exchange failed: </span><span class="si">{</span><span class="n">resp</span><span class="o">.</span><span class="n">status_code</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-35" name="__codelineno-10-35" href="#__codelineno-10-35"></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Failed to exchange code&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-36" name="__codelineno-10-36" href="#__codelineno-10-36"></a>        <span class="k">return</span> <span class="n">resp</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
+<a id="__codelineno-10-37" name="__codelineno-10-37" href="#__codelineno-10-37"></a>
+<a id="__codelineno-10-38" name="__codelineno-10-38" href="#__codelineno-10-38"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">get_profile</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tokens</span><span class="p">):</span>
+<a id="__codelineno-10-39" name="__codelineno-10-39" href="#__codelineno-10-39"></a>        <span class="n">resp</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">USER_URL</span><span class="p">,</span> <span class="n">headers</span><span class="o">=</span><span class="p">{</span>
+<a id="__codelineno-10-40" name="__codelineno-10-40" href="#__codelineno-10-40"></a>            <span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;Bearer </span><span class="si">{</span><span class="n">tokens</span><span class="p">[</span><span class="s1">&#39;access_token&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-41" name="__codelineno-10-41" href="#__codelineno-10-41"></a>            <span class="s2">&quot;Accept&quot;</span><span class="p">:</span> <span class="s2">&quot;application/json&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-42" name="__codelineno-10-42" href="#__codelineno-10-42"></a>        <span class="p">},</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<a id="__codelineno-10-43" name="__codelineno-10-43" href="#__codelineno-10-43"></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">resp</span><span class="o">.</span><span class="n">ok</span><span class="p">:</span>
+<a id="__codelineno-10-44" name="__codelineno-10-44" href="#__codelineno-10-44"></a>            <span class="n">logit</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;oauth.myprovider&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Profile fetch failed: </span><span class="si">{</span><span class="n">resp</span><span class="o">.</span><span class="n">status_code</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-45" name="__codelineno-10-45" href="#__codelineno-10-45"></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Failed to fetch profile&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-46" name="__codelineno-10-46" href="#__codelineno-10-46"></a>        <span class="n">data</span> <span class="o">=</span> <span class="n">resp</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
+<a id="__codelineno-10-47" name="__codelineno-10-47" href="#__codelineno-10-47"></a>        <span class="n">email</span> <span class="o">=</span> <span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;email&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+<a id="__codelineno-10-48" name="__codelineno-10-48" href="#__codelineno-10-48"></a>        <span class="c1"># Some providers don&#39;t return email directly — add a fallback here if needed</span>
+<a id="__codelineno-10-49" name="__codelineno-10-49" href="#__codelineno-10-49"></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">email</span><span class="p">:</span>
+<a id="__codelineno-10-50" name="__codelineno-10-50" href="#__codelineno-10-50"></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Could not retrieve verified email from provider&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-51" name="__codelineno-10-51" href="#__codelineno-10-51"></a>        <span class="k">return</span> <span class="p">{</span>
+<a id="__codelineno-10-52" name="__codelineno-10-52" href="#__codelineno-10-52"></a>            <span class="s2">&quot;uid&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;id&quot;</span><span class="p">]),</span>
+<a id="__codelineno-10-53" name="__codelineno-10-53" href="#__codelineno-10-53"></a>            <span class="s2">&quot;email&quot;</span><span class="p">:</span> <span class="n">email</span><span class="p">,</span>
+<a id="__codelineno-10-54" name="__codelineno-10-54" href="#__codelineno-10-54"></a>            <span class="s2">&quot;display_name&quot;</span><span class="p">:</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">),</span>
+<a id="__codelineno-10-55" name="__codelineno-10-55" href="#__codelineno-10-55"></a>        <span class="p">}</span>
 </code></pre></div>
 <blockquote>
 <p><strong>Note on the <code>/user/emails</code> fallback:</strong> GitHub may not return an email on the <code>/user</code> endpoint when the user's email is set to private. The built-in <code>GitHubOAuthProvider</code> handles this by falling back to <code>GET /user/emails</code> and picking the entry where <code>primary=True</code> and <code>verified=True</code>. If your provider has a similar pattern, add an equivalent fallback in <code>get_profile()</code> before raising.</p>
@@ -4300,20 +4540,20 @@ return URL keeps the current page's query string — minus any stale <code>code<
 <ol>
 <li>Register it in <code>services/oauth/__init__.py</code>:</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">.myprovider</span><span class="w"> </span><span class="kn">import</span> <span class="n">MyOAuthProvider</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">PROVIDERS</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="s2">&quot;google&quot;</span><span class="p">:</span> <span class="n">GoogleOAuthProvider</span><span class="p">,</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="s2">&quot;apple&quot;</span><span class="p">:</span> <span class="n">AppleOAuthProvider</span><span class="p">,</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="s2">&quot;github&quot;</span><span class="p">:</span> <span class="n">GitHubOAuthProvider</span><span class="p">,</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="s2">&quot;myprovider&quot;</span><span class="p">:</span> <span class="n">MyOAuthProvider</span><span class="p">,</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">.myprovider</span><span class="w"> </span><span class="kn">import</span> <span class="n">MyOAuthProvider</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">PROVIDERS</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="s2">&quot;google&quot;</span><span class="p">:</span> <span class="n">GoogleOAuthProvider</span><span class="p">,</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="s2">&quot;apple&quot;</span><span class="p">:</span> <span class="n">AppleOAuthProvider</span><span class="p">,</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="s2">&quot;github&quot;</span><span class="p">:</span> <span class="n">GitHubOAuthProvider</span><span class="p">,</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    <span class="s2">&quot;myprovider&quot;</span><span class="p">:</span> <span class="n">MyOAuthProvider</span><span class="p">,</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="p">}</span>
 </code></pre></div>
 <ol>
 <li>Add settings:</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">MYPROVIDER_CLIENT_ID</span>     <span class="o">=</span> <span class="s2">&quot;your-client-id&quot;</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">MYPROVIDER_CLIENT_SECRET</span> <span class="o">=</span> <span class="s2">&quot;your-client-secret&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">MYPROVIDER_CLIENT_ID</span>     <span class="o">=</span> <span class="s2">&quot;your-client-id&quot;</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">MYPROVIDER_CLIENT_SECRET</span> <span class="o">=</span> <span class="s2">&quot;your-client-secret&quot;</span>
 </code></pre></div>
 <p>The new provider is immediately available at:
 - <code>GET /api/auth/oauth/myprovider/begin</code>
@@ -4374,7 +4614,7 @@ return URL keeps the current page's query string — minus any stale <code>code<
 <hr />
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../../../web_developer/account/oauth.md">OAuth REST API</a> — client-facing flow, JavaScript examples, error table</li>
+<li><a href="../../../web_developer/account/oauth/">OAuth REST API</a> — client-facing flow, JavaScript examples, error table</li>
 <li><a href="../auth/">Authentication Flow</a> — JWT tokens, MFA, password reset</li>
 <li><a href="../user/">User Model</a> — <code>is_email_verified</code>, <code>requires_mfa</code>, <code>SUPERUSER_ONLY_FIELDS</code></li>
 </ul>

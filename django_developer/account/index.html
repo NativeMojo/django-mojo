@@ -3802,6 +3802,7 @@
 <li><a href="oauth/">OAuth / Social Login</a> — Provider setup, auto-link logic, email verification, MFA behaviour, adding new providers</li>
 <li><a href="email_change/">Email Change</a> — Self-service email address change flow</li>
 <li><a href="api_keys/">API Keys</a> — Group-scoped programmatic access, permissions, token lifecycle</li>
+<li><a href="auth/#group-scoped-tokens">Group-Scoped Tokens</a> — <code>Authorization: grouptoken</code> — a stateless bearer that authenticates as a real user but is capped at one group; <code>group_token.mint()</code>, epoch revocation, opt-in registration, writing group-token-safe endpoints</li>
 <li><a href="webhook_signing/">Webhook Signing</a> — Per-Group HMAC primitive for outbound webhooks, auto-signing via <code>jobs.publish_webhook(group=...)</code>, receiver verification helper</li>
 <li><a href="webhook_subscriptions/">Webhook Subscriptions</a> — Per-Group subscription registry, async fan-out dispatcher, signed delivery via the existing webhook primitive</li>
 <li><a href="notifications/">Notifications</a> — User inbox, WebSocket + push delivery, expiry</li>

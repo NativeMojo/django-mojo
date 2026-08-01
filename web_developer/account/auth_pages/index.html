@@ -4026,7 +4026,7 @@ nothing about whether the number has an account.</p>
 </tr>
 <tr>
 <td><code>?redirect=&lt;url&gt;</code></td>
-<td>Custom redirect after login (also <code>?next=</code> or <code>?returnTo=</code>). Preserved through the bouncer challenge <strong>and</strong> the OAuth provider round-trip.</td>
+<td>Custom redirect after login (also <code>?next=</code> or <code>?returnTo=</code>). Preserved through the bouncer challenge <strong>and</strong> the OAuth provider round-trip. Only <code>http</code>/<code>https</code> URLs and same-origin relative paths are accepted — see below.</td>
 </tr>
 <tr>
 <td><code>?back=&lt;url&gt;</code></td>
@@ -4207,6 +4207,13 @@ group's auth config. No URL params needed.</p>
 <code>?group_uuid=&lt;uuid&gt;</code> to the auth page URL. The group's auth config is applied
 and the param is preserved through navigation (login ↔ register switcher), the
 OAuth round-trip, and the login → passkey enrollment redirect.</p>
+<p><code>redirect</code>, <code>next</code>, <code>returnTo</code> and <code>back</code> ride the same links, so a destination
+you hand a group-scoped portal survives the whole flow. <strong>This is fixed in this
+release:</strong> the register → passkey-enrollment hop previously dropped every param
+after the first whenever <code>group_uuid</code> was combined with one of them, and the
+visitor landed on the group's <code>success_redirect</code> (or <code>/</code>) instead of where they
+came from. Nothing changes on your side — links that already worked keep
+working, and a <code>?group_uuid=</code> with no second param was never affected.</p>
 <p><strong>Group forwarded on submit</strong> — when the auth page resolves a group, the
 rendered forms automatically include <code>group_uuid</code> in the POST body. This
 satisfies servers configured with <code>REQUIRE_GROUP_ON_REGISTRATION = True</code>.</p>
@@ -4243,21 +4250,75 @@ allowlist.</p>
 <p><code>MojoAuth.requestHandoffCode(destination)</code> takes the destination as a required
 argument and rejects without one, regardless of what the server enforces. Treat
 a rejection as "do not navigate".</p>
-<p><strong><code>?back=</code></strong> (the "Back to website" link) accepts only <code>http</code>/<code>https</code> URLs and
-same-origin relative paths — a <code>javascript:</code>/<code>data:</code> value is dropped and the
-link stays hidden.</p>
+<p><strong>Both navigation params are scheme-guarded.</strong> <code>?back=</code> (the "Back to website"
+link) and <code>?redirect=</code>/<code>?next=</code>/<code>?returnTo=</code> (the post-login destination) accept
+only <code>http</code>/<code>https</code> URLs and same-origin relative paths. One guard, two
+different outcomes:</p>
+<ul>
+<li>a refused <strong><code>?back=</code></strong> value is dropped and the hero link stays hidden;</li>
+<li>a refused <strong><code>?redirect=</code></strong> value means the page navigates nowhere and shows
+  "That destination isn't allowed. Please return to the app and try again."</li>
+</ul>
+<p>So <code>javascript:</code> and <code>data:</code> are refused, and so is any non-web scheme —
+<code>mailto:</code>, <code>tel:</code>, and custom app schemes like <code>myapp://home</code>. If you were
+bouncing users into a native app that way, point <code>?redirect=</code> at an <code>https</code>
+universal/app link instead. The same guard applies to the group's configured
+<code>success_redirect</code>, which is where the destination comes from when no param is
+present.</p>
+<blockquote>
+<p><strong>A custom scheme <em>is</em> accepted as an OAuth <code>redirect_uri</code> — different
+parameter, different endpoint.</strong> <code>redirect_uri</code> on
+<code>GET /api/auth/oauth/&lt;provider&gt;/begin</code> is matched server-side against the
+operator's allowlist and supports mobile deep links (see
+<a href="../oauth/#native-apps--custom-url-schemes">OAuth § Native apps</a>). It does not
+pass through this browser guard. <code>?redirect=</code> on the hosted auth pages does,
+and refuses one no matter what the operator has allowlisted.</p>
+</blockquote>
+<p>This is a <strong>scheme</strong> check only, and it runs in the browser before any request
+is made — the destination <strong>host</strong> is not restricted by it. Host restriction is
+the separate, opt-in, server-side allowlist described above.</p>
+<p><strong>Your origin may be <em>gated</em>, which changes what the exchange returns.</strong> A
+deployment can declare certain destination hosts gated: the exchange then
+answers with a <a href="../authentication/#group-scoped-tokens-grouptoken">group-scoped token</a>
+package — <code>access_token</code> starting <code>gt1.</code>, <code>token_type</code>, <code>expires_in</code>, <code>group</code>,
+and <strong>no <code>refresh_token</code> key at all</strong> — instead of the usual JWT pair. Off by
+default; nothing changes for a deployment that has not opted in. Three
+consequences for a destination app:</p>
+<ul>
+<li><strong>Never assume <code>refresh_token</code> is present.</strong> Branch on the token string
+  (<code>gt1.</code> ⇒ group token), not on a stored flag.</li>
+<li><strong>There is no refresh.</strong> On expiry, bounce back through the auth origin with
+  <code>?redirect=&lt;current url&gt;</code> — the snippet below already does exactly that.</li>
+<li><strong>If you run your own OAuth callback page, it stops working</strong> once gating
+  enforces (<code>400 "redirect_uri is not on the allowlist"</code>). Use the hosted auth
+  pages' OAuth buttons instead; they route back through this same handoff.</li>
+</ul>
+<p>A visitor who is not a member of the group that owns a gated destination gets a
+<code>403</code> at the handoff, and the auth page shows the server's message rather than
+the generic one. Superusers get the same <code>403</code> — they can never hold a group
+token.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">&lt;</span><span class="nt">script</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://auth.example.com/api/account/static/mojo-auth.js&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">init</span><span class="p">({</span><span class="w"> </span><span class="nx">baseURL</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;https://auth.example.com&#39;</span><span class="w"> </span><span class="p">});</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">handleAuthCodeFromURL</span><span class="p">().</span><span class="nx">then</span><span class="p">(</span><span class="kd">function</span><span class="w"> </span><span class="p">(</span><span class="nx">data</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">data</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">isAuthenticated</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span><span class="nx">bootApp</span><span class="p">();</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">      </span><span class="nb">window</span><span class="p">.</span><span class="nx">location</span><span class="p">.</span><span class="nx">href</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;https://auth.example.com/auth?redirect=&#39;</span><span class="w"> </span><span class="o">+</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">        </span><span class="nb">encodeURIComponent</span><span class="p">(</span><span class="nb">window</span><span class="p">.</span><span class="nx">location</span><span class="p">.</span><span class="nx">href</span><span class="p">);</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">  </span><span class="p">});</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="kd">function</span><span class="w"> </span><span class="nx">toAuth</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="c1">// No refresh path for a group-scoped session — re-bounce instead.</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nb">window</span><span class="p">.</span><span class="nx">location</span><span class="p">.</span><span class="nx">href</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;https://auth.example.com/auth?redirect=&#39;</span><span class="w"> </span><span class="o">+</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">      </span><span class="nb">encodeURIComponent</span><span class="p">(</span><span class="nb">window</span><span class="p">.</span><span class="nx">location</span><span class="p">.</span><span class="nx">href</span><span class="p">);</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">  </span><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">handleAuthCodeFromURL</span><span class="p">().</span><span class="nx">then</span><span class="p">(</span><span class="kd">function</span><span class="w"> </span><span class="p">(</span><span class="nx">data</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">data</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">bootApp</span><span class="p">();</span><span class="w">                       </span><span class="c1">// just exchanged a code</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">isAuthenticated</span><span class="p">())</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">toAuth</span><span class="p">();</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">    </span><span class="c1">// Kind-aware: a JWT is judged on its exp claim, a gt1. token on the</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span><span class="c1">// token_expires_at saved from the exchange response.</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">isTokenExpired</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">getTokenType</span><span class="p">()</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;grouptoken&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">toAuth</span><span class="p">();</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="nx">MojoAuth</span><span class="p">.</span><span class="nx">refreshToken</span><span class="p">().</span><span class="nx">then</span><span class="p">(</span><span class="nx">bootApp</span><span class="p">).</span><span class="k">catch</span><span class="p">(</span><span class="nx">toAuth</span><span class="p">);</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="w">    </span><span class="nx">bootApp</span><span class="p">();</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="w">  </span><span class="p">}).</span><span class="k">catch</span><span class="p">(</span><span class="nx">toAuth</span><span class="p">);</span>
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="p">&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
 </code></pre></div>
 <hr />
 <h2 id="static-assets">Static Assets<a class="headerlink" href="#static-assets" title="Permanent link">&para;</a></h2>

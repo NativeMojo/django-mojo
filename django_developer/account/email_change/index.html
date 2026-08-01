@@ -4098,6 +4098,7 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>https://yourapp.com/email-change?token={{ token }}
 </code></pre></div>
 <p>The frontend extracts the token from the URL and calls <code>POST /api/auth/email/change/confirm</code> with <code>{ "token": "ec:..." }</code>. Alternatively, point the link directly at <code>GET /api/auth/email/change/confirm?token={{ token }}&amp;redirect=https://yourapp.com/login</code> to have the API render the result page.</p>
+<p>The <code>&amp;redirect=</code> destination must be <code>http</code>, <code>https</code>, or scheme-less — anything else (a custom app scheme such as <code>myapp://home</code>, <code>javascript:</code>, <code>data:</code>) is dropped by <code>mojo.helpers.urls.safe_nav_url</code> before it reaches the template, and the page renders with <strong>no button at all</strong>. The host is deliberately not restricted; scheme-relative and path-relative values pass through unchanged and may still resolve off-origin. The same rule applies to <code>&amp;redirect=</code> on <code>GET /api/auth/verify/email/confirm</code>.</p>
 <h3 id="email_change_code-code-flow"><code>email_change_code</code> (code flow)<a class="headerlink" href="#email_change_code-code-flow" title="Permanent link">&para;</a></h3>
 <p>Sent to the <strong>new</strong> address when <code>method: "code"</code>. Context variables:</p>
 <table>
