@@ -1096,9 +1096,10 @@ def _write_agent_report(opts, display=None, conf_drift=None):
             if agent_ctx.get("traceback"):
                 entry["traceback"] = agent_ctx["traceback"]
 
-        # Server error log tail
+        # Server error log tail. Logs live under VAR_ROOT/logs/, not VAR_ROOT —
+        # this read silently found nothing for as long as the field has existed.
         try:
-            log_path = os.path.join(paths.VAR_ROOT, "error.log")
+            log_path = os.path.join(paths.VAR_ROOT, "logs", "error.log")
             if os.path.exists(log_path):
                 with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
                     lines = fh.readlines()
@@ -1140,14 +1141,50 @@ def _write_agent_report(opts, display=None, conf_drift=None):
 
     duration = (helpers.TEST_RUN.finished_at or time.time()) - (helpers.TEST_RUN.started_at or time.time())
 
+    # Slowest individual tests — the input for deciding what to re-tier. Module
+    # timing alone cannot tell you which test inside a slow module is the cost.
+    slowest = sorted(
+        (r for r in helpers.TEST_RUN.records if r.get("duration") is not None),
+        key=lambda r: r["duration"],
+        reverse=True,
+    )[:25]
+    slowest = [
+        {
+            "test_name": r.get("name"),
+            "module": r.get("module"),
+            "test_file": r.get("test_module"),
+            "status": r.get("status"),
+            "duration": r["duration"],
+        }
+        for r in slowest
+    ]
+
+    # Top-level rollup MUST equal the sum of the per-module values. TEST_RUN's
+    # counters only see tests that actually executed, so a module skipped whole
+    # (requires_extra / requires_apps) contributed nothing to total/skipped even
+    # though its per-module entry counts its tests. That gap made every baseline
+    # comparison drift by the size of the opt-in tier. See item #1127.
+    totals = {"tests": 0, "passed": 0, "failed": 0, "skipped": 0}
+    for entry in modules.values():
+        for key in totals:
+            totals[key] += entry.get(key, 0) or 0
+
     report = {
         "status": "passed" if helpers.TEST_RUN.failed == 0 else "failed",
-        "total": helpers.TEST_RUN.total,
-        "passed": helpers.TEST_RUN.passed,
-        "failed": helpers.TEST_RUN.failed,
-        "skipped": helpers.TEST_RUN.skipped,
+        "total": totals["tests"],
+        "passed": totals["passed"],
+        "failed": totals["failed"],
+        "skipped": totals["skipped"],
+        # What actually executed this run, i.e. excluding whole-skipped modules.
+        "ran": {
+            "total": helpers.TEST_RUN.total,
+            "passed": helpers.TEST_RUN.passed,
+            "failed": helpers.TEST_RUN.failed,
+            "skipped": helpers.TEST_RUN.skipped,
+        },
         "duration": round(duration, 2),
         "modules": modules,
+        "slowest": slowest,
         "failures": failures,
         # Key names only — never the values (see _snapshot_conf).
         "conf_drift": list(conf_drift or []),

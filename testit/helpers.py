@@ -189,9 +189,11 @@ def _run_unit(func, name, *args, **kwargs):
     # Print test start message
     name_line = f"{INDENT}{test_name.ljust(80, '.')}"
 
+    started = time.time()
+
     try:
         result = func(*args, **kwargs)
-        _record_result(test_name, status="passed")
+        _record_result(test_name, status="passed", duration=time.time() - started)
         _increment("passed")
         dfn = _get_display_fn()
         if dfn:
@@ -201,7 +203,8 @@ def _run_unit(func, name, *args, **kwargs):
         return result
 
     except TestitSkip as skip:
-        _record_result(test_name, status="skipped", detail=str(skip))
+        _record_result(test_name, status="skipped", detail=str(skip),
+                       duration=time.time() - started)
         _increment("skipped")
         dfn = _get_display_fn()
         if dfn:
@@ -215,7 +218,8 @@ def _run_unit(func, name, *args, **kwargs):
     except AssertionError as error:
         _increment("failed")
         fail_context = _collect_failure_context(func, test_name, error, "failed") if AGENT_MODE else None
-        _record_result(test_name, status="failed", detail=str(error), agent_context=fail_context)
+        _record_result(test_name, status="failed", detail=str(error), agent_context=fail_context,
+                       duration=time.time() - started)
 
         dfn = _get_display_fn()
         if dfn:
@@ -231,7 +235,8 @@ def _run_unit(func, name, *args, **kwargs):
         _increment("failed")
         detail = traceback.format_exc() if VERBOSE else str(error)
         fail_context = _collect_failure_context(func, test_name, error, "error") if AGENT_MODE else None
-        _record_result(test_name, status="error", detail=detail, agent_context=fail_context)
+        _record_result(test_name, status="error", detail=detail, agent_context=fail_context,
+                       duration=time.time() - started)
 
         dfn = _get_display_fn()
         if dfn:
@@ -268,7 +273,7 @@ def _result_key(test_name):
     return test_name
 
 
-def _record_result(test_name, *, status, detail=None, agent_context=None):
+def _record_result(test_name, *, status, detail=None, agent_context=None, duration=None):
     context = _active_context()
     key = _result_key(test_name)
     record = {
@@ -278,6 +283,11 @@ def _record_result(test_name, *, status, detail=None, agent_context=None):
         "name": test_name,
         "status": status,
     }
+    if duration is not None:
+        # Wall time for this single test. The runner surfaces the slowest of these
+        # in the agent report; module-level timing alone cannot tell you which test
+        # inside a slow module is actually costing you.
+        record["duration"] = round(max(duration, 0.0), 4)
     if detail:
         record["detail"] = detail
     if agent_context:

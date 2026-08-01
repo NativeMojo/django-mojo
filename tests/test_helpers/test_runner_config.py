@@ -177,6 +177,130 @@ def test_agent_report_writes(opts):
         helpers.AGENT_MODE = old_agent
 
 
+class _FakeTracker:
+    """Stands in for the rich display's per-module tracker."""
+
+    def __init__(self, total, passed, failed, skipped, elapsed=0.0, skip_reason=None):
+        self.total = total
+        self.passed = passed
+        self.failed = failed
+        self.skipped = skipped
+        self.elapsed = elapsed
+        self.skip_reason = skip_reason
+
+
+class _FakeDisplay:
+    def __init__(self, trackers):
+        self.trackers = trackers
+        self._order = list(trackers.keys())
+
+
+@th.django_unit_test("agent output: top-level rollup equals the sum of per-module values")
+def test_agent_report_rollup_matches_modules(opts):
+    """Regression for #1127.
+
+    TEST_RUN's counters only see tests that actually executed, so a module skipped
+    whole (requires_extra / requires_apps) used to contribute nothing to the
+    top-level total/skipped while still being counted in its own module entry. A
+    baseline recorded from the top-level numbers then drifted against one derived
+    from the table by exactly the size of the opt-in tier.
+    """
+    import os
+    import json
+    from testit import runner, helpers
+    from mojo.helpers import paths
+
+    display = _FakeDisplay({
+        # Ran normally.
+        "test_alpha": _FakeTracker(total=10, passed=9, failed=0, skipped=1, elapsed=1.5),
+        # Skipped whole — the case that used to vanish from the rollup.
+        "test_optin": _FakeTracker(total=40, passed=0, failed=0, skipped=40,
+                                   elapsed=0.0, skip_reason="requires --extra slow"),
+    })
+
+    old_agent = helpers.AGENT_MODE
+    helpers.AGENT_MODE = True
+    try:
+        runner._write_agent_report(opts, display=display)
+        with open(os.path.join(paths.VAR_ROOT, "test_failures.json")) as fh:
+            data = json.load(fh)
+    finally:
+        helpers.AGENT_MODE = old_agent
+
+    module_total = sum(m["tests"] for m in data["modules"].values())
+    module_skipped = sum(m["skipped"] for m in data["modules"].values())
+
+    th.assert_eq(data["total"], module_total,
+                 f"top-level total ({data['total']}) must equal the sum of per-module "
+                 f"tests ({module_total})")
+    th.assert_eq(data["skipped"], module_skipped,
+                 f"top-level skipped ({data['skipped']}) must equal the sum of per-module "
+                 f"skipped ({module_skipped})")
+    th.assert_eq(data["total"], 50,
+                 f"the whole-skipped module's 40 tests must be counted, got {data['total']}")
+    th.assert_true("ran" in data,
+                   "report should carry a 'ran' block for what actually executed")
+
+
+@th.django_unit_test("agent output: per-test durations feed a slowest list")
+def test_agent_report_slowest(opts):
+    """Module-level timing cannot say which test inside a slow module is the cost."""
+    import os
+    import json
+    from testit import runner, helpers
+    from mojo.helpers import paths
+
+    old_records = helpers.TEST_RUN.records
+    old_agent = helpers.AGENT_MODE
+    helpers.AGENT_MODE = True
+    try:
+        helpers.TEST_RUN.records = [
+            {"module": "test_alpha", "test_module": "a", "function": "f",
+             "name": "quick_one", "status": "passed", "duration": 0.01},
+            {"module": "test_alpha", "test_module": "a", "function": "f",
+             "name": "slow_one", "status": "passed", "duration": 9.5},
+            # No duration recorded — must not blow up the sort.
+            {"module": "test_alpha", "test_module": "a", "function": "f",
+             "name": "untimed", "status": "passed"},
+        ]
+        runner._write_agent_report(opts)
+        with open(os.path.join(paths.VAR_ROOT, "test_failures.json")) as fh:
+            data = json.load(fh)
+    finally:
+        helpers.TEST_RUN.records = old_records
+        helpers.AGENT_MODE = old_agent
+
+    th.assert_true("slowest" in data, "report should carry a 'slowest' list")
+    th.assert_true(len(data["slowest"]) >= 2,
+                   f"slowest should include the timed tests, got {len(data['slowest'])}")
+    th.assert_eq(data["slowest"][0]["test_name"], "slow_one",
+                 f"slowest entry should be the 9.5s test, got {data['slowest'][0]['test_name']}")
+    th.assert_true(data["slowest"][0]["duration"] >= data["slowest"][1]["duration"],
+                   "slowest list must be sorted descending by duration")
+
+
+@th.django_unit_test("per-test timing: _record_result stores a duration")
+def test_record_result_duration(opts):
+    from testit import helpers
+
+    old_records = helpers.TEST_RUN.records
+    try:
+        helpers.TEST_RUN.records = []
+        helpers._record_result("timing_probe", status="passed", duration=0.25)
+        record = helpers.TEST_RUN.records[-1]
+        th.assert_true("duration" in record,
+                       "a recorded result should carry its duration")
+        th.assert_eq(record["duration"], 0.25,
+                     f"duration should round-trip, got {record.get('duration')}")
+
+        # A negative clock delta must never surface as a negative duration.
+        helpers._record_result("timing_probe_neg", status="passed", duration=-1.0)
+        th.assert_eq(helpers.TEST_RUN.records[-1]["duration"], 0.0,
+                     "a negative duration must be clamped to zero")
+    finally:
+        helpers.TEST_RUN.records = old_records
+
+
 @th.django_unit_test("dev_server.conf: var/ overrides config/ when both exist")
 def test_resolve_conf_var_overrides(opts):
     from mojo.helpers import paths
