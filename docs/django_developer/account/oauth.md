@@ -152,6 +152,13 @@ Custom schemes — mobile deep links — have their own narrower rules; see
 4. **Path** — the entry path, or a path underneath it terminating on a segment
    boundary. `/app` admits `/app` and `/app/inner`, and refuses `/application`.
    An entry ending in `/` admits every path on that host.
+5. **No dot segments** — a `redirect_uri` (or an entry) whose path carries a `.`
+   or `..` segment, in any `%2e` spelling, is **refused outright** rather than
+   normalized. A browser resolves those segments before it issues the request,
+   so admitting `…/callback/../../x` under an entry of `…/callback` would land
+   the OAuth `code` off the prefix — degrading the segment-bounded rule above to
+   host-only matching. `%2f`-encoded slashes and double-encoded `%252e` are
+   deliberately *not* dot segments (a browser resolves neither) and still match.
 
 Query and fragment are ignored on **both** sides. A `redirect_uri` may therefore
 carry its own query (e.g. an app passing `?redirect=/workspaces/` through the
@@ -172,6 +179,8 @@ Against an entry of `https://app.example.com`:
 | `https://APP.Example.com/callback` | admitted — hosts are case-insensitive |
 | `https://app.example.com:443/x` | admitted — explicit default port |
 | `https://app.example.com/x?to=%2Fhome` | admitted — the query is not matched |
+| `https://app.example.com/v1.2/callback` | admitted — dots inside a label are not a `.`/`..` segment |
+| `https://app.example.com/callback/../../x` | **refused** — a `..` path segment resolves out of the prefix before the request |
 | `https://app.example.com.evil.tld/` | **refused** — a different host that merely begins with the entry |
 | `https://app.example.com@evil.tld/` | **refused** — userinfo; the real host is `evil.tld` |
 | `https://evil.tld\@app.example.com/` | **refused** — backslash; a browser reads the host as `evil.tld` |
@@ -193,7 +202,10 @@ Two further rules:
 
 Entries that cannot be parsed as an absolute URL — `""`, `"h"`, `"/relative"` —
 are skipped with a warning and can never match anything. Under the prefix test
-they replaced, an entry of `"h"` admitted every `http(s)://` URL in existence.
+they replaced, an entry of `"h"` admitted every `http(s)://` URL in existence. An
+entry whose own path carries a `.`/`..` segment is dropped the same way, so
+`https://app.example.com/oauth/callback/../..` matches nothing (it would
+otherwise degrade to host-only matching once a browser resolved it).
 
 ### Custom URL schemes (mobile deep links)
 
@@ -238,6 +250,7 @@ Refused, fail-closed:
 | `myapp:callback`, `mailto:a@b` | the opaque form — no `//` and no leading `/`, so there is no way to tell an authority from a path |
 | `myapp:`, `myapp://` | neither authority nor path; as an entry it would authorize a whole scheme |
 | `javascript:…`, `data:…`, `vbscript:…` | a navigation sink, never a destination — refused even if an operator lists one |
+| `myapp://callback/../..`, `myapp://callback/%2e%2e/x` | a `.`/`..` path segment (any `%2e` spelling) — refused on every scheme, and a dot-segment deep-link entry is unusable |
 | `myapp://*.callback` | `*.` is not a wildcard here; it is an authority nothing equals |
 
 The same rules apply to `AUTH_HANDOFF_ALLOWED_URLS`, since the two lists share

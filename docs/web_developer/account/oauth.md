@@ -45,7 +45,7 @@ Steps 3–4 are invisible to your JS — your page still receives `?code=` and `
 
 | Parameter | Description |
 |---|---|
-| `redirect_uri` | Override the default callback URL. Must be on the server's allowlist. Returns `400` if provided but not allowed. It is matched as a **URL** — same scheme, same host (case-insensitive), same port, and a path at or under the allowlisted path on a `/` boundary; the query string is ignored, so you may append your own. Sharing a string prefix with an allowlisted URL is *not* enough. The allowlist is the server's `ALLOWED_REDIRECT_URLS` **plus** the `allowed_redirect_urls` registered on the group you name — so passing `group_uuid` (or `group`) can admit a landing URL that would 400 without it. |
+| `redirect_uri` | Override the default callback URL. Must be on the server's allowlist. Returns `400` if provided but not allowed. It is matched as a **URL** — same scheme, same host (case-insensitive), same port, and a path at or under the allowlisted path on a `/` boundary; the query string is ignored, so you may append your own. Sharing a string prefix with an allowlisted URL is *not* enough, and a path with a `.`/`..` segment (any `%2e` spelling) is refused outright. The allowlist is the server's `ALLOWED_REDIRECT_URLS` **plus** the `allowed_redirect_urls` registered on the group you name — so passing `group_uuid` (or `group`) can admit a landing URL that would 400 without it. |
 
 **Response:**
 
@@ -243,6 +243,12 @@ before assuming a server outage:
   entry without a port means the scheme default (443/80).
 - **Path boundary** — an entry of `.../app` admits `/app` and `/app/inner`, not
   `/application`. Add a trailing `/` to the entry to admit a whole host.
+- **Dot segments** — a path with a `.` or `..` segment, in any `%2e` spelling,
+  is refused rather than resolved: `.../callback/../../x` is rejected even though
+  the string sits under the prefix, because a browser resolves it off the prefix
+  before the request runs. Point `redirect_uri` at the real landing path. (A
+  `%2f`-encoded slash or a double-encoded `%252e` is *not* a dot segment and
+  still passes — a browser resolves neither.)
 - **Scheme** — must match the entry exactly, and `http`/`https` never
   substitute for each other. A custom scheme (`myapp://callback`, a mobile deep
   link) **is** still accepted — see below.

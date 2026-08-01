@@ -33,6 +33,8 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   absent), and a path at or under the entry path on a `/` segment boundary.
   Query and fragment are ignored on both sides; `*.` wildcards are **not**
   supported and are skipped as unusable entries; list IDN hosts in punycode. A
+  path carrying a `.`/`..` segment (any `%2e` spelling) is refused outright, not
+  normalized, on both the `redirect_uri` and every entry. A
   **custom scheme** (`myapp://callback`, a mobile deep link) is supported under
   narrower rules — exact scheme + exact case-folded authority + the same path
   rule, no default ports and no wildcards. Empty (or unset) refuses any
@@ -119,7 +121,9 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `AUTH_HANDOFF_ALLOWED_URLS` — list, **unset by default (monitor mode)**.
   Destination URLs `POST /api/auth/handoff` may mint a code for, matched on
   **exact host + path prefix** (`https://*.example.com/` admits one extra
-  dot-free label). A custom scheme (a mobile deep link) is usable here too —
+  dot-free label); a destination or entry whose path carries a `.`/`..` segment
+  (any `%2e` spelling) is refused outright, not normalized. A custom scheme (a
+  mobile deep link) is usable here too —
   same shared matcher, same narrower custom-scheme rules as
   `ALLOWED_REDIRECT_URLS` — but note that it only serves a **custom frontend**
   calling `POST /api/auth/handoff` directly: the bundled hosted auth pages

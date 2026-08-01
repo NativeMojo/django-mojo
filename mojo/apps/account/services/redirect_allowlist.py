@@ -84,7 +84,13 @@ An entry matches an ``http(s)`` destination when ALL of:
     ``example.com.evil.tld`` no;
   * the destination path is the entry path or sits underneath it on a path
     SEGMENT boundary — ``/app`` admits ``/app`` and ``/app/x`` but not
-    ``/application``.
+    ``/application``;
+  * neither side's path carries a ``.`` or ``..`` segment in ANY ``%2e``
+    spelling. Such a URL is refused OUTRIGHT on both sides rather than
+    normalized: a browser resolves those segments before it issues the request,
+    so admitting ``/oauth/callback/../../x`` under an entry of
+    ``/oauth/callback`` would degrade the SEGMENT-bounded match above into
+    exactly the host-only matching the next paragraph rejects.
 
 Host-only matching was deliberately rejected: it would make every path on an
 allowed host a token-deposit site (an open redirector, a query reflector, an
@@ -144,6 +150,30 @@ _SCHEME_CHARS = re.compile(r"^[a-z][a-z0-9+.-]*$")
 # a configuration footgun that ends in stored XSS on the auth origin, so they
 # are refused outright — the same trio `mojo.helpers.urls` refuses.
 _SCRIPT_SCHEMES = ("javascript", "data", "vbscript")
+
+# WHATWG dot-segment refusal. A `.`/`..` path segment is resolved by the browser
+# BEFORE it issues the request, so a candidate the matcher admits with such a
+# segment escapes the segment-bounded path prefix (`/oauth/callback/../../x`
+# under an entry of `/oauth/callback` lands off-prefix). It is refused outright
+# rather than normalized here — see "Static matching rules" in the module
+# docstring.
+_PCT_DOT = re.compile(r"%2e", re.IGNORECASE)
+_DOT_SEGMENTS = (".", "..")
+
+
+def _has_dot_segment(path):
+    """Return True when `path` carries a WHATWG dot segment.
+
+    Flags exactly WHATWG's dot-segment set: a single-dot segment (`.`, `%2e`) or
+    a double-dot segment (`..`, `.%2e`, `%2e.`, `%2e%2e`), ASCII
+    case-insensitively — `%2e` is decoded to `.` before the split on `/`.
+
+    Deliberately NOT decoded: `%252e` (a browser decodes it to the literal text
+    `%2e`, never a dot) and `%2f` (WHATWG does not treat it as a segment
+    delimiter, so `..%2f..%2fx` is one opaque segment, not a traversal).
+    """
+    return any(seg in _DOT_SEGMENTS for seg in _PCT_DOT.sub(".", path).split("/"))
+
 
 # Incident suppression: one report per destination host per hour, per mode.
 _NOTICE_PREFIX = "account:handoff:dest_alerted"
@@ -245,9 +275,12 @@ def matches_allowlist(url, entries, source="allowlist", allow_wildcard=False):
 
     Matching is by parsed URL, never by string prefix — scheme, host and port
     compared after parsing, path prefix terminating on a segment boundary, query
-    and fragment ignored on both sides. A custom-scheme entry (a mobile deep
-    link) matches on exact scheme + exact authority + the same path rule. See
-    "Static matching rules" and "Custom URL schemes" above.
+    and fragment ignored on both sides. A ``.``/``..`` path segment (any ``%2e``
+    spelling) is refused before matching — applied to the candidate AND to every
+    entry, so a dot-segment entry is dropped as unusable and admits nothing. A
+    custom-scheme entry (a mobile deep link) matches on exact scheme + exact
+    authority + the same path rule. See "Static matching rules" and "Custom URL
+    schemes" above.
     """
     candidate = _split(url)
     if candidate is None:
@@ -300,6 +333,9 @@ def _split(url, allow_wildcard=False):
     Anything else with a scheme goes to `_split_custom_scheme`, which returns
     the same 4-tuple shape with the raw authority in the host slot and None in
     the port slot. No scheme at all — ``//host/x``, ``/relative`` — refuses.
+
+    A path carrying a ``.``/``..`` segment (any ``%2e`` spelling) refuses here,
+    ahead of the scheme dispatch, so `_split_custom_scheme` inherits the rule.
     """
     if not url or not isinstance(url, str):
         return None
@@ -316,6 +352,15 @@ def _split(url, allow_wildcard=False):
     try:
         parts = urlsplit(raw)
     except ValueError:
+        return None
+    # Refuse a `.`/`..` path segment (any `%2e` spelling) rather than normalize
+    # it — the browser resolves it before the request, so an admitted one
+    # escapes the segment-bounded prefix. Run it on `parts.path` ONLY: a
+    # raw-string check would both miss cases and wrongly refuse a legitimate
+    # `?next=../x` query, and a `%2E` in the AUTHORITY stays the `_HOST_CHARS`
+    # test's job below. Placed ahead of the scheme dispatch so
+    # `_split_custom_scheme` inherits it.
+    if _has_dot_segment(parts.path or ""):
         return None
     scheme = (parts.scheme or "").lower()
     if scheme not in _SCHEMES:
@@ -357,7 +402,9 @@ def _split_custom_scheme(scheme, parts):
         (``myapp:callback``, ``mailto:a@b``): there is no way to tell an
         authority from a path there;
       * a bare ``myapp:`` or ``myapp://`` with neither authority nor path —
-        nothing to match on, and as an entry it would authorize a whole scheme.
+        nothing to match on, and as an entry it would authorize a whole scheme;
+      * a ``.``/``..`` path segment (any ``%2e`` spelling) — already refused by
+        `_split` before this function is reached, so it never gets here.
 
     ``com.example.app:/oauth`` and ``com.example.app:///oauth`` are the SAME
     value: both carry an empty authority and the path ``/oauth``. An empty
@@ -432,6 +479,15 @@ def report_unlisted_destination(destination, request=None, enforced=False):
     parts = _split(destination) if destination else None
     if parts is not None:
         host = parts[1]
+    elif destination:
+        # `_split` refused it (a dot segment, a backslash, unparsable), but the
+        # real host still buckets the suppression key and `destination_host`
+        # better than collapsing every refused destination into one shared
+        # `unparsable` slot — recover it directly, defensively.
+        try:
+            host = urlsplit(destination).hostname or ""
+        except ValueError:
+            host = ""
     try:
         from mojo.helpers.redis import get_connection
         notice_key = f"{_NOTICE_PREFIX}:{'enforced' if enforced else 'monitor'}:{host or 'unparsable'}"

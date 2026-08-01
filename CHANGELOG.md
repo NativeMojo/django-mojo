@@ -1,5 +1,38 @@
 ## Unreleased
 
+**fix (security)** — **a dot-segment path no longer walks a `redirect_uri` out
+of the allowlist's path boundary.** `redirect_allowlist._split()` returned
+`urlsplit(url).path` unnormalized and the matcher compared it with a
+segment-bounded `startswith`, so a supplied `redirect_uri` of
+`https://app.example.com/oauth/callback/../../../anything` matched an entry of
+`https://app.example.com/oauth/callback` — the string sits under the prefix, but
+a browser resolves the `..` before the request and delivers the OAuth
+`code`+`state` off-prefix. `_split` now **refuses** any `.`/`..` path segment
+(in any `%2e` spelling — `%2e%2e`, `.%2e`, `%2e.`, and a tab/CR/LF-interrupted
+`..`) outright rather than normalizing it: normalization is a second parser that
+disagrees with the browser at the edges, and every disagreement is a bypass.
+
+- **Both allowlists and custom schemes are covered** — the rule lives in the
+  shared `_split`, so `ALLOWED_REDIRECT_URLS`, `AUTH_HANDOFF_ALLOWED_URLS`, and
+  custom-scheme deep-link entries (`myapp://callback/../..`) all inherit it, on
+  **both** the supplied URL and every configured entry.
+- **A dot-segment entry becomes unusable.** An entry whose own path carries a
+  `.`/`..` segment now matches nothing and is named by the existing
+  unusable-entry warning, exactly like a truncated `"h"` entry.
+- **Deliberately still admitted** (a browser resolves neither, so neither
+  escapes): a `%2f`-encoded slash — `..%2f..%2fx` is one opaque segment, not a
+  traversal — and a double-encoded `%252e`, which a browser turns into the
+  literal text `%2e`, never a dot.
+- **Refused-destination reporting keeps the real host.** When `_split` refuses a
+  destination, `report_unlisted_destination` now recovers the host directly for
+  its per-host Redis suppression key and the incident's `destination_host`,
+  instead of collapsing every refused destination into one shared `unparsable`
+  bucket.
+- **Scope.** This closes the case where a `redirect_uri` is *supplied*. The
+  branch that derives a landing URL from the request origin when no `redirect_uri`
+  is given is unchanged and out of scope here — a separate security item covers
+  it. No status code, error string, or response shape changed.
+
 **fix (account)** — **a group-scoped auth portal no longer drops the forwarded
 `?redirect=` on the hop to passkey enrollment.** `auth_base.html` interpolated
 the server-built `auth_url` / `register_url` / `passkey_url`, `api_base` and

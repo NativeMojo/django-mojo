@@ -341,7 +341,11 @@ AUTH_HANDOFF_ALLOWED_URLS = [
 - Path matching stops at a segment boundary, so `/app` does not admit
   `/application`. Query strings are ignored. Host-only matching was
   deliberately rejected — it would turn every open redirector, query reflector
-  and analytics beacon on an allowed host into a token-deposit site.
+  and analytics beacon on an allowed host into a token-deposit site. A path
+  carrying a `.`/`..` segment (in any `%2e` spelling) is **refused outright**
+  rather than normalized, on both the destination and every entry — a browser
+  resolves it out of the prefix before the request, so admitting one would
+  degrade this segment boundary to host-only matching.
 - Hostnames must be plain ASCII host characters; list IDN destinations in
   punycode. That closes the parser-differential class where Python keeps a
   character inside the host that a browser treats as an authority terminator.

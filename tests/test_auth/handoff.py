@@ -252,6 +252,23 @@ def test_allowlist_path_prefix_is_segment_bounded(opts):
                      "a path outside the prefix must not be admitted")
 
 
+@th.django_unit_test("allowlist: a dot-segment path escape is refused")
+def test_allowlist_refuses_a_dot_segment_escape(opts):
+    """A `..` (or `%2e%2e`) segment sits UNDER the prefix as a string but the
+    browser resolves it OUT of the prefix before the request — so it must be
+    refused, not admitted. Refusal, not normalization (see
+    redirect_allowlist._has_dot_segment)."""
+    from mojo.apps.account.services import redirect_allowlist as ra
+
+    with _allowlist(["https://example.com/app"]):
+        assert_false(ra.is_allowed_destination("https://example.com/app/../../steal"),
+                     "a `..` traversal under the prefix resolves out of it and must be refused")
+        assert_false(ra.is_allowed_destination("https://example.com/app/%2e%2e/steal"),
+                     "the `%2e%2e` spelling of the same traversal must be refused")
+        assert_true(ra.is_allowed_destination("https://example.com/app/inner"),
+                    "a real path under the prefix must still be admitted")
+
+
 @th.django_unit_test("allowlist: scheme must be http/https and must not downgrade")
 def test_allowlist_scheme_rules(opts):
     from mojo.apps.account.services import redirect_allowlist as ra
