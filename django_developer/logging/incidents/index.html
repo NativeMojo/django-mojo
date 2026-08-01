@@ -1827,6 +1827,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#rate-fields-matching-on-an-ips-recent-behaviour" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rate fields — matching on an IP's recent behaviour
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#bundling" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2014,6 +2025,84 @@
     <span class="md-ellipsis">
       
         Default OSSEC rulesets — ensure_ossec_rules()
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#default-auth-and-bouncer-rulesets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Default auth and bouncer rulesets
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Default auth and bouncer rulesets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-design-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The design rule
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auth-ensure_auth_rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth — ensure_auth_rules()
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Auth — ensure_auth_rules()">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bouncer-token-failure-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bouncer token failure levels
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bouncer-ensure_bouncer_rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bouncer — ensure_bouncer_rules()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retuning-an-already-bootstrapped-ruleset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retuning an already-bootstrapped ruleset
       
     </span>
   </a>
@@ -4985,6 +5074,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#rate-fields-matching-on-an-ips-recent-behaviour" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rate fields — matching on an IP's recent behaviour
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#bundling" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5172,6 +5272,84 @@
     <span class="md-ellipsis">
       
         Default OSSEC rulesets — ensure_ossec_rules()
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#default-auth-and-bouncer-rulesets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Default auth and bouncer rulesets
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Default auth and bouncer rulesets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-design-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The design rule
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auth-ensure_auth_rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth — ensure_auth_rules()
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Auth — ensure_auth_rules()">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bouncer-token-failure-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bouncer token failure levels
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bouncer-ensure_bouncer_rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bouncer — ensure_bouncer_rules()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retuning-an-already-bootstrapped-ruleset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retuning an already-bootstrapped ruleset
       
     </span>
   </a>
@@ -5478,6 +5656,11 @@
 <td><code>prune_incidents</code></td>
 <td>Cron</td>
 <td>Deletes resolved/closed/ignored incidents older than <code>INCIDENT_PRUNE_DAYS</code>. Skips incidents with <code>metadata.do_not_delete = True</code>.</td>
+</tr>
+<tr>
+<td><code>recheck_active_threats</code></td>
+<td>Cron (daily 4:20)</td>
+<td>Re-scores up to <code>GEOLOCATION_RECHECK_THREATS_MAX</code> recently-active <code>GeoLocatedIP</code> rows so <code>threat_level</code> can decay. Skips <code>provider='mojo'</code> records and external blocklist lookups.</td>
 </tr>
 </tbody>
 </table>
@@ -6036,6 +6219,62 @@ pushed into the fleet-wide firewall.</p>
 </table>
 <p>Rules operate on <code>event.metadata</code>. Since <code>report_event</code> syncs all standard fields (level, category, source_ip, etc.) into metadata automatically, they are all available for rule matching alongside any custom fields you pass in.</p>
 <p><code>Rule.check_rule()</code> looks up the field by first checking <code>event.metadata[field_name]</code>, then falling back to <code>getattr(event, field_name)</code>. If <code>field_name</code> was stored with a <code>metadata.</code> prefix (e.g., <code>"metadata.http_url"</code>), the prefix is stripped automatically before lookup — so rules created that way still match correctly.</p>
+<p>Field names starting with <code>_</code> are always refused, so private attributes on
+<code>Event</code> can never be addressed from a rule.</p>
+<h3 id="rate-fields-matching-on-an-ips-recent-behaviour">Rate fields — matching on an IP's recent behaviour<a class="headerlink" href="#rate-fields-matching-on-an-ips-recent-behaviour" title="Permanent link">&para;</a></h3>
+<p>Because <code>check_rule()</code> falls through to <code>getattr(event, field_name)</code>, <strong>any
+property on <code>Event</code> is a matchable rule field</strong>. Three are provided for writing
+rules about a source IP's recent behaviour rather than about the single event in
+hand. All three are scoped to <code>GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS</code> (24h)
+and share the allowlists described in
+<a href="../../account/geoip/#threat-intelligence">account/geoip.md</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ip_recent_attack_events</code></td>
+<td>Count of allowlisted attack-category events (confirmed + suspect) for this event's <code>source_ip</code> in the window. <code>0</code> when the IP is clean or unset.</td>
+</tr>
+<tr>
+<td><code>ip_recent_distinct_targets</code></td>
+<td>Distinct user accounts those suspect-category events named. One person fumbling their own password scores <code>1</code>; a stuffing run scores many.</td>
+</tr>
+<tr>
+<td><code>ip_recent_distinct_devices</code></td>
+<td>Distinct pre-existing <code>BouncerSignal.muid</code>s seen behind the IP — a NAT/office egress scores high. <strong><code>None</code></strong> when the deployment has no bouncer telemetry, and <code>check_rule()</code> treats <code>None</code> as no-match, so a rule on this field fails <strong>closed</strong>.</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Block only an address that has been at it a while AND is spraying accounts,</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="c1"># and is not obviously a shared office egress.</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">rs</span> <span class="o">=</span> <span class="n">RuleSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;invalid_password&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Credential stuffing — sustained and broad&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="n">bundle_by</span><span class="o">=</span><span class="n">BundleBy</span><span class="o">.</span><span class="n">SOURCE_IP</span><span class="p">,</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    <span class="n">bundle_minutes</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>    <span class="n">match_by</span><span class="o">=</span><span class="n">MatchBy</span><span class="o">.</span><span class="n">ALL</span><span class="p">,</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>    <span class="n">handler</span><span class="o">=</span><span class="s2">&quot;block://?ttl=3600&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>    <span class="n">trigger_count</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">trigger_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="p">)</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="n">Rule</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">parent</span><span class="o">=</span><span class="n">rs</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">field_name</span><span class="o">=</span><span class="s2">&quot;ip_recent_attack_events&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>                    <span class="n">comparator</span><span class="o">=</span><span class="s2">&quot;&gt;=&quot;</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="s2">&quot;25&quot;</span><span class="p">,</span> <span class="n">value_type</span><span class="o">=</span><span class="s2">&quot;int&quot;</span><span class="p">)</span>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="n">Rule</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">parent</span><span class="o">=</span><span class="n">rs</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">field_name</span><span class="o">=</span><span class="s2">&quot;ip_recent_distinct_targets&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>                    <span class="n">comparator</span><span class="o">=</span><span class="s2">&quot;&gt;=&quot;</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="s2">&quot;10&quot;</span><span class="p">,</span> <span class="n">value_type</span><span class="o">=</span><span class="s2">&quot;int&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p><strong>No default RuleSet ships using these fields, and that is deliberate.</strong> Each is
+a database aggregate evaluated on the event publish path; a shipped default
+would put that cost on every event in every deployment. Opt in when your traffic
+justifies it, and pair the fields with a <code>trigger_count</code> so the aggregate is not
+the only gate.</p>
+<p>The three values are computed together and memoised on the event instance
+(<code>Event._ip_stats</code>) — <code>check_by_category()</code> walks every RuleSet in a category, so
+one event can read a field many times, and without the memo each read would be a
+fresh query.</p>
 <h3 id="bundling">Bundling<a class="headerlink" href="#bundling" title="Permanent link">&para;</a></h3>
 <p>Bundling controls how related events are collapsed into a single incident rather than creating a new one for each event.</p>
 <table>
@@ -6122,42 +6361,46 @@ pushed into the fleet-wide firewall.</p>
 <h3 id="thresholds-trigger_count">Thresholds (trigger_count)<a class="headerlink" href="#thresholds-trigger_count" title="Permanent link">&para;</a></h3>
 <p>A RuleSet can defer its handler until a minimum event count is reached. Until the threshold is crossed, the incident stays at <code>pending</code>. Once it is reached, the incident transitions to <code>new</code> and the handler fires.</p>
 <p>Use <code>trigger_window</code> to restrict the count to events within a recent time window — useful when the same incident might accumulate events over hours or days but you only want to trigger on a burst.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;auth:failed&quot;</span><span class="p">,</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Brute Force Detection&quot;</span><span class="p">,</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">bundle_by</span><span class="o">=</span><span class="n">BundleBy</span><span class="o">.</span><span class="n">SOURCE_IP</span><span class="p">,</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="n">bundle_minutes</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="n">handler</span><span class="o">=</span><span class="s2">&quot;block://?ttl=3600,ticket://?status=new&amp;priority=8&amp;category=security&quot;</span><span class="p">,</span>
-<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    <span class="n">trigger_count</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>       <span class="c1"># Wait for 10 events on this incident</span>
-<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>    <span class="n">trigger_window</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>      <span class="c1"># Only count events from the last 10 minutes</span>
-<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="p">)</span>
-</code></pre></div>
-<p>Until 10 events accumulate within the window, the incident sits at <code>pending</code>. Once the threshold is crossed, it transitions to <code>new</code> and the handler fires — blocking the IP fleet-wide and creating a ticket.</p>
-<h3 id="retriggering-retrigger_every">Retriggering (retrigger_every)<a class="headerlink" href="#retriggering-retrigger_every" title="Permanent link">&para;</a></h3>
-<p>Set <code>retrigger_every</code> to re-fire the handler after additional events beyond the initial trigger. This is useful for escalating alerts on incidents that keep growing:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
 <a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;auth:failed&quot;</span><span class="p">,</span>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Brute Force - Escalating&quot;</span><span class="p">,</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Brute Force Detection&quot;</span><span class="p">,</span>
 <a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    <span class="n">bundle_by</span><span class="o">=</span><span class="n">BundleBy</span><span class="o">.</span><span class="n">SOURCE_IP</span><span class="p">,</span>
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="n">bundle_minutes</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
-<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>    <span class="n">handler</span><span class="o">=</span><span class="s2">&quot;notify://perm@manage_security&quot;</span><span class="p">,</span>
-<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>    <span class="n">trigger_count</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
-<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>    <span class="n">retrigger_every</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>     <span class="c1"># Re-notify every 20 additional events after the first trigger</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="n">bundle_minutes</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>    <span class="n">handler</span><span class="o">=</span><span class="s2">&quot;block://?ttl=3600,ticket://?status=new&amp;priority=8&amp;category=security&quot;</span><span class="p">,</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>    <span class="n">trigger_count</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>       <span class="c1"># Wait for 10 events on this incident</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>    <span class="n">trigger_window</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>      <span class="c1"># Only count events from the last 10 minutes</span>
 <a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="p">)</span>
+</code></pre></div>
+<p>Until 10 events accumulate within the window, the incident sits at <code>pending</code>. Once the threshold is crossed, it transitions to <code>new</code> and the handler fires — blocking the IP fleet-wide and creating a ticket.</p>
+<blockquote>
+<p><strong><code>bundle_minutes</code> must cover <code>trigger_window</code>.</strong> The count is per-incident. With <code>bundle_minutes=0</code> (bundling disabled) every event creates its own incident, so the count never climbs past 1 and the <code>trigger_count</code> <strong>disables the ruleset</strong> instead of deferring it. Set <code>bundle_minutes</code> to at least <code>trigger_window</code>.</p>
+</blockquote>
+<p>Any RuleSet with a <code>block://</code> handler and no <code>trigger_count</code> fires on the <strong>first</strong> matching event. That is correct only when no legitimate user can produce the match — see <a href="#default-auth-and-bouncer-rulesets">Default auth and bouncer rulesets</a> for how the shipped defaults draw that line.</p>
+<h3 id="retriggering-retrigger_every">Retriggering (retrigger_every)<a class="headerlink" href="#retriggering-retrigger_every" title="Permanent link">&para;</a></h3>
+<p>Set <code>retrigger_every</code> to re-fire the handler after additional events beyond the initial trigger. This is useful for escalating alerts on incidents that keep growing:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;auth:failed&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Brute Force - Escalating&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>    <span class="n">bundle_by</span><span class="o">=</span><span class="n">BundleBy</span><span class="o">.</span><span class="n">SOURCE_IP</span><span class="p">,</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="n">bundle_minutes</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>    <span class="n">handler</span><span class="o">=</span><span class="s2">&quot;notify://perm@manage_security&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>    <span class="n">trigger_count</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>    <span class="n">retrigger_every</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>     <span class="c1"># Re-notify every 20 additional events after the first trigger</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="p">)</span>
 </code></pre></div>
 <p>With this config: handler fires at 10 events, then again at 30, 50, 70, and so on.</p>
 <hr />
 <h2 id="handlers">Handlers<a class="headerlink" href="#handlers" title="Permanent link">&para;</a></h2>
 <p>Handlers execute when a RuleSet triggers. Multiple handlers can be chained with commas.</p>
 <h3 id="syntax">Syntax<a class="headerlink" href="#syntax" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>job://app.module.function
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>email://admin@example.com
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>notify://user_id_or_channel
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>ticket://?status=open&amp;priority=8&amp;category=security&amp;title=Investigate
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>block://?ttl=3600
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>job://app.module.function
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>email://admin@example.com
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>notify://user_id_or_channel
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>ticket://?status=open&amp;priority=8&amp;category=security&amp;title=Investigate
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>block://?ttl=3600
 </code></pre></div>
 <p>Chained example:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>block://?ttl=3600,ticket://?status=new&amp;priority=9&amp;category=security,email://security@example.com
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>block://?ttl=3600,ticket://?status=new&amp;priority=9&amp;category=security,email://security@example.com
 </code></pre></div>
 <h3 id="handler-types">Handler Types<a class="headerlink" href="#handler-types" title="Permanent link">&para;</a></h3>
 <table>
@@ -6214,7 +6457,7 @@ pushed into the fleet-wide firewall.</p>
 </table>
 <p>The block handler extracts <code>source_ip</code> from the event, calls <code>GeoLocatedIP.geolocate()</code> to get or create the record, then calls <code>geo.block()</code> which handles both the DB update and the fleet-wide broadcast.</p>
 <p>The final <code>blocked_reason</code> value is constructed by appending the incident and event IDs to the base reason for traceability:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>auto:ruleset:incident:42:event:87
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>auto:ruleset:incident:42:event:87
 </code></pre></div>
 <p>After a successful block, the handler also:
 - Records a <code>handler:block</code> entry in <code>IncidentHistory</code> noting the IP and TTL
@@ -6260,7 +6503,7 @@ pushed into the fleet-wide firewall.</p>
 </table>
 <hr />
 <h2 id="incident-lifecycle">Incident Lifecycle<a class="headerlink" href="#incident-lifecycle" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>pending  →  new  →  open  →  investigating  →  resolved  →  closed
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>pending  →  new  →  open  →  investigating  →  resolved  →  closed
 </code></pre></div>
 <table>
 <thead>
@@ -6301,19 +6544,19 @@ pushed into the fleet-wide firewall.</p>
 <p><strong>1. Delete on resolution (immediate)</strong></p>
 <p>If a RuleSet has <code>metadata.delete_on_resolution = True</code>, any incident it creates is automatically deleted the moment it transitions to <code>resolved</code> or <code>closed</code>. This keeps the database clean for high-volume noise patterns (bot scanners, brute-force probes, health check blips) that generate incidents only as bookkeeping artifacts — once handled, there is no value in retaining them.</p>
 <p>This is triggered from all resolution paths: REST saves, the BlockHandler, and the LLM agent.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Bot Scanner Noise&quot;</span><span class="p">,</span>
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;ossec&quot;</span><span class="p">,</span>
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>    <span class="n">handler</span><span class="o">=</span><span class="s2">&quot;block://?ttl=3600&quot;</span><span class="p">,</span>
-<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>    <span class="n">metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;delete_on_resolution&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
-<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Bot Scanner Noise&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;ossec&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>    <span class="n">handler</span><span class="o">=</span><span class="s2">&quot;block://?ttl=3600&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>    <span class="n">metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;delete_on_resolution&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="p">)</span>
 </code></pre></div>
 <p><strong>2. Periodic pruning (<code>prune_incidents</code> job)</strong></p>
 <p>The <code>prune_incidents</code> async job deletes resolved, closed, and ignored incidents older than <code>INCIDENT_PRUNE_DAYS</code> (default: 90 days). It runs on a schedule and skips any incident protected by <code>do_not_delete</code>.</p>
 <p><strong>Protecting serious incidents from deletion</strong></p>
 <p>Set <code>metadata.do_not_delete = True</code> on an incident to prevent both auto-deletion on resolution and periodic pruning. Use this for confirmed serious threats — real intrusions, active data exfiltration, or incidents that must be retained for compliance or forensics.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;do_not_delete&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="n">incident</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">update_fields</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;metadata&quot;</span><span class="p">])</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;do_not_delete&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="n">incident</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">update_fields</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;metadata&quot;</span><span class="p">])</span>
 </code></pre></div>
 <p><code>do_not_delete</code> overrides any RuleSet <code>delete_on_resolution</code> setting. When in doubt, leave it unset — protect only when there is a clear reason.</p>
 <p><strong><code>check_delete_on_resolution()</code> — the deletion method</strong></p>
@@ -6337,20 +6580,20 @@ pushed into the fleet-wide firewall.</p>
 </tr>
 </tbody>
 </table>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">primary_incident</span><span class="o">.</span><span class="n">on_action_merge</span><span class="p">([</span><span class="n">incident_id_1</span><span class="p">,</span> <span class="n">incident_id_2</span><span class="p">])</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="n">primary_incident</span><span class="o">.</span><span class="n">on_action_merge</span><span class="p">([</span><span class="n">incident_id_1</span><span class="p">,</span> <span class="n">incident_id_2</span><span class="p">])</span>
 </code></pre></div>
 <hr />
 <h2 id="ossec-integration">OSSEC Integration<a class="headerlink" href="#ossec-integration" title="Permanent link">&para;</a></h2>
 <p>OSSEC runs on every EC2 instance as a detection-only agent. Local active response (blocking) is disabled in <code>ossec.conf</code>. OSSEC detects and reports — the incident engine decides and enforces.</p>
 <h3 id="event-flow">Event flow<a class="headerlink" href="#event-flow" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>OSSEC agent (on EC2 instance)
-<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>  → detects log pattern (SSH brute force, web attack, etc.)
-<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>  → ossec-webhook.sh batches alerts
-<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>  → POST /api/incident/ossec/alert/batch
-<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>  → ossec parser normalizes the alert
-<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a>  → reporter.report_event() creates Event
-<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a>  → Event.publish() triggers rule evaluation
-<a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a>  → RuleSet handler fires (block, ticket, email, etc.)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>OSSEC agent (on EC2 instance)
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>  → detects log pattern (SSH brute force, web attack, etc.)
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>  → ossec-webhook.sh batches alerts
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>  → POST /api/incident/ossec/alert/batch
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>  → ossec parser normalizes the alert
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>  → reporter.report_event() creates Event
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a>  → Event.publish() triggers rule evaluation
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>  → RuleSet handler fires (block, ticket, email, etc.)
 </code></pre></div>
 <h3 id="rest-endpoints">REST Endpoints<a class="headerlink" href="#rest-endpoints" title="Permanent link">&para;</a></h3>
 <table>
@@ -6452,7 +6695,7 @@ pushed into the fleet-wide firewall.</p>
 <td>6</td>
 <td>OSSEC - Generic Web Errors</td>
 <td><code>details</code> regex matches <code>Web (Attack )?4(00\|04\|05)</code></td>
-<td><code>block://?ttl=300&amp;fleet_wide=1</code>, no incident</td>
+<td><code>block://?ttl=300&amp;fleet_wide=1</code> after <strong>10 events in 10 minutes</strong>, no incident</td>
 </tr>
 <tr>
 <td>10</td>
@@ -6474,17 +6717,275 @@ pushed into the fleet-wide firewall.</p>
 <li><strong>Priority 2 — Login Session Noise</strong>: PAM <code>session opened</code> / <code>session closed</code> log entries have no source IP and are pure local audit bookkeeping. They are not attacks. Without this ruleset, OSSEC level 3 events for these messages were hitting the catch-all and generating admin-visible incidents at the rate of hundreds per day.</li>
 <li><strong>Priority 3 — SSH Single Probe (5710)</strong>: OSSEC rule 5710 fires on the first SSH attempt with a non-existent username. Scanners typically probe once and move on, so they never accumulate enough events to trip the multi-attempt brute-force rule (priority 5). Without this ruleset, each single-probe scanner IP created its own unmatched incident. Block it immediately.</li>
 <li><strong>Priority 5 — SSH Brute Force</strong>: Multi-attempt SSH brute force (rules 5712/5720/5551/5758). Immediate block, no incident.</li>
-<li><strong>Priority 6 — Generic Web Errors</strong>: Any Web 400/404/405 that is not already caught by the bot/scanner URL pattern check (priority 1). Catches phpunit/vendor scanner sweeps and other generic HTTP probers. Short block (5 minutes) — these are internet noise, not targeted attacks.</li>
+<li><strong>Priority 6 — Generic Web Errors</strong>: Any Web 400/404/405 that is not already caught by the bot/scanner URL pattern check (priority 1). Catches phpunit/vendor scanner sweeps and other generic HTTP probers. Short block (5 minutes) — these are internet noise, not targeted attacks. Gated at 10 events in 10 minutes: one 404 is a stale bookmark or a dead link in an email, while a sweep produces dozens in seconds. <code>bundle_minutes</code> is 10 rather than 0 so the events land on one incident and the count can actually climb — see the warning under <a href="#retuning-an-already-bootstrapped-ruleset">Retuning an already-bootstrapped ruleset</a>.</li>
 <li><strong>Priority 10 — Web Attack Detection</strong>: OSSEC rule 31104 specifically. One-hour block, no incident.</li>
 <li><strong>Priority 50 — Critical Severity</strong>: Level 12+ is unusual. Only this default creates an incident — something genuinely unexpected happened and warrants human review.</li>
 </ul>
 <p><strong>Usage:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.incident.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">RuleSet</span>
-<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>
-<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="c1"># Called once at deployment time, safe to call repeatedly</span>
-<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">ensure_ossec_rules</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.incident.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">RuleSet</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="c1"># Called once at deployment time, safe to call repeatedly</span>
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">ensure_ossec_rules</span><span class="p">()</span>
 </code></pre></div>
 <p>Rulesets installed by <code>ensure_ossec_rules()</code> are identified by name. If you need to modify a default ruleset's behavior (e.g., change a TTL or priority), edit it via the admin interface or REST API after installation — the method will not overwrite existing records.</p>
+<hr />
+<h2 id="default-auth-and-bouncer-rulesets">Default auth and bouncer rulesets<a class="headerlink" href="#default-auth-and-bouncer-rulesets" title="Permanent link">&para;</a></h2>
+<p>These are the defaults that firewall real people. <code>ensure_auth_rules()</code> and <code>ensure_bouncer_rules()</code> install them; both are idempotent and both are called by <code>ensure_default_rules()</code>.</p>
+<h3 id="the-design-rule">The design rule<a class="headerlink" href="#the-design-rule" title="Permanent link">&para;</a></h3>
+<p>django-mojo is an open REST platform — anyone can call it, and a large share of callers sit behind a corporate NAT, a school, or carrier-grade NAT where one address fronts thousands of unrelated people. Reactive blocking of a demonstrated bad actor is wanted. <strong>False positives are the thing to avoid.</strong> So the bar for every one of these rulesets is "highly probable bad actor", never "a user fumbled their credentials."</p>
+<p>Mechanically that means: <strong>any default whose match a legitimate person can produce must carry a <code>trigger_count</code>.</strong> A <code>block://</code> handler with no <code>trigger_count</code> fires on the <em>first</em> matching event — one mistyped username would firewall the whole egress. The two rulesets below that stay ungated do so because no legitimate user can produce their match at all.</p>
+<h3 id="auth-ensure_auth_rules">Auth — <code>ensure_auth_rules()</code><a class="headerlink" href="#auth-ensure_auth_rules" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Category</th>
+<th>Matches</th>
+<th>Gate</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Auth - Credential Stuffing</td>
+<td><code>login:unknown</code></td>
+<td><code>level &gt;= 8</code></td>
+<td><strong>25 events / 60 min</strong></td>
+<td><code>block://?ttl=1800&amp;fleet_wide=1</code></td>
+</tr>
+<tr>
+<td>Auth - Password Brute Force</td>
+<td><code>invalid_password</code></td>
+<td><code>level &gt;= 5</code></td>
+<td><strong>5 events / 15 min</strong></td>
+<td><code>block://?ttl=1800&amp;fleet_wide=1</code></td>
+</tr>
+<tr>
+<td>Auth - Bouncer Token Abuse</td>
+<td><code>security:bouncer:token_invalid</code></td>
+<td><code>level &gt;= 7</code></td>
+<td><strong>10 events / 30 min</strong></td>
+<td><code>block://?ttl=1800&amp;fleet_wide=1</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Credential Stuffing</strong> — a <code>login:unknown</code> event means the submitted username does not exist. One is a typo, or someone who forgot which email they signed up with. 25 in an hour from one address is a list being worked. <code>bundle_minutes</code> is 60 to match the counting window.</li>
+<li><strong>Password Brute Force</strong> — the login view emits <code>invalid_password</code> at level 5 only after a username has resolved, so this counts failed guesses against <em>known</em> accounts. Note the per-account sliding window in <code>mojo/decorators/limits.py</code> is the control that survives IP rotation; this ruleset is the per-address complement, not a replacement.</li>
+<li><strong>Bouncer Token Abuse</strong> — see the level split below. Only tampering reaches level 7, so ordinary token lifecycle failures never match this ruleset at all, and 10 tampered tokens in 30 minutes are still required before it blocks.</li>
+</ul>
+<h4 id="bouncer-token-failure-levels">Bouncer token failure levels<a class="headerlink" href="#bouncer-token-failure-levels" title="Permanent link">&para;</a></h4>
+<p><code>@md.requires_bouncer_token()</code> (<code>mojo/decorators/bouncer.py</code>) reports <code>security:bouncer:token_invalid</code> at a level that depends on <em>why</em> validation failed:</p>
+<table>
+<thead>
+<tr>
+<th>Cause</th>
+<th>Level</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>expired</code></td>
+<td>4</td>
+<td>The 15-minute TTL ran out while the user read the page.</td>
+</tr>
+<tr>
+<td><code>nonce_consumed</code></td>
+<td>4</td>
+<td>Double-submitted form — the nonce is single-use.</td>
+</tr>
+<tr>
+<td><code>ip_mismatch</code></td>
+<td>4</td>
+<td>Cellular or CGNAT handoff changed the egress IP mid-session.</td>
+</tr>
+<tr>
+<td><code>invalid_format</code></td>
+<td>7</td>
+<td>Not a well-formed token.</td>
+</tr>
+<tr>
+<td><code>invalid_signature</code></td>
+<td>7</td>
+<td>Forged or tampered with.</td>
+</tr>
+<tr>
+<td><code>page_type_mismatch</code></td>
+<td>7</td>
+<td>A valid token replayed against a different endpoint.</td>
+</tr>
+<tr>
+<td><code>duid_mismatch</code></td>
+<td>7</td>
+<td>A valid token replayed from a different device.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Log-only mode caps every cause at level 4.</strong> When <code>BOUNCER_REQUIRE_TOKEN</code> is False the deployment has not enabled enforcement, so nothing the bouncer observes may get an address firewalled — whatever the cause. Turning enforcement on is what makes the level-7 causes able to reach a blocking rule.</p>
+<h3 id="bouncer-ensure_bouncer_rules">Bouncer — <code>ensure_bouncer_rules()</code><a class="headerlink" href="#bouncer-ensure_bouncer_rules" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Category</th>
+<th>Matches</th>
+<th>Gate</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bouncer - Honeypot Credential Stuffing</td>
+<td><code>security:bouncer:honeypot_post</code></td>
+<td><code>level &gt;= 9</code></td>
+<td><strong>none — first event</strong></td>
+<td><code>block://?ttl=3600&amp;fleet_wide=1</code></td>
+</tr>
+<tr>
+<td>Bouncer - Bot Campaign Detection</td>
+<td><code>security:bouncer:campaign</code></td>
+<td><code>level &gt;= 10</code></td>
+<td><strong>none — first event</strong></td>
+<td><code>block://?ttl=86400&amp;fleet_wide=1</code> + notify</td>
+</tr>
+<tr>
+<td>Bouncer - High Confidence Bot Block</td>
+<td><code>security:bouncer:block</code></td>
+<td><code>risk_score &gt;= 80</code></td>
+<td><strong>3 events / 30 min</strong></td>
+<td><code>block://?ttl=3600&amp;fleet_wide=1</code></td>
+</tr>
+<tr>
+<td>Bouncer - In-Session Freeze</td>
+<td><code>security:bouncer:session_freeze</code></td>
+<td><code>level &gt;= 9</code></td>
+<td><strong>3 events / 60 min</strong></td>
+<td><code>block://?ttl=86400&amp;fleet_wide=1</code> + notify</td>
+</tr>
+<tr>
+<td>Bouncer - In-Session Shadow Ban</td>
+<td><code>security:bouncer:session_shadow_ban</code></td>
+<td><code>level &gt;= 8</code></td>
+<td>n/a — no block</td>
+<td><code>notify://perm@manage_security</code></td>
+</tr>
+<tr>
+<td>Bouncer - In-Session Step-Up Required</td>
+<td><code>security:bouncer:session_step_up</code></td>
+<td><code>level &gt;= 6</code></td>
+<td>n/a — no block</td>
+<td>no handler; bundles for visibility</td>
+</tr>
+<tr>
+<td>Bouncer - In-Session Suspect</td>
+<td><code>security:bouncer:session_suspect</code></td>
+<td>(no rules)</td>
+<td>n/a — no block</td>
+<td>no handler; bundles for visibility</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Honeypot and Campaign stay ungated deliberately.</strong> A honeypot POST means credentials were submitted to a page no real user can reach; campaign detection already requires 5+ distinct blocks sharing a signal pattern. Both are proof on their own — adding a trigger gate would only delay a certain block.</li>
+<li><strong>High Confidence Bot Block</strong> is a heuristic on browser signals. One 80+ score can be a privacy extension, an unusual corporate browser build, or somebody's headless integration test, so the firewall waits for the pattern to repeat.</li>
+<li><strong>In-Session Freeze</strong> costs the address a full day of firewall. One scorer verdict — which a paused laptop or an assistive tool can produce — is far too cheap a trigger for that penalty.</li>
+</ul>
+<h3 id="retuning-an-already-bootstrapped-ruleset">Retuning an already-bootstrapped ruleset<a class="headerlink" href="#retuning-an-already-bootstrapped-ruleset" title="Permanent link">&para;</a></h3>
+<p><code>_create_ruleset()</code> uses <code>get_or_create(defaults=...)</code>. <strong>Changing a default in code only affects deployments that have not bootstrapped yet.</strong> An existing deployment keeps whatever rows it already has — deliberately, so a framework upgrade can never silently rewrite security policy an operator tuned by hand. The trade-off is that upgrading does not fix an existing deployment for you; the REST calls below do.</p>
+<p><strong>Which deployments are affected.</strong> Any deployment bootstrapped before the trigger gates were added has these five rulesets with <code>trigger_count = null</code>, meaning each one firewalls an IP <strong>fleet-wide on a single event</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Ruleset</th>
+<th>One event means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Auth - Credential Stuffing</td>
+<td>One mistyped username → the whole egress blocked for 30 minutes</td>
+</tr>
+<tr>
+<td>Auth - Bouncer Token Abuse</td>
+<td>One expired token → the whole egress blocked for 30 minutes</td>
+</tr>
+<tr>
+<td>Bouncer - High Confidence Bot Block</td>
+<td>One heuristic bot score → 1 hour</td>
+</tr>
+<tr>
+<td>Bouncer - In-Session Freeze</td>
+<td>One risk-90 session → 24 hours</td>
+</tr>
+<tr>
+<td>OSSEC - Generic Web Errors</td>
+<td>One 404 → 5 minutes</td>
+</tr>
+</tbody>
+</table>
+<p>On a corporate NAT or CGNAT, "the whole egress" is everybody behind that address.</p>
+<p><strong>Check what you have:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>GET /api/incident/event/ruleset?size=100
+</code></pre></div>
+<p>Look for any ruleset whose <code>handler</code> contains <code>block://</code> and whose <code>trigger_count</code> is <code>null</code>.</p>
+<p><strong>Apply the current defaults.</strong> POST to the ruleset's id with the fields to change (requires <code>manage_security</code> or <code>security</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>POST /api/incident/event/ruleset/&lt;id&gt;
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>{&quot;trigger_count&quot;: 25, &quot;trigger_window&quot;: 60, &quot;bundle_minutes&quot;: 60}
+</code></pre></div>
+<p>The five, with the values the framework now ships:</p>
+<table>
+<thead>
+<tr>
+<th>Ruleset</th>
+<th><code>trigger_count</code></th>
+<th><code>trigger_window</code></th>
+<th><code>bundle_minutes</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Auth - Credential Stuffing</td>
+<td>25</td>
+<td>60</td>
+<td>60</td>
+</tr>
+<tr>
+<td>Auth - Bouncer Token Abuse</td>
+<td>10</td>
+<td>30</td>
+<td>30 (already)</td>
+</tr>
+<tr>
+<td>Bouncer - High Confidence Bot Block</td>
+<td>3</td>
+<td>30</td>
+<td>30 (already)</td>
+</tr>
+<tr>
+<td>Bouncer - In-Session Freeze</td>
+<td>3</td>
+<td>60</td>
+<td>60 (already)</td>
+</tr>
+<tr>
+<td>OSSEC - Generic Web Errors</td>
+<td>10</td>
+<td>10</td>
+<td><strong>10 — was 0</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong><code>bundle_minutes</code> must cover <code>trigger_window</code>.</strong> The threshold counts events on <em>one</em> incident. <code>bundle_minutes = 0</code> disables bundling, so every event lands on its own incident, the count never climbs past 1, and adding a <code>trigger_count</code> <strong>disables the rule</strong> rather than loosening it. This is why OSSEC - Generic Web Errors needs its <code>bundle_minutes</code> raised alongside the gate.</p>
+</blockquote>
+<p>Equivalent from a Django shell or a deployment script:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.incident.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">RuleSet</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;Auth - Credential Stuffing&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>    <span class="n">trigger_count</span><span class="o">=</span><span class="mi">25</span><span class="p">,</span> <span class="n">trigger_window</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">bundle_minutes</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
+</code></pre></div>
+<p>To verify a retune took effect, publish a single matching event and confirm the incident sits at <code>status="pending"</code> rather than transitioning to <code>new</code>.</p>
 <hr />
 <h2 id="integration-with-geolocatedip">Integration with GeoLocatedIP<a class="headerlink" href="#integration-with-geolocatedip" title="Permanent link">&para;</a></h2>
 <p>The incident system and <code>GeoLocatedIP</code> form a feedback loop:</p>
@@ -6493,7 +6994,22 @@ pushed into the fleet-wide firewall.</p>
 <li><strong>Incidents escalate threat levels</strong>: <code>GeoLocatedIP.update_threat_from_incident(priority)</code> is called when incidents are created. This escalates <code>threat_level</code> (never downgrades). It does not auto-block — blocking is handled by the rule engine (<code>block://</code> handlers) which has full context on conditions and TTLs.</li>
 <li><strong>GeoLocatedIP data feeds rules</strong>: Rules can match on <code>risk_score</code>, <code>is_tor</code>, <code>is_vpn</code>, <code>threat_level</code>, <code>country_code</code> — any GeoIP field that ends up in event metadata.</li>
 <li><strong>Block/unblock flows through GeoLocatedIP</strong>: The <code>block://</code> handler and admin actions both go through <code>GeoLocatedIP.block()</code>, ensuring a single code path for DB updates and fleet broadcasts.</li>
+<li><strong>Events decide <code>is_known_attacker</code> / <code>is_known_abuser</code></strong>: <code>check_threats()</code> reads <code>incident.Event</code> rows for the address. Only categories on the two attacker allowlists count, and only inside a 24-hour window — a <code>rest_error</code> from a server bug, a permission denial, or the bouncer's own block decision counts toward <strong>nothing</strong>. See <a href="../../account/geoip/#threat-intelligence">Threat Intelligence</a>.</li>
+<li><strong>Escalation decays</strong>: because steps 2 and 4 only ratchet up, the incident app runs a daily <code>recheck_active_threats</code> cron that re-scores recently-active addresses and lets a lower recomputed <code>threat_level</code> replace the stored one.</li>
 </ol>
+<p>Two consequences worth keeping in mind when adding a new event category:</p>
+<ul>
+<li>A new category is <strong>not</strong> attack evidence until someone adds it to
+  <code>GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_CATEGORIES</code> or
+  <code>..._SUSPECT_CATEGORIES</code>. Raising an event's <code>level</code> no longer makes it count.
+  This is the intended failure direction — new categories are far more often
+  operational noise than attacks.</li>
+<li>If you report an event about a specific account, report it from the
+  <strong>instance</strong> (<code>user.report_incident(...)</code>), not the class. Instance reporting
+  stamps <code>model_name</code>/<code>model_id</code>, and the distinct-account breadth gate — the
+  thing that separates a stuffing run from one locked-out user — can only see
+  events that name an account.</li>
+</ul>
 <p>See <a href="../../account/geoip/">GeoIP</a> for the full model reference.</p>
 <hr />
 <h2 id="integration-patterns">Integration Patterns<a class="headerlink" href="#integration-patterns" title="Permanent link">&para;</a></h2>
@@ -6506,70 +7022,70 @@ pushed into the fleet-wide firewall.</p>
 </ul>
 <p>If yes, report an event.</p>
 <h3 id="pattern-rate-limiting">Pattern: rate limiting<a class="headerlink" href="#pattern-rate-limiting" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
-<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>    <span class="sa">f</span><span class="s2">&quot;User </span><span class="si">{</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2"> exceeded API rate limit&quot;</span><span class="p">,</span>
-<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;rate_limit:api&quot;</span><span class="p">,</span>
-<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>    <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;api&quot;</span><span class="p">,</span>
-<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
-<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>    <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">,</span>
-<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a>    <span class="n">uid</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
-<a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a>    <span class="n">endpoint</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">path</span><span class="p">,</span>
-<a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>    <span class="sa">f</span><span class="s2">&quot;User </span><span class="si">{</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="si">}</span><span class="s2"> exceeded API rate limit&quot;</span><span class="p">,</span>
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;rate_limit:api&quot;</span><span class="p">,</span>
+<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a>    <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;api&quot;</span><span class="p">,</span>
+<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+<a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a>    <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">,</span>
+<a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a>    <span class="n">uid</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+<a id="__codelineno-26-8" name="__codelineno-26-8" href="#__codelineno-26-8"></a>    <span class="n">endpoint</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">path</span><span class="p">,</span>
+<a id="__codelineno-26-9" name="__codelineno-26-9" href="#__codelineno-26-9"></a><span class="p">)</span>
 </code></pre></div>
 <p>A RuleSet bundling by <code>SOURCE_IP</code> with <code>trigger_count=20</code> and <code>trigger_window=1</code> fires only when a real abuse pattern emerges — not on a single slow request.</p>
 <h3 id="pattern-authentication-failures">Pattern: authentication failures<a class="headerlink" href="#pattern-authentication-failures" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
-<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>    <span class="sa">f</span><span class="s2">&quot;Failed login for </span><span class="si">{</span><span class="n">username</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;auth:failed&quot;</span><span class="p">,</span>
-<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>    <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;account&quot;</span><span class="p">,</span>
-<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
-<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a>    <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">,</span>
-<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a>    <span class="n">username</span><span class="o">=</span><span class="n">username</span><span class="p">,</span>
-<a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>    <span class="sa">f</span><span class="s2">&quot;Failed login for </span><span class="si">{</span><span class="n">username</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;auth:failed&quot;</span><span class="p">,</span>
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>    <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;account&quot;</span><span class="p">,</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a>    <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">,</span>
+<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a>    <span class="n">username</span><span class="o">=</span><span class="n">username</span><span class="p">,</span>
+<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a><span class="p">)</span>
 </code></pre></div>
 <h3 id="pattern-known-threat-ip">Pattern: known threat IP<a class="headerlink" href="#pattern-known-threat-ip" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">GeoLocatedIP</span>
-<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">incident</span>
-<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>
-<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="n">geo</span> <span class="o">=</span> <span class="n">GeoLocatedIP</span><span class="o">.</span><span class="n">geolocate</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="p">)</span>
-<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>
-<a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a><span class="k">if</span> <span class="n">geo</span><span class="o">.</span><span class="n">is_threat</span><span class="p">:</span>
-<a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a>    <span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
-<a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a>        <span class="sa">f</span><span class="s2">&quot;Request from known threat IP </span><span class="si">{</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-<a id="__codelineno-24-9" name="__codelineno-24-9" href="#__codelineno-24-9"></a>        <span class="n">category</span><span class="o">=</span><span class="s2">&quot;ip:known_threat&quot;</span><span class="p">,</span>
-<a id="__codelineno-24-10" name="__codelineno-24-10" href="#__codelineno-24-10"></a>        <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;account&quot;</span><span class="p">,</span>
-<a id="__codelineno-24-11" name="__codelineno-24-11" href="#__codelineno-24-11"></a>        <span class="n">level</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
-<a id="__codelineno-24-12" name="__codelineno-24-12" href="#__codelineno-24-12"></a>        <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">,</span>
-<a id="__codelineno-24-13" name="__codelineno-24-13" href="#__codelineno-24-13"></a>        <span class="n">source_ip</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span>
-<a id="__codelineno-24-14" name="__codelineno-24-14" href="#__codelineno-24-14"></a>        <span class="n">is_tor</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">is_tor</span><span class="p">,</span>
-<a id="__codelineno-24-15" name="__codelineno-24-15" href="#__codelineno-24-15"></a>        <span class="n">is_vpn</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">is_vpn</span><span class="p">,</span>
-<a id="__codelineno-24-16" name="__codelineno-24-16" href="#__codelineno-24-16"></a>        <span class="n">threat_level</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">threat_level</span><span class="p">,</span>
-<a id="__codelineno-24-17" name="__codelineno-24-17" href="#__codelineno-24-17"></a>        <span class="n">risk_score</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">risk_score</span><span class="p">,</span>
-<a id="__codelineno-24-18" name="__codelineno-24-18" href="#__codelineno-24-18"></a>    <span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">GeoLocatedIP</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps</span><span class="w"> </span><span class="kn">import</span> <span class="n">incident</span>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="n">geo</span> <span class="o">=</span> <span class="n">GeoLocatedIP</span><span class="o">.</span><span class="n">geolocate</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="p">)</span>
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>
+<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a><span class="k">if</span> <span class="n">geo</span><span class="o">.</span><span class="n">is_threat</span><span class="p">:</span>
+<a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a>    <span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
+<a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a>        <span class="sa">f</span><span class="s2">&quot;Request from known threat IP </span><span class="si">{</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+<a id="__codelineno-28-9" name="__codelineno-28-9" href="#__codelineno-28-9"></a>        <span class="n">category</span><span class="o">=</span><span class="s2">&quot;ip:known_threat&quot;</span><span class="p">,</span>
+<a id="__codelineno-28-10" name="__codelineno-28-10" href="#__codelineno-28-10"></a>        <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;account&quot;</span><span class="p">,</span>
+<a id="__codelineno-28-11" name="__codelineno-28-11" href="#__codelineno-28-11"></a>        <span class="n">level</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-28-12" name="__codelineno-28-12" href="#__codelineno-28-12"></a>        <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">,</span>
+<a id="__codelineno-28-13" name="__codelineno-28-13" href="#__codelineno-28-13"></a>        <span class="n">source_ip</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span>
+<a id="__codelineno-28-14" name="__codelineno-28-14" href="#__codelineno-28-14"></a>        <span class="n">is_tor</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">is_tor</span><span class="p">,</span>
+<a id="__codelineno-28-15" name="__codelineno-28-15" href="#__codelineno-28-15"></a>        <span class="n">is_vpn</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">is_vpn</span><span class="p">,</span>
+<a id="__codelineno-28-16" name="__codelineno-28-16" href="#__codelineno-28-16"></a>        <span class="n">threat_level</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">threat_level</span><span class="p">,</span>
+<a id="__codelineno-28-17" name="__codelineno-28-17" href="#__codelineno-28-17"></a>        <span class="n">risk_score</span><span class="o">=</span><span class="n">geo</span><span class="o">.</span><span class="n">risk_score</span><span class="p">,</span>
+<a id="__codelineno-28-18" name="__codelineno-28-18" href="#__codelineno-28-18"></a>    <span class="p">)</span>
 </code></pre></div>
 <h3 id="pattern-payment-anomalies">Pattern: payment anomalies<a class="headerlink" href="#pattern-payment-anomalies" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
-<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>    <span class="s2">&quot;Multiple card declines for user&quot;</span><span class="p">,</span>
-<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;payment:declined&quot;</span><span class="p">,</span>
-<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>    <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;billing&quot;</span><span class="p">,</span>
-<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
-<a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a>    <span class="n">uid</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
-<a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a>    <span class="n">model_name</span><span class="o">=</span><span class="s2">&quot;billing.Order&quot;</span><span class="p">,</span>
-<a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a>    <span class="n">model_id</span><span class="o">=</span><span class="n">order</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
-<a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="n">incident</span><span class="o">.</span><span class="n">report_event</span><span class="p">(</span>
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>    <span class="s2">&quot;Multiple card declines for user&quot;</span><span class="p">,</span>
+<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;payment:declined&quot;</span><span class="p">,</span>
+<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a>    <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;billing&quot;</span><span class="p">,</span>
+<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>    <span class="n">level</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a>    <span class="n">uid</span><span class="o">=</span><span class="n">user</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+<a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a>    <span class="n">model_name</span><span class="o">=</span><span class="s2">&quot;billing.Order&quot;</span><span class="p">,</span>
+<a id="__codelineno-29-8" name="__codelineno-29-8" href="#__codelineno-29-8"></a>    <span class="n">model_id</span><span class="o">=</span><span class="n">order</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+<a id="__codelineno-29-9" name="__codelineno-29-9" href="#__codelineno-29-9"></a><span class="p">)</span>
 </code></pre></div>
 <h3 id="pattern-auto-block-via-ruleset">Pattern: auto-block via RuleSet<a class="headerlink" href="#pattern-auto-block-via-ruleset" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="c1"># This RuleSet blocks the IP after 10 failed SSH logins in 5 minutes,</span>
-<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="c1"># creates a ticket, and emails the security team — all from one config.</span>
-<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
-<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;ossec&quot;</span><span class="p">,</span>
-<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;SSH Brute Force&quot;</span><span class="p">,</span>
-<a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a>    <span class="n">bundle_by</span><span class="o">=</span><span class="n">BundleBy</span><span class="o">.</span><span class="n">SOURCE_IP</span><span class="p">,</span>
-<a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a>    <span class="n">bundle_minutes</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
-<a id="__codelineno-26-8" name="__codelineno-26-8" href="#__codelineno-26-8"></a>    <span class="n">handler</span><span class="o">=</span><span class="s2">&quot;block://?ttl=3600&amp;reason=ssh_brute_force,ticket://?status=new&amp;priority=9&amp;category=security,email://security@example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-26-9" name="__codelineno-26-9" href="#__codelineno-26-9"></a>    <span class="n">trigger_count</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
-<a id="__codelineno-26-10" name="__codelineno-26-10" href="#__codelineno-26-10"></a>    <span class="n">trigger_window</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
-<a id="__codelineno-26-11" name="__codelineno-26-11" href="#__codelineno-26-11"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c1"># This RuleSet blocks the IP after 10 failed SSH logins in 5 minutes,</span>
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="c1"># creates a ticket, and emails the security team — all from one config.</span>
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;ossec&quot;</span><span class="p">,</span>
+<a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;SSH Brute Force&quot;</span><span class="p">,</span>
+<a id="__codelineno-30-6" name="__codelineno-30-6" href="#__codelineno-30-6"></a>    <span class="n">bundle_by</span><span class="o">=</span><span class="n">BundleBy</span><span class="o">.</span><span class="n">SOURCE_IP</span><span class="p">,</span>
+<a id="__codelineno-30-7" name="__codelineno-30-7" href="#__codelineno-30-7"></a>    <span class="n">bundle_minutes</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-30-8" name="__codelineno-30-8" href="#__codelineno-30-8"></a>    <span class="n">handler</span><span class="o">=</span><span class="s2">&quot;block://?ttl=3600&amp;reason=ssh_brute_force,ticket://?status=new&amp;priority=9&amp;category=security,email://security@example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-30-9" name="__codelineno-30-9" href="#__codelineno-30-9"></a>    <span class="n">trigger_count</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+<a id="__codelineno-30-10" name="__codelineno-30-10" href="#__codelineno-30-10"></a>    <span class="n">trigger_window</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-30-11" name="__codelineno-30-11" href="#__codelineno-30-11"></a><span class="p">)</span>
 </code></pre></div>
 <hr />
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
@@ -6612,26 +7128,41 @@ pushed into the fleet-wide firewall.</p>
 <td><code>"mojo_blocked"</code></td>
 <td>Name of the kernel ipset used for permanent IP blocks. Change only if you have a naming conflict with an existing ipset.</td>
 </tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS</code></td>
+<td><code>24</code></td>
+<td>Window the <code>ip_recent_*</code> rule fields and the <code>is_known_attacker</code> / <code>is_known_abuser</code> predicates count over</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_RECHECK_THREATS_MAX</code></td>
+<td><code>500</code></td>
+<td>Rows the daily <code>recheck_active_threats</code> decay cron processes</td>
+</tr>
 </tbody>
 </table>
+<p>The rest of the <code>GEOLOCATION_INTERNAL_*</code> family (the attacker allowlists, the
+breadth gate, the shared-egress suppressor, the dry-run switch) is documented in
+<a href="../../account/geoip/#threat-intelligence">account/geoip.md</a>. All of them are
+re-read on every call, so a DB-backed <code>Setting</code> retunes detection without a
+restart.</p>
 <hr />
 <h2 id="why-consistency-matters">Why Consistency Matters<a class="headerlink" href="#why-consistency-matters" title="Permanent link">&para;</a></h2>
 <p>The incident system gets more valuable as more components use it. A RuleSet configured to detect brute force across <code>auth:failed</code> events only works if every authentication path reports <code>auth:failed</code> consistently.</p>
 <p>Establish naming conventions per domain and stick to them:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>auth:failed
-<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>auth:locked
-<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>auth:mfa_bypass_attempt
-<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>ip:suspicious
-<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a>ip:known_threat
-<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a>permission:denied
-<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a>payment:declined
-<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a>data:unexpected_delete
-<a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a>rate_limit:api
-<a id="__codelineno-27-10" name="__codelineno-27-10" href="#__codelineno-27-10"></a>ossec
-<a id="__codelineno-27-11" name="__codelineno-27-11" href="#__codelineno-27-11"></a>firewall:block
-<a id="__codelineno-27-12" name="__codelineno-27-12" href="#__codelineno-27-12"></a>firewall:unblock
-<a id="__codelineno-27-13" name="__codelineno-27-13" href="#__codelineno-27-13"></a>firewall:whitelist
-<a id="__codelineno-27-14" name="__codelineno-27-14" href="#__codelineno-27-14"></a>firewall:unwhitelist
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>auth:failed
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>auth:locked
+<a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a>auth:mfa_bypass_attempt
+<a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a>ip:suspicious
+<a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a>ip:known_threat
+<a id="__codelineno-31-6" name="__codelineno-31-6" href="#__codelineno-31-6"></a>permission:denied
+<a id="__codelineno-31-7" name="__codelineno-31-7" href="#__codelineno-31-7"></a>payment:declined
+<a id="__codelineno-31-8" name="__codelineno-31-8" href="#__codelineno-31-8"></a>data:unexpected_delete
+<a id="__codelineno-31-9" name="__codelineno-31-9" href="#__codelineno-31-9"></a>rate_limit:api
+<a id="__codelineno-31-10" name="__codelineno-31-10" href="#__codelineno-31-10"></a>ossec
+<a id="__codelineno-31-11" name="__codelineno-31-11" href="#__codelineno-31-11"></a>firewall:block
+<a id="__codelineno-31-12" name="__codelineno-31-12" href="#__codelineno-31-12"></a>firewall:unblock
+<a id="__codelineno-31-13" name="__codelineno-31-13" href="#__codelineno-31-13"></a>firewall:whitelist
+<a id="__codelineno-31-14" name="__codelineno-31-14" href="#__codelineno-31-14"></a>firewall:unwhitelist
 </code></pre></div>
 <p>The rule engine matches on these strings — consistent category naming means rule coverage automatically extends to every code path that reports under the same category, without touching the RuleSet.</p>
 

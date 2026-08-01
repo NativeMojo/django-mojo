@@ -5663,6 +5663,25 @@
 <h3 id="bouncer">BOUNCER<a class="headerlink" href="#bouncer" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>BOUNCER_ACCENT_COLOR</code></li>
+<li><code>BOUNCER_ALLOWED_ORIGINS</code> — list of origins allowed to call the bouncer
+  endpoints with credentials (<code>Access-Control-Allow-Credentials: true</code> plus a
+  specific <code>Access-Control-Allow-Origin</code>). Consulted first and unconditionally,
+  in both origin modes; it is the mechanism that names the permitted origins
+  once <code>BOUNCER_ALLOW_ANY_ORIGIN</code> is <code>False</code>. Matched by exact string, so
+  non-http entries such as <code>capacitor://localhost</code> are valid. <strong>File-only</strong>
+  (<code>settings.get_static</code>).</li>
+<li><code>BOUNCER_ALLOW_ANY_ORIGIN</code> — <strong>file-only</strong> (<code>settings.get_static</code>, default
+  <code>True</code>). By default the three public bouncer endpoints (<code>assess</code>, <code>event</code>,
+  <code>message</code>) echo any well-formed <code>http(s)</code> request <code>Origin</code> with credentials —
+  this is an open API platform and third-party callers are expected. Set it
+  <code>False</code> to restrict those endpoints to <code>BOUNCER_ALLOWED_ORIGINS</code>. <code>verify_pass</code>
+  and the permission-gated admin endpoints (<code>device</code>, <code>signal</code>, <code>signature</code>) are
+  never covered either way; <code>Origin: null</code> and malformed origins are always
+  refused. An uncoercible value degrades to the declared default (<code>True</code>), so a
+  typo'd opt-out does not silently take effect. See
+  <a href="../../account/bouncer/#cross-origin-embedding">account/bouncer.md</a>.
+  Deliberately not readable from the DB/Redis settings plane, so a <code>Setting</code> row
+  cannot change the origin policy at runtime.</li>
 <li><code>BOUNCER_CHALLENGE_BRAND</code></li>
 <li><code>BOUNCER_CHALLENGE_LOGO_URL</code></li>
 <li><code>BOUNCER_CONTACT_PATH</code></li>
@@ -5677,6 +5696,10 @@
 <li><code>BOUNCER_LEARN_UA_TTL</code></li>
 <li><code>BOUNCER_LOGIN_PATH</code></li>
 <li><code>BOUNCER_LOGO_URL</code></li>
+<li><code>BOUNCER_PASS_COOKIE_DOMAIN</code> — <code>Domain</code> attribute for the <code>mbp</code> pass cookie
+  (e.g. <code>'.example.com'</code>), so a subdomain deployment shares it between the app
+  host and the bouncer host. It also widens the set of subdomains the cookie
+  rides along on for credentialed same-site calls.</li>
 <li><code>BOUNCER_PASS_COOKIE_TTL</code></li>
 <li><code>BOUNCER_PUBLIC_MESSAGE_MAX_LENGTH</code></li>
 <li><code>BOUNCER_REGISTER_PATH</code></li>
@@ -5796,10 +5819,28 @@
 <li><code>GEOLOCATION_DEVICE_LOCATION_AGE</code></li>
 <li><code>GEOLOCATION_ENABLE_BLOCKLIST_CHECK</code></li>
 <li><code>GEOLOCATION_ENABLE_INTERNAL_THREAT_CHECK</code></li>
+<li><code>GEOLOCATION_INTERNAL_ABUSER_CATEGORY_PREFIX</code></li>
+<li><code>GEOLOCATION_INTERNAL_ABUSER_EVENT_THRESHOLD</code></li>
+<li><code>GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_CATEGORIES</code></li>
+<li><code>GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_THRESHOLD</code></li>
 <li><code>GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD</code></li>
-<li><code>GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD</code></li>
+<li><code>GEOLOCATION_INTERNAL_ATTACKER_MIN_TARGETS</code></li>
+<li><code>GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_CATEGORIES</code></li>
+<li><code>GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_THRESHOLD</code></li>
+<li><code>GEOLOCATION_INTERNAL_SHARED_EGRESS_MIN_DEVICES</code></li>
+<li><code>GEOLOCATION_INTERNAL_THREAT_DRY_RUN</code></li>
 <li><code>GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS</code></li>
+<li><code>GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS</code></li>
+<li><code>GEOLOCATION_RECHECK_THREATS_MAX</code></li>
+<li><code>GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES</code> <em>(deprecated — replaced by
+  the CONFIRMED/SUSPECT allowlists; still honored, logs a warning)</em></li>
+<li><code>GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD</code> <em>(deprecated — no predicate
+  reads it)</em></li>
 </ul>
+<p>Every <code>GEOLOCATION_INTERNAL_*</code> name above is read through <code>settings.get()</code> on
+each call, so a DB-backed <code>Setting</code> row retunes threat detection without a
+restart. See
+<a href="../../account/geoip/#threat-intelligence">account/geoip.md</a>.</p>
 <h3 id="github">GITHUB<a class="headerlink" href="#github" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>GITHUB_APP_ID</code></li>

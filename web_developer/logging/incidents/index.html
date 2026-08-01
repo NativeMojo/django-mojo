@@ -4261,8 +4261,48 @@
 </tr>
 <tr>
 <td>GET</td>
+<td><code>/api/incident/event/ruleset/&lt;id&gt;</code></td>
+<td>Get rule set</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/incident/event/ruleset</code></td>
+<td>Create rule set</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/incident/event/ruleset/&lt;id&gt;</code></td>
+<td>Update rule set</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td><code>/api/incident/event/ruleset/&lt;id&gt;</code></td>
+<td>Delete rule set</td>
+</tr>
+<tr>
+<td>GET</td>
 <td><code>/api/incident/event/ruleset/rule</code></td>
 <td>List rules</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/incident/event/ruleset/rule/&lt;id&gt;</code></td>
+<td>Get rule</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/incident/event/ruleset/rule</code></td>
+<td>Create rule</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/incident/event/ruleset/rule/&lt;id&gt;</code></td>
+<td>Update rule</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td><code>/api/incident/event/ruleset/rule/&lt;id&gt;</code></td>
+<td>Delete rule</td>
 </tr>
 <tr>
 <td>GET</td>
@@ -4643,7 +4683,7 @@
 <a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="p">}</span>
 </code></pre></div>
 <h2 id="ruleset-fields">RuleSet Fields<a class="headerlink" href="#ruleset-fields" title="Permanent link">&para;</a></h2>
-<p>When reading or writing rules via <code>/api/incident/event/ruleset</code>, these fields control threshold and retrigger behavior:</p>
+<p>Rule sets are read and written via <code>/api/incident/event/ruleset</code>, and their individual conditions via <code>/api/incident/event/ruleset/rule</code>. Reading needs <code>view_security</code> (or <code>security</code>); creating, updating and deleting need <strong><code>manage_security</code> (or <code>security</code>)</strong>.</p>
 <table>
 <thead>
 <tr>
@@ -4669,12 +4709,33 @@
 <td>Re-fire the handler every N additional events after the initial trigger. <code>null</code> = fire once only.</td>
 </tr>
 <tr>
+<td><code>is_active</code></td>
+<td>bool</td>
+<td><code>false</code> takes the rule set out of evaluation entirely without deleting it or losing its rules. Use this to park a rule set you may want back.</td>
+</tr>
+<tr>
+<td><code>bundle_minutes</code></td>
+<td>int or null</td>
+<td>Time window for grouping events onto one incident. <code>0</code> = disabled (every event gets its own incident), <code>null</code> = unlimited.</td>
+</tr>
+<tr>
 <td><code>metadata.delete_on_resolution</code></td>
 <td>bool</td>
 <td>When <code>true</code>, incidents created by this RuleSet are auto-deleted the moment they transition to <code>resolved</code> or <code>closed</code>. Intended for noise patterns (bot scanners, brute-force probes) where the incident has no long-term value. Overridden per-incident by <code>metadata.do_not_delete</code>.</td>
 </tr>
 </tbody>
 </table>
+<blockquote>
+<p><strong><code>bundle_minutes</code> must be at least <code>trigger_window</code>.</strong> The threshold counts events on a single incident. With <code>bundle_minutes: 0</code> each event lands on its own incident, so the count never climbs past 1 and a <code>trigger_count</code> silently <strong>disables</strong> the rule set instead of deferring it.</p>
+</blockquote>
+<p>A rule set whose <code>handler</code> contains <code>block://</code> and whose <code>trigger_count</code> is <code>null</code> firewalls the source IP on the <strong>first</strong> matching event. That is only appropriate when no legitimate user can produce the match — on a corporate NAT or CGNAT one address fronts many unrelated people. To retune a rule set that is already installed, POST just the fields you want to change:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>POST /api/incident/event/ruleset/12
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>{
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>  &quot;trigger_count&quot;: 25,
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>  &quot;trigger_window&quot;: 60,
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>  &quot;bundle_minutes&quot;: 60
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>}
+</code></pre></div>
 <h3 id="bundle_by-values"><code>bundle_by</code> values<a class="headerlink" href="#bundle_by-values" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -4758,17 +4819,17 @@
 </tbody>
 </table>
 <p><strong>Example — block after 10 failed logins in 10 minutes, re-alert every 20 more:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>POST /api/incident/event/ruleset
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>{
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>  &quot;category&quot;: &quot;auth:failed&quot;,
-<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>  &quot;name&quot;: &quot;Brute Force Detection&quot;,
-<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>  &quot;bundle_by&quot;: 4,
-<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>  &quot;bundle_minutes&quot;: 10,
-<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>  &quot;handler&quot;: &quot;block://?ttl=3600,notify://perm@manage_security&quot;,
-<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>  &quot;trigger_count&quot;: 10,
-<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>  &quot;trigger_window&quot;: 10,
-<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>  &quot;retrigger_every&quot;: 20
-<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>POST /api/incident/event/ruleset
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>{
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>  &quot;category&quot;: &quot;auth:failed&quot;,
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>  &quot;name&quot;: &quot;Brute Force Detection&quot;,
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>  &quot;bundle_by&quot;: 4,
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>  &quot;bundle_minutes&quot;: 10,
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>  &quot;handler&quot;: &quot;block://?ttl=3600,notify://perm@manage_security&quot;,
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>  &quot;trigger_count&quot;: 10,
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>  &quot;trigger_window&quot;: 10,
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>  &quot;retrigger_every&quot;: 20
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>}
 </code></pre></div>
 <p>Incidents stay at <code>pending</code> until <code>trigger_count</code> is reached, then transition to <code>new</code> and the handler fires. With <code>retrigger_every=20</code>, the handler fires again at 30 events, 50, 70, and so on.</p>
 <h2 id="filtering">Filtering<a class="headerlink" href="#filtering" title="Permanent link">&para;</a></h2>

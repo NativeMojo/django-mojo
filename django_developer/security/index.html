@@ -6004,6 +6004,11 @@ into the kernel firewall fleet-wide.</p>
 <td>Refreshes the cache-only <code>tor_exits</code>/<code>blocklist_de</code> IPSet rows (<code>refresh_from_source()</code> only — never synced to the firewall); see <a href="../account/geoip/#threat-list-caches-tor-exit-list-blocklistde">account/geoip.md</a></td>
 </tr>
 <tr>
+<td><code>recheck_active_threats</code></td>
+<td>Daily 4:20 AM</td>
+<td>Re-scores up to <code>GEOLOCATION_RECHECK_THREATS_MAX</code> (500) recently-active <code>GeoLocatedIP</code> rows so a stale <code>threat_level</code> can <strong>decay</strong> — everything else only ratchets up. Skips <code>provider='mojo'</code> records and external blocklist lookups; see <a href="../account/geoip/#decay">account/geoip.md</a></td>
+</tr>
+<tr>
 <td><code>check_system_health</code></td>
 <td>Every 3 minutes</td>
 <td>Checks runner health, system metrics (if <code>HEALTH_MONITORING_ENABLED</code>)</td>
@@ -6354,6 +6359,7 @@ into the kernel firewall fleet-wide.</p>
 <th>Rule</th>
 <th>Category</th>
 <th>Matches</th>
+<th>Trigger</th>
 <th>Handler</th>
 <th>Bundle</th>
 </tr>
@@ -6363,6 +6369,15 @@ into the kernel firewall fleet-wide.</p>
 <td>Credential Stuffing</td>
 <td><code>login:unknown</code></td>
 <td>level &gt;= 8</td>
+<td>25 events / 60min</td>
+<td><code>block://?ttl=1800</code></td>
+<td>SOURCE_IP, 60min</td>
+</tr>
+<tr>
+<td>Password Brute Force</td>
+<td><code>invalid_password</code></td>
+<td>level &gt;= 5</td>
+<td>5 events / 15min</td>
 <td><code>block://?ttl=1800</code></td>
 <td>SOURCE_IP, 15min</td>
 </tr>
@@ -6370,6 +6385,7 @@ into the kernel firewall fleet-wide.</p>
 <td>Bouncer Token Abuse</td>
 <td><code>security:bouncer:token_invalid</code></td>
 <td>level &gt;= 7</td>
+<td>10 events / 30min</td>
 <td><code>block://?ttl=1800</code></td>
 <td>SOURCE_IP, 30min</td>
 </tr>
@@ -6382,6 +6398,7 @@ into the kernel firewall fleet-wide.</p>
 <th>Rule</th>
 <th>Category</th>
 <th>Matches</th>
+<th>Trigger</th>
 <th>Handler</th>
 <th>Bundle</th>
 </tr>
@@ -6389,8 +6406,9 @@ into the kernel firewall fleet-wide.</p>
 <tbody>
 <tr>
 <td>Honeypot Detection</td>
-<td><code>security:bouncer:honeypot</code></td>
+<td><code>security:bouncer:honeypot_post</code></td>
 <td>level &gt;= 9</td>
+<td>first event</td>
 <td><code>block://?ttl=3600</code></td>
 <td>SOURCE_IP, 30min</td>
 </tr>
@@ -6398,6 +6416,7 @@ into the kernel firewall fleet-wide.</p>
 <td>Bot Campaign</td>
 <td><code>security:bouncer:campaign</code></td>
 <td>level &gt;= 10</td>
+<td>first event</td>
 <td><code>block://?ttl=86400,notify://perm@manage_security</code></td>
 <td>SOURCE_IP, 60min</td>
 </tr>
@@ -6405,11 +6424,21 @@ into the kernel firewall fleet-wide.</p>
 <td>High Confidence Bot</td>
 <td><code>security:bouncer:block</code></td>
 <td>risk_score &gt;= 80</td>
+<td>3 events / 30min</td>
 <td><code>block://?ttl=3600</code></td>
 <td>SOURCE_IP, 30min</td>
 </tr>
+<tr>
+<td>In-Session Freeze</td>
+<td><code>security:bouncer:session_freeze</code></td>
+<td>level &gt;= 9</td>
+<td>3 events / 60min</td>
+<td><code>block://?ttl=86400,notify://perm@manage_security</code></td>
+<td>SOURCE_IP, 60min</td>
+</tr>
 </tbody>
 </table>
+<p>Every blocking rule a legitimate user could trip carries a <code>trigger_count</code>, so one mistyped username or one expired token can never firewall a shared NAT egress. Honeypot and campaign stay on "first event" because no legitimate user can produce their match. See <a href="../logging/incidents/#default-auth-and-bouncer-rulesets">Default auth and bouncer rulesets</a> for the reasoning and for how to retune a deployment bootstrapped before the gates existed.</p>
 <h3 id="health-rules">Health Rules<a class="headerlink" href="#health-rules" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

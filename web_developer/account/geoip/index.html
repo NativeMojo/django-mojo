@@ -4074,6 +4074,34 @@ supported key-based access path.</p>
 </tr>
 </tbody>
 </table>
+<p>Only <code>detailed</code> includes the <code>data</code> blob. When threat checks have run,
+<code>data.threat_data</code> carries:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>internal</code></td>
+<td>object</td>
+<td>Incident-event stats for this IP: <code>total_events</code>, <code>high_severity_events</code>, <code>avg_level</code>, <code>top_categories</code>, <code>last_seen_event</code>, <code>lookback_days</code></td>
+</tr>
+<tr>
+<td><code>blocklists</code></td>
+<td>array</td>
+<td>Per-source hit records (e.g. <code>{"source": "blocklist.de", "is_listed": true}</code>)</td>
+</tr>
+<tr>
+<td><code>is_blocklisted</code></td>
+<td>bool</td>
+<td><code>true</code> when any enabled external blocklist lists this IP</td>
+</tr>
+</tbody>
+</table>
 <hr />
 <h2 id="get-systemgeoippk-geoip-detail"><code>GET system/geoip/&lt;pk&gt;</code> — GeoIP Detail<a class="headerlink" href="#get-systemgeoippk-geoip-detail" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /api/system/geoip/123
@@ -4125,6 +4153,14 @@ supported key-based access path.</p>
 <p>Actions are gated by the model's <code>SAVE_PERMS</code>: <code>manage_users</code>,
 <code>manage_security</code>, or <code>security</code> — and the combined <code>users</code> term (it includes
 <code>manage_users</code> by definition).</p>
+<p><strong><code>threat_level</code> after <code>refresh</code> / <code>threat_analysis</code>.</strong> Both actions run the
+threat-intelligence pass, and the resulting <code>threat_level</code> now reflects
+blocklist and known-attacker signals in addition to Tor/VPN/proxy detection.
+A blocklisted IP comes back at least <code>medium</code>; a known attacker at least
+<code>high</code>; both, <code>critical</code>. The level is escalate-only — these actions never
+lower a record's <code>threat_level</code>. Expect records that previously read <code>low</code> to
+move up the first time either action is run against an IP with incident
+history or a blocklist hit.</p>
 <p>See <a href="../firewall/">firewall.md</a> for full firewall management and security dashboard guide.</p>
 <hr />
 <h2 id="get-systemgeoiplookup-authenticated-ip-lookup"><code>GET system/geoip/lookup</code> — Authenticated IP Lookup<a class="headerlink" href="#get-systemgeoiplookup-authenticated-ip-lookup" title="Permanent link">&para;</a></h2>

@@ -4212,6 +4212,16 @@ with a perm list (DM-028).</p>
 - 24-hour preflight cache (<code>Access-Control-Max-Age: 86400</code>)
 - Allows custom headers including <code>X-Api-Key</code>, <code>X-Device-Id</code></p>
 <p>No configuration needed — works out of the box.</p>
+<p><strong>Credentialed CORS (bouncer paths only).</strong> A wildcard origin is incompatible
+with cookies, so bouncer paths get a <em>specific</em> <code>Access-Control-Allow-Origin</code>
+plus <code>Access-Control-Allow-Credentials: true</code> when the request <code>Origin</code> is on
+the <code>BOUNCER_ALLOWED_ORIGINS</code> allowlist, or — <strong>by default</strong> — for any
+well-formed <code>http(s)</code> origin on the three public bouncer endpoints (<code>assess</code>,
+<code>event</code>, <code>message</code>). Set <code>BOUNCER_ALLOW_ANY_ORIGIN = False</code> to restrict those
+three to the allowlist. Both settings are read file-only via
+<code>settings.get_static</code>. Everything else keeps the <code>*</code> fallback, and <code>*</code> is never
+sent together with <code>Access-Control-Allow-Credentials</code>. See
+<a href="../../account/bouncer/#cross-origin-embedding">account/bouncer.md</a>.</p>
 <hr />
 <h2 id="requestdata-reference">request.DATA Reference<a class="headerlink" href="#requestdata-reference" title="Permanent link">&para;</a></h2>
 <p><code>request.DATA</code> is an <code>objict</code> instance (dict subclass with attribute access).</p>

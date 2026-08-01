@@ -4096,6 +4096,45 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Cross-Origin Embedding">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#restricting-it-bouncer_allow_any_origin-false" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restricting it: BOUNCER_ALLOW_ANY_ORIGIN = False
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-default-does-and-does-not-cover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the default does and does not cover
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-changes-when-you-flip-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What changes when you flip it
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4771,7 +4810,7 @@ is always empty (nginx <code>auth_request</code> discards it).</p>
 <td>C — Separate eTLD+1</td>
 <td><code>marketing.com</code></td>
 <td><code>auth.example.com</code></td>
-<td><strong>Not in v1.</strong> Browsers will not share cookies across registrable domains. Would require a signed-token redirect dance — separate request when a real consumer surfaces.</td>
+<td><strong>Token flow only.</strong> The credentialed <code>assess</code>/<code>event</code>/<code>message</code> calls work by default (see <a href="#cross-origin-embedding">Cross-Origin Embedding</a>), so <code>@md.requires_bouncer_token</code> is usable from a tenant-owned domain. The <code>mbp</code> pass cookie still is not: <code>_set_pass_cookie</code> uses <code>samesite='Lax'</code>, so browsers refuse to store it cross-site and the repeat-visit challenge skip never engages.</td>
 </tr>
 </tbody>
 </table>
@@ -4782,22 +4821,101 @@ is always empty (nginx <code>auth_request</code> discards it).</p>
 exact config.</p>
 <hr />
 <h2 id="cross-origin-embedding">Cross-Origin Embedding<a class="headerlink" href="#cross-origin-embedding" title="Permanent link">&para;</a></h2>
-<p>The bouncer endpoints are normally same-origin. To allow a separate origin
-(SPA at <code>app.example.com</code> calling bouncer at <code>auth.example.com</code>) to call
-the bouncer with credentials, list the SPA origin in <code>BOUNCER_ALLOWED_ORIGINS</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">BOUNCER_ALLOWED_ORIGINS</span> <span class="o">=</span> <span class="p">[</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>    <span class="s1">&#39;https://app.example.com&#39;</span><span class="p">,</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="s1">&#39;https://playground.example.com&#39;</span><span class="p">,</span>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="p">]</span>
+<p><strong>Credentialed cross-origin access to the public bouncer API is ON by default.</strong>
+This is a REST API platform: anybody can call it, and third-party callers are the
+point. Out of the box the CORS middleware echoes any well-formed <code>http(s)</code>
+request <code>Origin</code> back with <code>Access-Control-Allow-Credentials: true</code> on the three
+public bouncer endpoints, so an SPA or a tenant-owned domain can
+<code>fetch(..., credentials: 'include')</code> with no server-side wiring at all.</p>
+<p>OPTIONS preflights take the identical decision, so JS clients work without
+ceremony.</p>
+<h3 id="restricting-it-bouncer_allow_any_origin-false">Restricting it: <code>BOUNCER_ALLOW_ANY_ORIGIN = False</code><a class="headerlink" href="#restricting-it-bouncer_allow_any_origin-false" title="Permanent link">&para;</a></h3>
+<p>To limit the public bouncer endpoints to a curated set of origins, opt out:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">BOUNCER_ALLOW_ANY_ORIGIN</span> <span class="o">=</span> <span class="kc">False</span>    <span class="c1"># default True</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="n">BOUNCER_ALLOWED_ORIGINS</span> <span class="o">=</span> <span class="p">[</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="s1">&#39;https://app.example.com&#39;</span><span class="p">,</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>    <span class="s1">&#39;https://playground.example.com&#39;</span><span class="p">,</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="p">]</span>
 </code></pre></div>
-<p>The CORS middleware sets <code>Access-Control-Allow-Origin: &lt;origin&gt;</code> (specific
-origin, not <code>*</code>) and <code>Access-Control-Allow-Credentials: true</code> only for
-requests whose <code>Origin</code> matches the allowlist AND whose path is a bouncer
-path (<code>/api/account/bouncer/*</code> or <code>/account/static/mojo-*</code>). Non-bouncer
-paths and non-allowlisted origins keep the existing wildcard behavior.</p>
-<p>OPTIONS preflights from allowlisted origins return 200 with the same
-credentialed headers, so JS clients can <code>fetch(..., credentials: 'include')</code>
-without ceremony.</p>
+<p>With the flag <code>False</code>, the middleware sets <code>Access-Control-Allow-Origin: &lt;origin&gt;</code>
+(specific origin, not <code>*</code>) and <code>Access-Control-Allow-Credentials: true</code> only for
+requests whose <code>Origin</code> matches <code>BOUNCER_ALLOWED_ORIGINS</code> AND whose path is a
+bouncer path (<code>/api/account/bouncer/*</code> or <code>/account/static/mojo-*</code>). Everything
+else keeps the wildcard fallback.</p>
+<p>The allowlist is consulted <strong>first and unconditionally</strong>, in both modes. It is
+therefore additive under the default and authoritative under the opt-out, and
+entries that are not well-formed http(s) origins — <code>chrome-extension://…</code>,
+<code>capacitor://localhost</code> — keep working either way, because the well-formedness
+guard applies only to the any-origin echo branch.</p>
+<h3 id="what-the-default-does-and-does-not-cover">What the default does and does not cover<a class="headerlink" href="#what-the-default-does-and-does-not-cover" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Any-origin echo?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/api/account/bouncer/assess</code></td>
+<td><strong>Yes</strong></td>
+</tr>
+<tr>
+<td><code>/api/account/bouncer/event</code></td>
+<td><strong>Yes</strong></td>
+</tr>
+<tr>
+<td><code>/api/account/bouncer/message</code></td>
+<td><strong>Yes</strong></td>
+</tr>
+<tr>
+<td><code>/api/account/bouncer/verify_pass</code></td>
+<td>No — server-to-server (nginx <code>auth_request</code>), and the sole carrier of <code>X-Bouncer-Muid</code></td>
+</tr>
+<tr>
+<td><code>/api/account/bouncer/device</code>, <code>/signal</code>, <code>/signature</code></td>
+<td>No — permission-gated admin endpoints returning fingerprints, IPs, muids and geo</td>
+</tr>
+<tr>
+<td><code>/account/static/mojo-*</code></td>
+<td>No — <code>&lt;script src&gt;</code> is not a CORS request, and the <code>*</code> fallback already serves it</td>
+</tr>
+</tbody>
+</table>
+<p>Those exclusions are not a restriction on legitimate third-party callers; the
+admin endpoints are permission-gated regardless, and no browser client calls
+<code>verify_pass</code>. An operator who lists an origin in <code>BOUNCER_ALLOWED_ORIGINS</code> can
+still reach every bouncer path, exactly as before.</p>
+<p>Also refused, in both modes:</p>
+<ul>
+<li><code>Origin: null</code> — a sandboxed iframe, <code>data:</code> document or <code>file://</code> page. No
+  real client sends it, and it names no origin to attribute the call to.</li>
+<li>Anything that is not a bare <code>http(s)://host[:port]</code> — a path, query, fragment,
+  a non-http scheme, or any value carrying CR, LF, tab or a space.</li>
+<li><code>Access-Control-Allow-Origin: *</code> is never sent together with
+  <code>Access-Control-Allow-Credentials: true</code>.</li>
+</ul>
+<p>The flag is read with <code>settings.get_static(..., kind='bool')</code> — <strong>file-based
+settings only</strong>. A DB/Redis-backed <code>Setting</code> row (writable over REST with
+<code>manage_settings</code>) cannot change the origin policy at runtime, in either
+direction. An uncoercible value such as <code>"maybe"</code> degrades to the declared
+default — which is now <code>True</code>, i.e. permissive — and logs a coercion warning, so
+a typo'd opt-out does not silently take effect.</p>
+<h3 id="what-changes-when-you-flip-it">What changes when you flip it<a class="headerlink" href="#what-changes-when-you-flip-it" title="Permanent link">&para;</a></h3>
+<p>Setting the flag <code>False</code> stops the three public endpoints answering credentialed
+cross-origin requests from origins you have not listed; they keep answering
+non-credentialed ones through the <code>*</code> fallback, which is unchanged and has always
+been there. Setting it back to <code>True</code> restores the echo.</p>
+<p>Neither direction takes effect instantly for clients that have already
+preflighted: <code>Access-Control-Max-Age: 86400</code> means a browser may keep acting on a
+cached preflight decision for up to 24 hours.</p>
+<p>Two things the flag does not affect at all. Mojo REST auth is header-based
+(<code>Authorization</code>, never a cookie) and every mojo cookie is <code>SameSite=Lax</code>, so a
+cross-<em>site</em> caller's <code>credentials: 'include'</code> request carries no cookies
+regardless of this setting — in practice the origin check only ever gated whether
+cookies could ride along on same-site-different-origin calls. And the public
+endpoints are reachable cross-origin either way via the <code>*</code> fallback with
+<code>credentials: 'omit'</code>.</p>
 <p><strong>Identity stitching across origins</strong> — <code>mojo_device_uid</code> localStorage is
 per-origin. A static site at <code>marketing.example.com</code> embedding sentinel
 served from <code>auth.example.com</code> cannot read the auth host's localStorage —
@@ -4825,7 +4943,11 @@ batched <code>/event</code> endpoints are heavier (DB writes + scoring) but lowe
 volume.</p>
 <p>To onboard a new consumer:</p>
 <ol>
-<li>Add its origin to <code>BOUNCER_ALLOWED_ORIGINS</code> in the bouncer's settings.</li>
+<li>Nothing, for CORS — the public <code>assess</code>/<code>event</code>/<code>message</code> endpoints answer
+   credentialed cross-origin calls from any well-formed origin by default, which
+   is what a consumer bringing its own domain needs. Only if this deployment has
+   opted out with <code>BOUNCER_ALLOW_ANY_ORIGIN = False</code> do you add the consumer's
+   origin to <code>BOUNCER_ALLOWED_ORIGINS</code>. See "Cross-Origin Embedding" above.</li>
 <li>(Optional) Create a <code>Group</code> with <code>auth_domain</code> set to the consumer's
    bouncer-page host, or instruct the consumer to pass <code>?group_uuid=&lt;uuid&gt;</code>
    on bouncer redirects. Configure per-group branding via the standard

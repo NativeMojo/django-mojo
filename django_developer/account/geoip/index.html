@@ -4039,6 +4039,56 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#threat-intelligence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threat Intelligence
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Threat Intelligence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#internal-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Internal analysis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tuning-and-dry-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tuning and dry run
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#decay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decay
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#mojo-provider" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4225,7 +4275,7 @@
 </tr>
 <tr>
 <td><code>data</code></td>
-<td>JSON bag for raw provider data and threat check results</td>
+<td>JSON bag for raw provider data and threat check results. <code>data.threat_data</code> holds <code>internal</code> (event stats), <code>blocklists</code> (per-source hits) and <code>is_blocklisted</code>. See <a href="#threat-intelligence">Threat Intelligence</a>.</td>
 </tr>
 <tr>
 <td><code>expires_at</code></td>
@@ -4701,6 +4751,186 @@ Tor/blocklisted traffic is <em>blocked</em> stays a geofence-rule / firewall
 decision.</p>
 <p>The Tor row honors <code>source_url</code> (falling back to the <code>TOR_EXIT_NODE_LIST_URL</code>
 setting); blocklist.de defaults to <code>https://lists.blocklist.de/lists/all.txt</code>.</p>
+<h3 id="threat-intelligence">Threat Intelligence<a class="headerlink" href="#threat-intelligence" title="Permanent link">&para;</a></h3>
+<p><code>mojo.helpers.geoip.threat_intel.perform_threat_check(ip, skip_external=False)</code>
+is the single entry point. It combines <strong>internal</strong> incident history with
+<strong>external</strong> blocklists and returns:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="s1">&#39;is_known_attacker&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>   <span class="c1"># internal high-severity events</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="s1">&#39;is_known_abuser&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>     <span class="c1"># internal volume/mid-severity pattern</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    <span class="s1">&#39;is_blocklisted&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>      <span class="c1"># listed on any enabled external blocklist</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="s1">&#39;threat_data&#39;</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>        <span class="s1">&#39;internal&#39;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">},</span>        <span class="c1"># see &quot;Internal analysis&quot; below</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>        <span class="s1">&#39;blocklists&#39;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>      <span class="c1"># per-source hit records</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>        <span class="s1">&#39;is_blocklisted&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>  <span class="c1"># mirror of the top-level flag</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>    <span class="p">},</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>threat_data</code> is the sub-dict consumers persist (<code>GeoLocatedIP.data['threat_data']</code>,
+<code>geolocate_ip()</code>'s <code>data['threat_data']</code>), and <code>recalculate_threat_level()</code> reads
+the blocklist flag from <strong>inside</strong> it — that is why the flag appears in both
+places.</p>
+<h4 id="internal-analysis">Internal analysis<a class="headerlink" href="#internal-analysis" title="Permanent link">&para;</a></h4>
+<p><code>check_internal_threats(ip)</code> reads <code>incident.Event</code> rows with a matching
+<code>source_ip</code>. It uses <strong>two different windows</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Window</th>
+<th>Setting</th>
+<th>Default</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Predicate</td>
+<td><code>GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS</code></td>
+<td><code>24</code></td>
+<td><code>is_known_attacker</code>, <code>is_known_abuser</code>, and every count that drives them</td>
+</tr>
+<tr>
+<td>Display</td>
+<td><code>GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS</code></td>
+<td><code>90</code></td>
+<td><code>total_events</code>, <code>avg_level</code>, <code>top_categories</code>, <code>last_seen_event</code></td>
+</tr>
+</tbody>
+</table>
+<p>The predicate answers "is this address hostile <strong>right now</strong>", and the
+enforcement it feeds is measured in minutes. The 90-day count answered "has
+anything ever gone wrong here", which on a shared egress is always yes. The long
+window is kept for the admin UI only — it drives no boolean.</p>
+<p><strong><code>is_known_attacker</code> is a two-tier allowlist.</strong> A category that is on neither
+list counts toward <strong>nothing</strong>, whatever its level:</p>
+<p><em>Tier 1 — confirmed.</em> <code>GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_CATEGORIES</code>
+(default <code>security:bouncer:honeypot_post</code>, <code>security:bouncer:campaign</code>,
+<code>sensitive_field_probe</code>). No legitimate user produces these — a honeypot field
+is invisible to a human. <code>GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_THRESHOLD</code>
+(3) events at <code>level &gt;= GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD</code> (7) is
+enough. Never suppressed.</p>
+<p><em>Tier 2 — suspect.</em> <code>GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_CATEGORIES</code> (default
+<code>login:unknown</code>, <code>reset:unknown</code>, <code>magic:unknown</code>, <code>totp:login_unknown</code>,
+<code>sms:login_unknown</code>, <code>token:unknown</code>, <code>invalid_password</code>). A real user <em>can</em>
+produce one of these by fumbling a credential, so volume alone proves nothing.
+All three of these must hold:</p>
+<ol>
+<li>at least <code>GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_THRESHOLD</code> (25) events in the
+   window, <strong>and</strong></li>
+<li>spread across at least <code>GEOLOCATION_INTERNAL_ATTACKER_MIN_TARGETS</code> (10)
+   distinct user accounts, <strong>and</strong></li>
+<li>the address is not a shared egress (below).</li>
+</ol>
+<p>The level floor does <strong>not</strong> apply to this tier — the category allowlist
+replaces it, which is how <code>invalid_password</code> (reported at level 5, and the
+single strongest credential-stuffing signal in the codebase) finally counts.</p>
+<p>Breadth is measured as <code>COUNT(DISTINCT model_id)</code> over events whose <code>model_name</code>
+names a user. Instance reporting (<code>user.report_incident(...)</code>, e.g.
+<code>invalid_password</code>) stamps both; class-level reporting
+(<code>User.class_report_incident</code>, e.g. <code>login:unknown</code> — the username does not
+resolve to an account) leaves <code>model_id</code> NULL. <strong>An event that names no account
+is not a target</strong>, so a burst of mistyped usernames from an office egress can
+never satisfy the breadth gate on its own. That is deliberate: one person
+fumbling their own password scores 1 target; a stuffing run scores many.</p>
+<p><strong>Shared-egress suppressor.</strong> If at least
+<code>GEOLOCATION_INTERNAL_SHARED_EGRESS_MIN_DEVICES</code> (25) distinct
+<code>BouncerSignal.muid</code> values were seen for the address inside the window, the
+<strong>suspect</strong> tier is suppressed — that address fronts many independent browsers,
+i.e. a NAT. <code>muid</code> is a server-set HttpOnly cookie present pre-auth, so page JS
+cannot forge it. Two guards:</p>
+<ul>
+<li>Only muids whose <code>BouncerDevice.first_seen</code> <strong>predates</strong> the window count, so
+  an attacker cycling fresh cookies on one address cannot fake a NAT.</li>
+<li>If the address has no <code>BouncerSignal</code> rows at all (deployment does not run the
+  bouncer JS), the suppressor is skipped entirely rather than defaulting either
+  way. <code>internal_stats['distinct_devices']</code> is <code>None</code> in that case — never <code>0</code>.</li>
+</ul>
+<p>The confirmed tier is never suppressed: an attacker behind a corporate NAT is
+still an attacker.</p>
+<p><strong><code>is_known_abuser</code> means sustained rate-limit tripping.</strong> At least
+<code>GEOLOCATION_INTERNAL_ABUSER_EVENT_THRESHOLD</code> (60) events whose category starts
+with <code>GEOLOCATION_INTERNAL_ABUSER_CATEGORY_PREFIX</code> (<code>rate_limit:</code>) inside the
+window. Each <code>rate_limit:*</code> event is deduped to one per key+IP per 60 seconds in
+Redis, so 60 events is roughly an hour of the day spent over the limits. This is
+a <strong>semantic change to a federated field</strong> — the old definition (≥10 events with
+a mean level in <code>[4, 8)</code> over 90 days) effectively counted "has this IP ever used
+the API", and <code>avg_level</code> no longer participates in any predicate.</p>
+<p><strong>What counts for nothing.</strong> Everything not named above: <code>rest_error</code>
+(level <strong>12</strong>, emitted by <code>mojo/decorators/http.py</code> for <em>any</em> unhandled 500 and
+attributed to the caller's IP), <code>assistant:error:*</code>, <code>system:health:*</code>,
+<code>traffic:*</code>, <code>rate_limit:*</code> (abuse, not attack), every permission-denied
+category, and — critically — <code>security:bouncer:block</code> and
+<code>security:bouncer:session_*</code>. Excluding the bouncer's own decisions is what
+breaks the self-confirming loop: a block emitted a level-8 event, which made
+<code>is_known_attacker</code> true, which added +40 to the next risk score, which made the
+next block more likely.</p>
+<p>The tradeoff is deliberate: a new attack category next quarter counts for
+nothing until someone adds it to a list. That fails toward missing an attacker
+rather than toward blocking a real user, which is the direction these platforms
+want. Add your own categories to either setting.</p>
+<p><code>internal_stats</code> carries the numbers behind the verdict:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>  <span class="s1">&#39;total_events&#39;</span><span class="p">:</span> <span class="mi">412</span><span class="p">,</span>           <span class="c1"># 90d, display only</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>  <span class="s1">&#39;high_severity_events&#39;</span><span class="p">:</span> <span class="mi">30</span><span class="p">,</span>    <span class="c1"># in-window attack evidence (confirmed+suspect)</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>  <span class="s1">&#39;confirmed_events&#39;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>  <span class="s1">&#39;suspect_events&#39;</span><span class="p">:</span> <span class="mi">30</span><span class="p">,</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>  <span class="s1">&#39;distinct_targets&#39;</span><span class="p">:</span> <span class="mi">12</span><span class="p">,</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>  <span class="s1">&#39;distinct_devices&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>         <span class="c1"># None when the deployment has no bouncer data</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>  <span class="s1">&#39;shared_egress_suppressed&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>  <span class="s1">&#39;abuse_events&#39;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a>  <span class="s1">&#39;avg_level&#39;</span><span class="p">:</span> <span class="mf">5.4</span><span class="p">,</span>              <span class="c1"># 90d, display only</span>
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a>  <span class="s1">&#39;top_categories&#39;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>       <span class="c1"># 90d, display only</span>
+<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>  <span class="s1">&#39;last_seen_event&#39;</span><span class="p">:</span> <span class="s1">&#39;...&#39;</span><span class="p">,</span>      <span class="c1"># 90d, display only</span>
+<a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a>  <span class="s1">&#39;lookback_days&#39;</span><span class="p">:</span> <span class="mi">90</span><span class="p">,</span>
+<a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a>  <span class="s1">&#39;window_hours&#39;</span><span class="p">:</span> <span class="mi">24</span><span class="p">,</span>
+<a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a><span class="p">}</span>
+</code></pre></div>
+<h4 id="tuning-and-dry-run">Tuning and dry run<a class="headerlink" href="#tuning-and-dry-run" title="Permanent link">&para;</a></h4>
+<p>Every <code>GEOLOCATION_INTERNAL_*</code> threshold is re-read on <strong>every call</strong> through
+<code>settings.get()</code>, so a DB-backed <code>Setting</code> row retunes detection with no code
+change and no restart. (Before this they were captured at import via
+<code>get_static()</code>, which reads file-based settings only.)</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Raise the suspect bar for one deployment, live.</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>https://api.example.com/api/account/setting<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;key=GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_THRESHOLD&#39;</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">&#39;value=50&#39;</span>
+</code></pre></div>
+<p>Set <code>GEOLOCATION_INTERNAL_THREAT_DRY_RUN=True</code> to compute the verdict and log it
+via <code>logit.info</code> (with the counts that drove it, to <code>mojo.log</code>) while returning
+<code>False/False</code>. <code>internal_stats</code> still carries <code>dry_run: True</code> plus
+<code>dry_run_is_known_attacker</code> / <code>dry_run_is_known_abuser</code>. On a busy deployment,
+run a week in dry run before letting a retune act.</p>
+<p><strong>Deprecated:</strong> <code>GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES</code> was the old
+denylist. It is still honored if set — the named categories are subtracted from
+both allowlists — and logs a deprecation warning. Its shape was the underlying
+bug: every <em>new</em> level-8+ category silently became attack evidence, which is how
+<code>magic:unknown</code> and then <code>rest_error</code> became "attacks". Remove it and edit the
+allowlists instead.</p>
+<h4 id="decay">Decay<a class="headerlink" href="#decay" title="Permanent link">&para;</a></h4>
+<p><code>update_threat_from_incident()</code> and <code>block()</code> only ratchet <code>threat_level</code> up, so
+a single level-8 event used to stamp an address <code>medium</code> forever. The incident
+app's <code>recheck_active_threats</code> cron (daily, 04:20) re-runs <code>check_threats()</code> for
+up to <code>GEOLOCATION_RECHECK_THREATS_MAX</code> (500) <code>GeoLocatedIP</code> rows whose
+<code>last_seen</code> falls inside the predicate window, letting a recomputed <strong>lower</strong>
+level replace the stored one. It runs with <code>skip_external=True</code> — the pass is
+about decaying local evidence, and a daily outbound blocklist lookup per row is
+not affordable. A previously recorded blocklist hit is carried forward rather
+than erased: an unrun lookup is not a clean lookup.</p>
+<p>Records with <code>provider == 'mojo'</code> are excluded. Their never-downgrade rule is the
+federation contract with the upstream, not a local scoring decision.</p>
+<p><strong>Threat level.</strong> <code>geolocate_ip(check_threats=True)</code> folds threat intelligence
+into <code>threat_level</code>, using the same <code>recalculate_threat_level()</code> weight table
+that <code>GeoLocatedIP.check_threats()</code> uses, so the helper path and the model path
+score identical evidence identically. The fold is <strong>escalate-only</strong> — it can
+raise <code>threat_level</code> but never lower it, so provider-derived levels (Tor →
+<code>high</code>) survive untouched, and <code>check_threats=False</code> behavior is unchanged.
+A bare blocklist hit scores 30 → <code>medium</code>; a known attacker scores 50 → <code>high</code>;
+both together → <code>critical</code>.</p>
+<p><code>geolocate_ip()</code> results also carry a top-level <code>is_blocklisted</code> bool on every
+branch (private/reserved, <code>mojo</code> provider, and normal providers) so callers
+don't have to reach into the raw blob. It is <strong>not</strong> persisted — <code>GeoLocatedIP</code>
+has no such field, and <code>refresh()</code>'s <code>hasattr</code>-gated copy loop drops it. The
+stored copy lives in <code>data['threat_data']['is_blocklisted']</code>.</p>
 <h3 id="mojo-provider"><code>mojo</code> Provider<a class="headerlink" href="#mojo-provider" title="Permanent link">&para;</a></h3>
 <p>Use another django-mojo instance as a GeoIP data source. The downstream instance calls the upstream's <code>GET /api/system/geoip/lookup?graph=detailed</code> with an ApiKey token and caches the result locally.</p>
 <p><strong>Configuration:</strong></p>
@@ -4808,6 +5038,91 @@ setting); blocklist.de defaults to <code>https://lists.blocklist.de/lists/all.tx
 <td><code>GEOLOCATION_CACHE_DURATION_DAYS</code></td>
 <td><code>90</code></td>
 <td>Days before a cached record expires</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_ENABLE_INTERNAL_THREAT_CHECK</code></td>
+<td><code>True</code></td>
+<td>Run the internal incident-history analysis</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_ENABLE_BLOCKLIST_CHECK</code></td>
+<td><code>True</code></td>
+<td>Run the external blocklist checks</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS</code></td>
+<td><code>90</code></td>
+<td><strong>Display-only</strong> stat window (<code>total_events</code>, <code>avg_level</code>, <code>top_categories</code>, <code>last_seen_event</code>). Drives no boolean.</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS</code></td>
+<td><code>24</code></td>
+<td><strong>Predicate</strong> window — every count that drives <code>is_known_attacker</code> / <code>is_known_abuser</code></td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD</code></td>
+<td><code>7</code></td>
+<td>Secondary severity floor, <strong>confirmed tier only</strong>. Was <code>8</code>; lowered because <code>sensitive_field_probe</code> is emitted at exactly 7.</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_CATEGORIES</code></td>
+<td><code>['security:bouncer:honeypot_post', 'security:bouncer:campaign', 'sensitive_field_probe']</code></td>
+<td>Tier 1 — no legitimate user produces these</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_THRESHOLD</code></td>
+<td><code>3</code></td>
+<td>Tier 1 events needed for <code>is_known_attacker</code></td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_CATEGORIES</code></td>
+<td><code>['login:unknown', 'reset:unknown', 'magic:unknown', 'totp:login_unknown', 'sms:login_unknown', 'token:unknown', 'invalid_password']</code></td>
+<td>Tier 2 — a real user can produce one; needs volume <strong>and</strong> breadth</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_THRESHOLD</code></td>
+<td><code>25</code></td>
+<td>Tier 2 events needed in the window</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_ATTACKER_MIN_TARGETS</code></td>
+<td><code>10</code></td>
+<td>Distinct user accounts tier 2 must hit</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_SHARED_EGRESS_MIN_DEVICES</code></td>
+<td><code>25</code></td>
+<td>Distinct pre-existing <code>BouncerSignal.muid</code>s that mark the address a NAT and suppress tier 2</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_ABUSER_CATEGORY_PREFIX</code></td>
+<td><code>'rate_limit:'</code></td>
+<td>Category prefix that counts toward <code>is_known_abuser</code></td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_ABUSER_EVENT_THRESHOLD</code></td>
+<td><code>60</code></td>
+<td>Prefixed events in the window needed for <code>is_known_abuser</code></td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_THREAT_DRY_RUN</code></td>
+<td><code>False</code></td>
+<td>Compute and log the verdict but always return <code>False/False</code></td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_RECHECK_THREATS_MAX</code></td>
+<td><code>500</code></td>
+<td>Max <code>GeoLocatedIP</code> rows the daily decay cron rechecks</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD</code></td>
+<td><code>5</code></td>
+<td><strong>Deprecated / unused.</strong> No predicate reads it.</td>
+</tr>
+<tr>
+<td><code>GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES</code></td>
+<td>unset</td>
+<td><strong>Deprecated denylist.</strong> Still honored when set (subtracted from both allowlists) and logs a warning. See <a href="#threat-intelligence">Threat Intelligence</a>.</td>
 </tr>
 <tr>
 <td><code>GEOIP_MOJO_PROVIDER_URL</code></td>
