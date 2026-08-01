@@ -416,6 +416,71 @@ def test_backfill_job(opts):
 
 ---
 
+## The HTTP Client (`opts.client`)
+
+`opts.client` is a `RestClient` making real HTTP requests to the server over
+localhost. It wraps `requests.Session`, so it behaves like a browser:
+
+- **Cookies persist** across requests — server-set cookies like `_muid` (device
+  identity), `_msid` (session identity) and `mbp` (bouncer pass) are stored and
+  resent automatically, exactly like a browser cookie jar.
+- **Realistic default headers** — `User-Agent`, `Accept`, `Accept-Language`,
+  `Accept-Encoding` are sent, so server-side signal analysis (bouncer scoring and
+  friends) sees traffic that resembles the real thing.
+- **Cookies survive logout** — `logout()` clears auth tokens but keeps cookies,
+  matching a browser where device identity outlives a re-login.
+- **`clear_cookies()`** simulates a fresh browser with no history — use it for
+  first-visit flows and `muid_missing` signals.
+
+```python
+resp = opts.client.get('/api/user/me')
+resp = opts.client.post('/api/login', {'username': 'alice', 'password': 'secret'})
+resp = opts.client.put('/api/user/42', {'display_name': 'Alice B.'})
+resp = opts.client.delete('/api/user/42')
+resp = opts.client.get('/api/resource', headers={'X-Custom': 'value'})
+```
+
+Every method returns an `objict`:
+
+```python
+resp.status_code      # int: HTTP status
+resp.json             # objict: parsed JSON body (same as resp.response)
+resp.response         # objict: parsed JSON body
+resp.text             # str: raw text, when the body is not JSON
+resp.error_reason     # str: HTTP reason phrase on non-2xx
+token = resp.json.data.access_token     # dot access, courtesy of objict
+```
+
+Authentication — a successful `login()` stores the JWT and adds the
+`Authorization` header to every later request on that client:
+
+```python
+opts.client.login('alice@example.com', 'password123')
+th.assert_true(opts.client.is_authenticated, "login failed")
+uid = opts.client.jwt_data.uid
+opts.client.logout()
+```
+
+Read the objict caveat below before pulling fields off a response.
+
+## Assert Helpers
+
+Use the testit helpers rather than bare `assert` — they render expected vs actual
+on failure, and `.claude/rules/testing.md` requires every assertion to carry a
+descriptive message.
+
+```python
+th.assert_true(value, "descriptive message")
+th.assert_eq(actual, expected, "descriptive message")   # prints both on failure
+th.assert_in(item, container, "descriptive message")
+
+with th.assert_raises(ValueError):
+    some_code_that_raises()
+```
+
+**Never write a bare `assert condition`.** A failure with no message costs the
+next reader a trip into the source to find out what was even being checked.
+
 ## Accessing Response Data — objict Key Collision
 
 Testit parses all HTTP responses into `objict`, a `dict` subclass with attribute access. Because `objict` inherits from `dict`, **attribute access for keys that share a name with a built-in dict method will silently return the method instead of the value.**
