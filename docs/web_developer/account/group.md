@@ -173,6 +173,28 @@ Use [category permissions](admin_portal.md#category-permissions-use-these-in-you
 }
 ```
 
+### Guest Members (view-only)
+
+Setting the `guest` marker makes a member view-only for any endpoint whose
+write tier checks `full_member` (requires manage-level permissions to set):
+
+```json
+{
+  "permissions": {"guest": true}
+}
+```
+
+- A guest still passes plain `member` (view) checks; only `full_member`
+  (write-tier) checks fail. Send `{"permissions": {"guest": false}}` to
+  restore full membership.
+- `full_member` cannot be granted directly on a member — it is derived from
+  the absence of the `guest` marker.
+- **Demoting an existing manager requires removing their manage grants too**
+  (e.g. `{"permissions": {"guest": true, "manage_group": false}}`) — the
+  marker alone does not strip other permissions, and a member who retains a
+  manage-level grant can still edit members, including clearing their own
+  marker.
+
 ## Hierarchical Groups
 
 Groups can have a parent group. Child groups inherit parent-level permissions for members. Use `parent=<id>` to filter by parent:

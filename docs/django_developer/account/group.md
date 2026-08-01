@@ -306,6 +306,49 @@ member.permissions["manage_content"] = True
 member.save()
 ```
 
+### Membership Tiers: `member` vs `full_member`
+
+`GroupMember.has_permission` recognizes two membership tiers:
+
+- **`"member"`** — the view tier. Satisfied by ANY member row, unconditionally.
+- **`"full_member"`** — the write tier. Satisfied by a member row that is **not
+  marked guest**: the marker is `permissions["guest"]` (any truthy value), set
+  and cleared with `member.add_permission("guest")` /
+  `member.remove_permission("guest")`. The marker's absence (or a falsy value)
+  means full member, so existing rows are unaffected.
+
+```python
+member.add_permission("guest")            # mark view-only
+member.has_permission("full_member")      # False
+member.has_permission("member")           # True — view tier untouched
+member.remove_permission("guest")         # restore full membership
+```
+
+Rules that follow from the design:
+
+- **`full_member` is derived, not grantable, on member rows.** A stored
+  `permissions["full_member"]` key is ignored — the guest marker alone decides.
+  To promote a guest, remove the marker.
+- **Marking guest does not strip or freeze other grants.** A row with
+  `{"guest": true, "manage_group": true}` still passes every tier that ORs in
+  `manage_group` — including the gate that lets it clear its own marker.
+  **Demoting an existing manager = remove their manage-level perms AND set the
+  marker.** A plain guest (marker only) cannot clear its own flag.
+- **Who may set/clear the marker**: the standard `can_change_permission` gate
+  (member-level `manage_group`/`manage_members`/`manage_users`/`manage_groups`,
+  or a global manager). Tune per-key via `MEMBER_PERMS_PROTECTION`, e.g.
+  `{"guest": ["manage_groups"]}` to restrict the marker to global admins.
+- **`ApiKey.has_permission` is asymmetric here**: a key passes `"member"`
+  unconditionally, but `"full_member"` on a key is an ordinary stored perm —
+  False unless explicitly granted to the key.
+- **`User.has_permission("full_member")`** is False for non-superusers unless
+  explicitly granted in the user's global dict. Because
+  `Group.user_has_permission` consults the global dict **first**, a global
+  `full_member` grant (or superuser) overrides the per-group guest marker in
+  every group — intentional platform-operator semantics.
+- **Compose write tiers** as `["manage_group", ..., "full_member"]` — a bare
+  `["full_member"]` list locks out platform operators who have no member row.
+
 ## request.group
 
 When a request includes `?group=<id>`, `MojoMiddleware` and auth decorators auto-populate `request.group` with the `Group` instance if the user is a member. Only **effectively active** groups resolve (`Group.get_active` — see [Effective activeness](#membership) above) — an inactive group's id, including an active child under a deactivated ancestor, behaves exactly like a nonexistent one (`request.group` stays `None`, no touch side effect), for both the `group=` and `group_uuid=` params. `GET /api/group/<pk>/member` follows the same contract: it resolves via `Group.get_active` and returns one indistinguishable `403` for every non-member outcome (nonexistent, inactive, or not a member), only `touch()`ing the group/member after membership in an effectively active group is confirmed. All permission checks and list queries are then scoped to that group — **except** endpoints gated with `@md.requires_global_perms`, which never consult `request.group` at all (global `User.permissions` or superuser only). See [Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks).

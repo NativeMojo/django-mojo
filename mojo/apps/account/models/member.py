@@ -118,6 +118,16 @@ class GroupMember(models.Model, MojoModel):
         Check if user has a specific permission—supports system-level permissions via 'sys.' prefix.
         If perm_key starts with 'sys.', only the user-level permission is checked.
         Otherwise, checks group-member-level permission as before.
+
+        Membership tiers: "member" is satisfied by ANY member row (the view
+        tier). "full_member" is the write tier — a member row not marked
+        guest. The marker is permissions["guest"] (truthy = guest), set and
+        cleared via add_permission("guest") / remove_permission("guest")
+        under the can_change_permission gate. "full_member" is derived from
+        the marker alone — a stored permissions["full_member"] key is
+        ignored on member rows. Marking guest does NOT strip or freeze the
+        row's other grants: demoting a manager means removing their
+        manage-level perms AND setting the marker.
         """
         # Support lists and sets for "OR" logic
         if isinstance(perm_key, (list, set)):
@@ -134,6 +144,10 @@ class GroupMember(models.Model, MojoModel):
 
         if perm_key in ["all", "authenticated", "member"]:
             return True
+        # Derived from the guest marker only — must precede the stored-dict
+        # lookup so a stored "full_member" key can never grant the write tier.
+        if perm_key == "full_member":
+            return not bool(self.permissions.get("guest", False))
         # Bare domain terms ("groups") satisfy their view_/manage_ forms —
         # one-directional; see mojo.helpers.perms.
         return any(bool(self.permissions.get(pk, False)) for pk in implied_perms(perm_key))
