@@ -1488,6 +1488,113 @@ def test_cancel_then_confirm_code_rejected(opts):
 
 
 # ===========================================================================
+# REST: GET /api/auth/email/change/confirm  — ?redirect= scheme guard
+#
+# The GET handler renders account/email_change_confirm.html and puts the
+# caller-supplied ?redirect= value on the template context, where it feeds the
+# meta refresh, the success "Continue" anchor and the error "Go back" anchor.
+# An unvalidated javascript: value is a one-click script-execution sink on the
+# auth origin. Every test asserts a POSITIVE page marker before its negative
+# assertion so it cannot pass vacuously against a 404 or a 500.
+# ===========================================================================
+
+XSS_REDIRECT = "javascript:alert(1)"
+
+
+def _change_confirm_get(opts, redirect, token="ec:notavalidtoken"):
+    """GET the email-change confirm page with a token and a ?redirect= value."""
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+    resp = opts.client.get(
+        "/api/auth/email/change/confirm",
+        params={"token": token, "redirect": redirect},
+    )
+    return resp, (resp.get("text") or "")
+
+
+@th.django_unit_test("email/change/confirm GET (error page): javascript: redirect is dropped, no link rendered")
+def test_change_confirm_get_error_page_omits_javascript_redirect(opts):
+    resp, body = _change_confirm_get(opts, XSS_REDIRECT)
+
+    assert_eq(resp.status_code, 200,
+              f"Confirm page must render 200 even for an invalid token, got {resp.status_code}")
+    assert_true("Link invalid" in body,
+                f"Expected the error card to render (positive marker 'Link invalid'), got: {body[:400]!r}")
+    assert_true("javascript:" not in body,
+                "A javascript: ?redirect= must never reach the rendered page — "
+                "it lands in the 'Go back' anchor href and executes on click")
+    assert_true("Go back" not in body,
+                "A refused ?redirect= must OMIT the button entirely, not render it dead")
+
+
+@th.django_unit_test("email/change/confirm GET (success page): javascript: redirect dropped from anchor and meta refresh")
+def test_change_confirm_get_success_page_omits_javascript_redirect(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+
+    User.objects.filter(pk=opts.user_id).update(
+        email=opts.original_email,
+        username=opts.original_username,
+    )
+    user = User.objects.get(pk=opts.user_id)
+    new_email = "confirm_get_guard@example.com"
+    token = tokens.generate_email_change_token(user, new_email)
+
+    resp, body = _change_confirm_get(opts, XSS_REDIRECT, token=token)
+
+    assert_eq(resp.status_code, 200, f"Confirm page must render 200 on success, got {resp.status_code}")
+    assert_true("Email address updated" in body,
+                f"Expected the success card to render (positive marker 'Email address updated'), "
+                f"got: {body[:400]!r}")
+    assert_true("javascript:" not in body,
+                "A javascript: ?redirect= must reach neither the 'Continue' anchor "
+                "nor the <meta http-equiv=refresh> on the success page")
+    assert_true('http-equiv="refresh"' not in body,
+                "No meta refresh may be emitted for a refused ?redirect=")
+    assert_true("You can close this tab" in body,
+                "A refused ?redirect= must fall through to the 'close this tab' copy — "
+                "proving the link was omitted, not merely left dead")
+
+    user.refresh_from_db()
+    assert_eq(str(user.email), new_email,
+              "The guard must not change the outcome of the flow — the email change still commits")
+
+    # Restore
+    User.objects.filter(pk=user.pk).update(
+        email=opts.original_email,
+        username=opts.original_username,
+    )
+
+
+@th.django_unit_test("email/change/confirm GET: an https redirect is preserved byte-for-byte")
+def test_change_confirm_get_keeps_https_redirect(opts):
+    destination = "https://example.com/login?next=1"
+    resp, body = _change_confirm_get(opts, destination)
+
+    assert_eq(resp.status_code, 200, f"Confirm page must render 200, got {resp.status_code}")
+    assert_true("Link invalid" in body,
+                f"Expected the error card to render (positive marker 'Link invalid'), got: {body[:400]!r}")
+    assert_true(f'href="{destination}"' in body,
+                f"A cross-origin https destination must render unchanged (host is not allowlisted); "
+                f"expected href=\"{destination}\" in the page")
+    assert_true("Go back" in body,
+                "The 'Go back' button must still be rendered for an accepted destination")
+
+
+@th.django_unit_test("email/change/confirm GET: a relative redirect is preserved, not normalized to absolute")
+def test_change_confirm_get_keeps_relative_redirect(opts):
+    destination = "/account/email?next=1"
+    resp, body = _change_confirm_get(opts, destination)
+
+    assert_eq(resp.status_code, 200, f"Confirm page must render 200, got {resp.status_code}")
+    assert_true("Link invalid" in body,
+                f"Expected the error card to render (positive marker 'Link invalid'), got: {body[:400]!r}")
+    assert_true(f'href="{destination}"' in body,
+                f"A relative destination must render unchanged — no normalization to an absolute URL; "
+                f"expected href=\"{destination}\" in the page")
+
+
+# ===========================================================================
 # Teardown
 # ===========================================================================
 

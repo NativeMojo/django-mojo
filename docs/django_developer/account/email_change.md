@@ -129,6 +129,8 @@ https://yourapp.com/email-change?token={{ token }}
 
 The frontend extracts the token from the URL and calls `POST /api/auth/email/change/confirm` with `{ "token": "ec:..." }`. Alternatively, point the link directly at `GET /api/auth/email/change/confirm?token={{ token }}&redirect=https://yourapp.com/login` to have the API render the result page.
 
+The `&redirect=` destination must be `http`, `https`, or scheme-less — anything else (a custom app scheme such as `myapp://home`, `javascript:`, `data:`) is dropped by `mojo.helpers.urls.safe_nav_url` before it reaches the template, and the page renders with **no button at all**. The host is deliberately not restricted; scheme-relative and path-relative values pass through unchanged and may still resolve off-origin. The same rule applies to `&redirect=` on `GET /api/auth/verify/email/confirm`.
+
 ### `email_change_code` (code flow)
 
 Sent to the **new** address when `method: "code"`. Context variables:

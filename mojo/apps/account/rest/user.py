@@ -12,7 +12,7 @@ from mojo.apps.account.services import auth_config
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
 from mojo.apps.shortlink import maybe_shorten_url
-from mojo.helpers import dates, crypto, logit
+from mojo.helpers import dates, crypto, logit, urls
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
 
@@ -1385,8 +1385,18 @@ def _render_confirm(request, template, ctx):
       - after a short delay via <meta http-equiv=refresh> otherwise
     Downstream projects can override the templates by placing their own versions
     under templates/account/<name>.html with higher priority in TEMPLATES.DIRS.
+
+    The destination is scheme-guarded by `urls.safe_nav_url` BEFORE it reaches
+    either the redirect branch below or the template context: only http/https
+    and scheme-less (relative or scheme-relative) values survive; a
+    javascript:/data:/custom-app scheme becomes "" and the template's
+    `{% if redirect_url %}` wrapper omits the link entirely. The host is
+    deliberately not restricted. There is no raw-query fallback here on
+    purpose — `safe_nav_url` returns "" for exactly the hostile inputs, so an
+    `or request.GET.get("redirect", "")` tail would fall through to the
+    unguarded value and invert the guard into a pass-through.
     """
-    redirect_url = request.DATA.get("redirect") or request.GET.get("redirect", "")
+    redirect_url = urls.safe_nav_url(request.DATA.get("redirect"))
     redirect_delay = 3 if ctx.get("success") else 0
 
     if redirect_url and ctx.get("success") and not redirect_delay:

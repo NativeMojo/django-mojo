@@ -13,4 +13,4 @@ Helpers live in `mojo/helpers/`. Import directly — no registration required.
 - [response](response.md) — JSON response helpers
 - [llm](llm.md) — LLM model discovery, API key management, quick Claude calls
 - [redis](redis.md) — Redis client and caching
-- [other](other.md) — stats, qrcode, filetypes, domain, geoip, sysinfo
+- [other](other.md) — stats, qrcode, filetypes, domain, geoip, sysinfo, urls

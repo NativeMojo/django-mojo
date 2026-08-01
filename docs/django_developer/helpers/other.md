@@ -128,3 +128,58 @@ to let `var/dev_server.conf` override the committed `config/dev_server.conf`; se
 ```python
 conf_path = paths.resolve_conf("dev_server.conf")
 ```
+
+## urls
+
+`safe_nav_url(value, default="")` — the scheme guard for a caller-supplied
+navigation target that the server is about to render into an `href` (or a
+`<meta http-equiv=refresh>`). Django autoescaping stops attribute breakout but
+does **not** neutralize a scheme-based payload, so `javascript:alert(1)` would
+otherwise survive into the attribute and execute on click.
+
+```python
+from mojo.helpers import urls
+
+redirect_url = urls.safe_nav_url(request.DATA.get("redirect"))
+# "" when refused — wrap the link in {% if redirect_url %} so it is OMITTED
+# rather than rendered dead.
+```
+
+| Input | Result |
+|---|---|
+| `https://example.com/x`, `http://localhost:3000/cb` | returned **unchanged** |
+| `/dashboard`, `/a?b=c#d`, `dashboard/settings` | returned **unchanged** (no scheme) |
+| `//example.com/x` | returned **unchanged** — see the off-origin note below |
+| `javascript:`, `data:`, `vbscript:`, `mailto:`, `tel:`, `myapp://home` | `default` |
+| `JaVaScRiPt:`, `java<TAB>script:`, leading-space/C0 `javascript:` | `default` |
+| `None`, `""`, a `list`, a `dict`, an `int` | `default` |
+| `http://[::1/x` (unparsable authority) | `default` |
+
+**A value that passes is returned byte-identically** — it is never normalized to
+an absolute URL, so relative destinations keep working for callers that depend
+on them. Normalization happens only *inside* the judgment.
+
+**The host is deliberately not restricted.** A legitimate cross-origin `https://`
+destination must keep working. Host restriction is the separate, opt-in concern
+of `ALLOWED_REDIRECT_URLS` / `AUTH_HANDOFF_ALLOWED_URLS` (see
+`mojo.apps.account.services.redirect_allowlist`). Do not fold a host check in
+here.
+
+**Scheme-relative and path-relative values pass through unchanged and may still
+resolve off-origin** — `//evil.test/x`, `/\evil.test/x` and `\\evil.test/x` all
+parse scheme-less. That is coherent with the point above: a cross-origin
+`https://evil.test` is explicitly permitted, so refusing its equivalent spelling
+would not add a boundary. This is the one place the guard is looser than the
+in-tree sibling `_safe_home_url` in `mojo/apps/shortlink/rest/redirect.py`, which
+refuses protocol-relative and is deliberately **not** migrated to this helper —
+its input is an admin-writable setting naming that deployment's own home page,
+where an off-site value is genuinely unwanted.
+
+**Browser-side twin.** `safeNavUrl()` in
+`mojo/apps/account/templates/account/auth_base.html` is the same contract for the
+hosted auth pages. The two must keep agreeing on what is refused; they differ
+only in that the browser twin returns the resolved absolute href.
+
+Current callers: `_render_verify` (`mojo/apps/account/rest/verify.py`) and
+`_render_confirm` (`mojo/apps/account/rest/user.py`) — the two server-rendered
+account confirm pages.

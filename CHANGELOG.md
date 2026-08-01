@@ -312,6 +312,57 @@ every other `SECRET_KEY` consumer. **Before upgrading**, check for an existing
 wrapped under the row's value, so move that value into `SECRET_KEY_FALLBACKS`
 to keep those files readable, then delete the row.
 
+**fix (account/security)** — **the two server-rendered account confirm pages
+rendered an unvalidated `?redirect=` straight into an `<a href>`.** A
+`javascript:` value therefore became a one-click script-execution sink on the
+auth origin — `<a href="javascript:alert(1)" ...>Go back</a>` — the
+server-side sibling of the same bug class already fixed for `?back=`/`?redirect=`
+on the hosted auth pages. **Both** entry points were affected and both are
+fixed: `GET /api/auth/verify/email/confirm` (`_render_verify` in
+`mojo/apps/account/rest/verify.py`) and `GET /api/auth/email/change/confirm`
+(`_render_confirm` in `mojo/apps/account/rest/user.py`). The destination is now
+scheme-guarded by the new `mojo.helpers.urls.safe_nav_url` at the point it
+enters the template context, which covers all three sinks per page (the
+`<meta http-equiv=refresh>`, the success **Continue** anchor and the error **Go
+back** anchor) with one check, and covers deployment template overrides too —
+both templates are documented as overridable, so a template-level filter would
+have protected only the shipped ones.
+
+- **Refusal shape: the link is OMITTED, not rendered dead.** A refused value
+  becomes `""`, the `{% if redirect_url %}` wrapper is false, and the page falls
+  back to its existing *"You can close this tab"* copy. No meta refresh is
+  emitted. Status codes, page copy, every other context variable and the outcome
+  of the flow itself (the email is still verified / the change still commits)
+  are unchanged.
+- **Newly refused:** any scheme that is not `http`/`https` — `javascript:`,
+  `data:`, `vbscript:`, `mailto:`, `tel:`, and **custom app schemes** such as
+  `myapp://home`. A deployment putting a deep link in `?redirect=` on these two
+  links loses the button and must switch to an https universal/app link — the
+  same consequence the browser-side fix shipped. Case, tab and C0/leading-space
+  padding (`JaVaScRiPt:`, `java<TAB>script:`) are refused as the schemes they
+  are, and a value whose authority cannot be parsed (`http://[::1/x`) is refused
+  rather than raising.
+- **Unchanged, deliberately: the host is NOT allowlisted.** A legitimate
+  cross-origin `https://` destination and a relative path both render
+  **byte-identically** — the value is returned verbatim, never normalized to an
+  absolute URL. Note the precise contract: **scheme-relative and path-relative
+  values pass through unchanged and may still resolve off-origin** (`//evil.test/x`,
+  `/\evil.test/x`). Host restriction stays the separate opt-in concern of
+  `ALLOWED_REDIRECT_URLS` / `AUTH_HANDOFF_ALLOWED_URLS`.
+- **`?redirect=` is now read via `request.DATA`** (`verify.py` previously used
+  `request.GET`, against repo convention). One behavior consequence: a repeated
+  `?redirect=a&redirect=b` arrives as a **list** and is refused, where
+  `request.GET.get()` used to take the last value. Fail-closed is the intended
+  answer.
+- **Template-context guarantee for downstream overrides:** `redirect_url` is now
+  always either `""` or a vetted `http(s)`/relative value. Keep custom templates'
+  links inside the `{% if redirect_url %}` wrapper.
+- New helper documented in
+  [helpers/other.md § urls](docs/django_developer/helpers/other.md#urls),
+  including why it deliberately admits protocol-relative values while the
+  sibling `_safe_home_url` in `mojo/apps/shortlink/rest/redirect.py` refuses
+  them, and why that sibling is not migrated to it.
+
 ## v1.2.64 - July 31, 2026
 
 fix: knowledge-base search can finally report "nothing matched" — the vector leg gains an optional relevance floor (`max_distance`, or the `DOCIT_KB_MAX_DISTANCE` setting), both shipping off.

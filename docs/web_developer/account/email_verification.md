@@ -133,6 +133,8 @@ The email link points to `GET /api/auth/verify/email/confirm?token=ev:...`. The 
 
 Append `&redirect=https://yourapp.com/dashboard` to the link in the email. On success the page shows a **Continue** button and automatically navigates there after 3 seconds. On error the redirect URL is shown as a **Go back** button only.
 
+**The destination must be `http`, `https`, or scheme-less.** Anything else — `javascript:`, `data:`, or a custom app scheme such as `myapp://home` — is dropped: **no button is rendered at all** (the page falls back to *"You can close this tab"*) and no automatic redirect is emitted. Status code, page copy and every other context value are unchanged. Point deep links at an https universal/app link instead. The **host is deliberately not restricted** — a cross-origin `https://` destination works — and scheme-relative or path-relative values pass through unchanged and may still resolve off-origin. Passing the parameter more than once (`?redirect=a&redirect=b`) is refused rather than taking the last value.
+
 **Option B — Frontend handles the token (SPA / mobile apps)**
 
 The email link points to a frontend route (e.g. `/verify-email?token=ev:...`). The frontend extracts the token and submits it via API.
@@ -370,8 +372,10 @@ Template context variables:
 | `email` | string | The verified email address (on success) |
 | `error_title` | string | Short error heading (on failure) |
 | `error_message` | string | Descriptive error text (on failure) |
-| `redirect_url` | string | Value of the `?redirect=` param (may be empty) |
+| `redirect_url` | string | Vetted value of the `?redirect=` param — always either `""` or an `http`/`https`/relative URL (see below). May be empty. |
 | `redirect_delay` | int | Seconds before automatic redirect (3 on success, 0 on error) |
+
+`redirect_url` is scheme-guarded **before** it reaches the context, so an overridden template inherits the guard for free: it is never a `javascript:`/`data:`/custom-app value, and a refused destination arrives as `""`. Keep the link inside a `{% if redirect_url %}` wrapper so a refused destination omits the button rather than rendering a dead one.
 
 Append `?redirect=https://yourapp.com/dashboard` to the verification link in the email to add a **Continue** button and an automatic 3-second redirect on success.
 

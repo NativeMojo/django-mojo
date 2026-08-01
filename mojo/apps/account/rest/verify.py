@@ -2,6 +2,7 @@ import mojo.decorators as md
 from mojo.helpers.response import JsonResponse
 from django.shortcuts import render
 from mojo.apps.account.utils import tokens
+from mojo.helpers import urls
 from mojo import errors as merrors
 
 
@@ -19,8 +20,18 @@ def _render_verify(request, template, ctx):
     Render an account verify template.
     If ?redirect=<url> is present and success=True, adds a Continue button and
     auto-redirect via <meta http-equiv=refresh> after a brief delay.
+
+    The destination is scheme-guarded by `urls.safe_nav_url` BEFORE it reaches
+    the template context: only http/https and scheme-less (relative or
+    scheme-relative) values survive; a javascript:/data:/custom-app scheme
+    becomes "" and the template's `{% if redirect_url %}` wrapper omits the
+    link entirely. The host is deliberately not restricted. Guarding here
+    rather than in the template covers all three sinks (meta refresh, Continue
+    anchor, Go-back anchor) with one check, and protects deployment template
+    overrides too — they inherit a `redirect_url` that is always either "" or a
+    vetted http(s)/relative value.
     """
-    redirect_url = request.GET.get("redirect", "")
+    redirect_url = urls.safe_nav_url(request.DATA.get("redirect"))
     redirect_delay = 3 if ctx.get("success") else 0
     ctx["redirect_url"] = redirect_url
     ctx["redirect_delay"] = redirect_delay
