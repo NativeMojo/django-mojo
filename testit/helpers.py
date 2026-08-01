@@ -1,4 +1,5 @@
 import json
+import hashlib
 import inspect
 import os
 import threading
@@ -698,24 +699,48 @@ _CONF_MUTEX = threading.Lock()
 _CONF_TEST_YIELD = None
 
 
+def _conf_write(conf_path, text, new_text):
+    """Write new_text unless it is identical to text. Returns the sha256 of the
+    file's final contents, and whether a write actually happened.
+
+    Skipping an identical write matters: uvicorn reloads on the write event, not
+    on a content diff, so rewriting the same bytes queues a worker restart whose
+    fingerprint is indistinguishable from the current one. The caller would see
+    its expected fingerprint immediately, return, and have the restart land in
+    the middle of the next test.
+    """
+    changed = new_text != text
+    if changed:
+        conf_path.write_text(new_text)
+    return hashlib.sha256(new_text.encode()).hexdigest(), changed
+
+
 def _conf_apply(conf_path, overrides):
-    """Apply overrides to django.conf and return the pre-override snapshot."""
+    """Apply overrides to django.conf.
+
+    Returns (snapshot, sha, changed) — the pre-override snapshot for the keys we
+    touched, the fingerprint of the file as it now stands, and whether the file
+    actually changed.
+    """
     with _CONF_MUTEX:
         text = conf_path.read_text()
         snapshot = _capture_conf_lines(text, overrides.keys())
         if _CONF_TEST_YIELD is not None:
             _CONF_TEST_YIELD()
-        conf_path.write_text(_apply_conf_overrides(text, overrides))
-        return snapshot
+        sha, changed = _conf_write(conf_path, text, _apply_conf_overrides(text, overrides))
+        return snapshot, sha, changed
 
 
 def _conf_restore(conf_path, snapshot):
-    """Subtract an override from django.conf as it currently stands."""
+    """Subtract an override from django.conf as it currently stands.
+
+    Returns (sha, changed) — see _conf_apply.
+    """
     with _CONF_MUTEX:
         text = conf_path.read_text()
         if _CONF_TEST_YIELD is not None:
             _CONF_TEST_YIELD()
-        conf_path.write_text(_restore_conf_overrides(text, snapshot))
+        return _conf_write(conf_path, text, _restore_conf_overrides(text, snapshot))
 
 
 def _read_dev_server_conf():
@@ -745,6 +770,74 @@ def _poll_server_up(host, port, timeout=10):
         except Exception:
             time.sleep(0.2)
     return False
+
+
+def _ready_path():
+    from mojo.helpers import paths
+    return os.path.join(str(paths.VAR_ROOT), "asgi_ready.json")
+
+
+def _read_ready():
+    """Read the worker's readiness signal.
+
+    Returns (pid, conf_sha) for the worker currently serving, or None when the
+    signal is UNAVAILABLE — the file does not exist, because the server predates
+    this feature or belongs to a project whose _asgi.py does not write it.
+
+    A present-but-unreadable file (mid-write, truncated, bad JSON) is reported as
+    a *stale* read, i.e. (None, None), NOT as unavailable. The distinction is
+    load-bearing: "no signal at all" means fall back to sleeping, while "cannot
+    read it right now" means a restart is in flight and we should keep waiting.
+    Conflating them would silently turn the wait back into a sleep forever.
+    """
+    path = _ready_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r") as fh:
+            data = json.load(fh)
+        return data.get("pid"), data.get("conf")
+    except Exception:
+        return (None, None)
+
+
+def _wait_for_worker(host, port, expected_sha, exclude_pid, timeout=30, interval=0.05):
+    """Block until the worker serving this port is a NEW process running the
+    config whose fingerprint is expected_sha.
+
+    Both halves are required. The fingerprint alone is not enough — a restore
+    that reproduces byte-identical content matches instantly while a restart is
+    still queued. A new pid alone is not enough either, since it says nothing
+    about which config that process read.
+
+    Returns True once confirmed. Raises RuntimeError on timeout — never returns
+    False, because a silent failure here reintroduces exactly the stale-override
+    bug this replaced (see item #543).
+    """
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        signal = _read_ready()
+        if signal is None:
+            raise RuntimeError(
+                "server_settings: readiness signal disappeared mid-wait "
+                f"({_ready_path()})"
+            )
+        pid, sha = signal
+        last = (pid, sha)
+        if pid is not None and pid != exclude_pid and sha == expected_sha:
+            # The right process has loaded the right config; make sure it is
+            # actually accepting requests before handing control back.
+            if _POLL(host, port, timeout=max(1, int(deadline - time.time()))):
+                return True
+        time.sleep(interval)
+
+    raise RuntimeError(
+        f"server_settings: no worker came up at {host}:{port} running config "
+        f"{expected_sha[:12]} within {timeout}s (last signal: pid={last[0] if last else None}, "
+        f"conf={(last[1] or '')[:12] if last else None}, previous pid={exclude_pid}). "
+        "Is bin/asgi_local running with --reload?"
+    )
 
 
 # Seams so tests can drive server_settings() without real sleeps or a real
@@ -788,12 +881,40 @@ def server_settings(**overrides):
 
     The context manager:
       1. Writes the overrides into var/django.conf (merging with existing values)
-      2. Waits for uvicorn to reload and the server to come back up
+      2. Waits for the NEW uvicorn worker to come up running that config
       3. Yields — your test runs here against the live server with new settings
       4. Removes ONLY the keys it set, restoring their previous lines
-      5. Waits for the server to reload and come back up again
+      5. Waits for the new worker again
 
     Raises RuntimeError if the server does not come back up within the timeout.
+
+    HOW THE WAIT WORKS
+    ------------------
+    Steps 2 and 5 used to be fixed sleeps — 1.5s in, 3s out — sized so the OLD
+    worker had certainly exited before we polled. It could not simply poll,
+    because the old process keeps answering until it dies, so "the server
+    responds" did not mean "the server responds with my config". At ~4.5s per
+    context that was most of the cost of every module that overrides settings.
+
+    Now the worker writes var/asgi_ready.json at startup with its pid and the
+    sha256 of the django.conf it loaded, and we wait for a signal that is BOTH a
+    different pid and the fingerprint we just wrote. That is an exact answer to
+    the question the sleep was approximating, so the wait costs what the reload
+    actually costs.
+
+    Two subtleties worth keeping:
+      - A write that does not change the file is skipped entirely, and so is its
+        wait. uvicorn reloads on the write event rather than a content diff, so
+        rewriting identical bytes would queue a restart whose fingerprint already
+        matches — we would return immediately and the restart would land inside
+        the next test.
+      - If var/asgi_ready.json does not exist at all, the old sleep-based path is
+        used unchanged. django-mojo ships testit to projects whose _asgi.py does
+        not write the signal, and they must keep working.
+
+    Assumes ONE uvicorn worker, which is what bin/asgi_local starts. Under
+    multiple workers a probe answered by a different, un-restarted worker would
+    satisfy "different pid" while the old settings were still live somewhere.
 
     RESTORE IS SUBTRACTIVE (maestro item 543)
     -----------------------------------------
@@ -835,33 +956,49 @@ def server_settings(**overrides):
         # seen half-applied by a context waiting to start.
         conf_path = paths.VAR_ROOT / 'django.conf'
         with server_lock.exclusive(logger=logger):
-            snapshot = _conf_apply(conf_path, overrides)
-            # Give uvicorn's watchdog time to detect the change and begin
-            # reloading, then wait for the server to come back up.
-            _SLEEP(1.5)
-            if not _POLL(host, port, timeout=10):
-                _conf_restore(conf_path, snapshot)
-                raise RuntimeError(
-                    f"server_settings: server at {host}:{port} did not come back up "
-                    f"after writing overrides {sorted(overrides.keys())}"
-                )
+            # Which worker is serving right now? Captured before the write so we
+            # can insist on a DIFFERENT process afterwards.
+            before = _read_ready()
+            signalled = before is not None
+
+            snapshot, sha, changed = _conf_apply(conf_path, overrides)
+
+            if signalled:
+                if changed:
+                    _wait_for_worker(host, port, sha, before[0])
+                # else: the file already said what we wanted, so no reload was
+                # triggered and the running worker is already correct.
+            else:
+                # No readiness signal (older testproject, or a consumer project
+                # whose _asgi.py does not write one). Fall back to the timing
+                # guess this replaced.
+                _SLEEP(1.5)
+                if not _POLL(host, port, timeout=10):
+                    _conf_restore(conf_path, snapshot)
+                    raise RuntimeError(
+                        f"server_settings: server at {host}:{port} did not come back up "
+                        f"after writing overrides {sorted(overrides.keys())}"
+                    )
 
             try:
                 yield
             finally:
-                _conf_restore(conf_path, snapshot)
-                # Wait long enough for uvicorn to detect the conf change, kill the old
-                # worker, start and warm up the new worker.  The initial sleep must be
-                # long enough that the OLD worker (still running with the overrides) has
-                # exited before the poll gets a response — otherwise the poll
-                # returns True against the stale worker and subsequent tests see the
-                # overrides still in effect.
-                _SLEEP(3)
-                if not _POLL(host, port, timeout=10):
-                    raise RuntimeError(
-                        f"server_settings: server at {host}:{port} did not come back up "
-                        f"after restoring django.conf"
-                    )
+                during = _read_ready() if signalled else None
+                restored_sha, restored_changed = _conf_restore(conf_path, snapshot)
+                if signalled:
+                    if restored_changed:
+                        _wait_for_worker(host, port, restored_sha,
+                                         during[0] if during else None)
+                else:
+                    # Fallback only. The sleep must outlast the OLD worker (still
+                    # holding the overrides), or the poll answers from it and the
+                    # next test still sees this context's settings.
+                    _SLEEP(3)
+                    if not _POLL(host, port, timeout=10):
+                        raise RuntimeError(
+                            f"server_settings: server at {host}:{port} did not come back up "
+                            f"after restoring django.conf"
+                        )
     finally:
         if serialized:
             _SETTINGS_SERIALIZE.release()

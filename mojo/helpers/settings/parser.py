@@ -138,11 +138,38 @@ class DjangoConfigLoader:
                 context["INSTALLED_APPS"] = installed_apps
 
 
+# Fingerprint of the django.conf this process actually loaded, set once at import
+# time by load_settings_config() below. Stays None in a process that never loaded
+# one.
+#
+# django.conf is read exactly once per process, when the Django settings module is
+# imported, so a config change only takes effect after a restart. Hashing the bytes
+# at that single point is therefore the only honest answer to "which config is this
+# process serving under?" -- a hash taken anywhere later could describe a file the
+# process never read. testit uses it to tell a freshly reloaded worker from the old
+# one it is replacing (see testit/helpers.py server_settings).
+CONF_FINGERPRINT = None
+
+
+def conf_fingerprint():
+    """sha256 of the django.conf this process loaded, or None if it loaded none."""
+    return CONF_FINGERPRINT
+
+
 def load_settings_config(context):
     """
     Load Django configuration from django.conf file.
 
     :param context: Dictionary to load configuration values into.
     """
+    global CONF_FINGERPRINT
+
     loader = DjangoConfigLoader()
     loader.load_config(context)
+
+    try:
+        import hashlib
+        CONF_FINGERPRINT = hashlib.sha256(loader.config_path.read_bytes()).hexdigest()
+    except Exception:
+        # A fingerprint is a diagnostic aid, never a reason to fail startup.
+        CONF_FINGERPRINT = None

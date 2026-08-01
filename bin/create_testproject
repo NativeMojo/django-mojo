@@ -58,6 +58,45 @@ import paths  # testproject/bin/paths.py — bootstraps sys.path
 
 from mojo.apps.realtime.routing import create_application
 application = create_application()
+
+# --- testit readiness signal -------------------------------------------------
+# uvicorn --reload replaces the worker process on every django.conf change, but
+# nothing downstream can tell the new worker from the old one: the old process
+# keeps answering requests until it exits, so "the server responds" is not the
+# same as "the server responds with my config". testit used to paper over that
+# with a fixed 4.5s sleep per settings override.
+#
+# Writing our pid and the fingerprint of the config we actually loaded lets
+# testit wait for exactly the right worker instead of guessing. It is written
+# here rather than served over HTTP on purpose: a test that overrides settings
+# can break URL routing, and a probe that lives in the URL map would then fail
+# precisely when it is needed most.
+def _write_testit_ready():
+    import json, os, tempfile
+    from mojo.helpers import paths as mojo_paths
+    from mojo.helpers.settings import parser as settings_parser
+
+    target = os.path.join(str(mojo_paths.VAR_ROOT), "asgi_ready.json")
+    payload = {"pid": os.getpid(), "conf": settings_parser.conf_fingerprint()}
+    # Atomic: testit polls this file and must never read a half-written one.
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, target)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+try:
+    _write_testit_ready()
+except Exception:
+    # Never block the server from starting over a test-only convenience.
+    pass
 PYEOF
 
 # ---------- testproject/config/settings/__init__.py ----------
