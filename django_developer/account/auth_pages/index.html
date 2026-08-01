@@ -4298,9 +4298,23 @@ returns a <code>SafeString</code> so autoescaping never runs twice.</p>
 <li><strong>Do not reach for <code>|safe</code></strong> in a script literal. It fixes the ampersand by
   reopening the string-literal breakout that autoescaping currently closes.</li>
 </ul>
-<p>The shipped <code>auth_base.html</code> interpolates five values this way — <code>api_base</code>,
-<code>success_redirect</code>, <code>auth_url</code>, <code>register_url</code>, <code>passkey_url</code> — and carries the
-same note as a <code>{% comment %}</code> beside them.</p>
+<p>This rule is codebase-wide, not a property of one file. Every shipped template
+that interpolates a value into a <code>&lt;script&gt;</code> string literal carries <code>|escapejs</code>
+(<code>auth_base.html</code>, <code>bouncer_challenge.html</code>, <code>contact.html</code>, <code>login.html</code>);
+<code>auth_base.html</code> also keeps the same note as a <code>{% comment %}</code> beside its block.</p>
+<p>A <code>&lt;style&gt;</code> block is raw-text too — and there is no <code>escapecss</code> filter. So a
+<code>{{ }}</code> interpolated into a <code>&lt;style&gt;</code> element cannot be made safe by any filter:
+it must instead be a value that is provably <strong>not attacker-influenced</strong> (admin-set
+config, a per-render hex nonce, a conf-file-only setting). The three that ship
+this way — <code>auth_base.html</code>'s <code>custom_css|safe</code>, <code>bouncer_challenge.html</code>'s
+<code>render_ctx.css_nonce</code>, <code>bouncer_decoy.html</code>'s <code>accent_color</code> — are enumerated in
+a reviewed allowlist; adding another is a security decision, not a formatting one.</p>
+<p>Both rules are enforced by a standing audit:
+<code>test_shipped_templates_raw_text_interpolations_are_safe</code>
+(<code>tests/test_auth/bouncer_forms.py</code>) walks <strong>every</strong> shipped template and fails
+the build when a <code>&lt;script&gt;</code> string-literal interpolation is missing <code>|escapejs</code>,
+or a <code>&lt;style&gt;</code> interpolation is not in the reviewed allowlist. There is no
+per-file list to maintain — a new template is covered the moment it ships.</p>
 <h3 id="overriding-the-hero-panel">Overriding the hero panel<a class="headerlink" href="#overriding-the-hero-panel" title="Permanent link">&para;</a></h3>
 <p>Create <code>templates/account/auth_hero.html</code> in your project:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">&lt;</span><span class="nt">div</span> <span class="na">class</span><span class="o">=</span><span class="s">&quot;mat-hero&quot;</span> <span class="na">style</span><span class="o">=</span><span class="s">&quot;background-image:url(&#39;/static/hero.jpg&#39;)&quot;</span><span class="p">&gt;</span>

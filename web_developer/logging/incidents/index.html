@@ -3181,6 +3181,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="List Events">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#account-observability-categories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Account observability categories
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4136,6 +4153,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="List Events">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#account-observability-categories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Account observability categories
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4657,7 +4691,19 @@
 <p><strong>GET</strong> <code>/api/incident/event</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>GET /api/incident/event?category=auth:failed&amp;sort=-created&amp;size=50
 </code></pre></div>
-<p>Events with <code>metadata.dedup_count &gt; 1</code> represent multiple identical events that were deduplicated. Check this field to get true event volume.</p>
+<p>Every reported occurrence is its own event row — there is no ingestion-time
+deduplication, so row counts reflect true volume. The exception is the
+Redis-suppressed operational categories below, which file at most one event
+per unit per window.</p>
+<h3 id="account-observability-categories">Account observability categories<a class="headerlink" href="#account-observability-categories" title="Permanent link">&para;</a></h3>
+<p>The account app files these suppressed operational categories (filterable by
+<code>category=</code>): <code>auth:handoff_group_token_inert</code> (level 6),
+<code>auth:handoff_group_token_entry_widened</code> (level 3),
+<code>account:realtime_disconnect_failed</code> (level 6),
+<code>account:login_no_client_ip</code> (level 5), <code>geoip:abuse_push_unconfigured</code> (level 5),
+and <code>geoip:abuse_push_rejected</code> / <code>geoip:abuse_push_missing_ip</code> /
+<code>geoip:abuse_push_no_signals</code> (level 4). Each is Redis-suppressed (at most one per
+hour per unit), so counts reflect distinct conditions, not raw volume.</p>
 <h2 id="tickets">Tickets<a class="headerlink" href="#tickets" title="Permanent link">&para;</a></h2>
 <p>Tickets are the bridge between automated systems and human operators.</p>
 <p><strong>GET</strong> <code>/api/incident/ticket?status=open&amp;sort=-priority</code></p>

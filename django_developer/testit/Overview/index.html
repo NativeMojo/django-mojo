@@ -4331,6 +4331,15 @@ already holding the exclusive hold is granted the shared hold immediately
 <li>Import Django models inside <code>@django_unit_setup</code> / <code>@django_unit_test</code> only.</li>
 <li>Tests run in definition order; keep related assertions grouped.</li>
 </ul>
+<blockquote>
+<p><strong>Collection is by function-name PREFIX, not by decorator, and there is no
+teardown phase.</strong> The runner collects <code>setup_*</code> for the setup phase and
+<code>test_*</code> / <code>quick_*</code> for the test phase — nothing else. A <code>cleanup_*</code> or
+<code>teardown_*</code> function is therefore dead code no matter how it is decorated
+(even <code>@django_unit_setup()</code>): it is never collected and never runs. Put
+per-module cleanup at the <strong>top of <code>setup_</code></strong> instead — delete any leftover
+rows/secrets there before creating fixtures, since the database is long-lived.</p>
+</blockquote>
 <p>See <code>docs/testit/examples/1_test_models.py</code> for a full reference module.</p>
 <hr />
 <h2 id="gating-expensive-or-destructive-tests">Gating Expensive or Destructive Tests<a class="headerlink" href="#gating-expensive-or-destructive-tests" title="Permanent link">&para;</a></h2>

@@ -3791,6 +3791,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="track() — Recording a Login">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#no-client-ip-incident" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No-client-IP incident
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3990,9 +4007,21 @@
 <li>Checks <code>is_new_country</code> and <code>is_new_region</code> by querying prior events for this user</li>
 <li>Parses <code>request.user_agent</code> via <code>rhelper.parse_user_agent()</code></li>
 <li>Creates the <code>UserLoginEvent</code> row</li>
+<li>If <code>request.ip</code> is <code>None</code>, files a suppressed incident (see below) — <strong>after</strong>
+   the row is created, so a reporter fault can never cost the login record</li>
 <li>Records metrics (see below)</li>
 <li>Returns the created event (or <code>None</code> if tracking disabled)</li>
 </ol>
+<h3 id="no-client-ip-incident">No-client-IP incident<a class="headerlink" href="#no-client-ip-incident" title="Permanent link">&para;</a></h3>
+<p>A login recorded with no resolved client IP files
+<code>account:login_no_client_ip</code> (level 5) via <code>report_event_suppressed</code>. This is
+almost always a reverse-proxy / ingress that is not forwarding the client
+address, which affects <strong>every</strong> request — so the suppression key is deliberately
+<strong>global, not per-user</strong> (<code>account:login_event:no_ip_alerted</code>). A per-user key
+would file one incident per login and flood the plane under exactly the
+misconfiguration the incident exists to surface. The body names a <code>user.id</code> /
+<code>event.id</code> only as an <strong>example</strong>, with an explicit note that the condition is not
+user-specific.</p>
 <p><strong>Manual call (e.g. custom auth flow):</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.account.models.login_event</span><span class="w"> </span><span class="kn">import</span> <span class="n">UserLoginEvent</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>

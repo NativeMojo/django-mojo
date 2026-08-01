@@ -1487,6 +1487,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#file-logging-helpers-logitinfo-logitwarning-argument-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File-logging helpers (logit.info / logit.warning) — argument semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4047,6 +4058,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#file-logging-helpers-logitinfo-logitwarning-argument-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File-logging helpers (logit.info / logit.warning) — argument semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4251,6 +4273,22 @@
 <li><code>LOG_CHANGES = True</code> provides automatic audit trails with no extra code</li>
 <li>Sensitive fields are automatically masked in change diffs — the full key list is <code>SENSITIVE_KEYS</code> in <code>mojo/helpers/logit.py</code> (single source of truth, see <code>docs/django_developer/helpers/logit.md</code>)</li>
 <li>The <code>payload</code> field is automatically sanitized before storage via <code>sanitize_dict()</code>, which shares the same <code>SENSITIVE_KEYS</code> list — plaintext credentials are never written to the Log table</li>
+</ul>
+<h2 id="file-logging-helpers-logitinfo-logitwarning-argument-semantics">File-logging helpers (<code>logit.info</code> / <code>logit.warning</code>) — argument semantics<a class="headerlink" href="#file-logging-helpers-logitinfo-logitwarning-argument-semantics" title="Permanent link">&para;</a></h2>
+<p>The file-logging helpers (<code>logit.info(*args)</code>, <code>logit.warning(*args)</code>,
+<code>logit.error(*args)</code>, etc.) are <strong>not</strong> printf and do <strong>not</strong> route by channel.
+Internally <code>_build_log(*args)</code> simply <code>"\n".join(str(arg) …)</code>s every argument, so:</p>
+<ul>
+<li><strong>Arg 0 is a cosmetic pseudo-channel, not a router.</strong> <code>logit.warning("account",
+  "message")</code> writes two lines — <code>account</code> then <code>message</code>. The first argument does
+  not select a log file or a logger; it is just the first line of the record. (To
+  write to a <em>named</em> file, get a logger explicitly:
+  <code>logger = logit.get_logger(name, "app.log")</code>.)</li>
+<li><strong><code>%</code>-placeholders never interpolate.</strong> <code>logit.info("did %s -&gt; %s", a, b)</code> does
+  <strong>not</strong> format — it emits three separate lines <code>did %s -&gt; %s</code>, <code>str(a)</code>,
+  <code>str(b)</code>, and the <code>%s</code> stay literal. Always build the message with an f-string:
+  <code>logit.info(f"did {a} -&gt; {b}")</code>. (This exact bug lived in
+  <code>account.asyncjobs.push_abuse_signals</code>; item 1100 fixed both its printf lines.)</li>
 </ul>
 
 

@@ -4270,7 +4270,7 @@ tenant and the fix is a global grant, not a different <code>?group=</code>.</p>
 <tr>
 <td>Events</td>
 <td><code>/api/incident/event</code></td>
-<td>Raw security events that feed into incidents</td>
+<td>Raw security events that feed into incidents — includes the OAuth redirect-allowlist categories <code>auth:oauth_redirect_refused</code>, <code>auth:redirect_allowlist_unusable_entry</code>, and <code>auth:redirect_allowlist_tenant_entry_unusable</code> (Redis-suppressed, so at most one per host/source/group per hour)</td>
 </tr>
 <tr>
 <td>History</td>
@@ -5323,11 +5323,6 @@ terminal-status skip), so a repeat is a safe no-op.</p>
 <td><code>INCIDENT_EVENT_METRICS</code></td>
 <td><code>True</code></td>
 <td>Enable incident/event metrics recording</td>
-</tr>
-<tr>
-<td><code>INCIDENT_DEDUP_WINDOW_SECONDS</code></td>
-<td><code>60</code></td>
-<td>Dedup window for identical events (0=disabled)</td>
 </tr>
 <tr>
 <td><code>HEALTH_MONITORING_ENABLED</code></td>

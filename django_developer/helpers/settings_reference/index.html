@@ -5505,19 +5505,33 @@
   absent), and a path at or under the entry path on a <code>/</code> segment boundary.
   Query and fragment are ignored on both sides; <code>*.</code> wildcards are <strong>not</strong>
   supported and are skipped as unusable entries; list IDN hosts in punycode. A
+  path carrying a <code>.</code>/<code>..</code> segment (any <code>%2e</code> spelling) is refused outright, not
+  normalized, on both the <code>redirect_uri</code> and every entry. A
   <strong>custom scheme</strong> (<code>myapp://callback</code>, a mobile deep link) is supported under
   narrower rules — exact scheme + exact case-folded authority + the same path
-  rule, no default ports and no wildcards. Empty (or unset) refuses any
-  <code>redirect_uri</code> outright. <strong>Not the only source</strong>: the group this request
+  rule, no default ports and no wildcards — and the <code>/callback</code> bounce emits it
+  as the <code>Location</code> (the 302 widens to exactly the one custom scheme admitted
+  here, or the deployment's own <code>OAUTH_REDIRECT_URI</code>; anything else is a 400).
+  Empty (or unset) refuses any <code>redirect_uri</code> outright. <strong>Not the only source</strong>: the group this request
   resolved (<code>?group=</code> / <code>?group_uuid=</code>) contributes its own
   <code>Group.metadata["allowed_redirect_urls"]</code>, inherited up the parent chain, so
-  the effective allowlist is this setting plus that tenant-writable list. Read
+  the effective allowlist is this setting plus that tenant-writable list. That
+  per-group value is coerced by the <strong>same</strong> <code>kind="list"</code> rules
+  (<code>redirect_allowlist.coerce_entries</code>), so a bare string is the single entry it
+  spells and a non-list value (int / bool / float / dict — an object's keys are
+  <strong>not</strong> entries) is dropped as unusable. Read
   through <code>settings.get</code> with <code>kind="list"</code>, so a <strong>global</strong> <code>Setting</code> row works
   — it holds text, and both a JSON array and a comma-separated string are
   coerced correctly. A group-scoped <code>Setting</code> row is never consulted (per-group
-  entries live in group metadata instead). See
-  <a href="../../account/oauth/#allowlist-configuration">OAuth</a> and
-  <a href="../../account/oauth/#the-per-group-source">the per-group source</a>.</li>
+  entries live in group metadata instead). An entry that can never match is
+  skipped and files a Redis-suppressed incident rather than a per-request log
+  line: <code>auth:redirect_allowlist_unusable_entry</code> (level 3) for a broken entry in
+  this setting, <code>auth:redirect_allowlist_tenant_entry_unusable</code> (level 1,
+  budgeted) for a broken group entry, and <code>auth:oauth_redirect_refused</code> (level 3,
+  budgeted) when a <code>redirect_uri</code> matches nothing. See
+  <a href="../../account/oauth/#allowlist-configuration">OAuth</a>,
+  <a href="../../account/oauth/#redirect-allowlist-incidents">redirect allowlist incidents</a>,
+  and <a href="../../account/oauth/#the-per-group-source">the per-group source</a>.</li>
 </ul>
 <h3 id="api">API<a class="headerlink" href="#api" title="Permanent link">&para;</a></h3>
 <ul>
@@ -5591,7 +5605,9 @@
 <li><code>AUTH_HANDOFF_ALLOWED_URLS</code> — list, <strong>unset by default (monitor mode)</strong>.
   Destination URLs <code>POST /api/auth/handoff</code> may mint a code for, matched on
   <strong>exact host + path prefix</strong> (<code>https://*.example.com/</code> admits one extra
-  dot-free label). A custom scheme (a mobile deep link) is usable here too —
+  dot-free label); a destination or entry whose path carries a <code>.</code>/<code>..</code> segment
+  (any <code>%2e</code> spelling) is refused outright, not normalized. A custom scheme (a
+  mobile deep link) is usable here too —
   same shared matcher, same narrower custom-scheme rules as
   <code>ALLOWED_REDIRECT_URLS</code> — but note that it only serves a <strong>custom frontend</strong>
   calling <code>POST /api/auth/handoff</code> directly: the bundled hosted auth pages

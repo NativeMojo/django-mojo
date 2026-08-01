@@ -5381,16 +5381,25 @@ reports nothing (there is no destination to name) and still mints.</p>
 <code>is_allowed_destination()</code> answers allow/deny <strong>only</strong> and never considers the
 mode — callers pair the two, which is why a <code>False</code> in monitor mode is reported
 rather than acted on.</p>
-<p><code>matches_allowlist(url, entries, source="allowlist", allow_wildcard=False)</code> is
-the matcher underneath, in its pure form: it reads no settings and takes no
-request, just "does this URL match one of these entries". It never raises.
-Reach for it when you already hold the entries — the OAuth <code>redirect_uri</code>
+<p><code>matches_allowlist(url, entries, source="allowlist", allow_wildcard=False,
+request=None, tenant=False)</code> is the matcher underneath, in its pure form: it
+reads no settings, just "does this URL match one of these entries". It never
+raises. Reach for it when you already hold the entries — the OAuth <code>redirect_uri</code>
 allowlist is the second in-tree caller, which is what keeps one implementation
 behind two lists. Reach for <code>is_allowed_destination()</code> instead when you want the
-handoff list <em>plus</em> any configured resolver. <code>source</code> only names the setting in
-the "ignoring unusable entry" warning (logged once per distinct entry, not once
-per request); <code>allow_wildcard</code> decides whether a <code>*.host</code> entry is honored or
-dropped as unusable.</p>
+handoff list <em>plus</em> any configured resolver. <code>allow_wildcard</code> decides whether a
+<code>*.host</code> entry is honored or dropped as unusable.</p>
+<p><code>source</code> names the origin of the list (the setting name, or <code>group:&lt;pk&gt;</code> for a
+tenant list) and is the <strong>suppression key</strong> for the unusable-entry incident it
+files when an entry can never match: an unusable entry no longer logs a
+per-request line (that was free amplification on the public <code>/begin</code>), it files a
+Redis-suppressed <code>auth:redirect_allowlist_unusable_entry</code> incident (level 3, one
+per source per hour). Because the handoff list shares this matcher, a broken
+<code>AUTH_HANDOFF_ALLOWED_URLS</code> entry files that <strong>same</strong> operator category — an
+unusable handoff entry is equally a deployment bug. <code>request</code>/<code>tenant</code> only steer
+which category and posture that incident uses (see
+<a href="../oauth/#redirect-allowlist-incidents">OAuth › redirect allowlist incidents</a>);
+they never change the match.</p>
 <p>Same-origin and relative redirects are unaffected in either mode — they never
 mint a code, because the tokens already live in <code>localStorage</code> on the
 destination origin.</p>
@@ -5419,9 +5428,14 @@ whatever the allowlist says. So listing <code>myapp://callback</code> buys a val
 destination for a <strong>custom frontend</strong> calling <code>POST /api/auth/handoff</code> itself —
 not for the shipped pages. The OAuth <code>redirect_uri</code> on
 <code>GET /api/auth/oauth/&lt;provider&gt;/begin</code> is a different parameter on a different
-endpoint and does not pass through this guard at all, so a native-app OAuth flow
-landing on a deep link is unaffected; see
-<a href="../oauth/#custom-url-schemes-mobile-deep-links">OAuth § Custom URL schemes</a>.</p>
+endpoint and does not pass through this guard at all, so the browser guard never
+touches a native-app OAuth flow landing on a deep link. That guard was only ever
+half the story, though: the server still has to emit the deep-link <code>Location</code> on
+the <code>/callback</code> bounce, and Django refuses a non-<code>http(s)</code> redirect scheme unless
+the scheme was vetted at <code>/begin</code> and recorded in the OAuth state. See
+<a href="../oauth/#custom-url-schemes-mobile-deep-links">OAuth § Custom URL schemes</a> and
+its <a href="../oauth/#the-callback-bounce">callback bounce</a> subsection for the exact
+rule and the 400 that a non-vetted scheme now returns.</p>
 <h4 id="rolling-enforcement-out">Rolling enforcement out<a class="headerlink" href="#rolling-enforcement-out" title="Permanent link">&para;</a></h4>
 <ol>
 <li><strong>Upgrade.</strong> Nothing breaks. With neither setting present you are in monitor
@@ -5507,7 +5521,11 @@ filed, it just does not decide whether the code is minted.</p>
 <li>Path matching stops at a segment boundary, so <code>/app</code> does not admit
   <code>/application</code>. Query strings are ignored. Host-only matching was
   deliberately rejected — it would turn every open redirector, query reflector
-  and analytics beacon on an allowed host into a token-deposit site.</li>
+  and analytics beacon on an allowed host into a token-deposit site. A path
+  carrying a <code>.</code>/<code>..</code> segment (in any <code>%2e</code> spelling) is <strong>refused outright</strong>
+  rather than normalized, on both the destination and every entry — a browser
+  resolves it out of the prefix before the request, so admitting one would
+  degrade this segment boundary to host-only matching.</li>
 <li>Hostnames must be plain ASCII host characters; list IDN destinations in
   punycode. That closes the parser-differential class where Python keeps a
   character inside the host that a browser treats as an authority terminator.</li>
@@ -5600,9 +5618,12 @@ correct for an <strong>allow</strong> rule and a bypass in a <strong>deny</stron
 <code>https://a.b.gated.example.com</code> would mint a plain JWT whose code lands right
 back on the gated origin. So the gating matcher is separate and looser:</p>
 <ul>
-<li><strong>Entries are hosts.</strong> A full URL is accepted and reduced to its host with a
-  warning — scheme, port and path are ignored, because a deny rule must never
-  be narrowed by them.</li>
+<li><strong>Entries are hosts.</strong> A full URL is accepted and reduced to its host, and the
+  dropped scheme, port and path file a suppressed
+  <code>auth:handoff_group_token_entry_widened</code> incident (level 3, one per derived
+  host per hour). A deny rule must never be narrowed by them — and the notice is
+  explicit that the bare host now covers <strong>MORE, not less</strong>: the host <strong>and every
+  one of its subdomains</strong>. List the bare host to make that intent visible.</li>
 <li><strong>Every entry covers the host and all of its subdomains, at any depth.</strong>
   <code>example.com</code> and <code>*.example.com</code> are the same rule; the <code>*.</code> is normalized
   away. A forgotten star is a silent hole, and <code>app.tenant.example.com</code> is the
@@ -5662,8 +5683,13 @@ rollout a safe rehearsal.</p>
 </thead>
 <tbody>
 <tr>
-<td>mode <code>off</code></td>
+<td>mode <code>off</code>, sources unset</td>
 <td>sources not read at all; plain JWT</td>
+<td>—</td>
+</tr>
+<tr>
+<td>mode <code>off</code> <strong>but sources configured</strong></td>
+<td>inert; plain JWT + one <code>auth:handoff_group_token_inert</code> incident (level 6)</td>
 <td>—</td>
 </tr>
 <tr>

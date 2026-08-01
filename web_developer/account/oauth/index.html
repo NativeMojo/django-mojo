@@ -3884,6 +3884,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#registering-a-landing-url-on-your-group" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registering a landing URL on your group
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#native-apps-custom-url-schemes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4077,7 +4088,7 @@ pages render a button for each enabled provider. See
 <tbody>
 <tr>
 <td><code>redirect_uri</code></td>
-<td>Override the default callback URL. Must be on the server's allowlist. Returns <code>400</code> if provided but not allowed. It is matched as a <strong>URL</strong> — same scheme, same host (case-insensitive), same port, and a path at or under the allowlisted path on a <code>/</code> boundary; the query string is ignored, so you may append your own. Sharing a string prefix with an allowlisted URL is <em>not</em> enough. The allowlist is the server's <code>ALLOWED_REDIRECT_URLS</code> <strong>plus</strong> the <code>allowed_redirect_urls</code> registered on the group you name — so passing <code>group_uuid</code> (or <code>group</code>) can admit a landing URL that would 400 without it.</td>
+<td>Override the default callback URL. Must be on the server's allowlist. Returns <code>400</code> if provided but not allowed. It is matched as a <strong>URL</strong> — same scheme, same host (case-insensitive), same port, and a path at or under the allowlisted path on a <code>/</code> boundary; the query string is ignored, so you may append your own. Sharing a string prefix with an allowlisted URL is <em>not</em> enough, and a path with a <code>.</code>/<code>..</code> segment (any <code>%2e</code> spelling) is refused outright. The allowlist is the server's <code>ALLOWED_REDIRECT_URLS</code> <strong>plus</strong> the <code>allowed_redirect_urls</code> registered on the group you name — so passing <code>group_uuid</code> (or <code>group</code>) can admit a landing URL that would 400 without it. Write that group value as a JSON <strong>array</strong>; a plain string is taken as the single entry it spells, and a number/boolean/object is ignored (see <a href="#registering-a-landing-url-on-your-group">Registering a landing URL on your group</a>).</td>
 </tr>
 </tbody>
 </table>
@@ -4226,6 +4237,12 @@ before assuming a server outage:</p>
   entry without a port means the scheme default (443/80).</li>
 <li><strong>Path boundary</strong> — an entry of <code>.../app</code> admits <code>/app</code> and <code>/app/inner</code>, not
   <code>/application</code>. Add a trailing <code>/</code> to the entry to admit a whole host.</li>
+<li><strong>Dot segments</strong> — a path with a <code>.</code> or <code>..</code> segment, in any <code>%2e</code> spelling,
+  is refused rather than resolved: <code>.../callback/../../x</code> is rejected even though
+  the string sits under the prefix, because a browser resolves it off the prefix
+  before the request runs. Point <code>redirect_uri</code> at the real landing path. (A
+  <code>%2f</code>-encoded slash or a double-encoded <code>%252e</code> is <em>not</em> a dot segment and
+  still passes — a browser resolves neither.)</li>
 <li><strong>Scheme</strong> — must match the entry exactly, and <code>http</code>/<code>https</code> never
   substitute for each other. A custom scheme (<code>myapp://callback</code>, a mobile deep
   link) <strong>is</strong> still accepted — see below.</li>
@@ -4238,6 +4255,34 @@ before assuming a server outage:</p>
 <p>What did <strong>not</strong> change: the status code (<code>400</code>), the error strings, the
 response shape, and host case-insensitivity — in fact case now matches <em>more</em>
 (<code>https://APP.Example.com/x</code> is admitted against <code>https://app.example.com</code>).</p>
+<p><strong>A refusal is now visible to the operator.</strong> A refused <code>redirect_uri</code> files a
+server-side security event (<code>auth:oauth_redirect_refused</code>), suppressed to one per
+host per hour. Nothing about the client response changes — you still get the same
+<code>400</code> with the same body — but if your integration is refusing in production, the
+operator can see the host and fix the allowlist without you shipping them a log.
+An <strong>unusable</strong> allowlist entry (one that can never match) is likewise surfaced as
+an event instead of a silent skip.</p>
+<h3 id="registering-a-landing-url-on-your-group">Registering a landing URL on your group<a class="headerlink" href="#registering-a-landing-url-on-your-group" title="Permanent link">&para;</a></h3>
+<p>If you run a white-label group, you can authorize your own OAuth landing origin
+without a server deploy: set <code>allowed_redirect_urls</code> in your group's metadata,
+then pass <code>group_uuid</code> (or <code>group</code>) on <code>begin</code>. A <code>redirect_uri</code> is admitted when
+it matches <strong>either</strong> the server's <code>ALLOWED_REDIRECT_URLS</code> <strong>or</strong> your group's
+list (inherited up the parent chain).</p>
+<p><strong>Write the value as a JSON array of URL strings:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;allowed_redirect_urls&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;https://portal.mytenant.example/auth/callback&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<ul>
+<li>A <strong>plain string</strong> is accepted as the single entry it spells
+  (<code>"https://portal.mytenant.example/"</code> → that one URL). A <strong>comma-separated</strong>
+  string becomes the list it spells — so use an <strong>array</strong> when a URL itself
+  contains a comma.</li>
+<li>A <strong>number, boolean, or object is ignored entirely</strong>: the whole per-group list
+  is dropped and your request still validates against the server's
+  <code>ALLOWED_REDIRECT_URLS</code>. In particular an object's <em>keys</em> are <strong>not</strong> treated as
+  entries — write <code>["https://…"]</code>, not <code>{"https://…": true}</code>.</li>
+<li>Each entry is matched as a URL — same scheme, host, port and segment-bounded
+  path prefix as the server list above; a shared string prefix is not enough.</li>
+</ul>
 <h3 id="native-apps-custom-url-schemes">Native apps — custom URL schemes<a class="headerlink" href="#native-apps-custom-url-schemes" title="Permanent link">&para;</a></h3>
 <p>A mobile deep link works as a <code>redirect_uri</code>, against an allowlist entry naming
 the same scheme. It is matched under narrower rules than a web URL: <strong>exact
@@ -4298,30 +4343,40 @@ and the query string is still ignored.</p>
 <p>Refused outright, whichever side they appear on: the opaque form with no <code>//</code>
 and no leading <code>/</code> (<code>myapp:callback</code>, <code>mailto:a@b</code>), a bare <code>myapp:</code> or
 <code>myapp://</code>, and <code>javascript:</code> / <code>data:</code> / <code>vbscript:</code>.</p>
+<p><strong>What the app observes.</strong> Once the deep link is admitted at <code>/begin</code>, the
+<code>/callback</code> responds with a <strong>302</strong> whose <code>Location</code> is your deep link with the
+code and state appended — <code>Location: myapp://callback?code=…&amp;state=…</code>. The OS
+hands that URL to your app, which then reads <code>code</code> + <code>state</code> from the query and
+<code>POST</code>s them to <code>/complete</code> exactly as a web page would. If the scheme was not
+vetted at <code>/begin</code> (for example a state minted before this behavior shipped, or a
+landing derived from the <code>Origin</code> header rather than an allowlisted
+<code>redirect_uri</code>), the callback returns <strong>400 <code>Cannot return to the redirect_uri in
+this OAuth state</code></strong> instead of the 302 — re-run <code>/begin</code> with a <code>redirect_uri</code>
+that is on the allowlist.</p>
 <hr />
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
 <p>Add to your Django settings:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">GOOGLE_CLIENT_ID</span> <span class="o">=</span> <span class="s2">&quot;your-client-id.apps.googleusercontent.com&quot;</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">GOOGLE_CLIENT_SECRET</span> <span class="o">=</span> <span class="s2">&quot;your-client-secret&quot;</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># The URL Google redirects back to after login</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="c1"># Must match one of the authorised redirect URIs in Google Console</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">OAUTH_REDIRECT_URI</span> <span class="o">=</span> <span class="s2">&quot;https://your-app.example.com/oauth/google/complete&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">GOOGLE_CLIENT_ID</span> <span class="o">=</span> <span class="s2">&quot;your-client-id.apps.googleusercontent.com&quot;</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">GOOGLE_CLIENT_SECRET</span> <span class="o">=</span> <span class="s2">&quot;your-client-secret&quot;</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1"># The URL Google redirects back to after login</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="c1"># Must match one of the authorised redirect URIs in Google Console</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="n">OAUTH_REDIRECT_URI</span> <span class="o">=</span> <span class="s2">&quot;https://your-app.example.com/oauth/google/complete&quot;</span>
 </code></pre></div>
 <p>If <code>OAUTH_REDIRECT_URI</code> is not set, the server builds it from the request <code>Origin</code> header as <code>&lt;origin&gt;/oauth/&lt;provider&gt;/complete</code>.</p>
 <h3 id="apple-settings">Apple Settings<a class="headerlink" href="#apple-settings" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">APPLE_CLIENT_ID</span>   <span class="o">=</span> <span class="s2">&quot;com.example.web&quot;</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">APPLE_TEAM_ID</span>     <span class="o">=</span> <span class="s2">&quot;ABCD1234EF&quot;</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">APPLE_KEY_ID</span>      <span class="o">=</span> <span class="s2">&quot;ABCD123456&quot;</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="n">APPLE_PRIVATE_KEY</span> <span class="o">=</span> <span class="s2">&quot;-----BEGIN PRIVATE KEY-----</span><span class="se">\n</span><span class="s2">...&quot;</span>  <span class="c1"># .p8 file contents</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">APPLE_CLIENT_ID</span>   <span class="o">=</span> <span class="s2">&quot;com.example.web&quot;</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">APPLE_TEAM_ID</span>     <span class="o">=</span> <span class="s2">&quot;ABCD1234EF&quot;</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">APPLE_KEY_ID</span>      <span class="o">=</span> <span class="s2">&quot;ABCD123456&quot;</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="n">APPLE_PRIVATE_KEY</span> <span class="o">=</span> <span class="s2">&quot;-----BEGIN PRIVATE KEY-----</span><span class="se">\n</span><span class="s2">...&quot;</span>  <span class="c1"># .p8 file contents</span>
 </code></pre></div>
 <p>Apple Sign In uses the same flow as Google. Replace <code>google</code> with <code>apple</code> in all endpoint URLs.</p>
 <blockquote>
 <p><strong>Note:</strong> Apple only provides the user's name on the very first Sign In. The framework does not rely on the name field, so this has no impact on account creation.</p>
 </blockquote>
 <h3 id="github-settings">GitHub Settings<a class="headerlink" href="#github-settings" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">GITHUB_CLIENT_ID</span>     <span class="o">=</span> <span class="s2">&quot;your-github-oauth-app-client-id&quot;</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">GITHUB_CLIENT_SECRET</span> <span class="o">=</span> <span class="s2">&quot;your-github-oauth-app-client-secret&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">GITHUB_CLIENT_ID</span>     <span class="o">=</span> <span class="s2">&quot;your-github-oauth-app-client-id&quot;</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">GITHUB_CLIENT_SECRET</span> <span class="o">=</span> <span class="s2">&quot;your-github-oauth-app-client-secret&quot;</span>
 </code></pre></div>
 <p>GitHub Sign In uses the standard redirect flow — identical to Google. Replace <code>google</code> with <code>github</code> in all endpoint URLs.</p>
 <blockquote>
@@ -4350,7 +4405,7 @@ and no leading <code>/</code> (<code>myapp:callback</code>, <code>mailto:a@b</co
 <tr>
 <td><code>ALLOWED_REDIRECT_URLS</code></td>
 <td><code>[]</code></td>
-<td>URLs permitted as <code>redirect_uri</code> on the <code>begin</code> endpoint, matched by scheme + host + port + segment-bounded path prefix (not by string prefix). Combined at request time with the <code>allowed_redirect_urls</code> list in the metadata of the group you pass as <code>group_uuid</code> / <code>group</code> (inherited up its parent chain), so a tenant can register its own landing origin without a server deploy.</td>
+<td>URLs permitted as <code>redirect_uri</code> on the <code>begin</code> endpoint, matched by scheme + host + port + segment-bounded path prefix (not by string prefix). Combined at request time with the <code>allowed_redirect_urls</code> list in the metadata of the group you pass as <code>group_uuid</code> / <code>group</code> (inherited up its parent chain), so a tenant can register its own landing origin without a server deploy — that group value is coerced by the same list rules (a JSON array, or a plain / comma-separated string), and a non-list value is ignored.</td>
 </tr>
 <tr>
 <td><code>OAUTH_ALLOW_REGISTRATION</code></td>
@@ -4366,27 +4421,27 @@ and no leading <code>/</code> (<code>myapp:callback</code>, <code>mailto:a@b</co
 <p><strong>GET</strong> <code>/api/account/oauth_connection</code></p>
 <p>Returns the authenticated user's OAuth connections. Admins with <code>manage_users</code> permission see all connections.</p>
 <p><strong>Response:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">    </span><span class="p">{</span>
-<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
-<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">      </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;google&quot;</span><span class="p">,</span>
-<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">      </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">      </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2025-01-15T10:30:00Z&quot;</span>
-<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="w">  </span><span class="p">]</span>
-<a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p">{</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">      </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;google&quot;</span><span class="p">,</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="w">      </span><span class="nt">&quot;email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="w">      </span><span class="nt">&quot;is_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2025-01-15T10:30:00Z&quot;</span>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="unlink-a-connection">Unlink a Connection<a class="headerlink" href="#unlink-a-connection" title="Permanent link">&para;</a></h3>
 <p><strong>DELETE</strong> <code>/api/account/oauth_connection/&lt;id&gt;</code></p>
 <p>Removes an OAuth connection. Admins with <code>manage_users</code> (or the combined <code>users</code> admin permission, which includes it) can delete any connection. Regular users can only delete their own.</p>
 <p><strong>Response (success):</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p">{</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="p">}</span>
 </code></pre></div>
 <h4 id="lockout-guard">Lockout Guard<a class="headerlink" href="#lockout-guard" title="Permanent link">&para;</a></h4>
 <p>To prevent users from locking themselves out, the server blocks the delete if <strong>both</strong> of the following are true:</p>
@@ -4395,10 +4450,10 @@ and no leading <code>/</code> (<code>myapp:callback</code>, <code>mailto:a@b</co
 <li>This is the user's <strong>only active</strong> OAuth connection</li>
 </ol>
 <p>In that case the server returns <code>400</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Cannot unlink your only login method. Set a password first.&quot;</span>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="p">{</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Cannot unlink your only login method. Set a password first.&quot;</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>To unlink, the user must first set a password (via the password-reset or set-password flow) or link a second OAuth provider.</p>
 <p>Admins with <code>manage_users</code> (or the combined <code>users</code> permission) bypass the lockout guard and can always delete any connection.</p>

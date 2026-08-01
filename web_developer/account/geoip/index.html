@@ -3879,6 +3879,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#push-side-observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Push-side observability
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#error-responses" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4268,6 +4279,14 @@ history or a blocklist hit.</p>
 <a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="p">}</span>
 </code></pre></div>
 <p><code>applied</code> contains only fields whose values changed. An empty <code>applied</code> means the incoming signals were already met or exceeded on this instance.</p>
+<h3 id="push-side-observability">Push-side observability<a class="headerlink" href="#push-side-observability" title="Permanent link">&para;</a></h3>
+<p>On the <strong>sending</strong> side, each way the <code>push_abuse_signals</code> job can drop files a
+suppressed incident (filter via <code>GET /api/incident/event?category=…</code>):
+<code>geoip:abuse_push_unconfigured</code> (level 5, upstream URL/api key unset),
+<code>geoip:abuse_push_rejected</code> (level 4, per HTTP status),
+<code>geoip:abuse_push_missing_ip</code> and <code>geoip:abuse_push_no_signals</code> (level 4). The
+incidents name payload key names and settings only — never signal values or the
+api key.</p>
 <h3 id="error-responses">Error Responses<a class="headerlink" href="#error-responses" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

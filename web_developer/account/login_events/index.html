@@ -3915,6 +3915,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4285,6 +4296,12 @@ normal permission rules.</p>
 </tr>
 </tbody>
 </table>
+<hr />
+<h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
+<p>A login recorded with <code>ip_address = null</code> also files a suppressed incident
+<code>account:login_no_client_ip</code> (level 5), keyed <strong>globally</strong> (not per-user) since a
+null client IP means a reverse-proxy / ingress is not forwarding the client
+address — it affects every request. Filter it via <code>GET /api/incident/event?category=account:login_no_client_ip</code>.</p>
 
 
 

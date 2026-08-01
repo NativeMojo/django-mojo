@@ -4160,6 +4160,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#drop-path-incidents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Drop-path incidents
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -5016,8 +5027,52 @@ stored copy lives in <code>data['threat_data']['is_blocklisted']</code>.</p>
 </ul>
 <p>Pass <code>from_sync=True</code> to suppress the push (used by the sync endpoint receiver to prevent loops).</p>
 <h3 id="push-is-always-async">Push is always async<a class="headerlink" href="#push-is-always-async" title="Permanent link">&para;</a></h3>
-<p><code>_maybe_push_abuse_signals()</code> enqueues via <code>jobs.publish</code> — HTTP is never made inline. <code>block()</code> return latency is unaffected by upstream availability. Retries on 5xx with backoff; 4xx (auth, permission, validation) logs and drops without retry.</p>
+<p><code>_maybe_push_abuse_signals()</code> enqueues via <code>jobs.publish</code> — HTTP is never made inline. <code>block()</code> return latency is unaffected by upstream availability. Retries on 5xx with backoff; 4xx (auth, permission, validation) drops without retry.</p>
 <p>The async job is <code>mojo.apps.account.asyncjobs.push_abuse_signals</code>. It posts <code>{ip, threat_level?, is_known_attacker?, is_known_abuser?}</code> to <code>POST /api/system/geoip/sync</code> on the upstream.</p>
+<h3 id="drop-path-incidents">Drop-path incidents<a class="headerlink" href="#drop-path-incidents" title="Permanent link">&para;</a></h3>
+<p>Each way the push can drop files a Redis-suppressed incident (via
+<code>report_event_suppressed</code>, one per hour per unit) instead of a file-log warning,
+so a broken federation surfaces in the incident feed:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Level</th>
+<th>Suppression unit</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>geoip:abuse_push_unconfigured</code></td>
+<td>5</td>
+<td>global</td>
+<td><code>GEOIP_MOJO_PROVIDER_URL</code> or <code>GEOIP_API_KEY_MOJO</code> unset (names the settings, never their values)</td>
+</tr>
+<tr>
+<td><code>geoip:abuse_push_rejected</code></td>
+<td>4</td>
+<td>per HTTP status</td>
+<td>Upstream returned a 4xx (carries ip, status, response body)</td>
+</tr>
+<tr>
+<td><code>geoip:abuse_push_missing_ip</code></td>
+<td>4</td>
+<td>global</td>
+<td>Job payload had no <code>ip</code> (body lists payload KEY names only)</td>
+</tr>
+<tr>
+<td><code>geoip:abuse_push_no_signals</code></td>
+<td>4</td>
+<td>global</td>
+<td>Job payload had an ip but no signal fields (KEY names only)</td>
+</tr>
+</tbody>
+</table>
+<p>The payload can carry abuse state (<code>threat_level</code>, the <code>is_known_*</code> flags), so the
+missing-ip / no-signals incidents name the payload's <strong>key names only</strong> — never
+their values — and the unconfigured incident names the settings, never the secret
+URL or api key.</p>
 <hr />
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>

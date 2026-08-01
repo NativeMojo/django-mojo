@@ -3778,10 +3778,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#deduplication" class="md-nav__link">
+  <a href="#noise-control" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deduplication
+        Noise Control
       
     </span>
   </a>
@@ -4821,9 +4821,14 @@
 </table>
 <h3 id="geoip-enrichment">GeoIP Enrichment<a class="headerlink" href="#geoip-enrichment" title="Permanent link">&para;</a></h3>
 <p>When an event has a <code>source_ip</code>, the system automatically looks up or creates a <code>GeoLocatedIP</code> record. This enriches the event with country, city, ISP, threat indicators (Tor, VPN, proxy, known attacker), and block status.</p>
-<h3 id="deduplication">Deduplication<a class="headerlink" href="#deduplication" title="Permanent link">&para;</a></h3>
-<p>Events are deduplicated within a configurable window (default 60 seconds). If an event with the same <code>category</code>, <code>level</code>, and optionally <code>source_ip</code>/<code>hostname</code> was created within the window, the existing event's <code>metadata.dedup_count</code> is incremented instead of creating a duplicate.</p>
-<p><strong>Setting:</strong> <code>INCIDENT_DEDUP_WINDOW_SECONDS</code> (default: <code>60</code>)</p>
+<h3 id="noise-control">Noise Control<a class="headerlink" href="#noise-control" title="Permanent link">&para;</a></h3>
+<p>There is <strong>no automatic ingestion-time deduplication</strong> — every <code>report_event()</code> call inserts its own <code>Event</code> row. This is deliberate: rule thresholds (<code>trigger_count</code>/<code>trigger_window</code>/<code>retrigger_every</code>), incident event counts, and metrics all count rows, so rows are the volume signal that tells you something is happening a lot. Noise is controlled at other layers:</p>
+<ul>
+<li><strong>Bundling</strong> — a RuleSet's <code>bundle_by</code>/<code>bundle_minutes</code> groups many events into one incident without losing rows.</li>
+<li><strong>Trigger thresholds</strong> — an incident holds at <code>pending</code> until <code>trigger_count</code> events arrive within <code>trigger_window</code>.</li>
+<li><strong>Opt-in suppression</strong> — for diagnostics reachable from attacker-amplifiable paths, <a href="../logging/incidents/#rate-limited-reporting--report_event_suppressed"><code>report_event_suppressed</code></a> files at most one event per <code>(category, key)</code> per window. On public, amplifiable categories pass <code>fail_open=False</code> and a <code>budget=</code> — the default fails <strong>open</strong> (files unsuppressed) during a Redis outage, and per-key suppression alone does not bound unbounded distinct keys.</li>
+<li><strong>Pruning</strong> — old low-level events are removed after <code>INCIDENT_EVENT_PRUNE_DAYS</code>.</li>
+</ul>
 <h3 id="event-categories">Event Categories<a class="headerlink" href="#event-categories" title="Permanent link">&para;</a></h3>
 <p>Categories are hierarchical strings using <code>:</code> as separator. The rule engine matches on exact category.</p>
 <table>
@@ -4950,8 +4955,26 @@
 <td>Realtime</td>
 <td>Identity exceeded concurrent websocket cap (DM-042)</td>
 </tr>
+<tr>
+<td><code>auth:redirect_allowlist_unusable_entry</code></td>
+<td>OAuth <code>/begin</code></td>
+<td>A <strong>deployment</strong> redirect-allowlist entry (<code>ALLOWED_REDIRECT_URLS</code> or <code>AUTH_HANDOFF_ALLOWED_URLS</code>) can never match — operator config bug. Level 3, suppressed per source per hour, fail-open</td>
+</tr>
+<tr>
+<td><code>auth:redirect_allowlist_tenant_entry_unusable</code></td>
+<td>OAuth <code>/begin</code></td>
+<td>A <strong>tenant</strong> <code>Group.metadata["allowed_redirect_urls"]</code> entry can never match. Level 1, suppressed per <code>group:&lt;pk&gt;</code> per hour, budgeted (25 groups/h), fail-closed</td>
+</tr>
+<tr>
+<td><code>auth:oauth_redirect_refused</code></td>
+<td>OAuth <code>/begin</code></td>
+<td>A <code>redirect_uri</code> matched no allowlist source. Level 3, suppressed per host per hour, budgeted (50 hosts/h), fail-closed</td>
+</tr>
 </tbody>
 </table>
+<p>The three redirect-allowlist categories are Redis-suppressed via
+<code>incident.report_event_suppressed</code> — see
+<a href="../account/oauth/#redirect-allowlist-incidents">OAuth › redirect allowlist incidents</a>.</p>
 <h3 id="event-levels">Event Levels<a class="headerlink" href="#event-levels" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -6120,11 +6143,6 @@ into the kernel firewall fleet-wide.</p>
 <td><code>INCIDENT_LEVEL_THRESHOLD</code></td>
 <td><code>7</code></td>
 <td>Min event level to auto-create incident without rule match</td>
-</tr>
-<tr>
-<td><code>INCIDENT_DEDUP_WINDOW_SECONDS</code></td>
-<td><code>60</code></td>
-<td>Event dedup window in seconds</td>
 </tr>
 <tr>
 <td><code>INCIDENT_EVENT_PRUNE_DAYS</code></td>
