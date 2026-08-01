@@ -365,6 +365,248 @@ configured at all, the deployment is in monitor mode and nothing is refused.)
 See [Auth Pages — Cross-Origin Redirect Handoff](../../web_developer/account/auth_pages.md#cross-origin-redirect-handoff)
 for the end-to-end client-side flow.
 
+### Gated destinations — deliver a group token instead of a JWT
+
+**Off by default.** A deployment can declare certain destination hosts
+**gated**: a handoff code minted for one exchanges into a
+[group-scoped token](#group-scoped-tokens) package — a `gt1.` bearer confined
+to one group, with **no refresh token** — instead of the platform access +
+refresh pair every other destination still receives.
+
+The property, stated honestly: *a gated destination host never receives a
+platform JWT through a mojo-hosted auth flow.*
+
+```python
+AUTH_HANDOFF_GROUP_TOKEN_MODE  = "enforce"          # off (default) / monitor / enforce
+AUTH_HANDOFF_GROUP_TOKEN_HOSTS = {"tenant-a.example.com": "<group uuid>"}
+```
+
+All three settings are **file-only** (`settings.get_static`), unlike the
+`AUTH_HANDOFF_*` pair above. A DB/Redis-backed `Setting` row is writable
+through the generic settings REST plane, so a remotely-writable mode would let
+settings-write access silently downgrade every gated destination back to a
+platform JWT. Group-scoped `Setting` rows are not consulted either, and neither
+is `group.metadata` — a tenant must never hold the switch that decides which
+credential its own visitors receive.
+
+#### The decision is taken at the mint and never re-taken
+
+`POST /api/auth/handoff` already has a server-validated `redirect_uri`, so
+gating resolves there, stamps the group id into the Redis handoff payload as
+`gid`, and `POST /api/auth/exchange` honors it **without consulting the mode or
+the destination again**. Re-resolving would let a resolver that breaks inside
+the code's TTL turn a gated code back into a JWT. Consequences worth knowing:
+
+- a code minted before a mode flip is honored under the decision taken when it
+  was minted — in **both** directions — for up to `AUTH_HANDOFF_CODE_TTL`;
+- a code minted before this feature existed carries no `gid` and behaves
+  exactly as it always has;
+- rolling deploys: an older server ignores `gid`. Deploy the fleet **first**,
+  then set the mode.
+
+Gating is never selected at login and never from a client-supplied
+`group_uuid` — an attacker simply omits a parameter they control.
+
+#### The matcher is a DENY rule, deliberately not the allowlist's
+
+`AUTH_HANDOFF_ALLOWED_URLS` matches on exact scheme, exact port and a path
+prefix, and its wildcard admits exactly one extra label. Every one of those is
+correct for an **allow** rule and a bypass in a **deny** rule: an entry of
+`gated.example.com` that failed to gate `http://gated.example.com`,
+`https://gated.example.com:8443`, `https://gated.example.com.` or
+`https://a.b.gated.example.com` would mint a plain JWT whose code lands right
+back on the gated origin. So the gating matcher is separate and looser:
+
+- **Entries are hosts.** A full URL is accepted and reduced to its host with a
+  warning — scheme, port and path are ignored, because a deny rule must never
+  be narrowed by them.
+- **Every entry covers the host and all of its subdomains, at any depth.**
+  `example.com` and `*.example.com` are the same rule; the `*.` is normalized
+  away. A forgotten star is a silent hole, and `app.tenant.example.com` is the
+  same tenant as `tenant.example.com`. When several entries match, the most
+  specific (most labels) wins. **An operator who gates an apex gates the whole
+  zone**, including their own admin app on a sibling subdomain — which then
+  receives a scoped token or a refusal instead of a JWT. That fails closed and
+  shows up immediately in monitor mode.
+- **List IDN destinations in punycode.** A non-ASCII host is reported
+  *suspicious*, not guessed at.
+- **IP-literal entries are refused in every encoding** — dotted-quad, decimal,
+  hex, octal, bracketed IPv6 — and so are single-label names like `localhost`.
+  We do not normalize numeric host forms and must not pretend to. A destination
+  in one of those shapes is *suspicious* too: no entry can ever be an IP form,
+  so treating an IP-literal destination as "matches nothing" would be
+  fail-**open** for a deployment whose gated box is an internal address. Use a
+  real dotted hostname.
+- **Suspicious fails CLOSED** — the exact inversion of the allowlist's "no
+  match". A backslash in the URL, a unicode label, a bracketed IPv6 literal or
+  a malformed port refuses under `enforce` rather than falling through as
+  ungated.
+- **A defective entry, or two entries normalizing to one host with different
+  groups, refuses every handoff until it is fixed** — plus a `logit.error` and
+  a level-2 incident. A dropped entry would be a silent hole; a fatal entry is
+  a loud, correctable outage.
+
+#### `enforce` hard-requires handoff-destination enforcement
+
+`AUTH_HANDOFF_GROUP_TOKEN_MODE = "enforce"` without
+`AUTH_HANDOFF_ALLOWED_URLS` or `AUTH_HANDOFF_RESOLVER` **refuses every
+handoff** — `400`, no code, a `logit.error` and a level-2
+`auth:handoff_group_token_misconfigured` incident. A deny map cannot enumerate
+"every host that is not mine", so that combination would let a tenant point
+`?redirect=` at any host it controls that is merely *absent* from the map and
+collect a full JWT pair while the operator believes gating is on. The
+alternatives — degrade to monitor, or refuse only gated destinations — both
+keep shipping JWTs under that belief. A two-line settings mistake becoming a
+loud handoff outage is the correct trade; the rollout below orders the settings
+so it cannot happen by following instructions.
+
+**Necessary, but not sufficient.** `is_enforced()` is a configuration-*presence*
+check: a resolver that admits every registered tenant domain satisfies it while
+leaving hosts unmapped, and an unmapped host is by definition not gated. So an
+allowlist-**admitted** destination that matches no gating entry files a
+suppressed `auth:handoff_group_token_unmapped` incident under `enforce` — the
+feed writes the gating map the way it already writes the allowlist. **Gating is
+complete only when the allowlist and the gating map are co-extensive per tenant
+zone.**
+
+`monitor` never requires the prerequisite. That is what makes step 2 of the
+rollout a safe rehearsal.
+
+#### Fail-closed table
+
+| Condition | `monitor` | `enforce` |
+|---|---|---|
+| mode `off` | sources not read at all; plain JWT | — |
+| allowlist enforcement missing | n/a | **400 on every handoff**, misconfiguration incident |
+| no `redirect_uri` | plain JWT | plain JWT (the allowlist already required one) |
+| destination matches no entry | plain JWT | plain JWT + `..._unmapped` incident |
+| destination host suspicious/unparsable | report, plain JWT | **400**, no code |
+| any defective entry in the map | report, plain JWT | **400 on every handoff** until fixed |
+| two entries → one host, different groups | report, plain JWT | **400**, no code |
+| resolver raises / won't import / junk type | report, plain JWT | **400**, no code |
+| unknown group uuid | report, plain JWT | **400**, no code |
+| group inactive, or an ancestor is | report, plain JWT | **400**, no code |
+| visitor is not a direct active member, or is a superuser | report `would_refuse`, plain JWT | **403**, no code |
+| gated destination is also this request's own host | misconfiguration incident, plain JWT | misconfiguration incident, **400** |
+| gated + eligible | report, plain JWT | code stamped with `gid` |
+| **OAuth** `/begin` or `/complete`, destination gated or suspicious | report, proceed to JWT | **400**, no provider exchange |
+
+Every enforce-mode handoff refusal reuses the existing
+`"redirect_uri is not permitted for auth handoff"`, so gated-versus-unlisted-
+versus-misconfigured is not an oracle. The non-member case is a distinct `403`
+with a comprehensible message, because it is read by a real human at the auth
+origin and discloses only what the visitor already knows about their own
+membership.
+
+#### Never list an auth-page origin
+
+A gated destination that equals the request's own `HTTP_HOST` is a
+configuration error: the auth page short-circuits a same-origin redirect to
+direct navigation, so no code is ever minted and the JWT already lives in that
+origin's storage. It files a level-2 misconfiguration incident.
+`HTTP_HOST` is `ALLOWED_HOSTS`-validated, so it is a trustworthy signal — but a
+**white-label `auth_domain` on a different host cannot be detected this way**.
+Do not gate a host you serve auth pages from.
+
+#### What a gated exchange does, and deliberately does not do
+
+`group_token_login` is a sibling of `jwt_login`, not a branch inside it — the
+JWT pair is never constructed. The mint runs **before any side effect**, so a
+refused mint leaves no `last_login` and no login event behind.
+
+| Side effect | Gated exchange |
+|---|---|
+| geofence enforcement (`scope="auth"`) | yes, first |
+| `last_login` | yes |
+| `UserLoginEvent` with the device | yes, `source="handoff:grouptoken"` |
+| `USER_LOGIN_HANDLER` | **yes** — this IS a login; an auth path that fires no handler is an invisible one |
+| `orig_webapp_url` / `last_webapp_url` | **no** |
+| `user.org.metadata["access_token_expiry"]` | **ignored** — that knob tunes JWT lifetimes; `GROUP_TOKEN_TTL` governs here |
+
+The declined `webapp_url` write is the point of the feature, not an oversight:
+`webapp_base_url` and `HTTP_ORIGIN` on an exchange call come from the gated
+destination's **own backend**, so honoring them would let a tenant origin
+overwrite protected metadata on the platform account of anyone who visits its
+site.
+
+**Superusers can never receive a group token**, so a superuser cannot sign into
+a gated destination through this flow at all — they get a `403` at the mint.
+Correct and fail-closed, but surprising the first time an operator hits it.
+
+**Realtime/WebSocket is out.** `mojo/apps/realtime/auth.py` calls bearer
+handlers with `request=None` and `group_token` fails closed on exactly that. A
+gated app has no group-token WebSocket story yet.
+
+#### The OAuth leg refuses instead of delivering
+
+`POST /api/auth/oauth/<provider>/complete` ends at `jwt_login` and hands a full
+pair to whichever origin posted to it. It cannot deliver a scoped token
+instead: `_find_or_create_user` can create a brand-new account, add a
+`GroupMember` from the client-supplied `state.group_uuid`, fire
+`USER_REGISTERED_HANDLER` and persist provider tokens **before** a membership
+pre-flight could fail — a `403` after four side effects — and auto-joining the
+visitor to avoid that would be a membership grant driven by a URL.
+
+So under `enforce`, a gated site that runs its **own** OAuth callback page
+loses OAuth login and must move that flow to the hosted auth pages, where OAuth
+already works and already routes through the gated handoff. This is the one
+place where turning gating on can break a working consumer integration —
+`monitor` names every such destination in the feed
+(`auth:handoff_group_token_oauth_refused`) before enforcement binds.
+
+Checked at `/begin` (both branches — the `else` one derives the landing URL
+from the **unvalidated** `Origin` header) and, authoritatively, at `/complete`
+before any provider call. Not checked at `/callback`, which only 302s the
+browser with a provider code that is useless without your client secret.
+**Same-host is exempt**: the hosted pages' OAuth buttons set the landing URL to
+the page's own URL and are served white-label on the tenant's own host, so
+without the carve-out a zone-wide entry would refuse a tenant's own Google
+button.
+
+> **The OAuth half is a deny-list with no allow-list backstop.**
+> `_validate_redirect_uri` is a bare `startswith` prefix check, so with
+> `ALLOWED_REDIRECT_URLS = ["https://gated.example.com"]` an
+> attacker-registered `gated.example.com.evil.tld` passes it — and gating
+> correctly reports *that* host as not gated. The headline property survives
+> literally, the tenant-facing intent does not. **Write
+> `ALLOWED_REDIRECT_URLS` prefixes so they terminate on a path boundary**
+> (`https://gated.example.com/`), and treat that list as security-critical.
+
+#### Rolling gating out
+
+1. **Deploy the whole fleet first.** An older server ignores `gid`.
+2. **Set `AUTH_HANDOFF_GROUP_TOKEN_MODE = "monitor"`** with your host map.
+   Nothing binds. Watch `auth:handoff_group_token_preview` — it names every
+   destination that would be gated and, per visitor outcome, whether they
+   would have been **refused** (not a member, or a superuser). Watch
+   `auth:handoff_group_token_oauth_refused` for gated sites running their own
+   OAuth callback; those must move to the hosted pages first.
+3. **Turn destination enforcement on** (`AUTH_HANDOFF_ALLOWED_URLS` or
+   `AUTH_HANDOFF_RESOLVER`) — see the rollout above. `enforce` refuses every
+   handoff without it, so this step comes **before** the next one.
+4. **Set the mode to `enforce`.** Watch `auth:handoff_group_token_unmapped`
+   and close the gap between the allowlist and the gating map.
+
+**Gating is forward-only.** Turning it on does **not** evict platform JWTs that
+are already sitting in a newly-gated origin's `localStorage`, and a destination
+app running its own token manager will keep trading its stale refresh token for
+fresh pairs until that token dies. The levers that actually evict are
+`POST /api/auth/sessions/revoke` (rotates `auth_key`, killing every JWT and
+group token that user holds) and letting `JWT_REFRESH_TOKEN_EXPIRY` run out.
+Plan for one of those when you flip a live destination.
+
+#### What gating is, and is not
+
+It is a **least-privilege** control for a cooperating tenant, and a
+**containment** control for a compromised one: XSS on the tenant's page reaches
+a group token confined to that tenant, not a platform JWT good for every group
+the visitor belongs to.
+
+It is **not** a defense against a malicious tenant. A tenant that hosts its own
+login form collects the password itself, which is strictly worse and is already
+out of scope (same reasoning as the handoff enforcement section above). An
+oversold property is a security liability; this one is worth having and narrow.
+
 ## API Keys
 
 Long-lived JWTs restricted by IP allowlist.
@@ -776,7 +1018,7 @@ def on_user_login(*, user, request, source, is_new_user):
     pass
 ```
 
-`source` values: `"password"`, `"magic"`, `"oauth"`, `"email_verify"`, `"invite"`, `"password_reset"`, `"email_change"`, `"sessions_revoke"`, `"totp"`, `"totp_mfa"`, `"totp_recovery"`, `"passkey"`, `"sms"`, `"sms_mfa"`, `"handoff"`.
+`source` values: `"password"`, `"magic"`, `"oauth"`, `"email_verify"`, `"invite"`, `"password_reset"`, `"email_change"`, `"sessions_revoke"`, `"totp"`, `"totp_mfa"`, `"totp_recovery"`, `"passkey"`, `"sms"`, `"sms_mfa"`, `"handoff"`, `"handoff:grouptoken"`.
 
 **Error contract asymmetry:**
 

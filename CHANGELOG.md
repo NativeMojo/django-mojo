@@ -1,5 +1,82 @@
 ## Unreleased
 
+**feat (account/security)** — **A handoff destination can be *gated*: it
+receives a group-scoped token instead of a platform JWT.** Opt-in, default
+**off**, and no existing response changes. When a deployment declares a
+destination host gated, a code minted for it exchanges into a `gt1.` package —
+`access_token`, `token_type`, `expires_in`, `group`, `user`, and **no
+`refresh_token` key at all** — confined to one group, with no route back to a
+platform JWT. Every other destination, and every deployment that sets nothing,
+behaves byte-for-byte as before.
+
+```python
+AUTH_HANDOFF_GROUP_TOKEN_MODE  = "enforce"      # off (default) / monitor / enforce
+AUTH_HANDOFF_GROUP_TOKEN_HOSTS = {"tenant-a.example.com": "<group uuid>"}
+```
+
+- **Decided at the mint, honored at the exchange, never re-derived.** The
+  gating decision is taken in `POST /api/auth/handoff` from the
+  already-validated `redirect_uri`, stamped into the Redis payload, and read
+  back at `POST /api/auth/exchange` without consulting the mode or the
+  destination again — so a resolver that breaks inside the code's TTL cannot
+  turn a gated code back into a JWT. A code minted before a mode flip is
+  honored under the old decision, in both directions. **Deploy the whole fleet
+  before setting the mode**: an older server ignores the stamp.
+- **The matcher is a deny rule and deliberately not the destination
+  allowlist's.** Entries are hosts (scheme, port and path are ignored), and one
+  entry covers the host and every subdomain at any depth — so gating an apex
+  gates the whole zone. A host that cannot be read unambiguously (backslash,
+  unicode IDN, bracketed IPv6, any IP-literal encoding, a single label) is
+  refused rather than treated as ungated, and a defective entry refuses every
+  handoff until it is fixed. List IDN hosts in punycode.
+- **`enforce` requires `AUTH_HANDOFF_ALLOWED_URLS` or `AUTH_HANDOFF_RESOLVER`
+  and refuses EVERY handoff without one** (400 + a level-2 incident). A deny
+  map cannot enumerate "every host that is not mine", so that combination would
+  ship JWT pairs while the operator believed gating was on. Necessary but not
+  sufficient — an allowlist-admitted destination that matches no gating entry
+  files `auth:handoff_group_token_unmapped`; gating is complete only when the
+  two are co-extensive per tenant zone.
+- **OAuth completion refuses a gated destination** rather than handing it a JWT
+  pair, reusing `/begin`'s existing `"redirect_uri is not on the allowlist"`.
+  A gated site running its **own** OAuth callback page loses OAuth login under
+  `enforce` and must move that flow to the hosted auth pages — the one place
+  where turning gating on can break a working integration, which is why
+  `monitor` names every such destination in the feed first. The auth origin's
+  own host is exempt, so a zone-wide entry cannot refuse a tenant's own
+  white-label Google button.
+- **Superusers can never receive a group token**, so they cannot sign into a
+  gated destination through this flow at all (403 at the mint). Realtime /
+  WebSocket is out too — bearer handlers there are called with no request, and
+  group-token validation fails closed on exactly that.
+- **A gated exchange is a login**: geofence, `last_login`, a `UserLoginEvent`
+  with `source="handoff:grouptoken"`, and `USER_LOGIN_HANDLER` all fire. It
+  deliberately performs **no** `webapp_url` metadata write — `webapp_base_url`
+  and `Origin` on an exchange come from the gated site's own backend, so
+  honoring them would let a tenant overwrite platform-account metadata for
+  every visitor. `GROUP_TOKEN_TTL` governs `expires_in`;
+  `org.metadata["access_token_expiry"]` is ignored.
+- **All three settings are file-only** (`settings.get_static`) on purpose: a
+  DB-backed `Setting` row is writable through the settings REST plane, and a
+  remotely-writable mode would let settings-write access silently downgrade
+  every gated destination.
+- **Gating is forward-only.** It does not evict JWTs already sitting in a
+  newly-gated origin's storage; use `POST /api/auth/sessions/revoke` or wait
+  out `JWT_REFRESH_TOKEN_EXPIRY`.
+- **Client (`mojo-auth.js`)**: `saveTokens()` now **clears** the stored refresh
+  token when a response carries none (verified behavior-neutral against every
+  current caller, but a real semantic change — it is what stops a stale refresh
+  token from upgrading a scoped session); two new `localStorage` keys
+  `token_type` and `token_expires_at`, cleared by `logout()` along with the
+  other two; new `getTokenType()`; `getAuthHeader()` emits `grouptoken` for a
+  `gt1.` token; `isTokenExpired()` is kind-aware and fails closed; and
+  `refreshToken()` / `requestHandoffCode()` reject under a group session.
+  `token_type` is deliberately **absent** from JWT responses — `/api/login` and
+  `/api/refresh_token` keep their exact key sets.
+- Honest scope: gating is least-privilege for a cooperating tenant and
+  containment for a compromised one (XSS on a tenant page reaches a scoped
+  token, not a platform JWT). It is **not** a defense against a malicious
+  tenant, who can host their own login form and collect the password outright.
+
 **fix (account/security)** — **`?redirect=` on the hosted auth pages can no
 longer carry a `javascript:` URL.** `auth_base.html` read
 `?redirect=`/`?next=`/`?returnTo=` straight from the query string and assigned

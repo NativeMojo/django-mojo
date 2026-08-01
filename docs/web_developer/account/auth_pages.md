@@ -313,18 +313,49 @@ This is a **scheme** check only, and it runs in the browser before any request
 is made — the destination **host** is not restricted by it. Host restriction is
 the separate, opt-in, server-side allowlist described above.
 
+**Your origin may be *gated*, which changes what the exchange returns.** A
+deployment can declare certain destination hosts gated: the exchange then
+answers with a [group-scoped token](authentication.md#group-scoped-tokens-grouptoken)
+package — `access_token` starting `gt1.`, `token_type`, `expires_in`, `group`,
+and **no `refresh_token` key at all** — instead of the usual JWT pair. Off by
+default; nothing changes for a deployment that has not opted in. Three
+consequences for a destination app:
+
+- **Never assume `refresh_token` is present.** Branch on the token string
+  (`gt1.` ⇒ group token), not on a stored flag.
+- **There is no refresh.** On expiry, bounce back through the auth origin with
+  `?redirect=<current url>` — the snippet below already does exactly that.
+- **If you run your own OAuth callback page, it stops working** once gating
+  enforces (`400 "redirect_uri is not on the allowlist"`). Use the hosted auth
+  pages' OAuth buttons instead; they route back through this same handoff.
+
+A visitor who is not a member of the group that owns a gated destination gets a
+`403` at the handoff, and the auth page shows the server's message rather than
+the generic one. Superusers get the same `403` — they can never hold a group
+token.
+
 ```html
 <script src="https://auth.example.com/api/account/static/mojo-auth.js"></script>
 <script>
   MojoAuth.init({ baseURL: 'https://auth.example.com' });
+
+  function toAuth() {
+    // No refresh path for a group-scoped session — re-bounce instead.
+    window.location.href = 'https://auth.example.com/auth?redirect=' +
+      encodeURIComponent(window.location.href);
+  }
+
   MojoAuth.handleAuthCodeFromURL().then(function (data) {
-    if (data || MojoAuth.isAuthenticated()) {
-      bootApp();
-    } else {
-      window.location.href = 'https://auth.example.com/auth?redirect=' +
-        encodeURIComponent(window.location.href);
+    if (data) return bootApp();                       // just exchanged a code
+    if (!MojoAuth.isAuthenticated()) return toAuth();
+    // Kind-aware: a JWT is judged on its exp claim, a gt1. token on the
+    // token_expires_at saved from the exchange response.
+    if (MojoAuth.isTokenExpired()) {
+      if (MojoAuth.getTokenType() === 'grouptoken') return toAuth();
+      return MojoAuth.refreshToken().then(bootApp).catch(toAuth);
     }
-  });
+    bootApp();
+  }).catch(toAuth);
 </script>
 ```
 

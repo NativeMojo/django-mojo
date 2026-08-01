@@ -118,6 +118,34 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   framework wraps the call — a resolver that raises, or a dotted path that fails
   to import, refuses **everything** and is logged. Unlike `USER_LOGIN_HANDLER`,
   it never fails open.
+- `AUTH_HANDOFF_GROUP_TOKEN_MODE` — **file-only** (`settings.get_static`). One
+  of `"off"` (default), `"monitor"`, `"enforce"`. When gating is on, a handoff
+  code minted for a **gated destination host** exchanges into a group-scoped
+  token package instead of a platform JWT pair, and the OAuth completion leg
+  refuses that destination outright. `monitor` predicts both outcomes into the
+  incident feed and binds nothing. An unrecognized string is treated as
+  `enforce` and logged — a typo in a security switch must not disable it.
+  **`enforce` additionally requires `AUTH_HANDOFF_ALLOWED_URLS` or
+  `AUTH_HANDOFF_RESOLVER`**, and refuses every handoff without one. File-only
+  because a DB/Redis-backed `Setting` row is writable through the generic
+  settings REST plane, and a remotely-writable mode would let settings-write
+  access silently downgrade every gated destination back to a platform JWT. See
+  [Gated destinations](../account/auth.md#gated-destinations--deliver-a-group-token-instead-of-a-jwt).
+- `AUTH_HANDOFF_GROUP_TOKEN_HOSTS` — **file-only** (`settings.get_static`,
+  `kind="dict"`). `{host_entry: group_uuid}`, default `{}`. A **deny** rule, so
+  the matching is deliberately looser than the allowlist's: entries are hosts
+  (a full URL is reduced to its host with a warning — scheme, port and path are
+  ignored), and **every entry covers the host and all of its subdomains at any
+  depth** (`example.com` and `*.example.com` are the same rule). List IDN hosts
+  in punycode; IP-literal and single-label entries are refused in every
+  encoding. A defective entry, or two entries normalizing to one host with
+  different groups, refuses every handoff while gating enforces.
+- `AUTH_HANDOFF_GROUP_TOKEN_RESOLVER` — **file-only** (`settings.get_static`).
+  Dotted path to `fn(url, request=None) -> Group | uuid | int pk | None`,
+  default `""`. **When set it decides** and the host map is not consulted.
+  Fails closed exactly like `AUTH_HANDOFF_RESOLVER`: raising, failing to
+  import, naming an unknown or inactive group, or returning a junk type all
+  refuse.
 - `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` — **file-only** (`settings.get_static`). A fixed code accepted in place of the real SMS code during phone verification; never set it in production. Deliberately not readable from the DB/Redis settings plane, so a `Setting` row cannot arm an authentication bypass at runtime.
 
 ### AWS
@@ -302,7 +330,10 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   refresh path — expiry means re-mint, and it is the one refusal that reports a
   distinct message (`"Group token expired"`) so a client can re-mint instead of
   prompting a full re-auth. Clock-skew tolerance for a future `iat` is a fixed
-  60s module constant, not a setting.
+  60s module constant, not a setting. It is also the `expires_in` a
+  [gated handoff exchange](../account/auth.md#gated-destinations--deliver-a-group-token-instead-of-a-jwt)
+  reports; `user.org.metadata["access_token_expiry"]` is deliberately **not**
+  consulted, because that knob tunes JWT lifetimes only.
 
 ### INCIDENT
 
