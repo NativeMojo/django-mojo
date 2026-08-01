@@ -1,3 +1,6 @@
+import hashlib
+
+
 class DjangoConfigLoader:
     """
     A clean, expandable class for loading Django configuration from django.conf files.
@@ -21,24 +24,34 @@ class DjangoConfigLoader:
 
         :param context: Dictionary to load configuration values into.
         :raises Exception: If the required configuration file is not found.
+        :return: sha256 of the exact bytes that were parsed.
         """
         self._validate_config_file()
-        self._parse_config_file(context)
+        raw = self.config_path.read_bytes()
+        self._parse_config_file(context, raw=raw)
         self._apply_admin_site_config(context)
+        return hashlib.sha256(raw).hexdigest()
 
     def _validate_config_file(self):
         """Validate that the configuration file exists."""
         if not self.config_path.exists():
             raise Exception(f"Required configuration file not found: {self.config_path}")
 
-    def _parse_config_file(self, context):
-        """Parse the configuration file and populate the context."""
-        with open(self.config_path, 'r') as file:
-            for line in file:
-                if '=' in line:
-                    key, value = line.strip().split('=', 1)
-                    parsed_value = self._parse_value(value.strip())
-                    context[key.strip()] = parsed_value
+    def _parse_config_file(self, context, raw=None):
+        """Parse the configuration file and populate the context.
+
+        `raw` is the already-read file content. It is passed in rather than
+        re-read so the fingerprint load_config returns describes exactly the
+        bytes that produced these settings — re-reading would let a concurrent
+        write make the process advertise a config it never actually loaded.
+        """
+        if raw is None:
+            raw = self.config_path.read_bytes()
+        for line in raw.decode('utf-8', errors='replace').splitlines():
+            if '=' in line:
+                key, value = line.strip().split('=', 1)
+                parsed_value = self._parse_value(value.strip())
+                context[key.strip()] = parsed_value
 
     def _parse_value(self, value):
         """
@@ -165,11 +178,9 @@ def load_settings_config(context):
     global CONF_FINGERPRINT
 
     loader = DjangoConfigLoader()
-    loader.load_config(context)
-
-    try:
-        import hashlib
-        CONF_FINGERPRINT = hashlib.sha256(loader.config_path.read_bytes()).hexdigest()
-    except Exception:
-        # A fingerprint is a diagnostic aid, never a reason to fail startup.
-        CONF_FINGERPRINT = None
+    # The fingerprint comes back from load_config itself, hashed from the very
+    # bytes it parsed. Hashing a second read here would let a write landing
+    # between the two make this process advertise a config it never loaded --
+    # and the whole stale-worker guard rests on "advertised sha == loaded
+    # settings" being true by construction.
+    CONF_FINGERPRINT = loader.load_config(context)

@@ -48,11 +48,17 @@ def _patch_server_settings_seams(tmpdir):
         "_SLEEP": getattr(th, "_SLEEP", None),
         "_POLL": getattr(th, "_POLL", None),
         "_read_dev_server_conf": th._read_dev_server_conf,
+        "_READY_TIMEOUT": getattr(th, "_READY_TIMEOUT", None),
     }
     paths.VAR_ROOT = tmpdir
     th._poll_server_up = lambda host, port, timeout=10: True
     th._SLEEP = lambda seconds: None
     th._POLL = lambda host, port, timeout=10: True
+    # The real deadline is 30s. Tests that deliberately never satisfy the wait
+    # would otherwise sit through all of it -- slow tests are what this whole
+    # item exists to remove.
+    if saved["_READY_TIMEOUT"] is not None:
+        th._READY_TIMEOUT = 0.3
     return saved
 
 
@@ -62,7 +68,7 @@ def _restore_server_settings_seams(saved):
     paths.VAR_ROOT = saved["VAR_ROOT"]
     th._poll_server_up = saved["_poll_server_up"]
     th._read_dev_server_conf = saved["_read_dev_server_conf"]
-    for name in ("_SLEEP", "_POLL"):
+    for name in ("_SLEEP", "_POLL", "_READY_TIMEOUT"):
         if saved[name] is None:
             if hasattr(th, name):
                 delattr(th, name)
@@ -555,6 +561,93 @@ def test_noop_write_skips_the_wait(opts):
         # A real change must still be reported as one.
         _snapshot2, _sha2, changed2 = th._conf_apply(conf, {"ALREADY": 2})
         assert changed2 is True, "a genuine value change must be reported as changed"
+    finally:
+        _restore_server_settings_seams(saved)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@th.django_unit_test("readiness: a failed wait must not strand the override it just wrote")
+def test_failed_wait_restores_the_override(opts):
+    """Regression for the security review of item 1094.
+
+    _conf_apply has already written the overrides by the time the wait runs, and
+    that wait raises BEFORE the try/yield/finally that would normally restore
+    them. So if nothing undoes the write on the way out, the override survives in
+    var/django.conf -- and uvicorn (--reload-include '*.conf') then serves it to
+    every later test. That is the item 543 leak reached through a different door,
+    and it matters because these contexts set things like BOUNCER_REQUIRE_TOKEN:
+    a stranded auth-relaxing value means later tests pass with the control off.
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    baseline = "SECRET_KEY = 'leak-baseline'\n"
+    tmpdir = Path(tempfile.mkdtemp(prefix="testit-ready-leak-"))
+    conf = tmpdir / "django.conf"
+    conf.write_text(baseline)
+    saved = _patch_server_settings_seams(tmpdir)
+    try:
+        # A signal exists, so the event-driven path is taken -- but the pid never
+        # changes, so the wait can only ever time out.
+        _write_ready(tmpdir, pid=777, conf_sha="whatever-the-old-worker-had")
+
+        raised = None
+        try:
+            with th.server_settings(BOUNCER_REQUIRE_TOKEN=True):
+                raise AssertionError("the context must not yield when the wait fails")
+        except RuntimeError as err:
+            raised = err
+
+        assert raised is not None, "a wait that never sees a new worker must raise"
+        assert "BOUNCER_REQUIRE_TOKEN" not in conf.read_text(), (
+            "the override must be removed from django.conf when the wait fails -- "
+            f"otherwise every later test runs under it. conf is now: {conf.read_text()!r}")
+        assert conf.read_text() == baseline, (
+            f"django.conf should be byte-identical to before the context, got "
+            f"{conf.read_text()!r}")
+    finally:
+        _restore_server_settings_seams(saved)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@th.django_unit_test("readiness: a no-op write against a worker on different config fails loudly")
+def test_noop_write_verifies_the_running_worker(opts):
+    """If no reload is needed we skip the wait -- but only if the running worker
+    actually confirms it loaded this exact file. Otherwise the test would run
+    against settings nobody chose, silently."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    baseline = "SECRET_KEY = 'noop-verify'\nALREADY = 1\n"
+    tmpdir = Path(tempfile.mkdtemp(prefix="testit-ready-noopverify-"))
+    conf = tmpdir / "django.conf"
+    conf.write_text(baseline)
+    saved = _patch_server_settings_seams(tmpdir)
+    try:
+        # Applying ALREADY=1 changes nothing, but the worker reports a config that
+        # is not this file.
+        _write_ready(tmpdir, pid=555, conf_sha=_sha("a completely different file"))
+
+        raised = None
+        try:
+            with th.server_settings(ALREADY=1):
+                raise AssertionError("must not yield against an unverified worker")
+        except RuntimeError as err:
+            raised = err
+
+        assert raised is not None, \
+            "a no-op write must still verify the running worker loaded this config"
+        assert "555" in str(raised), \
+            f"the error should name the worker it could not verify, got: {raised}"
+
+        # And the happy case still skips the wait entirely.
+        _write_ready(tmpdir, pid=555, conf_sha=_sha(baseline))
+        with th.server_settings(ALREADY=1):
+            pass
+        assert conf.read_text() == baseline, \
+            "a verified no-op context must leave the file untouched"
     finally:
         _restore_server_settings_seams(saved)
         shutil.rmtree(tmpdir, ignore_errors=True)

@@ -801,7 +801,13 @@ def _read_ready():
         return (None, None)
 
 
-def _wait_for_worker(host, port, expected_sha, exclude_pid, timeout=30, interval=0.05):
+# How long to wait for a reloaded worker before giving up. Generous, because
+# blowing this deadline aborts the test; a real reload is ~2s. Module-level so a
+# test can shorten it rather than sitting through the real thing.
+_READY_TIMEOUT = 30.0
+
+
+def _wait_for_worker(host, port, expected_sha, exclude_pid, timeout=None, interval=0.05):
     """Block until the worker serving this port is a NEW process running the
     config whose fingerprint is expected_sha.
 
@@ -814,6 +820,8 @@ def _wait_for_worker(host, port, expected_sha, exclude_pid, timeout=30, interval
     False, because a silent failure here reintroduces exactly the stale-override
     bug this replaced (see item #543).
     """
+    if timeout is None:
+        timeout = _READY_TIMEOUT
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
@@ -965,9 +973,32 @@ def server_settings(**overrides):
 
             if signalled:
                 if changed:
-                    _wait_for_worker(host, port, sha, before[0])
-                # else: the file already said what we wanted, so no reload was
-                # triggered and the running worker is already correct.
+                    # The overrides are already on disk. If the wait fails we MUST
+                    # take them back off before propagating: this raise happens
+                    # before the try/yield/finally below is entered, so nothing
+                    # else would ever restore them, and uvicorn (--reload-include
+                    # '*.conf') would then serve them to every later test. That is
+                    # the #543 leak reached through a different door.
+                    try:
+                        _wait_for_worker(host, port, sha, before[0])
+                    except Exception:
+                        _conf_restore(conf_path, snapshot)
+                        raise
+                elif before[1] is not None and before[1] != sha:
+                    # Nothing to reload, but the worker is not running the file we
+                    # just read either — someone else wrote it, or a previous
+                    # context stranded a key. Proceeding would run the test against
+                    # settings nobody chose, so fail loudly instead.
+                    _conf_restore(conf_path, snapshot)
+                    raise RuntimeError(
+                        "server_settings: django.conf needed no change, but the "
+                        f"running worker (pid {before[0]}) reports config "
+                        f"{(before[1] or '')[:12]} rather than {sha[:12]}. Another "
+                        "writer or a stranded override is in play — refusing to "
+                        f"run with overrides {sorted(overrides.keys())} unverified."
+                    )
+                # else: the file already said what we wanted AND the running
+                # worker confirms it loaded exactly this file. Nothing to wait for.
             else:
                 # No readiness signal (older testproject, or a consumer project
                 # whose _asgi.py does not write one). Fall back to the timing
