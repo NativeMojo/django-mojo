@@ -62,7 +62,7 @@ nothing about whether the number has an account.
 | `?token=ml:...` | Magic login token — auto-consumed on page load |
 | `?token=pr:...` | Password reset token — opens "Set New Password" view |
 | `?code=...&state=...` | OAuth callback — auto-completes the OAuth flow |
-| `?redirect=<url>` | Custom redirect after login (also `?next=` or `?returnTo=`). Preserved through the bouncer challenge **and** the OAuth provider round-trip. |
+| `?redirect=<url>` | Custom redirect after login (also `?next=` or `?returnTo=`). Preserved through the bouncer challenge **and** the OAuth provider round-trip. Only `http`/`https` URLs and same-origin relative paths are accepted — see below. |
 | `?back=<url>` | Override the "Back to website" hero link |
 | `?group_uuid=<uuid>` | Load per-group branding and restrict to the group's enabled methods. Must be `group_uuid` — the framework reserves `?group=` for integer IDs. |
 
@@ -293,9 +293,25 @@ allowlist.
 argument and rejects without one, regardless of what the server enforces. Treat
 a rejection as "do not navigate".
 
-**`?back=`** (the "Back to website" link) accepts only `http`/`https` URLs and
-same-origin relative paths — a `javascript:`/`data:` value is dropped and the
-link stays hidden.
+**Both navigation params are scheme-guarded.** `?back=` (the "Back to website"
+link) and `?redirect=`/`?next=`/`?returnTo=` (the post-login destination) accept
+only `http`/`https` URLs and same-origin relative paths. One guard, two
+different outcomes:
+
+- a refused **`?back=`** value is dropped and the hero link stays hidden;
+- a refused **`?redirect=`** value means the page navigates nowhere and shows
+  "That destination isn't allowed. Please return to the app and try again."
+
+So `javascript:` and `data:` are refused, and so is any non-web scheme —
+`mailto:`, `tel:`, and custom app schemes like `myapp://home`. If you were
+bouncing users into a native app that way, point `?redirect=` at an `https`
+universal/app link instead. The same guard applies to the group's configured
+`success_redirect`, which is where the destination comes from when no param is
+present.
+
+This is a **scheme** check only, and it runs in the browser before any request
+is made — the destination **host** is not restricted by it. Host restriction is
+the separate, opt-in, server-side allowlist described above.
 
 ```html
 <script src="https://auth.example.com/api/account/static/mojo-auth.js"></script>

@@ -222,6 +222,29 @@ Same-origin and relative redirects are unaffected in either mode — they never
 mint a code, because the tokens already live in `localStorage` on the
 destination origin.
 
+#### The scheme is refused client-side, in both modes
+
+Before any of the above runs, the hosted auth page itself refuses a destination
+that does not resolve to `http:`/`https:` — **no request is made**, the page
+navigates nowhere, and it shows "That destination isn't allowed. Please return
+to the app and try again." The check lives in `auth_base.html` and is the same
+guard `?back=` uses.
+
+This matters to an operator reading this page because monitor mode mints for
+anything: monitor mode is no longer the only thing standing between a
+`javascript:` destination and the browser's navigation sink, and the guard also
+covers the direct-navigation branch, which does not consult the server at all.
+It is a **scheme** check only — the destination host is not restricted by it,
+which stays the job of the opt-in allowlist above.
+
+One consequence to know before upgrading: the guard runs on the group's
+`theme.success_redirect` too, not only on a `?redirect=` param. A group whose
+success redirect uses a custom app scheme (`myapp://home`) dead-ends sign-in on
+**every** attempt, not just on crafted links — point it at an `https`
+universal/app link instead. Enforcing deployments already behaved this way (a
+scheme with no hostname never matches an allowlist entry); this is a change only
+for the shipped monitor-mode default.
+
 #### Rolling enforcement out
 
 1. **Upgrade.** Nothing breaks. With neither setting present you are in monitor

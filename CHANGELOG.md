@@ -1,5 +1,33 @@
 ## Unreleased
 
+**fix (account/security)** — **`?redirect=` on the hosted auth pages can no
+longer carry a `javascript:` URL.** `auth_base.html` read
+`?redirect=`/`?next=`/`?returnTo=` straight from the query string and assigned
+it to `window.location.href` at **both** sinks in `_mat.redirect()` — the
+direct-navigation branch, which does not consult the server, and the
+post-handoff one — with no protocol check. On the shipped default the server
+mints a handoff code for any destination (monitor mode), so a crafted link ran
+attacker script on the auth origin: the origin whose `localStorage` holds the
+visitor's tokens. `?back=`'s scheme guard is now **shared** by both parameters
+rather than copied — one implementation, generalized in place and renamed
+`safeNavUrl` — and it is applied once at the destination-resolution point, so a
+value that does not resolve to `http`/`https` is refused, the page navigates
+nowhere, and it shows an error. A malformed URL is refused now too; it used to
+fall through and navigate to the raw string. The host is deliberately **not**
+allowlisted: a cross-origin destination is legitimate and the scheme check is
+what closes the hole — host restriction remains the separate opt-in
+`AUTH_HANDOFF_ALLOWED_URLS`.
+
+- **Non-web schemes are refused too** — `mailto:`, `tel:`, and custom app
+  schemes such as `myapp://home`. A deployment that used `?redirect=` to bounce
+  a visitor into a native app must point it at an `https` universal/app link.
+- **This also covers the group's `theme.success_redirect`**, which is the
+  destination when no param is present and is tenant-writable and unvalidated. A
+  group whose success redirect uses a custom app scheme dead-ends sign-in on
+  **every** attempt, not just on crafted links. Enforcing deployments already
+  behaved this way (a scheme with no hostname never matches an allowlist entry);
+  this is a change only for the shipped monitor-mode default.
+
 **feat (account)** — **`Authorization: grouptoken <t>` — a bearer that
 authenticates as a real user but is capped at ONE group.** The only bearer that
 authenticated as a person was a platform JWT, which grants everything that
