@@ -336,8 +336,11 @@ Rules that follow from the design:
   marker.** A plain guest (marker only) cannot clear its own flag.
 - **Who may set/clear the marker**: the standard `can_change_permission` gate
   (member-level `manage_group`/`manage_members`/`manage_users`/`manage_groups`,
-  or a global manager). Tune per-key via `MEMBER_PERMS_PROTECTION`, e.g.
-  `{"guest": ["manage_groups"]}` to restrict the marker to global admins.
+  or a global manager). Tune per-key via `MEMBER_PERMS_PROTECTION` — the bare
+  (non-`sys.`) form checks the acting member's OWN row, so
+  `{"guest": ["manage_groups"]}` only narrows which member-level term
+  qualifies; to actually require a *global* grant, use the `sys.` prefix:
+  `{"guest": "sys.manage_groups"}`.
 - **`ApiKey.has_permission` is asymmetric here**: a key passes `"member"`
   unconditionally, but `"full_member"` on a key is an ordinary stored perm —
   False unless explicitly granted to the key.

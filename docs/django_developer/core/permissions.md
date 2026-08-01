@@ -253,7 +253,7 @@ Use these when you need read-only access or scoped access within a domain:
 |-------|-----------|-----------|-------|
 | User | view_users, manage_users, **users**, owner | manage_users, **users**, owner | |
 | Group | view_groups, manage_groups, manage_group, **groups** | manage_groups, manage_group, **groups** | |
-| GroupMember | view_members, view_groups, manage_groups, manage_group, **groups** | manage_groups, manage_group, **groups** | |
+| GroupMember | view_members, view_groups, manage_groups, manage_group, **groups** | manage_groups, manage_group, **groups** | `has_permission` also recognizes `member` (any row, view tier) and derived `full_member` (write tier, absent `guest` marker) — see [Membership Tiers](../account/group.md#membership-tiers-member-vs-full_member) |
 | Setting | manage_settings, **groups** | manage_settings, **groups** | |
 | ApiKey | manage_group, manage_groups, **groups** | manage_group, manage_groups, **groups** | Group-scoped API keys |
 | Passkey | owner, manage_users, **users** | owner, manage_users, **users** | WebAuthn credentials |
