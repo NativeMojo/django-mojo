@@ -72,7 +72,7 @@ hardening:
 
 Static matching rules
 ---------------------
-An entry matches a destination when ALL of:
+An entry matches an ``http(s)`` destination when ALL of:
 
   * scheme is ``http`` or ``https`` on both, and they are the SAME scheme (an
     ``https://`` entry never admits an ``http://`` destination — the code would
@@ -100,6 +100,31 @@ alone is NOT enough: it runs against ``parts.hostname``, which has already
 discarded the userinfo, so ``https://evil.tld\\@app.example.com/`` reaches it as
 a clean ``app.example.com`` while a browser reads the host as ``evil.tld``. List
 IDN destinations in their punycode form.
+
+Custom URL schemes (mobile deep links)
+--------------------------------------
+An entry may also name a custom scheme — ``myapp://callback``,
+``com.example.app:/oauth`` — so a native app can complete OAuth on its own
+deep link. A custom-scheme URL is not a web origin, so it is matched under its
+own, deliberately narrower rules: exact case-folded **scheme**, exact
+case-folded **authority** compared byte-for-byte, and the same
+segment-bounded **path** prefix. No default-port logic (there are no default
+ports), no ``_HOST_CHARS`` hostname rules (an authority here is an
+app-registered label, not a DNS name), and no wildcards. The backslash guard
+applies to every scheme.
+
+The two families never mix: a custom-scheme entry cannot admit an ``http(s)``
+URL, and an ``http(s)`` entry cannot admit a deep link. `_split_custom_scheme`
+documents exactly which shapes parse and which fail closed —
+``javascript:``/``data:``/``vbscript:`` and the opaque ``myapp:callback`` form
+are refused outright.
+
+This is one matcher, so custom schemes are usable in BOTH allowlists —
+``ALLOWED_REDIRECT_URLS`` and ``AUTH_HANDOFF_ALLOWED_URLS``. That is intended:
+the alternative is a per-caller scheme policy, which is exactly the drift the
+shared implementation exists to prevent. A handoff code is a bearer credential,
+so treat a deep-link handoff entry with the same care as a web one — the OS
+decides which installed app receives that scheme.
 """
 import re
 from urllib.parse import urlsplit
@@ -111,6 +136,14 @@ from mojo.helpers.settings import settings
 _SCHEMES = ("http", "https")
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _HOST_CHARS = re.compile(r"^[a-z0-9._-]+$")
+# RFC 3986 scheme grammar. urlsplit is looser in places, so a custom scheme is
+# tested explicitly rather than assumed well-formed.
+_SCHEME_CHARS = re.compile(r"^[a-z][a-z0-9+.-]*$")
+# Script pseudo-schemes are a navigation sink, never a destination. They cannot
+# match unless an operator lists one, but a matcher that would hand them back is
+# a configuration footgun that ends in stored XSS on the auth origin, so they
+# are refused outright — the same trio `mojo.helpers.urls` refuses.
+_SCRIPT_SCHEMES = ("javascript", "data", "vbscript")
 
 # Incident suppression: one report per destination host per hour, per mode.
 _NOTICE_PREFIX = "account:handoff:dest_alerted"
@@ -212,7 +245,9 @@ def matches_allowlist(url, entries, source="allowlist", allow_wildcard=False):
 
     Matching is by parsed URL, never by string prefix — scheme, host and port
     compared after parsing, path prefix terminating on a segment boundary, query
-    and fragment ignored on both sides. See "Static matching rules" above.
+    and fragment ignored on both sides. A custom-scheme entry (a mobile deep
+    link) matches on exact scheme + exact authority + the same path rule. See
+    "Static matching rules" and "Custom URL schemes" above.
     """
     candidate = _split(url)
     if candidate is None:
@@ -256,10 +291,15 @@ def _matches_static_list(url):
 
 
 def _split(url, allow_wildcard=False):
-    """Return (scheme, host, port, path) for an absolute http/https URL, else None.
+    """Return (scheme, host, port, path) for an absolute URL, else None.
 
-    A wildcard entry keeps its leading ``*.`` in the returned host; only the
-    allowlist side may carry one.
+    http(s) URLs take the branch below: a real DNS hostname, a scheme-default
+    port, and optional ``*.`` wildcard support on the allowlist side (the
+    leading ``*.`` stays in the returned host; only an entry may carry one).
+
+    Anything else with a scheme goes to `_split_custom_scheme`, which returns
+    the same 4-tuple shape with the raw authority in the host slot and None in
+    the port slot. No scheme at all — ``//host/x``, ``/relative`` — refuses.
     """
     if not url or not isinstance(url, str):
         return None
@@ -279,8 +319,7 @@ def _split(url, allow_wildcard=False):
         return None
     scheme = (parts.scheme or "").lower()
     if scheme not in _SCHEMES:
-        # Also how ``javascript:`` and ``data:`` are refused — no hostname.
-        return None
+        return _split_custom_scheme(scheme, parts)
     try:
         host = parts.hostname
         port = parts.port
@@ -296,12 +335,59 @@ def _split(url, allow_wildcard=False):
     return scheme, host, port or _DEFAULT_PORTS[scheme], parts.path or "/"
 
 
+def _split_custom_scheme(scheme, parts):
+    """Return (scheme, authority, None, path) for a custom-scheme URL, else None.
+
+    A custom scheme is a mobile deep link — ``myapp://callback``,
+    ``com.example.app:/oauth``. It is not a web origin: the authority is a label
+    the app registered with the OS, not a DNS name, and there is no default
+    port. So NONE of the http(s) rules apply here. The authority is compared
+    byte-for-byte after case-folding (which is also why userinfo and
+    percent-encoding cannot smuggle anything: ``myapp://evil@callback`` is
+    simply a different authority, not a rewriting of ``callback``), the port
+    slot is always None, and ``*.`` is inert — `_entry_matches` never reaches
+    `_host_matches` for a custom scheme.
+
+    Refused, fail-closed, because the shape cannot be read unambiguously:
+
+      * no scheme at all (``//host/x``, ``/relative``), or a scheme `urlsplit`
+        tolerated that is not RFC 3986 scheme syntax;
+      * ``javascript:`` / ``data:`` / ``vbscript:`` — see `_SCRIPT_SCHEMES`;
+      * the opaque form, where a non-empty path does not start with ``/``
+        (``myapp:callback``, ``mailto:a@b``): there is no way to tell an
+        authority from a path there;
+      * a bare ``myapp:`` or ``myapp://`` with neither authority nor path —
+        nothing to match on, and as an entry it would authorize a whole scheme.
+
+    ``com.example.app:/oauth`` and ``com.example.app:///oauth`` are the SAME
+    value: both carry an empty authority and the path ``/oauth``. An empty
+    authority is a real, distinct value — it never equals ``callback``.
+    """
+    if not scheme or not _SCHEME_CHARS.match(scheme):
+        return None
+    if scheme in _SCRIPT_SCHEMES:
+        return None
+    authority = (parts.netloc or "").lower()
+    path = parts.path or ""
+    if path and not path.startswith("/"):
+        return None
+    if not authority and not path:
+        return None
+    return scheme, authority, None, path or "/"
+
+
 def _entry_matches(entry, candidate):
     e_scheme, e_host, e_port, e_path = entry
     c_scheme, c_host, c_port, c_path = candidate
     if e_scheme != c_scheme or e_port != c_port:
         return False
-    if not _host_matches(e_host, c_host):
+    if e_scheme in _SCHEMES:
+        if not _host_matches(e_host, c_host):
+            return False
+    elif e_host != c_host:
+        # Custom scheme: exact, case-folded authority. `_host_matches` is
+        # deliberately not reached, so a ``*.`` inside a custom-scheme entry is
+        # an authority nothing will ever equal rather than a wildcard.
         return False
     if c_path == e_path:
         return True

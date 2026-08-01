@@ -1,5 +1,41 @@
 ## Unreleased
 
+**fix (account)** — **a custom URL scheme is a usable allowlist entry again
+(mobile deep links).** The parsed-URL matcher below accepted only `http` and
+`https`, which quietly made `myapp://callback` an unusable entry and 400'd every
+native-app OAuth flow that landed on one. A custom scheme is matched under its
+own, deliberately narrower rules — **exact case-folded scheme + exact
+case-folded authority, compared byte-for-byte, + the same segment-bounded path
+prefix**. There is no default-port logic (custom schemes have no default ports),
+no DNS-shaped hostname rules (an authority there is an app-registered label, not
+a host), and no `*.` wildcards — a `*.` in a custom-scheme entry is just an
+authority nothing equals. Query and fragment are ignored, and the backslash
+guard applies to every scheme.
+
+- **Supported shapes:** `myapp://callback` (authority `callback`, whole-path),
+  `myapp://callback/path` (that path and anything under it on a `/` boundary),
+  and `com.example.app:/oauth` — which is the **same value** as
+  `com.example.app:///oauth`, both being an empty authority with path `/oauth`.
+  An empty authority is a real value, not a wildcard: it never equals
+  `callback`.
+- **Refused, fail-closed:** the opaque form with no `//` and no leading `/`
+  (`myapp:callback`, `mailto:a@b`) — there is no way to tell an authority from a
+  path there; a bare `myapp:` or `myapp://` with neither authority nor path,
+  which as an entry would authorize a whole scheme; and `javascript:`, `data:`,
+  `vbscript:`, which are a navigation sink and never a destination.
+- **The two families never cross.** A custom-scheme entry cannot admit an
+  `http(s)` URL and an `http(s)` entry cannot admit a deep link, so the web path
+  is behaviorally identical to what the entry below shipped — not one URL wider.
+- **Applies to both allowlists**, since they share one matcher:
+  `ALLOWED_REDIRECT_URLS` and `AUTH_HANDOFF_ALLOWED_URLS`. Intended — the
+  alternative is a per-caller scheme policy, which is the drift the shared
+  implementation exists to prevent. A handoff code is a bearer credential, so
+  treat a deep-link handoff entry with the same care as a web one: the OS
+  decides which installed app receives that scheme.
+- **Supersedes the "audit and remove non-`http(s)` entries" advice** that
+  shipped with the entry below. That advice is withdrawn — custom-scheme entries
+  do not need to be moved to HTTPS universal/app links.
+
 **BREAKING (security)** — **the OAuth `redirect_uri` allowlist matches a URL,
 not a string prefix.** `GET /api/auth/oauth/<provider>/begin` validated a
 caller-supplied `redirect_uri` with `redirect_uri.startswith(entry)`. A prefix
@@ -18,17 +54,19 @@ auth-handoff destination allowlist uses.
   the parsed-URL match applies to entries from either — so everything below
   applies to a tenant's per-group entries as well as to the setting. Audit both
   when you upgrade.
-- **Before upgrading, audit `ALLOWED_REDIRECT_URLS` for non-`http(s)` entries.**
-  A mobile deep link (`myapp://callback`) is now an unusable entry, and every
-  OAuth flow landing on it starts returning `400` with only a log line to say
-  why. Move those flows to an HTTPS universal/app link first.
+- **Custom-scheme entries keep working** — see the entry below. A mobile deep
+  link (`myapp://callback`) is still a usable entry; it is matched on exact
+  scheme + exact authority + the same segment-bounded path prefix. No audit or
+  migration is needed for those.
 - **Newly refused** (a `redirect_uri` that used to pass): a host that merely
   begins with an entry (the fix); a non-default port unless listed
   (`https://app.example.com:8443`); a path prefix not terminating on a `/`
-  boundary (`/application` under an entry of `/app`); a non-`http(s)` scheme on
-  either side; a host this deployment cannot read the same way a browser does —
-  backslash, percent-encoding, unicode IDN (list punycode), bracketed IPv6,
-  trailing dot.
+  boundary (`/application` under an entry of `/app`); a host this deployment
+  cannot read the same way a browser does — backslash, percent-encoding,
+  unicode IDN (list punycode), bracketed IPv6, trailing dot; and, among
+  non-`http(s)` values, the opaque form with no `//` and no leading `/`
+  (`myapp:callback`, `mailto:a@b`), a bare `myapp:` / `myapp://`, and
+  `javascript:` / `data:` / `vbscript:`.
 - **Newly admitted:** host case variation (`https://APP.Example.com/x` against
   `https://app.example.com` — RFC-correct), and entries carrying a query or
   fragment, which are now ignored on both sides instead of making the entry

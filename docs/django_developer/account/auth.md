@@ -306,9 +306,14 @@ AUTH_HANDOFF_ALLOWED_URLS = [
 ]
 ```
 
-- Scheme must be `http`/`https` **and must match the entry** — an `https://`
-  entry never admits an `http://` destination. This is also how `javascript:`
-  and `data:` are refused: they have no hostname.
+- Scheme **must match the entry** — an `https://` entry never admits an
+  `http://` destination. A **custom scheme** (`myapp://callback`, a mobile deep
+  link) is also a usable entry, matched on exact scheme + exact case-folded
+  authority + the same path rule, with no default ports and no wildcards; it can
+  never admit an `http(s)` URL, or vice versa. `javascript:`, `data:` and
+  `vbscript:` are refused outright — a navigation sink is never a destination.
+  A handoff code is a bearer credential, so a deep-link entry deserves the same
+  scrutiny as a web one: the OS decides which installed app receives that scheme.
 - Host comparison is case-folded and exact. `*.example.com` admits
   `example.com` and `a.example.com`, but **not** `a.b.example.com` and **not**
   `example.com.evil.tld`.

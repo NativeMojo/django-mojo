@@ -323,6 +323,149 @@ def test_redirect_uri_no_allowlist_configured(opts):
 
 
 # ---------------------------------------------------------------------------
+# Custom URL schemes — mobile deep links.
+#
+# A native app completes OAuth on its own deep link, so a custom-scheme entry
+# has to be usable. It is NOT a web origin, so it is matched under its own
+# narrower rules: exact case-folded scheme, exact case-folded authority compared
+# byte-for-byte, and the same segment-bounded path prefix. No default ports (a
+# custom scheme has none), no DNS-shaped hostname rules (an authority here is an
+# app-registered label), no wildcards. The http(s) rules above are untouched by
+# any of this, and the two families never cross.
+# ---------------------------------------------------------------------------
+
+DEEP_ENTRY = "myapp://callback"
+DEEP_ENTRIES = [DEEP_ENTRY]
+DEEP_ALLOWED = "myapp://callback/oauth"
+
+
+@th.django_unit_test("oauth: a custom-scheme entry admits its own deep link")
+def test_redirect_uri_custom_scheme_entry_is_usable(opts):
+    """The named restore: `myapp://callback` is a working entry again.
+
+    It went unusable when the matcher replaced the prefix test, which silently
+    400'd every native-app OAuth flow. The authority is compared byte-for-byte
+    after case-folding — which is also what makes a userinfo confusable inert
+    here: `myapp://evil@callback` is simply a different authority, not a
+    rewriting of `callback`.
+    """
+    _assert_admitted(DEEP_ENTRY, "the deep link the entry names",
+                     entries=DEEP_ENTRIES)
+    _assert_admitted(DEEP_ALLOWED, "a path under the entry",
+                     entries=DEEP_ENTRIES)
+    _assert_admitted("MyApp://CallBack/oauth",
+                     "scheme and authority are case-insensitive",
+                     entries=DEEP_ENTRIES)
+    _assert_admitted("myapp://callback?code=x",
+                     "the query is ignored for custom schemes too",
+                     entries=DEEP_ENTRIES)
+
+    _assert_refused("otherapp://callback",
+                    "a different scheme — the OS routes it to a different app",
+                    entries=DEEP_ENTRIES)
+    _assert_refused("myapp://other",
+                    "a different authority under the same scheme",
+                    entries=DEEP_ENTRIES)
+    _assert_refused("myapp://callback.evil",
+                    "an authority that merely BEGINS with the entry's",
+                    entries=DEEP_ENTRIES)
+    _assert_refused("myapp://evil@callback",
+                    "userinfo makes it a different authority, not the same one",
+                    entries=DEEP_ENTRIES)
+    # Isolates the guard: without it this parses to authority `callback` and
+    # path `/oauth\x`, which sits under the entry and would MATCH.
+    _assert_refused("myapp://callback/oauth\\x",
+                    "the backslash guard applies to every scheme, not just web",
+                    entries=DEEP_ENTRIES)
+
+
+@th.django_unit_test("oauth: a custom-scheme path prefix terminates on a boundary")
+def test_redirect_uri_custom_scheme_path_terminates_on_a_boundary(opts):
+    entries = ["myapp://callback/oauth"]
+    _assert_admitted("myapp://callback/oauth",
+                     "the exact allowlisted deep link", entries=entries)
+    _assert_admitted("myapp://callback/oauth/done",
+                     "a path under the allowlisted prefix", entries=entries)
+    _assert_refused("myapp://callback/oauthdone",
+                    "a sibling path sharing a string prefix", entries=entries)
+    _assert_refused("myapp://callback/other",
+                    "a path outside the prefix", entries=entries)
+
+
+@th.django_unit_test("oauth: custom-scheme and web entries never admit each other")
+def test_redirect_uri_custom_scheme_and_web_never_cross(opts):
+    """Schemes are compared before anything else, so the two families are
+    disjoint in both directions. Restoring deep links cannot have widened the
+    web path by so much as one URL."""
+    _assert_refused("https://callback/oauth",
+                    "an https URL against a custom-scheme entry",
+                    entries=DEEP_ENTRIES)
+    _assert_refused("http://callback/oauth",
+                    "an http URL against a custom-scheme entry",
+                    entries=DEEP_ENTRIES)
+    _assert_refused("myapp://app.example.com/callback",
+                    "a deep link against an https entry naming the same label",
+                    entries=ENTRIES)
+    _assert_admitted(ALLOWED,
+                     "the https entry still admits its own URL with a "
+                     "custom-scheme entry sitting alongside it",
+                     entries=ENTRIES + DEEP_ENTRIES)
+
+
+@th.django_unit_test("oauth: the empty-authority deep-link forms are one value")
+def test_redirect_uri_custom_scheme_empty_authority(opts):
+    """`com.example.app:/oauth` and `com.example.app:///oauth` both parse to an
+    EMPTY authority with the path `/oauth`, so they are the same entry. An
+    empty authority is a real, distinct value — it never equals `callback`."""
+    for entry in ("com.example.app:/oauth", "com.example.app:///oauth"):
+        entries = [entry]
+        _assert_admitted("com.example.app:/oauth",
+                         f"the one-slash form against {entry!r}", entries=entries)
+        _assert_admitted("com.example.app:///oauth",
+                         f"the three-slash form against {entry!r}", entries=entries)
+        _assert_admitted("com.example.app:/oauth/done",
+                         f"a path under {entry!r}", entries=entries)
+        _assert_refused("com.example.app://callback/oauth",
+                        f"a NON-empty authority against {entry!r} — an empty "
+                        f"authority is a value, not a wildcard",
+                        entries=entries)
+
+
+@th.django_unit_test("oauth: ambiguous or dangerous custom-scheme shapes fail closed")
+def test_redirect_uri_custom_scheme_shapes_that_fail_closed(opts):
+    """What a custom scheme must NOT buy.
+
+    The opaque form (`myapp:callback`, `mailto:a@b`) gives no way to tell an
+    authority from a path, so it is refused on both sides rather than guessed
+    at. A scheme with neither authority nor path would authorize an entire
+    scheme. The script pseudo-schemes are a navigation sink and are refused
+    outright, so a mistyped entry can never turn `frontend_uri` into stored XSS
+    on the auth origin. `*.` is not a wildcard here — it is just an authority
+    nothing equals.
+    """
+    for junk, why in (
+            ("myapp:callback", "the opaque form — authority or path?"),
+            ("mailto:someone@example.com", "mailto is the same opaque shape"),
+            ("myapp:", "a bare scheme with nothing to match on"),
+            ("myapp://", "a scheme with an empty authority AND empty path"),
+            ("javascript:/alert(1)", "javascript: is a sink, never a destination"),
+            ("data:/text/html", "data: is a sink, never a destination"),
+            ("vbscript:/msgbox", "vbscript: is a sink, never a destination")):
+        _assert_refused("https://totally.evil.tld/steal",
+                        f"{why} — an unusable entry must admit nothing",
+                        entries=[junk])
+        _assert_refused(junk, f"{why} — and it must not admit itself either",
+                        entries=[junk, ENTRY])
+
+    _assert_refused("myapp://a.callback",
+                    "`*.` is inert for a custom scheme — no wildcard expansion",
+                    entries=["myapp://*.callback"])
+    _assert_admitted("myapp://*.callback",
+                     "it is only ever the literal authority it spells",
+                     entries=["myapp://*.callback"])
+
+
+# ---------------------------------------------------------------------------
 # End to end. Runs LAST — it is the only test here that writes to the DB.
 # ---------------------------------------------------------------------------
 

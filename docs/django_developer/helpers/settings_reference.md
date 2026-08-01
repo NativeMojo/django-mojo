@@ -28,11 +28,14 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `ALLOWED_REDIRECT_URLS` — list, default `[]`. URLs accepted as the OAuth
   `redirect_uri` landing page on `GET /api/auth/oauth/<provider>/begin`. Matched
-  as a **URL**, not a string prefix: same scheme (`http`/`https`, no downgrade),
-  same host case-folded, same port (scheme default when absent), and a path at
-  or under the entry path on a `/` segment boundary. Query and fragment are
-  ignored on both sides; `*.` wildcards are **not** supported and are skipped as
-  unusable entries; list IDN hosts in punycode. Empty (or unset) refuses any
+  as a **URL**, not a string prefix: same scheme (`http`/`https` never substitute
+  for each other), same host case-folded, same port (scheme default when
+  absent), and a path at or under the entry path on a `/` segment boundary.
+  Query and fragment are ignored on both sides; `*.` wildcards are **not**
+  supported and are skipped as unusable entries; list IDN hosts in punycode. A
+  **custom scheme** (`myapp://callback`, a mobile deep link) is supported under
+  narrower rules — exact scheme + exact case-folded authority + the same path
+  rule, no default ports and no wildcards. Empty (or unset) refuses any
   `redirect_uri` outright. **Not the only source**: the group this request
   resolved (`?group=` / `?group_uuid=`) contributes its own
   `Group.metadata["allowed_redirect_urls"]`, inherited up the parent chain, so
@@ -116,7 +119,9 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `AUTH_HANDOFF_ALLOWED_URLS` — list, **unset by default (monitor mode)**.
   Destination URLs `POST /api/auth/handoff` may mint a code for, matched on
   **exact host + path prefix** (`https://*.example.com/` admits one extra
-  dot-free label). **Setting it — any list, even `[]` — turns enforcement on**:
+  dot-free label). A custom scheme (a mobile deep link) is usable here too —
+  same shared matcher, same narrower custom-scheme rules as
+  `ALLOWED_REDIRECT_URLS`. **Setting it — any list, even `[]` — turns enforcement on**:
   `redirect_uri` becomes required and an unlisted destination gets a `400` with
   no code minted, plus an `auth:handoff_destination_refused` incident. Unset,
   with no resolver either, is monitor mode: the code is minted as always and an

@@ -243,9 +243,9 @@ before assuming a server outage:
   entry without a port means the scheme default (443/80).
 - **Path boundary** — an entry of `.../app` admits `/app` and `/app/inner`, not
   `/application`. Add a trailing `/` to the entry to admit a whole host.
-- **Scheme** — must be `http` or `https`, and must match the entry exactly. A
-  custom scheme (`myapp://callback`, a mobile deep link) is no longer accepted;
-  move that flow to an HTTPS universal/app link.
+- **Scheme** — must match the entry exactly, and `http`/`https` never
+  substitute for each other. A custom scheme (`myapp://callback`, a mobile deep
+  link) **is** still accepted — see below.
 - **Host spelling** — a trailing dot (`app.example.com.`), a unicode IDN host
   (list it in punycode instead), a bracketed IPv6 literal, or anything with a
   backslash or percent-encoding in the authority is refused.
@@ -255,6 +255,29 @@ before assuming a server outage:
 What did **not** change: the status code (`400`), the error strings, the
 response shape, and host case-insensitivity — in fact case now matches *more*
 (`https://APP.Example.com/x` is admitted against `https://app.example.com`).
+
+### Native apps — custom URL schemes
+
+A mobile deep link works as a `redirect_uri`, against an allowlist entry naming
+the same scheme. It is matched under narrower rules than a web URL: **exact
+scheme + exact authority (compared character for character, case-insensitive) +
+the same `/`-boundary path prefix**. There are no default ports and no wildcards,
+and the query string is still ignored.
+
+| Entry | `redirect_uri` | Result |
+|---|---|---|
+| `myapp://callback` | `myapp://callback` | admitted |
+| `myapp://callback` | `myapp://callback/oauth?code=…` | admitted — any path, query ignored |
+| `myapp://callback` | `MyApp://CallBack` | admitted — case-insensitive |
+| `myapp://callback` | `myapp://other` | **refused** — different authority |
+| `myapp://callback` | `myapp://callback.evil` | **refused** — merely begins with the entry |
+| `myapp://callback` | `otherapp://callback` | **refused** — different scheme |
+| `myapp://callback/oauth` | `myapp://callback/oauthdone` | **refused** — not on a `/` boundary |
+| `com.example.app:/oauth` | `com.example.app:///oauth` | admitted — the same value (empty authority, path `/oauth`) |
+
+Refused outright, whichever side they appear on: the opaque form with no `//`
+and no leading `/` (`myapp:callback`, `mailto:a@b`), a bare `myapp:` or
+`myapp://`, and `javascript:` / `data:` / `vbscript:`.
 
 ---
 

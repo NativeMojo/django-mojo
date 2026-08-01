@@ -134,9 +134,11 @@ and why it is kept.
 
 ### Matching rules
 
-An entry admits a `redirect_uri` when **all four** hold. This is the same
-matcher the auth-handoff destination allowlist uses
+An `http(s)` entry admits a `redirect_uri` when **all four** hold. This is the
+same matcher the auth-handoff destination allowlist uses
 (`mojo/apps/account/services/redirect_allowlist.py`), with wildcards turned off.
+Custom schemes — mobile deep links — have their own narrower rules; see
+[Custom URL schemes](#custom-url-schemes-mobile-deep-links) below.
 
 1. **Scheme** — `http` or `https` on both, and the *same* one. An `https://`
    entry never admits an `http://` landing URL; the OAuth `code` and `state`
@@ -189,10 +191,60 @@ Two further rules:
   unusable, with a log line naming it. (`AUTH_HANDOFF_ALLOWED_URLS` *does*
   support `*.`; this list deliberately does not — see the CHANGELOG entry.)
 
-Entries that cannot be parsed as an absolute `http(s)` URL — `""`, `"h"`,
-`"/relative"`, `"myapp://callback"` — are skipped with a warning and can never
-match anything. Under the prefix test they replaced, an entry of `"h"` admitted
-every `http(s)://` URL in existence.
+Entries that cannot be parsed as an absolute URL — `""`, `"h"`, `"/relative"` —
+are skipped with a warning and can never match anything. Under the prefix test
+they replaced, an entry of `"h"` admitted every `http(s)://` URL in existence.
+
+### Custom URL schemes (mobile deep links)
+
+An entry may name a custom scheme, so a native app can complete OAuth on its own
+deep link:
+
+```python
+ALLOWED_REDIRECT_URLS = [
+    "https://portal.example.com/",
+    "myapp://callback",              # the app's registered deep link
+    "com.example.app:/oauth",        # the reverse-DNS form, empty authority
+]
+```
+
+A custom-scheme URL is **not** a web origin, so none of the four rules above
+apply to it. It matches when all three hold:
+
+1. **Scheme** — equal after case-folding, and *not* `http`/`https`. Schemes are
+   compared before anything else, so a custom-scheme entry can never admit an
+   `http(s)` URL and an `http(s)` entry can never admit a deep link.
+2. **Authority** — equal after case-folding, compared **byte-for-byte**. There
+   is no default-port logic (a custom scheme has no default port) and no
+   hostname rules (the authority is a label the app registered with the OS, not
+   a DNS name). Byte comparison is also what makes the web confusables inert
+   here: `myapp://evil@callback` is simply a *different authority*, not a
+   rewriting of `callback`.
+3. **Path** — the same segment-bounded prefix rule as above. `myapp://callback`
+   (path `/`) admits every path under that authority; `myapp://callback/oauth`
+   admits `/oauth` and `/oauth/done` but not `/oauthdone`.
+
+Query and fragment are ignored, exactly as for `http(s)`, and the backslash
+guard applies to every scheme.
+
+`com.example.app:/oauth` and `com.example.app:///oauth` are the **same value** —
+both parse to an empty authority with the path `/oauth`. An empty authority is a
+real value, not a wildcard: it never equals `callback`.
+
+Refused, fail-closed:
+
+| Entry or `redirect_uri` | Why |
+|---|---|
+| `myapp:callback`, `mailto:a@b` | the opaque form — no `//` and no leading `/`, so there is no way to tell an authority from a path |
+| `myapp:`, `myapp://` | neither authority nor path; as an entry it would authorize a whole scheme |
+| `javascript:…`, `data:…`, `vbscript:…` | a navigation sink, never a destination — refused even if an operator lists one |
+| `myapp://*.callback` | `*.` is not a wildcard here; it is an authority nothing equals |
+
+The same rules apply to `AUTH_HANDOFF_ALLOWED_URLS`, since the two lists share
+one matcher. That is intended — a per-list scheme policy is exactly the drift
+the shared implementation exists to prevent. A handoff code is a bearer
+credential, so treat a deep-link handoff entry with the same care as a web one:
+the OS decides which installed app receives that scheme.
 
 ### The per-group source
 
