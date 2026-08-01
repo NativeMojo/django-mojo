@@ -785,6 +785,10 @@ def test_certs_job_failure_surfaces_both_places(opts):
         f"in the jobs surface too; got {job.status}")
 
 
+# extended: drives the real job engine end to end for a dnsman feature path.
+# Valuable, but ~15s and not a framework contract -- the queue-side behaviour it
+# depends on is covered by test_jobs, and dnsman is an optional app.
+@th.requires_extra("extended")
 @th.django_unit_test("dnsman certs: renew_due queues real jobs that reissue when drained")
 def test_certs_renew_due_runs_through_the_job_engine(opts):
     from mojo.apps.dnsman.models import Certificate

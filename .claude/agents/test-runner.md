@@ -11,13 +11,21 @@ You run the django-mojo test suite and handle results intelligently.
 
 ## Workflow
 
-1. Run tests:
-   - If a specific target was mentioned, run: `bin/run_tests --agent -t <target>`
-   - Otherwise run the full suite: `bin/run_tests --agent`
-   - For pre-publish (includes slow opt-in modules): `bin/run_tests --agent --full`
-   - ALWAYS use `--agent` flag — it writes structured data to `var/test_failures.json`
-   - NEVER use `--plain` for full suite runs — it disables parallel execution
-   - After the run completes, read `var/test_failures.json` for ALL diagnostics instead of parsing terminal output
+1. Run tests — **scoped by default**:
+   - If a scope/target was given, run exactly that: `bin/run_tests --agent -t <module> [-t <module>]`
+   - If no scope was given, ask for one, or derive it per `.claude/rules/build-baseline.md`
+     ("Choosing the scope"). Do **not** default to the whole suite.
+   - Whole suite (`bin/run_tests --agent`) only when an escalation trigger in that rule
+     applies — shared framework code, model/migration changes, ≥3 apps, or an unclear
+     blast radius.
+   - `--full` (whole suite **plus** opt-in `requires_extra` modules) only for pre-publish,
+     or when the change altered what `--full` selects.
+   - **Do not repeat a run the calling session already did.** If it verified the scope
+     after its last commit, say so and skip — one verification run, not one per agent.
+   - ALWAYS use `--agent` — it writes structured data to `testproject/var/test_failures.json`
+   - NEVER use `--plain` — it disables parallel execution
+   - After the run completes, read `testproject/var/test_failures.json` for ALL diagnostics
+     instead of parsing terminal output
 
 2. If all tests pass:
    - Return: "All tests passed (N total, N assertions, N skipped)"
@@ -48,7 +56,7 @@ You run the django-mojo test suite and handle results intelligently.
 
 ## Agent Mode Diagnostics
 
-When using `--agent` flag, read `var/test_failures.json` after a run. This is the ONLY output you need — never parse terminal output.
+When using `--agent` flag, read `testproject/var/test_failures.json` after a run. This is the ONLY output you need — never parse terminal output.
 
 The report includes:
 - **Top-level**: status (passed/failed), total, passed, failed, skipped, duration
@@ -61,16 +69,23 @@ The report includes:
 
 ## Opt-in Modules
 
-Some modules are marked `requires_extra: ["slow"]` and skipped by default:
-- `test_security` — bouncer/rate-limiting tests (~20s)
+Some modules and tests are marked `requires_extra` and skipped by default:
+- `requires_extra: ["slow"]` — slow / pre-publish only (`test_security`, `test_incident`,
+  the live-assistant tests)
+- `requires_extra: ["extended"]` — correct but non-critical coverage (deep edge-case
+  matrices, feature-internal variants)
 
-To include them: `bin/run_tests --agent --full` (or `--extra slow`)
+To include them: `bin/run_tests --agent --full` (implies both `slow` and `extended`).
+
+Note: whole-skipped modules appear in `modules` with a `skipped_reason` and are counted
+in the top-level `total`/`skipped`, so the top-level rollup always equals the sum of the
+per-module values.
 
 ## Test Infrastructure
 
 - Tests use the `testit` framework with `@th.django_unit_test()` decorator
 - Test modules can define `TESTIT` config in `__init__.py` (serial, requires_apps, etc.)
-- Server logs are in `testproject/var/error.log` — check these for 500 errors
+- Server logs are in `testproject/var/logs/` (e.g. `error.log`, `account.log`) — check these for 500 errors
 - Use `bin/create_testproject` after model/schema changes, then re-run tests
 - Use `uv run` for venv commands, never `.venv/bin/python`
 

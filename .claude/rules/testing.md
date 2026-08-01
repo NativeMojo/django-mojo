@@ -20,9 +20,12 @@ Before writing any test, read `docs/django_developer/testit/Overview.md`. This i
 
 ## Running
 - Run with `bin/run_tests --agent -t test_module.filename` — do not ask the user to run them
-- Always use `--agent` flag — read `var/test_failures.json` for diagnostics, never parse terminal output
-- Use `--full` to include opt-in modules (test_security, etc.) — only needed for pre-publish validation
-- Never use `--plain` for full suite runs — it disables the rich progress UI
+- Always use `--agent` flag — read `testproject/var/test_failures.json` for diagnostics, never parse terminal output
+- Scope the run to what you changed; see `.claude/rules/build-baseline.md` for choosing a
+  scope and the triggers that escalate to the whole suite
+- Use `--full` to include opt-in modules (`requires_extra` — `slow` and `extended`) — needed
+  for pre-publish validation, or when you changed what `--full` selects
+- Never use `--plain` — it disables the rich progress UI and parallel execution
 
 ## Rules
 - Every `assert` must include a descriptive failure message — no bare asserts

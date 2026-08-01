@@ -121,31 +121,61 @@ When `rich` is installed and `-j` is greater than 1, the runner shows a live per
 
 ### Agent Mode
 
-`--agent` writes `var/test_failures.json` after the run — a structured JSON report designed for LLM agents and CI pipelines. The report includes:
+`--agent` writes `testproject/var/test_failures.json` after the run — a structured JSON report designed for LLM agents and CI pipelines. The report includes:
 
-- **Top-level**: `status` (passed/failed), `total`, `passed`, `failed`, `skipped`, `duration`
-- **`modules`**: per-module breakdown — `tests`, `passed`, `failed`, `skipped`, `duration` for each test module
+- **Top-level**: `status` (passed/failed), `total`, `passed`, `failed`, `skipped`, `duration` — summed across every module, **including modules skipped whole** (`requires_apps`/`requires_extra`). This is the baseline-comparison number.
+- **`ran`**: the same shape (`total`, `passed`, `failed`, `skipped`) but restricted to what this invocation actually *executed* — whole-skipped modules contribute to the top-level totals but not to `ran`. Use `ran` when you need "how much work did this run really do," e.g. distinguishing a default-tier run from one that also pulled in `--extra` modules.
+- **`modules`**: per-module breakdown — `tests`, `passed`, `failed`, `skipped`, `duration` for each test module, plus `skipped_reason` when the whole module was skipped
+- **`slowest`**: the 25 slowest individual tests, sorted descending by `duration` — `test_name`, `module`, `test_file`, `status`, `duration`. Module-level `duration` alone can't say which test inside a slow module is the cost; every executed test records its own `duration` (seconds) and this is ranked from it.
 - **`failures`**: per-failure entries with `test_name`, `function`, `status`, `assertion`, `test_source`, `file_path`, `line`, `traceback` (errors only), and `server_log_tail`
 - **`conf_drift`**: names of any `var/django.conf` keys that changed across the run — normally empty. A non-empty list means a `th.server_settings()` context did not restore cleanly and the key is now stranded. Key **names only**; values are never reported, since an override may be a credential.
 
-LLM agents should always use `--agent` and read the JSON report instead of parsing terminal output. Never use `--plain` for full suite runs — it disables the rich UI but doesn't improve agent output.
+LLM agents should always use `--agent` and read the JSON report instead of parsing terminal output. Never use `--plain` — it disables the rich UI but doesn't improve agent output.
 
-### Opt-in Modules
+### Tiers — default, `slow`, `extended`
 
-Modules with `"requires_extra": ["slow"]` in their TESTIT config are skipped by default. Include them with `--full` (shortcut for `--extra slow`):
+Two opt-in tiers; `--full` turns on both.
 
 ```bash
-./bin/run_tests --full          # include all opt-in modules
-./bin/run_tests --extra slow    # equivalent
+./bin/run_tests                        # default tier only
+./bin/run_tests --full                 # + slow + extended
+./bin/run_tests --extra extended       # + just one tier
 ```
 
-Currently opt-in:
+| Tier | Tag | Meaning |
+|---|---|---|
+| default | *(none)* | Critical. Runs on every invocation. |
+| `slow` | `requires_extra: ["slow"]` | Expensive, or only meaningful before a release. |
+| `extended` | `@th.requires_extra("extended")` | Correct and worth keeping, but not a critical contract. |
 
-| Module | Reason |
-|---|---|
-| `test_security` | Bouncer/rate-limiting tests (~20s, serial) |
+Two words rather than one because they are chosen on different grounds — `slow` is a
+statement about cost, `extended` about criticality — and "why is this opt-in?" should be
+answerable from the tag alone.
 
-To make a module opt-in, add `"requires_extra": ["slow"]` to its `__init__.py` TESTIT config.
+Currently `slow`: `test_security` (bouncer/rate-limiting, serial), `test_incident`, the
+live-assistant tests.
+
+#### Deciding the tier
+
+A test belongs in the **default tier regardless of cost** if it covers a security boundary
+(permissions, auth, tenant isolation, secrets), a core framework contract (model
+save/serialize, REST dispatch, graphs, `request.DATA`), a bug that has already shipped
+once, or anything whose failure means the framework is broken for *every* consumer. The
+slowest single test in the suite is a shortlink scheme-injection test and it stays in the
+default tier — cost alone never demotes a security test.
+
+**`extended`** is for exhaustive input matrices past the first representative case, deep
+feature-internal variants of one app, coverage already asserted elsewhere, and tests whose
+cost *is* a timeout — an assertion that nothing arrives can only pass by waiting, so keep
+the positive path in the default tier and demote the negative one.
+
+**Not a reason to demote:** the app is optional. `requires_apps` already skips a module
+whole when the project has not installed that app.
+
+Tag at authoring time; auditing it back out later is far more expensive.
+
+To move a whole module, add `"requires_extra": ["slow"]` (or `["extended"]`) to its
+`__init__.py` TESTIT config. For a single test, use the decorator.
 
 ### JSON Config
 CLI flags always win, but you can seed defaults through a JSON file:
@@ -223,6 +253,43 @@ When a large app has many tests, split it into domain-focused packages (`test_au
 > already holding the exclusive hold is granted the shared hold immediately
 > (it is the restarter — it cannot tear down its own socket behind its own back).
 
+### How `server_settings()` waits — a readiness signal, not a sleep
+
+Both reloads (applying overrides, then restoring them) used to be fixed sleeps —
+1.5s in, 3s out — sized to outlast the OLD uvicorn worker, since a plain socket
+poll answers from a dying worker just as readily as a fresh one; "the server
+responds" never meant "the server responds with my config."
+
+The generated `_asgi.py` now writes `testproject/var/asgi_ready.json` (`{"pid":
+..., "conf": sha256(django.conf)}`) once Django finishes loading. `server_settings()`
+waits for a signal reporting **both** a different pid and the fingerprint of the
+config it just wrote, then confirms the socket answers — an exact answer to "is
+the new worker up with my config" instead of a timed guess, so the wait costs
+what the reload actually costs. A write that leaves `django.conf` byte-identical
+(e.g. restoring a value the file already held) skips the wait entirely: uvicorn
+reloads on the write event, not a content diff, so rewriting identical bytes
+would only queue a restart the fingerprint check already considers satisfied.
+
+That skip is guarded rather than assumed. When no write was needed, the running
+worker's own fingerprint must still match the file — if it does not, someone else
+wrote `django.conf` or a previous context stranded a key, and the context raises
+instead of running your test against settings nobody chose.
+
+**A failed wait undoes its own write.** The overrides are on disk before the wait
+begins, and the wait raises before the context's restore block is reached — so it
+restores explicitly on the way out. Without that, a timed-out wait would leave the
+override in `django.conf`, and uvicorn (`--reload-include '*.conf'`) would serve it
+to every later test in the run.
+
+**Falls back automatically** to the old sleep-based wait when
+`testproject/var/asgi_ready.json` does not exist — an older testproject, or a
+downstream project whose `_asgi.py` predates this convention. There is nothing
+to configure; testit checks for the file on every call.
+
+Assumes a single uvicorn worker, which is what `bin/asgi_local` starts. Under
+multiple workers a probe answered by a different, un-restarted worker could
+satisfy "different pid" while the old settings were still live on another one.
+
 ### How `server_settings()` restores — subtractive, and one at a time
 
 - **It removes only the keys it set.** The context captures the exact source
@@ -252,7 +319,7 @@ Supported keys:
 | `serial` | `False` | Force this module to run sequentially, after all parallel modules complete. Use for modules that rely on signals bound to the main thread. **Not** needed merely because a module calls `th.server_settings()` — `testit/server_lock.py` handles that hazard without giving up parallelism. |
 | `requires_apps` | `[]` | List of Django app labels. The module is skipped entirely if any listed app is not in `INSTALLED_APPS`. |
 | `server_settings` | `{}` | **Reserved — not implemented.** The key is accepted by the config loader and then ignored; the runner never applies it. Use `th.server_settings()` inside the tests that need an override. |
-| `requires_extra` | `[]` | List of `--extra` flags. The module is skipped unless at least one flag is present. Use `["slow"]` for opt-in modules included by `--full`. |
+| `requires_extra` | `[]` | List of `--extra` flags. The module is skipped unless at least one flag is present. Use `["slow"]` or `["extended"]` for opt-in modules included by `--full` — see Tiers above. |
 
 All keys are optional. A missing `__init__.py` or a missing `TESTIT` assignment uses defaults (parallel, no app requirements).
 
@@ -293,11 +360,13 @@ def test_admin_can_login(opts):
 
 > **Collection is by function-name PREFIX, not by decorator, and there is no
 > teardown phase.** The runner collects `setup_*` for the setup phase and
-> `test_*` / `quick_*` for the test phase — nothing else. A `cleanup_*` or
-> `teardown_*` function is therefore dead code no matter how it is decorated
-> (even `@django_unit_setup()`): it is never collected and never runs. Put
-> per-module cleanup at the **top of `setup_`** instead — delete any leftover
-> rows/secrets there before creating fixtures, since the database is long-lived.
+> `test_*` for the test phase — nothing else. (The historical `quick_*` test
+> prefix and its `-q`/`--quick` selector were removed; use the `slow`/`extended`
+> tiers above to opt tests in or out instead.) A `cleanup_*` or `teardown_*`
+> function is therefore dead code no matter how it is decorated (even
+> `@django_unit_setup()`): it is never collected and never runs. Put per-module
+> cleanup at the **top of `setup_`** instead — delete any leftover rows/secrets
+> there before creating fixtures, since the database is long-lived.
 
 See `docs/testit/examples/1_test_models.py` for a full reference module.
 
@@ -384,13 +453,15 @@ All other keys (e.g. `periods`, `slug`, `status`, `data`, `id`) are safe to acce
 
 ## Outputs & Tooling
 
-- A structured run report is written to `var/test_results.json`:
+- A structured run report is written to `testproject/var/test_results.json`:
   - `total`, `passed`, `failed`
-  - `records[]` with module, file, function, status (`passed`, `failed`, `error`, `skipped`)
+  - `records[]` with module, file, function, status (`passed`, `failed`, `error`, `skipped`), and `duration` (seconds, when the test actually ran)
   - timestamps (`started_at`, `finished_at`, `duration`)
-- Agent report (written when `--agent` is passed): `var/test_failures.json`
-  - Top-level `status`, `total`, `passed`, `failed`, `skipped`, `duration`
-  - Per-module stats in `modules` dict (tests, passed, failed, skipped, duration)
+- Agent report (written when `--agent` is passed): `testproject/var/test_failures.json`
+  - Top-level `status`, `total`, `passed`, `failed`, `skipped`, `duration` — summed across all modules, including ones skipped whole
+  - `ran` — the same counts restricted to what actually executed this run (excludes whole-skipped modules)
+  - Per-module stats in `modules` dict (tests, passed, failed, skipped, duration, plus `skipped_reason` when the module was skipped whole)
+  - `slowest` — the 25 slowest individual tests, sorted descending by `duration`
   - Per-failure diagnostics in `failures` list (test_source, file_path, line, traceback, server_log_tail)
   - `conf_drift` — names of `var/django.conf` keys stranded by a settings override (empty on a clean run)
 - HTTP helper: `testit.client.RestClient`

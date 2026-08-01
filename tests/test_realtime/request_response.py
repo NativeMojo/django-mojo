@@ -78,6 +78,9 @@ def test_ws_request_response(opts):
         ws.close()
 
 
+# extended: asserts nothing arrives, so it can only pass by waiting out a real
+# timeout. The positive path (ws_request) stays in the default tier.
+@th.requires_extra("extended")
 @th.django_unit_test("ws_request_timeout")
 def test_ws_request_timeout(opts):
     """realtime.request() returns None when client doesn't respond within timeout."""
@@ -182,6 +185,9 @@ def test_ws_wait_for_event(opts):
         ws.close()
 
 
+# extended: same shape -- the assertion is that no matching event ever lands, so
+# the cost IS the timeout. ws_wait_for_event covers the matching path by default.
+@th.requires_extra("extended")
 @th.django_unit_test("ws_wait_for_event_no_match")
 def test_ws_wait_for_event_no_match(opts):
     """wait_for_event() ignores non-matching messages and times out."""
