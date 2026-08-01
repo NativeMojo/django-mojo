@@ -502,6 +502,20 @@ def test_own_host_detection(opts):
     assert_false(hg.is_own_host(objict(META={}), f"https://{GATED_HOST}/"),
                  "no HTTP_HOST means no same-origin claim can be made")
 
+    # The same-origin comparison must NOT inherit the entry-shape test. An
+    # auth origin on an IP literal or a single label can never appear in the
+    # gating map, but it is still unmistakably itself — applying the shape
+    # test here would refuse every OAuth begin on such a deployment.
+    local = objict(META={"HTTP_HOST": "127.0.0.1:5555"})
+    assert_true(hg.is_own_host(local, "http://127.0.0.1:5555/auth/oauth/google/complete"),
+                "an IP-literal auth origin must still recognise itself")
+    assert_false(hg.is_own_host(local, f"https://{GATED_HOST}/app"),
+                 "an IP-literal auth origin must not claim a foreign host")
+    assert_false(hg.is_own_host(local, "https://127.0.0.1\\@evil.tld/"),
+                 "the backslash parser differential must hold for the "
+                 "same-origin comparison too, or a crafted URL claims to be "
+                 "the auth origin while the browser navigates elsewhere")
+
 
 # ---------------------------------------------------------------------------
 # B + G. Endpoints — reload block 1: gating `enforce`, allowlist enforced.
@@ -526,7 +540,13 @@ def test_block1_enforce(opts):
             AUTH_HANDOFF_ALLOWED_URLS=BLOCK1_ALLOWED,
             AUTH_HANDOFF_GROUP_TOKEN_MODE="enforce",
             AUTH_HANDOFF_GROUP_TOKEN_HOSTS={GATED_HOST: opts.group_a_uuid},
-            AUTH_HANDOFF_CODE_TTL=300):
+            AUTH_HANDOFF_CODE_TTL=300,
+            # The OAuth arm below needs the gated host to CLEAR
+            # _validate_redirect_uri, or its 400 would come from the allowlist
+            # and the test would pass with the whole feature deleted. The
+            # test project's own entry is kept: tests/test_oauth runs in a
+            # parallel package and relies on it.
+            ALLOWED_REDIRECT_URLS=["https://example.com/", f"https://{GATED_HOST}/"]):
         _clear_limits()
 
         # --- mint every code this block needs in ONE session ----------------
@@ -720,6 +740,93 @@ def test_block1_enforce(opts):
             assert_false("access_token" in _data(resp),
                          f"{why} must not receive a token: {resp.response}")
             opts.client.logout()
+
+        # --- H. the OAuth leg REFUSES a gated destination --------------------
+        # It cannot deliver a scoped token instead: /complete can create the
+        # account, join a group from client-supplied state and fire the
+        # registration webhook before any membership pre-flight could fail.
+        _clear_limits()
+        opts.client.logout()
+
+        resp = opts.client.get(
+            f"/api/auth/oauth/google/begin?redirect_uri=https://{GATED_HOST}/land")
+        assert_eq(resp.status_code, 400,
+                  f"/begin must refuse a gated redirect_uri — this URL CLEARS "
+                  f"ALLOWED_REDIRECT_URLS, so a 200 here means gating never ran. "
+                  f"Got {resp.status_code}: {resp.response}")
+        assert_true("allowlist" in str(resp.response),
+                    f"the refusal must reuse the string /begin already emits for "
+                    f"an unlisted URI, so gated-vs-unlisted is not an oracle: "
+                    f"{resp.response}")
+        assert_true(_data(resp).get("auth_url") is None,
+                    f"a refused /begin must return no auth_url: {resp.response}")
+
+        resp = opts.client.get(
+            "/api/auth/oauth/google/begin?redirect_uri=https://example.com/login")
+        assert_eq(resp.status_code, 200,
+                  f"an UNGATED redirect_uri must still begin normally — this is "
+                  f"what proves the 400 above came from gating and not from the "
+                  f"allowlist. Got {resp.status_code}: {resp.response}")
+        assert_true(bool(_data(resp).get("auth_url")) and bool(_data(resp).get("state")),
+                    f"an ungated /begin must be unchanged: {resp.response}")
+
+        # The no-redirect_uri branch derives the landing URL from the
+        # UNVALIDATED Origin header and never calls _validate_redirect_uri at
+        # all, so this arm cannot be vacuous.
+        resp = opts.client.get("/api/auth/oauth/google/begin",
+                               headers={"Origin": f"https://{GATED_HOST}"})
+        assert_eq(resp.status_code, 400,
+                  f"/begin must refuse a gated Origin-derived default — that "
+                  f"branch picks the destination with a request header and "
+                  f"skips the allowlist entirely. Got {resp.status_code}: "
+                  f"{resp.response}")
+
+        resp = opts.client.get("/api/auth/oauth/google/begin")
+        assert_eq(resp.status_code, 200,
+                  f"with no Origin the default lands on the AUTH ORIGIN itself, "
+                  f"which is the same-host carve-out: a zone-wide gating entry "
+                  f"must never refuse a tenant's own white-label auth page when "
+                  f"it calls its own OAuth buttons. Got {resp.status_code}: "
+                  f"{resp.response}")
+
+        # /complete cannot be driven end to end (no real provider), so seed the
+        # state directly and assert the refusal lands BEFORE any provider call.
+        # "redirect_uri is not on the allowlist" is unreachable in /complete by
+        # any other path — _validate_redirect_uri is never called there.
+        import json as _json
+        import uuid as _uuid
+        from mojo.helpers.redis import get_connection
+
+        def seed_state(frontend_uri):
+            state = _uuid.uuid4().hex
+            get_connection().setex(f"oauth:state:{state}", 600, _json.dumps({
+                "redirect_uri": "https://example.com/api/auth/oauth/google/callback",
+                "frontend_uri": frontend_uri}))
+            return state
+
+        resp = opts.client.post(
+            "/api/auth/oauth/google/complete",
+            {"code": "hgt-not-a-real-code",
+             "state": seed_state(f"https://{GATED_HOST}/land")})
+        assert_eq(resp.status_code, 400,
+                  f"/complete must refuse a state whose frontend_uri is gated — "
+                  f"this is the authoritative check and it survives a mode flip "
+                  f"inside the state's TTL. Got {resp.status_code}: {resp.response}")
+        assert_true("redirect_uri is not on the allowlist" in str(resp.response),
+                    f"the refusal must be the gating one, not a provider error: "
+                    f"{resp.response}")
+
+        resp = opts.client.post(
+            "/api/auth/oauth/google/complete",
+            {"code": "hgt-not-a-real-code",
+             "state": seed_state("https://example.com/login")},
+            headers={"Origin": f"https://{GATED_HOST}"})
+        assert_eq(resp.status_code, 400,
+                  f"/complete must also refuse when the CALLER's own origin is "
+                  f"gated — the response body physically goes there. Got "
+                  f"{resp.status_code}: {resp.response}")
+        assert_true("redirect_uri is not on the allowlist" in str(resp.response),
+                    f"the refusal must be the gating one: {resp.response}")
 
 
 # ---------------------------------------------------------------------------
@@ -943,6 +1050,55 @@ def test_stamp_wins_and_corrupt_gid_refuses(opts):
                      f"{why} must NEVER produce a token — a corrupt stamp is a "
                      f"corrupt code, not a licence to fall back to a JWT: "
                      f"{resp.response}")
+
+
+# ---------------------------------------------------------------------------
+# H. The OAuth leg — in-process. The endpoint arm lives in block 1, where the
+# gated host also clears ALLOWED_REDIRECT_URLS.
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("oauth: a gated destination is refused, and only under enforce")
+def test_oauth_refusal_modes(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.rest import oauth
+
+    gated = f"https://{GATED_HOST}/land"
+    hosts = {GATED_HOST: opts.group_a_uuid}
+
+    with _gating(mode="off", hosts=hosts):
+        oauth._refuse_gated_destination(None, gated)  # must not raise
+
+    with _gating(mode="monitor", hosts=hosts):
+        # Monitor reports and PROCEEDS — that is what makes the rollout safe:
+        # a deployment learns from the feed that a gated site runs its own
+        # OAuth callback before enforcement can break it.
+        oauth._refuse_gated_destination(None, gated)
+
+    with _gating(mode="enforce", hosts=hosts):
+        try:
+            oauth._refuse_gated_destination(None, gated)
+            raise AssertionError(
+                "enforce must REFUSE a gated OAuth destination — /complete "
+                "hands a full access+refresh pair to whichever origin posts "
+                "to it, and it cannot deliver a scoped token instead without "
+                "provisioning the account first")
+        except merrors.ValueException as exc:
+            assert_eq(str(exc.reason), "redirect_uri is not on the allowlist",
+                      f"the refusal must reuse /begin's existing unlisted-URI "
+                      f"string so gated-vs-unlisted is not an oracle, got "
+                      f"{exc.reason!r}")
+
+        # Ungated and absent destinations are untouched.
+        oauth._refuse_gated_destination(None, "https://plain.example.org/x")
+        oauth._refuse_gated_destination(None, None)
+
+        # A destination we cannot read unambiguously is refused too.
+        try:
+            oauth._refuse_gated_destination(None, "https://[2001:db8::1]/x")
+            raise AssertionError(
+                "a suspicious OAuth destination must fail CLOSED under enforce")
+        except merrors.ValueException:
+            pass
 
 
 # ---------------------------------------------------------------------------

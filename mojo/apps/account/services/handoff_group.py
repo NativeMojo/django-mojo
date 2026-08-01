@@ -177,13 +177,15 @@ def _is_host_shaped(host):
     return not host.rsplit(".", 1)[-1].isdigit()
 
 
-def host_of(url):
-    """Return (ok, host) for a destination URL. `ok=False` means SUSPICIOUS.
+def _bare_host(url):
+    """Return (ok, host): the parsed hostname, WITHOUT the entry-shape test.
 
-    False is not "no match" — it fails CLOSED at the caller, the exact
-    inversion of `redirect_allowlist._split` returning None. Scheme is not
-    examined: `http`, `https` and protocol-relative `//host/x` all carry a
-    host, while `javascript:`, `data:` and a bare relative path carry none.
+    Used only for EQUALITY comparisons (is this the auth origin itself?). The
+    shape test exists so an IP-literal destination cannot silently "match
+    nothing" against a map that can never contain one — irrelevant when the
+    question is "is this the same host as the one serving this request?", and
+    applying it there would refuse every request on an IP-literal or
+    single-label auth host. Never use this for matching against the map.
     """
     if not url or not isinstance(url, str):
         return False, None
@@ -191,7 +193,9 @@ def host_of(url):
     # Python's urlsplit does not treat a backslash as an authority terminator;
     # browsers (WHATWG) do. `https://gated.example\@evil.tld/` is host
     # `evil.tld` here and host `gated.example` in a browser. Refusing is the
-    # only safe reading of a parser differential.
+    # only safe reading of a parser differential — and it has to hold for the
+    # equality comparison too, or a crafted URL could claim to be the auth
+    # origin while the browser navigates somewhere else.
     if "\\" in raw:
         return False, None
     try:
@@ -207,7 +211,19 @@ def host_of(url):
         host = host[:-1]
     if not host or not _HOST_CHARS.match(host):
         return False, None
-    if not _is_host_shaped(host):
+    return True, host
+
+
+def host_of(url):
+    """Return (ok, host) for a destination URL. `ok=False` means SUSPICIOUS.
+
+    False is not "no match" — it fails CLOSED at the caller, the exact
+    inversion of `redirect_allowlist._split` returning None. Scheme is not
+    examined: `http`, `https` and protocol-relative `//host/x` all carry a
+    host, while `javascript:`, `data:` and a bare relative path carry none.
+    """
+    ok, host = _bare_host(url)
+    if not ok or not _is_host_shaped(host):
         return False, None
     return True, host
 
@@ -229,21 +245,26 @@ def request_host(request):
         return None
     # "//" so urlsplit reads "example.com:8443" as an authority and not as a
     # scheme — a bare host:port parses as scheme "example.com" otherwise.
-    ok, host = host_of(f"//{raw}")
+    ok, host = _bare_host(f"//{raw}")
     return host if ok else None
 
 
 def is_own_host(request, url):
-    """True when a gated destination is the auth origin itself (C9).
+    """True when a destination is the very host serving this request.
 
-    Listing an auth-page origin in the gating map is a configuration error:
-    the auth page short-circuits a same-origin redirect to direct navigation,
-    and the JWT is already in that origin's storage.
+    Two callers, one fact. On the handoff leg, a GATED destination that is also
+    the auth origin is a configuration error (C9): the auth page
+    short-circuits a same-origin redirect to direct navigation, and the JWT is
+    already in that origin's storage. On the OAuth leg it is the carve-out that
+    keeps a zone-wide gating entry from refusing a tenant's own white-label
+    auth page when it calls its own Google/Apple/GitHub buttons — those set the
+    landing URL to the page's own URL, so the JWT lands in the auth origin's
+    own storage, which is exactly the outcome the refusal reasons is safe.
     """
     mine = request_host(request)
     if not mine:
         return False
-    ok, host = host_of(url)
+    ok, host = _bare_host(url)
     return bool(ok and host == mine)
 
 
@@ -563,6 +584,35 @@ def report_unmapped(destination, request=None):
     _report(body, f"Unmapped auth handoff destination: {host or destination}",
             "auth:handoff_group_token_unmapped", 3, request=request,
             destination=destination, destination_host=host or "")
+
+
+def report_oauth(destination, group, request=None, enforced=False):
+    """A gated host is running its OWN OAuth callback page.
+
+    The OAuth completion leg cannot deliver a scoped token — it can create an
+    account, join a group from client-supplied state and fire the registration
+    webhook before any membership pre-flight could fail — so it refuses
+    instead. Monitor mode names every such destination here FIRST, which is
+    what makes the rollout safe: this is the one place where turning gating on
+    can break a working consumer integration.
+    """
+    _, host = host_of(destination)
+    if not _should_report("oauth", host or destination, enforced):
+        return
+    verb = "was REFUSED" if enforced else "would be REFUSED under enforcement"
+    _report(
+        f"An OAuth login {verb} for {destination!r}, which is a GATED "
+        f"destination (group {getattr(group, 'name', group)}). The OAuth "
+        f"completion endpoint returns a full platform access+refresh pair to "
+        f"whichever origin posts to it, and it cannot hand out a group-scoped "
+        f"token instead without provisioning the account first. A gated site "
+        f"must not run its own OAuth callback page: move that flow to the "
+        f"hosted auth pages, where OAuth already works and already routes "
+        f"through the gated handoff."
+        + ("" if enforced else " Nothing was blocked — monitor mode does not bind."),
+        f"Gated destination running its own OAuth callback: {host or destination}",
+        "auth:handoff_group_token_oauth_refused", 3, request=request,
+        destination=destination, destination_host=host or "", group=group)
 
 
 def report_misconfigured(reason, kind, destination=None, request=None):

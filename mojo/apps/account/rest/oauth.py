@@ -77,6 +77,66 @@ def _validate_redirect_uri(request, redirect_uri):
     raise merrors.ValueException("redirect_uri is not on the allowlist")
 
 
+def _refuse_gated_destination(request, url):
+    """Refuse an OAuth landing URL that sits on a GATED destination host.
+
+    Two gated surfaces, two answers. The handoff leg DELIVERS a group-scoped
+    token to a gated destination; this leg REFUSES, because it cannot safely
+    deliver one. `on_oauth_complete` ends at `jwt_login` and hands a full
+    access+refresh pair to whichever origin posted to it, and routing it
+    through a scoped delivery instead is not available: `_find_or_create_user`
+    can create a brand-new account, add a GroupMember from the client-supplied
+    `state.group_uuid`, fire USER_REGISTERED_HANDLER and persist provider
+    tokens BEFORE a membership pre-flight could fail — a 403 after four side
+    effects — and auto-joining the visitor to avoid that would be a membership
+    grant driven by a URL.
+
+    So under `enforce` a gated site that runs its OWN OAuth callback page loses
+    OAuth login and must move that flow to the hosted auth pages, where OAuth
+    already works and already routes through the gated handoff. `monitor` files
+    an incident and proceeds, so a deployment learns which destinations that
+    hits BEFORE it binds.
+
+    Same-host is exempt: the hosted auth pages' OAuth buttons set the landing
+    URL to the page's own URL, and those pages are served white-label on the
+    tenant's own host — so with a zone-wide gating entry this would otherwise
+    refuse a tenant's own Google button. A JWT landing in the auth origin's own
+    storage is exactly the outcome the refusal reasons is safe.
+
+    The refusal message is the string `/begin` ALREADY emits for an unlisted
+    URI, so gated-versus-unlisted is not an oracle.
+    """
+    from mojo.apps.account.services import handoff_group
+    mode = handoff_group.get_mode()
+    if mode == handoff_group.MODE_OFF:
+        return
+    enforcing = mode == handoff_group.MODE_ENFORCE
+
+    if handoff_group.is_own_host(request, url):
+        ok, group = handoff_group.resolve_group(url, request=request)
+        if ok and group is not None:
+            reason = (
+                f"AUTH_HANDOFF_GROUP_TOKEN_HOSTS gates {url!r}, which is the "
+                f"auth origin serving this very request. An auth-page origin "
+                f"must never be gated — the OAuth flow that lands there is the "
+                f"hosted one, and the visitor's tokens already live in this "
+                f"origin's storage. Remove the entry.")
+            logit.error("oauth", reason)
+            handoff_group.report_misconfigured(
+                reason, "own_host", destination=url, request=request)
+        return
+
+    ok, group = handoff_group.resolve_group(url, request=request)
+    if ok and group is None:
+        return
+    if ok:
+        handoff_group.report_oauth(url, group, request=request, enforced=enforcing)
+    else:
+        handoff_group.report_refusal(url, request=request, enforced=enforcing)
+    if enforcing:
+        raise merrors.ValueException("redirect_uri is not on the allowlist")
+
+
 def _resolve_state_group(state_data):
     """Look up an active Group from state_data['group_uuid'].
 
@@ -244,6 +304,11 @@ def on_oauth_begin(request, provider):
         frontend_uri = custom_frontend_uri
     else:
         frontend_uri = _get_redirect_uri(request, provider)
+    # Covers BOTH branches deliberately. The `else` one is the load-bearing
+    # case: it derives the landing URL from the UNVALIDATED HTTP_ORIGIN header
+    # and never calls _validate_redirect_uri, so a caller with no redirect_uri
+    # param picks the destination with a request header.
+    _refuse_gated_destination(request, frontend_uri)
 
     # callback_uri = where the provider redirects (always our backend)
     origin = _get_origin(request)
@@ -290,6 +355,13 @@ def on_oauth_callback(request, provider):
 
     Peeks at state to find the frontend_uri, then bounces the browser there
     with code + state as query params. The frontend JS then calls /complete.
+
+    Deliberately NOT gated (see `_refuse_gated_destination`), and stated here
+    so it does not read as an oversight: this only 302s the browser with the
+    provider's authorization code, which is useless without our client secret.
+    The only actor who can spend it is our own /complete, which refuses. A
+    check here would replace a navigation with a raw JSON error for no
+    security gain.
     """
     # Google sends GET query params, Apple sends POST form data
     code = request.GET.get("code") or request.POST.get("code", "")
@@ -359,6 +431,13 @@ def on_oauth_complete(request, provider):
     state_data = svc.consume_state(state)
     if state_data is None:
         raise merrors.PermissionDeniedException("Invalid or expired OAuth state", 401, 401)
+
+    # The AUTHORITATIVE gating check, and it runs BEFORE any provider call.
+    # It survives a mode flip inside the state's TTL, covers a legacy state
+    # with no frontend_uri, and re-checks the caller's own origin — which is
+    # where the response body physically goes.
+    _refuse_gated_destination(request, state_data.get("frontend_uri"))
+    _refuse_gated_destination(request, _get_origin(request))
 
     code = request.DATA.get("code")
     # redirect_uri is bound to the state — use it for the token exchange.
