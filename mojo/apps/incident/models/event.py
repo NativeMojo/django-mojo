@@ -63,6 +63,15 @@ class Event(models.Model, MojoModel):
     # JSON-based metadata field
     metadata = models.JSONField(default=dict, blank=True)
 
+    class Meta:
+        # Every per-IP threat query filters source_ip AND a created window.
+        # With only the single-column btrees Postgres reads every row for the
+        # address across all time and then filters on created — the window
+        # shortens the result, not the scan.
+        indexes = [
+            models.Index(fields=['source_ip', 'created']),
+        ]
+
     class RestMeta:
         SEARCH_FIELDS = ["details"]
         VIEW_PERMS = ["view_security", "security"]
@@ -155,6 +164,48 @@ class Event(models.Model, MojoModel):
     @property
     def security_summary(self):
         return self._SECURITY_SUMMARIES.get(self.category, self.category)
+
+    # --- rate fields for the rule engine ----------------------------------
+    # Rule.check_rule() falls through to getattr(event, field_name), so every
+    # property below is usable as a RuleSet field name — an operator can gate a
+    # handler on "this IP has been at it for a while" instead of on one event.
+    # No default RuleSet ships using them: each is a DB aggregate on the event
+    # publish path, and a shipped default would put that cost on every event in
+    # every deployment. See docs/django_developer/logging/incidents.md.
+    #
+    # check_by_category() walks every RuleSet in the category, so a property can
+    # be read several times per event — the cache is required, not an
+    # optimisation. check_rule() refuses field names starting with "_", so
+    # _ip_stats itself is not addressable from a rule.
+    _ip_stats = None
+
+    def _get_ip_stats(self):
+        if self._ip_stats is None:
+            from mojo.helpers.geoip import threat_intel
+            self._ip_stats = threat_intel.ip_activity_stats(self.source_ip)
+        return self._ip_stats
+
+    @property
+    def ip_recent_attack_events(self):
+        """Allowlisted attack events (confirmed + suspect) for this event's IP
+        inside the threat window. 0 when the IP is clean or unknown."""
+        return self._get_ip_stats().get('attack_events', 0)
+
+    @property
+    def ip_recent_distinct_targets(self):
+        """Distinct user accounts the suspect-category events targeted. One
+        person fumbling their own password scores 1; spraying scores many."""
+        return self._get_ip_stats().get('distinct_targets', 0)
+
+    @property
+    def ip_recent_distinct_devices(self):
+        """Distinct pre-existing bouncer devices seen behind this IP.
+
+        None when the deployment does not run the bouncer JS — check_rule()
+        treats None as no-match, so a rule using this field fails CLOSED rather
+        than reading "no telemetry" as "no devices".
+        """
+        return self._get_ip_stats().get('distinct_devices', None)
 
     _geo_ip = None
     @property

@@ -61,6 +61,15 @@ def refresh_threat_lists(force=False, verbose=False, now=None):
         payload={})
 
 
+# Daily — recompute threat_level for recently-active IPs so a stale escalation
+# can decay. Everything else in the system only ratchets up.
+@schedule(minutes="20", hours="4")
+def recheck_active_threats(force=False, verbose=False, now=None):
+    jobs.publish(
+        func="mojo.apps.incident.asyncjobs.recheck_active_threats",
+        channel="cleanup", payload={})
+
+
 # Twice a day — triage any new incidents that haven't been LLM-assessed yet
 @schedule(hours="9,18")
 def triage_new_incidents(force=False, verbose=False, now=None):

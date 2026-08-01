@@ -87,6 +87,12 @@ class BouncerSignal(models.Model, MojoModel):
 
     class Meta:
         ordering = ['-created']
+        # The shared-egress suppressor counts distinct muids for one address
+        # inside a short window; without the composite the query scans every
+        # signal ever recorded for that address.
+        indexes = [
+            models.Index(fields=['ip_address', 'created']),
+        ]
 
     def __str__(self):
         return f"BouncerSignal<{self.muid} {self.decision} score={self.risk_score}>"

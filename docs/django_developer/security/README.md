@@ -777,6 +777,7 @@ Default health rules are auto-created on first health check run. They send notif
 | `sync_firewall` | Hourly | Restores all ipsets from DB truth; skips unchanged sets; startup recovery after reboot |
 | `refresh_ipsets` | Weekly (Sunday 3 AM) | Re-fetches IPSet source URLs and syncs CIDRs to fleet |
 | `refresh_threat_lists` | Every 6 hours | Refreshes the cache-only `tor_exits`/`blocklist_de` IPSet rows (`refresh_from_source()` only — never synced to the firewall); see [account/geoip.md](../account/geoip.md#threat-list-caches-tor-exit-list-blocklistde) |
+| `recheck_active_threats` | Daily 4:20 AM | Re-scores up to `GEOLOCATION_RECHECK_THREATS_MAX` (500) recently-active `GeoLocatedIP` rows so a stale `threat_level` can **decay** — everything else only ratchets up. Skips `provider='mojo'` records and external blocklist lookups; see [account/geoip.md](../account/geoip.md#decay) |
 | `check_system_health` | Every 3 minutes | Checks runner health, system metrics (if `HEALTH_MONITORING_ENABLED`) |
 
 ### Async Jobs (Broadcast)

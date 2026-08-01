@@ -124,6 +124,7 @@ All IPs are validated against a strict regex before touching iptables. Commands 
 | `sync_firewall` | Cron (hourly, minute 0) | Rebuilds all ipsets from DB truth. Restores permanent blocks after restart and reconciles fleet drift. |
 | `prune_events` | Cron (daily 9:45) | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` with level < 6 |
 | `prune_incidents` | Cron | Deletes resolved/closed/ignored incidents older than `INCIDENT_PRUNE_DAYS`. Skips incidents with `metadata.do_not_delete = True`. |
+| `recheck_active_threats` | Cron (daily 4:20) | Re-scores up to `GEOLOCATION_RECHECK_THREATS_MAX` recently-active `GeoLocatedIP` rows so `threat_level` can decay. Skips `provider='mojo'` records and external blocklist lookups. |
 
 ### Why no public blocking endpoints?
 
@@ -468,6 +469,53 @@ Each Rule checks one field in `event.metadata` against a target value:
 Rules operate on `event.metadata`. Since `report_event` syncs all standard fields (level, category, source_ip, etc.) into metadata automatically, they are all available for rule matching alongside any custom fields you pass in.
 
 `Rule.check_rule()` looks up the field by first checking `event.metadata[field_name]`, then falling back to `getattr(event, field_name)`. If `field_name` was stored with a `metadata.` prefix (e.g., `"metadata.http_url"`), the prefix is stripped automatically before lookup — so rules created that way still match correctly.
+
+Field names starting with `_` are always refused, so private attributes on
+`Event` can never be addressed from a rule.
+
+### Rate fields — matching on an IP's recent behaviour
+
+Because `check_rule()` falls through to `getattr(event, field_name)`, **any
+property on `Event` is a matchable rule field**. Three are provided for writing
+rules about a source IP's recent behaviour rather than about the single event in
+hand. All three are scoped to `GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS` (24h)
+and share the allowlists described in
+[account/geoip.md](../account/geoip.md#threat-intelligence).
+
+| Field | Value |
+|---|---|
+| `ip_recent_attack_events` | Count of allowlisted attack-category events (confirmed + suspect) for this event's `source_ip` in the window. `0` when the IP is clean or unset. |
+| `ip_recent_distinct_targets` | Distinct user accounts those suspect-category events named. One person fumbling their own password scores `1`; a stuffing run scores many. |
+| `ip_recent_distinct_devices` | Distinct pre-existing `BouncerSignal.muid`s seen behind the IP — a NAT/office egress scores high. **`None`** when the deployment has no bouncer telemetry, and `check_rule()` treats `None` as no-match, so a rule on this field fails **closed**. |
+
+```python
+# Block only an address that has been at it a while AND is spraying accounts,
+# and is not obviously a shared office egress.
+rs = RuleSet.objects.create(
+    category="invalid_password",
+    name="Credential stuffing — sustained and broad",
+    bundle_by=BundleBy.SOURCE_IP,
+    bundle_minutes=60,
+    match_by=MatchBy.ALL,
+    handler="block://?ttl=3600",
+    trigger_count=5, trigger_window=60,
+)
+Rule.objects.create(parent=rs, index=0, field_name="ip_recent_attack_events",
+                    comparator=">=", value="25", value_type="int")
+Rule.objects.create(parent=rs, index=1, field_name="ip_recent_distinct_targets",
+                    comparator=">=", value="10", value_type="int")
+```
+
+**No default RuleSet ships using these fields, and that is deliberate.** Each is
+a database aggregate evaluated on the event publish path; a shipped default
+would put that cost on every event in every deployment. Opt in when your traffic
+justifies it, and pair the fields with a `trigger_count` so the aggregate is not
+the only gate.
+
+The three values are computed together and memoised on the event instance
+(`Event._ip_stats`) — `check_by_category()` walks every RuleSet in a category, so
+one event can read a field many times, and without the memo each read would be a
+fresh query.
 
 ### Bundling
 
@@ -862,6 +910,21 @@ The incident system and `GeoLocatedIP` form a feedback loop:
 2. **Incidents escalate threat levels**: `GeoLocatedIP.update_threat_from_incident(priority)` is called when incidents are created. This escalates `threat_level` (never downgrades). It does not auto-block — blocking is handled by the rule engine (`block://` handlers) which has full context on conditions and TTLs.
 3. **GeoLocatedIP data feeds rules**: Rules can match on `risk_score`, `is_tor`, `is_vpn`, `threat_level`, `country_code` — any GeoIP field that ends up in event metadata.
 4. **Block/unblock flows through GeoLocatedIP**: The `block://` handler and admin actions both go through `GeoLocatedIP.block()`, ensuring a single code path for DB updates and fleet broadcasts.
+5. **Events decide `is_known_attacker` / `is_known_abuser`**: `check_threats()` reads `incident.Event` rows for the address. Only categories on the two attacker allowlists count, and only inside a 24-hour window — a `rest_error` from a server bug, a permission denial, or the bouncer's own block decision counts toward **nothing**. See [Threat Intelligence](../account/geoip.md#threat-intelligence).
+6. **Escalation decays**: because steps 2 and 4 only ratchet up, the incident app runs a daily `recheck_active_threats` cron that re-scores recently-active addresses and lets a lower recomputed `threat_level` replace the stored one.
+
+Two consequences worth keeping in mind when adding a new event category:
+
+- A new category is **not** attack evidence until someone adds it to
+  `GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_CATEGORIES` or
+  `..._SUSPECT_CATEGORIES`. Raising an event's `level` no longer makes it count.
+  This is the intended failure direction — new categories are far more often
+  operational noise than attacks.
+- If you report an event about a specific account, report it from the
+  **instance** (`user.report_incident(...)`), not the class. Instance reporting
+  stamps `model_name`/`model_id`, and the distinct-account breadth gate — the
+  thing that separates a stuffing run from one locked-out user — can only see
+  events that name an account.
 
 See [GeoIP](../account/geoip.md) for the full model reference.
 
@@ -973,6 +1036,14 @@ RuleSet.objects.create(
 | `INCIDENT_EVENT_METRICS` | — | Enable metrics recording for events and incidents |
 | `INCIDENT_METRICS_MIN_GRANULARITY` | `"hours"` | Granularity for incident metrics |
 | `FIREWALL_BLOCKED_IPSET_NAME` | `"mojo_blocked"` | Name of the kernel ipset used for permanent IP blocks. Change only if you have a naming conflict with an existing ipset. |
+| `GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS` | `24` | Window the `ip_recent_*` rule fields and the `is_known_attacker` / `is_known_abuser` predicates count over |
+| `GEOLOCATION_RECHECK_THREATS_MAX` | `500` | Rows the daily `recheck_active_threats` decay cron processes |
+
+The rest of the `GEOLOCATION_INTERNAL_*` family (the attacker allowlists, the
+breadth gate, the shared-egress suppressor, the dry-run switch) is documented in
+[account/geoip.md](../account/geoip.md#threat-intelligence). All of them are
+re-read on every call, so a DB-backed `Setting` retunes detection without a
+restart.
 
 ---
 

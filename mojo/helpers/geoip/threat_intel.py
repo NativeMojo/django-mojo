@@ -3,34 +3,301 @@ Threat Intelligence module for checking IPs against various blocklists and
 internal incident data.
 """
 import requests
+from objict import objict
 from mojo.helpers.settings import settings
 from mojo.helpers import dates, logit
 
-# Threat checking settings
+# ---------------------------------------------------------------------------
+# Detection defaults.
+#
+# Every name in this block is the DEFAULT for the matching GEOLOCATION_*
+# setting, NOT the live value. _config() re-reads each one through
+# settings.get() on every call, so a deployment can retune detection from the
+# DB-backed Setting store with no code change and no restart — "each system
+# tunes its own rules". get_static() (what this module used to call) reads
+# file-based settings only and freezes the value at import time, which is why
+# nothing here was tunable before.
+#
+# A file-based setting of the same name still wins over the default below; the
+# DB-backed row wins over both.
+# ---------------------------------------------------------------------------
 ENABLE_BLOCKLIST_CHECK = settings.get_static('GEOLOCATION_ENABLE_BLOCKLIST_CHECK', True)
 ENABLE_INTERNAL_THREAT_CHECK = settings.get_static('GEOLOCATION_ENABLE_INTERNAL_THREAT_CHECK', True)
-INTERNAL_THREAT_LOOKBACK_DAYS = settings.get_static('GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS', 90)
-INTERNAL_THREAT_EVENT_THRESHOLD = settings.get_static('GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD', 5)
-INTERNAL_ATTACKER_LEVEL_THRESHOLD = settings.get_static('GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD', 8)
 
-# Event categories excluded from the "known attacker" high-severity count.
+# Display-only stat window: total_events, avg_level, top_categories and
+# last_seen_event are reported over this many days because the admin UI wants
+# the long view. It drives NO boolean — see INTERNAL_THREAT_WINDOW_HOURS.
+INTERNAL_THREAT_LOOKBACK_DAYS = settings.get_static('GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS', 90)
+
+# Predicate window. is_known_attacker / is_known_abuser answer "is this address
+# hostile RIGHT NOW", and the enforcement they feed is measured in minutes. The
+# old 90-day count answered "has anything ever gone wrong here", which on a
+# shared egress is always yes. 24h still spans a slow stuffing run pacing under
+# the rate limits, and lets an address rehabilitate in a day.
+INTERNAL_THREAT_WINDOW_HOURS = settings.get_static('GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS', 24)
+
+# Deprecated. Retained so an existing import does not break; no longer read by
+# any predicate (the attacker tiers and the abuser check carry their own
+# thresholds).
+INTERNAL_THREAT_EVENT_THRESHOLD = settings.get_static('GEOLOCATION_INTERNAL_THREAT_EVENT_THRESHOLD', 5)
+
+# Secondary severity floor, CONFIRMED TIER ONLY. The confirmed categories are
+# already unambiguous by name, so this only exists to let an operator tighten.
+# Default is 7, not 8, because `sensitive_field_probe` is emitted at exactly 7
+# (mojo/models/rest.py) — a floor of 8 would silently make a third of the
+# shipped confirmed list inert.
+INTERNAL_ATTACKER_LEVEL_THRESHOLD = settings.get_static('GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD', 7)
+
+# --- Tier 1: CONFIRMED -----------------------------------------------------
+# Unambiguous. No legitimate user produces these: a honeypot field is invisible
+# to a human, a campaign signature is a cross-device correlation, and a
+# sensitive-field probe is a deliberate attempt to filter on a column the model
+# declares off-limits. A handful is enough.
+INTERNAL_ATTACKER_CONFIRMED_CATEGORIES = settings.get_static(
+    'GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_CATEGORIES',
+    ['security:bouncer:honeypot_post',
+     'security:bouncer:campaign',
+     'sensitive_field_probe'])
+INTERNAL_ATTACKER_CONFIRMED_THRESHOLD = settings.get_static(
+    'GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_THRESHOLD', 3)
+
+# --- Tier 2: SUSPECT -------------------------------------------------------
+# Ambiguous. A real user CAN produce one of these by fumbling a credential, so
+# volume alone proves nothing — the tier also requires BREADTH (attempts spread
+# across many distinct accounts) and is suppressed behind a shared egress.
 #
-# These are user-error / account-enumeration events (a mistyped username, a
-# password reset for an address that was never registered) that the auth code
-# reports at level 8 — the same level as a genuine attack. On a shared NAT,
-# CGNAT, or corporate egress a single address fronts hundreds of legitimate
-# users, so a handful of typos over the 90-day window would otherwise brand
-# that address a known attacker and feed the bouncer's scoring for everyone
-# behind it.
-#
-# Tradeoff: genuine credential stuffing from one address no longer trips
-# is_known_attacker on these categories alone. It still shows up in
-# total_events, avg_level, top_categories, and is_known_abuser, all of which
-# deliberately keep counting every event.
+# `invalid_password` is here despite being reported at level 5: it is the
+# strongest credential-stuffing signal in the codebase and was invisible to the
+# old level-8 floor. For this tier the category allowlist REPLACES the level
+# floor — an attack category's severity is a reporting decision, not evidence.
+INTERNAL_ATTACKER_SUSPECT_CATEGORIES = settings.get_static(
+    'GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_CATEGORIES',
+    ['login:unknown', 'reset:unknown', 'magic:unknown',
+     'totp:login_unknown', 'sms:login_unknown', 'token:unknown',
+     'invalid_password'])
+INTERNAL_ATTACKER_SUSPECT_THRESHOLD = settings.get_static(
+    'GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_THRESHOLD', 25)
+# Breadth gate: how many DISTINCT accounts the suspect events must target. One
+# user fumbling their own password hits exactly one. Spraying hits many.
+INTERNAL_ATTACKER_MIN_TARGETS = settings.get_static(
+    'GEOLOCATION_INTERNAL_ATTACKER_MIN_TARGETS', 10)
+
+# --- Shared-egress suppressor ---------------------------------------------
+# BouncerSignal.muid is a server-set HttpOnly cookie present pre-auth, so JS
+# cannot forge it. An address fronting this many independent browsers inside
+# the window is a NAT/CGNAT/corporate egress, not one attacker — suppress the
+# SUSPECT tier there. Never the confirmed tier.
+INTERNAL_SHARED_EGRESS_MIN_DEVICES = settings.get_static(
+    'GEOLOCATION_INTERNAL_SHARED_EGRESS_MIN_DEVICES', 25)
+
+# --- Abuser ----------------------------------------------------------------
+# Every rate_limit:* event is deduped to one per key+IP per 60s in Redis
+# (mojo/decorators/limits.py), so each event is roughly one minute spent over a
+# limit. 60 of them is an hour of the day sustained over the limits — a real
+# abuse pattern, unlike the old "has this IP ever used the API" count.
+INTERNAL_ABUSER_CATEGORY_PREFIX = settings.get_static(
+    'GEOLOCATION_INTERNAL_ABUSER_CATEGORY_PREFIX', 'rate_limit:')
+INTERNAL_ABUSER_EVENT_THRESHOLD = settings.get_static(
+    'GEOLOCATION_INTERNAL_ABUSER_EVENT_THRESHOLD', 60)
+
+# --- Dry run ---------------------------------------------------------------
+# When true, compute the verdict and log it (with the counts that drove it) but
+# always return False/False. Lets a busy deployment watch a week of real
+# traffic before anything can act on a retune.
+INTERNAL_THREAT_DRY_RUN = settings.get_static('GEOLOCATION_INTERNAL_THREAT_DRY_RUN', False)
+
+# DEPRECATED denylist. Default is None (= unset) so "a deployment configured
+# this" is distinguishable from "we shipped it". Still honored when set: the
+# named categories are subtracted from both allowlists. The denylist shape was
+# structurally wrong — every NEW level-8+ category silently became attack
+# evidence, which is how `magic:unknown` and then `rest_error` (level 12, fired
+# by ANY unhandled 500 and attributed to the client's IP) became "attacks".
 INTERNAL_ATTACKER_EXCLUDED_CATEGORIES = settings.get_static(
-    'GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES',
-    ['login:unknown', 'reset:unknown', 'totp:login_unknown',
-     'sms:login_unknown', 'token:unknown'])
+    'GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES', None)
+
+# model_name values that mean "this event targeted a user account". Instance
+# reporting (User.report_incident) stamps the app-qualified form; class-level
+# reporting (User.class_report_incident, used by login:unknown) stamps the bare
+# class name and no model_id at all — an event with no model_id is not a
+# target, which is why a username-enumeration burst can never satisfy the
+# breadth gate on its own.
+ATTACK_TARGET_MODEL_NAMES = ('account.User', 'User')
+
+_DEPRECATION_WARNED = False
+
+
+def _config():
+    """Read every detection threshold at call time.
+
+    DB-backed Setting rows win, then file-based settings, then the module
+    default bound above. Reading the module attribute as the default is what
+    keeps `mock.patch.object(threat_intel, "X", ...)` working: _config()
+    resolves the global at call time, and an unset setting falls through to it.
+    """
+    global _DEPRECATION_WARNED
+
+    excluded = settings.get(
+        'GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES',
+        INTERNAL_ATTACKER_EXCLUDED_CATEGORIES, kind="list")
+    if excluded and not _DEPRECATION_WARNED:
+        _DEPRECATION_WARNED = True
+        logit.warning(
+            "geoip",
+            "GEOLOCATION_INTERNAL_ATTACKER_EXCLUDED_CATEGORIES is deprecated: "
+            "attacker detection is now a two-tier allowlist "
+            "(GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_CATEGORIES / "
+            "..._SUSPECT_CATEGORIES) and everything unnamed already counts for "
+            f"nothing. Still honoring the exclusion of {list(excluded)!r}; "
+            "remove the setting and edit the allowlists instead.")
+
+    return objict(
+        enabled=settings.get('GEOLOCATION_ENABLE_INTERNAL_THREAT_CHECK',
+                             ENABLE_INTERNAL_THREAT_CHECK, kind="bool"),
+        lookback_days=settings.get('GEOLOCATION_INTERNAL_THREAT_LOOKBACK_DAYS',
+                                   INTERNAL_THREAT_LOOKBACK_DAYS, kind="int"),
+        window_hours=settings.get('GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS',
+                                  INTERNAL_THREAT_WINDOW_HOURS, kind="int"),
+        attacker_level_threshold=settings.get(
+            'GEOLOCATION_INTERNAL_ATTACKER_LEVEL_THRESHOLD',
+            INTERNAL_ATTACKER_LEVEL_THRESHOLD, kind="int"),
+        confirmed_categories=settings.get(
+            'GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_CATEGORIES',
+            INTERNAL_ATTACKER_CONFIRMED_CATEGORIES, kind="list"),
+        confirmed_threshold=settings.get(
+            'GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_THRESHOLD',
+            INTERNAL_ATTACKER_CONFIRMED_THRESHOLD, kind="int"),
+        suspect_categories=settings.get(
+            'GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_CATEGORIES',
+            INTERNAL_ATTACKER_SUSPECT_CATEGORIES, kind="list"),
+        suspect_threshold=settings.get(
+            'GEOLOCATION_INTERNAL_ATTACKER_SUSPECT_THRESHOLD',
+            INTERNAL_ATTACKER_SUSPECT_THRESHOLD, kind="int"),
+        min_targets=settings.get('GEOLOCATION_INTERNAL_ATTACKER_MIN_TARGETS',
+                                 INTERNAL_ATTACKER_MIN_TARGETS, kind="int"),
+        shared_egress_min_devices=settings.get(
+            'GEOLOCATION_INTERNAL_SHARED_EGRESS_MIN_DEVICES',
+            INTERNAL_SHARED_EGRESS_MIN_DEVICES, kind="int"),
+        abuser_prefix=settings.get('GEOLOCATION_INTERNAL_ABUSER_CATEGORY_PREFIX',
+                                   INTERNAL_ABUSER_CATEGORY_PREFIX),
+        abuser_threshold=settings.get('GEOLOCATION_INTERNAL_ABUSER_EVENT_THRESHOLD',
+                                      INTERNAL_ABUSER_EVENT_THRESHOLD, kind="int"),
+        dry_run=settings.get('GEOLOCATION_INTERNAL_THREAT_DRY_RUN',
+                             INTERNAL_THREAT_DRY_RUN, kind="bool"),
+        excluded_categories=list(excluded or []),
+    )
+
+
+def _allowlists(cfg):
+    """The two category tiers with any deprecated exclusions removed."""
+    excluded = set(cfg.excluded_categories or [])
+    confirmed = [c for c in (cfg.confirmed_categories or []) if c not in excluded]
+    suspect = [c for c in (cfg.suspect_categories or []) if c not in excluded]
+    return confirmed, suspect
+
+
+def _distinct_devices(ip_address, window_start):
+    """DISTINCT muids seen behind this IP inside the window, or None.
+
+    None means "no answer" — the deployment does not run the bouncer JS, or the
+    account app is unavailable. Callers must treat None as "cannot tell" and
+    never as zero.
+
+    Only muids whose BouncerDevice.first_seen predates the window are counted,
+    so an attacker cycling fresh muids on one address cannot manufacture a fake
+    NAT and suppress their own detection.
+    """
+    try:
+        from mojo.apps.account.models.bouncer_signal import BouncerSignal
+        from mojo.apps.account.models.bouncer_device import BouncerDevice
+
+        seen = (BouncerSignal.objects
+                .filter(ip_address=ip_address, created__gte=window_start)
+                .exclude(muid='')
+                .order_by()
+                .values_list('muid', flat=True))
+        if not seen.exists():
+            # No bouncer telemetry at all for this address — skip the
+            # suppressor entirely rather than defaulting either way.
+            return None
+        # muid is unique on BouncerDevice, so counting devices IS counting
+        # distinct qualifying muids.
+        return BouncerDevice.objects.filter(
+            muid__in=seen, first_seen__lt=window_start).count()
+    except Exception as e:
+        logit.exception("geoip",
+                        f"shared-egress device count failed for {ip_address}: {e}")
+        return None
+
+
+def _window_stats(ip_address, cfg):
+    """Attack-activity counters for one IP inside the predicate window.
+
+    Pure counting — no verdict. check_internal_threats() applies the
+    predicates; Event exposes the same numbers as rule-matchable properties.
+    """
+    from datetime import timedelta
+    from mojo.apps.incident.models.event import Event
+
+    window_start = dates.utcnow() - timedelta(hours=cfg.window_hours)
+    confirmed_cats, suspect_cats = _allowlists(cfg)
+
+    recent = Event.objects.filter(source_ip=ip_address, created__gte=window_start)
+
+    confirmed_events = 0
+    if confirmed_cats:
+        confirmed_events = recent.filter(
+            category__in=confirmed_cats,
+            level__gte=cfg.attacker_level_threshold).count()
+
+    suspect_events = 0
+    distinct_targets = 0
+    if suspect_cats:
+        suspect_qs = recent.filter(category__in=suspect_cats)
+        suspect_events = suspect_qs.count()
+        if suspect_events:
+            distinct_targets = (suspect_qs
+                                .filter(model_name__in=ATTACK_TARGET_MODEL_NAMES,
+                                        model_id__isnull=False)
+                                .order_by()
+                                .values('model_id')
+                                .distinct()
+                                .count())
+
+    abuse_events = 0
+    if cfg.abuser_prefix:
+        abuse_events = recent.filter(category__startswith=cfg.abuser_prefix).count()
+
+    return objict(
+        window_start=window_start,
+        window_hours=cfg.window_hours,
+        confirmed_events=confirmed_events,
+        suspect_events=suspect_events,
+        attack_events=confirmed_events + suspect_events,
+        distinct_targets=distinct_targets,
+        abuse_events=abuse_events,
+    )
+
+
+def ip_activity_stats(ip_address):
+    """Window-scoped attack counters for an IP, safe to call from any path.
+
+    Backs the Event.ip_recent_* properties so an operator can write incident
+    rules against a rate instead of a single event. Never raises: a failure
+    yields zeros and a None device count (both of which fail a rule closed).
+    """
+    blank = objict(confirmed_events=0, suspect_events=0, attack_events=0,
+                   distinct_targets=0, abuse_events=0, distinct_devices=None,
+                   window_hours=INTERNAL_THREAT_WINDOW_HOURS)
+    if not ip_address:
+        return blank
+    try:
+        cfg = _config()
+        stats = _window_stats(ip_address, cfg)
+        stats.distinct_devices = _distinct_devices(ip_address, stats.window_start)
+        return stats
+    except Exception as e:
+        logit.exception("geoip", f"ip_activity_stats failed for {ip_address}: {e}")
+        return blank
 
 
 def _get_blocklist_config():
@@ -55,8 +322,23 @@ def check_internal_threats(ip_address):
     """
     Check internal incident database for threats from this IP.
     Returns dict with is_known_attacker, is_known_abuser, and stats.
+
+    is_known_attacker is a two-tier ALLOWLIST verdict over a short window:
+
+      * CONFIRMED — a few events in a category no legitimate user can produce.
+      * SUSPECT   — many events in a category a real user CAN produce, spread
+                    across many distinct accounts, from an address that is not
+                    a shared egress.
+
+    Anything not named in either tier counts toward NOTHING. That is deliberate
+    and is the point of the rewrite: an allowlist cannot be silently widened by
+    a new category, and — critically — the bouncer's own decisions
+    (security:bouncer:block, :session_*) are not evidence, which breaks the
+    self-confirming loop where a block raised the score that produced the next
+    block.
     """
-    if not ENABLE_INTERNAL_THREAT_CHECK:
+    cfg = _config()
+    if not cfg.enabled:
         return {
             'is_known_attacker': False,
             'is_known_abuser': False,
@@ -71,9 +353,10 @@ def check_internal_threats(ip_address):
         # with UnboundLocalError inside the blanket except.
         from django.db import models
 
-        lookback_date = dates.utcnow() - timedelta(days=INTERNAL_THREAT_LOOKBACK_DAYS)
+        lookback_date = dates.utcnow() - timedelta(days=cfg.lookback_days)
 
-        # Get all events from this IP in the lookback period
+        # Display-only history. These stats feed the admin UI over the long
+        # window; none of them drives a boolean any more.
         events = Event.objects.filter(
             source_ip=ip_address,
             created__gte=lookback_date
@@ -88,13 +371,6 @@ def check_internal_threats(ip_address):
                 'internal_stats': {'total_events': 0}
             }
 
-        # Calculate threat metrics. The attacker count — and ONLY that count —
-        # drops the enumeration/typo categories (see
-        # INTERNAL_ATTACKER_EXCLUDED_CATEGORIES above).
-        high_sev = events.filter(level__gte=INTERNAL_ATTACKER_LEVEL_THRESHOLD)
-        if INTERNAL_ATTACKER_EXCLUDED_CATEGORIES:
-            high_sev = high_sev.exclude(category__in=INTERNAL_ATTACKER_EXCLUDED_CATEGORIES)
-        high_severity_events = high_sev.count()
         avg_level = events.aggregate(avg_level=models.Avg('level'))['avg_level'] or 0
 
         # Get category breakdown
@@ -105,24 +381,66 @@ def check_internal_threats(ip_address):
         # Get most recent event
         recent_event = events.order_by('-created').first()
 
-        # Determine if known attacker (high severity events)
-        is_known_attacker = high_severity_events >= INTERNAL_THREAT_EVENT_THRESHOLD
+        # --- predicates: short window, allowlisted categories only ---------
+        window = _window_stats(ip_address, cfg)
 
-        # Determine if known abuser (lots of low-medium events)
-        is_known_abuser = (
-            total_events >= INTERNAL_THREAT_EVENT_THRESHOLD * 2 and
-            avg_level < INTERNAL_ATTACKER_LEVEL_THRESHOLD and
-            avg_level >= 4  # Warning level
-        )
+        is_confirmed = window.confirmed_events >= cfg.confirmed_threshold
+        is_suspect = (window.suspect_events >= cfg.suspect_threshold and
+                      window.distinct_targets >= cfg.min_targets)
+
+        # Shared-egress suppressor. Suspect tier ONLY — a confirmed attacker
+        # behind a corporate NAT is still an attacker.
+        distinct_devices = None
+        suppressed = False
+        if is_suspect and not is_confirmed:
+            distinct_devices = _distinct_devices(ip_address, window.window_start)
+            if (distinct_devices is not None and
+                    distinct_devices >= cfg.shared_egress_min_devices):
+                is_suspect = False
+                suppressed = True
+
+        is_known_attacker = bool(is_confirmed or is_suspect)
+        is_known_abuser = window.abuse_events >= cfg.abuser_threshold
 
         stats = {
             'total_events': total_events,
-            'high_severity_events': high_severity_events,
+            # Attack evidence inside the predicate window. Kept under the old
+            # key because recalculate_threat_level() scores it.
+            'high_severity_events': window.attack_events,
+            'confirmed_events': window.confirmed_events,
+            'suspect_events': window.suspect_events,
+            'distinct_targets': window.distinct_targets,
+            'distinct_devices': distinct_devices,
+            'shared_egress_suppressed': suppressed,
+            'abuse_events': window.abuse_events,
             'avg_level': round(avg_level, 2),
             'top_categories': list(category_counts),
             'last_seen_event': recent_event.created.isoformat() if recent_event else None,
-            'lookback_days': INTERNAL_THREAT_LOOKBACK_DAYS
+            'lookback_days': cfg.lookback_days,
+            'window_hours': cfg.window_hours,
         }
+
+        if cfg.dry_run:
+            # Compute everything, act on nothing. Lets a busy deployment watch
+            # a week of real traffic before a retune can block anyone.
+            stats['dry_run'] = True
+            stats['dry_run_is_known_attacker'] = is_known_attacker
+            stats['dry_run_is_known_abuser'] = is_known_abuser
+            logit.info(
+                "geoip",
+                f"[dry-run] internal threat verdict for {ip_address}: "
+                f"attacker={is_known_attacker} abuser={is_known_abuser} "
+                f"confirmed={window.confirmed_events}/{cfg.confirmed_threshold} "
+                f"suspect={window.suspect_events}/{cfg.suspect_threshold} "
+                f"targets={window.distinct_targets}/{cfg.min_targets} "
+                f"devices={distinct_devices} suppressed={suppressed} "
+                f"abuse={window.abuse_events}/{cfg.abuser_threshold} "
+                f"window={cfg.window_hours}h — returning False/False")
+            return {
+                'is_known_attacker': False,
+                'is_known_abuser': False,
+                'internal_stats': stats
+            }
 
         return {
             'is_known_attacker': is_known_attacker,
@@ -230,7 +548,8 @@ def check_all_blocklists(ip_address):
     Check IP against all enabled blocklists.
     Returns aggregated results.
     """
-    if not ENABLE_BLOCKLIST_CHECK:
+    if not settings.get('GEOLOCATION_ENABLE_BLOCKLIST_CHECK',
+                        ENABLE_BLOCKLIST_CHECK, kind="bool"):
         return {
             'blocklist_hits': [],
             'is_blocklisted': False
