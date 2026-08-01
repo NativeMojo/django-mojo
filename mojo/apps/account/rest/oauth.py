@@ -106,6 +106,19 @@ def _validate_redirect_uri(request, redirect_uri):
     extending it in place would append the group's entries to the deployment's
     global setting — permanently, and growing on every request.
 
+    The per-group source now gets the SAME coercion, via
+    `redirect_allowlist.coerce_entries`. `group.metadata["allowed_redirect_urls"]`
+    is a free-form JSONField that never passes through `settings.get`, so before
+    it was read with a bare `list(value)`: a bare string char-exploded (each
+    character an unusable entry the matcher dropped — a silently-dead allowlist)
+    and a truthy non-iterable (`5`, `True`) raised `TypeError`, which surfaced as
+    a 500 on this public, anonymously-selectable endpoint. `coerce_entries`
+    applies the `kind="list"` rules instead — string-as-one-entry, JSON array,
+    comma list — and DROPS any non-coercible value (int/bool/float/dict) as an
+    unusable source, which is what removes the 500. A dict value's keys no longer
+    act as entries. The outer `if value:` guard is kept, so a falsy value
+    (`None`/`""`/`[]`/`{}`) never reaches the coercion and never signals.
+
     Raises ValueException (400) if the URI is not on the allowlist or if no
     allowlist is configured at all.
     """
@@ -117,11 +130,17 @@ def _validate_redirect_uri(request, redirect_uri):
     if group:
         value = group.get_metadata_value("allowed_redirect_urls")
         if value:
-            # `list(value)` intentionally preserves the pre-existing shape: a
-            # bare-string value char-explodes (each char is an unusable entry the
-            # matcher drops) and a non-iterable raises — UNCHANGED here, fixed
-            # separately in #1103.
-            group_entries = list(value)
+            # Coerce the free-form JSONField value with the SAME `kind="list"`
+            # semantics the deployment list gets from `settings.get`: a bare
+            # string becomes the single entry it spells (a comma string → the
+            # list it spells), a JSON-array string becomes that array, and any
+            # non-list value (int/bool/float/dict) is dropped as an unusable
+            # source. Dropping the non-list case is what removes the old
+            # `list(5)` `TypeError` that 500'd this public endpoint, and the
+            # coercion is what stops a bare string char-shattering into dead
+            # single-character entries. See `redirect_allowlist.coerce_entries`.
+            group_entries = redirect_allowlist.coerce_entries(
+                value, source=f"group:{getattr(group, 'pk', None)}")
 
     if not deployment and not group_entries:
         raise merrors.ValueException(

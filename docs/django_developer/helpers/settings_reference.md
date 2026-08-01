@@ -43,7 +43,11 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   Empty (or unset) refuses any `redirect_uri` outright. **Not the only source**: the group this request
   resolved (`?group=` / `?group_uuid=`) contributes its own
   `Group.metadata["allowed_redirect_urls"]`, inherited up the parent chain, so
-  the effective allowlist is this setting plus that tenant-writable list. Read
+  the effective allowlist is this setting plus that tenant-writable list. That
+  per-group value is coerced by the **same** `kind="list"` rules
+  (`redirect_allowlist.coerce_entries`), so a bare string is the single entry it
+  spells and a non-list value (int / bool / float / dict — an object's keys are
+  **not** entries) is dropped as unusable. Read
   through `settings.get` with `kind="list"`, so a **global** `Setting` row works
   — it holds text, and both a JSON array and a comma-separated string are
   coerced correctly. A group-scoped `Setting` row is never consulted (per-group

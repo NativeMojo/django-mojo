@@ -1,5 +1,36 @@
 ## Unreleased
 
+**fix (account)** — **the per-group OAuth redirect-allowlist source is now
+coerced with the same `kind="list"` rules as the deployment setting, fixing a 500
+on the public `/begin`.** `_validate_redirect_uri` read the deployment list via
+`settings.get(kind="list")`, but the group source
+(`group.metadata["allowed_redirect_urls"]`, a free-form JSONField) got a bare
+`list(value)`. Two failures followed: a truthy non-iterable (`5`, `True`) raised
+`TypeError: '…' object is not iterable` → a **500 on the public, anonymously
+selectable endpoint** (the group is chosen by `?group=` / `?group_uuid=`, so one
+anonymous request drove it); and a bare string char-shattered into
+single-character entries the matcher dropped, so a tenant's own landing origin was
+silently refused. Coercion happens on read, via
+`redirect_allowlist.coerce_entries`, mirroring
+`settings._convert_value(kind="list")` exactly — never on write (owner ruling).
+
+- **String-as-one-entry.** A bare string is the single entry it spells
+  (`"https://a.example/"` → `["https://a.example/"]`); a comma-separated string is
+  the list it spells. Write a JSON array when a URL itself contains a comma.
+- **Dict narrowing (behavior change).** A dict value's KEYS **no longer act as
+  entries**. Before, `list({"https://a.example/": true})` yielded the key and
+  allowlisted that host; the value is now dropped as an unusable source. Write a
+  list, not an object.
+- **Fail-closed preserved.** A non-coercible value drops to *no* group entry and
+  the request still validates against `ALLOWED_REDIRECT_URLS` — it never widens
+  the allowlist. A falsy value (`None` / `""` / `[]` / `{}`) is silent; a
+  non-coercible one (int / bool / float / dict, or bracket-wrapped broken JSON)
+  files a new Redis-suppressed, budgeted, fail-closed incident category
+  `auth:redirect_allowlist_tenant_source_unusable` (level 1, 25 sources/hour).
+- **Child shadows ancestor.** `get_metadata_value` returns the first hit walking
+  up the parent chain, so a broken value on a child group hides a good list on an
+  ancestor — fix the value on the group that actually carries it.
+
 **fix (account)** — **the two OAuth redirect-allowlist diagnostics on the public
 `/begin` are now Redis-suppressed incidents, not attacker-amplifiable log
 lines.** The unusable-entry warning (`_warn_unusable_entry`) and the refusal line

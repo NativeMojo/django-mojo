@@ -332,11 +332,37 @@ array (above) and a comma-separated string (`"https://a.example/,https://b.examp
 both work. A **group-scoped** `Setting` row is never consulted for this key —
 per-group entries live in group metadata, not in a scoped setting.
 
-Write the group value as a **list**. A bare string is stored happily (`metadata`
-is a JSONField and nothing coerces it), but it is then spread one character at
-a time into the combined list, where every character is refused as an unusable
-entry — so the tenant silently gets no entry at all rather than the one it
-meant.
+The group value is coerced with the SAME `kind="list"` rules the deployment
+setting gets, through `redirect_allowlist.coerce_entries` — `metadata` is a
+free-form JSONField, so it may hold any of these shapes, but a **JSON array is
+the only one worth writing**:
+
+| `metadata["allowed_redirect_urls"]` | Coerces to | Note |
+|---|---|---|
+| `["https://a.example/", "https://b.example/"]` | those two entries | write this |
+| `"https://a.example/"` | the one entry it spells | a bare string is accepted |
+| `"https://a.example/,https://b.example/"` | both entries | comma-split; use an array if a URL itself contains a comma |
+| `'["https://a.example/"]'` (a JSON-array *string*) | that array | a text value is parsed as JSON |
+| `5`, `true`, `1.5` | *nothing* — dropped as an unusable source | files a level-1 tenant incident |
+| `{"https://a.example/": true}` | *nothing* — an object's KEYS are **not** entries | the narrowing; write a list |
+| `null`, `""`, `[]`, `{}` | *nothing*, silently | indistinguishable from unset |
+
+Two consequences are worth stating, because both were live bugs before the
+coercion:
+
+- **A dict no longer leaks its keys.** The value used to be read with a bare
+  `list(value)`, which on an object yields its KEYS — so
+  `{"https://a.example/": true}` accidentally allowlisted that host. It now
+  contributes nothing; write a JSON array.
+- **A non-list value no longer 500s `begin`.** A number or bool used to reach
+  `list(value)` and raise `TypeError` on this public endpoint (a 500 drivable by
+  one anonymous request); it is now dropped as an unusable source and the request
+  validates against the deployment list as if no group were named.
+
+Because `get_metadata_value()` returns the **first** hit walking UP the parent
+chain, a child group's own `allowed_redirect_urls` **shadows** an ancestor's — a
+broken value on the child hides a good list on the parent. Fix the value on the
+group that actually carries it, not an ancestor.
 
 The bundled hosted auth pages do not exercise this path: `mojo-auth.js` folds
 the page's query string *inside* the encoded `redirect_uri`, so `group_uuid`

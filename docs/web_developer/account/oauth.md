@@ -45,7 +45,7 @@ Steps 3–4 are invisible to your JS — your page still receives `?code=` and `
 
 | Parameter | Description |
 |---|---|
-| `redirect_uri` | Override the default callback URL. Must be on the server's allowlist. Returns `400` if provided but not allowed. It is matched as a **URL** — same scheme, same host (case-insensitive), same port, and a path at or under the allowlisted path on a `/` boundary; the query string is ignored, so you may append your own. Sharing a string prefix with an allowlisted URL is *not* enough, and a path with a `.`/`..` segment (any `%2e` spelling) is refused outright. The allowlist is the server's `ALLOWED_REDIRECT_URLS` **plus** the `allowed_redirect_urls` registered on the group you name — so passing `group_uuid` (or `group`) can admit a landing URL that would 400 without it. |
+| `redirect_uri` | Override the default callback URL. Must be on the server's allowlist. Returns `400` if provided but not allowed. It is matched as a **URL** — same scheme, same host (case-insensitive), same port, and a path at or under the allowlisted path on a `/` boundary; the query string is ignored, so you may append your own. Sharing a string prefix with an allowlisted URL is *not* enough, and a path with a `.`/`..` segment (any `%2e` spelling) is refused outright. The allowlist is the server's `ALLOWED_REDIRECT_URLS` **plus** the `allowed_redirect_urls` registered on the group you name — so passing `group_uuid` (or `group`) can admit a landing URL that would 400 without it. Write that group value as a JSON **array**; a plain string is taken as the single entry it spells, and a number/boolean/object is ignored (see [Registering a landing URL on your group](#registering-a-landing-url-on-your-group)). |
 
 **Response:**
 
@@ -270,6 +270,31 @@ operator can see the host and fix the allowlist without you shipping them a log.
 An **unusable** allowlist entry (one that can never match) is likewise surfaced as
 an event instead of a silent skip.
 
+### Registering a landing URL on your group
+
+If you run a white-label group, you can authorize your own OAuth landing origin
+without a server deploy: set `allowed_redirect_urls` in your group's metadata,
+then pass `group_uuid` (or `group`) on `begin`. A `redirect_uri` is admitted when
+it matches **either** the server's `ALLOWED_REDIRECT_URLS` **or** your group's
+list (inherited up the parent chain).
+
+**Write the value as a JSON array of URL strings:**
+
+```json
+{ "allowed_redirect_urls": ["https://portal.mytenant.example/auth/callback"] }
+```
+
+- A **plain string** is accepted as the single entry it spells
+  (`"https://portal.mytenant.example/"` → that one URL). A **comma-separated**
+  string becomes the list it spells — so use an **array** when a URL itself
+  contains a comma.
+- A **number, boolean, or object is ignored entirely**: the whole per-group list
+  is dropped and your request still validates against the server's
+  `ALLOWED_REDIRECT_URLS`. In particular an object's *keys* are **not** treated as
+  entries — write `["https://…"]`, not `{"https://…": true}`.
+- Each entry is matched as a URL — same scheme, host, port and segment-bounded
+  path prefix as the server list above; a shared string prefix is not enough.
+
 ### Native apps — custom URL schemes
 
 A mobile deep link works as a `redirect_uri`, against an allowlist entry naming
@@ -351,7 +376,7 @@ GitHub Sign In uses the standard redirect flow — identical to Google. Replace 
 |---|---|---|
 | `GOOGLE_SCOPES` | `"openid email profile"` | OAuth scopes requested from Google |
 | `OAUTH_STATE_TTL` | `600` | Seconds a CSRF state token is valid before it expires |
-| `ALLOWED_REDIRECT_URLS` | `[]` | URLs permitted as `redirect_uri` on the `begin` endpoint, matched by scheme + host + port + segment-bounded path prefix (not by string prefix). Combined at request time with the `allowed_redirect_urls` list in the metadata of the group you pass as `group_uuid` / `group` (inherited up its parent chain), so a tenant can register its own landing origin without a server deploy. |
+| `ALLOWED_REDIRECT_URLS` | `[]` | URLs permitted as `redirect_uri` on the `begin` endpoint, matched by scheme + host + port + segment-bounded path prefix (not by string prefix). Combined at request time with the `allowed_redirect_urls` list in the metadata of the group you pass as `group_uuid` / `group` (inherited up its parent chain), so a tenant can register its own landing origin without a server deploy — that group value is coerced by the same list rules (a JSON array, or a plain / comma-separated string), and a non-list value is ignored. |
 | `OAUTH_ALLOW_REGISTRATION` | `True` | Allow new accounts to be created via OAuth. Set to `False` for invite-only or closed deployments — the complete endpoint returns `403` if no existing account matches. |
 
 ---

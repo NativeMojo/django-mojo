@@ -54,6 +54,24 @@ PARENT_URI = "https://tenant-b.example/landing"
 STRING_URI = "https://tenant-c.example/landing"
 STRING_UNRELATED = "https://totally.evil.tld/steal"
 
+# A URL the PINNED deployment list (`["https://example.com/"]`) already admits,
+# used to prove a non-list group value drops to "no group entry" and the request
+# still validates against the deployment list — rather than 500-ing.
+GLOBAL_URI = "https://example.com/landing"
+
+# A group whose metadata value is an OBJECT whose KEY is a URL. The old
+# `list(value)` yielded the dict KEYS, so the key acted as an entry; the
+# coercion drops a dict as an unusable source (the dict-narrowing).
+DICT_ENTRY = "https://tenant-d.example/"
+
+# String FORMS a text-backed `Setting` row would also accept under `kind="list"`:
+# a JSON-array string and a comma-separated string.
+JSON_ARRAY_VALUE = '["https://tenant-e.example/app"]'
+JSON_ARRAY_UNDER = "https://tenant-e.example/app/x"   # a path under the entry
+CSV_VALUE = "https://tenant-f.example/one,https://tenant-f.example/two"
+CSV_ONE = "https://tenant-f.example/one"
+CSV_TWO = "https://tenant-f.example/two"
+
 REFUSAL = "redirect_uri is not on the allowlist"
 
 
@@ -83,12 +101,46 @@ def setup_redirect_allowlist_group_source(opts):
     stringy.metadata = {"allowed_redirect_urls": STRING_URI}
     stringy.save()
 
+    # Non-list values. A JSONField round-trips each JSON type exactly, so these
+    # reach get_metadata_value() as a Python int / bool / dict — the shapes that
+    # used to char-shatter (str) or raise TypeError (int/bool) or leak dict keys.
+    inty = Group.objects.create(name=f"{GROUP_PREFIX}inty", kind="organization")
+    inty.metadata = {"allowed_redirect_urls": 5}
+    inty.save()
+
+    booly = Group.objects.create(name=f"{GROUP_PREFIX}booly", kind="organization")
+    booly.metadata = {"allowed_redirect_urls": True}
+    booly.save()
+
+    dicty = Group.objects.create(name=f"{GROUP_PREFIX}dicty", kind="organization")
+    dicty.metadata = {"allowed_redirect_urls": {DICT_ENTRY: True}}
+    dicty.save()
+
+    # String FORMS the deployment setting would also accept under kind="list".
+    jsonstr = Group.objects.create(name=f"{GROUP_PREFIX}jsonstr", kind="organization")
+    jsonstr.metadata = {"allowed_redirect_urls": JSON_ARRAY_VALUE}
+    jsonstr.save()
+
+    csv = Group.objects.create(name=f"{GROUP_PREFIX}csv", kind="organization")
+    csv.metadata = {"allowed_redirect_urls": CSV_VALUE}
+    csv.save()
+
     # Group.objects.create() leaves uuid=None (it is lazily assigned), and the
     # dispatcher's group_uuid branch would silently no-op against a null uuid.
     opts.tenant_uuid = tenant.get_uuid()
     opts.tenant_id = tenant.pk
     opts.child_uuid = child.get_uuid()
     opts.stringy_uuid = stringy.get_uuid()
+    opts.inty_uuid = inty.get_uuid()
+    opts.inty_pk = inty.pk
+    opts.booly_uuid = booly.get_uuid()
+    opts.booly_pk = booly.pk
+    opts.dicty_uuid = dicty.get_uuid()
+    opts.dicty_pk = dicty.pk
+    opts.jsonstr_uuid = jsonstr.get_uuid()
+    opts.jsonstr_pk = jsonstr.pk
+    opts.csv_uuid = csv.get_uuid()
+    opts.csv_pk = csv.pk
 
 
 def _begin(opts, redirect_uri, group_param=None):
@@ -206,3 +258,150 @@ def test_string_valued_group_metadata_admits_nothing_unrelated(opts):
         _begin(opts, "https://app.example.com/callback",
                f"group_uuid={opts.stringy_uuid}"),
         "a second unrelated host — no single character may act as an entry")
+
+
+@th.django_unit_test("oauth: a STRING-valued group entry admits the URL it spells")
+def test_string_valued_group_metadata_admits_the_url_it_spells(opts):
+    """The coercion turns a bare string into the single entry it spells.
+
+    Before #1103 a bare-string metadata value was `list()`-exploded into single
+    characters, every one an unusable entry — so the tenant's OWN landing origin
+    was refused (a silently-dead allowlist). `coerce_entries` now reads it with
+    the same `kind="list"` rule the deployment setting gets: a bare string is the
+    single entry it spells, so the tenant's own origin is admitted. This FAILS at
+    HEAD (the characters all fail `_split`, so the URL is refused 400).
+    """
+    _assert_admitted(
+        _begin(opts, STRING_URI, f"group_uuid={opts.stringy_uuid}"),
+        "a STRING-valued group entry admits the exact URL it spells")
+    # Fail-closed half: it admits the URL it spells and nothing else.
+    _assert_refused(
+        _begin(opts, STRING_UNRELATED, f"group_uuid={opts.stringy_uuid}"),
+        "an unrelated host against the same STRING-valued group entry")
+
+
+@th.django_unit_test("oauth: a non-list group metadata value cannot 500 the public begin")
+def test_non_list_group_metadata_cannot_break_begin(opts):
+    """A truthy non-iterable metadata value must never crash the public /begin.
+
+    Before #1103 `group_entries = list(value)` on a truthy non-iterable (`5`,
+    `True`) raised `TypeError: 'int'/'bool' object is not iterable`, which the
+    generic error handler turned into a 500 — on the PUBLIC, anonymously
+    selectable `/begin`, drivable by a single anonymous request. `coerce_entries`
+    drops such a value as an unusable source, so the group contributes no entry
+    and the request validates against the deployment list as if no group were
+    named. Both legs 500 at HEAD.
+    """
+    for uuid, label in ((opts.inty_uuid, "an int"), (opts.booly_uuid, "a bool")):
+        refusal = _begin(opts, STRING_UNRELATED, f"group_uuid={uuid}")
+        assert refusal.status_code != 500, (
+            f"{label}-valued group metadata must not 500 /begin — a non-list "
+            f"value used to reach `list(value)` and raise TypeError; got "
+            f"{refusal.status_code}: {refusal.response}")
+        _assert_refused(
+            refusal,
+            f"an unrelated URL with {label}-valued group metadata (no entry)")
+        normal = _begin(opts, GLOBAL_URI, f"group_uuid={uuid}")
+        assert normal.status_code != 500, (
+            f"{label}-valued group metadata must not 500 the normal-flow leg "
+            f"either — same TypeError origin; got {normal.status_code}: "
+            f"{normal.response}")
+        _assert_admitted(
+            normal,
+            f"a deployment-list URL with {label}-valued group metadata beside it")
+
+
+@th.django_unit_test("oauth: a dict-valued group entry contributes no entries (keys are not entries)")
+def test_dict_valued_group_metadata_contributes_no_entries(opts):
+    """The dict narrowing: a dict value's KEYS no longer act as entries.
+
+    Before #1103 `group_entries = list(value)` on a dict yielded its KEYS, so a
+    tenant that wrote `{"https://tenant-d.example/": true}` accidentally
+    allowlisted that host — `list({...})` handed the key straight to the matcher,
+    which admitted a URL under it. `coerce_entries` drops a dict as an unusable
+    source, so the same URL is now refused. This FAILS at HEAD (200 — the key
+    acts as an entry). Write a JSON array, not an object.
+    """
+    _assert_refused(
+        _begin(opts, DICT_ENTRY + "callback", f"group_uuid={opts.dicty_uuid}"),
+        "a URL under a dict metadata value's KEY (keys are not entries)")
+
+
+@th.django_unit_test("oauth: string forms of the group value are coerced like the setting")
+def test_group_metadata_string_forms_are_coerced_like_the_setting(opts):
+    """A JSON-array string and a comma-separated string coerce like the setting.
+
+    A tenant may store the value as a JSON-array string (`'["https://…"]'`) or a
+    comma-separated string, exactly as a text-backed `Setting` row holds
+    `ALLOWED_REDIRECT_URLS`. `coerce_entries` reads both into the list they spell,
+    so their origins are admitted while an unrelated host stays refused. Both
+    forms char-shatter and are refused at HEAD.
+    """
+    # JSON-array string → the array it spells; the entry admits a path under it.
+    _assert_admitted(
+        _begin(opts, JSON_ARRAY_UNDER, f"group_uuid={opts.jsonstr_uuid}"),
+        "a path under the json-array group entry")
+    _assert_refused(
+        _begin(opts, STRING_UNRELATED, f"group_uuid={opts.jsonstr_uuid}"),
+        "an unrelated host against the json-array group")
+    # Comma-separated string → both entries it spells.
+    _assert_admitted(
+        _begin(opts, CSV_ONE, f"group_uuid={opts.csv_uuid}"),
+        "the first entry of the comma-separated group value")
+    _assert_admitted(
+        _begin(opts, CSV_TWO, f"group_uuid={opts.csv_uuid}"),
+        "the second entry of the comma-separated group value")
+    _assert_refused(
+        _begin(opts, STRING_UNRELATED, f"group_uuid={opts.csv_uuid}"),
+        "an unrelated host against the comma-separated group")
+
+
+@th.django_unit_test("oauth: coerce_entries matches the settings kind='list' coercion")
+def test_coerce_entries_matches_the_settings_list_coercion(opts):
+    """`coerce_entries` must not drift from `settings.get(kind="list")`.
+
+    The per-group source needs the SAME coercion the deployment list gets, so a
+    tenant's value behaves identically whether it lands in group metadata or in a
+    text-backed `Setting` row. This pins each shape's output AND asserts it equals
+    the settings helper's own `_convert_value(value, "list", [])` — deliberately
+    reaching a private method, because the whole point is that the two
+    implementations must stay identical. This is a pure in-process check (no
+    server), so it exercises `coerce_entries` directly.
+    """
+    from mojo.apps.account.services import redirect_allowlist
+    from mojo.helpers.settings import settings
+
+    cases = [
+        (["https://a.example/", "https://b.example/"],
+         ["https://a.example/", "https://b.example/"], "a real list passes through"),
+        (["https://a.example/", 5, None],
+         ["https://a.example/", 5, None], "a list with junk members is returned whole"),
+        ([], [], "an empty list is empty"),
+        ('["https://a.example/", "https://b.example/"]',
+         ["https://a.example/", "https://b.example/"], "a JSON-array string parses"),
+        ("https://a.example/,https://b.example/",
+         ["https://a.example/", "https://b.example/"], "a comma string splits"),
+        ("https://a.example/",
+         ["https://a.example/"], "a bare string is the one entry it spells"),
+        ("[bad]", [], "bracket-wrapped broken JSON is an unusable source"),
+        ("", [], "an empty string is empty"),
+        (None, [], "None is empty"),
+        ({}, [], "an empty dict is empty"),
+        (0, [], "zero is empty"),
+        (False, [], "False is empty"),
+        (5, [], "a truthy int is unusable"),
+        (True, [], "a truthy bool is unusable"),
+        (1.5, [], "a float is unusable"),
+        ({"https://a.example/": True}, [], "a dict's keys are not entries"),
+        (("https://a.example/",), [], "a tuple is unusable"),
+    ]
+    for value, expected, why in cases:
+        got = redirect_allowlist.coerce_entries(value, source="test")
+        assert got == expected, (
+            f"coerce_entries({value!r}) should be {expected!r} ({why}), got {got!r}")
+        # Drift pin: reaches a private helper on purpose — coerce_entries and the
+        # settings kind="list" coercion must never diverge.
+        reference = settings._convert_value(value, "list", [], name="ALLOWED_REDIRECT_URLS")
+        assert got == reference, (
+            f"coerce_entries({value!r})={got!r} drifted from settings "
+            f"_convert_value(...)={reference!r} — the two must stay identical")

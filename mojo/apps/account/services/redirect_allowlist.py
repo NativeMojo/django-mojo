@@ -70,6 +70,19 @@ hardening:
     change that tightens everything else would widen an allowlist no operator
     re-consented to).
 
+Coercing a free-form source
+---------------------------
+`ALLOWED_REDIRECT_URLS` reaches the matcher already normalized to a list, because
+it is read through `settings.get(kind="list")`. The per-group source does not:
+`group.metadata["allowed_redirect_urls"]` is a free-form JSONField, so a tenant
+can store a bare string, a JSON-array string, a number, a bool or an object where
+a list belongs. `coerce_entries(value, source=...)` applies the SAME `kind="list"`
+rules to it before it is matched, so the two sources cannot drift — a bare string
+becomes the single entry it spells, a non-list scalar/object is dropped as an
+unusable SOURCE (one suppressed signal, `[]` back), and a falsy value is `[]`
+silently. That is what removes the `list(5)` `TypeError` (a 500 on the public
+`/begin`) and the char-shattering of a bare string, without validating on write.
+
 Static matching rules
 ---------------------
 An entry matches an ``http(s)`` destination when ALL of:
@@ -135,6 +148,8 @@ decides which installed app receives that scheme.
 import re
 from urllib.parse import urlsplit
 
+from objict import objict
+
 from mojo.helpers import logit, modules
 from mojo.helpers.settings import settings
 
@@ -188,6 +203,14 @@ _RENOTIFY_SEC = 3600
 # never-raising. See `docs/django_developer/account/oauth.md` for the table.
 CATEGORY_UNUSABLE_ENTRY = "auth:redirect_allowlist_unusable_entry"
 CATEGORY_TENANT_ENTRY = "auth:redirect_allowlist_tenant_entry_unusable"
+# A tenant SOURCE (the whole `metadata["allowed_redirect_urls"]` value) that
+# cannot be coerced into a list of entries — a non-list JSON scalar/object, or a
+# bracket-wrapped string that is not valid JSON. Distinct from
+# CATEGORY_TENANT_ENTRY, which reports individual list MEMBERS that never match;
+# this reports the source being the wrong SHAPE, so the whole per-group list is
+# dropped. Same low-trust posture (level 1, budgeted, fail-closed). See
+# `coerce_entries` / `_warn_unusable_source`.
+CATEGORY_TENANT_SOURCE = "auth:redirect_allowlist_tenant_source_unusable"
 CATEGORY_REDIRECT_REFUSED = "auth:oauth_redirect_refused"
 
 # At most this many raw entries are quoted in an unusable-entry incident body;
@@ -334,6 +357,99 @@ def matches_allowlist(url, entries, source="allowlist", allow_wildcard=False,
                 "account.redirect_allowlist",
                 f"failed to report unusable {source} entries: {exc}")
     return matched
+
+
+def coerce_entries(value, source="allowlist"):
+    """Coerce a free-form allowlist SOURCE into a list of entries. Never raises.
+
+    Mirrors `settings.SettingsHelper._convert_value(value, "list")` EXACTLY, so
+    the per-group source (`group.metadata["allowed_redirect_urls"]`, a free-form
+    JSONField that never passed through `settings.get`) behaves identically to
+    the deployment list. The two must not drift — a test pins them together.
+
+      * a ``list`` is returned AS-IS, NOT copied. The caller reads FROM the
+        returned list (it hands it to `matches_allowlist`, which never mutates
+        its `entries`), so a copy would be dead work. A list with non-string
+        members is still returned whole: a junk member fails closed in `_split`
+        as an unusable ENTRY (the per-member `matches_allowlist` path), a
+        different and narrower diagnostic than an unusable SOURCE.
+      * a ``str`` wrapped in ``[`` … ``]`` is parsed as JSON; a JSON array is
+        returned, anything else is broken JSON (comma-splitting it would
+        manufacture nonsense entries) → an unusable SOURCE: one signal, ``[]``.
+      * any other ``str`` is comma-split: ``"a,b"`` → ``["a", "b"]`` and
+        ``"https://a/"`` → ``["https://a/"]``, the single entry it spells.
+      * a falsy value (``None``, ``""``, ``[]``, ``{}``, ``0``, ``False``) is
+        ``[]`` SILENTLY — for a self-service field, unset and empty are the same
+        thing and not worth an incident.
+      * anything else — a truthy int, bool, float, dict, tuple, set — is an
+        unusable SOURCE: one signal, ``[]``. In particular a ``dict`` value's
+        KEYS no longer act as entries (the old `list(value)` yielded its keys);
+        write a list.
+
+    `source` names the origin (``group:<pk>``) and is the suppression key of the
+    unusable-SOURCE signal.
+    """
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        if value.startswith("[") and value.endswith("]"):
+            try:
+                parsed = objict.from_json(value)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, list):
+                return parsed
+            # Bracket-wrapped but unparsable: comma-splitting would manufacture
+            # nonsense entries (e.g. '["a"' , ']'), so the whole SOURCE is junk.
+            _warn_unusable_source(source, value)
+            return []
+        return [x.strip() for x in value.split(",") if x.strip()]
+    if not value:
+        # None / "" / [] / {} / 0 / False — indistinguishable from unset for a
+        # self-service field, so no signal.
+        return []
+    _warn_unusable_source(source, value)
+    return []
+
+
+def _warn_unusable_source(source, value):
+    """File a Redis-suppressed incident for a SOURCE that cannot become a list.
+
+    Distinct from `_report_unusable_entries` (which names individual list MEMBERS
+    that never match): this fires when the source VALUE itself is the wrong shape
+    — a non-list JSON scalar/object, or a bracket-wrapped string that is not valid
+    JSON — so the whole per-group list is dropped and the tenant silently gets no
+    entry. Same low-trust posture as the tenant unusable-ENTRY incident: level 1,
+    keyed by `source` (``group:<pk>``), BUDGETED (`_TENANT_BUDGET` distinct
+    sources/hour) and FAIL-CLOSED, because `request.group` is anonymously
+    selectable and `metadata` is `manage_group`-writable. Never raises — the
+    module contract; a broken incident plane must not 500 the public endpoint.
+    """
+    try:
+        from mojo.apps import incident
+
+        body = (
+            f"The tenant redirect allowlist source ({source}) is a "
+            f"{type(value).__name__} ({value!r:.200}) that cannot be read as a "
+            f"list of URLs, so the whole per-group allowlist was dropped and the "
+            f"tenant silently gets no entry. `metadata['allowed_redirect_urls']` "
+            f"is `manage_group`-writable free-form JSON; set it to a JSON array "
+            f"of URL strings.")
+        incident.report_event_suppressed(
+            body,
+            key=source,
+            title=f"Unusable tenant redirect allowlist source: {source}",
+            category=CATEGORY_TENANT_SOURCE,
+            level=1,
+            window=_RENOTIFY_SEC,
+            budget=_TENANT_BUDGET,
+            fail_open=False,
+            allowlist_source=source,
+            value_type=type(value).__name__)
+    except Exception as exc:
+        logit.error(
+            "account.redirect_allowlist",
+            f"failed to report unusable {source} source: {exc}")
 
 
 def _report_unusable_entries(source, samples, total, request=None, tenant=False):
