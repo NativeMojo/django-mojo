@@ -128,23 +128,23 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `BOUNCER_ACCENT_COLOR`
 - `BOUNCER_ALLOWED_ORIGINS` — list of origins allowed to call the bouncer
   endpoints with credentials (`Access-Control-Allow-Credentials: true` plus a
-  specific `Access-Control-Allow-Origin`). Everything else keeps the wildcard
-  fallback, which blocks credentialed flows at the browser. Matched by exact
-  string, so non-http entries such as `capacitor://localhost` are valid.
-  **File-only** (`settings.get_static`).
+  specific `Access-Control-Allow-Origin`). Consulted first and unconditionally,
+  in both origin modes; it is the mechanism that names the permitted origins
+  once `BOUNCER_ALLOW_ANY_ORIGIN` is `False`. Matched by exact string, so
+  non-http entries such as `capacitor://localhost` are valid. **File-only**
+  (`settings.get_static`).
 - `BOUNCER_ALLOW_ANY_ORIGIN` — **file-only** (`settings.get_static`, default
-  `False`). Stops `BOUNCER_ALLOWED_ORIGINS` being consulted on the three public
-  bouncer endpoints (`assess`, `event`, `message`) and echoes any well-formed
-  `http(s)` request `Origin` with credentials instead. **Security caveat:** this
-  hands every website a visitor loads a credentialed channel to those endpoints
-  in that visitor's browser. `verify_pass` and the permission-gated admin
-  endpoints (`device`, `signal`, `signature`) are never covered; `Origin: null`
-  and malformed origins are still refused. Only for multi-tenant deployments
-  whose caller domains are unknowable at deploy time and which validate the
-  calling domain themselves — see
-  [account/bouncer.md](../account/bouncer.md#bouncer_allow_any_origin--when-the-caller-domains-are-unknowable).
+  `True`). By default the three public bouncer endpoints (`assess`, `event`,
+  `message`) echo any well-formed `http(s)` request `Origin` with credentials —
+  this is an open API platform and third-party callers are expected. Set it
+  `False` to restrict those endpoints to `BOUNCER_ALLOWED_ORIGINS`. `verify_pass`
+  and the permission-gated admin endpoints (`device`, `signal`, `signature`) are
+  never covered either way; `Origin: null` and malformed origins are always
+  refused. An uncoercible value degrades to the declared default (`True`), so a
+  typo'd opt-out does not silently take effect. See
+  [account/bouncer.md](../account/bouncer.md#cross-origin-embedding).
   Deliberately not readable from the DB/Redis settings plane, so a `Setting` row
-  cannot arm a CORS bypass at runtime.
+  cannot change the origin policy at runtime.
 - `BOUNCER_CHALLENGE_BRAND`
 - `BOUNCER_CHALLENGE_LOGO_URL`
 - `BOUNCER_CONTACT_PATH`
@@ -161,8 +161,8 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `BOUNCER_LOGO_URL`
 - `BOUNCER_PASS_COOKIE_DOMAIN` — `Domain` attribute for the `mbp` pass cookie
   (e.g. `'.example.com'`), so a subdomain deployment shares it between the app
-  host and the bouncer host. Note it also widens the same-site blast radius of
-  `BOUNCER_ALLOW_ANY_ORIGIN` to every subdomain it covers.
+  host and the bouncer host. It also widens the set of subdomains the cookie
+  rides along on for credentialed same-site calls.
 - `BOUNCER_PASS_COOKIE_TTL`
 - `BOUNCER_PUBLIC_MESSAGE_MAX_LENGTH`
 - `BOUNCER_REGISTER_PATH`

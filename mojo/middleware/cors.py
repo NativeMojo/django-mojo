@@ -10,14 +10,14 @@ _BOUNCER_PREFIXES = (
     '/account/static/mojo-',
 )
 
-# The public, unauthenticated bouncer API. Deliberately NARROWER than
-# _BOUNCER_PREFIXES, because BOUNCER_ALLOW_ANY_ORIGIN must be strictly narrower
-# than an operator-curated allowlist:
+# The public, unauthenticated bouncer API — the paths the any-origin default
+# covers. Deliberately NARROWER than _BOUNCER_PREFIXES:
 #   - device / signal / signature are permission-gated admin endpoints that
 #     return device fingerprints, IPs, muids and geo (rest/bouncer_admin.py).
 #   - verify_pass is the sole carrier of X-Bouncer-Muid (a stable device id) and
 #     exists for nginx auth_request — server-to-server, which ignores CORS. No
 #     browser client calls it, so excluding it costs the feature nothing.
+# Neither exclusion restricts a legitimate third-party caller of the public API.
 _BOUNCER_PUBLIC_ENDPOINTS = frozenset(('assess', 'event', 'message'))
 
 # Never echo a header value carrying these. Django raises BadHeaderError on
@@ -50,16 +50,23 @@ def _is_bouncer_public_path(path):
 def _allow_any_origin():
     """Read BOUNCER_ALLOW_ANY_ORIGIN from file-based settings only.
 
+    Defaults to True. This is an open REST API platform: third-party callers are
+    the product, so credentialed cross-origin access to the public bouncer API is
+    on unless an operator opts OUT. Setting it False is the restriction; leaving
+    it alone is not a grant of anything new.
+
     Never settings.get(): that consults the DB/Redis-backed Setting store, which
     is writable over REST and group-scopable. A database row must not be able to
-    flip a CORS bypass. kind='bool' is the framework's fail-closed coercion — an
-    unrecognized string degrades to the declared default with a warning instead
-    of failing open the way a bare bool() would.
+    flip the origin policy either way. kind='bool' degrades an unrecognized
+    string to the DECLARED default — now True — with a coercion warning.
+
+    The except returns True for the same reason: an exception reading a setting
+    must not silently re-impose a restriction the operator never asked for.
     """
     try:
-        return bool(settings.get_static('BOUNCER_ALLOW_ANY_ORIGIN', False, kind='bool'))
+        return bool(settings.get_static('BOUNCER_ALLOW_ANY_ORIGIN', True, kind='bool'))
     except Exception:
-        return False
+        return True
 
 
 def _is_echoable_origin(origin):
@@ -94,16 +101,20 @@ def _is_echoable_origin(origin):
 def _credentialed_origin(request, allow_any=False):
     """Return the request Origin when it may be echoed with credentials, else ''.
 
-    The allowlist is tested FIRST and unconditionally, so a deployment that has
-    not set BOUNCER_ALLOW_ANY_ORIGIN behaves exactly as it did before the flag
-    existed, and an allowlist entry still wins when the flag is on.
+    The allowlist is tested FIRST and unconditionally. That ordering is what makes
+    BOUNCER_ALLOWED_ORIGINS the opt-out mechanism: it still wins by exact string,
+    so entries that are not well-formed http(s) origins ('chrome-extension://…',
+    'capacitor://localhost') keep working regardless of the flag.
 
-    When the flag is on and `allow_any` is True — public bouncer API paths only —
-    any well-formed http(s) origin is echoed with Access-Control-Allow-Credentials.
-    That gives up origin attribution on those endpoints: every website a visitor
-    loads can drive them inside that visitor's browser. It exists for deployments
-    whose caller domains are not knowable at deploy time and which validate the
-    calling domain themselves.
+    By default (`BOUNCER_ALLOW_ANY_ORIGIN` unset → True) any well-formed http(s)
+    origin is echoed with Access-Control-Allow-Credentials on the public bouncer
+    API paths — `allow_any` is True only for those. Set the flag False to restrict
+    those endpoints to BOUNCER_ALLOWED_ORIGINS.
+
+    Note what this header does and does not carry. mojo REST auth is
+    Authorization-header based and every mojo cookie is SameSite=Lax, so the
+    credentials this permits are not ambient session authority; the public
+    endpoints are already reachable cross-origin through the '*' fallback below.
     """
     origin = request.META.get('HTTP_ORIGIN', '')
     if not origin:
@@ -129,12 +140,12 @@ class CORSMiddleware:
             response = self.get_response(request)
 
         # Bouncer paths: credentialed CORS with specific Origin (browsers
-        # cannot send cookies with Allow-Origin: *), but only if the request
-        # Origin is on the BOUNCER_ALLOWED_ORIGINS allowlist — or, when
-        # BOUNCER_ALLOW_ANY_ORIGIN is enabled, if the path is one of the public
-        # bouncer API endpoints. Non-allowlisted cross-origin requests still get
-        # the wildcard fallback below, which blocks credentialed flows at the
-        # browser but keeps non-credentialed API use working.
+        # cannot send cookies with Allow-Origin: *). Granted when the request
+        # Origin is on the BOUNCER_ALLOWED_ORIGINS allowlist, or — by default,
+        # unless BOUNCER_ALLOW_ANY_ORIGIN is set False — for any well-formed
+        # origin on the public bouncer API endpoints. Anything still not granted
+        # falls through to the wildcard below, which blocks credentialed flows at
+        # the browser but keeps non-credentialed API use working.
         #
         # The public-path test is PATH-based only, never method-based, so the
         # OPTIONS short-circuit above and the real request take the identical

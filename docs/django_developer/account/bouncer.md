@@ -546,7 +546,7 @@ is always empty (nginx `auth_request` discards it).
 |---|---|---|---|
 | A — Same domain | `example.com/protected` | `example.com/auth` | Yes — natural cookie sharing |
 | B — Subdomains | `app.example.com` | `auth.example.com` | Yes — set `BOUNCER_PASS_COOKIE_DOMAIN='.example.com'` |
-| C — Separate eTLD+1 | `marketing.com` | `auth.example.com` | **Token flow only.** With `BOUNCER_ALLOW_ANY_ORIGIN` the credentialed `assess`/`event`/`message` calls work, so `@md.requires_bouncer_token` is usable from a tenant-owned domain. The `mbp` pass cookie still is not: `_set_pass_cookie` uses `samesite='Lax'`, so browsers refuse to store it cross-site and the repeat-visit challenge skip never engages. |
+| C — Separate eTLD+1 | `marketing.com` | `auth.example.com` | **Token flow only.** The credentialed `assess`/`event`/`message` calls work by default (see [Cross-Origin Embedding](#cross-origin-embedding)), so `@md.requires_bouncer_token` is usable from a tenant-owned domain. The `mbp` pass cookie still is not: `_set_pass_cookie` uses `samesite='Lax'`, so browsers refuse to store it cross-site and the repeat-visit challenge skip never engages. |
 
 ### nginx drop-in
 
@@ -559,42 +559,43 @@ exact config.
 
 ## Cross-Origin Embedding
 
-The bouncer endpoints are normally same-origin. To allow a separate origin
-(SPA at `app.example.com` calling bouncer at `auth.example.com`) to call
-the bouncer with credentials, list the SPA origin in `BOUNCER_ALLOWED_ORIGINS`:
+**Credentialed cross-origin access to the public bouncer API is ON by default.**
+This is a REST API platform: anybody can call it, and third-party callers are the
+point. Out of the box the CORS middleware echoes any well-formed `http(s)`
+request `Origin` back with `Access-Control-Allow-Credentials: true` on the three
+public bouncer endpoints, so an SPA or a tenant-owned domain can
+`fetch(..., credentials: 'include')` with no server-side wiring at all.
+
+OPTIONS preflights take the identical decision, so JS clients work without
+ceremony.
+
+### Restricting it: `BOUNCER_ALLOW_ANY_ORIGIN = False`
+
+To limit the public bouncer endpoints to a curated set of origins, opt out:
 
 ```python
+BOUNCER_ALLOW_ANY_ORIGIN = False    # default True
 BOUNCER_ALLOWED_ORIGINS = [
     'https://app.example.com',
     'https://playground.example.com',
 ]
 ```
 
-The CORS middleware sets `Access-Control-Allow-Origin: <origin>` (specific
-origin, not `*`) and `Access-Control-Allow-Credentials: true` only for
-requests whose `Origin` matches the allowlist AND whose path is a bouncer
-path (`/api/account/bouncer/*` or `/account/static/mojo-*`). Non-bouncer
-paths and non-allowlisted origins keep the existing wildcard behavior.
+With the flag `False`, the middleware sets `Access-Control-Allow-Origin: <origin>`
+(specific origin, not `*`) and `Access-Control-Allow-Credentials: true` only for
+requests whose `Origin` matches `BOUNCER_ALLOWED_ORIGINS` AND whose path is a
+bouncer path (`/api/account/bouncer/*` or `/account/static/mojo-*`). Everything
+else keeps the wildcard fallback.
 
-OPTIONS preflights from allowlisted origins return 200 with the same
-credentialed headers, so JS clients can `fetch(..., credentials: 'include')`
-without ceremony.
+The allowlist is consulted **first and unconditionally**, in both modes. It is
+therefore additive under the default and authoritative under the opt-out, and
+entries that are not well-formed http(s) origins — `chrome-extension://…`,
+`capacitor://localhost` — keep working either way, because the well-formedness
+guard applies only to the any-origin echo branch.
 
-### `BOUNCER_ALLOW_ANY_ORIGIN` — when the caller domains are unknowable
+### What the default does and does not cover
 
-`BOUNCER_ALLOWED_ORIGINS` is a deploy-time list. A multi-tenant platform whose
-customers point their own domains at their sites cannot enumerate it: the right
-values are not known when the settings file is written. For that case only:
-
-```python
-BOUNCER_ALLOW_ANY_ORIGIN = True     # default False
-```
-
-When enabled, the request `Origin` is echoed back with
-`Access-Control-Allow-Credentials: true` instead of being tested against the
-allowlist — but **only on the three public bouncer API endpoints**:
-
-| Path | Bypass applies? |
+| Path | Any-origin echo? |
 |---|---|
 | `/api/account/bouncer/assess` | **Yes** |
 | `/api/account/bouncer/event` | **Yes** |
@@ -603,57 +604,45 @@ allowlist — but **only on the three public bouncer API endpoints**:
 | `/api/account/bouncer/device`, `/signal`, `/signature` | No — permission-gated admin endpoints returning fingerprints, IPs, muids and geo |
 | `/account/static/mojo-*` | No — `<script src>` is not a CORS request, and the `*` fallback already serves it |
 
-The bypass is deliberately **strictly narrower** than the allowlist. An operator
-who lists an origin explicitly is making a per-origin decision; the flag is a
-blanket grant, so it must not reach anything the allowlist could.
+Those exclusions are not a restriction on legitimate third-party callers; the
+admin endpoints are permission-gated regardless, and no browser client calls
+`verify_pass`. An operator who lists an origin in `BOUNCER_ALLOWED_ORIGINS` can
+still reach every bouncer path, exactly as before.
 
-Still refused with the flag on:
+Also refused, in both modes:
 
-- `Origin: null` — a sandboxed iframe, `data:` document or `file://` page.
-  Echoing it with credentials would give an unattributable context the same
-  access as a named one.
+- `Origin: null` — a sandboxed iframe, `data:` document or `file://` page. No
+  real client sends it, and it names no origin to attribute the call to.
 - Anything that is not a bare `http(s)://host[:port]` — a path, query, fragment,
   a non-http scheme, or any value carrying CR, LF, tab or a space.
 - `Access-Control-Allow-Origin: *` is never sent together with
-  `Access-Control-Allow-Credentials: true`, before or after this change.
+  `Access-Control-Allow-Credentials: true`.
 
 The flag is read with `settings.get_static(..., kind='bool')` — **file-based
 settings only**. A DB/Redis-backed `Setting` row (writable over REST with
-`manage_settings`) cannot arm it. An uncoercible value such as `"maybe"` fails
-closed to `False` and logs a coercion warning.
+`manage_settings`) cannot change the origin policy at runtime, in either
+direction. An uncoercible value such as `"maybe"` degrades to the declared
+default — which is now `True`, i.e. permissive — and logs a coercion warning, so
+a typo'd opt-out does not silently take effect.
 
-The allowlist is still consulted **first**, so the two are additive rather than
-one shadowing the other: an allowlisted origin is echoed exactly as before, and
-entries that are not well-formed http(s) origins — `chrome-extension://…`,
-`capacitor://localhost` — keep working, because the well-formedness guard only
-applies to the arbitrary-echo branch.
+### What changes when you flip it
 
-Enabling it logs a warning once per worker process at startup, alongside the
-existing `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` notice.
+Setting the flag `False` stops the three public endpoints answering credentialed
+cross-origin requests from origins you have not listed; they keep answering
+non-credentialed ones through the `*` fallback, which is unchanged and has always
+been there. Setting it back to `True` restores the echo.
 
-**What an attacker gains.** With `BOUNCER_ALLOW_ANY_ORIGIN = True`, any website
-a visitor loads can drive the bouncer inside that visitor's browser: it can mint
-bouncer tokens bound to the visitor's IP, burn the visitor's per-IP rate-limit
-budget on `assess`/`event`/`message`, and — from any page that is same-site with
-the bouncer host, such as another tenant's subdomain — read that visitor's own
-risk assessment back, since `assess` returns `decision` and `risk_score` and
-`event` returns a `risk_action` derived from the device's `risk_tier`. That is a
-per-visitor bot-reputation oracle. `BOUNCER_PASS_COOKIE_DOMAIN` widens
-"same-site" to every subdomain it covers. Turning the flag back off is not
-immediate: `Access-Control-Max-Age: 86400` means already-cached preflights keep
-sending credentialed requests for up to 24 hours. Enable it only when your
-application validates the calling domain itself, and prefer
-`BOUNCER_ALLOWED_ORIGINS` whenever the set of domains is knowable.
+Neither direction takes effect instantly for clients that have already
+preflighted: `Access-Control-Max-Age: 86400` means a browser may keep acting on a
+cached preflight decision for up to 24 hours.
 
-Two things the flag does **not** change, so they are not later misattributed to
-it. Every mojo cookie is `SameSite=Lax` and mojo REST auth is header-based
-(`Authorization`, never a cookie), so a genuinely cross-*site* caller sends
-`credentials: 'include'` requests that carry no cookies at all — the flag does
-not let anyone impersonate anyone. And the three public endpoints are already
-reachable and readable cross-origin today via the `*` fallback with
-`credentials: 'omit'`; a simple unpreflighted form POST can already reach them.
-The genuinely new exposure is same-site-different-origin, which is exactly the
-subdomain-tenant case.
+Two things the flag does not affect at all. Mojo REST auth is header-based
+(`Authorization`, never a cookie) and every mojo cookie is `SameSite=Lax`, so a
+cross-*site* caller's `credentials: 'include'` request carries no cookies
+regardless of this setting — in practice the origin check only ever gated whether
+cookies could ride along on same-site-different-origin calls. And the public
+endpoints are reachable cross-origin either way via the `*` fallback with
+`credentials: 'omit'`.
 
 **Identity stitching across origins** — `mojo_device_uid` localStorage is
 per-origin. A static site at `marketing.example.com` embedding sentinel
@@ -687,11 +676,11 @@ volume.
 
 To onboard a new consumer:
 
-1. Add its origin to `BOUNCER_ALLOWED_ORIGINS` in the bouncer's settings. If
-   consumers bring their own domains and the set is not knowable at deploy
-   time, set `BOUNCER_ALLOW_ANY_ORIGIN = True` instead and read the security
-   tradeoff in "Cross-Origin Embedding" above first — prefer the allowlist
-   whenever the domains *are* knowable.
+1. Nothing, for CORS — the public `assess`/`event`/`message` endpoints answer
+   credentialed cross-origin calls from any well-formed origin by default, which
+   is what a consumer bringing its own domain needs. Only if this deployment has
+   opted out with `BOUNCER_ALLOW_ANY_ORIGIN = False` do you add the consumer's
+   origin to `BOUNCER_ALLOWED_ORIGINS`. See "Cross-Origin Embedding" above.
 2. (Optional) Create a `Group` with `auth_domain` set to the consumer's
    bouncer-page host, or instruct the consumer to pass `?group_uuid=<uuid>`
    on bouncer redirects. Configure per-group branding via the standard

@@ -848,42 +848,32 @@ in the background streaming behavioral signals to
 | `data-flush-size` | `25` | Force flush when buffer hits this size |
 
 Both scripts include `credentials: 'include'` on every fetch so the HttpOnly
-`mbp` pass cookie sets cross-origin. For that to work the server must return
-credentialed CORS headers for your page's origin, which happens in one of two
-ways:
+`mbp` pass cookie sets cross-origin. **This works from any origin by default** —
+the server echoes any well-formed `http(s)` origin back with credentials on
+`/assess`, `/event` and `/message`, so you do not need to be listed anywhere and
+there is nothing to request from the backend team.
 
-1. **`BOUNCER_ALLOWED_ORIGINS` contains your page's origin** (the default, and
-   what you should ask for whenever your origins are knowable up front).
-2. **`BOUNCER_ALLOW_ANY_ORIGIN = True`** on the server. Then any well-formed
-   `http(s)` origin is echoed back with credentials on `/assess`, `/event` and
-   `/message` without being listed. This exists for multi-tenant platforms whose
-   customers bring their own domains; it does **not** cover `/verify_pass` or
-   the admin endpoints, and `Origin: null` (sandboxed iframe, `data:`,
-   `file://`) is still refused.
+Two standing exceptions, in every configuration: `/verify_pass` and the
+permission-gated admin endpoints are not covered (no browser client calls them),
+and `Origin: null` — a sandboxed iframe, `data:` or `file://` page — is refused.
 
-If neither applies, the server answers with `Access-Control-Allow-Origin: *`,
-and the browser rejects your `credentials: 'include'` fetch **before your page
-sees the response**. `mojo-bouncer.js` treats that as a failure and calls
-`_allowThrough()` — so the gate silently becomes a no-op rather than throwing.
-If your gate appears to pass instantly on a tenant domain, this is the first
-thing to check.
+The one case that needs backend coordination is a server that has **opted out**
+with `BOUNCER_ALLOW_ANY_ORIGIN = False`. There, only origins listed in
+`BOUNCER_ALLOWED_ORIGINS` get credentialed headers, and yours must be added.
 
-> Ask your backend team before requesting `BOUNCER_ALLOW_ANY_ORIGIN`. With
-> `BOUNCER_ALLOW_ANY_ORIGIN = True`, any website a visitor loads can drive the
-> bouncer inside that visitor's browser: it can mint bouncer tokens bound to the
-> visitor's IP, burn the visitor's per-IP rate-limit budget on
-> `assess`/`event`/`message`, and — from any page that is same-site with the
-> bouncer host, such as another tenant's subdomain — read that visitor's own
-> risk assessment back, since `assess` returns `decision` and `risk_score` and
-> `event` returns a `risk_action` derived from the device's risk tier. That is a
-> per-visitor bot-reputation oracle. Turning the flag back off is not immediate:
-> preflights are cached for 24 hours (`Access-Control-Max-Age: 86400`). Enable
-> it only when the application validates the calling domain itself, and prefer
-> `BOUNCER_ALLOWED_ORIGINS` whenever the set of domains is knowable.
+If your origin is not covered, the server answers with
+`Access-Control-Allow-Origin: *`, and the browser rejects your
+`credentials: 'include'` fetch **before your page sees the response**.
+`mojo-bouncer.js` treats that as a failure and calls `_allowThrough()` — so the
+gate silently becomes a no-op rather than throwing. If your gate appears to pass
+instantly on a tenant domain, this is the first thing to check.
 
-Note that even with the flag on, the `mbp` pass cookie is `SameSite=Lax`, so a
-page on a *different registrable domain* from the bouncer host still never
-stores it. The token flow works; the repeat-visit challenge skip does not.
+Two things to know either way. A change to this setting is not immediate for
+clients that have already preflighted: `Access-Control-Max-Age: 86400` means a
+browser may act on a cached preflight decision for up to 24 hours. And the `mbp`
+pass cookie is `SameSite=Lax`, so a page on a *different registrable domain* from
+the bouncer host never stores it — the token flow works cross-site; the
+repeat-visit challenge skip does not.
 
 **Identity continuity** — both scripts share the `mojo_device_uid`
 localStorage key with `mojo-auth.js`, so a user authenticated via the gate
@@ -1004,12 +994,12 @@ host. Two shapes work:
 
 Cross-domain deployments (e.g. `marketing.com` gated by `auth.example.com`)
 are not supported for nginx `auth_request` gating — browser cookie policy
-blocks the `mbp` share, and `BOUNCER_ALLOW_ANY_ORIGIN` does not change that.
-That flag only affects CORS response headers on the public JSON endpoints; the
-`mbp` cookie is `SameSite=Lax` and `verify_pass` is not covered by the bypass
-at all (nginx `auth_request` is server-to-server and ignores CORS anyway). A
-tenant-owned domain can therefore use the **token** flow cross-origin, but not
-the cookie-gated one.
+blocks the `mbp` share, and the permissive cross-origin default does not change
+that. `BOUNCER_ALLOW_ANY_ORIGIN` only affects CORS response headers on the public
+JSON endpoints; the `mbp` cookie is `SameSite=Lax` and `verify_pass` is never
+covered by the any-origin echo (nginx `auth_request` is server-to-server and
+ignores CORS anyway). A tenant-owned domain can therefore use the **token** flow
+cross-origin, but not the cookie-gated one.
 
 ### Capacity & latency
 

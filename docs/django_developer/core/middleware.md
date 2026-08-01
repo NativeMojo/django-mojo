@@ -158,9 +158,10 @@ No configuration needed — works out of the box.
 **Credentialed CORS (bouncer paths only).** A wildcard origin is incompatible
 with cookies, so bouncer paths get a *specific* `Access-Control-Allow-Origin`
 plus `Access-Control-Allow-Credentials: true` when the request `Origin` is on
-the `BOUNCER_ALLOWED_ORIGINS` allowlist — or, when `BOUNCER_ALLOW_ANY_ORIGIN`
-is enabled, for any well-formed `http(s)` origin on the three public bouncer
-endpoints (`assess`, `event`, `message`). Both settings are read file-only via
+the `BOUNCER_ALLOWED_ORIGINS` allowlist, or — **by default** — for any
+well-formed `http(s)` origin on the three public bouncer endpoints (`assess`,
+`event`, `message`). Set `BOUNCER_ALLOW_ANY_ORIGIN = False` to restrict those
+three to the allowlist. Both settings are read file-only via
 `settings.get_static`. Everything else keeps the `*` fallback, and `*` is never
 sent together with `Access-Control-Allow-Credentials`. See
 [account/bouncer.md](../account/bouncer.md#cross-origin-embedding).
