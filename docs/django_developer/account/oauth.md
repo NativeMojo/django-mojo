@@ -517,6 +517,6 @@ These appear in your standard Mojo log output. Failed logins (invalid state, dis
 
 ## See Also
 
-- [OAuth REST API](../../../web_developer/account/oauth.md) — client-facing flow, JavaScript examples, error table
+- [OAuth REST API](../../web_developer/account/oauth.md) — client-facing flow, JavaScript examples, error table
 - [Authentication Flow](auth.md) — JWT tokens, MFA, password reset
 - [User Model](user.md) — `is_email_verified`, `requires_mfa`, `SUPERUSER_ONLY_FIELDS`

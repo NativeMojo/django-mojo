@@ -218,6 +218,17 @@ reports nothing (there is no destination to name) and still mints.
 mode — callers pair the two, which is why a `False` in monitor mode is reported
 rather than acted on.
 
+`matches_allowlist(url, entries, source="allowlist", allow_wildcard=False)` is
+the matcher underneath, in its pure form: it reads no settings and takes no
+request, just "does this URL match one of these entries". It never raises.
+Reach for it when you already hold the entries — the OAuth `redirect_uri`
+allowlist is the second in-tree caller, which is what keeps one implementation
+behind two lists. Reach for `is_allowed_destination()` instead when you want the
+handoff list *plus* any configured resolver. `source` only names the setting in
+the "ignoring unusable entry" warning (logged once per distinct entry, not once
+per request); `allow_wildcard` decides whether a `*.host` entry is honored or
+dropped as unusable.
+
 Same-origin and relative redirects are unaffected in either mode — they never
 mint a code, because the tokens already live in `localStorage` on the
 destination origin.
@@ -241,9 +252,19 @@ One consequence to know before upgrading: the guard runs on the group's
 `theme.success_redirect` too, not only on a `?redirect=` param. A group whose
 success redirect uses a custom app scheme (`myapp://home`) dead-ends sign-in on
 **every** attempt, not just on crafted links — point it at an `https`
-universal/app link instead. Enforcing deployments already behaved this way (a
-scheme with no hostname never matches an allowlist entry); this is a change only
-for the shipped monitor-mode default.
+universal/app link instead.
+
+**The browser guard and the allowlist disagree about custom schemes, and that
+is deliberate.** A custom scheme *is* a usable `AUTH_HANDOFF_ALLOWED_URLS` entry
+(see [Settings](#settings) below), but the bundled auth pages never reach the
+server to find out: `safeNavUrl` refuses it in the browser, in both modes,
+whatever the allowlist says. So listing `myapp://callback` buys a valid handoff
+destination for a **custom frontend** calling `POST /api/auth/handoff` itself —
+not for the shipped pages. The OAuth `redirect_uri` on
+`GET /api/auth/oauth/<provider>/begin` is a different parameter on a different
+endpoint and does not pass through this guard at all, so a native-app OAuth flow
+landing on a deep link is unaffected; see
+[OAuth § Custom URL schemes](oauth.md#custom-url-schemes-mobile-deep-links).
 
 #### Rolling enforcement out
 

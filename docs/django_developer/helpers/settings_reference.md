@@ -121,7 +121,10 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   **exact host + path prefix** (`https://*.example.com/` admits one extra
   dot-free label). A custom scheme (a mobile deep link) is usable here too —
   same shared matcher, same narrower custom-scheme rules as
-  `ALLOWED_REDIRECT_URLS`. **Setting it — any list, even `[]` — turns enforcement on**:
+  `ALLOWED_REDIRECT_URLS` — but note that it only serves a **custom frontend**
+  calling `POST /api/auth/handoff` directly: the bundled hosted auth pages
+  scheme-guard `?redirect=` in the browser and refuse a custom scheme before the
+  server is consulted. **Setting it — any list, even `[]` — turns enforcement on**:
   `redirect_uri` becomes required and an unlisted destination gets a `400` with
   no code minted, plus an `auth:handoff_destination_refused` incident. Unset,
   with no resolver either, is monitor mode: the code is minted as always and an

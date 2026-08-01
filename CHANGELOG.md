@@ -31,6 +31,9 @@ carry `|escapejs`.
   escapes first.
 - **Not a security fix.** Autoescaping still neutralized `<` and `"`, so there
   was never a string or tag breakout — this was a correctness bug.
+- **If you override `auth_base.html`**, the same rule applies to any context
+  value you interpolate into a JS string literal — written up in
+  [auth_pages.md § Interpolating context into inline JS](docs/django_developer/account/auth_pages.md#interpolating-context-into-inline-js--always-escapejs).
 
 **fix (account)** — **a custom URL scheme is a usable allowlist entry again
 (mobile deep links).** The parsed-URL matcher below accepted only `http` and
@@ -64,9 +67,21 @@ guard applies to every scheme.
   implementation exists to prevent. A handoff code is a bearer credential, so
   treat a deep-link handoff entry with the same care as a web one: the OS
   decides which installed app receives that scheme.
-- **Supersedes the "audit and remove non-`http(s)` entries" advice** that
-  shipped with the entry below. That advice is withdrawn — custom-scheme entries
-  do not need to be moved to HTTPS universal/app links.
+- **The bundled hosted auth pages still refuse a custom scheme on
+  `?redirect=`.** This changes the server-side *matcher* only; `auth_base.html`'s
+  `safeNavUrl` guard is unchanged and admits `http`/`https`/relative only, so it
+  refuses a custom-scheme post-login destination — and a custom-scheme
+  `theme.success_redirect` — in the browser, before any request. Listing
+  `myapp://callback` in `AUTH_HANDOFF_ALLOWED_URLS` therefore buys a valid
+  destination for a **custom frontend** calling `POST /api/auth/handoff` itself,
+  not for the shipped pages. The OAuth `redirect_uri` on `/begin` is a different
+  parameter on a different endpoint and never passes through that browser guard,
+  so a native-app OAuth flow does work.
+- **No `http(s)` migration is needed.** An interim build of the entry below
+  carried a pre-upgrade action item telling operators to audit
+  `ALLOWED_REDIRECT_URLS` for non-`http(s)` entries and move those flows to
+  HTTPS universal/app links. That advice never shipped in a release; it is
+  withdrawn, and it has been removed from the entry below rather than reworded.
 
 **BREAKING (security)** — **the OAuth `redirect_uri` allowlist matches a URL,
 not a string prefix.** `GET /api/auth/oauth/<provider>/begin` validated a
@@ -86,7 +101,7 @@ auth-handoff destination allowlist uses.
   the parsed-URL match applies to entries from either — so everything below
   applies to a tenant's per-group entries as well as to the setting. Audit both
   when you upgrade.
-- **Custom-scheme entries keep working** — see the entry below. A mobile deep
+- **Custom-scheme entries keep working** — see the entry above. A mobile deep
   link (`myapp://callback`) is still a usable entry; it is matched on exact
   scheme + exact authority + the same segment-bounded path prefix. No audit or
   migration is needed for those.
@@ -241,8 +256,10 @@ what closes the hole — host restriction remains the separate opt-in
   destination when no param is present and is tenant-writable and unvalidated. A
   group whose success redirect uses a custom app scheme dead-ends sign-in on
   **every** attempt, not just on crafted links. Enforcing deployments already
-  behaved this way (a scheme with no hostname never matches an allowlist entry);
-  this is a change only for the shipped monitor-mode default.
+  behaved this way, because a custom scheme was then unmatchable against any
+  allowlist entry — as of the custom-scheme entry above it *is* matchable, so
+  this browser-side guard is now the only thing refusing it, in both modes and
+  regardless of what the allowlist says.
 
 **feat (account)** — **`Authorization: grouptoken <t>` — a bearer that
 authenticates as a real user but is capped at ONE group.** The only bearer that

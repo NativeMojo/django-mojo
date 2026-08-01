@@ -245,6 +245,14 @@ group's auth config. No URL params needed.
 and the param is preserved through navigation (login ↔ register switcher), the
 OAuth round-trip, and the login → passkey enrollment redirect.
 
+`redirect`, `next`, `returnTo` and `back` ride the same links, so a destination
+you hand a group-scoped portal survives the whole flow. **This is fixed in this
+release:** the register → passkey-enrollment hop previously dropped every param
+after the first whenever `group_uuid` was combined with one of them, and the
+visitor landed on the group's `success_redirect` (or `/`) instead of where they
+came from. Nothing changes on your side — links that already worked keep
+working, and a `?group_uuid=` with no second param was never affected.
+
 **Group forwarded on submit** — when the auth page resolves a group, the
 rendered forms automatically include `group_uuid` in the POST body. This
 satisfies servers configured with `REQUIRE_GROUP_ON_REGISTRATION = True`.
@@ -308,6 +316,14 @@ bouncing users into a native app that way, point `?redirect=` at an `https`
 universal/app link instead. The same guard applies to the group's configured
 `success_redirect`, which is where the destination comes from when no param is
 present.
+
+> **A custom scheme *is* accepted as an OAuth `redirect_uri` — different
+> parameter, different endpoint.** `redirect_uri` on
+> `GET /api/auth/oauth/<provider>/begin` is matched server-side against the
+> operator's allowlist and supports mobile deep links (see
+> [OAuth § Native apps](oauth.md#native-apps--custom-url-schemes)). It does not
+> pass through this browser guard. `?redirect=` on the hosted auth pages does,
+> and refuses one no matter what the operator has allowlisted.
 
 This is a **scheme** check only, and it runs in the browser before any request
 is made — the destination **host** is not restricted by it. Host restriction is

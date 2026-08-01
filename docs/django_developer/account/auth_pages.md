@@ -213,6 +213,37 @@ To enable it, set `AUTH_CSP_ENABLED = True` — together with
 violations are reported instead of enforced. Full policy, rationale, rollout and
 settings: [Content Security Policy](../security/csp.md).
 
+### Interpolating context into inline JS — always `|escapejs`
+
+Any context value you put inside a JS **string literal** must carry `|escapejs`,
+and it must come *after* any `default:` filter:
+
+```html
+<script nonce="{{ csp_nonce }}">
+    var PASSKEY_URL = "{{ passkey_url|default:'/passkey'|escapejs }}";
+</script>
+```
+
+Autoescaping alone is not enough here and gets it actively wrong. `<script>` is
+a raw-text element, so the HTML parser never decodes entities inside it: the `&`
+joining two query params is autoescaped to `&amp;` and the literal reaches the
+browser holding that verbatim, so a URL like `/passkey?group_uuid=…&redirect=…`
+arrives with an `amp;redirect=` param and the real one silently missing.
+`escapejs` emits `\uXXXX` escapes the JS engine decodes at parse time, and
+returns a `SafeString` so autoescaping never runs twice.
+
+Two things not to do:
+
+- **Do not add `|escapejs` in an attribute** (`href`, `src`). The parser *does*
+  decode entities there, so plain autoescaping is already correct; `escapejs`
+  would put a literal backslash-`u` escape in the link.
+- **Do not reach for `|safe`** in a script literal. It fixes the ampersand by
+  reopening the string-literal breakout that autoescaping currently closes.
+
+The shipped `auth_base.html` interpolates five values this way — `api_base`,
+`success_redirect`, `auth_url`, `register_url`, `passkey_url` — and carries the
+same note as a `{% comment %}` beside them.
+
 ### Overriding the hero panel
 
 Create `templates/account/auth_hero.html` in your project:
