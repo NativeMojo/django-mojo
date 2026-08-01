@@ -340,7 +340,21 @@ Rules that follow from the design:
   (non-`sys.`) form checks the acting member's OWN row, so
   `{"guest": ["manage_groups"]}` only narrows which member-level term
   qualifies; to actually require a *global* grant, use the `sys.` prefix:
-  `{"guest": "sys.manage_groups"}`.
+  `{"guest": "sys.manage_groups"}`. Note the gate's global short-circuit runs
+  **before** the protection map is read: a user holding global `manage_groups`
+  or `manage_users` can always set or clear the marker, regardless of any
+  `MEMBER_PERMS_PROTECTION` entry.
+- **Reserved keys on upgrade**: `guest` and `full_member` now carry framework
+  meaning inside `GroupMember.permissions`. Deployments upgrading past this
+  version should audit existing rows for either key — a pre-existing
+  `full_member` grant is now ignored on member rows, and a pre-existing
+  `guest` key (if used for an unrelated purpose) now marks those members
+  view-only.
+- **One row per (group, user) is assumed.** `Group.get_member_for_user`
+  resolves a single row (`.last()` — the newest), so if duplicate member rows
+  exist for a user, an unmarked duplicate wins over a marked one and the guest
+  restriction fails open. `Group.add_member` uses `get_or_create` and never
+  duplicates; schema-level uniqueness is tracked as a hardening follow-up.
 - **`ApiKey.has_permission` is asymmetric here**: a key passes `"member"`
   unconditionally, but `"full_member"` on a key is an ordinary stored perm —
   False unless explicitly granted to the key.

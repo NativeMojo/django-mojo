@@ -80,6 +80,7 @@ def test_guest_marker_blocks_full_member(opts):
     for tier in ("member", "all", "authenticated"):
         assert m.has_permission(tier), \
             f"marking guest must not touch the {tier!r} view tier"
+    m.remove_permission("guest")
 
 
 @th.django_unit_test("full_member: removing the guest marker restores the write tier")
