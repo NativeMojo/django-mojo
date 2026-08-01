@@ -92,7 +92,7 @@ There is **no automatic ingestion-time deduplication** — every `report_event()
 
 - **Bundling** — a RuleSet's `bundle_by`/`bundle_minutes` groups many events into one incident without losing rows.
 - **Trigger thresholds** — an incident holds at `pending` until `trigger_count` events arrive within `trigger_window`.
-- **Opt-in suppression** — for diagnostics reachable from attacker-amplifiable paths, [`report_event_suppressed`](../logging/incidents.md#rate-limited-reporting--report_event_suppressed) files at most one event per `(category, key)` per window.
+- **Opt-in suppression** — for diagnostics reachable from attacker-amplifiable paths, [`report_event_suppressed`](../logging/incidents.md#rate-limited-reporting--report_event_suppressed) files at most one event per `(category, key)` per window. On public, amplifiable categories pass `fail_open=False` and a `budget=` — the default fails **open** (files unsuppressed) during a Redis outage, and per-key suppression alone does not bound unbounded distinct keys.
 - **Pruning** — old low-level events are removed after `INCIDENT_EVENT_PRUNE_DAYS`.
 
 ### Event Categories
