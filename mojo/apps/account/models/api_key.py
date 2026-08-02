@@ -253,9 +253,27 @@ class ApiKey(MojoSecrets, MojoModel):
         Prevents a group admin from self-minting a key with arbitrary powerful
         permissions.
         """
-        from mojo.helpers.request import is_override_user_session
+        from mojo.helpers.request import (
+            is_override_user_session, is_key_backed_session)
         user = getattr(request, "user", None)
         if user is None:
+            return False
+        # A key-backed session may NEVER grant a PROTECTED permission.
+        #
+        # Without this the floor is bypassable in two REST calls. The
+        # short-circuit below reads `user.has_permission([...])`, and for a
+        # non-override key session request.user IS the ApiKey — so it reads the
+        # KEY's own group-bounded dict, and implied_perms expands
+        # manage_groups -> groups. A group admin can therefore mint key A with
+        # the unprotected `groups` perm (allowed: `groups` is in this model's
+        # SAVE_PERMS), authenticate as A, and have A mint key B carrying
+        # geoip_sync — the exact escalation the floor exists to stop.
+        #
+        # Same class as the block in _can_manage_acting_user: a confined
+        # credential must not be able to mint a successor with authority it
+        # does not itself legitimately hold. Scoped to PROTECTED perms so
+        # ordinary key-provisions-key flows keep working.
+        if is_key_backed_session(request) and perm in _apikey_perms_protection():
             return False
         # Skipped for a session that ASSUMES a member (override ApiKey /
         # GroupScopedToken) — see GroupMember.can_change_permission for the
@@ -291,8 +309,14 @@ class ApiKey(MojoSecrets, MojoModel):
             raise merrors.ValueException("permissions must be a JSON object")
         request = self.active_request
         for perm, perm_value in value.items():
-            if not isinstance(self.permissions, dict):
-                self.permissions = {}
+            # Read through the normalizer instead of resetting the column
+            # first. `permissions` may legitimately hold a JSON STRING — that
+            # shape is what _get_permissions_dict exists for, and has_permission
+            # authorizes off it. Materializing `{}` before the gate would let an
+            # all-no-op payload silently WIPE a stringy permissions column with
+            # no authorization check at all, stripping (say) a federation key's
+            # geoip_sync. Only assign back once a write is actually authorized.
+            current = self._get_permissions_dict()
             # A no-op needs no authority.
             #
             # This loop gates every key in the incoming dict, and the admin UI
@@ -310,11 +334,12 @@ class ApiKey(MojoSecrets, MojoModel):
             # Only a genuine state change is gated — REVOKING a protected perm
             # still demands the authority to grant it, so this cannot become a
             # loophole for stripping a federation key's access.
-            stored = self.permissions.get(perm, False)
+            stored = current.get(perm, False)
             if (stored == perm_value) if bool(perm_value) else not bool(stored):
                 continue
             if not self.can_change_permission(perm, perm_value, request):
                 raise merrors.PermissionDeniedException()
+            self.permissions = current
             if bool(perm_value):
                 self.permissions[perm] = perm_value
             else:

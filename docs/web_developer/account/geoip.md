@@ -87,6 +87,7 @@ Returns a paginated list of cached GeoIP records. Supports standard query parame
 | `default` | All fields except raw provider data, plus `is_threat`, `is_suspicious`, `risk_score` |
 | `basic` | Core location and threat fields only |
 | `detailed` | All fields including raw data |
+| `federation` | Location and abuse-signal fields only — no per-fleet blocking/whitelisting state, no raw data, and (unlike the other three graphs) no `is_threat`/`is_suspicious`/`risk_score` either. This is what the [lookup endpoint](#get-systemgeoiplookup--authenticated-ip-lookup) returns to a peer instance. |
 
 Only `detailed` includes the `data` blob. When threat checks have run,
 `data.threat_data` carries:
@@ -154,9 +155,19 @@ GET /api/system/geoip/lookup?ip=1.2.3.4
 **Auth:** any authenticated caller. An ApiKey token works here and needs **no
 permissions** — unlike the `system/geoip` CRUD endpoints, which reject ApiKey
 identities outright. This is what lets a downstream django-mojo instance use
-this endpoint as its GeoIP source; it requests `graph=federation`, which
-returns location and abuse signals only and omits all per-fleet blocking and
-whitelisting state.
+this endpoint as its GeoIP source.
+
+**The `graph` parameter is honored only for callers holding the model's
+`VIEW_PERMS`** (`manage_users`, `view_security`, `manage_security`, `security`,
+or `users`). Everyone else — including a federation ApiKey — is served the
+`federation` graph regardless of what they ask for: location and abuse signals
+only, no per-fleet blocking or whitelisting state and no raw provider `data`.
+Requests are downgraded, never rejected, so passing `graph=detailed` without
+the permissions returns `200` with the federation payload rather than a `403`.
+
+> An API key exists so an instance can *be* a GeoIP provider, not so it can
+> manage or inspect another fleet's GeoIP data. If you need the full record,
+> use `GET system/geoip/<pk>` with a user session that holds the permissions.
 
 ### Response
 

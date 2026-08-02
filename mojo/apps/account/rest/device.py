@@ -41,8 +41,35 @@ def on_geo_located_ip(request, pk=None):
 @md.rate_limit("geoip_lookup", ip_limit=30)
 @md.requires_auth()
 def on_geo_located_ip_lookup(request):
+    """Authenticated IP lookup — the federation read path.
+
+    Deliberately open to any authenticated identity, including a group ApiKey
+    holding no permissions: this is how a downstream instance uses another as
+    its GeoIP provider. Do NOT add uses_model_security or a
+    rest_check_permission_or_raise here — GeoLocatedIP is groupless, so that
+    would deny every key and break federation fleet-wide (see
+    tests/test_account/test_geoip_federation_wire.py).
+
+    But open access must not mean the CALLER picks the payload shape. The
+    `detailed` graph carries the raw provider blob and every graph except
+    `federation` carries per-fleet enforcement state (is_blocked, blocked_*,
+    is_whitelisted, whitelisted_*) — data the model gates behind VIEW_PERMS on
+    its CRUD endpoints. A key is here to BE a GeoIP provider, not to manage or
+    read another fleet's enforcement decisions. So anything richer than the
+    federation graph requires the same VIEW_PERMS the CRUD endpoints demand;
+    everyone else is served the federation graph whatever they asked for.
+    Privileged User callers are unaffected and still get their default graph.
+    """
     ip_address = request.DATA.get('ip')
     auto_refresh = request.DATA.get('auto_refresh', True)
+    graph = request.DATA.get('graph', 'default')
+    if graph != 'federation' and not GeoLocatedIP.rest_check_permission(
+            request, "VIEW_PERMS"):
+        graph = 'federation'
+    # on_rest_get re-reads the graph from request.DATA, so the resolved value
+    # has to go back there to stick (same technique Group.check_view_permission
+    # uses to downgrade a caller to the basic graph).
+    request.DATA["graph"] = graph
     geo_ip = GeoLocatedIP.geolocate(ip_address, auto_refresh=auto_refresh)
     return geo_ip.on_rest_get(request)
 

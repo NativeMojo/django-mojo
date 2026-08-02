@@ -181,6 +181,42 @@ def test_lookup_federation_graph_strips_firewall_state(opts):
 
 
 @th.django_unit_test()
+def test_lookup_forces_federation_graph_for_unprivileged_callers(opts):
+    """A caller may not widen its own payload by asking for a richer graph.
+
+    REGRESSION (found by post-build security review of 3fc821c9): the endpoint
+    is open to any authenticated identity, and on_rest_get honours a
+    caller-supplied ?graph=. The `detailed` graph carries the raw provider blob
+    and every graph except `federation` carries per-fleet enforcement state —
+    data the model gates behind VIEW_PERMS on its CRUD endpoints. So a
+    zero-permission ApiKey could read exactly what Ian's "provider, not manage"
+    boundary is meant to withhold, just by adding a query param.
+    """
+    _use_apikey(opts, opts.fed_token)
+    for requested in ("detailed", "basic", "default"):
+        resp = opts.client.get(
+            "/api/system/geoip/lookup",
+            params={"ip": FED_IP, "graph": requested},
+        )
+        assert resp.status_code == 200, (
+            f"graph={requested} must still be served (downgraded, not denied) "
+            f"— got {resp.status_code} {opts.client.last_response.body}"
+        )
+        data = resp.response.data
+        leaked = [f for f in FIREWALL_FIELDS if f in data]
+        assert not leaked, (
+            f"?graph={requested} let an unprivileged key read per-fleet "
+            f"enforcement state {leaked}; the endpoint must force the "
+            f"federation graph for callers without VIEW_PERMS"
+        )
+        assert "data" not in data, (
+            f"?graph={requested} leaked the raw provider blob to an "
+            f"unprivileged key"
+        )
+    opts.client.logout()
+
+
+@th.django_unit_test()
 def test_lookup_denies_anonymous(opts):
     """No credential -> denied.
 
@@ -393,6 +429,156 @@ def test_revoking_a_protected_perm_is_still_denied(opts):
         GroupMember.objects.filter(group=group).delete()
         Group.objects.filter(pk=group.pk).delete()
         User.objects.filter(pk=user.pk).delete()
+
+
+@th.django_unit_test()
+def test_a_key_cannot_mint_a_key_with_a_protected_perm(opts):
+    """The floor must not be bypassable by laundering it through a second key.
+
+    REGRESSION (found by post-build security review of 3fc821c9). This was a
+    two-call escalation:
+
+      1. A group admin mints key A with the UNPROTECTED `groups` perm — allowed,
+         since `groups` is not on the floor and is in this model's SAVE_PERMS.
+      2. Authenticating AS key A, mint key B carrying `geoip_sync`. The
+         short-circuit at the top of can_change_permission reads
+         `user.has_permission(["manage_groups", "manage_users"])`, and for a
+         non-override key session request.user IS the ApiKey — so it read key
+         A's own dict, where implied_perms expands manage_groups -> groups.
+         It returned True and the protection map was never consulted.
+
+    Net: the tenant admin the floor exists to stop obtained fleet-wide
+    threat-intel write in two REST calls.
+    """
+    from mojo.apps.account.models import User, Group, GroupMember, ApiKey
+
+    user, group, email, password = _make_group_admin(
+        opts, "mint", {"manage_group": True, "manage_members": True})
+    try:
+        # Step 1: a group admin legitimately mints a key holding `groups`.
+        _login(opts, email, password)
+        resp = opts.client.post("/api/group/apikey", {
+            "group": group.pk,
+            "name": "fed_key_launderer",
+            "permissions": {"groups": True},
+        })
+        assert resp.status_code == 200, (
+            f"minting a key with the unprotected `groups` perm must still "
+            f"work, got {resp.status_code}: {opts.client.last_response.body}"
+        )
+        token_a = resp.response.data.token
+        assert token_a, f"create echo must carry the raw token: {resp.response.data!r}"
+
+        # Step 2: as that key, try to mint a key carrying the protected perm.
+        _use_apikey(opts, token_a)
+        resp = opts.client.post("/api/group/apikey", {
+            "group": group.pk,
+            "name": "fed_key_laundered",
+            "permissions": {"geoip_sync": True},
+        })
+        assert resp.status_code == 403, (
+            f"a key-backed session must not be able to grant a PROTECTED perm "
+            f"— this is the floor-laundering escalation. got "
+            f"{resp.status_code}: {opts.client.last_response.body}"
+        )
+        assert not ApiKey.objects.filter(
+            group=group, permissions__contains={"geoip_sync": True}).exists(), (
+            "no key in this group may have ended up with geoip_sync"
+        )
+    finally:
+        opts.client.logout()
+        ApiKey.objects.filter(group=group).delete()
+        GroupMember.objects.filter(group=group).delete()
+        Group.objects.filter(pk=group.pk).delete()
+        User.objects.filter(pk=user.pk).delete()
+
+
+@th.django_unit_test()
+def test_a_key_can_still_grant_unprotected_perms(opts):
+    """The key-backed block is scoped to PROTECTED perms only.
+
+    Guards the fix above from over-reaching: ordinary key-provisions-key flows
+    must keep working, or the fix would be a silent breaking change for any
+    deployment that provisions keys with a key.
+    """
+    from mojo.apps.account.models import User, Group, GroupMember, ApiKey
+
+    user, group, email, password = _make_group_admin(
+        opts, "mintok", {"manage_group": True, "manage_members": True})
+    try:
+        _login(opts, email, password)
+        resp = opts.client.post("/api/group/apikey", {
+            "group": group.pk,
+            "name": "fed_key_parent",
+            "permissions": {"groups": True},
+        })
+        assert resp.status_code == 200, f"setup key failed: {opts.client.last_response.body}"
+        token_a = resp.response.data.token
+
+        _use_apikey(opts, token_a)
+        resp = opts.client.post("/api/group/apikey", {
+            "group": group.pk,
+            "name": "fed_key_child",
+            "permissions": {"some_group_perm": True},
+        })
+        assert resp.status_code == 200, (
+            f"a key must still be able to grant UNPROTECTED perms, got "
+            f"{resp.status_code}: {opts.client.last_response.body}"
+        )
+        child = ApiKey.objects.filter(group=group, name="fed_key_child").first()
+        assert child is not None and child.permissions.get("some_group_perm") is True, (
+            f"unprotected perm must land, got {child.permissions if child else None}"
+        )
+    finally:
+        opts.client.logout()
+        ApiKey.objects.filter(group=group).delete()
+        GroupMember.objects.filter(group=group).delete()
+        Group.objects.filter(pk=group.pk).delete()
+        User.objects.filter(pk=user.pk).delete()
+
+
+@th.django_unit_test()
+def test_no_op_payload_cannot_wipe_a_string_permissions_column(opts):
+    """An all-no-op payload must not silently clear a JSON-STRING permissions column.
+
+    REGRESSION (found by post-build security review of 3fc821c9). The no-op
+    short-circuit was added with the `isinstance(self.permissions, dict)` reset
+    hoisted ABOVE the gate, so a column holding a JSON string got materialized
+    to {} before any authorization ran — and because every key in the payload
+    then looked like a no-op, no gate ever ran and the wipe stuck. A stringy
+    permissions column is a shape this model supports for authorization
+    (_get_permissions_dict feeds has_permission), so a federation key stored
+    that way could be silently stripped of geoip_sync by any caller who could
+    reach it.
+    """
+    import json
+    from mojo.apps.account.models import Group, ApiKey
+
+    Group.objects.filter(name="geoip_fed_strperm_group").delete()
+    group = Group.objects.create(name="geoip_fed_strperm_group", kind="organization")
+    try:
+        key, _tok = ApiKey.create_for_group(
+            group=group, name="geoip_fed_test_strperm", permissions={})
+        # The stringy shape, written past the setter the way a legacy row or a
+        # trusted internal call could have left it.
+        ApiKey.objects.filter(pk=key.pk).update(
+            permissions=json.dumps({"geoip_sync": True}))
+        key.refresh_from_db()
+        assert key.has_permission("geoip_sync"), (
+            "precondition: the stringy column must authorize geoip_sync"
+        )
+
+        # An all-no-op payload, with no request at all (the harshest case —
+        # can_change_permission would return False for a None user).
+        key.set_permissions({"unrelated_perm": False})
+        assert key.has_permission("geoip_sync"), (
+            f"a no-op payload wiped the permissions column — geoip_sync was "
+            f"silently revoked with no authorization check. now: "
+            f"{key.permissions!r}"
+        )
+    finally:
+        ApiKey.objects.filter(group=group).delete()
+        Group.objects.filter(pk=group.pk).delete()
 
 
 @th.django_unit_test()

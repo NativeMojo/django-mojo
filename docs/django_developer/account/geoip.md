@@ -203,8 +203,9 @@ All actions are gated by `SAVE_PERMS`: `manage_users`, `manage_security`, or `se
 | `default` | All fields except `data` and `provider`, plus computed extras |
 | `basic` | Core location + threat + blocking fields |
 | `detailed` | All fields including raw `data` |
+| `federation` | Location + abuse-signal fields only — the peer-instance wire format served by [`GET system/geoip/lookup`](#get-systemgeoiplookup--authenticated-ip-lookup) below. Never includes the per-fleet firewall fields (`is_blocked`, `is_whitelisted`, `blocked_*`, `whitelisted_*`) or the raw `data` blob. |
 
-All graphs include `is_threat`, `is_suspicious`, and `risk_score` as extras. The `basic` graph also includes `block_active`.
+`default`, `basic`, and `detailed` include `is_threat`, `is_suspicious`, and `risk_score` as extras; `federation` defines no `extra` list at all, so none of the three are serialized on it — the fields they're computed from (`is_known_attacker`, `is_known_abuser`, `threat_level`, `is_tor`, `is_vpn`, `is_proxy`) are present, so a caller needing the computed booleans derives them itself. The `basic` graph also includes `block_active`.
 
 ---
 
@@ -267,6 +268,23 @@ Every downstream running `GEOIP_PRIMARY_PROVIDER='mojo'` depends on that. Do
 change would deny every ApiKey and silently break GeoIP federation fleet-wide.
 `tests/test_account/test_geoip_federation_wire.py::test_lookup_accepts_group_apikey`
 exists as the tripwire for exactly this.
+
+**Open access does not mean the caller picks the payload.** Anything richer
+than the `federation` graph requires the same `VIEW_PERMS` the CRUD endpoints
+demand; a caller without them is served the `federation` graph whatever it
+asked for. Otherwise a zero-permission key could read per-fleet enforcement
+state — or, via `graph=detailed`, the raw provider blob — simply by adding a
+query parameter. Privileged `User` callers are unaffected and still receive
+their requested graph.
+
+> **The boundary rule, in one line (owner ruling, 2026-08-02):** an API key
+> exists so an instance can *be* a GeoIP provider, **not** so it can manage or
+> inspect another fleet's GeoIP data. Read/write of records, and the
+> block/unblock/whitelist actions, are for a real `User` with the permissions —
+> keys are denied there, deliberately, and that is not a regression from the
+> ApiKey group-scoping work. If you find yourself wanting to relax it, add a
+> narrow purpose-built endpoint (as `system/geoip/sync` is) rather than opening
+> the CRUD surface or setting `ALLOW_API_KEY_GLOBAL`.
 
 ### `POST system/geoip/sync` — Federation Abuse-Signal Receiver
 

@@ -147,6 +147,24 @@ Without this, a key self-claiming `manage_users` could read every tenant's
 `APIKEY_PERMS_PROTECTION` (see [API Keys](../account/api_keys.md)). Net: an
 ApiKey can only ever reach **group-owned** data, confined to its own group.
 
+**A third path bypasses both gates above: no model security at all.** Both
+protections just described only fire on an endpoint that actually reaches
+them — `requires_global_perms` is a decorator you must apply, and the
+model-security groupless-deny only runs for a view that goes through
+`uses_model_security` / `on_rest_request` (or an explicit
+`rest_check_permission_or_raise` call). A hand-written view gated by
+`@md.requires_auth()` alone that serializes an instance directly (e.g.
+`instance.on_rest_get(request)`, which performs no permission check of its own)
+never reaches `_evaluate_permission` — so an ApiKey is authenticated but subject
+to **no permission check at all**, whether or not the model is groupless. This
+is a deliberate, narrow pattern rather than an oversight to "fix" reflexively:
+`GET /api/system/geoip/lookup` is the canonical instance — `GeoLocatedIP` is
+groupless, and every downstream instance running the `mojo` GeoIP provider
+authenticates with a group-scoped key holding zero permissions, so the endpoint
+is authentication-only by design. See [GeoIP](../account/geoip.md) (the
+`GET system/geoip/lookup` entry) for the guardrail and its tripwire test before
+adding model security to an endpoint like this to "conform" it.
+
 The security registry records `global_only: True` for these endpoints, so audit
 tooling can tell them apart.
 

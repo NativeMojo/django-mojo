@@ -141,8 +141,12 @@ default regardless of what's in its `permissions` dict — e.g. a key with
 `{"manage_users": true}` still gets `403` from `GET /api/user`. Use a
 service-account `User` with a real permission grant for that kind of machine
 access instead. A handful of endpoints are purpose-built to accept a key for
-shared/global data (like the GeoIP federation-sync receiver — see
-[GeoIP](geoip.md)) and say so explicitly in their own docs.
+shared/global data and say so explicitly in their own docs — for `GeoLocatedIP`
+that's **both** `GET /api/system/geoip/lookup` (authentication only — no
+permissions needed at all) **and** `POST /api/system/geoip/sync` (requires
+`geoip_sync`); see [GeoIP](geoip.md). The plain CRUD endpoints
+(`GET/POST /api/system/geoip`, `GET/PUT/DELETE /api/system/geoip/<pk>`) still
+reject a key by default like every other groupless model.
 
 Endpoints that resolve or inspect a group or its membership — `GET
 /api/group/uuid/<uuid>`, `GET /api/group/<pk>`, `GET /api/group/<pk>/member` —
