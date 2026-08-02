@@ -148,8 +148,15 @@ GET /api/system/geoip/lookup?ip=1.2.3.4
 | Param | Required | Description |
 |---|---|---|
 | `ip` | Yes | IP address to geolocate |
-| `auto_refresh` | No | Refresh expired cache (default: `true`) |
-| `graph` | No | Response graph (`default`, `basic`, `detailed`) |
+| `auto_refresh` | No | Refresh expired cache (default: `true`). Cannot currently be turned off from a query string — `"false"` is read as a truthy string. |
+| `graph` | No | Response graph (`default`, `basic`, `detailed`, `federation`) |
+
+**Auth:** any authenticated caller. An ApiKey token works here and needs **no
+permissions** — unlike the `system/geoip` CRUD endpoints, which reject ApiKey
+identities outright. This is what lets a downstream django-mojo instance use
+this endpoint as its GeoIP source; it requests `graph=federation`, which
+returns location and abuse signals only and omits all per-fleet blocking and
+whitelisting state.
 
 ### Response
 
@@ -183,6 +190,11 @@ POST /api/system/geoip/sync
 ```
 
 **Requires:** ApiKey token with `geoip_sync` permission (group-scoped). This endpoint is used by downstream django-mojo instances to push abuse signals observed locally back to this upstream. You do not call this manually — it is invoked by the `push_abuse_signals` async job.
+
+> `geoip_sync` is a **protected** permission: because it writes fleet-wide
+> threat intel, only a global administrator can grant it to a key. A group
+> admin creating or editing a key will get a `403` if they try to turn it on.
+> In the admin UI the toggle is shown disabled for those users.
 
 ### Request Body
 

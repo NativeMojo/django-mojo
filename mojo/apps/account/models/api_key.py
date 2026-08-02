@@ -9,10 +9,37 @@ from mojo.helpers.settings import settings
 from mojo import errors as merrors
 
 
+# Framework-level protection floor: permissions that must never be grantable by
+# an ordinary group admin, whatever a deployment configures.
+#
+# geoip_sync authorizes POST /api/system/geoip/sync, which writes GLOBAL threat
+# intel consumed by every instance federating with this one. It is escalate-only
+# and cannot touch per-fleet enforcement, but "raise suspicion fleet-wide" is
+# still not a tenant-level power.
+#
+# The `sys.` prefix is load-bearing. Protection values resolve through
+# GroupMember.has_permission, where a bare term reads the member's own group
+# dict — so a domain term like "security" would still pass for any group admin
+# holding it in their own tenant, which is exactly the hole being closed.
+# `sys.geoip_sync` forces the check onto the granter's GLOBAL dict instead.
+APIKEY_PERMS_PROTECTION_DEFAULTS = {
+    "geoip_sync": "sys.geoip_sync",
+}
+
+
 def _apikey_perms_protection():
     # kind="dict" so a DB-backed Setting (stored as a JSON string) parses into a
     # dict — otherwise `perm in <str>` would silently degrade to substring matching.
-    return settings.get("APIKEY_PERMS_PROTECTION", {}, kind="dict") or {}
+    configured = settings.get("APIKEY_PERMS_PROTECTION", {}, kind="dict") or {}
+    # MERGED, not defaulted. settings.get returns a configured value WHOLESALE —
+    # the `{}` above is consulted only when the setting is absent entirely. So a
+    # deployment that sets APIKEY_PERMS_PROTECTION to protect its own perms would
+    # otherwise silently drop the floor along with it, which is the failure this
+    # merge exists to prevent.
+    #
+    # Deployment wins per key: naming an entry explicitly overrides the floor
+    # (including relaxing it — a deliberate, visible act, not an accident).
+    return {**APIKEY_PERMS_PROTECTION_DEFAULTS, **configured}
 
 
 class ApiKey(MojoSecrets, MojoModel):
@@ -264,10 +291,30 @@ class ApiKey(MojoSecrets, MojoModel):
             raise merrors.ValueException("permissions must be a JSON object")
         request = self.active_request
         for perm, perm_value in value.items():
-            if not self.can_change_permission(perm, perm_value, request):
-                raise merrors.PermissionDeniedException()
             if not isinstance(self.permissions, dict):
                 self.permissions = {}
+            # A no-op needs no authority.
+            #
+            # This loop gates every key in the incoming dict, and the admin UI
+            # submits the ENTIRE switch catalog on every save (web-mojo's
+            # FormView.getFormData re-collects every checkbox by name — even
+            # disabled ones). So an untouched protected perm rides along on
+            # writes that have nothing to do with it: renaming a key, flipping
+            # is_active, creating any key at all. Gating those would 403 the
+            # whole save with no indication why.
+            #
+            # Harmless while APIKEY_PERMS_PROTECTION was empty; a live floor
+            # (see APIKEY_PERMS_PROTECTION_DEFAULTS) makes it reachable, so the
+            # skip is required for the floor to be shippable at all.
+            #
+            # Only a genuine state change is gated — REVOKING a protected perm
+            # still demands the authority to grant it, so this cannot become a
+            # loophole for stripping a federation key's access.
+            stored = self.permissions.get(perm, False)
+            if (stored == perm_value) if bool(perm_value) else not bool(stored):
+                continue
+            if not self.can_change_permission(perm, perm_value, request):
+                raise merrors.PermissionDeniedException()
             if bool(perm_value):
                 self.permissions[perm] = perm_value
             else:

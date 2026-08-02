@@ -244,15 +244,29 @@ Requires `manage_users` permission. PUT supports POST_SAVE_ACTIONS for block/unb
 GET /api/system/geoip/lookup?ip=1.2.3.4
 ```
 
-**Requires authentication** (`@md.requires_auth()`). Rate limited to 30 requests/minute per IP. Used by the `mojo` provider on downstream instances to query the upstream.
+**Requires authentication** (`@md.requires_auth()`) and nothing more. Rate limited to 30 requests/minute per IP. Used by the `mojo` provider on downstream instances to query the upstream.
 
 | Param | Required | Description |
 |---|---|---|
 | `ip` | Yes | IP address to geolocate |
-| `auto_refresh` | No | Refresh expired cache (default: `true`) |
-| `graph` | No | Response graph (`default`, `basic`, `detailed`). The `mojo` provider requests `graph=detailed`. |
+| `auto_refresh` | No | Refresh expired cache (default: `true`). **Cannot currently be disabled from a query string** — params arrive as raw strings and `"false"` is truthy. |
+| `graph` | No | Response graph (`default`, `basic`, `detailed`, `federation`). The `mojo` provider requests `graph=federation`. |
 
 Returns the `GeoLocatedIP` record via `on_rest_get`.
+
+**A group ApiKey IS accepted here — deliberately, and this is load-bearing.**
+Note the contrast with the CRUD endpoints above, which reject keys: this
+endpoint is gated by `requires_auth()` alone and responds through the
+serializer directly, so it never reaches model security's groupless-deny
+branch. The key needs **no permissions at all** — only that it be active,
+unexpired, and (if linked to a member) linked to an active non-superuser.
+
+Every downstream running `GEOIP_PRIMARY_PROVIDER='mojo'` depends on that. Do
+**not** "conform" this endpoint by adding `@md.uses_model_security` or a
+`rest_check_permission_or_raise` call: `GeoLocatedIP` is groupless, so that
+change would deny every ApiKey and silently break GeoIP federation fleet-wide.
+`tests/test_account/test_geoip_federation_wire.py::test_lookup_accepts_group_apikey`
+exists as the tripwire for exactly this.
 
 ### `POST system/geoip/sync` — Federation Abuse-Signal Receiver
 
@@ -540,7 +554,39 @@ stored copy lives in `data['threat_data']['is_blocklisted']`.
 
 ### `mojo` Provider
 
-Use another django-mojo instance as a GeoIP data source. The downstream instance calls the upstream's `GET /api/system/geoip/lookup?graph=detailed` with an ApiKey token and caches the result locally.
+Use another django-mojo instance as a GeoIP data source. The downstream instance calls the upstream's `GET /api/system/geoip/lookup?graph=federation` with an ApiKey token and caches the result locally.
+
+**Provisioning the hub key** — what permissions the ApiKey actually needs:
+
+| Call | Permission required |
+|---|---|
+| `GET system/geoip/lookup` (every lookup) | **none** — authentication only |
+| `POST system/geoip/sync` (only if `GEOIP_MOJO_SYNC_ENABLED`) | **`geoip_sync`** |
+
+So the minimal hub-side key is:
+
+```python
+api_key, token = ApiKey.create_for_group(
+    group, "geoip-federation-<downstream>", permissions={"geoip_sync": True})
+```
+
+Which group the key hangs on does not matter for either call — neither
+endpoint consults `request.group`. Put the returned token in the downstream's
+`GEOIP_API_KEY_MOJO`.
+
+> **`geoip_sync` is a protected permission.** It writes fleet-wide threat
+> intel, so `APIKEY_PERMS_PROTECTION` ships a framework floor requiring
+> `sys.geoip_sync` to grant it — an ordinary group admin cannot mint a
+> federation key. A global `manage_users`/`manage_groups` holder can, as can a
+> member of the key's group who globally holds `geoip_sync`. See
+> [API Keys](api_keys.md) for the floor and how to override it.
+
+> **Leave a federation key unlinked.** Do not set `user` + `override_user` on
+> it. The sync gate is `requires_global_perms`, which authorizes on
+> `request.user` — under `override_user=True` that is the linked *member*, so
+> the key's own permissions stop bounding it and the member's global grants
+> take over. Reference-mode (`override_user=False`) and unlinked keys are
+> unaffected.
 
 **Configuration:**
 

@@ -77,11 +77,17 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### APIKEY
 
-- `APIKEY_PERMS_PROTECTION` — dict, default `{}` (read with `kind="dict"`, so a
-  DB-backed `Setting` JSON string is honored). Maps a permission key → the
-  permission(s) the granter must hold to assign it to an `ApiKey`, gating
-  `ApiKey.set_permissions` on REST write. Empty by default (any group admin with
-  a key-management perm may assign any non-`sys.` key). Mirrors
+- `APIKEY_PERMS_PROTECTION` — dict, **merged over a framework floor** (read with
+  `kind="dict"`, so a DB-backed `Setting` JSON string is honored). Maps a
+  permission key → the permission(s) the granter must hold to assign it to an
+  `ApiKey`, gating `ApiKey.set_permissions` on REST write. The effective map is
+  `{**ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS, **configured}` — currently the
+  floor is `{"geoip_sync": "sys.geoip_sync"}`. A value configured here overrides
+  the floor for that key (including relaxing it); anything the floor names and
+  the deployment does not stays protected. It is a merge rather than a plain
+  default because `settings.get` returns a configured value wholesale, which
+  would otherwise drop the floor the moment a deployment set this at all.
+  Mirrors
   [`MEMBER_PERMS_PROTECTION`](#member); `sys.`-prefixed requirements escalate to
   a global grant. Stops a group admin from self-minting a key with permissions
   they aren't entitled to grant.

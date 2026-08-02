@@ -262,3 +262,110 @@ def test_memory_tier_check_apikey_no_crash(opts):
     finally:
         ApiKey.objects.filter(group=grp).delete()
         grp.delete()
+
+
+# ── APIKEY_PERMS_PROTECTION framework floor (maestro item 1194) ─────────────
+#
+# These live HERE, not in tests/test_account, deliberately. APIKEY_PERMS_PROTECTION
+# is a single global DB Setting plus a shared Redis hash, and testit runs MODULES
+# in parallel threads while files within a module run serially. Every mutator of
+# that Setting must therefore sit in this one module — test_apikey_perms_protection
+# above and base_term_expansion.py's setup already do — or concurrent writers race
+# and both sides flake. The non-mutating half of the geoip_sync coverage lives in
+# tests/test_account/test_geoip_federation_wire.py.
+
+
+def _floor_group_admin(tag):
+    """A group admin with NO global grants. Returns (user, group, email, pw)."""
+    from mojo.apps.account.models import User, Group, GroupMember
+
+    email = f"gpless_floor_{tag}@globalperms.test"
+    pw = "Gpless##flr99"
+    user = User.objects.create_user(username=email, email=email, password=pw)
+    user.is_active = True
+    user.is_email_verified = True
+    user.requires_mfa = False
+    user.save()
+    grp = Group.objects.create(name=f"gpless_floor_{tag}", kind="organization")
+    m, _ = GroupMember.objects.get_or_create(user=user, group=grp)
+    m.permissions = {"manage_group": True, "manage_members": True}
+    m.save()
+    return user, grp, email, pw
+
+
+@th.django_unit_test("groupless: the geoip_sync floor survives a deployment-supplied protection map")
+def test_geoip_sync_floor_survives_deployment_map(opts):
+    """THE REGRESSION THE FLOOR EXISTS FOR.
+
+    settings.get returns a configured value WHOLESALE — the in-code default is
+    consulted only when the setting is absent entirely. So a deployment that
+    sets APIKEY_PERMS_PROTECTION to protect its OWN perms would silently drop
+    the framework floor, if the floor were a plain default instead of a merge.
+    """
+    from mojo.apps.account.models import User, Group, GroupMember, ApiKey
+    from mojo.apps.account.models.setting import Setting
+    from mojo.apps.account.models.api_key import _apikey_perms_protection
+    from mojo.decorators.limits import clear_rate_limits
+
+    user, grp, email, pw = _floor_group_admin(_uuid.uuid4().hex[:8])
+    Setting.remove("APIKEY_PERMS_PROTECTION")
+    try:
+        # A deployment protecting only its own perm, silent about geoip_sync.
+        Setting.set("APIKEY_PERMS_PROTECTION", {"tenant_perm": "sys.tenant_admin"})
+        effective = _apikey_perms_protection()
+        assert effective.get("geoip_sync") == "sys.geoip_sync", \
+            f"framework floor dropped by a deployment map (wholesale-replacement bug): {effective!r}"
+        assert effective.get("tenant_perm") == "sys.tenant_admin", \
+            f"deployment entries must survive the merge: {effective!r}"
+
+        clear_rate_limits(ip="127.0.0.1", key="login")
+        assert opts.client.login(email, pw), f"login failed: {opts.client.last_response.body}"
+        resp = opts.client.post("/api/group/apikey", {
+            "group": grp.pk, "name": "floor_merged", "permissions": {"geoip_sync": True}})
+        assert resp.status_code == 403, \
+            f"geoip_sync must stay protected under a deployment-supplied map, got {resp.status_code}: {opts.client.last_response.body}"
+    finally:
+        opts.client.logout()
+        Setting.remove("APIKEY_PERMS_PROTECTION")
+        ApiKey.objects.filter(group=grp).delete()
+        GroupMember.objects.filter(group=grp).delete()
+        grp.delete()
+        User.objects.filter(pk=user.pk).delete()
+
+
+@th.django_unit_test("groupless: a deployment can explicitly override the geoip_sync floor")
+def test_geoip_sync_floor_is_overridable(opts):
+    """The floor is a default, not a ceiling.
+
+    Naming geoip_sync explicitly must take effect — a framework dictating
+    policy a deployment cannot change is a worse failure than the one fixed.
+    """
+    from mojo.apps.account.models import User, Group, GroupMember, ApiKey
+    from mojo.apps.account.models.setting import Setting
+    from mojo.apps.account.models.api_key import _apikey_perms_protection
+    from mojo.decorators.limits import clear_rate_limits
+
+    user, grp, email, pw = _floor_group_admin(_uuid.uuid4().hex[:8])
+    Setting.remove("APIKEY_PERMS_PROTECTION")
+    try:
+        Setting.set("APIKEY_PERMS_PROTECTION", {"geoip_sync": "manage_group"})
+        effective = _apikey_perms_protection()
+        assert effective.get("geoip_sync") == "manage_group", \
+            f"an explicit deployment entry must override the floor: {effective!r}"
+
+        clear_rate_limits(ip="127.0.0.1", key="login")
+        assert opts.client.login(email, pw), f"login failed: {opts.client.last_response.body}"
+        resp = opts.client.post("/api/group/apikey", {
+            "group": grp.pk, "name": "floor_override", "permissions": {"geoip_sync": True}})
+        assert resp.status_code == 200, \
+            f"an explicitly relaxed requirement must be honored, got {resp.status_code}: {opts.client.last_response.body}"
+        key = ApiKey.objects.filter(group=grp, name="floor_override").first()
+        assert key is not None and key.permissions.get("geoip_sync") is True, \
+            f"geoip_sync must land under the relaxed rule, got {key.permissions if key else None}"
+    finally:
+        opts.client.logout()
+        Setting.remove("APIKEY_PERMS_PROTECTION")
+        ApiKey.objects.filter(group=grp).delete()
+        GroupMember.objects.filter(group=grp).delete()
+        grp.delete()
+        User.objects.filter(pk=user.pk).delete()
