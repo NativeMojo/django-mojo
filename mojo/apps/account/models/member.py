@@ -105,7 +105,25 @@ class GroupMember(models.Model, MojoModel):
     def set_permissions(self, value):
             if not isinstance(value, dict):
                 return
+            current = self.permissions if isinstance(self.permissions, dict) else {}
             for perm, perm_value in value.items():
+                # A no-op needs no authority — same rule as ApiKey.set_permissions.
+                # The admin UI submits the ENTIRE permission switch catalog on
+                # every save, so a protected perm the admin never touched rides
+                # along as False on writes that have nothing to do with it.
+                # Gating that would 403 the whole save the moment
+                # MEMBER_PERMS_PROTECTION is populated — turning an attempt to
+                # HARDEN member permissions into an outage for every group admin.
+                #
+                # Read-only: never normalize the column before the gate, or an
+                # all-no-op payload could wipe it unauthorized (the bug this
+                # pattern already caused once on ApiKey).
+                #
+                # REVOKING a protected perm still requires the authority to
+                # grant it, so this is not a downgrade loophole.
+                stored = current.get(perm, False)
+                if (stored == perm_value) if bool(perm_value) else not bool(stored):
+                    continue
                 if not self.can_change_permission(perm, perm_value, self.active_request):
                     raise merrors.PermissionDeniedException()
                 if bool(perm_value):

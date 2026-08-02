@@ -149,7 +149,7 @@ GET /api/system/geoip/lookup?ip=1.2.3.4
 | Param | Required | Description |
 |---|---|---|
 | `ip` | Yes | IP address to geolocate |
-| `auto_refresh` | No | Refresh expired cache (default: `true`). Cannot currently be turned off from a query string — `"false"` is read as a truthy string. |
+| `auto_refresh` | No | Refresh expired cache (default: `true`). Pass `false`, `0`, `no`, or `off` to get the cached record as-is rather than waiting on a provider re-fetch. |
 | `graph` | No | Response graph (`default`, `basic`, `detailed`, `federation`) |
 
 **Auth:** any authenticated caller. An ApiKey token works here and needs **no

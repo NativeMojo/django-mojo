@@ -36,6 +36,26 @@ def on_geo_located_ip(request, pk=None):
     return GeoLocatedIP.on_rest_request(request, pk)
 
 
+# Same vocabulary settings uses for kind="bool" (mojo/helpers/settings/helper.py).
+_FALSEY_PARAM_VALUES = ("false", "0", "no", "off", "n", "")
+
+
+def _param_is_true(value):
+    """Coerce a request-data flag that may have arrived as a raw string.
+
+    Query params are stored verbatim by RequestDataParser — no coercion — and
+    `objict.get` is a plain dict.get, so `?auto_refresh=false` yields the STRING
+    "false", which is truthy. Any boolean query param read straight with
+    `request.DATA.get(...)` is therefore inverted for exactly the callers who
+    bothered to pass it. Kept local rather than added to the shared request
+    helper: changing coercion globally would silently flip the truthiness of
+    every existing `request.DATA.get(...)` check in the codebase.
+    """
+    if isinstance(value, str):
+        return value.strip().lower() not in _FALSEY_PARAM_VALUES
+    return bool(value)
+
+
 @md.GET('system/geoip/lookup')
 @md.requires_params('ip')
 @md.rate_limit("geoip_lookup", ip_limit=30)
@@ -61,7 +81,7 @@ def on_geo_located_ip_lookup(request):
     Privileged User callers are unaffected and still get their default graph.
     """
     ip_address = request.DATA.get('ip')
-    auto_refresh = request.DATA.get('auto_refresh', True)
+    auto_refresh = _param_is_true(request.DATA.get('auto_refresh', True))
     graph = request.DATA.get('graph', 'default')
     if graph != 'federation' and not GeoLocatedIP.rest_check_permission(
             request, "VIEW_PERMS"):

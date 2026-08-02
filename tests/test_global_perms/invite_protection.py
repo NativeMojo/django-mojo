@@ -106,3 +106,91 @@ def test_invite_enforces_member_perms_protection(opts):
             if u is not None:
                 GroupMember.objects.filter(user=u).delete()
                 u.delete()
+
+
+# ── MEMBER_PERMS_PROTECTION no-op trap (maestro item 1197) ─────────────────
+
+
+@th.django_unit_test("member perms: an untouched protected perm does not 403 an unrelated save")
+def test_member_perms_noop_does_not_block_save(opts):
+    """A no-op on a protected member perm must not deny the whole save.
+
+    GroupMember.set_permissions gated EVERY key in the incoming dict regardless
+    of value, and the admin UI submits the entire permission switch catalog on
+    every save — so a protected perm the admin never touched rides along as
+    False. Before the fix this returned a bare 403, meaning the very act of
+    populating MEMBER_PERMS_PROTECTION (i.e. HARDENING member permissions)
+    broke member administration for every group admin.
+
+    Reproduced against the unfixed code: 403 on a save whose only real change
+    was an unrelated, unprotected permission.
+
+    Sibling of the same fix on ApiKey.set_permissions (maestro item 1194).
+    """
+    from mojo.apps.account.models import User, Group, GroupMember
+    from mojo.apps.account.models.setting import Setting
+    from mojo.decorators.limits import clear_rate_limits
+
+    PROT = "gp_noop_prot_perm"
+    tag = _uuid.uuid4().hex[:8]
+    admin_email = f"gp_noop_admin_{tag}@globalperms.test"
+    target_email = f"gp_noop_target_{tag}@globalperms.test"
+    pw = "Gpnoop##adm99"
+
+    admin = User.objects.create_user(username=admin_email, email=admin_email, password=pw)
+    admin.is_active = True
+    admin.is_email_verified = True
+    admin.requires_mfa = False
+    admin.save()
+    target = User.objects.create_user(username=target_email, email=target_email, password=pw)
+    target.is_active = True
+    target.save()
+
+    grp = Group.objects.create(name=f"gp_noop_{tag}", kind="organization")
+    am, _ = GroupMember.objects.get_or_create(user=admin, group=grp)
+    am.permissions = {"manage_group": True, "manage_members": True}
+    am.save()
+    tm, _ = GroupMember.objects.get_or_create(user=target, group=grp)
+    tm.permissions = {}
+    tm.save()
+
+    Setting.remove("MEMBER_PERMS_PROTECTION")
+    try:
+        Setting.set("MEMBER_PERMS_PROTECTION", {PROT: "sys.gp_noop_never_held"})
+        clear_rate_limits(ip="127.0.0.1", key="login")
+        assert opts.client.login(admin_email, pw), \
+            f"admin login failed: {opts.client.last_response.body}"
+
+        # The admin-UI shape: whole catalog, protected perm present and OFF.
+        resp = opts.client.post(f"/api/group/member/{tm.pk}", {
+            "permissions": {"view_logs": True, PROT: False}})
+        assert resp.status_code == 200, \
+            f"an untouched protected perm must not deny an unrelated save, got {resp.status_code}: {opts.client.last_response.body}"
+        tm.refresh_from_db()
+        assert tm.permissions.get("view_logs") is True, \
+            f"the real change must land, got {tm.permissions!r}"
+        assert PROT not in tm.permissions, \
+            f"a False value must not grant the protected perm, got {tm.permissions!r}"
+
+        # GRANTING it is still denied — the skip is not a loophole.
+        resp = opts.client.post(f"/api/group/member/{tm.pk}", {
+            "permissions": {PROT: True}})
+        assert resp.status_code == 403, \
+            f"granting a protected member perm must still be denied, got {resp.status_code}: {opts.client.last_response.body}"
+
+        # And REVOKING one that is actually held is still denied.
+        tm.permissions = {PROT: True}
+        tm.save()
+        resp = opts.client.post(f"/api/group/member/{tm.pk}", {
+            "permissions": {PROT: False}})
+        assert resp.status_code == 403, \
+            f"revoking a held protected perm must still be denied, got {resp.status_code}: {opts.client.last_response.body}"
+        tm.refresh_from_db()
+        assert tm.permissions.get(PROT) is True, \
+            f"the protected perm must survive the denied revocation, got {tm.permissions!r}"
+    finally:
+        opts.client.logout()
+        Setting.remove("MEMBER_PERMS_PROTECTION")
+        GroupMember.objects.filter(group=grp).delete()
+        grp.delete()
+        User.objects.filter(pk__in=[admin.pk, target.pk]).delete()

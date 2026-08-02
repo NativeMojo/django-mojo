@@ -250,7 +250,7 @@ GET /api/system/geoip/lookup?ip=1.2.3.4
 | Param | Required | Description |
 |---|---|---|
 | `ip` | Yes | IP address to geolocate |
-| `auto_refresh` | No | Refresh expired cache (default: `true`). **Cannot currently be disabled from a query string** — params arrive as raw strings and `"false"` is truthy. |
+| `auto_refresh` | No | Refresh expired cache (default: `true`). Pass `false`/`0`/`no`/`off` to serve an expired record as-is instead of re-fetching from the provider inside the request. |
 | `graph` | No | Response graph (`default`, `basic`, `detailed`, `federation`). The `mojo` provider requests `graph=federation`. |
 
 Returns the `GeoLocatedIP` record via `on_rest_get`.

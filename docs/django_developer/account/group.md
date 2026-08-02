@@ -343,7 +343,12 @@ Rules that follow from the design:
   `{"guest": "sys.manage_groups"}`. Note the gate's global short-circuit runs
   **before** the protection map is read: a user holding global `manage_groups`
   or `manage_users` can always set or clear the marker, regardless of any
-  `MEMBER_PERMS_PROTECTION` entry.
+  `MEMBER_PERMS_PROTECTION` entry. The gate is also skipped for a **no-op** —
+  submitting a key whose value matches the stored state changes nothing and so
+  needs no authority. That matters because the admin UI submits every switch on
+  every save; without it, populating `MEMBER_PERMS_PROTECTION` at all would
+  return a bare 403 on unrelated member edits. Real grants and revocations are
+  still gated.
 - **Reserved keys on upgrade**: `guest` and `full_member` now carry framework
   meaning inside `GroupMember.permissions`. Deployments upgrading past this
   version should audit existing rows for either key — a pre-existing

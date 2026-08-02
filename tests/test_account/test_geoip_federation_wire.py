@@ -69,14 +69,12 @@ def setup_federation_wire(opts):
         permissions={},
     )
 
-    # `expires_at` MUST be set in the future, and it is the ONLY thing keeping
-    # this fixture intact. GeoLocatedIP.is_expired returns True when expires_at
-    # is null, and geolocate() then calls refresh() — which rewrites the row
-    # from the provider chain. Note that `?auto_refresh=false` does NOT save
-    # you: query params arrive as raw strings (RequestDataParser does no
-    # coercion), and the string "false" is truthy, so the endpoint's
-    # auto_refresh flag cannot be turned off from a GET at all. Filed as a
-    # sub-item of maestro 1194.
+    # `expires_at` MUST be set in the future — it is what keeps this fixture
+    # intact. GeoLocatedIP.is_expired returns True when expires_at is null, and
+    # geolocate() then calls refresh(), rewriting the row from the provider
+    # chain. (`?auto_refresh=false` now works too — see
+    # test_lookup_honors_auto_refresh_false — but relying on expires_at keeps
+    # these tests independent of that flag.)
     #
     # These are RFC 5737 documentation addresses, which Python's ipaddress
     # module reports as private — so a refresh would silently overwrite
@@ -214,6 +212,61 @@ def test_lookup_forces_federation_graph_for_unprivileged_callers(opts):
             f"unprivileged key"
         )
     opts.client.logout()
+
+
+@th.django_unit_test()
+def test_lookup_honors_auto_refresh_false(opts):
+    """`?auto_refresh=false` must actually prevent the refresh (item #1196).
+
+    Query params arrive as raw strings and RequestDataParser does no coercion,
+    so `request.DATA.get('auto_refresh', True)` returned the STRING "false" —
+    truthy — and an expired record was refreshed anyway. The documented
+    parameter did the opposite of nothing: it was inverted for exactly the
+    callers who bothered to pass it.
+
+    Reproduced before the fix: an expired row came back rewritten to
+    provider='internal' with country_code=None.
+    """
+    from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
+    from mojo.helpers import dates
+
+    stale_ip = "192.0.2.172"
+    GeoLocatedIP.objects.filter(ip_address=stale_ip).delete()
+    GeoLocatedIP.objects.create(
+        ip_address=stale_ip,
+        provider="maxmind",
+        country_code="US",
+        country_name="United States",
+        expires_at=dates.utcnow() - timedelta(days=1),   # EXPIRED
+    )
+    try:
+        _use_apikey(opts, opts.fed_token)
+        resp = opts.client.get(
+            "/api/system/geoip/lookup",
+            params={"ip": stale_ip, "auto_refresh": "false"},
+        )
+        assert resp.status_code == 200, (
+            f"lookup failed: {resp.status_code} {opts.client.last_response.body}"
+        )
+        row = GeoLocatedIP.objects.get(ip_address=stale_ip)
+        assert row.provider == "maxmind", (
+            f"auto_refresh=false did not prevent the refresh — provider was "
+            f"rewritten to {row.provider!r} and country_code to "
+            f"{row.country_code!r}"
+        )
+
+        # And the flag must still DEFAULT to on: omitting it refreshes.
+        resp = opts.client.get(
+            "/api/system/geoip/lookup", params={"ip": stale_ip})
+        assert resp.status_code == 200, "default-path lookup failed"
+        row = GeoLocatedIP.objects.get(ip_address=stale_ip)
+        assert row.provider != "maxmind", (
+            "omitting auto_refresh must still refresh an expired record — the "
+            "coercion must not have flipped the default to off"
+        )
+    finally:
+        opts.client.logout()
+        GeoLocatedIP.objects.filter(ip_address=stale_ip).delete()
 
 
 @th.django_unit_test()

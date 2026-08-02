@@ -545,7 +545,13 @@ restart. See
   `manage_groups` may assign arbitrary member keys). Example — require a *global*
   `manage_jobs` to grant a member `manage_jobs`:
   `{"manage_jobs": "sys.manage_jobs"}` (the `sys.` prefix escalates the
-  requirement to the granter's global permission). Use it to stop tenant admins
+  requirement to the granter's global permission). Unlike
+  `APIKEY_PERMS_PROTECTION` this has **no framework floor** — it really is empty
+  until you populate it. Populating it is safe: `set_permissions` skips any key
+  whose value would not change the stored state, so a protected permission the
+  admin never touched (the admin UI submits the whole switch catalog on every
+  save) does not deny the write. Granting and revoking a protected key both
+  still require the stated authority. Use it to stop tenant admins
   from minting high-privilege member grants.
 
 ### METRICS
