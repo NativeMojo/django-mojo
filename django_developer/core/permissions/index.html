@@ -4207,6 +4207,23 @@ Without this, a key self-claiming <code>manage_users</code> could read every ten
 <code>User</code> rows. A key's own <code>permissions</code> are additionally gated on assignment by
 <code>APIKEY_PERMS_PROTECTION</code> (see <a href="../../account/api_keys/">API Keys</a>). Net: an
 ApiKey can only ever reach <strong>group-owned</strong> data, confined to its own group.</p>
+<p><strong>A third path bypasses both gates above: no model security at all.</strong> Both
+protections just described only fire on an endpoint that actually reaches
+them — <code>requires_global_perms</code> is a decorator you must apply, and the
+model-security groupless-deny only runs for a view that goes through
+<code>uses_model_security</code> / <code>on_rest_request</code> (or an explicit
+<code>rest_check_permission_or_raise</code> call). A hand-written view gated by
+<code>@md.requires_auth()</code> alone that serializes an instance directly (e.g.
+<code>instance.on_rest_get(request)</code>, which performs no permission check of its own)
+never reaches <code>_evaluate_permission</code> — so an ApiKey is authenticated but subject
+to <strong>no permission check at all</strong>, whether or not the model is groupless. This
+is a deliberate, narrow pattern rather than an oversight to "fix" reflexively:
+<code>GET /api/system/geoip/lookup</code> is the canonical instance — <code>GeoLocatedIP</code> is
+groupless, and every downstream instance running the <code>mojo</code> GeoIP provider
+authenticates with a group-scoped key holding zero permissions, so the endpoint
+is authentication-only by design. See <a href="../../account/geoip/">GeoIP</a> (the
+<code>GET system/geoip/lookup</code> entry) for the guardrail and its tripwire test before
+adding model security to an endpoint like this to "conform" it.</p>
 <p>The security registry records <code>global_only: True</code> for these endpoints, so audit
 tooling can tell them apart.</p>
 <p><strong>Identity classification (DM-045).</strong> Before any of the group/owner logic

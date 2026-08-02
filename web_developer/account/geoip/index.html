@@ -4083,6 +4083,10 @@ supported key-based access path.</p>
 <td><code>detailed</code></td>
 <td>All fields including raw data</td>
 </tr>
+<tr>
+<td><code>federation</code></td>
+<td>Location and abuse-signal fields only — no per-fleet blocking/whitelisting state, no raw data, and (unlike the other three graphs) no <code>is_threat</code>/<code>is_suspicious</code>/<code>risk_score</code> either. This is what the <a href="#get-systemgeoiplookup--authenticated-ip-lookup">lookup endpoint</a> returns to a peer instance.</td>
+</tr>
 </tbody>
 </table>
 <p>Only <code>detailed</code> includes the <code>data</code> blob. When threat checks have run,
@@ -4195,15 +4199,31 @@ history or a blocklist hit.</p>
 <tr>
 <td><code>auto_refresh</code></td>
 <td>No</td>
-<td>Refresh expired cache (default: <code>true</code>)</td>
+<td>Refresh expired cache (default: <code>true</code>). Pass <code>false</code>, <code>0</code>, <code>no</code>, or <code>off</code> to get the cached record as-is rather than waiting on a provider re-fetch.</td>
 </tr>
 <tr>
 <td><code>graph</code></td>
 <td>No</td>
-<td>Response graph (<code>default</code>, <code>basic</code>, <code>detailed</code>)</td>
+<td>Response graph (<code>default</code>, <code>basic</code>, <code>detailed</code>, <code>federation</code>)</td>
 </tr>
 </tbody>
 </table>
+<p><strong>Auth:</strong> any authenticated caller. An ApiKey token works here and needs <strong>no
+permissions</strong> — unlike the <code>system/geoip</code> CRUD endpoints, which reject ApiKey
+identities outright. This is what lets a downstream django-mojo instance use
+this endpoint as its GeoIP source.</p>
+<p><strong>The <code>graph</code> parameter is honored only for callers holding the model's
+<code>VIEW_PERMS</code></strong> (<code>manage_users</code>, <code>view_security</code>, <code>manage_security</code>, <code>security</code>,
+or <code>users</code>). Everyone else — including a federation ApiKey — is served the
+<code>federation</code> graph regardless of what they ask for: location and abuse signals
+only, no per-fleet blocking or whitelisting state and no raw provider <code>data</code>.
+Requests are downgraded, never rejected, so passing <code>graph=detailed</code> without
+the permissions returns <code>200</code> with the federation payload rather than a <code>403</code>.</p>
+<blockquote>
+<p>An API key exists so an instance can <em>be</em> a GeoIP provider, not so it can
+manage or inspect another fleet's GeoIP data. If you need the full record,
+use <code>GET system/geoip/&lt;pk&gt;</code> with a user session that holds the permissions.</p>
+</blockquote>
 <h3 id="response_1">Response<a class="headerlink" href="#response_1" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
@@ -4229,6 +4249,12 @@ history or a blocklist hit.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>POST /api/system/geoip/sync
 </code></pre></div>
 <p><strong>Requires:</strong> ApiKey token with <code>geoip_sync</code> permission (group-scoped). This endpoint is used by downstream django-mojo instances to push abuse signals observed locally back to this upstream. You do not call this manually — it is invoked by the <code>push_abuse_signals</code> async job.</p>
+<blockquote>
+<p><code>geoip_sync</code> is a <strong>protected</strong> permission: because it writes fleet-wide
+threat intel, only a global administrator can grant it to a key. A group
+admin creating or editing a key will get a <code>403</code> if they try to turn it on.
+In the admin UI the toggle is shown disabled for those users.</p>
+</blockquote>
 <h3 id="request-body">Request Body<a class="headerlink" href="#request-body" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

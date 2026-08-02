@@ -4662,7 +4662,12 @@ permission layer decides read-vs-write from the RestMeta keys of the call
   <code>{"guest": "sys.manage_groups"}</code>. Note the gate's global short-circuit runs
   <strong>before</strong> the protection map is read: a user holding global <code>manage_groups</code>
   or <code>manage_users</code> can always set or clear the marker, regardless of any
-  <code>MEMBER_PERMS_PROTECTION</code> entry.</li>
+  <code>MEMBER_PERMS_PROTECTION</code> entry. The gate is also skipped for a <strong>no-op</strong> —
+  submitting a key whose value matches the stored state changes nothing and so
+  needs no authority. That matters because the admin UI submits every switch on
+  every save; without it, populating <code>MEMBER_PERMS_PROTECTION</code> at all would
+  return a bare 403 on unrelated member edits. Real grants and revocations are
+  still gated.</li>
 <li><strong>Reserved keys on upgrade</strong>: <code>guest</code> and <code>full_member</code> now carry framework
   meaning inside <code>GroupMember.permissions</code>. Deployments upgrading past this
   version should audit existing rows for either key — a pre-existing

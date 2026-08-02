@@ -4617,9 +4617,13 @@
 <td><code>detailed</code></td>
 <td>All fields including raw <code>data</code></td>
 </tr>
+<tr>
+<td><code>federation</code></td>
+<td>Location + abuse-signal fields only — the peer-instance wire format served by <a href="#get-systemgeoiplookup--authenticated-ip-lookup"><code>GET system/geoip/lookup</code></a> below. Never includes the per-fleet firewall fields (<code>is_blocked</code>, <code>is_whitelisted</code>, <code>blocked_*</code>, <code>whitelisted_*</code>) or the raw <code>data</code> blob.</td>
+</tr>
 </tbody>
 </table>
-<p>All graphs include <code>is_threat</code>, <code>is_suspicious</code>, and <code>risk_score</code> as extras. The <code>basic</code> graph also includes <code>block_active</code>.</p>
+<p><code>default</code>, <code>basic</code>, and <code>detailed</code> include <code>is_threat</code>, <code>is_suspicious</code>, and <code>risk_score</code> as extras; <code>federation</code> defines no <code>extra</code> list at all, so none of the three are serialized on it — the fields they're computed from (<code>is_known_attacker</code>, <code>is_known_abuser</code>, <code>threat_level</code>, <code>is_tor</code>, <code>is_vpn</code>, <code>is_proxy</code>) are present, so a caller needing the computed booleans derives them itself. The <code>basic</code> graph also includes <code>block_active</code>.</p>
 <hr />
 <h2 id="rest-endpoints">REST Endpoints<a class="headerlink" href="#rest-endpoints" title="Permanent link">&para;</a></h2>
 <p>The account app sets <code>APP_NAME = ""</code>, so these endpoints register directly under <code>/api/system/</code>.</p>
@@ -4643,7 +4647,7 @@ even if its <code>permissions</code> dict includes <code>manage_users</code> (<c
 <h3 id="get-systemgeoiplookup-authenticated-ip-lookup"><code>GET system/geoip/lookup</code> — Authenticated IP Lookup<a class="headerlink" href="#get-systemgeoiplookup-authenticated-ip-lookup" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>GET /api/system/geoip/lookup?ip=1.2.3.4
 </code></pre></div>
-<p><strong>Requires authentication</strong> (<code>@md.requires_auth()</code>). Rate limited to 30 requests/minute per IP. Used by the <code>mojo</code> provider on downstream instances to query the upstream.</p>
+<p><strong>Requires authentication</strong> (<code>@md.requires_auth()</code>) and nothing more. Rate limited to 30 requests/minute per IP. Used by the <code>mojo</code> provider on downstream instances to query the upstream.</p>
 <table>
 <thead>
 <tr>
@@ -4661,16 +4665,45 @@ even if its <code>permissions</code> dict includes <code>manage_users</code> (<c
 <tr>
 <td><code>auto_refresh</code></td>
 <td>No</td>
-<td>Refresh expired cache (default: <code>true</code>)</td>
+<td>Refresh expired cache (default: <code>true</code>). Pass <code>false</code>/<code>0</code>/<code>no</code>/<code>off</code> to serve an expired record as-is instead of re-fetching from the provider inside the request.</td>
 </tr>
 <tr>
 <td><code>graph</code></td>
 <td>No</td>
-<td>Response graph (<code>default</code>, <code>basic</code>, <code>detailed</code>). The <code>mojo</code> provider requests <code>graph=detailed</code>.</td>
+<td>Response graph (<code>default</code>, <code>basic</code>, <code>detailed</code>, <code>federation</code>). The <code>mojo</code> provider requests <code>graph=federation</code>.</td>
 </tr>
 </tbody>
 </table>
 <p>Returns the <code>GeoLocatedIP</code> record via <code>on_rest_get</code>.</p>
+<p><strong>A group ApiKey IS accepted here — deliberately, and this is load-bearing.</strong>
+Note the contrast with the CRUD endpoints above, which reject keys: this
+endpoint is gated by <code>requires_auth()</code> alone and responds through the
+serializer directly, so it never reaches model security's groupless-deny
+branch. The key needs <strong>no permissions at all</strong> — only that it be active,
+unexpired, and (if linked to a member) linked to an active non-superuser.</p>
+<p>Every downstream running <code>GEOIP_PRIMARY_PROVIDER='mojo'</code> depends on that. Do
+<strong>not</strong> "conform" this endpoint by adding <code>@md.uses_model_security</code> or a
+<code>rest_check_permission_or_raise</code> call: <code>GeoLocatedIP</code> is groupless, so that
+change would deny every ApiKey and silently break GeoIP federation fleet-wide.
+<code>tests/test_account/test_geoip_federation_wire.py::test_lookup_accepts_group_apikey</code>
+exists as the tripwire for exactly this.</p>
+<p><strong>Open access does not mean the caller picks the payload.</strong> Anything richer
+than the <code>federation</code> graph requires the same <code>VIEW_PERMS</code> the CRUD endpoints
+demand; a caller without them is served the <code>federation</code> graph whatever it
+asked for. Otherwise a zero-permission key could read per-fleet enforcement
+state — or, via <code>graph=detailed</code>, the raw provider blob — simply by adding a
+query parameter. Privileged <code>User</code> callers are unaffected and still receive
+their requested graph.</p>
+<blockquote>
+<p><strong>The boundary rule, in one line (owner ruling, 2026-08-02):</strong> an API key
+exists so an instance can <em>be</em> a GeoIP provider, <strong>not</strong> so it can manage or
+inspect another fleet's GeoIP data. Read/write of records, and the
+block/unblock/whitelist actions, are for a real <code>User</code> with the permissions —
+keys are denied there, deliberately, and that is not a regression from the
+ApiKey group-scoping work. If you find yourself wanting to relax it, add a
+narrow purpose-built endpoint (as <code>system/geoip/sync</code> is) rather than opening
+the CRUD surface or setting <code>ALLOW_API_KEY_GLOBAL</code>.</p>
+</blockquote>
 <h3 id="post-systemgeoipsync-federation-abuse-signal-receiver"><code>POST system/geoip/sync</code> — Federation Abuse-Signal Receiver<a class="headerlink" href="#post-systemgeoipsync-federation-abuse-signal-receiver" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>POST /api/system/geoip/sync
 </code></pre></div>
@@ -4943,7 +4976,47 @@ don't have to reach into the raw blob. It is <strong>not</strong> persisted — 
 has no such field, and <code>refresh()</code>'s <code>hasattr</code>-gated copy loop drops it. The
 stored copy lives in <code>data['threat_data']['is_blocklisted']</code>.</p>
 <h3 id="mojo-provider"><code>mojo</code> Provider<a class="headerlink" href="#mojo-provider" title="Permanent link">&para;</a></h3>
-<p>Use another django-mojo instance as a GeoIP data source. The downstream instance calls the upstream's <code>GET /api/system/geoip/lookup?graph=detailed</code> with an ApiKey token and caches the result locally.</p>
+<p>Use another django-mojo instance as a GeoIP data source. The downstream instance calls the upstream's <code>GET /api/system/geoip/lookup?graph=federation</code> with an ApiKey token and caches the result locally.</p>
+<p><strong>Provisioning the hub key</strong> — what permissions the ApiKey actually needs:</p>
+<table>
+<thead>
+<tr>
+<th>Call</th>
+<th>Permission required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET system/geoip/lookup</code> (every lookup)</td>
+<td><strong>none</strong> — authentication only</td>
+</tr>
+<tr>
+<td><code>POST system/geoip/sync</code> (only if <code>GEOIP_MOJO_SYNC_ENABLED</code>)</td>
+<td><strong><code>geoip_sync</code></strong></td>
+</tr>
+</tbody>
+</table>
+<p>So the minimal hub-side key is:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="n">api_key</span><span class="p">,</span> <span class="n">token</span> <span class="o">=</span> <span class="n">ApiKey</span><span class="o">.</span><span class="n">create_for_group</span><span class="p">(</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>    <span class="n">group</span><span class="p">,</span> <span class="s2">&quot;geoip-federation-&lt;downstream&gt;&quot;</span><span class="p">,</span> <span class="n">permissions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;geoip_sync&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
+</code></pre></div>
+<p>Which group the key hangs on does not matter for either call — neither
+endpoint consults <code>request.group</code>. Put the returned token in the downstream's
+<code>GEOIP_API_KEY_MOJO</code>.</p>
+<blockquote>
+<p><strong><code>geoip_sync</code> is a protected permission.</strong> It writes fleet-wide threat
+intel, so <code>APIKEY_PERMS_PROTECTION</code> ships a framework floor requiring
+<code>sys.geoip_sync</code> to grant it — an ordinary group admin cannot mint a
+federation key. A global <code>manage_users</code>/<code>manage_groups</code> holder can, as can a
+member of the key's group who globally holds <code>geoip_sync</code>. See
+<a href="../api_keys/">API Keys</a> for the floor and how to override it.</p>
+<p><strong>Leave a federation key unlinked.</strong> Do not set <code>user</code> + <code>override_user</code> on
+it. The sync gate is <code>requires_global_perms</code>, which authorizes on
+<code>request.user</code> — under <code>override_user=True</code> that is the linked <em>member</em>, so
+the key's own permissions stop bounding it and the member's global grants
+take over. Reference-mode (<code>override_user=False</code>) and unlinked keys are
+unaffected.</p>
+</blockquote>
 <p><strong>Configuration:</strong></p>
 <table>
 <thead>

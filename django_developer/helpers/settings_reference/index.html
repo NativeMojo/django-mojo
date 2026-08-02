@@ -5549,11 +5549,17 @@
 </ul>
 <h3 id="apikey">APIKEY<a class="headerlink" href="#apikey" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>APIKEY_PERMS_PROTECTION</code> — dict, default <code>{}</code> (read with <code>kind="dict"</code>, so a
-  DB-backed <code>Setting</code> JSON string is honored). Maps a permission key → the
-  permission(s) the granter must hold to assign it to an <code>ApiKey</code>, gating
-  <code>ApiKey.set_permissions</code> on REST write. Empty by default (any group admin with
-  a key-management perm may assign any non-<code>sys.</code> key). Mirrors
+<li><code>APIKEY_PERMS_PROTECTION</code> — dict, <strong>merged over a framework floor</strong> (read with
+  <code>kind="dict"</code>, so a DB-backed <code>Setting</code> JSON string is honored). Maps a
+  permission key → the permission(s) the granter must hold to assign it to an
+  <code>ApiKey</code>, gating <code>ApiKey.set_permissions</code> on REST write. The effective map is
+  <code>{**ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS, **configured}</code> — currently the
+  floor is <code>{"geoip_sync": "sys.geoip_sync"}</code>. A value configured here overrides
+  the floor for that key (including relaxing it); anything the floor names and
+  the deployment does not stays protected. It is a merge rather than a plain
+  default because <code>settings.get</code> returns a configured value wholesale, which
+  would otherwise drop the floor the moment a deployment set this at all.
+  Mirrors
   <a href="#member"><code>MEMBER_PERMS_PROTECTION</code></a>; <code>sys.</code>-prefixed requirements escalate to
   a global grant. Stops a group admin from self-minting a key with permissions
   they aren't entitled to grant.</li>
@@ -6010,7 +6016,13 @@ restart. See
   <code>manage_groups</code> may assign arbitrary member keys). Example — require a <em>global</em>
   <code>manage_jobs</code> to grant a member <code>manage_jobs</code>:
   <code>{"manage_jobs": "sys.manage_jobs"}</code> (the <code>sys.</code> prefix escalates the
-  requirement to the granter's global permission). Use it to stop tenant admins
+  requirement to the granter's global permission). Unlike
+  <code>APIKEY_PERMS_PROTECTION</code> this has <strong>no framework floor</strong> — it really is empty
+  until you populate it. Populating it is safe: <code>set_permissions</code> skips any key
+  whose value would not change the stored state, so a protected permission the
+  admin never touched (the admin UI submits the whole switch catalog on every
+  save) does not deny the write. Granting and revoking a protected key both
+  still require the stated authority. Use it to stop tenant admins
   from minting high-privilege member grants.</li>
 </ul>
 <h3 id="metrics">METRICS<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h3>
