@@ -4111,10 +4111,21 @@
 <p>When shortlinks are disabled or the app is not installed, behavior is identical to the pre-shortlink implementation:
 - Public files return a permanent CDN/storage URL (cached in <code>download_url</code>)
 - Private files return a time-limited presigned URL (TTL from <code>urls_expire_in</code> FileManager setting)</p>
+<p>For user-scoped S3 storage, “public” means the FileManager has current,
+conclusive storage evidence. <code>get_for_user()</code> can establish policy-level
+evidence first; the first direct file or rendition URL supersedes policy-only
+evidence once with an exact-object check. An existing manager with no metadata
+can also reconcile directly on that first URL after upgrade. A confirmed
+anonymous 403 repairs the manager to private and returns a fresh presigned URL,
+so an existing avatar or document becomes readable without being uploaded
+again. If AWS access cannot be determined, the URL is also presigned but the
+operator's stored <code>is_public</code> value is not overwritten.</p>
 <p>To bypass shortlink wrapping and get the raw backend URL directly (e.g., from within the shortlink resolver itself), call:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">url</span> <span class="o">=</span> <span class="n">file_instance</span><span class="o">.</span><span class="n">get_direct_download_url</span><span class="p">()</span>
 </code></pre></div>
 <p><code>get_direct_download_url()</code> never produces a short URL and never recurses into the shortlink system. Use it when you need the actual fetch URL, not the stable surface URL.</p>
+<p>Shortlink redirects call this direct method at resolution time, so a repaired
+private manager produces a fresh presign behind its existing stable short URL.</p>
 <p>See <a href="../shortlinks/">shortlinks.md</a> for the full pipeline, per-manager toggles, and the tier-1/tier-2 distinction.</p>
 <h2 id="upload-status-management">Upload Status Management<a class="headerlink" href="#upload-status-management" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">file</span><span class="o">.</span><span class="n">mark_as_uploading</span><span class="p">(</span><span class="n">commit</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>

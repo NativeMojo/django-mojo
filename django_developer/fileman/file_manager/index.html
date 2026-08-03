@@ -3853,6 +3853,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="S3 Backend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#public-access-reconciliation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Public-access reconciliation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -4026,34 +4043,74 @@
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">AWS_STORAGE_BUCKET_NAME</span> <span class="o">=</span> <span class="s2">&quot;my-bucket&quot;</span>
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">AWS_S3_REGION_NAME</span> <span class="o">=</span> <span class="s2">&quot;us-east-1&quot;</span>
 </code></pre></div>
+<h4 id="public-access-reconciliation">Public-access reconciliation<a class="headerlink" href="#public-access-reconciliation" title="Permanent link">&para;</a></h4>
+<p>For a user-scoped S3 manager, <code>is_public</code> is a stored classification that must
+agree with the storage service. FileManager performs a policy-level check when
+<code>get_for_user()</code> provisions or retrieves a personal manager. The first real
+file or rendition URL then supersedes policy-only evidence once with a stronger
+object-level check. An existing manager can also enter directly through that
+object-level path when one of its files is resolved after upgrade.</p>
+<p>The internal <code>public_access_audit</code> field stores versioned evidence with one of
+three statuses:</p>
+<ul>
+<li><code>public</code> — anonymous access was conclusively established; <code>is_public</code> is repaired to <code>True</code> and unsigned URLs are allowed.</li>
+<li><code>private</code> — anonymous access was conclusively denied; <code>is_public</code> is repaired to <code>False</code>.</li>
+<li><code>unknown</code> — AWS could not establish either result. The stored <code>is_public</code> value is preserved, but download behavior fails closed to a presigned URL.</li>
+</ul>
+<p>The audit uses an anonymous HEAD probe after authenticated S3 access confirms a
+real object exists. An anonymous 403 is enough to disprove manager-wide public
+access. A successful probe proves only that one object is readable, so the
+manager is classified public only when policy evidence also shows an
+unconditional anonymous <code>s3:GetObject</code> allow covering the entire prefix, no
+matching deny can override it, and effective bucket/account Public Access Block
+settings do not restrict the existing policy. Before any object exists, that
+same conservative policy evidence is used by itself. The audit never adds or
+broadens bucket policy statements.</p>
+<p>Audit metadata carries a one-way fingerprint of the backend URL/type and
+effective connection settings. Changing those FileManager inputs invalidates
+the evidence. Normal reads do not use an hourly TTL and do not poll AWS after
+the current evidence is established.</p>
+<p>Bucket/account policy or Public Access Block changes made through AWS Console,
+Terraform, or another path outside FileManager are not observable from the
+model. Force a bulk policy refresh after such a change:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>reconcile_fileman_public_access
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>reconcile_fileman_public_access<span class="w"> </span>--dry-run
+</code></pre></div>
+<p>The command audits active user-scoped S3 managers independently, reports
+<code>public</code>/<code>private</code>/<code>unknown</code> totals, and continues if one manager fails. Dry-run
+performs the read-only AWS inspection without changing <code>is_public</code> or audit
+metadata.</p>
 <h3 id="backend-interface-downloadfile_path-local_path">Backend interface — <code>download(file_path, local_path)</code><a class="headerlink" href="#backend-interface-downloadfile_path-local_path" title="Permanent link">&para;</a></h3>
 <p>All backends used by the renderer pipeline (image, vector, video, audio, document) must implement:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">download</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">local_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Copy the stored file at file_path to a local filesystem path.&quot;&quot;&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">download</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">local_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Copy the stored file at file_path to a local filesystem path.&quot;&quot;&quot;</span>
 </code></pre></div>
 <p>The renderers download the original file to a temp path before processing. The local backend (<code>FileSystemStorageBackend</code>) and the S3 backend both implement this. If you write a custom backend, implement <code>download()</code> or rendition generation will fail for that backend's files.</p>
 <p>See <code>mojo/apps/fileman/backends/</code> — each backend inherits <code>BaseStorageBackend</code>.</p>
 <h2 id="direct-upload-flow-s3">Direct Upload Flow (S3)<a class="headerlink" href="#direct-upload-flow-s3" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># 1. Create File record</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">file</span> <span class="o">=</span> <span class="n">File</span><span class="p">(</span><span class="n">filename</span><span class="o">=</span><span class="s2">&quot;report.pdf&quot;</span><span class="p">,</span> <span class="n">file_size</span><span class="o">=</span><span class="mi">102400</span><span class="p">,</span> <span class="n">content_type</span><span class="o">=</span><span class="s2">&quot;application/pdf&quot;</span><span class="p">)</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">file</span><span class="o">.</span><span class="n">file_manager</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_from_request</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">file</span><span class="o">.</span><span class="n">on_rest_pre_save</span><span class="p">({},</span> <span class="kc">True</span><span class="p">)</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">file</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># 2. Get presigned upload URL</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">upload_url</span> <span class="o">=</span> <span class="n">file</span><span class="o">.</span><span class="n">request_upload_url</span><span class="p">()</span>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="c1"># Return upload_url to the client</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>
-<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="c1"># 3. Client uploads directly to S3</span>
-<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="c1"># 4. Client confirms: POST /api/fileman/file/&lt;id&gt; with action=mark_as_completed</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># 1. Create File record</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">file</span> <span class="o">=</span> <span class="n">File</span><span class="p">(</span><span class="n">filename</span><span class="o">=</span><span class="s2">&quot;report.pdf&quot;</span><span class="p">,</span> <span class="n">file_size</span><span class="o">=</span><span class="mi">102400</span><span class="p">,</span> <span class="n">content_type</span><span class="o">=</span><span class="s2">&quot;application/pdf&quot;</span><span class="p">)</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">file</span><span class="o">.</span><span class="n">file_manager</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_from_request</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">file</span><span class="o">.</span><span class="n">on_rest_pre_save</span><span class="p">({},</span> <span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">file</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1"># 2. Get presigned upload URL</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">upload_url</span> <span class="o">=</span> <span class="n">file</span><span class="o">.</span><span class="n">request_upload_url</span><span class="p">()</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># Return upload_url to the client</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="c1"># 3. Client uploads directly to S3</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="c1"># 4. Client confirms: POST /api/fileman/file/&lt;id&gt; with action=mark_as_completed</span>
 </code></pre></div>
 <h2 id="multiple-filemanagers-per-group">Multiple FileManagers per Group<a class="headerlink" href="#multiple-filemanagers-per-group" title="Permanent link">&para;</a></h2>
 <p>A group can have multiple named FileManagers (e.g., <code>"avatars"</code>, <code>"documents"</code>). Specify by name:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">fm</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_for_user_group</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">use</span><span class="o">=</span><span class="s2">&quot;avatars&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">fm</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_for_user_group</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">use</span><span class="o">=</span><span class="s2">&quot;avatars&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>REST clients pass <code>?use=avatars</code> to select a specific manager.</p>
 <h2 id="auto-provisioning">Auto-Provisioning<a class="headerlink" href="#auto-provisioning" title="Permanent link">&para;</a></h2>
-<p>If no <code>FileManager</code> exists for a group, the system-wide default is used automatically. Set <code>is_default=True</code> on one FileManager to designate it.</p>
+<p>If no <code>FileManager</code> exists for a group or user, the system-wide default is used
+automatically. Set <code>is_default=True</code> on one FileManager to designate it. A new
+user manager inherits the system manager's public/private value and reconciles
+its derived S3 prefix before it is returned.</p>
 
 
 

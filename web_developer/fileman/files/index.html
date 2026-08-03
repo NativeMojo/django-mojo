@@ -3984,6 +3984,14 @@
 </ul>
 <p>For the normal case — <code>&lt;img src={file.thumbnail}&gt;</code>, <code>&lt;a href={file.url}&gt;Download&lt;/a&gt;</code> — no client-side change is needed. Browsers follow the redirect transparently.</p>
 <p>If a deployment has shortlinks disabled (global <code>FILEMAN_USE_SHORTLINKS=False</code> or per-FileManager override), <code>url</code> will be the direct backend URL with no wrapping. Treat both forms as opaque.</p>
+<p>The server verifies personal S3 managers before exposing an unsigned URL. It
+may first inspect manager-level policy when resolving the personal manager, then
+supersedes policy-only evidence once with the first exact file or rendition
+check. An older manager can also repair itself directly when an existing URL is
+first resolved after upgrade. Private or indeterminate access returns a fresh
+presigned target; the file does not need to be uploaded again. Clients should
+therefore continue treating every returned URL as opaque and should not infer
+public/private status from its shape.</p>
 <h2 id="get-file">Get File<a class="headerlink" href="#get-file" title="Permanent link">&para;</a></h2>
 <p><strong>GET</strong> <code>/api/fileman/file/123</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
