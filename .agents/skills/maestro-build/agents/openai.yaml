@@ -1,0 +1,11 @@
+interface:
+  display_name: "Maestro Build"
+  short_description: "Build and close a planned Maestro board item"
+  default_prompt: "Use $maestro-build to claim, implement, verify, and close this planned Maestro item."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "maestro"
+      description: "Read and update the shared Maestro workspace and boards"
+      transport: "streamable_http"
+      url: "https://maestromojo.com/mcp"

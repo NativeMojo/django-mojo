@@ -1,0 +1,11 @@
+interface:
+  display_name: "Maestro Auto"
+  short_description: "Scope and build a Maestro item batch"
+  default_prompt: "Use $maestro-auto to scope and build this batch behind one consolidated approval gate."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "maestro"
+      description: "Read and update the shared Maestro workspace and boards"
+      transport: "streamable_http"
+      url: "https://maestromojo.com/mcp"

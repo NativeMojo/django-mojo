@@ -1,0 +1,11 @@
+interface:
+  display_name: "Maestro Task"
+  short_description: "File investigated work on the Maestro board"
+  default_prompt: "Use $maestro-task to investigate this request and file it on the Maestro board."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "maestro"
+      description: "Read and update the shared Maestro workspace and boards"
+      transport: "streamable_http"
+      url: "https://maestromojo.com/mcp"
