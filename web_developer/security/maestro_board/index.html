@@ -23,7 +23,7 @@
     
     
       
-        <title>Maestro Boards — REST API - Django-MOJO</title>
+        <title>Maestro Reporting — REST and Rule API - Django-MOJO</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#maestro-boards-rest-api" class="md-skip">
+        <a href="#maestro-reporting-rest-and-rule-api" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Maestro Boards — REST API
+              Maestro Reporting — REST and Rule API
             
           </span>
         </div>
@@ -3733,10 +3733,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#permissions" class="md-nav__link">
+  <a href="#ticket-action" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Permissions
+        Ticket action
       
     </span>
   </a>
@@ -3744,60 +3744,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#boards" class="md-nav__link">
+  <a href="#rules-handlers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Boards
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Boards">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#register-create-a-board" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Register (create) a board
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#standard-crud" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Standard CRUD
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#refresh-the-cached-schema" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Refresh the cached schema
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#pushing-a-ticket" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pushing a ticket
+        Rules handlers
       
     </span>
   </a>
@@ -3805,10 +3755,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#links" class="md-nav__link">
+  <a href="#item-links" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Links
+        Item links
       
     </span>
   </a>
@@ -3816,10 +3766,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#webhook-receiver-maestro-this-project" class="md-nav__link">
+  <a href="#ongoing-updates" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Webhook receiver (maestro → this project)
+        Ongoing updates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#callback-receiver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Callback receiver
       
     </span>
   </a>
@@ -3846,118 +3807,76 @@
   
 
 
-<h1 id="maestro-boards-rest-api">Maestro Boards — REST API<a class="headerlink" href="#maestro-boards-rest-api" title="Permanent link">&para;</a></h1>
-<p>Push incident tickets into a remote maestro board and keep them in sync.
-A maestro workspace admin mints a board link and gives you a paste URL
-(<code>https://&lt;maestro-host&gt;/api/boards/link/&lt;key&gt;</code>); registering it here creates
-a MaestroBoard, after which tickets can be pushed to the board and board-side
-changes flow back onto the ticket as notes.</p>
-<h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Permission</th>
-<th>Access</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>manage_security</code> (or <code>security</code>)</td>
-<td>Board CRUD, <code>refresh_schema</code>, <code>push_to_board</code>, link delete</td>
-</tr>
-<tr>
-<td><code>view_security</code> (or <code>security</code>)</td>
-<td>List/read links</td>
-</tr>
-</tbody>
-</table>
-<p>There is no view-only tier for boards — the row holds a credential.</p>
-<h2 id="boards">Boards<a class="headerlink" href="#boards" title="Permanent link">&para;</a></h2>
-<h3 id="register-create-a-board">Register (create) a board<a class="headerlink" href="#register-create-a-board" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>POST /api/incident/maestro/board
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>{&quot;paste_url&quot;: &quot;https://maestromojo.com/api/boards/link/&lt;key&gt;&quot;}
+<h1 id="maestro-reporting-rest-and-rule-api">Maestro Reporting — REST and Rule API<a class="headerlink" href="#maestro-reporting-rest-and-rule-api" title="Permanent link">&para;</a></h1>
+<p>A django-mojo deployment has one reporting connection to one Maestro workspace.
+The secret lives in server <code>django.conf</code>; browser clients never create, select
+or read a connection credential.</p>
+<p>Maestro owns the integration's default board. Wherever this API accepts
+<code>board</code>, it is a remote Maestro board id inside the configured workspace.</p>
+<h2 id="ticket-action">Ticket action<a class="headerlink" href="#ticket-action" title="Permanent link">&para;</a></h2>
+<p>Users with Ticket save permission (<code>manage_security</code> or <code>security</code>) can push an
+existing Ticket:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="err">POST /api/incident/ticket/42</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="err">Content-Type: application/json</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="err">{&quot;push_to_maestro&quot;: true}</span>
 </code></pre></div>
-<p>The save validates the link against maestro synchronously — a bad or
-unreachable link returns 400 and nothing is created. The paste must be
-<code>https</code> with a public hostname (local/private hosts are rejected unless the
-server sets the dev-only <code>MAESTRO_ALLOW_HTTP</code>). On success the response
-carries the cached board <code>name</code>, <code>remote_board_id</code>, and <code>schema</code>
-(<code>{"label": ..., "columns": [...]}</code>). The link key itself is stored encrypted
-and never appears in any response.</p>
-<p>Optional writable fields:</p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>status_map</code></td>
-<td><code>{"column": "&lt;slug&gt;", "map": {"&lt;ticket status&gt;": "&lt;option value&gt;"}}</code> — enables status sync both directions; without it, ticket status never changes from board activity</td>
-</tr>
-<tr>
-<td><code>sync_notes</code></td>
-<td>Mirror ticket notes as board comments (default <code>true</code>)</td>
-</tr>
-<tr>
-<td><code>group</code></td>
-<td>Restrict pushes to tickets of this group</td>
-</tr>
-<tr>
-<td><code>is_active</code></td>
-<td>Kill switch</td>
-</tr>
-</tbody>
-</table>
-<h3 id="standard-crud">Standard CRUD<a class="headerlink" href="#standard-crud" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>GET  /api/incident/maestro/board            # list
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>GET  /api/incident/maestro/board/&lt;id&gt;
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>POST /api/incident/maestro/board/&lt;id&gt;       # update (re-paste a new link via paste_url)
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>DELETE /api/incident/maestro/board/&lt;id&gt;
+<p><code>true</code> uses Maestro's default board. To select a remote board:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="nt">&quot;push_to_maestro&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">}</span>
 </code></pre></div>
-<h3 id="refresh-the-cached-schema">Refresh the cached schema<a class="headerlink" href="#refresh-the-cached-schema" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>POST /api/incident/maestro/board/&lt;id&gt;
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>{&quot;refresh_schema&quot;: 1}
+<p>The response is the ordinary Ticket response. Reporting happens in a job and
+is idempotent: a Ticket already linked to Maestro updates the same item rather
+than creating another. A missing deployment key or malformed selector returns
+400 before enqueueing.</p>
+<h2 id="rules-handlers">Rules handlers<a class="headerlink" href="#rules-handlers" title="Permanent link">&para;</a></h2>
+<p>Report an Incident directly, without a Ticket:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>maestro://
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>maestro://?board=3
 </code></pre></div>
-<p>Re-registers against maestro and returns the refreshed
-<code>{"name", "remote_board_id", "schema"}</code>.</p>
-<h2 id="pushing-a-ticket">Pushing a ticket<a class="headerlink" href="#pushing-a-ticket" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>POST /api/incident/ticket/&lt;id&gt;
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>{&quot;push_to_board&quot;: &lt;board id&gt;}
+<p>Create/reuse a local Ticket and also report it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>ticket://?priority=8&amp;maestro=1
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>ticket://?priority=8&amp;board=3
 </code></pre></div>
-<p>Queues an async push (the response is the normal ticket payload). The push is
-idempotent — re-pushing updates the existing board item instead of creating a
-duplicate. On first push a system note with the remote item URL is added to
-the ticket. Errors: 400 unknown/inactive board, 403 when the board is
-group-scoped and the ticket belongs to a different group.</p>
-<p>After a ticket is linked:</p>
+<p>Plain <code>ticket://?priority=8</code> stays local-only. <code>maestro=1</code> selects the server
+default; presence of <code>board</code> opts into Maestro and selects that remote board.</p>
+<h2 id="item-links">Item links<a class="headerlink" href="#item-links" title="Permanent link">&para;</a></h2>
+<p>Links are read-only except for explicit unlink:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="err">GET    /api/incident/maestro/item-link</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="err">GET    /api/incident/maestro/item-link/17</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="err">DELETE /api/incident/maestro/item-link/17</span>
+</code></pre></div>
+<p>Reading requires <code>view_security</code> or <code>security</code>; unlinking requires
+<code>manage_security</code>. Each row exposes its Ticket-or-Incident source, stable
+integration id, remote item/board ids, URL and last-sync timestamp. Deleting it
+stops future sync and leaves the remote Maestro item intact.</p>
+<p>The old <code>/api/incident/maestro/board</code> and <code>/api/incident/maestro/link</code> surfaces
+are legacy read-only records. New setup is deployment configuration, not REST.</p>
+<h2 id="ongoing-updates">Ongoing updates<a class="headerlink" href="#ongoing-updates" title="Permanent link">&para;</a></h2>
+<p>After linking:</p>
 <ul>
-<li>Edits to <code>title</code> / <code>description</code> / <code>status</code> sync to the board automatically
-  (status only when <code>status_map</code> is configured).</li>
-<li>New ticket notes are mirrored as board comments (unless <code>sync_notes</code> is
-  off). Notes originating from the board itself are never mirrored back.</li>
-<li>Board-side changes and comments arrive as system ticket notes
-  (<code>user=null</code>, <code>metadata.origin="maestro"</code>).</li>
+<li>Ticket title, description, status and priority changes sync to Maestro.</li>
+<li>New Ticket notes sync as comments.</li>
+<li>Incident title, details, category, status and priority changes sync.</li>
+<li>Incident history entries sync as comments.</li>
+<li>Maestro comments return as Ticket notes or Incident history.</li>
+<li>Maestro lifecycle <code>active</code>, <code>done</code>, and <code>parked</code> maps to local <code>open</code>,
+  <code>resolved</code>, and <code>paused</code>.</li>
+<li>A same-workspace Maestro board move updates the cached board and sync
+  continues.</li>
 </ul>
-<p>Rule-driven auto-push: the rules engine's <code>ticket://</code> handler accepts
-<code>board=&lt;id&gt;</code> — see the <a href="../">security guide</a>.</p>
-<h2 id="links">Links<a class="headerlink" href="#links" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>GET    /api/incident/maestro/link           # list (filter: ticket, maestro_board)
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>GET    /api/incident/maestro/link/&lt;id&gt;
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>DELETE /api/incident/maestro/link/&lt;id&gt;      # unlink — stops syncing, remote item stays
+<p>Outbound failures never fail a local save. Timeouts/5xx retry; terminal 4xx
+responses are dropped with an operator log.</p>
+<h2 id="callback-receiver">Callback receiver<a class="headerlink" href="#callback-receiver" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="err">POST /api/incident/maestro/webhook</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="err">X-Mojo-Signature: &lt;HMAC-SHA256 signature&gt;</span>
 </code></pre></div>
-<p>Link rows are read-only (<code>remote_item_id</code>, <code>remote_url</code>, <code>last_synced</code>);
-they are created by pushing, never via REST.</p>
-<h2 id="webhook-receiver-maestro-this-project">Webhook receiver (maestro → this project)<a class="headerlink" href="#webhook-receiver-maestro-this-project" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>POST /api/incident/maestro/webhook/&lt;callback_token&gt;
-</code></pre></div>
-<p>Not for browser clients — this is the endpoint maestro calls. No session
-auth; it is protected by the unguessable per-board token plus an
-<code>X-Mojo-Signature</code> header (HMAC-SHA256 of the canonical JSON payload, keyed
-by the raw link key). Invalid token/signature → 401. Events for items that
-are no longer linked return <code>200 {"ignored": true}</code>.</p>
+<p>This endpoint is for Maestro, not browser callers. It is public but
+rate-limited and verifies the bounded JSON payload using the deployment
+<code>MAESTRO_API_KEY</code>. The signed payload must include <code>integration_id</code> and
+<code>item.id</code>; lookup uses both. Invalid/missing signatures return 401 and unknown
+links return 200 with <code>ignored=true</code>.</p>
+<p>Remote note ids are deduplicated, and Maestro-origin changes are excluded from
+outbound hooks to prevent loops.</p>
 
 
 

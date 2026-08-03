@@ -3956,6 +3956,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#maestroboardremote-id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        maestro://?board=&lt;remote-id&gt;
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#notifytargets" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5253,9 +5264,14 @@
 <td>Optional username to assign to</td>
 </tr>
 <tr>
+<td><code>maestro</code></td>
+<td></td>
+<td>Set <code>1</code> to also report the Ticket to the configured Maestro default board</td>
+</tr>
+<tr>
 <td><code>board</code></td>
 <td></td>
-<td>Optional MaestroBoard id — auto-push the created ticket to that remote maestro board (see <a href="maestro_board/">Maestro Board Link</a>)</td>
+<td>Remote Maestro board id; also opts the Ticket into Maestro reporting</td>
 </tr>
 </tbody>
 </table>
@@ -5263,31 +5279,38 @@
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>ticket://?priority=5&amp;assignee=oncall
 <a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>ticket://?priority=9&amp;board=3
 </code></pre></div>
+<h4 id="maestroboardremote-id"><code>maestro://?board=&lt;remote-id&gt;</code><a class="headerlink" href="#maestroboardremote-id" title="Permanent link">&para;</a></h4>
+<p>Reports the Incident itself to Maestro without creating a local Ticket. Omit
+<code>board</code> to use the integration's server-side default:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>maestro://
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>maestro://?board=3
+</code></pre></div>
+<p>See <a href="maestro_board/">Maestro Workspace Reporting</a>.</p>
 <h4 id="notifytargets"><code>notify://&lt;targets&gt;</code><a class="headerlink" href="#notifytargets" title="Permanent link">&para;</a></h4>
 <p>Sends in-app notification + push notification to resolved targets.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>notify://perm@manage_security           # All users with manage_security perm
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>notify://alice,bob                       # Specific users
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>notify://perm@manage_security,alice      # Mixed
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>notify://perm@manage_security           # All users with manage_security perm
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>notify://alice,bob                       # Specific users
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>notify://perm@manage_security,alice      # Mixed
 </code></pre></div>
 <h4 id="emailtargets"><code>email://&lt;targets&gt;</code><a class="headerlink" href="#emailtargets" title="Permanent link">&para;</a></h4>
 <p>Sends email alert to resolved targets. Only sends to users with verified emails.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>email://perm@manage_security
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>email://alice,oncall
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>email://perm@manage_security
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>email://alice,oncall
 </code></pre></div>
 <p><strong>Requires:</strong> <code>INCIDENT_EMAIL_FROM</code> setting.</p>
 <h4 id="smstargets"><code>sms://&lt;targets&gt;</code><a class="headerlink" href="#smstargets" title="Permanent link">&para;</a></h4>
 <p>Sends SMS alert to resolved targets. Only sends to users with verified phone numbers.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>sms://perm@manage_security
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>sms://oncall
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>sms://perm@manage_security
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>sms://oncall
 </code></pre></div>
 <h4 id="llm"><code>llm://</code><a class="headerlink" href="#llm" title="Permanent link">&para;</a></h4>
 <p>Invokes the LLM security agent for autonomous triage. No parameters — the agent receives the event and incident context and decides what to do.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>llm://
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>llm://
 </code></pre></div>
 <p><strong>Requires:</strong> <code>LLM_HANDLER_API_KEY</code> setting and the <code>anthropic</code> Python package (<code>anthropic&gt;=0.52.0</code>).</p>
 <h4 id="jobmodulefunctionparams"><code>job://&lt;module.function&gt;?&lt;params&gt;</code><a class="headerlink" href="#jobmodulefunctionparams" title="Permanent link">&para;</a></h4>
 <p>Dispatches a custom async job.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>job://myapp.jobs.analyze_traffic?window=3600
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>job://myapp.jobs.analyze_traffic?window=3600
 </code></pre></div>
 <h3 id="target-resolution">Target Resolution<a class="headerlink" href="#target-resolution" title="Permanent link">&para;</a></h3>
 <p>Targets in <code>notify://</code>, <code>email://</code>, and <code>sms://</code> handlers support three formats:</p>
@@ -5323,10 +5346,10 @@
 <h2 id="4-incidents">4. Incidents<a class="headerlink" href="#4-incidents" title="Permanent link">&para;</a></h2>
 <p>An Incident is a correlated group of events that represents a single security issue.</p>
 <h3 id="lifecycle">Lifecycle<a class="headerlink" href="#lifecycle" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>     new ──→ investigating ──→ resolved
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>      │           │                │
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>      │           ▼                │
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>      └────→  ignored  ◄──────────┘
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>     new ──→ investigating ──→ resolved
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>      │           │                │
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>      │           ▼                │
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>      └────→  ignored  ◄──────────┘
 </code></pre></div>
 <table>
 <thead>
@@ -5407,11 +5430,11 @@
 <p>Duplicate incidents can be merged via the <code>merge</code> POST_SAVE_ACTION. The target incident absorbs all events and history from the source.</p>
 <h3 id="llm-analysis-post_save_action">LLM Analysis (POST_SAVE_ACTION)<a class="headerlink" href="#llm-analysis-post_save_action" title="Permanent link">&para;</a></h3>
 <p>The <code>analyze</code> action triggers deep LLM analysis on an incident — finding related incidents, proposing merge candidates, and creating a new (disabled) RuleSet for human approval. It runs asynchronously via the job queue.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># How the action is triggered via REST:</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="c1"># POST /api/incident/incident/&lt;id&gt;  {&quot;analyze&quot;: 1}</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c1"># Programmatically:</span>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="n">incident</span><span class="o">.</span><span class="n">on_action_analyze</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># How the action is triggered via REST:</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="c1"># POST /api/incident/incident/&lt;id&gt;  {&quot;analyze&quot;: 1}</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1"># Programmatically:</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">incident</span><span class="o">.</span><span class="n">on_action_analyze</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
 </code></pre></div>
 <p><strong>Guard behavior:</strong>
 - Returns <code>{"status": False, "error": "..."}</code> if <code>LLM_HANDLER_API_KEY</code> is not configured.
@@ -5679,11 +5702,11 @@ dispatch guards, and built-in handlers.</p>
 <p>Each RuleSet can have an <code>agent_memory</code> field in its metadata. The agent reads this at the start of each invocation and can update it with learnings. This provides continuity across invocations — the agent remembers patterns it has seen before for this rule type.</p>
 <h3 id="custom-agent-prompts">Custom Agent Prompts<a class="headerlink" href="#custom-agent-prompts" title="Permanent link">&para;</a></h3>
 <p>Add an <code>agent_prompt</code> field to a RuleSet's metadata to give the agent rule-specific instructions:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="n">ruleset</span><span class="o">.</span><span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>    <span class="s2">&quot;agent_prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;This rule fires on SSH brute force. Check if the IP has been seen before. If more than 3 incidents from this IP in 24h, block for 24h instead of 1h.&quot;</span><span class="p">,</span>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>    <span class="s2">&quot;agent_memory&quot;</span><span class="p">:</span> <span class="s2">&quot;&quot;</span>  <span class="c1"># Agent will populate this</span>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="p">}</span>
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">ruleset</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">ruleset</span><span class="o">.</span><span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>    <span class="s2">&quot;agent_prompt&quot;</span><span class="p">:</span> <span class="s2">&quot;This rule fires on SSH brute force. Check if the IP has been seen before. If more than 3 incidents from this IP in 24h, block for 24h instead of 1h.&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>    <span class="s2">&quot;agent_memory&quot;</span><span class="p">:</span> <span class="s2">&quot;&quot;</span>  <span class="c1"># Agent will populate this</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="p">}</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="n">ruleset</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
 </code></pre></div>
 <h3 id="ticket-re-invocation">Ticket Re-Invocation<a class="headerlink" href="#ticket-re-invocation" title="Permanent link">&para;</a></h3>
 <p>When a ticket is LLM-enabled (<code>metadata.llm_enabled</code>, legacy <code>llm_linked</code> alias honored) and a human adds a note, the full conversation history is sent back to the agent. This allows humans to:
@@ -5760,14 +5783,14 @@ dispatch guards, and built-in handlers.</p>
 <p>Manual: Via GeoLocatedIP POST_SAVE_ACTIONS (<code>unblock</code>, <code>whitelist</code>).</p>
 <h3 id="ipsets-bulk-blocking">IPSets (Bulk Blocking)<a class="headerlink" href="#ipsets-bulk-blocking" title="Permanent link">&para;</a></h3>
 <p>IPSets block large sets of IPs using kernel-level ipset (much faster than individual iptables rules). Used for country blocks, abuse lists, etc.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.incident.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">IPSet</span>
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="n">ipset</span> <span class="o">=</span> <span class="n">IPSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
-<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;country_cn&quot;</span><span class="p">,</span>
-<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Block all Chinese IPs&quot;</span><span class="p">,</span>
-<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>    <span class="n">source_url</span><span class="o">=</span><span class="s2">&quot;https://example.com/cn-cidrs.txt&quot;</span><span class="p">,</span>
-<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>    <span class="n">is_enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.incident.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">IPSet</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="n">ipset</span> <span class="o">=</span> <span class="n">IPSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;country_cn&quot;</span><span class="p">,</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Block all Chinese IPs&quot;</span><span class="p">,</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>    <span class="n">source_url</span><span class="o">=</span><span class="s2">&quot;https://example.com/cn-cidrs.txt&quot;</span><span class="p">,</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>    <span class="n">is_enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="p">)</span>
 </code></pre></div>
 <p>The <code>refresh_ipsets</code> cron fetches CIDRs from source URLs weekly and syncs to all servers.</p>
 <p><strong>Cache-only rows:</strong> <code>tor_exits</code> and <code>blocklist_de</code> are <code>IPSet</code> rows created with
@@ -5799,17 +5822,17 @@ into the kernel firewall fleet-wide.</p>
 <h2 id="8-bouncer-integration">8. Bouncer Integration<a class="headerlink" href="#8-bouncer-integration" title="Permanent link">&para;</a></h2>
 <p>Bouncer (the bot detection system) feeds events into the incident pipeline. See <a href="../account/bouncer/">Bouncer docs</a> for the full bouncer architecture.</p>
 <h3 id="how-bouncer-events-flow-into-incidents">How Bouncer Events Flow into Incidents<a class="headerlink" href="#how-bouncer-events-flow-into-incidents" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>Bouncer assess → risk_score ≥ block threshold
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>    │
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>    ├─→ report_event(category=&quot;security:bouncer:block&quot;, level=10)
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>    │       → Rule engine matches → block:// handler → IP blocked fleet-wide
-<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>    │
-<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>    ├─→ report_event(category=&quot;security:bouncer:honeypot&quot;, level=10)
-<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>    │       → When POST received on decoy page
-<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>    │
-<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>    └─→ Learner job runs → signatures learned
-<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>            → report_event(category=&quot;security:bouncer:campaign&quot;, level=10)
-<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>                → When 5+ blocks share same signal pattern
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>Bouncer assess → risk_score ≥ block threshold
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>    │
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>    ├─→ report_event(category=&quot;security:bouncer:block&quot;, level=10)
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>    │       → Rule engine matches → block:// handler → IP blocked fleet-wide
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>    │
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>    ├─→ report_event(category=&quot;security:bouncer:honeypot&quot;, level=10)
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>    │       → When POST received on decoy page
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>    │
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>    └─→ Learner job runs → signatures learned
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>            → report_event(category=&quot;security:bouncer:campaign&quot;, level=10)
+<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>                → When 5+ blocks share same signal pattern
 </code></pre></div>
 <h3 id="auth-metrics">Auth Metrics<a class="headerlink" href="#auth-metrics" title="Permanent link">&para;</a></h3>
 <p>One aggregate counter is recorded for all authentication failure events:</p>
@@ -5832,9 +5855,9 @@ into the kernel firewall fleet-wide.</p>
 </tbody>
 </table>
 <p>Bumped automatically by <code>Event.save()</code> when <code>INCIDENT_EVENT_METRICS</code> is enabled. The category set is defined in <code>AUTH_FAILURE_CATEGORIES</code> (a <code>frozenset</code> in <code>mojo/apps/incident/models/event.py</code>) — add new failure categories there without touching the recording logic.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># Fetch the current hour&#39;s auth failure count</span>
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="n">result</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">fetch_values</span><span class="p">([</span><span class="s2">&quot;auth:failures&quot;</span><span class="p">],</span> <span class="n">account</span><span class="o">=</span><span class="s2">&quot;incident&quot;</span><span class="p">,</span> <span class="n">granularity</span><span class="o">=</span><span class="s2">&quot;hours&quot;</span><span class="p">)</span>
-<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="n">count</span> <span class="o">=</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;data&quot;</span><span class="p">][</span><span class="s2">&quot;auth:failures&quot;</span><span class="p">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Fetch the current hour&#39;s auth failure count</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="n">result</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">fetch_values</span><span class="p">([</span><span class="s2">&quot;auth:failures&quot;</span><span class="p">],</span> <span class="n">account</span><span class="o">=</span><span class="s2">&quot;incident&quot;</span><span class="p">,</span> <span class="n">granularity</span><span class="o">=</span><span class="s2">&quot;hours&quot;</span><span class="p">)</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="n">count</span> <span class="o">=</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;data&quot;</span><span class="p">][</span><span class="s2">&quot;auth:failures&quot;</span><span class="p">]</span>
 </code></pre></div>
 <h3 id="bouncer-metrics">Bouncer Metrics<a class="headerlink" href="#bouncer-metrics" title="Permanent link">&para;</a></h3>
 <p>8 metrics are recorded for monitoring:</p>
@@ -5928,11 +5951,11 @@ into the kernel firewall fleet-wide.</p>
 <li>Default rules handle common OSSEC patterns (bot scanners, SSH brute force, web attacks)</li>
 </ol>
 <h3 id="alert-flow">Alert Flow<a class="headerlink" href="#alert-flow" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>OSSEC → POST /api/incident/ossec/alert
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>    → Validates secret
-<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>    → Normalizes alert fields (rule_id, level, description, source_ip)
-<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>    → report_event(category=&quot;ossec:alert&quot;, level=ossec_level, metadata={rule_id, ...})
-<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>    → Rule engine matches on rule_id field
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>OSSEC → POST /api/incident/ossec/alert
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>    → Validates secret
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>    → Normalizes alert fields (rule_id, level, description, source_ip)
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>    → report_event(category=&quot;ossec:alert&quot;, level=ossec_level, metadata={rule_id, ...})
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>    → Rule engine matches on rule_id field
 </code></pre></div>
 <h2 id="10-health-monitoring">10. Health Monitoring<a class="headerlink" href="#10-health-monitoring" title="Permanent link">&para;</a></h2>
 <p>The health monitoring system runs every 3 minutes (when enabled) and reports infrastructure events.</p>
@@ -5986,8 +6009,8 @@ into the kernel firewall fleet-wide.</p>
 </tbody>
 </table>
 <h3 id="enable-health-monitoring">Enable Health Monitoring<a class="headerlink" href="#enable-health-monitoring" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1"># In Django settings</span>
-<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="n">HEALTH_MONITORING_ENABLED</span> <span class="o">=</span> <span class="kc">True</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># In Django settings</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="n">HEALTH_MONITORING_ENABLED</span> <span class="o">=</span> <span class="kc">True</span>
 </code></pre></div>
 <p>Default health rules are auto-created on first health check run. They send notifications and create tickets — they never block IPs (health issues are not attacks).</p>
 <h2 id="11-cronjobs-background-jobs">11. Cronjobs &amp; Background Jobs<a class="headerlink" href="#11-cronjobs-background-jobs" title="Permanent link">&para;</a></h2>
@@ -6497,7 +6520,7 @@ into the kernel firewall fleet-wide.</p>
 <ul>
 <li><a href="abuse_hardening/">Authenticated-Abuse Hardening</a> — global per-identity API throttle, traffic-concentration detection, account kill switch, websocket connection limits, deployment hardening</li>
 <li><a href="csp/">Content Security Policy</a> — the nonce-based CSP on the hosted auth pages, <strong>opt-in and off by default</strong> (<code>AUTH_CSP_ENABLED</code> ships <code>False</code>): how to turn it on, the default policy, the per-page <code>frame-ancestors</code> rule, the <code>{{ csp_nonce }}</code> contract for overridden templates, and the <code>AUTH_CSP_*</code> settings</li>
-<li><a href="maestro_board/">Maestro Board Link</a> — push tickets into a remote maestro board and sync both directions (registration, status_map, signed webhooks, echo suppression)</li>
+<li><a href="maestro_board/">Maestro Workspace Reporting</a> — deployment ApiKey setup, direct Incident or Ticket reporting, remote/default board routing, signed callbacks and echo suppression</li>
 <li><a href="ticket_actions/">Ticket Actions</a> — structured Approve/Deny action notes on tickets: schema, dispatch guards, built-in handlers (rule approval/update, block confirm, escalate), handler registration, LLM opt-in contract</li>
 <li><a href="../account/bouncer/">Bouncer Architecture</a> — bot detection, scoring, tokens, signatures</li>
 <li><a href="../account/geoip/">GeoIP System</a> — IP geolocation, blocking, threat escalation</li>

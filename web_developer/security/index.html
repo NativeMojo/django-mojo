@@ -4343,20 +4343,15 @@ tenant and the fix is a global grant, not a different <code>?group=</code>.</p>
 <td>Bulk CIDR blocking: countries, datacenters, abuse lists</td>
 </tr>
 <tr>
-<td>Maestro Boards</td>
-<td><code>/api/incident/maestro/board</code></td>
-<td>Push tickets into a remote maestro board, two-way sync</td>
-</tr>
-<tr>
-<td>Maestro Links</td>
-<td><code>/api/incident/maestro/link</code></td>
-<td>Which tickets are linked to which board items</td>
+<td>Maestro Item Links</td>
+<td><code>/api/incident/maestro/item-link</code></td>
+<td>Remote Maestro items linked to local Tickets or Incidents</td>
 </tr>
 </tbody>
 </table>
 <p>See individual API docs for full details:
 - <a href="rate_limits/">Rate Limits &amp; Client Backoff</a> — the 429/<code>Retry-After</code> contract every client must honor
-- <a href="maestro_board/">Maestro Boards</a> — register a board link, push tickets, status_map, webhook contract
+- <a href="maestro_board/">Maestro Reporting</a> — deployment-configured workspace reporting, Ticket/Incident actions, item links and signed callbacks
 - <a href="../logging/incidents/">Incidents</a>
 - <a href="../logging/reporting_events/">Events &amp; Reporting</a>
 - <a href="../account/firewall/">Firewall &amp; GeoIP</a>
@@ -5247,7 +5242,12 @@ terminal-status skip), so a repeat is a safe no-op.</p>
 <tr>
 <td>Ticket</td>
 <td><code>ticket://?priority=8</code></td>
-<td>Create ticket for human review</td>
+<td>Create a local ticket; add <code>maestro=1</code> or remote <code>board=3</code> to report it</td>
+</tr>
+<tr>
+<td>Maestro</td>
+<td><code>maestro://?board=3</code></td>
+<td>Report the Incident directly; omit <code>board</code> for the default</td>
 </tr>
 <tr>
 <td>Job</td>

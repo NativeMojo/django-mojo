@@ -5988,9 +5988,11 @@ restart. See
 </ul>
 <h3 id="maestro">MAESTRO<a class="headerlink" href="#maestro" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>MAESTRO_CALLBACK_BASE</code> — public base URL for the maestro board webhook receiver; falls back to <code>BASE_URL</code> when unset (see <a href="../../security/maestro_board/">Maestro Board Link</a>)</li>
-<li><code>MAESTRO_LINK_TIMEOUT</code> — outbound HTTP timeout in seconds for maestro link API calls (default <code>10</code>)</li>
-<li><code>MAESTRO_ALLOW_HTTP</code> — dev-only: allow <code>http://</code> board-link pastes and local/private hosts (default off; production pastes must be https to a public hostname)</li>
+<li><code>MAESTRO_API_KEY</code> — deployment-wide Maestro workspace reporting ApiKey. Required to report Incidents/Tickets; static/secret and never read from a database <code>Setting</code> row.</li>
+<li><code>MAESTRO_API_URL</code> — Maestro API origin (default <code>https://maestromojo.com</code>). Static; production values must be HTTPS with a public host.</li>
+<li><code>MAESTRO_CALLBACK_BASE</code> — public base URL for the fixed signed Maestro webhook receiver; falls back to static <code>BASE_URL</code> when unset (see <a href="../../security/maestro_board/">Maestro Workspace Reporting</a>).</li>
+<li><code>MAESTRO_LINK_TIMEOUT</code> — outbound Maestro reporting timeout in seconds (default <code>10</code>).</li>
+<li><code>MAESTRO_ALLOW_HTTP</code> — dev-only: allow HTTP/local Maestro origins (default off).</li>
 </ul>
 <h3 id="magic">MAGIC<a class="headerlink" href="#magic" title="Permanent link">&para;</a></h3>
 <ul>
