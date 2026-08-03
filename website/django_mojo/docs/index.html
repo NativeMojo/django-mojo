@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://raw.githubusercontent.com; img-src 'self' data: https://maestromojo.s3.amazonaws.com https://raw.githubusercontent.com; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>Documentation — Django-MOJO</title>
   <meta name="description" content="Search and browse the complete Django-MOJO reference for backend framework developers and REST/API consumers.">
   <meta property="og:title" content="Django-MOJO Documentation">
@@ -62,6 +63,7 @@
   <div class="search-results" id="search-results" role="listbox"><p class="search-empty">Type at least two characters to search the knowledge base.</p></div>
 </dialog>
 
+<script src="/vendor/purify.min.js"></script>
 <script src="/vendor/marked.min.js"></script>
 <script src="/js/docs.js?v=1"></script>
 </body>

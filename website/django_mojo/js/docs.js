@@ -185,7 +185,10 @@
       var response = await fetch(url);
       if (!response.ok) { throw new Error('Source returned HTTP ' + response.status); }
       var markdown = await response.text();
-      el.body.innerHTML = marked.parse(markdown, {gfm:true, breaks:false});
+      el.body.innerHTML = DOMPurify.sanitize(
+        marked.parse(markdown, {gfm:true, breaks:false}),
+        {USE_PROFILES:{html:true}}
+      );
       enhanceArticle(doc);
       document.title = doc.title + ' — Django-MOJO';
       setStatus(doc.track === 'django_developer' ? 'Django developer reference' : 'Web & API reference');

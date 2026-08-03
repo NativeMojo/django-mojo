@@ -10,8 +10,9 @@ Build the deployable bundle:
 uv run python scripts/build_django_mojo_site.py
 ```
 
-Validate links, anchors, deterministic shards, pinned dependencies, required
-entry points, and SitesMojo file limits without keeping an output directory:
+Validate links, anchors, deterministic shards, pinned dependencies, tracked
+documentation inputs, required entry points, and SitesMojo file limits without
+keeping an output directory:
 
 ```bash
 uv run python scripts/build_django_mojo_site.py --check
@@ -23,8 +24,13 @@ shard. Articles are fetched from the public GitHub repository at the exact
 commit recorded in `data/build.json`; regenerate and redeploy to publish docs
 changes.
 
+The builder reads article content from the pinned Git tree, rejects untracked
+documentation and non-regular Git entries, and only replaces the validated
+`docs_site/` destination after a complete staging build. Rendered Markdown is
+sanitized with the pinned DOMPurify bundle and served under a restrictive
+content security policy.
+
 The hosted site belongs to the NativeMojo workspace, is linked to the
 django-mojo project, and uses the immutable slug `django-mojo`. A SitesMojo
 deployment is public immediately. Large generated bundles must be uploaded
 from disk through the Sites API rather than embedded in an MCP tool argument.
-

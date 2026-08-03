@@ -25,6 +25,10 @@ MARKED_URL = "https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"
 MARKED_SHA256 = "3e7e7d7feb3e5d58cb6c804f68ab5c24cc7e5eb6270fd6e5cbb9124739217d0c"
 MARKED_LICENSE_URL = "https://cdn.jsdelivr.net/npm/marked@15.0.12/LICENSE.md"
 MARKED_LICENSE_SHA256 = "8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c"
+DOMPURIFY_URL = "https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"
+DOMPURIFY_SHA256 = "89e1fa7647cb495370d3a997ace4387f5d15d9f4c5af12352c53daa400956287"
+DOMPURIFY_LICENSE_URL = "https://cdn.jsdelivr.net/npm/dompurify@3.2.6/LICENSE"
+DOMPURIFY_LICENSE_SHA256 = "1b02e03c3fb4f87d476c128f0eb9def1f5a1709d28b180465228bd41574623b7"
 LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$", re.MULTILINE)
 CODE_RE = re.compile(r"```.*?```|`[^`]+`", re.DOTALL)
@@ -49,6 +53,11 @@ def source_commit():
         raise RuntimeError(
             "docs differ from the pinned Git commit; commit or restore them before building"
         )
+    untracked = run_git("ls-files", "--others", "--exclude-standard", "--", "docs")
+    if untracked:
+        raise RuntimeError(
+            "untracked documentation files are not publishable; commit or remove them before building"
+        )
     return commit
 
 
@@ -71,46 +80,87 @@ def document_id(path):
     return path.relative_to(DOCS).with_suffix("").as_posix()
 
 
-def read_documents():
+def read_documents(commit):
     documents = []
-    for track in TRACKS:
-        for path in sorted((DOCS / track).rglob("*.md")):
-            markdown = path.read_text(encoding="utf-8")
-            headings = []
-            seen = {}
-            for match in HEADING_RE.finditer(markdown):
-                label = re.sub(r"[`*]", "", match.group(2)).strip()
-                base = heading_slug(label) or "section"
-                count = seen.get(base, 0)
-                seen[base] = count + 1
-                slug = base if count == 0 else f"{base}-{count}"
-                headings.append(
-                    {"level": len(match.group(1)), "title": label, "slug": slug}
-                )
-            title = headings[0]["title"] if headings else path.stem.replace("_", " ").title()
-            body = plain_text(markdown)
-            rel = path.relative_to(DOCS).as_posix()
-            parts = PurePosixPath(rel).parts
-            section = parts[1] if len(parts) > 2 else "overview"
-            documents.append(
-                {
-                    "id": document_id(path),
-                    "source": rel,
-                    "track": track,
-                    "section": section,
-                    "title": title,
-                    "headings": headings,
-                    "excerpt": body[:260],
-                    "search": body.lower(),
-                    "aliases": {},
-                    "path": path,
-                    "markdown": markdown,
-                }
+    tree = run_git(
+        "ls-tree",
+        "-r",
+        commit,
+        "--",
+        *(f"docs/{track}" for track in TRACKS),
+    )
+    tracked = []
+    for line in tree.splitlines():
+        metadata, repo_path = line.split("\t", 1)
+        mode, object_type, _object_id = metadata.split()
+        if not repo_path.endswith(".md"):
+            continue
+        if object_type != "blob" or mode not in ("100644", "100755"):
+            raise RuntimeError(
+                f"documentation source must be a regular Git file: {repo_path}"
             )
+        tracked.append(repo_path)
+    for repo_path in sorted(tracked):
+        rel = repo_path.removeprefix("docs/")
+        path = DOCS / rel
+        markdown = run_git("show", f"{commit}:{repo_path}")
+        headings = []
+        seen = {}
+        for match in HEADING_RE.finditer(markdown):
+            label = re.sub(r"[`*]", "", match.group(2)).strip()
+            base = heading_slug(label) or "section"
+            count = seen.get(base, 0)
+            seen[base] = count + 1
+            slug = base if count == 0 else f"{base}-{count}"
+            headings.append(
+                {"level": len(match.group(1)), "title": label, "slug": slug}
+            )
+        title = (
+            headings[0]["title"]
+            if headings
+            else path.stem.replace("_", " ").title()
+        )
+        body = plain_text(markdown)
+        parts = PurePosixPath(rel).parts
+        track = parts[0]
+        section = parts[1] if len(parts) > 2 else "overview"
+        documents.append(
+            {
+                "id": document_id(path),
+                "source": rel,
+                "track": track,
+                "section": section,
+                "title": title,
+                "headings": headings,
+                "excerpt": body[:260],
+                "search": body.lower(),
+                "aliases": {},
+                "path": path,
+                "markdown": markdown,
+            }
+        )
     ids = [doc["id"] for doc in documents]
     if len(ids) != len(set(ids)):
         raise RuntimeError("duplicate document ids found")
     return documents
+
+
+def validate_output_path(output):
+    output = output.resolve()
+    default = DEFAULT_OUTPUT.resolve()
+    temporary = Path(tempfile.gettempdir()).resolve()
+    if output == temporary:
+        raise RuntimeError("refusing to use the system temporary root as build output")
+    if output != default and temporary not in output.parents:
+        raise RuntimeError(
+            f"--output must be {default} or a dedicated directory under {temporary}"
+        )
+    protected = (DOCS.resolve(), SOURCE.resolve())
+    if output == ROOT.resolve() or any(
+        output == path or path in output.parents for path in protected
+    ):
+        raise RuntimeError(f"refusing destructive build output path: {output}")
+    return output
 
 
 def normalize_repo_target(source, href):
@@ -292,13 +342,11 @@ def validate_output(output):
     return count, total
 
 
-def build(output):
+def build_into(output, final_output):
     commit = source_commit()
-    documents = read_documents()
+    documents = read_documents(commit)
     local_links = validate_links(documents)
-    if output.exists():
-        shutil.rmtree(output)
-    output.mkdir(parents=True)
+    output.mkdir(parents=True, exist_ok=True)
     copy_source(output)
     catalog = [compact_catalog(doc) for doc in documents]
     search = [{"id": doc["id"], "text": doc["search"]} for doc in documents]
@@ -325,11 +373,21 @@ def build(output):
         MARKED_LICENSE_SHA256,
         output / "vendor" / "marked.LICENSE.md",
     )
+    download_verified(
+        DOMPURIFY_URL,
+        DOMPURIFY_SHA256,
+        output / "vendor" / "purify.min.js",
+    )
+    download_verified(
+        DOMPURIFY_LICENSE_URL,
+        DOMPURIFY_LICENSE_SHA256,
+        output / "vendor" / "DOMPURIFY.LICENSE",
+    )
     count, total = validate_output(output)
     print(
         json.dumps(
             {
-                "output": str(output),
+                "output": str(final_output),
                 "commit": commit,
                 "documents": len(documents),
                 "django_developer": build_info["tracks"]["django_developer"],
@@ -343,6 +401,20 @@ def build(output):
             indent=2,
         )
     )
+
+
+def build(output):
+    output = validate_output_path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}-", dir=output.parent))
+    try:
+        build_into(staging, output)
+        if output.exists():
+            shutil.rmtree(output)
+        staging.replace(output)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
 
 def main():
