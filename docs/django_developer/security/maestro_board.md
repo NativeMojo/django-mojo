@@ -1,171 +1,181 @@
-# Maestro Board Link — Pushing Tickets to a Remote Maestro Board
+# Maestro Workspace Reporting
 
-The incident app can push `Ticket` rows into a board on a remote maestro
-instance and keep linked tickets in sync in both directions. This is the
-**client half** of maestro's board link protocol: a maestro workspace admin
-mints a board-scoped link key and hands you a paste URL; registering it here
-creates a `MaestroBoard`, and tickets can then be pushed manually, on every
-linked-ticket change, or automatically from the rules engine.
+The incident app can report either an `Incident` or a local `Ticket` to one
+central Maestro workspace. This is a many-projects-to-one-workspace design:
+each django-mojo deployment has one reporting ApiKey, while Maestro owns the
+workspace, default board, board validation and cross-board triage.
 
-Design stance: **fail-closed setup, fail-open sync**. Registering a bad link
-fails the save immediately; once linked, no maestro outage or error can ever
-block or break a ticket save — remote calls run in jobs with a small retry,
-then drop with a local log.
+The deployment connection is static configuration, not a database model. Only
+the per-source remote item association is persisted locally.
 
-## Models
+## Configuration
 
-### `incident.MaestroBoard` (MojoSecrets)
+Set the reporting key in `var/django.conf`:
 
-One row per registered board link (`mojo/apps/incident/models/maestro_board.py`).
+```python
+MAESTRO_API_KEY = "<workspace integration reporting key>"
 
-| Field | Meaning |
-|-------|---------|
-| `name` | Cached board name (from the register response) |
-| `api_url` | Maestro API base, parsed from the paste URL |
-| `remote_board_id` | The board's id on the maestro side |
-| `schema` | Cached register response: `{"label": ..., "columns": [...]}` |
-| `status_map` | Optional ticket-status ↔ board-column mapping (below) |
-| `sync_notes` | Mirror ticket notes as board comments (default on) |
-| `callback_token` | Unguessable path segment of this project's webhook URL |
-| `group` | Optional — when set, only tickets of that group may push to it |
-| `is_active` | Kill switch — inactive boards send and accept nothing |
-
-The raw link key is stored encrypted via MojoSecrets (`get_secret("link_key")`)
-and never serializes.
-
-### `incident.MaestroBoardLink`
-
-One row per pushed (ticket, board) pair: `ticket` FK (`ticket.board_links`),
-`maestro_board` FK, `remote_item_id`, `remote_url`, `last_synced`. Created only
-by the sync service — REST exposure is list + delete (= unlink).
-
-## Registration
-
-Registering = pasting the link URL into a board create:
-
-```
-POST /api/incident/maestro/board
-{"paste_url": "https://maestromojo.com/api/boards/link/<key>"}
+# Optional; this is the default.
+MAESTRO_API_URL = "https://maestromojo.com"
 ```
 
-`set_paste_url()` parses the URL into `api_url` + secret key;
-`on_rest_pre_save` then calls maestro's `link/register` synchronously,
-submitting this project's callback URL and caching the returned board
-name/id/schema. Any failure raises a 400 and nothing persists.
+The client reads both through `settings.get_static()`, so a database `Setting`
+row cannot replace the deployment credential. The key is sent only as:
 
-The callback URL is built from settings:
+```text
+Authorization: apikey <token>
+```
 
-| Setting | Meaning |
-|---------|---------|
-| `MAESTRO_CALLBACK_BASE` | Preferred public base URL for the webhook receiver |
-| `BASE_URL` | Fallback when `MAESTRO_CALLBACK_BASE` is unset |
-| `MAESTRO_LINK_TIMEOUT` | Outbound HTTP timeout in seconds (default 10) |
-| `MAESTRO_ALLOW_HTTP` | Dev-only: allow http:// pastes and local hosts (default off) |
+`MAESTRO_API_URL` must be an HTTPS public origin. `MAESTRO_ALLOW_HTTP=True`
+relaxes that rule only for local development. Existing `BASE_URL` (or
+`MAESTRO_CALLBACK_BASE`) supplies this deployment's public callback origin.
 
-One of the two base URLs must be configured or registration fails with a
-clear 400. The webhook path is
-`/api/incident/maestro/webhook/<callback_token>`.
+After installation or an in-place key rotation, validate and register the
+callback:
 
-Because the server POSTs the link key to the pasted host, the paste is an
-SSRF/key-leak surface: `https` is required and loopback/private/link-local
-IP-literal hosts are rejected. Set `MAESTRO_ALLOW_HTTP=true` only for local
-development against a dev maestro instance.
+```bash
+python manage.py register_maestro
+```
 
-## Pushing tickets
+The command prints the safe integration/workspace/default-board identity and
+never the key. It refuses a key belonging to a different stable integration
+when local item links already exist. No network call occurs at Django import or
+ordinary process startup.
 
-Three triggers, one idempotent service call
-(`services/maestro_sync.py:push_ticket`) — an existing link updates the remote
-item instead of creating a duplicate:
+`django.conf` is loaded once per process. Rotation therefore requires a
+coordinated pause/drain, config update on every node, worker/web restart,
+registration, token activation and resume. Do not roll a new key through only
+some processes: old workers will fail new callback signatures and new workers
+will receive terminal authorization failures for old work.
 
-1. **Manual action** — `POST /api/incident/ticket/<pk>` with
-   `{"push_to_board": <board id>}`. Validates the board is active and
-   group-compatible (fail-closed), then enqueues the push.
-2. **Linked-ticket changes** — REST edits to `title`, `description`, or
-   `status` on a ticket with links enqueue an update per linked board; new
-   REST-created notes enqueue a board comment (unless the board's
-   `sync_notes` is off).
-3. **Rules engine** — the existing `ticket://` handler accepts an optional
-   `board=<id>` param: `ticket://?priority=9&board=3` creates the ticket and
-   pushes it.
+## Routing
 
-The first successful push writes a system ticket note containing the remote
-item URL.
+`board` always means a remote Maestro board id in the configured ApiKey's
+workspace. It is never a local model primary key.
 
-All pushes run as jobs on the `incident_handlers` channel
-(`asyncjobs.maestro_push_ticket` / `maestro_sync_change` / `maestro_push_note`)
-with `max_retries=3`, exponential backoff. Retriable failures (timeouts, 5xx)
-re-raise so the engine retries; terminal failures (4xx — revoked key,
-validation) drop immediately with a log. Nothing propagates to the caller.
+- Omit `board` to use the integration's server-side default board.
+- Supply `board=3` to request Maestro board 3.
+- Maestro rejects missing/inactive defaults and inactive or cross-workspace
+  overrides. django-mojo never guesses a replacement.
+- After creation, updates and comments address the remote item id, so a human
+  can move the item between boards inside the workspace without severing sync.
 
-## status_map — syncing ticket status
+## Reporting modes
 
-Maestro boards have no fixed status field — "status" is whatever category
-column the board defines. Ticket `status` therefore syncs **only** when the
-board's `status_map` is configured:
+### Incident only
+
+Use the rules handler when Maestro should be the workflow record and no local
+Ticket is needed:
+
+```text
+maestro://
+maestro://?board=3
+```
+
+The handler reports its associated Incident idempotently. A directly linked
+Incident is retained through resolution cleanup and age pruning, cannot be
+deleted until explicitly unlinked, and transfers its link through an
+unambiguous Incident merge.
+
+### Local Ticket plus Maestro
+
+Plain `ticket://` remains local-only. Opt into Maestro explicitly:
+
+```text
+ticket://?priority=8&maestro=1
+ticket://?priority=8&board=3
+```
+
+`maestro=1` uses the default; `board=3` both opts in and selects the remote
+board. Rule-created Tickets inherit the Incident group. Existing unresolved
+Ticket dedupe is group-scoped; a recurring Incident reuses and pushes the
+eligible Ticket while recording the occurrence without reparenting it.
+
+An existing Ticket can be pushed later through its RestMeta action:
 
 ```json
-{
-  "column": "state",
-  "map": {"open": "todo", "closed": "done"}
-}
+{"push_to_maestro": true}
+{"push_to_maestro": 3}
 ```
 
-Outbound, `map` translates ticket status → column option value; inbound, the
-reverse mapping applies a board column change to `ticket.status`
-(compare-before-write). A status/option with no mapping is skipped with a log
-— never an error.
+JSON `true` means the default board. A strict positive integer means that
+remote board. Booleans are handled before integers so `true` can never become
+board id 1.
 
-## Inbound webhooks
+## Local model
 
-`POST /api/incident/maestro/webhook/<callback_token>`
-(`rest/maestro_webhook.py`) — public endpoint, fail-closed:
+`incident.MaestroItemLink` stores one association for exactly one Ticket or
+Incident:
 
-- board looked up by its unguessable `callback_token`, must be `is_active`
-  and must hold a link key (a keyless board 401s rather than falling back to
-  any other signing secret)
-- `X-Mojo-Signature` must verify: HMAC-SHA256 of the canonical JSON payload
-  dict keyed by the raw link key (`mojo.helpers.crypto.sign.verify_signature`
-  on the **parsed dict**, not raw bytes)
-- rejections are 401 — terminal to maestro's retry queue
-- IP rate-limited (`rate_limit("maestro_webhook", ip_limit=60)`), matching
-  the app's other public receivers
-- `note.created` deliveries dedup on the board-side note id — a replayed or
-  retried payload never duplicates a ticket note. (The signed payload carries
-  no timestamp/nonce yet, so a captured `item.updated` can still be replayed
-  to re-apply a stale status until the maestro contract adds one;
-  compare-before-write bounds the effect.)
+| Field | Meaning |
+|---|---|
+| `ticket` / `incident` | Exactly one local source (`PROTECT` on deletion) |
+| `remote_integration_id` | Stable, non-secret Maestro integration identity |
+| `remote_item_id` | Item id inside that integration |
+| `remote_board_id` | Current/resolved Maestro board |
+| `remote_url` | Current item URL |
+| `last_synced` | Last successful outbound/location sync |
 
-Verified events (`item.updated`, `item.archived`, `item.restored`,
-`note.created`) always produce a system ticket note (`user=None`,
-`metadata.origin="maestro"`); `item.updated` additionally applies a
-`status_map` column change to the ticket status. Webhooks for unlinked items
-return 200 `{"ignored": true}`.
+Constraints enforce one link per Ticket, one per Incident, and unique
+`(remote_integration_id, remote_item_id)`. Links are created internally and are
+REST read/delete only; deleting a link stops sync but leaves the Maestro item.
 
-## Echo suppression
+The older `MaestroBoard` and `MaestroBoardLink` tables remain readable legacy
+records. Their board-scoped credentials are not assumed to be workspace keys
+and their setup endpoints are read-only. Adoption requires an explicit
+Maestro-confirmed ownership/rekey operation; schema migration never guesses or
+deletes encrypted credentials.
 
-A synced change must not bounce back:
+## Synchronization
 
-- **Maestro-side**: writes arriving via the link API never dispatch a webhook
-  back to the same link.
-- **Client-side**: the webhook handler writes tickets/notes via direct ORM
-  saves, which never enter the REST hook pipeline — so they cannot re-trigger
-  the outbound sync hooks in `Ticket.on_rest_saved` /
-  `TicketNote.on_rest_saved`. Notes carrying `metadata.origin="maestro"` are
-  additionally excluded from note mirroring.
+`services/maestro_sync.py` is the wire-contract boundary. Source creates carry
+project, kind (`ticket` or `incident`), local id, backlink, title/details,
+priority and canonical lifecycle. An optional board is sent only on first
+create; Maestro returns the stable integration id and resolved board.
 
-## Wire contract
+Linked changes and notes/history publish jobs on `incident_handlers`:
 
-All request/response shapes live in one file —
-`mojo/apps/incident/services/maestro_sync.py` — versioned `{"v": 1}` payloads,
-`Authorization: linkkey <key>` auth. If maestro's contract drifts, that file
-is the only thing to fix. Contract source: maestro repo
-`docs/web_developer/boards/linking.md` (plan-of-record:
-`planning/confirmed/maestro-connect.md`).
+- `asyncjobs.maestro_push_source`
+- `asyncjobs.maestro_sync_change`
+- `asyncjobs.maestro_push_note`
 
-## Permissions
+Timeouts and 5xx responses retry up to the configured job bound. 4xx responses
+are terminal and logged without breaking a local save. Remote bodies are
+not logged or returned to local users.
 
-Board CRUD and the `push_to_board` action require `manage_security` (or the
-combined `security`) — the board row holds a credential, so there is no
-view-only tier. `MaestroBoardLink` rows are readable with `view_security`,
-deletable with `manage_security`. The webhook receiver is public by design
-and protected by token + signature.
+Lifecycle is board-independent. django-mojo sends `done` for local
+resolved/closed, `parked` for paused/ignored, and `active` otherwise. Maestro
+translates its board's workflow roles back to those values; callbacks map them
+to local resolved, paused and open states.
+
+## Callbacks
+
+Maestro calls the fixed public endpoint:
+
+```text
+POST /api/incident/maestro/webhook
+```
+
+The endpoint is rate-limited, caps JSON size and requires
+`X-Mojo-Signature`, verified over the parsed payload with
+`MAESTRO_API_KEY`. The signed body carries the stable integration id; lookup is
+by `(integration_id, remote_item_id)`, preventing item-id collisions across
+integrations.
+
+Remote comments become `TicketNote` or `IncidentHistory` entries. Their
+metadata records `origin="maestro"` and the remote note id for replay dedupe.
+Callback-applied lifecycle saves use direct ORM writes, and Maestro-origin
+notes/history never enqueue outbound work, preventing echoes.
+
+## Settings
+
+| Setting | Meaning |
+|---|---|
+| `MAESTRO_API_KEY` | Required deployment reporting ApiKey; secret/static |
+| `MAESTRO_API_URL` | Maestro origin; default `https://maestromojo.com` |
+| `MAESTRO_CALLBACK_BASE` | Optional callback origin; falls back to `BASE_URL` |
+| `MAESTRO_LINK_TIMEOUT` | Outbound timeout in seconds; default 10 |
+| `MAESTRO_ALLOW_HTTP` | Development-only HTTP/private-host relaxation |
+
+The server half of this contract is Maestro item 32. Do not enable one side
+against an unpinned incompatible version.

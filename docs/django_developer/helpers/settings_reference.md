@@ -517,9 +517,11 @@ restart. See
 
 ### MAESTRO
 
-- `MAESTRO_CALLBACK_BASE` — public base URL for the maestro board webhook receiver; falls back to `BASE_URL` when unset (see [Maestro Board Link](../security/maestro_board.md))
-- `MAESTRO_LINK_TIMEOUT` — outbound HTTP timeout in seconds for maestro link API calls (default `10`)
-- `MAESTRO_ALLOW_HTTP` — dev-only: allow `http://` board-link pastes and local/private hosts (default off; production pastes must be https to a public hostname)
+- `MAESTRO_API_KEY` — deployment-wide Maestro workspace reporting ApiKey. Required to report Incidents/Tickets; static/secret and never read from a database `Setting` row.
+- `MAESTRO_API_URL` — Maestro API origin (default `https://maestromojo.com`). Static; production values must be HTTPS with a public host.
+- `MAESTRO_CALLBACK_BASE` — public base URL for the fixed signed Maestro webhook receiver; falls back to static `BASE_URL` when unset (see [Maestro Workspace Reporting](../security/maestro_board.md)).
+- `MAESTRO_LINK_TIMEOUT` — outbound Maestro reporting timeout in seconds (default `10`).
+- `MAESTRO_ALLOW_HTTP` — dev-only: allow HTTP/local Maestro origins (default off).
 
 ### MAGIC
 

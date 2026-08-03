@@ -1,109 +1,101 @@
-# Maestro Boards — REST API
+# Maestro Reporting — REST and Rule API
 
-Push incident tickets into a remote maestro board and keep them in sync.
-A maestro workspace admin mints a board link and gives you a paste URL
-(`https://<maestro-host>/api/boards/link/<key>`); registering it here creates
-a MaestroBoard, after which tickets can be pushed to the board and board-side
-changes flow back onto the ticket as notes.
+A django-mojo deployment has one reporting connection to one Maestro workspace.
+The secret lives in server `django.conf`; browser clients never create, select
+or read a connection credential.
 
-## Permissions
+Maestro owns the integration's default board. Wherever this API accepts
+`board`, it is a remote Maestro board id inside the configured workspace.
 
-| Permission | Access |
-|------------|--------|
-| `manage_security` (or `security`) | Board CRUD, `refresh_schema`, `push_to_board`, link delete |
-| `view_security` (or `security`) | List/read links |
+## Ticket action
 
-There is no view-only tier for boards — the row holds a credential.
+Users with Ticket save permission (`manage_security` or `security`) can push an
+existing Ticket:
 
-## Boards
+```http
+POST /api/incident/ticket/42
+Content-Type: application/json
 
-### Register (create) a board
-
-```
-POST /api/incident/maestro/board
-{"paste_url": "https://maestromojo.com/api/boards/link/<key>"}
+{"push_to_maestro": true}
 ```
 
-The save validates the link against maestro synchronously — a bad or
-unreachable link returns 400 and nothing is created. The paste must be
-`https` with a public hostname (local/private hosts are rejected unless the
-server sets the dev-only `MAESTRO_ALLOW_HTTP`). On success the response
-carries the cached board `name`, `remote_board_id`, and `schema`
-(`{"label": ..., "columns": [...]}`). The link key itself is stored encrypted
-and never appears in any response.
+`true` uses Maestro's default board. To select a remote board:
 
-Optional writable fields:
-
-| Field | Meaning |
-|-------|---------|
-| `status_map` | `{"column": "<slug>", "map": {"<ticket status>": "<option value>"}}` — enables status sync both directions; without it, ticket status never changes from board activity |
-| `sync_notes` | Mirror ticket notes as board comments (default `true`) |
-| `group` | Restrict pushes to tickets of this group |
-| `is_active` | Kill switch |
-
-### Standard CRUD
-
-```
-GET  /api/incident/maestro/board            # list
-GET  /api/incident/maestro/board/<id>
-POST /api/incident/maestro/board/<id>       # update (re-paste a new link via paste_url)
-DELETE /api/incident/maestro/board/<id>
+```json
+{"push_to_maestro": 3}
 ```
 
-### Refresh the cached schema
+The response is the ordinary Ticket response. Reporting happens in a job and
+is idempotent: a Ticket already linked to Maestro updates the same item rather
+than creating another. A missing deployment key or malformed selector returns
+400 before enqueueing.
 
-```
-POST /api/incident/maestro/board/<id>
-{"refresh_schema": 1}
-```
+## Rules handlers
 
-Re-registers against maestro and returns the refreshed
-`{"name", "remote_board_id", "schema"}`.
+Report an Incident directly, without a Ticket:
 
-## Pushing a ticket
-
-```
-POST /api/incident/ticket/<id>
-{"push_to_board": <board id>}
+```text
+maestro://
+maestro://?board=3
 ```
 
-Queues an async push (the response is the normal ticket payload). The push is
-idempotent — re-pushing updates the existing board item instead of creating a
-duplicate. On first push a system note with the remote item URL is added to
-the ticket. Errors: 400 unknown/inactive board, 403 when the board is
-group-scoped and the ticket belongs to a different group.
+Create/reuse a local Ticket and also report it:
 
-After a ticket is linked:
-
-- Edits to `title` / `description` / `status` sync to the board automatically
-  (status only when `status_map` is configured).
-- New ticket notes are mirrored as board comments (unless `sync_notes` is
-  off). Notes originating from the board itself are never mirrored back.
-- Board-side changes and comments arrive as system ticket notes
-  (`user=null`, `metadata.origin="maestro"`).
-
-Rule-driven auto-push: the rules engine's `ticket://` handler accepts
-`board=<id>` — see the [security guide](README.md).
-
-## Links
-
-```
-GET    /api/incident/maestro/link           # list (filter: ticket, maestro_board)
-GET    /api/incident/maestro/link/<id>
-DELETE /api/incident/maestro/link/<id>      # unlink — stops syncing, remote item stays
+```text
+ticket://?priority=8&maestro=1
+ticket://?priority=8&board=3
 ```
 
-Link rows are read-only (`remote_item_id`, `remote_url`, `last_synced`);
-they are created by pushing, never via REST.
+Plain `ticket://?priority=8` stays local-only. `maestro=1` selects the server
+default; presence of `board` opts into Maestro and selects that remote board.
 
-## Webhook receiver (maestro → this project)
+## Item links
 
+Links are read-only except for explicit unlink:
+
+```http
+GET    /api/incident/maestro/item-link
+GET    /api/incident/maestro/item-link/17
+DELETE /api/incident/maestro/item-link/17
 ```
-POST /api/incident/maestro/webhook/<callback_token>
+
+Reading requires `view_security` or `security`; unlinking requires
+`manage_security`. Each row exposes its Ticket-or-Incident source, stable
+integration id, remote item/board ids, URL and last-sync timestamp. Deleting it
+stops future sync and leaves the remote Maestro item intact.
+
+The old `/api/incident/maestro/board` and `/api/incident/maestro/link` surfaces
+are legacy read-only records. New setup is deployment configuration, not REST.
+
+## Ongoing updates
+
+After linking:
+
+- Ticket title, description, status and priority changes sync to Maestro.
+- New Ticket notes sync as comments.
+- Incident title, details, category, status and priority changes sync.
+- Incident history entries sync as comments.
+- Maestro comments return as Ticket notes or Incident history.
+- Maestro lifecycle `active`, `done`, and `parked` maps to local `open`,
+  `resolved`, and `paused`.
+- A same-workspace Maestro board move updates the cached board and sync
+  continues.
+
+Outbound failures never fail a local save. Timeouts/5xx retry; terminal 4xx
+responses are dropped with an operator log.
+
+## Callback receiver
+
+```http
+POST /api/incident/maestro/webhook
+X-Mojo-Signature: <HMAC-SHA256 signature>
 ```
 
-Not for browser clients — this is the endpoint maestro calls. No session
-auth; it is protected by the unguessable per-board token plus an
-`X-Mojo-Signature` header (HMAC-SHA256 of the canonical JSON payload, keyed
-by the raw link key). Invalid token/signature → 401. Events for items that
-are no longer linked return `200 {"ignored": true}`.
+This endpoint is for Maestro, not browser callers. It is public but
+rate-limited and verifies the bounded JSON payload using the deployment
+`MAESTRO_API_KEY`. The signed payload must include `integration_id` and
+`item.id`; lookup uses both. Invalid/missing signatures return 401 and unknown
+links return 200 with `ignored=true`.
+
+Remote note ids are deduplicated, and Maestro-origin changes are excluded from
+outbound hooks to prevent loops.

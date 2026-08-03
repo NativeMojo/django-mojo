@@ -290,13 +290,26 @@ Creates a Ticket linked to the incident for human review.
 | `priority` | `5` | Priority 1-10 (10 = highest) |
 | `category` | | Optional ticket category |
 | `assignee` | | Optional username to assign to |
-| `board` | | Optional MaestroBoard id — auto-push the created ticket to that remote maestro board (see [Maestro Board Link](maestro_board.md)) |
+| `maestro` | | Set `1` to also report the Ticket to the configured Maestro default board |
+| `board` | | Remote Maestro board id; also opts the Ticket into Maestro reporting |
 
 ```
 ticket://?priority=9&status=open
 ticket://?priority=5&assignee=oncall
 ticket://?priority=9&board=3
 ```
+
+#### `maestro://?board=<remote-id>`
+
+Reports the Incident itself to Maestro without creating a local Ticket. Omit
+`board` to use the integration's server-side default:
+
+```
+maestro://
+maestro://?board=3
+```
+
+See [Maestro Workspace Reporting](maestro_board.md).
 
 #### `notify://<targets>`
 
@@ -923,7 +936,7 @@ Health rules **never** use `block://` — infrastructure issues should not block
 
 - [Authenticated-Abuse Hardening](abuse_hardening.md) — global per-identity API throttle, traffic-concentration detection, account kill switch, websocket connection limits, deployment hardening
 - [Content Security Policy](csp.md) — the nonce-based CSP on the hosted auth pages, **opt-in and off by default** (`AUTH_CSP_ENABLED` ships `False`): how to turn it on, the default policy, the per-page `frame-ancestors` rule, the `{{ csp_nonce }}` contract for overridden templates, and the `AUTH_CSP_*` settings
-- [Maestro Board Link](maestro_board.md) — push tickets into a remote maestro board and sync both directions (registration, status_map, signed webhooks, echo suppression)
+- [Maestro Workspace Reporting](maestro_board.md) — deployment ApiKey setup, direct Incident or Ticket reporting, remote/default board routing, signed callbacks and echo suppression
 - [Ticket Actions](ticket_actions.md) — structured Approve/Deny action notes on tickets: schema, dispatch guards, built-in handlers (rule approval/update, block confirm, escalate), handler registration, LLM opt-in contract
 - [Bouncer Architecture](../account/bouncer.md) — bot detection, scoring, tokens, signatures
 - [GeoIP System](../account/geoip.md) — IP geolocation, blocking, threat escalation

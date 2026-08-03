@@ -65,12 +65,11 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | Bouncer Signals | `/api/account/bouncer/signal` | Assessment audit trail with full signal payloads |
 | Bot Signatures | `/api/account/bouncer/signature` | Manage bot signatures (auto-learned + manual) |
 | IPSet | `/api/incident/ipset` | Bulk CIDR blocking: countries, datacenters, abuse lists |
-| Maestro Boards | `/api/incident/maestro/board` | Push tickets into a remote maestro board, two-way sync |
-| Maestro Links | `/api/incident/maestro/link` | Which tickets are linked to which board items |
+| Maestro Item Links | `/api/incident/maestro/item-link` | Remote Maestro items linked to local Tickets or Incidents |
 
 See individual API docs for full details:
 - [Rate Limits & Client Backoff](rate_limits.md) — the 429/`Retry-After` contract every client must honor
-- [Maestro Boards](maestro_board.md) — register a board link, push tickets, status_map, webhook contract
+- [Maestro Reporting](maestro_board.md) — deployment-configured workspace reporting, Ticket/Incident actions, item links and signed callbacks
 - [Incidents](../logging/incidents.md)
 - [Events & Reporting](../logging/reporting_events.md)
 - [Firewall & GeoIP](../account/firewall.md)
@@ -586,7 +585,8 @@ Rules can fire these handlers when incidents are created:
 | Email | `email://perm@manage_security` | Email verified users |
 | SMS | `sms://perm@manage_security` | SMS verified users (critical only) |
 | Notify | `notify://perm@manage_security` | In-app + push notification |
-| Ticket | `ticket://?priority=8` | Create ticket for human review |
+| Ticket | `ticket://?priority=8` | Create a local ticket; add `maestro=1` or remote `board=3` to report it |
+| Maestro | `maestro://?board=3` | Report the Incident directly; omit `board` for the default |
 | Job | `job://module.function` | Run custom async job |
 | LLM | `llm://` | Autonomous LLM triage agent |
 
