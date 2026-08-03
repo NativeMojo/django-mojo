@@ -94,6 +94,51 @@ AWS_STORAGE_BUCKET_NAME = "my-bucket"
 AWS_S3_REGION_NAME = "us-east-1"
 ```
 
+#### Public-access reconciliation
+
+For a user-scoped S3 manager, `is_public` is a stored classification that must
+agree with the storage service. FileManager performs a policy-level check when
+`get_for_user()` provisions or retrieves a personal manager. The first real
+file or rendition URL then supersedes policy-only evidence once with a stronger
+object-level check. An existing manager can also enter directly through that
+object-level path when one of its files is resolved after upgrade.
+
+The internal `public_access_audit` field stores versioned evidence with one of
+three statuses:
+
+- `public` — anonymous access was conclusively established; `is_public` is repaired to `True` and unsigned URLs are allowed.
+- `private` — anonymous access was conclusively denied; `is_public` is repaired to `False`.
+- `unknown` — AWS could not establish either result. The stored `is_public` value is preserved, but download behavior fails closed to a presigned URL.
+
+The audit uses an anonymous HEAD probe after authenticated S3 access confirms a
+real object exists. An anonymous 403 is enough to disprove manager-wide public
+access. A successful probe proves only that one object is readable, so the
+manager is classified public only when policy evidence also shows an
+unconditional anonymous `s3:GetObject` allow covering the entire prefix, no
+matching deny can override it, and effective bucket/account Public Access Block
+settings do not restrict the existing policy. Before any object exists, that
+same conservative policy evidence is used by itself. The audit never adds or
+broadens bucket policy statements.
+
+Audit metadata carries a one-way fingerprint of the backend URL/type and
+effective connection settings. Changing those FileManager inputs invalidates
+the evidence. Normal reads do not use an hourly TTL and do not poll AWS after
+the current evidence is established.
+
+Bucket/account policy or Public Access Block changes made through AWS Console,
+Terraform, or another path outside FileManager are not observable from the
+model. Force a bulk policy refresh after such a change:
+
+```bash
+python manage.py reconcile_fileman_public_access
+python manage.py reconcile_fileman_public_access --dry-run
+```
+
+The command audits active user-scoped S3 managers independently, reports
+`public`/`private`/`unknown` totals, and continues if one manager fails. Dry-run
+performs the read-only AWS inspection without changing `is_public` or audit
+metadata.
+
 ### Backend interface — `download(file_path, local_path)`
 
 All backends used by the renderer pipeline (image, vector, video, audio, document) must implement:
@@ -136,4 +181,7 @@ REST clients pass `?use=avatars` to select a specific manager.
 
 ## Auto-Provisioning
 
-If no `FileManager` exists for a group, the system-wide default is used automatically. Set `is_default=True` on one FileManager to designate it.
+If no `FileManager` exists for a group or user, the system-wide default is used
+automatically. Set `is_default=True` on one FileManager to designate it. A new
+user manager inherits the system manager's public/private value and reconciles
+its derived S3 prefix before it is returned.

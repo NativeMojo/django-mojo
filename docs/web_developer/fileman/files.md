@@ -29,6 +29,15 @@ For the normal case — `<img src={file.thumbnail}>`, `<a href={file.url}>Downlo
 
 If a deployment has shortlinks disabled (global `FILEMAN_USE_SHORTLINKS=False` or per-FileManager override), `url` will be the direct backend URL with no wrapping. Treat both forms as opaque.
 
+The server verifies personal S3 managers before exposing an unsigned URL. It
+may first inspect manager-level policy when resolving the personal manager, then
+supersedes policy-only evidence once with the first exact file or rendition
+check. An older manager can also repair itself directly when an existing URL is
+first resolved after upgrade. Private or indeterminate access returns a fresh
+presigned target; the file does not need to be uploaded again. Clients should
+therefore continue treating every returned URL as opaque and should not infer
+public/private status from its shape.
+
 ## Get File
 
 **GET** `/api/fileman/file/123`

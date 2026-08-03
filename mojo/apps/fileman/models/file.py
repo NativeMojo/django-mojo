@@ -573,7 +573,10 @@ class File(models.Model, MojoModel):
         bypassing any shortlink wrapping. Used by the shortlink resolver and
         as the fallback when shortlinks are disabled.
         """
-        if self.file_manager.is_public:
+        effective_public = self.file_manager.ensure_public_access_audited(
+            file_path=self.storage_file_path,
+        )
+        if effective_public:
             if not self.download_url:
                 self.download_url = self.file_manager.backend.get_url(self.storage_file_path)
             return self.download_url

@@ -6,8 +6,10 @@ from datetime import datetime, timedelta
 import os
 import uuid
 import hashlib
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 import json
+import fnmatch
+import requests
 
 from .base import StorageBackend
 
@@ -173,8 +175,7 @@ class S3StorageBackend(StorageBackend):
     def get_url(self, file_path: str, expires_in: Optional[int] = None) -> str:
         """Get a URL to access the file, either public or pre-signed based on expiration"""
         if expires_in is None:
-            # Assume the bucket is public and generate a public URL
-            url = f"https://{self.bucket_name}.s3.amazonaws.com/{file_path}"
+            url = self.get_public_url(file_path)
         else:
             # Generate a pre-signed URL
             url = self.client.generate_presigned_url(
@@ -186,6 +187,28 @@ class S3StorageBackend(StorageBackend):
                 ExpiresIn=expires_in
             )
         return url
+
+    def get_public_url(self, file_path: str) -> str:
+        """Build the unsigned URL for the same endpoint used by this backend."""
+        endpoint = urlparse(self.endpoint_url)
+        encoded_path = quote(file_path.lstrip("/"), safe="/~")
+        hostname = endpoint.hostname or ""
+        is_aws_endpoint = hostname == "s3.amazonaws.com" or hostname.startswith("s3.") and hostname.endswith(".amazonaws.com")
+        use_virtual = self.addressing_style == "virtual" or (
+            self.addressing_style == "auto" and is_aws_endpoint
+        )
+
+        if use_virtual:
+            netloc = f"{self.bucket_name}.{hostname}"
+            if endpoint.port:
+                netloc = f"{netloc}:{endpoint.port}"
+            base_path = endpoint.path.rstrip("/")
+            return f"{endpoint.scheme}://{netloc}{base_path}/{encoded_path}"
+
+        return (
+            f"{self.endpoint_url.rstrip('/')}/{quote(self.bucket_name, safe='')}/"
+            f"{encoded_path}"
+        )
 
     def supports_direct_upload(self) -> bool:
         """
@@ -441,127 +464,243 @@ class S3StorageBackend(StorageBackend):
                 raise ValueError(f"S3 connection error: {e}")
 
     # -------------------------------
-    # PUBLIC ACCESS AUDIT (KISS)
+    # PUBLIC ACCESS AUDIT
     # -------------------------------
-    def check_public_access_for_prefix(self):
-        """
-        Check whether the configured prefix for this FileManager is actually publicly readable.
+    @staticmethod
+    def _error_code(exc):
+        return str((getattr(exc, "response", {}).get("Error") or {}).get("Code") or "")
 
-        This does NOT attempt an anonymous HTTP GET. It audits:
-          - S3 PublicAccessBlock configuration (bucket-level)
-          - Bucket policy statement that make_path_public() would create
+    @staticmethod
+    def _as_list(value):
+        if isinstance(value, list):
+            return value
+        return [] if value is None else [value]
 
-        Returns:
-            (ok, issues, details)
-        """
+    @classmethod
+    def _principal_is_public(cls, principal):
+        if principal == "*":
+            return True
+        if isinstance(principal, dict):
+            return "*" in cls._as_list(principal.get("AWS"))
+        return False
+
+    @classmethod
+    def _action_can_get_object(cls, action):
+        return any(
+            isinstance(pattern, str)
+            and fnmatch.fnmatchcase("s3:getobject", pattern.lower())
+            for pattern in cls._as_list(action)
+        )
+
+    @classmethod
+    def _deny_can_get_object(cls, statement):
+        if "Action" in statement:
+            return cls._action_can_get_object(statement.get("Action"))
+        if "NotAction" in statement:
+            excluded = cls._as_list(statement.get("NotAction"))
+            return not any(
+                isinstance(pattern, str)
+                and fnmatch.fnmatchcase("s3:getobject", pattern.lower())
+                for pattern in excluded
+            )
+        return False
+
+    def _resource_covers_entire_prefix(self, resource):
+        """Accept only a trailing-star resource with an unambiguous literal base."""
+        prefix_arn = f"arn:aws:s3:::{self.bucket_name}/{self.folder_path}"
+        for pattern in self._as_list(resource):
+            if not isinstance(pattern, str) or not pattern.endswith("*"):
+                continue
+            literal = pattern[:-1]
+            if any(char in literal for char in ("*", "?", "[")):
+                continue
+            if prefix_arn.startswith(literal):
+                return True
+        return False
+
+    def _resource_may_overlap_prefix(self, resource):
+        prefix_arn = f"arn:aws:s3:::{self.bucket_name}/{self.folder_path}"
+        child_arn = f"{prefix_arn.rstrip('/')}/__fileman_audit_probe__"
+        for pattern in self._as_list(resource):
+            if not isinstance(pattern, str):
+                continue
+            if fnmatch.fnmatchcase(prefix_arn, pattern) or fnmatch.fnmatchcase(child_arn, pattern):
+                return True
+            literal = pattern.split("*", 1)[0].split("?", 1)[0].split("[", 1)[0]
+            if literal.startswith(prefix_arn) or prefix_arn.startswith(literal):
+                return True
+        return False
+
+    def _get_account_public_access_block(self):
+        session = boto3.Session(
+            aws_access_key_id=self.access_key_id,
+            aws_secret_access_key=self.secret_access_key,
+            region_name=self.region_name,
+        )
+        account_id = session.client("sts").get_caller_identity()["Account"]
+        response = session.client("s3control").get_public_access_block(AccountId=account_id)
+        return response.get("PublicAccessBlockConfiguration") or {}
+
+    def _audit_existing_object(self, file_path):
+        details = {
+            "bucket": self.bucket_name,
+            "prefix": self.folder_path,
+            "file_path": file_path,
+            "method": "object",
+            "authenticated_head": None,
+            "anonymous_head_status": None,
+        }
+        try:
+            self.client.head_object(Bucket=self.bucket_name, Key=file_path)
+            details["authenticated_head"] = "exists"
+        except ClientError as exc:
+            code = self._error_code(exc)
+            details["authenticated_head"] = code or "error"
+            details["status"] = "unknown"
+            return False, [f"Authenticated HeadObject could not confirm the object: {code or exc}"], details
+        except Exception as exc:
+            details["authenticated_head"] = "error"
+            details["status"] = "unknown"
+            return False, [f"Authenticated HeadObject failed: {exc}"], details
+
+        try:
+            response = requests.head(self.get_url(file_path), allow_redirects=True, timeout=3)
+            details["anonymous_head_status"] = response.status_code
+        except Exception as exc:
+            details["status"] = "unknown"
+            return False, [f"Anonymous HeadObject failed: {exc}"], details
+
+        if 200 <= response.status_code < 400:
+            details["status"] = "public"
+            return True, [], details
+        if response.status_code in (401, 403):
+            details["status"] = "private"
+            return False, [f"Anonymous HeadObject returned {response.status_code}."], details
+        details["status"] = "unknown"
+        return False, [f"Anonymous HeadObject returned indeterminate status {response.status_code}."], details
+
+    def check_public_access_for_prefix(self, file_path=None):
+        """Return tri-state evidence for anonymous access to this manager prefix."""
+        if file_path:
+            ok, issues, details = self._audit_existing_object(file_path)
+            if details.get("status") != "public":
+                return ok, issues, details
+
+            # A successful anonymous request proves this key is public, not the
+            # entire FileManager prefix. Require whole-prefix policy evidence
+            # before caching a manager-wide public result.
+            policy_ok, policy_issues, policy_details = self.check_public_access_for_prefix()
+            details["policy_evidence"] = policy_details
+            if policy_ok:
+                return True, [], details
+            details["status"] = "unknown"
+            return False, [
+                "The object is public but whole-prefix public access could not be established."
+            ] + list(policy_issues or []), details
+
         issues = []
         details = {
             "bucket": self.bucket_name,
             "prefix": self.folder_path,
-            "expected_sid": f"AllowPublicReadForPrefix_{self.folder_path.replace('/', '_')}",
-            "expected_resource": f"arn:aws:s3:::{self.bucket_name}/{self.folder_path}*",
-            "public_access_block": None,
+            "method": "policy",
             "policy": None,
-            "policy_has_expected_statement": False,
+            "bucket_public_access_block": None,
+            "account_public_access_block": None,
         }
 
-        # 1) PublicAccessBlock (bucket-level)
         try:
-            pab = self.client.get_public_access_block(Bucket=self.bucket_name)
-            cfg = pab.get("PublicAccessBlockConfiguration") or {}
-            details["public_access_block"] = cfg
-
-            # These settings commonly prevent public bucket policies from taking effect.
-            if cfg.get("BlockPublicPolicy"):
-                issues.append("Bucket PublicAccessBlock.BlockPublicPolicy is enabled (public bucket policies may be blocked).")
-            if cfg.get("RestrictPublicBuckets"):
-                issues.append("Bucket PublicAccessBlock.RestrictPublicBuckets is enabled (public access may be restricted even if policy exists).")
-        except ClientError as e:
-            code = (e.response.get("Error") or {}).get("Code")
-            if code in ("NoSuchPublicAccessBlockConfiguration", "NoSuchPublicAccessBlock"):
-                # No config set is fine; treat as not blocking.
-                details["public_access_block"] = None
-            elif code in ("AccessDenied", "AllAccessDisabled"):
-                issues.append("AccessDenied reading bucket PublicAccessBlock configuration (insufficient permissions to audit).")
-            else:
-                issues.append(f"Error reading bucket PublicAccessBlock configuration: {code or str(e)}")
-
-        # 2) Bucket policy statement for our prefix
-        try:
-            policy_str = self.client.get_bucket_policy(Bucket=self.bucket_name).get("Policy")
-            if policy_str:
-                policy = json.loads(policy_str)
-            else:
-                policy = None
+            policy_text = self.client.get_bucket_policy(Bucket=self.bucket_name).get("Policy")
+            policy = json.loads(policy_text) if policy_text else None
+            if not isinstance(policy, dict):
+                raise ValueError("bucket policy is not a JSON object")
             details["policy"] = policy
+        except ClientError as exc:
+            code = self._error_code(exc)
+            if code in ("NoSuchBucketPolicy", "NoSuchPolicy", "404"):
+                details["status"] = "private"
+                return False, ["No bucket policy grants anonymous access to this prefix."], details
+            details["status"] = "unknown"
+            return False, [f"Unable to read bucket policy: {code or exc}"], details
+        except Exception as exc:
+            details["status"] = "unknown"
+            return False, [f"Unable to parse bucket policy: {exc}"], details
 
-            statements = []
-            if isinstance(policy, dict):
-                st = policy.get("Statement", [])
-                if isinstance(st, dict):
-                    statements = [st]
-                elif isinstance(st, list):
-                    statements = st
+        raw_statements = policy.get("Statement", [])
+        statements = raw_statements if isinstance(raw_statements, list) else [raw_statements]
+        covering_allow = False
+        ambiguous_allow = False
+        matching_deny = False
 
-            expected_sid = details["expected_sid"]
-            expected_resource = details["expected_resource"]
+        for statement in statements:
+            if not isinstance(statement, dict):
+                continue
+            if statement.get("Effect") == "Deny" and self._deny_can_get_object(statement):
+                if "NotResource" in statement or self._resource_may_overlap_prefix(statement.get("Resource")):
+                    matching_deny = True
+                continue
+            if statement.get("Effect") != "Allow":
+                continue
+            if not self._principal_is_public(statement.get("Principal")):
+                continue
+            if not self._action_can_get_object(statement.get("Action")):
+                continue
+            if statement.get("Condition"):
+                if self._resource_may_overlap_prefix(statement.get("Resource")):
+                    ambiguous_allow = True
+                continue
+            if self._resource_covers_entire_prefix(statement.get("Resource")):
+                covering_allow = True
+            elif self._resource_may_overlap_prefix(statement.get("Resource")):
+                ambiguous_allow = True
 
-            def _principal_is_public(principal):
-                if principal == "*":
-                    return True
-                if isinstance(principal, dict):
-                    aws = principal.get("AWS")
-                    if aws == "*" or aws == ["*"]:
-                        return True
-                return False
+        if matching_deny:
+            details["status"] = "unknown"
+            return False, ["A matching deny may override anonymous GetObject access."], details
+        if not covering_allow:
+            if ambiguous_allow:
+                details["status"] = "unknown"
+                return False, ["The bucket policy has only conditional or partial public access."], details
+            details["status"] = "private"
+            return False, ["Bucket policy does not grant anonymous GetObject for the entire prefix."], details
 
-            def _action_has_get_object(action):
-                if action == "s3:GetObject":
-                    return True
-                if isinstance(action, list) and "s3:GetObject" in action:
-                    return True
-                return False
-
-            def _resource_covers_prefix(resource):
-                if resource == expected_resource:
-                    return True
-                if isinstance(resource, list) and expected_resource in resource:
-                    return True
-                return False
-
-            for stmt in statements:
-                if not isinstance(stmt, dict):
-                    continue
-                if stmt.get("Sid") != expected_sid:
-                    continue
-                if stmt.get("Effect") != "Allow":
-                    continue
-                if not _principal_is_public(stmt.get("Principal")):
-                    continue
-                if not _action_has_get_object(stmt.get("Action")):
-                    continue
-                if not _resource_covers_prefix(stmt.get("Resource")):
-                    continue
-
-                details["policy_has_expected_statement"] = True
-                break
-
-            if not details["policy_has_expected_statement"]:
-                issues.append("Bucket policy does not include the expected public-read statement for this prefix.")
-        except self.client.exceptions.from_code("NoSuchBucketPolicy"):
-            details["policy"] = None
-            issues.append("No bucket policy is set (prefix is not publicly readable).")
-        except ClientError as e:
-            code = (e.response.get("Error") or {}).get("Code")
-            if code in ("AccessDenied", "AllAccessDisabled"):
-                issues.append("AccessDenied reading bucket policy (insufficient permissions to audit).")
+        try:
+            response = self.client.get_public_access_block(Bucket=self.bucket_name)
+            bucket_pab = response.get("PublicAccessBlockConfiguration") or {}
+        except ClientError as exc:
+            code = self._error_code(exc)
+            if code in ("NoSuchPublicAccessBlockConfiguration", "NoSuchPublicAccessBlock", "404"):
+                bucket_pab = {}
             else:
-                issues.append(f"Error reading bucket policy: {code or str(e)}")
-        except Exception as e:
-            issues.append(f"Error parsing bucket policy: {str(e)}")
+                details["status"] = "unknown"
+                return False, [f"Unable to read bucket Public Access Block: {code or exc}"], details
+        details["bucket_public_access_block"] = bucket_pab
 
-        ok = len(issues) == 0
-        return ok, issues, details
+        try:
+            account_pab = self._get_account_public_access_block()
+        except ClientError as exc:
+            code = self._error_code(exc)
+            if code in ("NoSuchPublicAccessBlockConfiguration", "NoSuchPublicAccessBlock", "404"):
+                account_pab = {}
+            else:
+                details["status"] = "unknown"
+                return False, [f"Unable to read account Public Access Block: {code or exc}"], details
+        except Exception as exc:
+            details["status"] = "unknown"
+            return False, [f"Unable to read account Public Access Block: {exc}"], details
+        details["account_public_access_block"] = account_pab
+
+        for scope, config in (("Bucket", bucket_pab), ("Account", account_pab)):
+            # BlockPublicPolicy rejects future PutBucketPolicy calls but does
+            # not disable an existing policy. RestrictPublicBuckets changes the
+            # effective read posture and is therefore conclusive here.
+            if config.get("RestrictPublicBuckets"):
+                issues.append(f"{scope} Public Access Block prevents effective public bucket policies.")
+        if issues:
+            details["status"] = "private"
+            return False, issues, details
+
+        details["status"] = "public"
+        return True, [], details
 
     def make_path_public(self):
         # Get the current bucket policy (if any)

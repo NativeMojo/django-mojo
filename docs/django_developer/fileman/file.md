@@ -109,6 +109,16 @@ When shortlinks are disabled or the app is not installed, behavior is identical 
 - Public files return a permanent CDN/storage URL (cached in `download_url`)
 - Private files return a time-limited presigned URL (TTL from `urls_expire_in` FileManager setting)
 
+For user-scoped S3 storage, “public” means the FileManager has current,
+conclusive storage evidence. `get_for_user()` can establish policy-level
+evidence first; the first direct file or rendition URL supersedes policy-only
+evidence once with an exact-object check. An existing manager with no metadata
+can also reconcile directly on that first URL after upgrade. A confirmed
+anonymous 403 repairs the manager to private and returns a fresh presigned URL,
+so an existing avatar or document becomes readable without being uploaded
+again. If AWS access cannot be determined, the URL is also presigned but the
+operator's stored `is_public` value is not overwritten.
+
 To bypass shortlink wrapping and get the raw backend URL directly (e.g., from within the shortlink resolver itself), call:
 
 ```python
@@ -116,6 +126,9 @@ url = file_instance.get_direct_download_url()
 ```
 
 `get_direct_download_url()` never produces a short URL and never recurses into the shortlink system. Use it when you need the actual fetch URL, not the stable surface URL.
+
+Shortlink redirects call this direct method at resolution time, so a repaired
+private manager produces a fresh presign behind its existing stable short URL.
 
 See [shortlinks.md](shortlinks.md) for the full pipeline, per-manager toggles, and the tier-1/tier-2 distinction.
 

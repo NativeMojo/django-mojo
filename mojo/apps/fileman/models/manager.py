@@ -1,7 +1,10 @@
 import os
 import boto3
+import hashlib
+import json
 from botocore.exceptions import ClientError
 from django.db import models
+from django.utils import timezone
 from mojo.models import MojoModel, MojoSecrets
 from urllib.parse import urlparse
 from mojo.helpers.settings import settings
@@ -148,6 +151,14 @@ class FileManager(MojoSecrets, MojoModel):
         help_text="Whether this allows public access to the files"
     )
 
+    public_access_audit = models.JSONField(
+        null=True,
+        blank=True,
+        default=None,
+        editable=False,
+        help_text="Internal versioned evidence for the effective public-access classification"
+    )
+
     parent = models.ForeignKey(
         'self',
         on_delete=models.CASCADE,
@@ -184,7 +195,27 @@ class FileManager(MojoSecrets, MojoModel):
         """Override save to ensure name is set before saving"""
         if not self.name:
             self.name = self.generate_name()
+        if self.pk and self._backend is not None:
+            persisted = type(self).objects.filter(pk=self.pk).values_list(
+                "backend_type", "backend_url"
+            ).first()
+            if persisted and persisted != (self.backend_type, self.backend_url):
+                self._backend = None
+        if getattr(self, "_secrets_changed", False):
+            self._backend = None
         super().save(*args, **kwargs)
+
+    def set_secret(self, key, value):
+        self._backend = None
+        return super().set_secret(key, value)
+
+    def set_secrets(self, value):
+        self._backend = None
+        return super().set_secrets(value)
+
+    def clear_secrets(self):
+        self._backend = None
+        return super().clear_secrets()
 
     def get_setting(self, key, default=None):
         """Get a specific setting value"""
@@ -203,6 +234,7 @@ class FileManager(MojoSecrets, MojoModel):
 
     def set_backend_url(self, url, *args):
         """Set the backend URL"""
+        self._backend = None
         self.backend_url = os.path.join(url, *args)
         self.backend_type = self.backend_url.split(':')[0]
 
@@ -375,11 +407,17 @@ class FileManager(MojoSecrets, MojoModel):
         self._update_default()
         if not self.name:
             self.name = self.generate_name()
-        if "is_public" in changed_fields or created:
+        backend_changed = bool({"backend_type", "backend_url"}.intersection(changed_fields))
+        policy_changed = "is_public" in changed_fields or created
+        if backend_changed or created:
+            self._backend = None
+        if policy_changed:
             if self.is_public:
                 self.backend.make_path_public()
             else:
                 self.backend.make_path_private()
+        if self.is_s3 and (policy_changed or backend_changed):
+            self.audit_is_public(force=True)
 
     def generate_name(self):
         use_part = f"{self.use} " if getattr(self, "use", "") else ""
@@ -391,12 +429,105 @@ class FileManager(MojoSecrets, MojoModel):
             return f"{self.group.name}'s {use_part}{self.backend_type} FileManager"
         return f"{use_part}{self.backend_type} FileManager"
 
-    def audit_is_public(self):
-        is_public = self.check_public_access()
-        if self.is_public != is_public:
-            self.is_public = is_public
-            self.save()
-        return self.is_public
+    PUBLIC_ACCESS_AUDIT_VERSION = 1
+    PUBLIC_ACCESS_SETTING_KEYS = (
+        "aws_key",
+        "aws_secret",
+        "aws_region",
+        "endpoint_url",
+        "signature_version",
+        "addressing_style",
+    )
+
+    def public_access_config_fingerprint(self):
+        """Hash effective storage inputs without persisting credential material."""
+        payload = {
+            "backend_type": self.backend_type,
+            "backend_url": self.backend_url,
+            "settings": {
+                key: self.get_setting(key, None)
+                for key in self.PUBLIC_ACCESS_SETTING_KEYS
+            },
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _uses_automatic_public_access_audit(self):
+        """Lazy upgrade repair is deliberately limited to personal S3 managers."""
+        return bool(
+            self.pk
+            and self.is_active
+            and self.is_s3
+            and self.user_id is not None
+            and self.group_id is None
+        )
+
+    def _public_access_audit_is_current(self, file_path=None):
+        audit = self.public_access_audit
+        if not isinstance(audit, dict):
+            return False
+        if audit.get("version") != self.PUBLIC_ACCESS_AUDIT_VERSION:
+            return False
+        if audit.get("config_fingerprint") != self.public_access_config_fingerprint():
+            return False
+        # A policy-only provisioning result is superseded once by evidence from
+        # a real object. Thereafter normal URL reads remain network-free.
+        if file_path and audit.get("method") != "object":
+            return False
+        return audit.get("status") in ("public", "private", "unknown")
+
+    def audit_is_public(self, file_path=None, force=True, persist=True):
+        """Inspect S3 access and return the safe effective public/private value.
+
+        Conclusive results repair ``is_public``. An indeterminate result keeps
+        the operator's stored value but is effectively private so callers use a
+        presigned URL.
+        """
+        if not self.is_s3:
+            return self.is_public
+        if not force and self._public_access_audit_is_current(file_path=file_path):
+            return self.public_access_audit.get("status") == "public"
+
+        fingerprint = self.public_access_config_fingerprint()
+        try:
+            ok, issues, details = self.backend.check_public_access_for_prefix(file_path=file_path)
+            details = details if isinstance(details, dict) else {}
+            status = details.get("status")
+            if status not in ("public", "private", "unknown"):
+                status = "public" if ok else "private"
+            method = details.get("method") or ("object" if file_path else "policy")
+        except Exception as exc:
+            status = "unknown"
+            method = "object" if file_path else "policy"
+            issues = [str(exc)]
+            details = {"error": str(exc)}
+
+        audit = {
+            "version": self.PUBLIC_ACCESS_AUDIT_VERSION,
+            "status": status,
+            "method": method,
+            "checked_at": timezone.now().isoformat(),
+            "config_fingerprint": fingerprint,
+            "issues": list(issues or []),
+            "details": details,
+        }
+        self._public_access_audit_result = audit
+
+        if persist:
+            updates = {"public_access_audit": audit, "modified": timezone.now()}
+            self.public_access_audit = audit
+            if status in ("public", "private"):
+                self.is_public = status == "public"
+                updates["is_public"] = self.is_public
+            type(self).objects.filter(pk=self.pk).update(**updates)
+
+        return status == "public"
+
+    def ensure_public_access_audited(self, file_path=None, force=False, persist=True):
+        """Return safe effective access, auditing only stale personal S3 state."""
+        if not self._uses_automatic_public_access_audit():
+            return self.is_public
+        return self.audit_is_public(file_path=file_path, force=force, persist=persist)
 
     def check_public_access(self):
         """
@@ -410,8 +541,8 @@ class FileManager(MojoSecrets, MojoModel):
             if not self.is_s3:
                 return False
             self.backend.test_connection()
-            ok, issues, details = self.backend.check_public_access_for_prefix()
-            return bool(ok)
+            ok, issues, details = self.backend.check_public_access_for_prefix(file_path=None)
+            return bool(ok and (details or {}).get("status", "public") == "public")
         except Exception:
             return False
 
@@ -427,7 +558,7 @@ class FileManager(MojoSecrets, MojoModel):
             if not self.is_s3:
                 return dict(status=False, error="Public access auditing is only supported for S3 backends.")
             self.backend.test_connection()
-            ok, issues, details = self.backend.check_public_access_for_prefix()
+            ok, issues, details = self.backend.check_public_access_for_prefix(file_path=None)
             return dict(status=True, result=dict(ok=ok, issues=issues, details=details))
         except Exception as e:
             return dict(status=False, error=str(e))
@@ -713,6 +844,7 @@ class FileManager(MojoSecrets, MojoModel):
                                 'backend_type': sys_manager.backend_type,
                                 'backend_url': temp_manager.backend_url,
                                 'is_active': True,
+                                'is_public': sys_manager.is_public,
                             }
                         )
                         if created:
@@ -724,6 +856,8 @@ class FileManager(MojoSecrets, MojoModel):
                     file_manager = cls.objects.filter(
                         user=user, group=None, is_default=True, is_active=True
                     ).first()
+        if file_manager is not None:
+            file_manager.ensure_public_access_audited()
         return file_manager
 
     @classmethod
