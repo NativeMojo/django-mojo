@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Django-MOJO — Ship the product. Skip the plumbing.</title>
+  <meta name="description" content="Django-MOJO is the full-stack Django framework for teams that want to ship, not assemble. REST, auth, jobs, realtime, files, security, and metrics—one coherent system.">
+  <meta property="og:title" content="Django-MOJO — Ship the product. Skip the plumbing.">
+  <meta property="og:description" content="The full-stack Django framework for teams that want to ship, not assemble.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://django-mojo.sitesmojo.com/">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="/css/site.css?v=1">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top">
+  <div class="top__in">
+    <a class="brand" href="/" aria-label="Django-MOJO home">
+      <img src="https://maestromojo.s3.amazonaws.com/fileman/749a1317b78244538c96ff238d0ab4e2/site_media/nm_mark_862f947d.png" width="28" height="28" alt="">
+      <span><b>Django</b><i>MOJO</i></span>
+    </a>
+    <nav class="nav" aria-label="Main navigation">
+      <a href="#framework">Framework</a>
+      <a href="#quickstart">Quick start</a>
+      <a href="https://github.com/NativeMojo/django-mojo" rel="noopener">GitHub</a>
+      <a class="btn btn--sm" href="/docs/">Read the docs</a>
+    </nav>
+    <details class="menu">
+      <summary aria-label="Open navigation"><span></span><span></span></summary>
+      <div class="menu__panel">
+        <a href="#framework">Framework</a>
+        <a href="#quickstart">Quick start</a>
+        <a href="https://github.com/NativeMojo/django-mojo" rel="noopener">GitHub</a>
+        <a href="/docs/">Read the docs</a>
+      </div>
+    </details>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero">
+    <div class="wrap hero__grid">
+      <div class="hero__copy">
+        <p class="eyebrow">Full-stack Django framework</p>
+        <h1>Ship the product.<br><span>Skip the plumbing.</span></h1>
+        <p class="lede">REST, identity, jobs, realtime, files, security, and metrics—already integrated, already speaking the same language.</p>
+        <div class="hero__actions">
+          <a class="btn btn--accent" href="/docs/?doc=django_developer/README">Start building</a>
+          <button class="install" type="button" data-copy="pip install django-mojo" aria-label="Copy pip install django-mojo">
+            <span>$</span> pip install django-mojo <b aria-hidden="true">Copy</b>
+          </button>
+        </div>
+        <p class="hero__note">Open source · Python 3.10+ · Django 5.2</p>
+      </div>
+
+      <div class="signal" aria-label="A request flowing through Django-MOJO's integrated framework layers">
+        <div class="signal__head"><span>request.pipeline</span><b>LIVE</b></div>
+        <div class="signal__rail" aria-hidden="true"><i></i></div>
+        <div class="signal__row"><span class="signal__n">01</span><div><b>AUTH</b><small>JWT · OAuth · Passkeys</small></div><em>verified</em></div>
+        <div class="signal__row"><span class="signal__n">02</span><div><b>PERMISSIONS</b><small>object + group scope</small></div><em>allowed</em></div>
+        <div class="signal__row"><span class="signal__n">03</span><div><b>RESTMETA</b><small>graph · filter · serialize</small></div><em>12ms</em></div>
+        <div class="signal__out"><span>200</span><code>{"status":true,"data":{…}}</code></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="proof" aria-label="Framework facts">
+    <div class="wrap proof__grid">
+      <div><b>172</b><span>reference articles</span></div>
+      <div><b>2</b><span>developer tracks</span></div>
+      <div><b>1</b><span>consistent framework</span></div>
+      <p>Built in production, documented from the code, and designed for humans and coding agents alike.</p>
+    </div>
+  </section>
+
+  <section class="sec" id="framework">
+    <div class="wrap">
+      <div class="sec__head reveal">
+        <p class="eyebrow">One system, not a parts bin</p>
+        <h2>The stack you assemble on every Django project—already assembled.</h2>
+        <p class="lede">Define the data, state the permissions, choose the graph. Django-MOJO supplies the production surface around it.</p>
+      </div>
+      <div class="swap reveal">
+        <div class="swap__head"><span>You used to wire up</span><span>Django-MOJO ships</span></div>
+        <div><p>DRF · serializers · viewsets</p><p><b>Model-first REST</b><span>Permissions, graphs, filtering, pagination, exports.</span></p></div>
+        <div><p>JWT · allauth · MFA packages</p><p><b>Complete identity</b><span>OAuth, TOTP, passkeys, API keys, devices, sessions.</span></p></div>
+        <div><p>Celery · cron · worker glue</p><p><b>Async jobs</b><span>Scheduling, retries, idempotency, heartbeats, webhooks.</span></p></div>
+        <div><p>Channels · custom routing</p><p><b>Realtime</b><span>Authenticated topic pub/sub with the same permission model.</span></p></div>
+        <div><p>S3 wrappers · image tooling</p><p><b>Files + vault</b><span>Uploads, renditions, durable URLs, encrypted storage.</span></p></div>
+        <div><p>Logs · counters · alert glue</p><p><b>Operations</b><span>Metrics, security events, incidents, rules, evidence.</span></p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec sec--ink" id="quickstart">
+    <div class="wrap quick">
+      <div class="quick__copy reveal">
+        <p class="eyebrow">The pattern</p>
+        <h2>Model in. Production API out.</h2>
+        <p>Django-MOJO keeps the important decisions together: data shape, access rules, and response graphs. The endpoint becomes a three-line adapter.</p>
+        <ol>
+          <li><b>Define</b> a normal Django model.</li>
+          <li><b>Declare</b> permissions and graphs in <code>RestMeta</code>.</li>
+          <li><b>Expose</b> the model through one decorated view.</li>
+        </ol>
+        <a class="more" href="/docs/?doc=django_developer/core/mojo_model">Explore MojoModel →</a>
+      </div>
+      <div class="codewindow reveal">
+        <div class="codewindow__bar"><i></i><i></i><i></i><span>models/article.py</span></div>
+        <pre><code><span class="c">from</span> django.db <span class="c">import</span> models
+<span class="c">from</span> mojo.models <span class="c">import</span> MojoModel
+
+<span class="c">class</span> <span class="t">Article</span>(models.Model, MojoModel):
+    title = models.CharField(max_length=<span class="n">200</span>)
+    body = models.TextField()
+    author = models.ForeignKey(<span class="s">"account.User"</span>, …)
+
+    <span class="c">class</span> <span class="t">RestMeta</span>:
+        VIEW_PERMS = [<span class="s">"view_articles"</span>]
+        SAVE_PERMS = [<span class="s">"manage_articles"</span>]
+        GRAPHS = {
+            <span class="s">"list"</span>: {<span class="s">"fields"</span>: [<span class="s">"id"</span>, <span class="s">"title"</span>]},
+            <span class="s">"detail"</span>: {<span class="s">"fields"</span>: [<span class="s">"*"</span>]},
+        }</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="wrap docs-callout reveal">
+      <div>
+        <p class="eyebrow">Two ways into the same framework</p>
+        <h2>Docs shaped around the work you’re doing.</h2>
+      </div>
+      <a class="track" href="/docs/?doc=django_developer/README">
+        <span>01 · BACKEND</span><b>Django developer</b><p>Models, services, helpers, configuration, architecture, and extension patterns.</p><em>102 articles →</em>
+      </a>
+      <a class="track" href="/docs/?doc=web_developer/README">
+        <span>02 · CLIENT</span><b>Web &amp; API developer</b><p>Endpoints, auth flows, request formats, permissions, graphs, and realtime protocols.</p><em>70 articles →</em>
+      </a>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="wrap cta__grid">
+      <div><p class="eyebrow">Start with the model</p><h2>Your product is the custom part.</h2></div>
+      <div><p>Let Django-MOJO handle the infrastructure every serious application needs.</p><div><a class="btn btn--accent" href="/docs/">Read the docs</a><a class="btn btn--ghost" href="https://github.com/NativeMojo/django-mojo" rel="noopener">View on GitHub</a></div></div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot__in">
+    <a class="brand" href="/"><img src="https://maestromojo.s3.amazonaws.com/fileman/749a1317b78244538c96ff238d0ab4e2/site_media/nm_mark_862f947d.png" width="28" height="28" alt=""><span><b>Django</b><i>MOJO</i></span></a>
+    <p>An open-source component of the Native Mojo foundation.</p>
+    <div><a href="/docs/">Documentation</a><a href="https://github.com/NativeMojo/django-mojo" rel="noopener">GitHub</a><a href="https://nativemojo.com/">Native Mojo</a></div>
+  </div>
+</footer>
+<script src="/js/site.js?v=1"></script>
+</body>
+</html>
+
