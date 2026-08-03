@@ -1,31 +1,31 @@
 """
-Keeps server-restarting operations away from live websocket connections.
+Keeps server-restarting operations away from live test-client requests.
 
 WHY THIS EXISTS
 ---------------
 `th.server_settings()` deliberately RESTARTS the asgi_local server: it writes
 overrides into var/django.conf and relies on uvicorn's
 ``--reload-include '*.conf'`` to pick them up. A reload kills the worker
-process — and every in-flight websocket along with it. A test holding a socket
-across that moment then sends on a dead connection and dies with
-"Connection is already closed."
+process — and every in-flight HTTP or websocket request along with it. An
+ordinary request then fails with RemoteDisconnected, while a test holding a
+socket sees "Connection is already closed."
 
 The test runner executes modules as THREADS inside one process
 (``testit/runner.py`` uses ThreadPoolExecutor), so a plain in-process
 reader/writer lock is enough to keep the two apart:
 
-  - a websocket connection holds the lock SHARED for its lifetime
+  - an HTTP request or websocket connection holds the lock SHARED while active
   - server_settings() holds it EXCLUSIVE for its whole duration
 
-Many websocket tests still run concurrently with each other; a settings
-override simply waits for open sockets to close and holds off new ones until
-the server is back up.
+Many client requests still run concurrently with each other; a settings
+override simply waits for active requests to finish and holds off new ones
+until the server is back up.
 
 One exception, and it is not a loophole: the thread that already holds the
-exclusive hold gets a shared hold immediately. Opening a websocket INSIDE a
-``th.server_settings()`` body is a normal thing to do, and that thread is the
-restarter — it cannot tear down its own socket behind its own back, so waiting
-would only stall it for the full reader timeout.
+exclusive hold gets a shared hold immediately. Making an HTTP request or
+opening a websocket INSIDE a ``th.server_settings()`` body is normal, and that
+thread is the restarter — it cannot tear down its own request, so waiting would
+only stall it for the full reader timeout.
 
 FAILSAFE
 --------
@@ -44,7 +44,7 @@ from contextlib import contextmanager
 # A settings override restarts the server twice (apply + restore), each with a
 # sleep plus a 10s poll, so a writer may legitimately hold the lock a while.
 WRITER_TIMEOUT = 60.0
-# Websocket tests are short; if one has held the lock this long it has leaked.
+# Client requests are short; if one has held the lock this long it has leaked.
 READER_TIMEOUT = 30.0
 
 
@@ -136,7 +136,7 @@ def exclusive(timeout=WRITER_TIMEOUT, logger=None):
         readers, _writer, _waiting = LOCK.state()
         logger.warning(
             f"[server_lock] proceeding without the exclusive hold after {timeout}s "
-            f"({readers} websocket connection(s) still open) — the caller is about "
+            f"({readers} client request(s) still active) — the caller is about "
             f"to mutate var/django.conf and restart the server, so a websocket test "
             f"may see its connection torn down by the reload"
         )

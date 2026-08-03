@@ -945,9 +945,10 @@ def server_settings(**overrides):
     logger = logit.get_logger("testit", "testit.log")
 
     # Both reloads below kill the uvicorn worker, and with it every in-flight
-    # websocket. Hold the server exclusively so no WsClient has a socket open
-    # across either restart (see testit/server_lock.py). Degrades to the old
-    # unsynchronized behavior on timeout rather than hanging the suite.
+    # HTTP or websocket request. Hold the server exclusively so no RestClient
+    # request or WsClient socket spans either restart (see testit/server_lock.py).
+    # Degrades to the old unsynchronized behavior on timeout rather than hanging
+    # the suite.
     from testit import server_lock
 
     # One settings context at a time, process-wide. The timeout is the liveness

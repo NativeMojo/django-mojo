@@ -37,6 +37,11 @@ class RestClient:
         """
         self.host = host if host[-1] == "/" else f"{host}/"
         self.logger = logger
+        # Ordinary HTTP requests need the same protection as WsClient: a
+        # concurrent server_settings() context reloads uvicorn and otherwise
+        # can terminate an in-flight request with RemoteDisconnected.
+        from testit import server_lock
+        self._server_lock = server_lock
         self.session = requests.Session()
         self.session.headers.update(self.DEFAULT_HEADERS)
         self.access_token = None
@@ -106,6 +111,20 @@ class RestClient:
             dict: A dictionary containing the response data and status code. If an error occurs,
                   returns a dictionary with an error message instead.
         """
+        holds_server = self._server_lock.acquire_shared()
+        if not holds_server and self.logger:
+            self.logger.warning(
+                "[http] proceeding without the shared server hold — a settings "
+                "override may terminate this request during a server reload"
+            )
+        try:
+            return self._make_request_while_server_stable(method, path, **kwargs)
+        finally:
+            if holds_server:
+                self._server_lock.release_shared()
+
+    def _make_request_while_server_stable(self, method, path, **kwargs):
+        """Send and consume one response while uvicorn reloads are excluded."""
         if path[0] == "/":
             path = path[1:]
         url = f"{self.host}{path}"

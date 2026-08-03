@@ -1,14 +1,14 @@
 """
 Maestro item 275 — the server-restart lock that keeps th.server_settings()
-from tearing down live websockets.
+from tearing down live HTTP requests and websockets.
 
 The race itself is not reproducible on demand (it needs a settings override to
-land inside another module's websocket window during a parallel full-suite
+land inside another module's client-request window during a parallel full-suite
 run), so these tests pin the LOCK'S INVARIANTS instead — which is what makes
 the race impossible by construction:
 
-  - a shared holder (websocket connection) excludes an exclusive holder
-    (server_settings), and vice versa
+  - a shared holder (HTTP request or websocket connection) excludes an
+    exclusive holder (server_settings), and vice versa
   - shared holders do not exclude each other
   - a waiting exclusive holder blocks NEW shared holders (writer preference),
     so a stream of websocket tests cannot starve a settings override
@@ -65,7 +65,7 @@ def test_writer_excludes_readers(opts):
     t.join(timeout=10)
     assert_eq(
         granted, [False],
-        f"a websocket must not open while the server is being restarted, got {granted}",
+        f"a client request must not start while the server is restarting, got {granted}",
     )
 
     lock.release_write()
@@ -115,7 +115,7 @@ def test_waiting_writer_blocks_new_readers(opts):
     # A NEW reader must queue behind the waiting writer rather than jumping in.
     assert_true(
         not lock.acquire_read(timeout=0.3),
-        "a new websocket must not start while a settings override is waiting",
+        "a new client request must not start while a settings override is waiting",
     )
 
     lock.release_read()
@@ -161,3 +161,87 @@ def test_exclusive_context_manager(opts):
 
     _readers, writer_held, _waiting = server_lock.LOCK.state()
     assert_true(not writer_held, "the exclusive hold must be released when the context exits")
+
+
+class _FakeElapsed:
+    def total_seconds(self):
+        return 0.001
+
+
+class _FakeResponse:
+    content = b"{}"
+    status_code = 200
+    ok = True
+    reason = "OK"
+    headers = {}
+    elapsed = _FakeElapsed()
+
+    def json(self):
+        return {}
+
+
+class _RecordingServerLock:
+    def __init__(self, events):
+        self.events = events
+        self.held = False
+
+    def acquire_shared(self):
+        self.events.append("acquire")
+        self.held = True
+        return True
+
+    def release_shared(self):
+        self.events.append("release")
+        self.held = False
+
+
+class _RecordingSession:
+    def __init__(self, lock, events, error=None):
+        self.lock = lock
+        self.events = events
+        self.error = error
+
+    def request(self, *args, **kwargs):
+        assert_true(self.lock.held, "the restart lock must be held while an HTTP request is in flight")
+        self.events.append("request")
+        if self.error:
+            raise self.error
+        return _FakeResponse()
+
+
+@th.django_unit_test("server_lock: RestClient holds a shared lock around every HTTP request")
+def test_rest_client_holds_shared_lock(opts):
+    from testit.client import RestClient
+
+    events = []
+    lock = _RecordingServerLock(events)
+    client = RestClient(opts.host)
+    client._server_lock = lock
+    client.session = _RecordingSession(lock, events)
+
+    response = client.get("/api/health")
+
+    assert_eq(response.status_code, 200, "the fake HTTP request should complete")
+    assert_eq(events, ["acquire", "request", "release"],
+              f"the shared lock must surround the request, got {events}")
+
+
+@th.django_unit_test("server_lock: RestClient releases its shared lock after a request error")
+def test_rest_client_releases_shared_lock_on_error(opts):
+    from testit.client import RestClient
+
+    events = []
+    lock = _RecordingServerLock(events)
+    client = RestClient(opts.host)
+    client._server_lock = lock
+    client.session = _RecordingSession(lock, events, error=RuntimeError("simulated disconnect"))
+
+    try:
+        client.get("/api/health")
+    except RuntimeError:
+        pass
+    else:
+        assert_true(False, "the simulated request error should propagate")
+
+    assert_eq(events, ["acquire", "request", "release"],
+              f"the shared lock must be released after an error, got {events}")
