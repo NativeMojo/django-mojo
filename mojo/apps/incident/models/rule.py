@@ -122,7 +122,7 @@ class RuleSet(models.Model, MojoModel):
     # job://handler_name?param1=value1&param2=value2 | email://user@example.com
     # notify://perm@permission,user@example.com | ticket://?status=open
     # resolve://?status=resolved&note=Auto-resolved
-    # Chains split on ',(job|email|notify|ticket|block|llm|resolve)://'
+    # Chains split on ',(job|email|notify|ticket|maestro|block|llm|resolve)://'
     handler = models.TextField(default=None, null=True)
     trigger_count = models.IntegerField(null=True, blank=True,
         validators=[MinValueValidator(1)],
@@ -166,12 +166,12 @@ class RuleSet(models.Model, MojoModel):
         try:
             from mojo.apps import jobs
 
-            specs = re.split(r',(?=(?:job|email|sms|notify|ticket|block|llm|resolve)://)', self.handler.strip())
+            specs = re.split(r',(?=(?:job|email|sms|notify|ticket|maestro|block|llm|resolve)://)', self.handler.strip())
             published = False
 
             for spec in filter(None, [s.strip() for s in specs]):
                 handler_url = urlparse(spec)
-                if handler_url.scheme not in ("job", "email", "sms", "notify", "block", "ticket", "llm", "resolve"):
+                if handler_url.scheme not in ("job", "email", "sms", "notify", "block", "ticket", "maestro", "llm", "resolve"):
                     continue
 
                 payload = {

@@ -10,6 +10,7 @@ class IncidentHistory(models.Model, MojoModel):
         SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security"]
         CAN_DELETE = False  # History should not be deletable
+        JSON_REPLACE_FIELDS = ["metadata"]
 
         GRAPHS = {
             "default": {
@@ -38,6 +39,14 @@ class IncidentHistory(models.Model, MojoModel):
 
     note = models.TextField(blank=True, null=True, default=None)
     media = models.ForeignKey("fileman.File", related_name="+", null=True, default=None, on_delete=models.CASCADE)
+    metadata = models.JSONField(default=dict, blank=True)
 
     def set_incident(self, value):
         self.parent = value
+
+    def on_rest_saved(self, changed_fields, created):
+        if not created or (self.metadata or {}).get("origin") == "maestro":
+            return
+        from mojo.apps.incident.services import maestro_sync
+        for link_id in self.parent.maestro_links.values_list("id", flat=True):
+            maestro_sync.enqueue_note(link_id, "incident", self.pk)

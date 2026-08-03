@@ -175,12 +175,13 @@ def test_handler_split_regex_preserves_targets(opts):
     """Handler chain splitting should preserve comma-separated targets within a single handler."""
     import re
 
-    handler = "email://perm@manage_security,protected@incident_emails?template=critical,block://?ttl=3600"
-    specs = re.split(r',(?=(?:job|email|sms|notify|ticket|block|llm)://)', handler.strip())
+    handler = "email://perm@manage_security,protected@incident_emails?template=critical,maestro://?board=3,block://?ttl=3600"
+    specs = re.split(r',(?=(?:job|email|sms|notify|ticket|maestro|block|llm|resolve)://)', handler.strip())
 
-    assert len(specs) == 2, f"Should split into 2 specs, got {len(specs)}: {specs}"
+    assert len(specs) == 3, f"Should split into 3 specs, got {len(specs)}: {specs}"
     assert "perm@manage_security,protected@incident_emails" in specs[0], f"First spec should preserve targets: {specs[0]}"
-    assert specs[1] == "block://?ttl=3600", f"Second spec should be block handler: {specs[1]}"
+    assert specs[1] == "maestro://?board=3", f"Second spec should be maestro handler: {specs[1]}"
+    assert specs[2] == "block://?ttl=3600", f"Third spec should be block handler: {specs[2]}"
 
 
 # ---------------------------------------------------------------------------

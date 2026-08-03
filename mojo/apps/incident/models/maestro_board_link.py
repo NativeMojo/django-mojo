@@ -6,7 +6,8 @@ class MaestroBoardLink(models.Model, MojoModel):
     """
     A ticket that has been pushed into a maestro board (DM-040) — one row per
     (ticket, board) pair. Created by the sync service, never via REST; REST
-    exposure is read-only plus delete (= unlink).
+    exposure is read-only.  Deployment-scoped Maestro reporting supersedes
+    these rows, but they remain available for transition audits.
     """
     class Meta:
         ordering = ['-created']
@@ -18,7 +19,7 @@ class MaestroBoardLink(models.Model, MojoModel):
         DELETE_PERMS = ["manage_security"]
         CAN_CREATE = False
         CAN_UPDATE = False
-        CAN_DELETE = True
+        CAN_DELETE = False
         GRAPHS = {
             "default": {
                 "graphs": {

@@ -1,73 +1,40 @@
-"""
-Maestro board link client (DM-040) — the wire layer for pushing incident
-tickets into a remote maestro board and applying signed board webhooks back
-onto tickets.
+"""Workspace-scoped Maestro reporting for Tickets and Incidents.
 
-Every request/response shape of maestro's board link API lives in this one
-file so contract drift is a one-file fix. Contract source: maestro repo
-planning/confirmed/maestro-connect.md (superseded by maestro's
-docs/web_developer/boards/linking.md once that ships).
-
-Outbound sync is fail-open: calls run in jobs (small retry, then drop with a
-local log) and never raise into a ticket save. Registration is the exception —
-it runs synchronously inside MaestroBoard's REST save and is fail-closed so an
-admin pasting a bad link sees the failure immediately.
+The deployment has one Maestro integration configured in ``django.conf``.
+Only per-source remote item links live in the database.  All wire shapes stay
+in this module so the client and Maestro server can version the contract in one
+place.
 """
+
 import ipaddress
 from urllib.parse import urlparse
 
 import requests
+from django.utils import timezone
 
 from mojo.errors import ValueException
-from mojo.helpers import dates, logit
+from mojo.helpers import logit
 from mojo.helpers.settings import settings
 
 logger = logit.get_logger("incident", "incident.log")
 
 PROTOCOL_VERSION = 1
-SYNCED_TICKET_FIELDS = ("title", "description", "status")
+DEFAULT_API_URL = "https://maestromojo.com"
 TITLE_MAX = 255
+DESCRIPTION_MAX = 20000
 NOTE_TEXT_MAX = 10000
+INTEGRATION_ID_MAX = 100
+PROJECT_MAX = 255
+REMOTE_URL_MAX = 500
 
 
 class MaestroRequestError(Exception):
-    """A failed call to the maestro link API.
-
-    retriable=True (timeouts, connection errors, 5xx) means the jobs engine
-    should retry; False (4xx — revoked key, wrong board, validation) is
-    terminal and must be dropped with a log, never retried.
-    """
+    """A failed Maestro reporting call."""
 
     def __init__(self, message, status=None, retriable=False):
         super().__init__(message)
         self.status = status
         self.retriable = retriable
-
-
-def parse_paste_url(url):
-    """Parse a pasted maestro link URL into (api_base, raw_key).
-
-    Paste format: https://<host>/api/boards/link/<key> — nothing is served at
-    that path; it exists only to carry the endpoint and key in one string.
-
-    The server POSTs the link key to this host, so the paste is an SSRF/
-    key-leak surface: https is required and loopback/private/link-local
-    IP-literal hosts are rejected. MAESTRO_ALLOW_HTTP=true relaxes both for
-    local development against a dev maestro. (IP-literal blocking, not DNS
-    resolution — a rebinding hostname is residual risk, mitigated by the
-    admin-tier permission required to paste.)
-    """
-    parsed = urlparse(str(url or "").strip())
-    allow_http = settings.get("MAESTRO_ALLOW_HTTP", False, kind="bool")
-    schemes = ("http", "https") if allow_http else ("https",)
-    if parsed.scheme not in schemes or not parsed.netloc:
-        raise ValueException("invalid maestro board link", 400)
-    if not allow_http and _is_blocked_host(parsed.hostname):
-        raise ValueException("invalid maestro board link", 400)
-    parts = [p for p in parsed.path.split("/") if p]
-    if len(parts) != 4 or parts[:3] != ["api", "boards", "link"]:
-        raise ValueException("invalid maestro board link", 400)
-    return f"{parsed.scheme}://{parsed.netloc}", parts[3]
 
 
 def _is_blocked_host(host):
@@ -77,39 +44,75 @@ def _is_blocked_host(host):
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False
-    return (ip.is_loopback or ip.is_private or ip.is_link_local
-            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+    return (
+        ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved
+        or ip.is_multicast or ip.is_unspecified
+    )
 
 
-def get_callback_url(board):
-    """This project's webhook receiver URL, submitted at registration."""
-    base = settings.get("MAESTRO_CALLBACK_BASE", None) or settings.get("BASE_URL", None)
+def get_config(require_key=True):
+    """Return ``(api_url, api_key)`` from static deployment settings."""
+    api_url = str(settings.get_static("MAESTRO_API_URL", DEFAULT_API_URL) or "").strip().rstrip("/")
+    key = str(settings.get_static("MAESTRO_API_KEY", "") or "").strip()
+    allow_http = bool(settings.get_static("MAESTRO_ALLOW_HTTP", False))
+    parsed = urlparse(api_url)
+    schemes = ("http", "https") if allow_http else ("https",)
+    if (
+        parsed.scheme not in schemes
+        or not parsed.netloc
+        or parsed.path not in ("", "/")
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueException("MAESTRO_API_URL must be an HTTPS origin", 400)
+    if not allow_http and _is_blocked_host(parsed.hostname):
+        raise ValueException("MAESTRO_API_URL must use a public host", 400)
+    if require_key and not key:
+        raise ValueException("MAESTRO_API_KEY is not configured", 400)
+    return api_url, key
+
+
+def get_callback_url():
+    base = settings.get_static("MAESTRO_CALLBACK_BASE", None) or settings.get_static("BASE_URL", None)
     base = str(base or "").strip().rstrip("/")
     if not base:
         raise ValueException(
-            "BASE_URL (or MAESTRO_CALLBACK_BASE) must be configured to register a maestro board", 400)
-    return f"{base}/api/incident/maestro/webhook/{board.callback_token}"
+            "BASE_URL (or MAESTRO_CALLBACK_BASE) must be configured for Maestro callbacks", 400)
+    parsed = urlparse(base)
+    allow_http = bool(settings.get_static("MAESTRO_ALLOW_HTTP", False))
+    schemes = ("http", "https") if allow_http else ("https",)
+    if (
+        parsed.scheme not in schemes
+        or not parsed.netloc
+        or parsed.path not in ("", "/")
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueException("Maestro callback base must be an HTTPS origin", 400)
+    if not allow_http and _is_blocked_host(parsed.hostname):
+        raise ValueException("Maestro callback base must use a public host", 400)
+    return f"{base}/api/incident/maestro/webhook"
 
 
-def _post(board, path, payload):
-    """POST a versioned payload to maestro with the board's link key.
-
-    Returns the parsed JSON response on 2xx; raises MaestroRequestError
-    otherwise. Remote error bodies are logged for operators but never echoed
-    into user-visible messages.
-    """
-    key = board.get_secret("link_key")
-    if not key or not board.api_url:
-        raise MaestroRequestError("board has no link key or endpoint", retriable=False)
-    url = f"{board.api_url.rstrip('/')}/api/boards/{path}"
+def _post(path, payload):
+    """POST a versioned payload with the deployment reporting ApiKey."""
+    api_url, key = get_config()
+    url = f"{api_url}/api/boards/{path.lstrip('/')}"
     body = {"v": PROTOCOL_VERSION}
     body.update(payload)
     timeout = settings.get_static("MAESTRO_LINK_TIMEOUT", 10)
     try:
-        resp = requests.post(
-            url, json=body,
-            headers={"Authorization": f"linkkey {key}"},
-            timeout=timeout, allow_redirects=False)
+        response = requests.post(
+            url,
+            json=body,
+            headers={"Authorization": f"apikey {key}"},
+            timeout=timeout,
+            allow_redirects=False,
+        )
     except requests.Timeout:
         logger.warning("[maestro] %s timed out after %ss", url, timeout)
         raise MaestroRequestError(f"maestro timed out after {timeout}s", retriable=True)
@@ -117,255 +120,380 @@ def _post(board, path, payload):
         logger.warning("[maestro] %s failed: %s", url, err)
         raise MaestroRequestError("maestro is unreachable", retriable=True)
 
-    if resp.status_code >= 400:
-        try:
-            raw = resp.text[:500]
-        except Exception:
-            raw = ""
-        logger.warning("[maestro] HTTP %s from %s: %s", resp.status_code, url, raw)
+    if response.status_code >= 400:
+        logger.warning("[maestro] HTTP %s from %s", response.status_code, url)
         raise MaestroRequestError(
-            f"maestro rejected the request (HTTP {resp.status_code})",
-            status=resp.status_code, retriable=resp.status_code >= 500)
+            f"maestro rejected the request (HTTP {response.status_code})",
+            status=response.status_code,
+            retriable=response.status_code >= 500,
+        )
     try:
-        return resp.json()
+        data = response.json()
     except Exception:
         raise MaestroRequestError("maestro returned an invalid response", retriable=False)
+    if not isinstance(data, dict):
+        raise MaestroRequestError("maestro returned an invalid response", retriable=False)
+    return data
 
 
-def register(board):
-    """Validate the board's link against maestro and cache the board schema.
+def _integration_id(data):
+    value = data.get("integration_id")
+    if value is None and isinstance(data.get("integration"), dict):
+        value = data["integration"].get("id")
+    value = str(value or "").strip()
+    if not value or len(value) > INTEGRATION_ID_MAX:
+        raise MaestroRequestError("maestro returned no valid integration id", retriable=False)
+    return value
 
-    Called synchronously from MaestroBoard.on_rest_pre_save — raises
-    ValueException (400) on any failure so a bad paste never persists.
-    Mutates name/remote_board_id/schema on the instance; the caller saves.
-    """
-    if not board.api_url or not board.get_secret("link_key"):
-        raise ValueException("a maestro board link (paste_url) is required", 400)
-    callback_url = get_callback_url(board)
+
+def _board_id(data):
+    value = data.get("board")
+    if isinstance(value, dict):
+        value = value.get("id")
+    if isinstance(value, bool):
+        value = None
     try:
-        data = _post(board, "link/register", {"callback_url": callback_url})
+        value = int(value)
+    except (TypeError, ValueError):
+        value = None
+    if value is None or value <= 0:
+        raise MaestroRequestError("maestro returned no valid board id", retriable=False)
+    return value
+
+
+def register():
+    """Validate configuration and register the fixed callback endpoint."""
+    from mojo.apps.incident.models import MaestroItemLink
+
+    try:
+        data = _post("link/register", {"callback_url": get_callback_url()})
+        integration_id = _integration_id(data)
     except MaestroRequestError as err:
-        raise ValueException(f"maestro board registration failed: {err}", 400)
-    binfo = data.get("board") if isinstance(data, dict) else None
-    if not isinstance(binfo, dict) or not binfo.get("id"):
-        raise ValueException("maestro board registration failed: unexpected response", 400)
-    board.remote_board_id = binfo.get("id")
-    board.name = binfo.get("name") or board.name
-    board.schema = {
-        "label": data.get("label") or "",
-        "columns": binfo.get("columns") or [],
-    }
+        raise ValueException(f"maestro registration failed: {err}", 400)
 
+    linked_ids = set(MaestroItemLink.objects.values_list("remote_integration_id", flat=True).distinct())
+    if linked_ids and linked_ids != {integration_id}:
+        raise ValueException(
+            "MAESTRO_API_KEY belongs to a different integration than existing item links", 409)
 
-def _status_values(board, status):
-    """Map a ticket status onto the board's category column via status_map.
-
-    Returns a values dict ({column_slug: option_value}) or None when no map is
-    configured or the status has no option (logged, never fatal).
-    """
-    smap = board.status_map or {}
-    column = smap.get("column")
-    mapping = smap.get("map") or {}
-    if not column:
-        return None
-    value = mapping.get(status)
-    if value is None:
-        logger.info("[maestro] board %s status_map has no option for ticket status %r", board.pk, status)
-        return None
-    return {column: value}
-
-
-def build_item_payload(board, ticket):
-    base = str(settings.get("BASE_URL", "") or "").rstrip("/")
-    payload = {
-        "title": (ticket.title or "")[:TITLE_MAX],
-        "description": ticket.description or "",
-        "source": {
-            "project": settings.get("PROJECT_NAME", "") or urlparse(base).netloc,
-            "ticket_id": ticket.pk,
-            "url": f"{base}/api/incident/ticket/{ticket.pk}" if base else "",
+    workspace = data.get("workspace") if isinstance(data.get("workspace"), dict) else {}
+    default_board = data.get("default_board")
+    if default_board is None:
+        default_board = data.get("board")
+    if not isinstance(default_board, dict):
+        default_board = {"id": default_board}
+    if not workspace.get("id"):
+        raise ValueException("maestro registration returned incomplete workspace routing", 400)
+    try:
+        default_board_id = _board_id({"board": default_board})
+    except MaestroRequestError as err:
+        raise ValueException(f"maestro registration returned incomplete workspace routing: {err}", 400)
+    return {
+        "integration_id": integration_id,
+        "workspace": {"id": workspace.get("id"), "name": workspace.get("name") or ""},
+        "default_board": {
+            "id": default_board_id,
+            "name": default_board.get("name") or "",
         },
     }
-    values = _status_values(board, ticket.status)
-    if values:
-        payload["values"] = values
-    return payload
 
 
-def push_ticket(board, ticket):
-    """Create or update the board item for a ticket. Idempotent — an existing
-    link (or one that wins a concurrent-create race) updates instead of
-    creating a duplicate item."""
-    from django.db import IntegrityError
-    from mojo.apps.incident.models import MaestroBoardLink
+def parse_board_selector(value, allow_default=True):
+    """Return a strict remote board id, or None for Maestro's default."""
+    if value is None or value is True:
+        if allow_default:
+            return None
+        raise ValueException("a remote Maestro board id is required", 400)
+    if isinstance(value, bool):
+        raise ValueException("Maestro board must be a positive integer", 400)
+    try:
+        board_id = int(value)
+    except (TypeError, ValueError):
+        raise ValueException("Maestro board must be a positive integer", 400)
+    if board_id <= 0 or str(value).strip() != str(board_id):
+        raise ValueException("Maestro board must be a positive integer", 400)
+    return board_id
 
-    # Group choke point: every push path (action, rules, queued jobs) lands
-    # here — a group-scoped board only ever accepts its own group's tickets.
-    if board.group_id and board.group_id != ticket.group_id:
-        logger.warning("[maestro] board %s is group-scoped; refusing ticket %s (group %s)",
-                       board.pk, ticket.pk, ticket.group_id)
-        return None
 
-    link = MaestroBoardLink.objects.filter(ticket=ticket, maestro_board=board).first()
-    payload = build_item_payload(board, ticket)
-    if link is None:
-        data = _post(board, "link/item", payload)
-        remote_id = (data or {}).get("id") if isinstance(data, dict) else None
-        if not remote_id:
-            raise MaestroRequestError("maestro item create returned no id", retriable=False)
-        remote_url = str((data or {}).get("url") or "")
-        if remote_url.startswith("/"):
-            remote_url = f"{board.api_url.rstrip('/')}{remote_url}"
-        try:
-            link = MaestroBoardLink.objects.create(
-                ticket=ticket, maestro_board=board,
-                remote_item_id=remote_id, remote_url=remote_url)
-        except IntegrityError:
-            # Concurrent push won the race — the ticket is linked; fall through
-            # to stamping last_synced on the winner's row.
-            link = MaestroBoardLink.objects.get(ticket=ticket, maestro_board=board)
-        else:
-            ticket.add_note(
-                f"Pushed to maestro board '{board.name}': {link.remote_url}",
-                None,
-                metadata={"origin": "maestro", "type": "board_link", "board": board.pk})
+def lifecycle_for_status(status):
+    status = str(status or "").lower()
+    if status in ("resolved", "closed"):
+        return "done"
+    if status in ("paused", "ignored", "parked"):
+        return "parked"
+    return "active"
+
+
+def build_item_payload(source):
+    base = str(settings.get_static("BASE_URL", "") or "").rstrip("/")
+    project = settings.get_static("PROJECT_NAME", "") or urlparse(base).netloc
+    if source._meta.model_name == "ticket":
+        kind = "ticket"
+        title = source.title
+        description = source.description
+        url = f"{base}/api/incident/ticket/{source.pk}" if base else ""
     else:
-        _post(board, f"link/item/{link.remote_item_id}", payload)
-    link.last_synced = dates.utcnow()
+        kind = "incident"
+        title = source.title or source.category or f"Incident {source.pk}"
+        description = source.details
+        url = f"{base}/api/incident/incident/{source.pk}" if base else ""
+    return {
+        "title": str(title or "")[:TITLE_MAX],
+        "description": str(description or "")[:DESCRIPTION_MAX],
+        "priority": source.priority,
+        "lifecycle": lifecycle_for_status(source.status),
+        "source": {
+            "project": str(project)[:PROJECT_MAX],
+            "kind": kind,
+            "id": source.pk,
+            "url": url[:REMOTE_URL_MAX],
+        },
+    }
+
+
+def push_source(source, board_id=None):
+    """Create or update the remote item for a Ticket or Incident."""
+    from django.db import IntegrityError
+    from mojo.apps.incident.models import MaestroItemLink
+
+    board_id = parse_board_selector(board_id) if board_id is not None else None
+    link = source.maestro_links.first()
+    payload = build_item_payload(source)
+    if link is None:
+        if board_id is not None:
+            payload["board"] = board_id
+        data = _post("link/item", payload)
+        remote_id = data.get("id")
+        if isinstance(remote_id, bool):
+            remote_id = None
+        try:
+            remote_id = int(remote_id)
+        except (TypeError, ValueError):
+            remote_id = None
+        if remote_id is None or remote_id <= 0:
+            raise MaestroRequestError("maestro item create returned no id", retriable=False)
+        integration_id = _integration_id(data)
+        resolved_board = _board_id(data)
+        remote_url = str(data.get("url") or "")[:REMOTE_URL_MAX]
+        api_url, _key = get_config()
+        if remote_url.startswith("/"):
+            remote_url = f"{api_url}{remote_url}"
+        source_field = source._meta.model_name
+        try:
+            link = MaestroItemLink.objects.create(
+                **{source_field: source},
+                remote_integration_id=integration_id,
+                remote_item_id=remote_id,
+                remote_board_id=resolved_board,
+                remote_url=remote_url,
+            )
+        except IntegrityError:
+            link = source.maestro_links.get()
+        else:
+            _record_link_created(source, link)
+    else:
+        _post(f"link/item/{link.remote_item_id}", payload)
+    link.last_synced = timezone.now()
     link.save(update_fields=["last_synced", "modified"])
     return link
 
 
-def sync_ticket_change(link, changed):
-    """Push changed ticket fields (title/description/status) to the board item."""
-    board = link.maestro_board
-    ticket = link.ticket
+def push_ticket(ticket, board_id=None):
+    return push_source(ticket, board_id)
+
+
+def push_incident(incident, board_id=None):
+    return push_source(incident, board_id)
+
+
+def _record_link_created(source, link):
+    meta = {
+        "origin": "maestro",
+        "type": "item_link",
+        "remote_integration_id": link.remote_integration_id,
+        "remote_item_id": link.remote_item_id,
+    }
+    text = f"Pushed to Maestro: {link.remote_url}" if link.remote_url else "Pushed to Maestro"
+    if source._meta.model_name == "ticket":
+        source.add_note(text, None, metadata=meta)
+    else:
+        source.add_history("maestro:linked", note=text, metadata=meta)
+
+
+def sync_change(link, changed):
+    source = link.source
     payload = {}
-    if "title" in changed:
-        payload["title"] = (ticket.title or "")[:TITLE_MAX]
-    if "description" in changed:
-        payload["description"] = ticket.description or ""
+    if source._meta.model_name == "ticket":
+        if "title" in changed:
+            payload["title"] = (source.title or "")[:TITLE_MAX]
+        if "description" in changed:
+            payload["description"] = source.description or ""
+    else:
+        if "title" in changed or "category" in changed:
+            payload["title"] = (source.title or source.category or f"Incident {source.pk}")[:TITLE_MAX]
+        if "details" in changed:
+            payload["description"] = source.details or ""
+    if "priority" in changed:
+        payload["priority"] = source.priority
     if "status" in changed:
-        values = _status_values(board, ticket.status)
-        if values:
-            payload["values"] = values
+        payload["lifecycle"] = lifecycle_for_status(source.status)
     if not payload:
         return
-    _post(board, f"link/item/{link.remote_item_id}", payload)
-    link.last_synced = dates.utcnow()
+    _post(f"link/item/{link.remote_item_id}", payload)
+    link.last_synced = timezone.now()
     link.save(update_fields=["last_synced", "modified"])
 
 
 def push_note(link, note):
-    """Mirror a ticket note as a board item comment."""
-    _post(link.maestro_board, "link/note", {
+    _post("link/note", {
         "item": link.remote_item_id,
         "text": (note.note or "")[:NOTE_TEXT_MAX],
     })
-    link.last_synced = dates.utcnow()
+    link.last_synced = timezone.now()
     link.save(update_fields=["last_synced", "modified"])
 
 
-def handle_board_webhook(board, payload):
-    """Apply a signature-verified maestro webhook to the linked ticket.
-
-    Every write here is a direct ORM save (add_note / save(update_fields)) —
-    never the REST pipeline — so nothing in this path can re-enter the
-    outbound sync hooks (echo suppression). Unknown items and events return
-    200/ignored so maestro's queue stays quiet.
-    """
-    from mojo.apps.incident.models import MaestroBoardLink, TicketNote
+def handle_webhook(payload):
+    """Apply a signature-verified callback to its linked local source."""
+    from mojo.apps.incident.models import IncidentHistory, MaestroItemLink, TicketNote
 
     event = payload.get("event") or ""
-    item = payload.get("item") or {}
-    link = MaestroBoardLink.objects.filter(
-        maestro_board=board, remote_item_id=item.get("id")).select_related("ticket").first()
+    item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+    integration_id = payload.get("integration_id")
+    if integration_id is None and isinstance(payload.get("integration"), dict):
+        integration_id = payload["integration"].get("id")
+    integration_id = str(integration_id or "")
+    remote_item_id = item.get("id")
+    if isinstance(remote_item_id, bool):
+        remote_item_id = None
+    try:
+        remote_item_id = int(remote_item_id)
+    except (TypeError, ValueError):
+        remote_item_id = None
+    if (
+        not integration_id
+        or len(integration_id) > INTEGRATION_ID_MAX
+        or remote_item_id is None
+        or remote_item_id <= 0
+    ):
+        logger.info("[maestro] callback has no valid integration/item identity")
+        return {"status": True, "ignored": True}
+    link = MaestroItemLink.objects.filter(
+        remote_integration_id=integration_id,
+        remote_item_id=remote_item_id,
+    ).select_related("ticket", "incident").first()
     if link is None:
-        logger.info("[maestro] webhook for unlinked item %s on board %s — ignored", item.get("id"), board.pk)
+        logger.info("[maestro] callback for unlinked integration/item %s/%s", integration_id, item.get("id"))
         return {"status": True, "ignored": True}
 
-    ticket = link.ticket
+    _refresh_remote_location(link, item, payload)
+    source = link.source
     meta = {
         "origin": "maestro",
         "event": event,
-        "board": board.pk,
+        "remote_integration_id": integration_id,
         "remote_item_id": link.remote_item_id,
     }
     if event == "note.created":
-        note = payload.get("note") or {}
+        note = payload.get("note") if isinstance(payload.get("note"), dict) else {}
         remote_note_id = note.get("id")
-        # Dedup on the board-side note id — a replayed or retried delivery of
-        # the same signed payload must not duplicate the ticket note.
-        if remote_note_id is not None and TicketNote.objects.filter(
-                parent=ticket, metadata__origin="maestro",
-                metadata__remote_note_id=remote_note_id).exists():
-            return {"status": True, "ignored": True}
+        if remote_note_id is not None:
+            if link.ticket_id and TicketNote.objects.filter(
+                parent=source, metadata__origin="maestro",
+                metadata__remote_note_id=remote_note_id,
+            ).exists():
+                return {"status": True, "ignored": True}
+            if link.incident_id and IncidentHistory.objects.filter(
+                parent=source, metadata__origin="maestro",
+                metadata__remote_note_id=remote_note_id,
+            ).exists():
+                return {"status": True, "ignored": True}
         author = note.get("author") or "maestro"
-        meta["remote_note_id"] = remote_note_id
-        meta["author"] = author
-        ticket.add_note(f"[maestro] {author}: {note.get('text') or ''}", None, metadata=meta)
-    elif event == "item.updated":
-        changes = payload.get("changes") or []
+        meta.update({"remote_note_id": remote_note_id, "author": author})
+        text = f"[maestro] {author}: {note.get('text') or ''}"
+        _record_remote_activity(source, event, text, meta)
+    elif event in ("item.updated", "item.moved"):
+        changes = payload.get("changes") if isinstance(payload.get("changes"), list) else []
         summary = "; ".join(
-            f"{c.get('column')}: {c.get('old')} -> {c.get('new')}" for c in changes
-        ) or "item updated"
+            f"{c.get('column')}: {c.get('old')} -> {c.get('new')}"
+            for c in changes if isinstance(c, dict)
+        ) or ("item moved" if event == "item.moved" else "item updated")
         meta["changes"] = changes
-        ticket.add_note(f"[maestro] Board item updated — {summary}", None, metadata=meta)
-        _apply_status_change(board, ticket, changes)
+        _record_remote_activity(source, event, f"[maestro] {summary}", meta)
+        _apply_lifecycle(source, item.get("lifecycle") or payload.get("lifecycle"))
     elif event in ("item.archived", "item.restored"):
-        ticket.add_note(f"[maestro] Board item {event.split('.', 1)[1]}", None, metadata=meta)
+        _record_remote_activity(source, event, f"[maestro] Item {event.split('.', 1)[1]}", meta)
     else:
-        logger.info("[maestro] unknown webhook event %r on board %s — ignored", event, board.pk)
+        logger.info("[maestro] unknown callback event %r — ignored", event)
         return {"status": True, "ignored": True}
     return {"status": True}
 
 
-def _apply_status_change(board, ticket, changes):
-    """Reverse-map a board category-column change onto ticket.status.
+def _refresh_remote_location(link, item, payload):
+    board = item.get("board", payload.get("board"))
+    if isinstance(board, dict):
+        board = board.get("id")
+    try:
+        board = int(board) if not isinstance(board, bool) else None
+    except (TypeError, ValueError):
+        board = None
+    url = item.get("url") or payload.get("url")
+    fields = []
+    if board and board != link.remote_board_id:
+        link.remote_board_id = board
+        fields.append("remote_board_id")
+    if url and str(url) != link.remote_url:
+        link.remote_url = str(url)[:REMOTE_URL_MAX]
+        fields.append("remote_url")
+    if fields:
+        link.last_synced = timezone.now()
+        fields.extend(["last_synced", "modified"])
+        link.save(update_fields=fields)
 
-    Only runs when status_map is configured; a reverse-map miss leaves the
-    status untouched (the change note above already records it). The save is
-    compare-before-write and direct ORM — no REST hooks, no outbound echo.
-    """
-    smap = board.status_map or {}
-    column = smap.get("column")
-    mapping = smap.get("map") or {}
-    if not column:
-        return
-    reverse = {v: k for k, v in mapping.items()}
-    for change in changes:
-        if change.get("column") != column:
-            continue
-        new_status = reverse.get(change.get("new"))
-        if new_status and ticket.status != new_status:
-            ticket.status = new_status
-            ticket.save(update_fields=["status", "modified"])
-        return
+
+def _record_remote_activity(source, event, text, metadata):
+    if source._meta.model_name == "ticket":
+        source.add_note(text, None, metadata=metadata)
+    else:
+        source.add_history(f"maestro:{event}", note=text, metadata=metadata)
+
+
+def _apply_lifecycle(source, lifecycle):
+    mapping = {"active": "open", "done": "resolved", "parked": "paused"}
+    new_status = mapping.get(lifecycle)
+    if new_status and source.status != new_status:
+        source.status = new_status
+        source.save(update_fields=["status", "modified"] if hasattr(source, "modified") else ["status"])
 
 
 def _enqueue(func, payload):
-    # Fail-open: outbound sync must never break a ticket save — publish
-    # errors are logged and dropped.
     try:
         from mojo.apps import jobs
         jobs.publish(
-            func, payload,
-            channel="incident_handlers",
-            max_retries=3, backoff_base=2.0)
+            func, payload, channel="incident_handlers",
+            max_retries=3, backoff_base=2.0,
+        )
     except Exception:
         logger.exception("[maestro] failed to enqueue %s %s", func, payload)
 
 
-def enqueue_push(ticket_id, board_id):
-    _enqueue("mojo.apps.incident.asyncjobs.maestro_push_ticket",
-             {"ticket_id": ticket_id, "board_id": board_id})
+def enqueue_push(source_kind, source_id, board_id=None):
+    payload = {"source_kind": source_kind, "source_id": source_id}
+    if board_id is not None:
+        payload["board_id"] = board_id
+    _enqueue("mojo.apps.incident.asyncjobs.maestro_push_source", payload)
 
 
 def enqueue_sync(link_id, changed):
-    _enqueue("mojo.apps.incident.asyncjobs.maestro_sync_change",
-             {"link_id": link_id, "changed": list(changed)})
+    _enqueue("mojo.apps.incident.asyncjobs.maestro_sync_change", {
+        "link_id": link_id,
+        "changed": list(changed),
+    })
 
 
-def enqueue_note(link_id, note_id):
-    _enqueue("mojo.apps.incident.asyncjobs.maestro_push_note",
-             {"link_id": link_id, "note_id": note_id})
+def enqueue_note(link_id, note_kind, note_id):
+    _enqueue("mojo.apps.incident.asyncjobs.maestro_push_note", {
+        "link_id": link_id,
+        "note_kind": note_kind,
+        "note_id": note_id,
+    })

@@ -27,6 +27,7 @@ def prune_incidents(job):
         created__lt=cutoff,
         status__in=("resolved", "closed", "ignored"),
         tickets__isnull=True,
+        maestro_links__isnull=True,
     ).filter(
         Q(metadata__do_not_delete=False)
         | ~Q(metadata__has_key="do_not_delete"),
@@ -677,56 +678,64 @@ def _maestro_fail(job, err, what):
     job.add_log(f"maestro sync dropped {what}: {err}", kind="error")
 
 
-def maestro_push_ticket(job):
-    """Push a ticket into a maestro board — creates the board item + link row
-    on first push, updates the existing item on re-push (idempotent)."""
-    from mojo.apps.incident.models import MaestroBoard, Ticket
+def maestro_push_source(job):
+    """Create/update the Maestro item for a Ticket or Incident."""
+    from mojo.apps.incident.models import Incident, Ticket
     from mojo.apps.incident.services import maestro_sync
 
-    board = MaestroBoard.objects.filter(pk=job.payload.get("board_id"), is_active=True).first()
-    ticket = Ticket.objects.filter(pk=job.payload.get("ticket_id")).first()
-    if board is None or ticket is None:
-        job.add_log("maestro_push_ticket: board or ticket missing/inactive — skipped")
+    source_kind = job.payload.get("source_kind")
+    model = {"ticket": Ticket, "incident": Incident}.get(source_kind)
+    source = model.objects.filter(pk=job.payload.get("source_id")).first() if model else None
+    if source is None:
+        job.add_log("maestro_push_source: source missing — skipped")
         return
     try:
-        maestro_sync.push_ticket(board, ticket)
+        maestro_sync.push_source(source, job.payload.get("board_id"))
     except maestro_sync.MaestroRequestError as err:
-        _maestro_fail(job, err, f"pushing ticket {ticket.pk} to board {board.pk}")
+        _maestro_fail(job, err, f"pushing {source_kind} {source.pk}")
+    except Exception as err:
+        # Configuration/validation failures are terminal for queued work.
+        _maestro_fail(job, err, f"pushing {source_kind} {source.pk}")
 
 
 def maestro_sync_change(job):
-    """Push changed fields of a linked ticket to its maestro board item."""
-    from mojo.apps.incident.models import MaestroBoardLink
+    """Push changed fields of a linked local source."""
+    from mojo.apps.incident.models import MaestroItemLink
     from mojo.apps.incident.services import maestro_sync
 
-    link = MaestroBoardLink.objects.filter(
-        pk=job.payload.get("link_id"),
-        maestro_board__is_active=True).select_related("maestro_board", "ticket").first()
+    link = MaestroItemLink.objects.filter(pk=job.payload.get("link_id")).select_related(
+        "ticket", "incident").first()
     if link is None:
-        job.add_log("maestro_sync_change: link missing or board inactive — skipped")
+        job.add_log("maestro_sync_change: link missing — skipped")
         return
     try:
-        maestro_sync.sync_ticket_change(link, job.payload.get("changed") or [])
+        maestro_sync.sync_change(link, job.payload.get("changed") or [])
     except maestro_sync.MaestroRequestError as err:
-        _maestro_fail(job, err, f"syncing ticket {link.ticket_id} to board {link.maestro_board_id}")
+        _maestro_fail(job, err, f"syncing {link.source_kind} {link.source_id}")
+    except Exception as err:
+        _maestro_fail(job, err, f"syncing {link.source_kind} {link.source_id}")
 
 
 def maestro_push_note(job):
-    """Mirror a ticket note as a comment on the linked maestro board item."""
-    from mojo.apps.incident.models import MaestroBoardLink, TicketNote
+    """Mirror a TicketNote or IncidentHistory as a Maestro comment."""
+    from mojo.apps.incident.models import IncidentHistory, MaestroItemLink, TicketNote
     from mojo.apps.incident.services import maestro_sync
 
-    link = MaestroBoardLink.objects.filter(
-        pk=job.payload.get("link_id"),
-        maestro_board__is_active=True).select_related("maestro_board").first()
-    note = TicketNote.objects.filter(pk=job.payload.get("note_id")).first()
+    link = MaestroItemLink.objects.filter(pk=job.payload.get("link_id")).first()
+    note_model = {
+        "ticket": TicketNote,
+        "incident": IncidentHistory,
+    }.get(job.payload.get("note_kind"))
+    note = note_model.objects.filter(pk=job.payload.get("note_id")).first() if note_model else None
     if link is None or note is None:
         job.add_log("maestro_push_note: link or note missing — skipped")
         return
     try:
         maestro_sync.push_note(link, note)
     except maestro_sync.MaestroRequestError as err:
-        _maestro_fail(job, err, f"pushing note {note.pk} to board {link.maestro_board_id}")
+        _maestro_fail(job, err, f"pushing note {note.pk} to item {link.remote_item_id}")
+    except Exception as err:
+        _maestro_fail(job, err, f"pushing note {note.pk} to item {link.remote_item_id}")
 
 
 def example(job):

@@ -1,40 +1,25 @@
-"""
-Service-level tests for the maestro board link client (DM-040) —
-mojo/apps/incident/services/maestro_sync.py with the module's `requests`
-mocked, called directly in the test process.
-"""
+"""Service contract tests for deployment-scoped Maestro reporting."""
+
 import json
+from io import StringIO
 from unittest import mock
 
 from testit import helpers as th
 
 PREFIX = "[maestro_svc]"
 TEST_KEY = "svc" + "k" * 45
+INTEGRATION = "integration-project-a"
 
 
 @th.django_unit_setup()
 def setup_maestro_service(opts):
-    from mojo.apps.account.models.setting import Setting
-    from mojo.apps.incident.models import MaestroBoard, Ticket
-
-    Setting.set("MAESTRO_CALLBACK_BASE", "http://client.example.test")
-    MaestroBoard.objects.filter(name__startswith=PREFIX).delete()
-    Ticket.objects.filter(title__startswith=PREFIX).delete()
-
-
-def _make_board(**kwargs):
-    from mojo.apps.incident.models import MaestroBoard
-    defaults = dict(
-        name=f"{PREFIX} board",
-        api_url="https://maestro.example.test",
-        remote_board_id=77,
-        is_active=True,
+    from mojo.apps.incident.models import (
+        Incident, MaestroBoard, MaestroItemLink, Ticket,
     )
-    defaults.update(kwargs)
-    board = MaestroBoard(**defaults)
-    board.set_secret("link_key", TEST_KEY)
-    board.save()
-    return board
+    MaestroItemLink.objects.all().delete()
+    Ticket.objects.filter(title__startswith=PREFIX).delete()
+    Incident.objects.filter(title__startswith=PREFIX).delete()
+    MaestroBoard.objects.filter(name__startswith=PREFIX).delete()
 
 
 def _make_ticket(**kwargs):
@@ -44,372 +29,316 @@ def _make_ticket(**kwargs):
     return Ticket.objects.create(**defaults)
 
 
-def _mock_requests(json_data=None, status=200):
-    """Patch maestro_sync.requests; returns the patcher. Keeps the real
-    exception classes so the service's except clauses still resolve."""
-    from mojo.apps.incident.services import maestro_sync
-    import requests as real_requests
-
-    patcher = mock.patch.object(maestro_sync, "requests")
-    mock_requests = patcher.start()
-    mock_requests.Timeout = real_requests.Timeout
-    mock_requests.exceptions = real_requests.exceptions
-    resp = mock.Mock()
-    resp.status_code = status
-    resp.text = json.dumps(json_data or {})
-    resp.json = mock.Mock(return_value=json_data or {})
-    mock_requests.post.return_value = resp
-    return patcher, mock_requests
+def _make_incident(**kwargs):
+    from mojo.apps.incident.models import Incident
+    defaults = dict(title=f"{PREFIX} incident", details="svc details", category="test", status="open")
+    defaults.update(kwargs)
+    return Incident.objects.create(**defaults)
 
 
-def _maestro_job_count():
-    from mojo.apps.jobs.models import Job
-    return Job.objects.filter(func__startswith="mojo.apps.incident.asyncjobs.maestro").count()
-
-
-@th.django_unit_test()
-def test_parse_paste_url(opts):
-    from mojo.errors import ValueException
-    from mojo.apps.incident.services import maestro_sync
-
-    base, key = maestro_sync.parse_paste_url("https://maestromojo.com/api/boards/link/abc123XYZ")
-    assert base == "https://maestromojo.com", f"wrong api base parsed: {base}"
-    assert key == "abc123XYZ", f"wrong key parsed: {key}"
-
-    for bad in (
-        "not-a-url",
-        "ftp://maestromojo.com/api/boards/link/abc",
-        "http://maestromojo.com/api/boards/link/abc",       # https required
-        "https://localhost/api/boards/link/abc",            # SSRF guard
-        "https://127.0.0.1/api/boards/link/abc",            # SSRF guard
-        "https://192.168.1.5/api/boards/link/abc",          # SSRF guard
-        "https://169.254.169.254/api/boards/link/abc",      # SSRF guard (metadata)
-        "https://maestromojo.com/api/boards/link",          # missing key
-        "https://maestromojo.com/api/other/link/abc",       # wrong path
-        "",
-        None,
-    ):
-        try:
-            maestro_sync.parse_paste_url(bad)
-            assert False, f"parse_paste_url must reject {bad!r}"
-        except ValueException:
-            pass
-
-
-@th.django_unit_test()
-def test_register_success_caches_schema(opts):
-    from mojo.apps.incident.models import MaestroBoard
-    from mojo.apps.incident.services import maestro_sync
-
-    board = MaestroBoard(name="", api_url="https://maestro.example.test")
-    board.set_secret("link_key", TEST_KEY)
-
-    columns = [{"slug": "state", "name": "State", "type": "category",
-                "options": [{"value": "todo", "label": "Todo", "color": "#111111"}]}]
-    patcher, mock_requests = _mock_requests(
-        {"v": 1, "label": "Link A", "board": {"id": 5, "name": "Sprint", "columns": columns}})
-    try:
-        maestro_sync.register(board)
-    finally:
-        patcher.stop()
-
-    assert board.remote_board_id == 5, f"remote_board_id not cached: {board.remote_board_id}"
-    assert board.name == "Sprint", f"board name not cached: {board.name}"
-    assert board.schema.get("columns") == columns, f"schema columns not cached: {board.schema}"
-    assert board.schema.get("label") == "Link A", f"label not cached: {board.schema}"
-
-    args, kwargs = mock_requests.post.call_args
-    assert args[0] == "https://maestro.example.test/api/boards/link/register", f"wrong register url: {args[0]}"
-    assert kwargs["headers"]["Authorization"] == f"linkkey {TEST_KEY}", "register must auth with linkkey scheme"
-    body = kwargs["json"]
-    assert body["v"] == 1, f"payload must be versioned: {body}"
-    assert body["callback_url"] == f"http://client.example.test/api/incident/maestro/webhook/{board.callback_token}", (
-        f"callback_url must carry the board's callback token: {body['callback_url']}")
-
-
-@th.django_unit_test()
-def test_register_failure_raises(opts):
-    import requests as real_requests
-    from mojo.errors import ValueException
-    from mojo.apps.incident.models import MaestroBoard
-    from mojo.apps.incident.services import maestro_sync
-
-    board = MaestroBoard(api_url="https://maestro.example.test")
-    board.set_secret("link_key", TEST_KEY)
-
-    # Remote rejects the key (401)
-    patcher, _ = _mock_requests({"error": "invalid link key"}, status=401)
-    try:
-        try:
-            maestro_sync.register(board)
-            assert False, "register must raise on a 401 from maestro"
-        except ValueException as err:
-            assert "registration failed" in err.reason, f"unexpected reason: {err.reason}"
-            assert "invalid link key" not in err.reason, "remote error bodies must not be echoed to users"
-    finally:
-        patcher.stop()
-
-    # Remote times out
-    patcher, mock_requests = _mock_requests()
-    mock_requests.post.side_effect = real_requests.Timeout("boom")
-    try:
-        try:
-            maestro_sync.register(board)
-            assert False, "register must raise on timeout"
-        except ValueException:
-            pass
-    finally:
-        patcher.stop()
-
-    # No key at all (paste_url never provided)
-    board2 = MaestroBoard(api_url="")
-    try:
-        maestro_sync.register(board2)
-        assert False, "register must require a pasted link"
-    except ValueException:
-        pass
-
-
-@th.django_unit_test()
-def test_push_ticket_creates_link_and_note(opts):
-    from mojo.apps.incident.models import MaestroBoardLink, TicketNote
-    from mojo.apps.incident.services import maestro_sync
-
-    board = _make_board()
-    ticket = _make_ticket()
-
-    patcher, mock_requests = _mock_requests({"id": 501, "url": "/workspaces/board/5?item=501"})
-    try:
-        link = maestro_sync.push_ticket(board, ticket)
-    finally:
-        patcher.stop()
-
-    assert link.remote_item_id == 501, f"link must store the remote item id: {link.remote_item_id}"
-    assert link.remote_url == "https://maestro.example.test/workspaces/board/5?item=501", (
-        f"relative remote url must be absolutized: {link.remote_url}")
-    assert link.last_synced is not None, "last_synced must be stamped on push"
-    assert MaestroBoardLink.objects.filter(ticket=ticket, maestro_board=board).count() == 1, (
-        "exactly one link row per (ticket, board)")
-
-    args, kwargs = mock_requests.post.call_args
-    assert args[0].endswith("/api/boards/link/item"), f"first push must create: {args[0]}"
-    body = kwargs["json"]
-    assert body["title"] == ticket.title, f"item title mismatch: {body}"
-    assert body["source"]["ticket_id"] == ticket.pk, f"source.ticket_id mismatch: {body}"
-
-    note = TicketNote.objects.filter(parent=ticket, metadata__type="board_link").first()
-    assert note is not None, "push must add a ticket note with the remote item url"
-    assert note.user is None, "board-link note must be a system note (user=None)"
-    assert note.metadata.get("origin") == "maestro", f"note must carry the sync origin marker: {note.metadata}"
-    assert link.remote_url in (note.note or ""), f"note must contain the remote url: {note.note}"
-
-
-@th.django_unit_test()
-def test_push_ticket_is_idempotent(opts):
-    from mojo.apps.incident.models import MaestroBoardLink, TicketNote
-    from mojo.apps.incident.services import maestro_sync
-
-    board = _make_board()
-    ticket = _make_ticket(title=f"{PREFIX} idempotent")
-
-    patcher, _ = _mock_requests({"id": 601, "url": "/workspaces/board/5?item=601"})
-    try:
-        maestro_sync.push_ticket(board, ticket)
-    finally:
-        patcher.stop()
-
-    notes_before = TicketNote.objects.filter(parent=ticket).count()
-
-    patcher, mock_requests = _mock_requests({"id": 601})
-    try:
-        maestro_sync.push_ticket(board, ticket)
-    finally:
-        patcher.stop()
-
-    args, _ = mock_requests.post.call_args
-    assert args[0].endswith("/api/boards/link/item/601"), (
-        f"second push must update the existing item, not create: {args[0]}")
-    assert MaestroBoardLink.objects.filter(ticket=ticket, maestro_board=board).count() == 1, (
-        "re-push must not create a duplicate link row")
-    assert TicketNote.objects.filter(parent=ticket).count() == notes_before, (
-        "re-push must not add another board-link note")
-
-
-@th.django_unit_test()
-def test_sync_ticket_change_sends_only_changed_and_mapped(opts):
-    from mojo.apps.incident.services import maestro_sync
-
-    board = _make_board(status_map={"column": "state", "map": {"open": "todo", "closed": "done"}})
-    ticket = _make_ticket(title=f"{PREFIX} sync", status="closed")
-
-    patcher, _ = _mock_requests({"id": 701, "url": "/w"})
-    try:
-        link = maestro_sync.push_ticket(board, ticket)
-    finally:
-        patcher.stop()
-
-    patcher, mock_requests = _mock_requests({})
-    try:
-        maestro_sync.sync_ticket_change(link, ["title", "status"])
-    finally:
-        patcher.stop()
-
-    args, kwargs = mock_requests.post.call_args
-    assert args[0].endswith("/api/boards/link/item/701"), f"sync must target the item: {args[0]}"
-    body = kwargs["json"]
-    assert body["title"] == ticket.title, f"changed title must be sent: {body}"
-    assert body["values"] == {"state": "done"}, f"status must map through status_map: {body}"
-    assert "description" not in body, f"unchanged fields must not be sent: {body}"
-
-    # A status with no mapping and nothing else changed -> no HTTP call at all
-    ticket.status = "weird_state"
-    ticket.save(update_fields=["status"])
-    link.refresh_from_db()
-    patcher, mock_requests = _mock_requests({})
-    try:
-        maestro_sync.sync_ticket_change(link, ["status"])
-    finally:
-        patcher.stop()
-    assert not mock_requests.post.called, "unmapped status change alone must not call maestro"
-
-
-@th.django_unit_test()
-def test_push_ticket_group_choke_point(opts):
-    """The service itself refuses group-mismatched pushes — covers queued jobs
-    and any future enqueue path, not just the REST action / rules pre-checks."""
-    from mojo.apps.account.models import Group
-    from mojo.apps.incident.models import MaestroBoardLink
-    from mojo.apps.incident.services import maestro_sync
-
-    Group.objects.filter(name=f"{PREFIX} grp").delete()
-    grp = Group.objects.create(name=f"{PREFIX} grp", kind="organization")
-    board = _make_board(name=f"{PREFIX} grouped", group=grp)
-    ticket = _make_ticket(title=f"{PREFIX} groupless")
-
-    patcher, mock_requests = _mock_requests({"id": 999, "url": "/w"})
-    try:
-        result = maestro_sync.push_ticket(board, ticket)
-    finally:
-        patcher.stop()
-
-    assert result is None, "group-mismatched push must be refused"
-    assert not mock_requests.post.called, "group-mismatched push must never reach maestro"
-    assert not MaestroBoardLink.objects.filter(ticket=ticket, maestro_board=board).exists(), (
-        "group-mismatched push must not create a link row")
-
-
-@th.django_unit_test()
-def test_webhook_note_creates_system_note_no_echo(opts):
-    from mojo.apps.incident.models import TicketNote
-    from mojo.apps.incident.services import maestro_sync
-
-    board = _make_board(name=f"{PREFIX} wh")
-    ticket = _make_ticket(title=f"{PREFIX} wh ticket")
-    patcher, _ = _mock_requests({"id": 801, "url": "/w"})
-    try:
-        maestro_sync.push_ticket(board, ticket)
-    finally:
-        patcher.stop()
-
-    jobs_before = _maestro_job_count()
-    result = maestro_sync.handle_board_webhook(board, {
-        "v": 1, "event": "note.created", "board": 77,
-        "item": {"id": 801, "title": ticket.title, "values": {}, "is_active": True},
-        "note": {"id": 9, "text": "looks good", "author": "Alice"},
-    })
-    assert result == {"status": True}, f"webhook apply must succeed: {result}"
-
-    note = TicketNote.objects.filter(parent=ticket, metadata__event="note.created").first()
-    assert note is not None, "board comment must become a ticket note"
-    assert note.user is None, "sync note must have no human identity (user=None)"
-    assert note.metadata.get("origin") == "maestro", f"sync note must carry origin marker: {note.metadata}"
-    assert "Alice" in note.note and "looks good" in note.note, f"note must carry author + text: {note.note}"
-
-    # Echo suppression: applying the webhook must not enqueue any outbound
-    # maestro sync work (notes were written via ORM, not the REST pipeline).
-    assert _maestro_job_count() == jobs_before, (
-        "webhook-applied changes must NOT enqueue outbound maestro jobs (echo)")
-
-    # Replay dedup: re-delivering the same signed note payload must not
-    # duplicate the ticket note.
-    result = maestro_sync.handle_board_webhook(board, {
-        "v": 1, "event": "note.created", "board": 77,
-        "item": {"id": 801, "title": ticket.title, "values": {}, "is_active": True},
-        "note": {"id": 9, "text": "looks good", "author": "Alice"},
-    })
-    assert result.get("ignored") is True, f"replayed note delivery must be ignored: {result}"
-    assert TicketNote.objects.filter(
-        parent=ticket, metadata__event="note.created").count() == 1, (
-        "a replayed note.created must not create a second ticket note")
-
-
-@th.django_unit_test()
-def test_webhook_item_updated_status_map_and_echo(opts):
-    from mojo.apps.incident.models import TicketNote
-    from mojo.apps.incident.services import maestro_sync
-
-    board = _make_board(name=f"{PREFIX} wh2",
-                        status_map={"column": "state", "map": {"open": "todo", "closed": "done"}})
-    ticket = _make_ticket(title=f"{PREFIX} wh2 ticket", status="open")
-    patcher, _ = _mock_requests({"id": 802, "url": "/w"})
-    try:
-        maestro_sync.push_ticket(board, ticket)
-    finally:
-        patcher.stop()
-
-    jobs_before = _maestro_job_count()
-    payload = {
-        "v": 1, "event": "item.updated", "board": 77,
-        "item": {"id": 802, "title": ticket.title, "values": {"state": "done"}, "is_active": True},
-        "changes": [{"column": "state", "old": "todo", "new": "done"}],
+def _settings_patch(maestro_sync, **overrides):
+    values = {
+        "MAESTRO_API_KEY": TEST_KEY,
+        "MAESTRO_API_URL": "https://maestro.example.test",
+        "MAESTRO_CALLBACK_BASE": "https://client.example.test",
+        "MAESTRO_ALLOW_HTTP": False,
+        "MAESTRO_LINK_TIMEOUT": 10,
+        "BASE_URL": "https://client.example.test",
+        "PROJECT_NAME": "service-tests",
     }
-    result = maestro_sync.handle_board_webhook(board, payload)
-    assert result == {"status": True}, f"webhook apply must succeed: {result}"
+    values.update(overrides)
+    return mock.patch.object(
+        maestro_sync.settings,
+        "get_static",
+        side_effect=lambda name, default=None: values.get(name, default),
+    )
 
-    ticket.refresh_from_db()
-    assert ticket.status == "closed", f"mapped column change must update ticket status: {ticket.status}"
-    note = TicketNote.objects.filter(parent=ticket, metadata__event="item.updated").first()
-    assert note is not None, "item.updated must add a describing ticket note"
-    assert _maestro_job_count() == jobs_before, (
-        "webhook-applied status change must NOT enqueue outbound maestro jobs (echo)")
 
-    # Repeat delivery: status already matches -> compare-before-write no-op
-    modified_before = ticket.modified
-    maestro_sync.handle_board_webhook(board, payload)
-    ticket.refresh_from_db()
-    assert ticket.status == "closed", "repeat delivery must be a no-op on status"
-    assert ticket.modified == modified_before, "repeat delivery must not rewrite the ticket"
+def _mock_requests(maestro_sync, json_data=None, status=200):
+    import requests as real_requests
+    patcher = mock.patch.object(maestro_sync, "requests")
+    mocked = patcher.start()
+    mocked.Timeout = real_requests.Timeout
+    response = mock.Mock()
+    response.status_code = status
+    response.text = json.dumps(json_data or {})
+    response.json.return_value = json_data or {}
+    mocked.post.return_value = response
+    return patcher, mocked
+
+
+def _create_response(item_id=501, board=5, integration=INTEGRATION):
+    return {
+        "id": item_id,
+        "url": f"/workspaces/board/{board}?item={item_id}",
+        "board": {"id": board, "name": "Triage"},
+        "integration": {"id": integration},
+    }
 
 
 @th.django_unit_test()
-def test_webhook_without_status_map_notes_only(opts):
+def test_static_config_and_strict_board_selector(opts):
+    from mojo.errors import ValueException
     from mojo.apps.incident.services import maestro_sync
 
-    board = _make_board(name=f"{PREFIX} wh3")  # no status_map
-    ticket = _make_ticket(title=f"{PREFIX} wh3 ticket", status="open")
-    patcher, _ = _mock_requests({"id": 803, "url": "/w"})
+    with _settings_patch(maestro_sync):
+        assert maestro_sync.get_config() == (
+            "https://maestro.example.test", TEST_KEY,
+        ), "configured Maestro origin/key must be returned"
+        assert maestro_sync.parse_board_selector(True) is None, "true must select the default board"
+        assert maestro_sync.parse_board_selector("3") == 3, "numeric remote board must parse"
+
+    for bad in (False, 0, -1, "01", "x"):
+        try:
+            maestro_sync.parse_board_selector(bad)
+            assert False, f"invalid board selector {bad!r} must fail"
+        except ValueException:
+            pass
+
+    with _settings_patch(maestro_sync, MAESTRO_API_KEY=""):
+        try:
+            maestro_sync.get_config()
+            assert False, "missing MAESTRO_API_KEY must fail"
+        except ValueException as err:
+            assert "MAESTRO_API_KEY" in err.reason, f"error must name missing setting: {err.reason}"
+            assert TEST_KEY not in err.reason, "configuration errors must not disclose keys"
+
+    for name, value in (
+        ("MAESTRO_API_URL", "https://user:secret@maestro.example.test"),
+        ("MAESTRO_API_URL", "https://maestro.example.test/api"),
+        ("MAESTRO_CALLBACK_BASE", "https://client.example.test/callback-base"),
+    ):
+        with _settings_patch(maestro_sync, **{name: value}):
+            try:
+                if name == "MAESTRO_API_URL":
+                    maestro_sync.get_config()
+                else:
+                    maestro_sync.get_callback_url()
+                assert False, f"non-origin {name} must fail"
+            except ValueException:
+                pass
+
+
+@th.django_unit_test()
+def test_register_uses_apikey_and_returns_safe_routing(opts):
+    from mojo.apps.incident.services import maestro_sync
+
+    response = {
+        "integration": {"id": INTEGRATION},
+        "workspace": {"id": 17, "name": "NativeMojo"},
+        "default_board": {"id": 11, "name": "Inbox"},
+    }
+    patcher, mocked = _mock_requests(maestro_sync, response)
     try:
-        maestro_sync.push_ticket(board, ticket)
+        with _settings_patch(maestro_sync):
+            result = maestro_sync.register()
     finally:
         patcher.stop()
 
-    maestro_sync.handle_board_webhook(board, {
-        "v": 1, "event": "item.updated", "board": 77,
-        "item": {"id": 803, "title": ticket.title, "values": {"state": "done"}, "is_active": True},
-        "changes": [{"column": "state", "old": "todo", "new": "done"}],
-    })
-    ticket.refresh_from_db()
-    assert ticket.status == "open", "without status_map a board column change must NOT touch ticket status"
+    assert result["integration_id"] == INTEGRATION, f"wrong registration result: {result}"
+    args, kwargs = mocked.post.call_args
+    assert args[0] == "https://maestro.example.test/api/boards/link/register", f"wrong URL: {args[0]}"
+    assert kwargs["headers"]["Authorization"] == f"apikey {TEST_KEY}", (
+        "all reporting calls must use the built-in apikey scheme")
+    assert kwargs["json"]["callback_url"] == "https://client.example.test/api/incident/maestro/webhook", (
+        f"callback must be the fixed signed endpoint: {kwargs['json']}")
 
 
 @th.django_unit_test()
-def test_webhook_unlinked_item_ignored(opts):
+def test_register_refuses_different_integration(opts):
+    from mojo.apps.incident.models import MaestroItemLink
     from mojo.apps.incident.services import maestro_sync
 
-    board = _make_board(name=f"{PREFIX} wh4")
-    result = maestro_sync.handle_board_webhook(board, {
-        "v": 1, "event": "item.updated", "board": 77,
-        "item": {"id": 999999, "title": "x", "values": {}, "is_active": True},
-        "changes": [],
-    })
-    assert result.get("ignored") is True, f"unknown item must be ignored, not an error: {result}"
+    ticket = _make_ticket(title=f"{PREFIX} existing integration")
+    MaestroItemLink.objects.create(
+        ticket=ticket, remote_integration_id="old-integration",
+        remote_item_id=1, remote_board_id=2,
+    )
+    response = {
+        "integration": {"id": "different-integration"},
+        "workspace": {"id": 17, "name": "NativeMojo"},
+        "default_board": {"id": 11, "name": "Inbox"},
+    }
+    patcher, _mocked = _mock_requests(maestro_sync, response)
+    try:
+        with _settings_patch(maestro_sync):
+            try:
+                maestro_sync.register()
+                assert False, "a different integration key must not adopt existing links"
+            except Exception as err:
+                assert "different integration" in str(err).lower(), f"wrong failure: {err}"
+    finally:
+        patcher.stop()
+
+
+@th.django_unit_test()
+def test_push_ticket_default_and_idempotent(opts):
+    from mojo.apps.incident.models import MaestroItemLink, TicketNote
+    from mojo.apps.incident.services import maestro_sync
+
+    ticket = _make_ticket(
+        title=f"{PREFIX} default",
+        description="x" * (maestro_sync.DESCRIPTION_MAX + 1),
+    )
+    patcher, mocked = _mock_requests(maestro_sync, _create_response())
+    try:
+        with _settings_patch(maestro_sync):
+            link = maestro_sync.push_ticket(ticket)
+    finally:
+        patcher.stop()
+
+    body = mocked.post.call_args.kwargs["json"]
+    assert "board" not in body, f"default routing must omit board: {body}"
+    assert body["source"]["kind"] == "ticket" and body["source"]["id"] == ticket.pk, (
+        f"ticket source identity missing: {body}")
+    assert len(body["description"]) == maestro_sync.DESCRIPTION_MAX, (
+        "outbound source descriptions must be bounded")
+    assert link.remote_integration_id == INTEGRATION, f"integration id not stored: {link}"
+    assert link.remote_board_id == 5, f"resolved board not stored: {link.remote_board_id}"
+    assert MaestroItemLink.objects.filter(ticket=ticket).count() == 1, "ticket must have one link"
+    assert TicketNote.objects.filter(parent=ticket, metadata__type="item_link").count() == 1, (
+        "first push must record one local system note")
+
+    patcher, mocked = _mock_requests(maestro_sync, {})
+    try:
+        with _settings_patch(maestro_sync):
+            maestro_sync.push_ticket(ticket, 99)
+    finally:
+        patcher.stop()
+    args, kwargs = mocked.post.call_args
+    assert args[0].endswith("/link/item/501"), f"repeat push must update existing item: {args[0]}"
+    assert "board" not in kwargs["json"], "repeat push must not silently move an existing item"
+    assert MaestroItemLink.objects.filter(ticket=ticket).count() == 1, "repeat push must stay idempotent"
+
+
+@th.django_unit_test()
+def test_push_incident_explicit_board_and_sync(opts):
+    from mojo.apps.incident.services import maestro_sync
+
+    incident = _make_incident(status="resolved", priority=8)
+    patcher, mocked = _mock_requests(maestro_sync, _create_response(item_id=601, board=3))
+    try:
+        with _settings_patch(maestro_sync):
+            link = maestro_sync.push_incident(incident, 3)
+    finally:
+        patcher.stop()
+    body = mocked.post.call_args.kwargs["json"]
+    assert body["board"] == 3, f"explicit remote board missing: {body}"
+    assert body["source"]["kind"] == "incident", f"incident source identity missing: {body}"
+    assert body["lifecycle"] == "done", f"resolved incident must map to done: {body}"
+
+    incident.title = f"{PREFIX} changed"
+    incident.status = "paused"
+    patcher, mocked = _mock_requests(maestro_sync, {})
+    try:
+        with _settings_patch(maestro_sync):
+            maestro_sync.sync_change(link, ["title", "status"])
+    finally:
+        patcher.stop()
+    body = mocked.post.call_args.kwargs["json"]
+    assert body["title"] == incident.title, f"changed incident title missing: {body}"
+    assert body["lifecycle"] == "parked", f"paused incident must map to parked: {body}"
+
+
+@th.django_unit_test()
+def test_callback_routes_ticket_by_integration_and_dedupes_note(opts):
+    from mojo.apps.incident.models import MaestroItemLink, TicketNote
+    from mojo.apps.incident.services import maestro_sync
+
+    ticket = _make_ticket(title=f"{PREFIX} callback ticket")
+    MaestroItemLink.objects.create(
+        ticket=ticket, remote_integration_id=INTEGRATION,
+        remote_item_id=701, remote_board_id=3,
+    )
+    payload = {
+        "v": 1,
+        "integration_id": INTEGRATION,
+        "event": "note.created",
+        "item": {"id": 701, "board": 4, "url": "/board/4?item=701"},
+        "note": {"id": 9, "text": "looks good", "author": "Alice"},
+    }
+    assert maestro_sync.handle_webhook(payload) == {"status": True}, "signed callback must apply"
+    assert maestro_sync.handle_webhook(payload).get("ignored") is True, "replayed note must be ignored"
+    assert TicketNote.objects.filter(
+        parent=ticket, metadata__remote_note_id=9).count() == 1, "remote note must dedupe"
+    link = ticket.maestro_links.get()
+    assert link.remote_board_id == 4, f"move must refresh cached board: {link.remote_board_id}"
+
+    wrong = dict(payload, integration_id="other-integration")
+    assert maestro_sync.handle_webhook(wrong).get("ignored") is True, (
+        "same item id from another integration must not route to this ticket")
+    malformed = dict(payload, item={"id": [701]})
+    assert maestro_sync.handle_webhook(malformed).get("ignored") is True, (
+        "malformed signed callback identities must be ignored without an ORM error")
+
+
+@th.django_unit_test()
+def test_callback_routes_incident_history_and_lifecycle(opts):
+    from mojo.apps.incident.models import IncidentHistory, MaestroItemLink
+    from mojo.apps.incident.services import maestro_sync
+
+    incident = _make_incident(title=f"{PREFIX} callback incident", status="open")
+    MaestroItemLink.objects.create(
+        incident=incident, remote_integration_id=INTEGRATION,
+        remote_item_id=801, remote_board_id=5,
+    )
+    payload = {
+        "integration_id": INTEGRATION,
+        "event": "item.updated",
+        "item": {"id": 801, "board": 5, "lifecycle": "done"},
+        "changes": [{"column": "stage", "old": "building", "new": "done"}],
+    }
+    result = maestro_sync.handle_webhook(payload)
+    assert result == {"status": True}, f"incident callback must apply: {result}"
+    incident.refresh_from_db()
+    assert incident.status == "resolved", f"done lifecycle must resolve incident: {incident.status}"
+    history = IncidentHistory.objects.filter(parent=incident, metadata__origin="maestro").first()
+    assert history is not None, "incident callback must append history"
+    assert history.metadata.get("remote_item_id") == 801, f"callback metadata missing: {history.metadata}"
+
+
+@th.django_unit_test()
+def test_item_link_constraints(opts):
+    from django.db import IntegrityError, transaction
+    from mojo.apps.incident.models import MaestroItemLink
+
+    ticket = _make_ticket(title=f"{PREFIX} constraints")
+    incident = _make_incident(title=f"{PREFIX} constraints")
+    invalid_rows = [
+        {},
+        {"ticket": ticket, "incident": incident},
+    ]
+    for fields in invalid_rows:
+        try:
+            with transaction.atomic():
+                MaestroItemLink.objects.create(
+                    remote_integration_id=INTEGRATION, remote_item_id=900,
+                    **fields,
+                )
+            assert False, f"exactly-one-source constraint must reject {fields}"
+        except IntegrityError:
+            pass
+
+
+@th.django_unit_test()
+def test_register_management_command_never_prints_key(opts):
+    from django.core.management import call_command
+    from mojo.apps.incident.models import MaestroItemLink
+    from mojo.apps.incident.services import maestro_sync
+
+    MaestroItemLink.objects.all().delete()
+    response = {
+        "integration": {"id": INTEGRATION},
+        "workspace": {"id": 17, "name": "NativeMojo"},
+        "default_board": {"id": 11, "name": "Inbox"},
+    }
+    output = StringIO()
+    patcher, _mocked = _mock_requests(maestro_sync, response)
+    try:
+        with _settings_patch(maestro_sync):
+            call_command("register_maestro", stdout=output)
+    finally:
+        patcher.stop()
+    rendered = output.getvalue()
+    assert INTEGRATION in rendered and "NativeMojo" in rendered, f"safe routing summary missing: {rendered}"
+    assert TEST_KEY not in rendered, "management command must never print MAESTRO_API_KEY"

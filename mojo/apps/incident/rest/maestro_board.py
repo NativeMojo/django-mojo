@@ -1,5 +1,5 @@
 from mojo import decorators as md
-from mojo.apps.incident.models import MaestroBoard, MaestroBoardLink
+from mojo.apps.incident.models import MaestroBoard, MaestroBoardLink, MaestroItemLink
 
 
 @md.URL('maestro/board')
@@ -14,3 +14,10 @@ def on_maestro_board(request, pk=None):
 @md.uses_model_security(MaestroBoardLink)
 def on_maestro_link(request, pk=None):
     return MaestroBoardLink.on_rest_request(request, pk)
+
+
+@md.URL('maestro/item-link')
+@md.URL('maestro/item-link/<int:pk>')
+@md.uses_model_security(MaestroItemLink)
+def on_maestro_item_link(request, pk=None):
+    return MaestroItemLink.on_rest_request(request, pk)

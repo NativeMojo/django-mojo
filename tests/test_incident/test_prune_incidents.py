@@ -11,11 +11,12 @@ CATEGORY = "test_prune_inc"
 
 @th.django_unit_setup()
 def setup_prune_incidents(opts):
-    from mojo.apps.incident.models import Incident
+    from mojo.apps.incident.models import Incident, MaestroItemLink
     from django.utils import timezone
     from datetime import timedelta
 
     # Clean up from previous runs
+    MaestroItemLink.objects.filter(incident__category__startswith=CATEGORY).delete()
     Incident.objects.filter(category__startswith=CATEGORY).delete()
 
     old = timezone.now() - timedelta(days=120)
@@ -66,6 +67,17 @@ def setup_prune_incidents(opts):
         title="Ticket referencing old incident",
         incident=opts.old_ticketed,
         metadata={"llm_linked": True},
+    )
+
+    # Old resolved Incident reported directly to Maestro — also durable.
+    opts.old_maestro = Incident.objects.create(
+        category=CATEGORY, title="Old Maestro-linked", status="resolved", metadata={})
+    Incident.objects.filter(pk=opts.old_maestro.pk).update(created=old)
+    MaestroItemLink.objects.create(
+        incident=opts.old_maestro,
+        remote_integration_id="prune-test-integration",
+        remote_item_id=99101,
+        remote_board_id=3,
     )
 
 
@@ -131,3 +143,12 @@ def test_prune_skips_ticketed(opts):
     ticket = Ticket.objects.get(pk=opts.ticket.pk)
     assert ticket.incident_id == opts.old_ticketed.pk, \
         "Ticket.incident should still reference the preserved incident"
+
+
+@th.django_unit_test()
+def test_prune_skips_maestro_linked(opts):
+    """A direct Maestro item link preserves its source Incident."""
+    from mojo.apps.incident.models import Incident
+
+    assert Incident.objects.filter(pk=opts.old_maestro.pk).exists(), \
+        "Old Maestro-linked incident should survive pruning"

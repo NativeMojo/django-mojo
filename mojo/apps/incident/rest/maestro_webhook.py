@@ -3,25 +3,18 @@ import json
 from mojo import decorators as md
 from mojo.errors import PermissionDeniedException, ValueException
 from mojo.helpers.crypto.sign import get_signature_header, verify_signature
-from mojo.apps.incident.models import MaestroBoard
 
 
-@md.POST('maestro/webhook/<str:token>')
-@md.public_endpoint("maestro board link webhook — HMAC-verified against the board's link key")
+MAX_CALLBACK_BYTES = 65536
+
+
+@md.POST('maestro/webhook')
+@md.public_endpoint("Maestro workspace callback — HMAC verified with deployment ApiKey")
 @md.rate_limit("maestro_webhook", ip_limit=60)
-def on_maestro_webhook(request, token=None):
-    """Receiver for maestro board webhooks (DM-040).
-
-    Fail-closed: the board is looked up by its unguessable callback token and
-    must be active, and the payload must carry a valid X-Mojo-Signature —
-    HMAC-SHA256 of the canonical JSON dict keyed by the raw link key (verified
-    on the parsed dict, per the link contract, so wire encoding is
-    irrelevant). 4xx responses are terminal to maestro (no retry).
-    """
-    board = MaestroBoard.objects.filter(callback_token=token, is_active=True).first()
-    if board is None:
-        raise PermissionDeniedException("invalid webhook target", 401, 401)
-
+def on_maestro_webhook(request):
+    """Receive a signed callback for the deployment's one Maestro integration."""
+    if len(request.body or b"") > MAX_CALLBACK_BYTES:
+        raise ValueException("invalid payload", 400)
     try:
         payload = json.loads(request.body)
     except Exception:
@@ -29,10 +22,10 @@ def on_maestro_webhook(request, token=None):
     if not isinstance(payload, dict):
         raise ValueException("invalid payload", 400)
 
-    # A missing link_key must fail closed — verify_signature(secret_key=None)
-    # would silently fall back to settings.SECRET_KEY.
-    key = board.get_secret("link_key")
-    if not key:
+    from mojo.apps.incident.services import maestro_sync
+    try:
+        _api_url, key = maestro_sync.get_config()
+    except ValueException:
         raise PermissionDeniedException("invalid webhook target", 401, 401)
 
     header = get_signature_header()
@@ -42,5 +35,4 @@ def on_maestro_webhook(request, token=None):
     if not signature or not verify_signature(payload, signature, key):
         raise PermissionDeniedException("invalid signature", 401, 401)
 
-    from mojo.apps.incident.services import maestro_sync
-    return maestro_sync.handle_board_webhook(board, payload)
+    return maestro_sync.handle_webhook(payload)

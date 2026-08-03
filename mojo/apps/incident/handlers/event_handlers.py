@@ -18,6 +18,7 @@ Supported handler schemes:
 - notify://perm@manage_security — in-app + push notification
 - block://?ttl=3600 — fleet-wide IP block
 - ticket://?status=open&priority=8 — create support ticket
+- maestro://?board=3 — report the Incident directly to Maestro
 - resolve://?status=resolved&note=Auto-resolved — resolve (or close) the incident
 
 Target resolution (comma-separated, mix and match):
@@ -391,8 +392,9 @@ class TicketHandler:
     Handler syntax:
         ticket://?status=open&priority=8&title=Investigate&category=security
 
-    Optional board=<maestro board id> pushes the created ticket into that
-    maestro board (DM-040) — enqueue only, failures log and never block.
+    board=<remote maestro board id> creates/reuses a local Ticket and reports it.
+    maestro=1 reports to the integration's default board. Without either, the
+    handler remains local-only.
     """
 
     def __init__(self, target=None, **params):
@@ -422,10 +424,22 @@ class TicketHandler:
 
             incident = getattr(event, "incident", None)
             if incident and incident.rule_set_id:
-                if Ticket.objects.filter(
-                    incident__rule_set_id=incident.rule_set_id
-                ).exclude(status__in=("resolved", "closed")).exists():
-                    logger.info("TicketHandler: skipping duplicate for rule_set %s", incident.rule_set_id)
+                existing = Ticket.objects.filter(
+                    incident__rule_set_id=incident.rule_set_id,
+                    group_id=incident.group_id,
+                ).exclude(status__in=("resolved", "closed")).first()
+                if existing is not None:
+                    logger.info("TicketHandler: reusing ticket %s for rule_set %s", existing.pk, incident.rule_set_id)
+                    existing.add_note(
+                        f"Recurring incident #{incident.pk}", None,
+                        metadata={"type": "incident_recurrence", "incident_id": incident.pk},
+                    )
+                    incident.add_history(
+                        "handler:ticket_reused",
+                        note=f"Reused ticket #{existing.pk} for this occurrence",
+                    )
+                    if self._wants_maestro():
+                        self._push_to_maestro(existing, self.params.get("board"))
                     return True
 
             ticket = Ticket.objects.create(
@@ -436,32 +450,55 @@ class TicketHandler:
                 category=category,
                 assignee=assignee,
                 incident=incident,
+                group=getattr(incident, "group", None),
                 metadata={**getattr(event, "metadata", {})},
             )
-            if self.params.get("board"):
-                self._push_to_board(ticket, self.params.get("board"))
+            if self._wants_maestro():
+                self._push_to_maestro(ticket, self.params.get("board"))
             return True
         except Exception:
             logger.exception("TicketHandler failed for event %s", event.pk)
             return False
 
-    def _push_to_board(self, ticket, board_id):
+    def _wants_maestro(self):
+        if "board" in self.params:
+            return True
+        return str(self.params.get("maestro") or "").lower() in ("1", "true", "yes")
+
+    def _push_to_maestro(self, ticket, board_value=None):
         try:
-            from mojo.apps.incident.models import MaestroBoard
             from mojo.apps.incident.services import maestro_sync
-            board = MaestroBoard.objects.filter(pk=int(board_id), is_active=True).first()
-            if board is None:
-                logger.warning("TicketHandler: maestro board %s not found or inactive", board_id)
-                return
-            # Same boundary the manual push_to_board action enforces: a
-            # group-scoped board only accepts tickets of its own group.
-            if board.group_id and board.group_id != ticket.group_id:
-                logger.warning("TicketHandler: maestro board %s is group-scoped and does not accept ticket %s",
-                               board.pk, ticket.pk)
-                return
-            maestro_sync.enqueue_push(ticket.pk, board.pk)
+            maestro_sync.get_config()
+            board_id = maestro_sync.parse_board_selector(board_value) if board_value is not None else None
+            maestro_sync.enqueue_push("ticket", ticket.pk, board_id)
         except Exception:
             logger.exception("TicketHandler: maestro push enqueue failed for ticket %s", ticket.pk)
+
+
+class MaestroHandler:
+    """Report the associated Incident directly to the configured Maestro workspace."""
+
+    def __init__(self, target=None, **params):
+        self.params = params
+
+    def run(self, event):
+        try:
+            incident = getattr(event, "incident", None)
+            if incident is None and getattr(event, "incident_id", None):
+                from mojo.apps.incident.models import Incident
+                incident = Incident.objects.filter(pk=event.incident_id).first()
+            if incident is None:
+                logger.warning("MaestroHandler: event %s has no incident", event.pk)
+                return False
+            from mojo.apps.incident.services import maestro_sync
+            maestro_sync.get_config()
+            board_value = self.params.get("board")
+            board_id = maestro_sync.parse_board_selector(board_value) if board_value is not None else None
+            maestro_sync.enqueue_push("incident", incident.pk, board_id)
+            return True
+        except Exception:
+            logger.exception("MaestroHandler failed for event %s", event.pk)
+            return False
 
 
 class ResolveHandler:
@@ -593,6 +630,7 @@ HANDLER_MAP = {
     "notify": NotifyHandler,
     "block": BlockHandler,
     "ticket": TicketHandler,
+    "maestro": MaestroHandler,
     "llm": LLMHandler,
     "resolve": ResolveHandler,
 }
@@ -647,7 +685,7 @@ def execute_handler(job):
             logger.warning("execute_handler: unknown handler type %s", handler_type)
             return
 
-        if handler_type in ("job", "block", "ticket"):
+        if handler_type in ("job", "block", "ticket", "maestro"):
             handler = handler_cls(handler_url.netloc or None, **params)
         else:
             handler = handler_cls(handler_url.netloc, **params)

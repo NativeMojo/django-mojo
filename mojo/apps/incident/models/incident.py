@@ -1,4 +1,4 @@
-from django.db import models
+from django.db import models, transaction
 from mojo.models import MojoModel
 from mojo.helpers import logit
 
@@ -95,7 +95,7 @@ class Incident(models.Model, MojoModel):
             return self._geo_ip.to_dict("default")
         return None
 
-    def add_history(self, kind, note=None, by=None, to=None, group=None, media=None):
+    def add_history(self, kind, note=None, by=None, to=None, group=None, media=None, metadata=None):
         """
         Record a history entry for this incident.
 
@@ -115,7 +115,7 @@ class Incident(models.Model, MojoModel):
             # has been deleted — insert would otherwise hit a FK error.
             if not Incident.objects.filter(pk=self.pk).exists():
                 return
-            IncidentHistory.objects.create(
+            history = IncidentHistory.objects.create(
                 parent=self,
                 kind=kind,
                 note=note,
@@ -125,9 +125,16 @@ class Incident(models.Model, MojoModel):
                 media=media,
                 state=self.state,
                 priority=self.priority,
+                metadata=metadata or {},
             )
+            if (history.metadata or {}).get("origin") != "maestro":
+                from mojo.apps.incident.services import maestro_sync
+                for link_id in self.maestro_links.values_list("id", flat=True):
+                    maestro_sync.enqueue_note(link_id, "incident", history.pk)
+            return history
         except Exception:
             logger.exception("Failed to create IncidentHistory for incident %s", self.pk)
+            return None
 
     def check_delete_on_resolution(self):
         """
@@ -145,9 +152,8 @@ class Incident(models.Model, MojoModel):
             return False
         if not self.rule_set_id:
             return False
-        # Keep any incident that has a ticket — ticket creation implies
-        # the incident is worth preserving as history.
-        if self.tickets.exists():
+        # A local Ticket or direct Maestro item makes the incident durable.
+        if self.tickets.exists() or self.maestro_links.exists():
             return False
         try:
             rule_set = self.rule_set
@@ -202,6 +208,17 @@ class Incident(models.Model, MojoModel):
                 note=f"Fields updated: {', '.join(sorted(other_fields))}",
                 by=by)
 
+        changed = {"title", "details", "status", "priority", "category"} & set(changed_fields)
+        if changed:
+            from mojo.apps.incident.services import maestro_sync
+            for link_id in self.maestro_links.values_list("id", flat=True):
+                maestro_sync.enqueue_sync(link_id, sorted(changed))
+
+    def on_rest_pre_delete(self):
+        if self.maestro_links.exists():
+            from mojo.errors import ValueException
+            raise ValueException("unlink this incident from Maestro before deleting it", 409)
+
     def on_action_analyze(self, value):
         """
         Trigger LLM analysis on this incident to find patterns, merge related
@@ -255,33 +272,47 @@ class Incident(models.Model, MojoModel):
         if not value or not isinstance(value, list):
             raise ValueError("Invalid value")
 
-        # Get the other incidents to merge
-        other_incidents = Incident.objects.filter(id__in=value).exclude(id=self.id)
+        from mojo.errors import ValueException
+        from mojo.apps.incident.models import MaestroItemLink
 
         by = getattr(getattr(self, 'active_request', None), 'user', None)
+        with transaction.atomic():
+            target = Incident.objects.select_for_update().get(pk=self.pk)
+            other_incidents = list(Incident.objects.select_for_update().filter(
+                id__in=value).exclude(id=self.id))
+            participant_ids = [target.pk] + [row.pk for row in other_incidents]
+            links = list(MaestroItemLink.objects.select_for_update().filter(
+                incident_id__in=participant_ids))
+            if len(links) > 1:
+                raise ValueException(
+                    "cannot merge incidents that each have a Maestro item; unlink duplicates first", 409)
 
-        merged_total = 0
-        for incident in other_incidents:
-            event_count = incident.events.count()
-            # Move all events from the other incident to this incident
-            incident.events.update(incident=self)
-            # Reassign any tickets to the target so deleting the merged
-            # incident does not strand ticket history.
-            ticket_count = incident.tickets.update(incident=self)
+            merged_total = 0
+            for incident in other_incidents:
+                event_count = incident.events.count()
+                incident.events.update(incident=target)
+                ticket_count = incident.tickets.update(incident=target)
 
-            note = f"Merged incident #{incident.id} ({event_count} events"
-            if ticket_count:
-                note += f", {ticket_count} tickets"
-            note += ")"
-            self.add_history("merged", note=note, by=by)
+                note = f"Merged incident #{incident.id} ({event_count} events"
+                if ticket_count:
+                    note += f", {ticket_count} tickets"
+                note += ")"
+                target.add_history("merged", note=note, by=by)
+                merged_total += event_count
 
-            merged_total += event_count
-            # Delete the now-empty incident
-            incident.delete()
+                if links and links[0].incident_id == incident.pk:
+                    links[0].incident = target
+                    links[0].save(update_fields=["incident", "modified"])
+                incident.delete()
 
-        if merged_total:
-            meta = dict(self.metadata or {})
-            meta["event_count"] = int(meta.get("event_count") or 0) + merged_total
-            self.metadata = meta
-            self.save(update_fields=["metadata"])
+            if merged_total:
+                meta = dict(target.metadata or {})
+                meta["event_count"] = int(meta.get("event_count") or 0) + merged_total
+                target.metadata = meta
+                target.save(update_fields=["metadata"])
+                if links:
+                    from mojo.apps.incident.services import maestro_sync
+                    maestro_sync.enqueue_sync(
+                        links[0].pk, ["title", "details", "priority", "status"])
+                self.metadata = target.metadata
         return {"status": True}

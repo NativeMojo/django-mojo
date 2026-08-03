@@ -6,3 +6,4 @@ from .ticket import Ticket, TicketNote
 from .ipset import IPSet
 from .maestro_board import MaestroBoard
 from .maestro_board_link import MaestroBoardLink
+from .maestro_item_link import MaestroItemLink
