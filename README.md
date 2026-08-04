@@ -2,6 +2,8 @@
 
 **The full-stack Django framework for teams that want to ship, not assemble.**
 
+**[Website & Documentation →](https://django-mojo.sitesmojo.com/)**
+
 ---
 
 Most Django projects end up wiring together the same set of packages: a REST layer, an auth system, a job queue, a WebSocket server, a file store, a secrets manager, a metrics backend. Each one has its own conventions, its own config, its own failure modes — and none of them know about each other.
