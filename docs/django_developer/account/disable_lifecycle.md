@@ -202,7 +202,7 @@ not try to enumerate it: the product runs its own closure, in the order it
 decides, and calls `pii_anonymize()` as the last step.
 
 ```python
-# settings
+# settings file — NOT a DB-backed Setting row, see below
 ACCOUNT_CLOSURE_HANDLER = "myapp.services.closure.close_account"
 ```
 
@@ -222,7 +222,9 @@ need it.
 | Rule | Why |
 |---|---|
 | Called as `handler(user)`, account still active, `GroupMember` rows intact | `pii_anonymize()` step 8 deletes memberships; anything the product reaches *through* them must be purged first or it is orphaned |
-| The handler owns the final `user.pii_anonymize()` | The framework does **not** call it after a handler runs — a handler that skips it leaves the account un-anonymized |
+| The handler owns the final `user.pii_anonymize()` | The framework does **not** call it after a handler runs |
+| Returning without closing the account is a **failure**, not a success | Otherwise a no-op handler earns "your account has been deactivated" for a fully intact account. The framework re-reads the row afterwards and requires the closure to have landed — it does not do the anonymizing, it insists that it happened |
+| Must not deactivate the account or revoke credentials before that final anonymize | A partial purge that breaks re-authentication strands the closure permanently: the token is already spent, and an inactive account can neither re-initiate nor be re-run (confirm short-circuits on `is_active`) |
 | Must be idempotent | A failed run may have partially purged, and recovery re-runs the whole handler |
 | Fails closed — raise to abort | No anonymization, no success response, account left active |
 | Resolved by dotted path at call time | A deployment can point it anywhere importable; nothing is resolved at import time |
@@ -230,6 +232,19 @@ need it.
 "Erasure complete" is a product-defined condition, so product-specific
 fail-closed rules (aborting when a personal group has an unexpected second
 member, say) belong in the handler, not in the framework.
+
+### File-only, deliberately
+
+This key is read with `settings.get_static`, so it comes from the settings
+**file** and nothing else. A DB-backed `Setting` row with this key is ignored.
+
+That is a security boundary, not an oversight. `settings.get` resolves the
+DB/Redis `Setting` store ahead of file settings, and `Setting` rows are
+REST-writable by anyone holding `manage_settings`/`groups`. Since this value
+names code that the web worker imports and calls, honouring a DB row would
+promote a config-write permission into arbitrary code execution. Same reasoning
+as `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE`; `test_closure_handler_is_file_only` pins
+it.
 
 ### Failure and retry: the token is already spent
 

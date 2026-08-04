@@ -15,6 +15,19 @@ These are read while URL/module bootstrap happens, so changes require a process 
 
 These are read through `mojo.helpers.settings.settings` during normal runtime.
 
+### ACCOUNT
+
+- `ACCOUNT_CLOSURE_HANDLER` — **file-only** (read with `settings.get_static`).
+  Dotted path to a product callable `handler(user)` that owns permanent account
+  closure, called by the `account/deactivate/confirm` endpoint in place of a
+  direct `user.pii_anonymize()`. Default `None` — unset, the confirm endpoint
+  anonymizes directly. A DB-backed `Setting` row is deliberately ignored: the
+  value names code the worker imports and calls, so honouring a DB row would
+  turn `manage_settings` into arbitrary code execution. Fails closed — an
+  unresolvable path, a raising handler, or a handler that returns without
+  closing the account all anonymize nothing and leave the account active. See
+  [Account Closure Delegation](../account/disable_lifecycle.md#account-closure-delegation-account_closure_handler).
+
 ### ALLOW
 
 - `ALLOW_EMAIL_CHANGE`
