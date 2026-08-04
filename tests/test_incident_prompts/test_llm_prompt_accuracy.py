@@ -47,6 +47,7 @@ def test_llm_agent_source_has_no_ingestion_dedup_claim(opts):
 @th.django_unit_test("llm_agent prompt and schema describe operative thresholds")
 def test_llm_agent_threshold_contract(opts):
     from mojo.apps.incident.handlers import llm_agent
+    from mojo.apps.incident.models.rule import BundleBy
 
     create_rule = next(tool for tool in llm_agent.TOOLS if tool["name"] == "create_rule")
     properties = create_rule["input_schema"]["properties"]
@@ -62,6 +63,10 @@ def test_llm_agent_threshold_contract(opts):
     th.assert_true(
         "RuleSet.trigger_window" in properties["window_minutes"]["description"],
         "create_rule.window_minutes must name its canonical RuleSet.trigger_window mapping")
+    th.assert_eq(
+        properties["bundle_by"].get("enum"),
+        [value for value, _label in BundleBy.CHOICES],
+        "create_rule.bundle_by enum must stay aligned with RuleSet bundle choices")
 
     for prompt_name in ("SYSTEM_PROMPT", "ANALYSIS_PROMPT"):
         prompt = getattr(llm_agent, prompt_name)

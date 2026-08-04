@@ -21,6 +21,8 @@ from mojo.helpers import logit, llm
 
 logger = logit.get_logger(__name__, "incident.log")
 
+RULESET_BUNDLE_BY_VALUES = list(range(14))
+
 
 def _get_llm_api_key():
     return llm.get_api_key()
@@ -300,6 +302,7 @@ TOOLS = [
                 },
                 "bundle_by": {
                     "type": "integer",
+                    "enum": RULESET_BUNDLE_BY_VALUES,
                     "description": "How to group events into incidents to prevent duplicates. 0=none, 2=model_name, 3=model_name+id, 4=source_ip, 7=source_ip+model_name, 8=source_ip+model_name+id, 9=source_ip+hostname. Default 4 (source_ip) is usually correct.",
                     "default": 4,
                 },
@@ -904,22 +907,49 @@ def _rule_signature_from_ruleset(ruleset):
     return ujson.dumps([ruleset.category or "", ruleset.handler or "", tuples])
 
 
-def _find_matching_proposed_ruleset(category, signature):
-    """Scan llm_proposed RuleSets in this category for a signature match."""
+def _threshold_bundle_policy(trigger_count, trigger_window, bundle_by, bundle_minutes):
+    return (trigger_count, trigger_window, bundle_by, bundle_minutes)
+
+
+def _threshold_bundle_policy_from_params(params):
+    return _threshold_bundle_policy(
+        params.get("min_count"),
+        params.get("window_minutes"),
+        params.get("bundle_by", 4),
+        params.get("bundle_minutes", 30),
+    )
+
+
+def _threshold_bundle_policy_from_ruleset(ruleset):
+    return _threshold_bundle_policy(
+        ruleset.trigger_count,
+        ruleset.trigger_window,
+        ruleset.bundle_by,
+        ruleset.bundle_minutes,
+    )
+
+
+def _find_matching_proposed_ruleset(category, signature, policy, is_active=None):
+    """Find an LLM proposal with the same rules and canonical runtime policy."""
     from mojo.apps.incident.models import RuleSet
     candidates = RuleSet.objects.filter(category=category, metadata__llm_proposed=True)
+    if is_active is not None:
+        candidates = candidates.filter(is_active=is_active)
     for rs in candidates:
-        if _rule_signature_from_ruleset(rs) == signature:
+        if (
+            _rule_signature_from_ruleset(rs) == signature
+            and _threshold_bundle_policy_from_ruleset(rs) == policy
+        ):
             return rs
     return None
 
 
-def _find_open_proposal_ticket(category):
-    """Find any open rule-proposal ticket for this category.
+def _find_open_proposal_ticket(category, policy):
+    """Find an open same-category proposal with the same runtime policy.
 
-    Replaces the time-windowed dedup — if there's an open proposal ticket
-    linked to a pending ruleset in the same category, the new proposal
-    is a duplicate regardless of timing.
+    Different rule conditions may still describe the same recurring pattern,
+    but a different threshold or bundle policy must remain separately
+    reviewable instead of being silently discarded.
     """
     from mojo.apps.incident.models import Ticket, RuleSet
 
@@ -935,7 +965,11 @@ def _find_open_proposal_ticket(category):
             continue
         try:
             rs = RuleSet.objects.get(pk=ruleset_id)
-            if rs.category == category and not rs.is_active:
+            if (
+                rs.category == category
+                and not rs.is_active
+                and _threshold_bundle_policy_from_ruleset(rs) == policy
+            ):
                 return ticket, rs
         except RuleSet.DoesNotExist:
             continue
@@ -958,8 +992,14 @@ def _validate_rule_thresholds(params):
     if min_count is not None and min_count > 1:
         bundle_by = params.get("bundle_by", 4)
         bundle_minutes = params.get("bundle_minutes", 30)
+        if (
+            isinstance(bundle_by, bool)
+            or not isinstance(bundle_by, int)
+            or bundle_by not in RULESET_BUNDLE_BY_VALUES
+        ):
+            return "bundle_by must be an integer matching a RuleSet bundle choice"
         if bundle_by == 0:
-            return "min_count greater than 1 requires bundle_by to be enabled"
+            return "min_count greater than 1 requires a non-zero bundle_by choice"
         if (
             isinstance(bundle_minutes, bool)
             or not isinstance(bundle_minutes, int)
@@ -983,10 +1023,13 @@ def _tool_create_rule(params):
     handler = params["handler"]
     rules_payload = params.get("rules") or []
     signature = _rule_signature(category, handler, rules_payload)
+    policy = _threshold_bundle_policy_from_params(params)
 
-    # Check exact signature match against ACTIVE rules only
-    existing = _find_matching_proposed_ruleset(category, signature)
-    if existing is not None and existing.is_active:
+    # Active proposals deduplicate only when rules and runtime policy match.
+    existing = _find_matching_proposed_ruleset(
+        category, signature, policy, is_active=True,
+    )
+    if existing is not None:
         return {
             "ok": True,
             "ruleset_id": existing.pk,
@@ -994,8 +1037,9 @@ def _tool_create_rule(params):
             "already_active": True,
         }
 
-    # Check for any open proposal ticket in this category (replaces time-window dedup)
-    open_ticket, pending_rs = _find_open_proposal_ticket(category)
+    # Same-category pending proposals may share a ticket only when their
+    # canonical threshold and bundle policy also match.
+    open_ticket, pending_rs = _find_open_proposal_ticket(category, policy)
     if open_ticket is not None and pending_rs is not None:
         pending_meta = pending_rs.metadata or {}
         occurrence_count = int(pending_meta.get("occurrence_count") or 1) + 1

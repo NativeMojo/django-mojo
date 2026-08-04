@@ -553,7 +553,7 @@ In both dedup cases the tool response includes `deduplicated: true`. The agent's
 
 `add_ticket_note` — Accepts an optional `incident_id` parameter. When provided, the tool automatically appends a clickable incident reference card to the note's context references, linking the note back to the specific incident that triggered it. This is the preferred approach when the LLM is adding findings from a new incident to an existing ticket.
 
-`create_rule` — Before creating a new `RuleSet`, the tool computes a canonical signature from `category | handler | sorted rule conditions` and scans existing `llm_proposed` RuleSets in the same category. If a pending match is found, its `metadata.occurrence_count` is incremented and a note is appended to the existing approval ticket rather than spawning a second one. If an active (enabled) match is found, the proposal is silently skipped. If the pending rule's approval ticket has been closed, a fresh ticket is opened on the existing RuleSet.
+`create_rule` — Before creating a new `RuleSet`, the tool computes a canonical signature from `category | handler | sorted rule conditions` and compares existing `llm_proposed` RuleSets in the same category. An active proposal is skipped only when both its signature and canonical threshold/bundle policy match. A pending same-category proposal receives an occurrence-count bump only when that policy matches; a different policy gets its own RuleSet and approval ticket so it remains reviewable. Legacy metadata-only threshold aliases do not participate in this comparison because they are not runtime policy. If a matching pending rule's approval ticket has been closed, a fresh ticket is opened on the existing RuleSet.
 
 ### LLM-Proposed Rule Thresholds
 
@@ -566,11 +566,12 @@ see the policy that approval will activate.
 
 Both aliases must be positive integers, and `window_minutes` requires
 `min_count`. A multi-event threshold (`min_count > 1`) is rejected unless
-`bundle_by` is enabled, `bundle_minutes` is positive, and the bundle window is
-at least as long as `window_minutes`. This ensures the requested number of
-events can remain on one incident long enough to reach the threshold. Calls
-that fail validation return the tool's normal `{ok: false, error: ...}` result
-without creating a partial RuleSet or approval ticket.
+`bundle_by` is a non-boolean integer from the `RuleSet` choices and is not
+`NONE`, `bundle_minutes` is positive, and the bundle window is at least as long
+as `window_minutes`. This ensures the requested number of events can remain on
+one incident long enough to reach the threshold. Calls that fail validation
+return the tool's normal `{ok: false, error: ...}` result without creating a
+partial RuleSet or approval ticket.
 
 Proposals created before this contract may have `metadata.min_count` or
 `metadata.window_minutes` while their canonical trigger fields are null. Those
