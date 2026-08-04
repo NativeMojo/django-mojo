@@ -615,6 +615,12 @@ that policy in `trigger_count` and `trigger_window`; approval only activates
 the persisted values. Reviewers should confirm that the bundle window is long
 enough to retain the events needed by the threshold before approving.
 
+The proposal tool accepts only positive integer `min_count` and
+`window_minutes` values, and `window_minutes` requires `min_count`. When
+`min_count > 1`, `bundle_by` must be enabled, `bundle_minutes` must be positive,
+and the bundle window must be at least as long as `window_minutes`. Invalid or
+unreachable thresholds create neither a partial RuleSet nor an approval ticket.
+
 Older proposals may instead carry `metadata.min_count` or
 `metadata.window_minutes` with null `trigger_count` / `trigger_window`. Treat
 those as legacy audit findings, not as operative thresholds. Review the
