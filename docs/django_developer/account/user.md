@@ -357,6 +357,7 @@ The full disable-lifecycle schema and service API are in [disable_lifecycle.md](
 | `ALLOW_USERNAME_CHANGE` | `True` | Feature flag — set `False` to disable the self-service username change endpoint |
 | `ALLOW_SELF_DEACTIVATION` | `True` | Feature flag — set `False` to disable self-service account deactivation |
 | `DEACTIVATE_TOKEN_TTL` | `900` | Account deactivation confirmation token TTL (seconds, 15 min default) |
+| `ACCOUNT_CLOSURE_HANDLER` | `None` | Dotted path to a product callable that owns permanent account closure. Unset, the confirm endpoint anonymizes directly. See [disable_lifecycle.md](disable_lifecycle.md#account-closure-delegation-account_closure_handler) |
 | `ALLOW_USER_REGISTRATION` | `False` | Enable built-in `POST /api/auth/register` endpoint |
 | `REQUIRE_GROUP_ON_REGISTRATION` | `False` | Require `group_uuid` body param on register; rejects if missing or invalid |
 | `REGISTRATION_EXTRA_FIELDS` | `[]` | Allowlist of extra body keys forwarded to `USER_REGISTERED_HANDLER` via `extra`; unrecognised keys are silently dropped |

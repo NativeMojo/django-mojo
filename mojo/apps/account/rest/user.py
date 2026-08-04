@@ -9,6 +9,7 @@ from django.http import HttpResponseRedirect
 from mojo.apps.account.models.user import User
 from mojo.apps.account.services import extensions as account_extensions
 from mojo.apps.account.services import auth_config
+from mojo.apps.account.services import closure as account_closure
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
 from mojo.apps.shortlink import maybe_shorten_url
@@ -1832,8 +1833,13 @@ def on_account_deactivate(request):
 @md.public_endpoint()
 def on_account_deactivate_confirm(request):
     """
-    Step 2: Validate the dv: token and call pii_anonymize().
+    Step 2: Validate the dv: token and run the closure.
     Public endpoint — the token is the credential.
+
+    The deployment's ACCOUNT_CLOSURE_HANDLER, when set, owns the closure from
+    here; see mojo/apps/account/services/closure.py. A failure there raises and
+    leaves the account active — the token is already spent, so recovery is a
+    fresh POST account/deactivate.
     """
     raw_token = request.DATA.get("token", "")
     user = tokens.verify_deactivate_token(raw_token)
@@ -1844,7 +1850,7 @@ def on_account_deactivate_confirm(request):
     # Log BEFORE anonymisation so username is still readable
     user.report_incident(f"{user.username} account deactivated", "account:deactivated", uid=user.pk)
 
-    user.pii_anonymize()
+    account_closure.run_account_closure(user)
 
     return JsonResponse({"status": True, "message": "Your account has been deactivated."})
 

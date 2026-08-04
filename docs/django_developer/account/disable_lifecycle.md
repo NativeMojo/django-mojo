@@ -189,6 +189,75 @@ while wiping every other metadata key (which may carry user PII).
 
 ---
 
+## Account Closure Delegation (`ACCOUNT_CLOSURE_HANDLER`)
+
+Permanent closure and reversible disable are different mechanisms. Everything
+above this section is **disable** — reversible, `is_active=False`, data intact.
+This section is **closure** — `pii_anonymize()`, irreversible. `services/disable.py`
+plays no part in it beyond the `record_anonymize` call noted above.
+
+The framework owns the closure entry point (`POST account/deactivate/confirm`)
+but cannot know everywhere a product stores personal data. So the framework does
+not try to enumerate it: the product runs its own closure, in the order it
+decides, and calls `pii_anonymize()` as the last step.
+
+```python
+# settings
+ACCOUNT_CLOSURE_HANDLER = "myapp.services.closure.close_account"
+```
+
+```python
+# myapp/services/closure.py
+def close_account(user):
+    purge_everything_we_own(user)   # memberships still exist here
+    user.pii_anonymize()            # always last
+```
+
+Unset — the default — the confirm endpoint anonymizes directly, exactly as it did
+before this setting existed. Nothing to configure for a deployment that does not
+need it.
+
+### Handler contract
+
+| Rule | Why |
+|---|---|
+| Called as `handler(user)`, account still active, `GroupMember` rows intact | `pii_anonymize()` step 8 deletes memberships; anything the product reaches *through* them must be purged first or it is orphaned |
+| The handler owns the final `user.pii_anonymize()` | The framework does **not** call it after a handler runs — a handler that skips it leaves the account un-anonymized |
+| Must be idempotent | A failed run may have partially purged, and recovery re-runs the whole handler |
+| Fails closed — raise to abort | No anonymization, no success response, account left active |
+| Resolved by dotted path at call time | A deployment can point it anywhere importable; nothing is resolved at import time |
+
+"Erasure complete" is a product-defined condition, so product-specific
+fail-closed rules (aborting when a personal group has an unexpected second
+member, say) belong in the handler, not in the framework.
+
+### Failure and retry: the token is already spent
+
+`verify_deactivate_token` consumes the token **at verification**, before the
+endpoint body runs. A handler that fails has therefore already burned it.
+
+Recovery is **re-initiation**, not a same-token retry: the account is still
+active and can authenticate, so the user runs `POST account/deactivate` again and
+confirms with a fresh token. Single-use-at-verify is a deliberate replay defense
+— do not reorder it to allow retries. This is also why handler idempotency is
+contractual rather than advisory.
+
+On failure the caller gets a generic "restart deactivation" error. The handler's
+own exception message is never surfaced: the endpoint is public (the token is the
+credential), and a closure that dies mid-purge can easily put the PII it was
+deleting into its own error text. For the same reason the
+`account:closure_failed` incident records the dotted path and the outcome only —
+the traceback goes to the server log, which is the operator's own domain.
+
+### No bypass
+
+`run_account_closure` is the only caller of `pii_anonymize()` in the account app,
+and a source-pin test in `tests/test_user_mgmt/deactivation.py` keeps it that
+way. A future admin-erasure surface must go through `run_account_closure` — it
+cannot quietly skip a deployment's handler.
+
+---
+
 ## Back-Compat for Legacy Keys
 
 Legacy protected metadata keys are still honoured on read for one release:

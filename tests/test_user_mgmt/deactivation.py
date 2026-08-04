@@ -13,8 +13,18 @@ Coverage:
   - Incident account:deactivated written before anonymisation
   - dv: token has correct prefix
 """
+import contextlib
+import uuid as _uuid
+
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
+from tests.test_user_mgmt import _closure_handlers
+
+CLOSURE_SETTING = "ACCOUNT_CLOSURE_HANDLER"
+HANDLER_OK = "tests.test_user_mgmt._closure_handlers.capture_and_anonymize"
+HANDLER_NO_ANON = "tests.test_user_mgmt._closure_handlers.capture_without_anonymize"
+HANDLER_RAISES = "tests.test_user_mgmt._closure_handlers.raising"
+HANDLER_MISSING = "tests.test_user_mgmt._closure_handlers.no_such_handler"
 
 TEST_USER = "deactivation_user"
 TEST_PWORD = "deact##mojo99"
@@ -380,3 +390,237 @@ def test_deactivate_jwt_invalid_after(opts):
         opts.client.logout()
         assert_true(me_resp.status_code in (401, 403),
                     f"Old JWT should be invalid after deactivation, got {me_resp.status_code}")
+
+
+# ===========================================================================
+# ACCOUNT_CLOSURE_HANDLER delegation
+#
+# The confirm endpoint hands the whole closure to the deployment's handler when
+# one is configured. Unset, it anonymizes directly — which every test above
+# already covers, and which is the no-regression proof for this feature.
+# ===========================================================================
+
+@contextlib.contextmanager
+def _closure_handler(path):
+    """Install ACCOUNT_CLOSURE_HANDLER so the SERVER process sees it.
+
+    A DB-backed Setting rather than th.server_settings(): settings.get() checks
+    Redis/DB ahead of file settings, both processes share them, and there is no
+    uvicorn reload. Always removed again — the setting is global.
+    """
+    from mojo.apps.account.models.setting import Setting
+    Setting.set(CLOSURE_SETTING, path)
+    try:
+        yield
+    finally:
+        Setting.remove(CLOSURE_SETTING)
+
+
+def _make_closure_user(with_membership=False):
+    """A disposable user for one delegation test, named so the test handlers
+    recognise it (see _closure_handlers.TEST_USERNAME_MARKER)."""
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.group import Group
+    from mojo.apps.account.models.member import GroupMember
+
+    suffix = _uuid.uuid4().hex[:8]
+    username = f"closure_delegation_{suffix}"
+    user = User(username=username, email=f"{username}@example.com")
+    user.save()
+    user.is_active = True
+    user.is_email_verified = True
+    user.requires_mfa = False
+    user.save_password(TEST_PWORD)
+    user.save()
+
+    if with_membership:
+        group = Group.objects.create(name=f"Closure Test Group {suffix}")
+        GroupMember.objects.create(user=user, group=group)
+
+    _closure_handlers.clear_capture(user.pk)
+    return user
+
+
+def _confirm(opts, user):
+    from mojo.apps.account.utils import tokens
+    tok = tokens.generate_deactivate_token(user)
+    opts.client.logout()
+    return tok, opts.client.post("/api/account/deactivate/confirm", {"token": tok})
+
+
+@th.django_unit_test("closure delegation: handler owns the closure, sees intact identity")
+def test_closure_handler_receives_intact_user(opts):
+    user = _make_closure_user(with_membership=True)
+    original_username = user.username
+
+    with _closure_handler(HANDLER_OK):
+        _, resp = _confirm(opts, user)
+
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
+
+    seen = _closure_handlers.read_capture(user.pk)
+    assert_true(seen.get("called"), "Configured closure handler should have been invoked")
+    assert_eq(seen.get("username"), original_username,
+              "Handler must run BEFORE anonymisation — it should see the real username")
+    assert_true(seen.get("is_active"),
+                "Handler must see the account still active when it runs")
+    assert_true(seen.get("memberships", 0) >= 1,
+                "Handler must run while GroupMember rows still exist — that is the "
+                "whole point of delegating before pii_anonymize() deletes them")
+
+    # The handler ended with pii_anonymize(), so the account is closed.
+    user.refresh_from_db()
+    assert_true(not user.is_active, "Account should be inactive after the handler closed it")
+    assert_true(user.username.startswith("deleted-"),
+                f"Handler called pii_anonymize(), so username should be anonymised, got {user.username}")
+
+
+@th.django_unit_test("closure delegation: framework does not anonymize behind a handler")
+def test_closure_handler_framework_does_not_anonymize(opts):
+    user = _make_closure_user()
+    original_username = user.username
+
+    with _closure_handler(HANDLER_NO_ANON):
+        _, resp = _confirm(opts, user)
+
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
+
+    seen = _closure_handlers.read_capture(user.pk)
+    assert_true(seen.get("called"), "Configured closure handler should have been invoked")
+
+    # The handler deliberately skipped pii_anonymize(). If the framework had
+    # anonymized too, the delegation contract would be broken.
+    user.refresh_from_db()
+    assert_eq(user.username, original_username,
+              "Framework must NOT anonymize when a handler is configured — the "
+              "handler owns the final pii_anonymize() call")
+
+
+@th.django_unit_test("closure delegation: raising handler fails closed, leaks nothing")
+def test_closure_handler_raises_fails_closed(opts):
+    from mojo.apps.incident.models.event import Event
+
+    user = _make_closure_user()
+    original_username = user.username
+    original_email = str(user.email)
+
+    with _closure_handler(HANDLER_RAISES):
+        _, resp = _confirm(opts, user)
+
+    assert_true(resp.status_code >= 400,
+                f"A failed closure handler must not report success, got {resp.status_code}")
+
+    body = str(resp.get("json") or resp.get("text") or resp.get("response") or "")
+    assert_true("exploded" not in body,
+                "Handler exception text must never reach the caller")
+    assert_true(original_email not in body,
+                "A closure failure can carry the PII it was purging — it must not "
+                f"appear in the response body: {body}")
+    assert_true("deactivation" in body.lower() or "closure" in body.lower(),
+                f"Caller should be told to restart deactivation, got: {body}")
+
+    user.refresh_from_db()
+    assert_true(user.is_active, "Account must stay ACTIVE after a failed closure")
+    assert_eq(user.username, original_username,
+              "Account must NOT be anonymised after a failed closure")
+
+    incidents = Event.objects.filter(uid=user.pk, category="account:closure_failed")
+    assert_true(incidents.exists(),
+                "A failed closure must record an account:closure_failed incident")
+    details = " ".join(i.details or "" for i in incidents)
+    assert_true(HANDLER_RAISES in details,
+                f"Incident should name the configured handler, got: {details}")
+    assert_true("exploded" not in details and original_email not in details,
+                f"Incident must record handler name and outcome only, got: {details}")
+
+
+@th.django_unit_test("closure delegation: unimportable handler path fails closed")
+def test_closure_handler_bad_path_fails_closed(opts):
+    from mojo.apps.incident.models.event import Event
+
+    user = _make_closure_user()
+    original_username = user.username
+
+    with _closure_handler(HANDLER_MISSING):
+        _, resp = _confirm(opts, user)
+
+    assert_true(resp.status_code >= 400,
+                f"An unresolvable handler must not report success, got {resp.status_code}")
+
+    user.refresh_from_db()
+    assert_true(user.is_active, "Account must stay ACTIVE when the handler cannot be resolved")
+    assert_eq(user.username, original_username,
+              "Account must NOT be anonymised when the handler cannot be resolved")
+    assert_true(
+        Event.objects.filter(uid=user.pk, category="account:closure_failed").exists(),
+        "An unresolvable handler must record an account:closure_failed incident")
+
+
+@th.django_unit_test("closure delegation: failed run burns the token, re-initiation completes")
+def test_closure_failure_requires_reinitiation(opts):
+    user = _make_closure_user()
+
+    with _closure_handler(HANDLER_RAISES):
+        burned_token, resp = _confirm(opts, user)
+    assert_true(resp.status_code >= 400, "Setup: the closure was supposed to fail")
+
+    # The token was consumed at VERIFICATION, before the handler ran. Replaying it
+    # is rejected — recovery is a fresh deactivate request, not a same-token retry.
+    replay = opts.client.post("/api/account/deactivate/confirm", {"token": burned_token})
+    assert_true(replay.status_code >= 400,
+                f"A burned token must stay burned after a failed closure, got {replay.status_code}")
+
+    user.refresh_from_db()
+    assert_true(user.is_active, "Account must still be active before re-initiation")
+
+    # Re-initiating with a fresh token completes the closure.
+    with _closure_handler(HANDLER_OK):
+        _, retry = _confirm(opts, user)
+    assert_eq(retry.status_code, 200, f"Re-initiated closure expected 200, got {retry.status_code}")
+
+    user.refresh_from_db()
+    assert_true(user.username.startswith("deleted-"),
+                f"Re-initiated closure should complete, got username {user.username}")
+
+
+@th.django_unit_test("closure delegation: no pii_anonymize call site bypasses the delegation")
+def test_pii_anonymize_call_sites_are_pinned(opts):
+    """Source pin. `run_account_closure` is the only thing allowed to invoke
+    pii_anonymize(), so a future admin-erasure surface cannot quietly skip a
+    deployment's closure handler. Parsed with ast, so docstrings and comments
+    that merely mention the name do not count."""
+    import ast
+    import os
+    from mojo.apps import account as account_app
+
+    app_root = os.path.dirname(account_app.__file__)
+    allowed_callers = {os.path.join("services", "closure.py")}
+
+    callers = set()
+    definitions = set()
+    for dirpath, _dirnames, filenames in os.walk(app_root):
+        for filename in filenames:
+            if not filename.endswith(".py"):
+                continue
+            full = os.path.join(dirpath, filename)
+            rel = os.path.relpath(full, app_root)
+            with open(full, "r", encoding="utf-8") as fh:
+                try:
+                    tree = ast.parse(fh.read(), filename=full)
+                except SyntaxError:
+                    continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == "pii_anonymize":
+                    definitions.add(rel)
+                elif isinstance(node, ast.Call):
+                    func = node.func
+                    name = getattr(func, "attr", None) or getattr(func, "id", None)
+                    if name == "pii_anonymize":
+                        callers.add(rel)
+
+    assert_eq(definitions, {os.path.join("models", "user.py")},
+              f"pii_anonymize should be defined only on the User model, found: {definitions}")
+    assert_eq(callers, allowed_callers,
+              "pii_anonymize() must only be called by services/closure.py, so every "
+              "erasure path goes through the deployment's ACCOUNT_CLOSURE_HANDLER. "
+              f"Unexpected call sites: {sorted(callers - allowed_callers)}")

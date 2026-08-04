@@ -1229,7 +1229,9 @@ Public endpoint — the token is the credential (no Bearer token required).
 
 1. Token is validated (single-use, expiry, correct kind)
 2. An `account:deactivated` incident is logged while the username is still readable
-3. `pii_anonymize()` runs — all PII cleared, `auth_key` rotated, account disabled
+3. The closure runs — all PII cleared, `auth_key` rotated, account disabled.
+   A deployment that sets `ACCOUNT_CLOSURE_HANDLER` runs its own cleanup here
+   first; either way the account ends up anonymised
 4. All active JWTs are immediately invalid
 
 **Important:** After a successful confirm, clear all stored tokens on the client.
@@ -1246,6 +1248,18 @@ Any subsequent API call with the old JWT will return 401.
 | Missing token | 400 |
 | `ALLOW_SELF_DEACTIVATION = False` | 403 |
 | Unauthenticated request to Step 1 | 401/403 |
+| Deployment's closure handler failed | 400 — **retryable, see below** |
+
+**The retryable failure case.** If the deployment configures
+`ACCOUNT_CLOSURE_HANDLER` and that handler fails, confirm returns 400 with a
+generic "Account closure could not be completed. Please restart deactivation."
+The account is **still active and fully usable** — nothing was anonymised.
+
+The token is spent either way (it is consumed at validation, before the handler
+runs), so there is no point re-posting it — that returns "Token already used".
+Recovery is to start over at Step 1 and get a fresh token. Treat this like any
+other retryable error in the UI: keep the user signed in and offer "try again",
+not "your account is in a broken state".
 
 **Settings:**
 
@@ -1253,6 +1267,7 @@ Any subsequent API call with the old JWT will return 401.
 |---|---|---|
 | `DEACTIVATE_TOKEN_TTL` | `900` | Seconds until confirmation token expires |
 | `ALLOW_SELF_DEACTIVATION` | `True` | Feature flag — set `False` to disable entirely |
+| `ACCOUNT_CLOSURE_HANDLER` | `None` | Backend-only. Dotted path to a product callable that owns closure; unset, the framework anonymises directly |
 
 **Email template:** The downstream project must provide an
 `account_deactivate_confirm` email template. Context variables: `token` (the
