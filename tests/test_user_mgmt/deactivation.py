@@ -461,6 +461,27 @@ def _run_closure(user):
     closure.run_account_closure(user)
 
 
+def _capture_incidents(user):
+    """Record report_incident calls made on this user instance.
+
+    Asserted here instead of by querying Event rows. These tests run in the test
+    process, where a concurrently-running module can have the incident reporter
+    patched out from under them (and reporter._create_event_dict lets an ambient
+    authenticated request override an explicit uid). What the contract actually
+    requires is that run_account_closure REPORTS the right thing with nothing
+    leaky in it — which is exactly what this observes. That the reporter then
+    files a real Event is the incident app's own contract, covered by its tests
+    and by the account:deactivated assertions above.
+    """
+    recorded = []
+
+    def _recorder(details, event_type="info", **kwargs):
+        recorded.append({"details": details, "event_type": event_type})
+
+    user.report_incident = _recorder
+    return recorded
+
+
 def _expect_closure_failure(user, what):
     """Run the closure expecting it to fail closed. Returns the exception."""
     from mojo import errors as merrors
@@ -515,11 +536,10 @@ def test_closure_framework_does_not_anonymize(opts):
 
 @th.django_unit_test("closure delegation: raising handler fails closed and leaks nothing")
 def test_closure_handler_raises_fails_closed(opts):
-    from mojo.apps.incident.models.event import Event
-
     user = _make_closure_user()
     original_username = user.username
     original_email = str(user.email)
+    incidents = _capture_incidents(user)
 
     with _closure_handler(HANDLER_RAISES):
         err = _expect_closure_failure(user, "raising handler")
@@ -537,25 +557,21 @@ def test_closure_handler_raises_fails_closed(opts):
     assert_eq(user.username, original_username,
               "Account must NOT be anonymised after a failed closure")
 
-    # Matched on the handler path, not uid: reporter._create_event_dict lets an
-    # authenticated ACTIVE_REQUEST override an explicit uid, and in-process tests
-    # inherit whatever context a concurrent test left behind.
-    incidents = Event.objects.filter(
-        category="account:closure_failed", details__contains=HANDLER_RAISES)
-    assert_true(incidents.exists(),
-                "A failed closure must record an account:closure_failed incident "
-                "naming the handler")
-    details = " ".join(i.details or "" for i in incidents)
+    assert_eq(len(incidents), 1, f"Expected exactly one incident, got {incidents}")
+    assert_eq(incidents[0]["event_type"], "account:closure_failed",
+              f"Wrong incident category: {incidents[0]['event_type']}")
+    details = incidents[0]["details"]
+    assert_true(HANDLER_RAISES in details,
+                f"Incident should name the configured handler, got: {details}")
     assert_true("exploded" not in details and original_email not in details,
                 f"Incident must record handler name and outcome only, got: {details}")
 
 
 @th.django_unit_test("closure delegation: handler that skips anonymize is an incomplete closure")
 def test_closure_incomplete_is_a_failure(opts):
-    from mojo.apps.incident.models.event import Event
-
     user = _make_closure_user()
     original_username = user.username
+    incidents = _capture_incidents(user)
 
     with _closure_handler(HANDLER_NO_ANON):
         _expect_closure_failure(user, "handler that returned without closing")
@@ -569,17 +585,15 @@ def test_closure_incomplete_is_a_failure(opts):
     assert_true(user.is_active, "Account must stay ACTIVE when the handler did not close it")
     assert_eq(user.username, original_username, "Account must NOT be anonymised")
 
-    details = " ".join(
-        i.details or "" for i in Event.objects.filter(
-            category="account:closure_failed", details__contains=HANDLER_NO_ANON))
-    assert_true("incomplete" in details,
-                f"Incident should record the incomplete outcome, got: {details}")
+    assert_eq(len(incidents), 1, f"Expected exactly one incident, got {incidents}")
+    assert_eq(incidents[0]["event_type"], "account:closure_failed",
+              f"Wrong incident category: {incidents[0]['event_type']}")
+    assert_true("incomplete" in incidents[0]["details"],
+                f"Incident should record the incomplete outcome, got: {incidents[0]['details']}")
 
 
 @th.django_unit_test("closure delegation: unresolvable handler paths fail closed")
 def test_closure_handler_bad_path_fails_closed(opts):
-    from mojo.apps.incident.models.event import Event
-
     # A missing attribute, a missing module, and a relative path. The last one
     # raises TypeError out of import_module, not ImportError — a narrow except
     # would let it escape as a 500 with no closure incident.
@@ -589,6 +603,7 @@ def test_closure_handler_bad_path_fails_closed(opts):
             ("relative path", ".relative.path.handler")):
         user = _make_closure_user()
         original_username = user.username
+        incidents = _capture_incidents(user)
 
         with _closure_handler(path):
             _expect_closure_failure(user, label)
@@ -596,10 +611,11 @@ def test_closure_handler_bad_path_fails_closed(opts):
         user.refresh_from_db()
         assert_true(user.is_active, f"{label}: account must stay ACTIVE")
         assert_eq(user.username, original_username, f"{label}: account must NOT be anonymised")
-        assert_true(
-            Event.objects.filter(
-                category="account:closure_failed", details__contains=path).exists(),
-            f"{label}: must record an account:closure_failed incident naming the path")
+        assert_eq(len(incidents), 1, f"{label}: expected one incident, got {incidents}")
+        assert_eq(incidents[0]["event_type"], "account:closure_failed",
+                  f"{label}: wrong incident category")
+        assert_true(path in incidents[0]["details"],
+                    f"{label}: incident should name the path, got {incidents[0]['details']}")
 
 
 @th.django_unit_test("closure delegation: a DB Setting row cannot install a handler (THE regression)")
