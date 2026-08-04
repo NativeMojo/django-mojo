@@ -21,6 +21,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [fileman/](fileman/README.md) | File upload, storage backends, renditions |
 | [email/](email/README.md) | AWS SES email, templates, mailboxes, inbound handling |
 | [aws/cloudwatch.md](aws/cloudwatch.md) | CloudWatch monitoring — EC2, RDS, and ElastiCache metrics via boto3 |
+| [aws/aws_check.md](aws/aws_check.md) | Audit and safely bootstrap AWS credentials, cron, S3, SES, SNS/CloudWatch and incident defaults |
 | [dnsman/](dnsman/README.md) | Domains, DNS records across providers, WHOIS/privacy, and centrally-issued TLS certificates |
 | [jobs/](jobs/README.md) | Async job queue — publishing, scheduling, retries, webhooks, broadcasting, monitoring |
 | [metrics/](metrics/README.md) | Redis-backed time-series metrics |

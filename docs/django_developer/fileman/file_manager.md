@@ -85,6 +85,13 @@ Files stored in AWS S3. Supports:
 - Presigned download URLs with configurable TTL
 - Public bucket support
 
+`python manage.py aws-check --section s3 --check` audits the system-default S3
+manager, bucket access/region, Public Access Block and CORS without persisting
+audit state. `--apply --bucket-name <name>` can create a missing private bucket
+and system manager. `--probe-s3` is separately confirmed and uses only a unique
+sentinel key that is deleted in `finally`; it never lists or deletes user
+objects. Existing buckets and policies are preserved.
+
 Configure via FileManager settings or in `settings.py`:
 
 ```python

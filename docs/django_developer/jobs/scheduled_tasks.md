@@ -161,6 +161,23 @@ Notification failures are logged but do not affect the task result.
 
 ## Cron: dispatch_scheduled_tasks
 
+### Dispatcher heartbeat
+
+`mojo.helpers.cron.run_now()` records an expiring per-run Redis heartbeat at
+start and completion. Run IDs are isolated, so an older overlapping completion
+cannot hide a newer failed/incomplete invocation. Redis heartbeat failures are
+logged but never stop scheduled functions.
+
+Audit the external dispatcher, jobs runners and scheduler together with:
+
+```bash
+python manage.py aws-check --section cron --check
+```
+
+The external scheduler should invoke
+`cron.load_app_cron(); cron.run_now()` at least once per minute; `aws-check`
+prints the exact shell command when no fresh heartbeat exists.
+
 ```python
 # mojo/apps/jobs/cronjobs.py
 @schedule(minutes="0")

@@ -200,6 +200,11 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` — **file-only**
   (`settings.get_static`, `kind="list"`), default `[]`. Exact SNS topic ARN
   allowlist for `/api/aws/cloudwatch/sns/alarm`; missing/empty denies all.
+- `AWS_MONITORING_NAME` — **file-only**, optional stable deployment slug used
+  by `aws-check` for owned SNS topic and CloudWatch alarm names. Falls back to
+  the static `BASE_URL` hostname.
+- `AWS_CHECK_CRON_MAX_AGE` — **file-only**, default `180` seconds. Maximum age
+  of a completed cron-dispatch heartbeat accepted by `aws-check`.
 - `AWS_KEY`
 - `AWS_REGION`
 - `AWS_SECRET`

@@ -320,6 +320,10 @@ request/response documentation.
 
 ## SNS alarm ingestion
 
+For deployment-wide audit and create-missing setup, use
+[`python manage.py aws-check`](aws_check.md). It enforces the required two-phase
+topic ARN allowlist before creating the HTTPS subscription or alarms.
+
 django-mojo can receive CloudWatch alarm state changes through SNS at:
 
 ```text
