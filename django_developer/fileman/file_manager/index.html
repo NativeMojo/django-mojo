@@ -4037,6 +4037,12 @@
 - Presigned upload URLs (direct browser-to-S3 uploads)
 - Presigned download URLs with configurable TTL
 - Public bucket support</p>
+<p><code>python manage.py aws-check --section s3 --check</code> audits the system-default S3
+manager, bucket access/region, Public Access Block and CORS without persisting
+audit state. <code>--apply --bucket-name &lt;name&gt;</code> can create a missing private bucket
+and system manager. <code>--probe-s3</code> is separately confirmed and uses only a unique
+sentinel key that is deleted in <code>finally</code>; it never lists or deletes user
+objects. Existing buckets and policies are preserved.</p>
 <p>Configure via FileManager settings or in <code>settings.py</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">AWS_ACCESS_KEY_ID</span> <span class="o">=</span> <span class="s2">&quot;...&quot;</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">AWS_SECRET_ACCESS_KEY</span> <span class="o">=</span> <span class="s2">&quot;...&quot;</span>

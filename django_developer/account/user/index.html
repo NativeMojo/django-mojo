@@ -4992,6 +4992,11 @@ allowed for anyone with edit access.</p>
 <td>Account deactivation confirmation token TTL (seconds, 15 min default)</td>
 </tr>
 <tr>
+<td><code>ACCOUNT_CLOSURE_HANDLER</code></td>
+<td><code>None</code></td>
+<td>Dotted path to a product callable that owns permanent account closure. Unset, the confirm endpoint anonymizes directly. See <a href="../disable_lifecycle/#account-closure-delegation-account_closure_handler">disable_lifecycle.md</a></td>
+</tr>
+<tr>
 <td><code>ALLOW_USER_REGISTRATION</code></td>
 <td><code>False</code></td>
 <td>Enable built-in <code>POST /api/auth/register</code> endpoint</td>

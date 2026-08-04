@@ -3905,13 +3905,52 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#error-responses" class="md-nav__link">
+  <a href="#metric-endpoint-error-responses" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Error Responses
+        Metric endpoint error responses
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cloudwatch-alarm-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CloudWatch alarm events
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CloudWatch alarm events">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#request-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Request format
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#response-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Response format
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3936,18 +3975,21 @@
 
 
 <h1 id="aws-cloudwatch-monitoring-api">AWS CloudWatch Monitoring API<a class="headerlink" href="#aws-cloudwatch-monitoring-api" title="Permanent link">&para;</a></h1>
-<p>Live AWS infrastructure metrics for EC2, RDS, and ElastiCache — exposed through
-two endpoints that mirror the <a href="../../metrics/metrics/">metrics app</a> exactly.</p>
+<p>Live AWS infrastructure metrics for EC2, RDS, and ElastiCache are exposed
+through two read endpoints that mirror the
+<a href="../../metrics/metrics/">metrics app</a> exactly. A separate public endpoint
+receives signed CloudWatch alarm deliveries from AWS SNS.</p>
 <p>Slugs in all responses are <strong>friendly names</strong>, not raw AWS IDs:</p>
 <ul>
 <li><strong>EC2</strong>: the instance's <code>Name</code> tag value (e.g. <code>"web-server-1"</code>), falling back to the instance ID when no <code>Name</code> tag is set.</li>
 <li><strong>RDS / ElastiCache</strong>: the identifier is already human-readable (e.g. <code>"prod-postgres"</code>, <code>"prod-redis-001"</code>), so it is used as-is.</li>
 </ul>
 <p>Use the <code>slug</code> value from the <code>resources</code> endpoint when targeting specific instances via the <code>fetch</code> endpoint's <code>slugs</code> parameter.</p>
-<p><strong>Permission required:</strong> <code>manage_aws</code> on all endpoints — checked as a
+<p><strong>Permission required for the two GET endpoints:</strong> <code>manage_aws</code>, checked as a
 <strong>global</strong> <code>User.permissions</code> grant only (<code>@md.requires_global_perms</code>); a
-<code>manage_aws</code> permission held only at the group/member level does not
-authorize these endpoints.</p>
+<code>manage_aws</code> permission held only at the group/member level does not authorize
+metric reads. The SNS alarm POST is public and instead requires a valid AWS SNS
+signature from an exactly allowlisted topic.</p>
 <hr />
 <h2 id="endpoints">Endpoints<a class="headerlink" href="#endpoints" title="Permanent link">&para;</a></h2>
 <table>
@@ -3968,6 +4010,11 @@ authorize these endpoints.</p>
 <td>GET</td>
 <td><code>/api/aws/cloudwatch/fetch</code></td>
 <td>Time-series metric data for one or more instances</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/aws/cloudwatch/sns/alarm</code></td>
+<td>Public AWS SNS delivery endpoint; signature and exact-topic allowlist required</td>
 </tr>
 </tbody>
 </table>
@@ -4305,10 +4352,12 @@ longer than a week.</p>
 <a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="nt">&quot;Resource&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;*&quot;</span>
 <a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">}</span>
 </code></pre></div>
-<p>No additional Django settings are needed — the CloudWatch helper reuses
-<code>AWS_KEY</code>, <code>AWS_SECRET</code>, and <code>AWS_REGION</code> already configured for SES and S3.</p>
+<p>No additional Django settings are needed for metric reads — the CloudWatch
+helper reuses <code>AWS_KEY</code>, <code>AWS_SECRET</code>, and <code>AWS_REGION</code> already configured for
+SES and S3. Alarm delivery requires the deployment to set
+<code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code> to the exact accepted SNS topic ARN(s).</p>
 <hr />
-<h2 id="error-responses">Error Responses<a class="headerlink" href="#error-responses" title="Permanent link">&para;</a></h2>
+<h2 id="metric-endpoint-error-responses">Metric endpoint error responses<a class="headerlink" href="#metric-endpoint-error-responses" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
@@ -4332,6 +4381,104 @@ longer than a week.</p>
 <tr>
 <td><code>500</code></td>
 <td>AWS API error — check server logs for details</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="cloudwatch-alarm-events">CloudWatch alarm events<a class="headerlink" href="#cloudwatch-alarm-events" title="Permanent link">&para;</a></h2>
+<p>The SNS alarm endpoint is AWS-facing infrastructure, not a browser API. Clients
+should not POST alarm JSON themselves: SNS signs the outer envelope and the
+server rejects unsigned messages or topics absent from the deployment's exact
+allowlist.</p>
+<p><strong>Authentication/permission:</strong> no User session or Django permission is used.
+Authorization consists of the SNS signature, strict AWS certificate URL, and
+an exact <code>TopicArn</code> match in <code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code>. A missing or
+empty allowlist denies all delivery. Deployments should use a dedicated topic
+whose AWS policy restricts <code>sns:Publish</code> to the intended CloudWatch alarm
+sources/accounts; an SNS signature alone does not prove that CloudWatch authored
+the inner message.</p>
+<h3 id="request-format">Request format<a class="headerlink" href="#request-format" title="Permanent link">&para;</a></h3>
+<p>SNS posts its standard JSON envelope as the raw request body (commonly with
+<code>Content-Type: text/plain</code>). A notification has this shape; <code>Message</code> is itself
+a JSON-encoded CloudWatch alarm state-change document:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;Type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Notification&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;MessageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;11111111-2222-3333-4444-555555555555&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;TopicArn&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;arn:aws:sns:us-east-1:123456789012:operations&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">&quot;Message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;{\&quot;AlarmName\&quot;:\&quot;api-errors\&quot;,\&quot;AlarmArn\&quot;:\&quot;arn:aws:cloudwatch:us-east-1:123456789012:alarm:api-errors\&quot;,\&quot;AWSAccountId\&quot;:\&quot;123456789012\&quot;,\&quot;NewStateValue\&quot;:\&quot;ALARM\&quot;,\&quot;OldStateValue\&quot;:\&quot;OK\&quot;,\&quot;NewStateReason\&quot;:\&quot;Threshold crossed\&quot;,\&quot;StateChangeTime\&quot;:\&quot;2026-08-04T03:00:00.000+0000\&quot;,\&quot;Trigger\&quot;:{\&quot;Namespace\&quot;:\&quot;AWS/ApplicationELB\&quot;,\&quot;MetricName\&quot;:\&quot;HTTPCode_Target_5XX_Count\&quot;,\&quot;Dimensions\&quot;:[]}}&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nt">&quot;Timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-04T03:00:00.000Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="nt">&quot;SignatureVersion&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="nt">&quot;SigningCertURL&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://sns.us-east-1.amazonaws.com/SimpleNotificationService-example.pem&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="nt">&quot;Signature&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;base64-signature&quot;</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="p">}</span>
+</code></pre></div>
+<p>Clients should never synthesize this envelope. Configure an SNS subscription
+and let AWS sign and deliver it. The endpoint also accepts signed SNS
+<code>SubscriptionConfirmation</code> envelopes and follows only a strict, non-redirecting
+AWS confirmation URL.</p>
+<p>Accepted state changes appear in the incident feed with:</p>
+<ul>
+<li><code>scope</code>: <code>aws:cloudwatch</code></li>
+<li><code>category</code>: <code>aws:cloudwatch:alarm</code></li>
+<li>bounded metadata for alarm/account/region/state/reason/time and metric
+  namespace/name/dimensions</li>
+</ul>
+<p>Alarm ingestion is opt-in at the policy layer. Without a CloudWatch-specific
+RuleSet, the Event is retained but no Incident or Ticket is created. With a
+matching rule, <code>ALARM</code> can open an incident and run configured handlers such as
+<code>ticket://?board=&lt;id&gt;</code>.</p>
+<p><code>INSUFFICIENT_DATA</code> records uncertainty without closing current work. <code>OK</code>
+resolves the matching Incident and adds recovery history/notes. An existing
+Ticket or Maestro item stays open for the human workflow to close; a later
+<code>ALARM</code> starts a new incident occurrence. SNS replays do not duplicate these
+records.</p>
+<h3 id="response-format">Response format<a class="headerlink" href="#response-format" title="Permanent link">&para;</a></h3>
+<p>An accepted notification returns the durable transition identifier and whether
+the delivery matched an existing SNS/logical transition:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">&quot;duplicate&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nt">&quot;transition_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="p">}</span>
+</code></pre></div>
+<p>A confirmed subscription returns:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">&quot;confirmed&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">&quot;status_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">200</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">}</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>200</code></td>
+<td>Notification accepted (including an idempotent duplicate), or subscription confirmed</td>
+</tr>
+<tr>
+<td><code>400</code></td>
+<td>Malformed SNS/CloudWatch payload or unsupported SNS message type</td>
+</tr>
+<tr>
+<td><code>403</code></td>
+<td>Generic signature, certificate-URL, header-consistency, or topic authorization failure</td>
+</tr>
+<tr>
+<td><code>405</code></td>
+<td>Method other than POST</td>
+</tr>
+<tr>
+<td><code>503</code></td>
+<td>Certificate fetch, confirmation, processing, or durable handler dispatch should be retried by SNS</td>
 </tr>
 </tbody>
 </table>

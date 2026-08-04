@@ -5276,6 +5276,26 @@ terminal-status skip), so a repeat is a safe no-op.</p>
 </ol>
 <p>High-level events that don't match any rule are automatically sent to the LLM if configured. This ensures nothing falls through the cracks.</p>
 <p>The LLM creates rules in a <strong>disabled</strong> state and opens a ticket for human approval. Respond to the ticket to approve, modify, or reject the proposed rule.</p>
+<p>For new thresholded proposals, the approval note shows the operative event
+count, counting window, and bundle window. The disabled RuleSet already stores
+that policy in <code>trigger_count</code> and <code>trigger_window</code>; approval only activates
+the persisted values. Reviewers should confirm that the bundle window is long
+enough to retain the events needed by the threshold before approving.</p>
+<p>The proposal tool accepts only positive integer <code>min_count</code> and
+<code>window_minutes</code> values, and <code>window_minutes</code> requires <code>min_count</code>. When
+<code>min_count &gt; 1</code>, <code>bundle_by</code> must be a supported non-zero integer choice (not a
+boolean), <code>bundle_minutes</code> must be positive, and the bundle window must be at
+least as long as <code>window_minutes</code>. Invalid or unreachable thresholds create
+neither a partial RuleSet nor an approval ticket. Existing proposals absorb a
+repeat only when their persisted threshold and bundle policy matches; a
+different policy remains a separate approval item for reviewers.</p>
+<p>Older proposals may instead carry <code>metadata.min_count</code> or
+<code>metadata.window_minutes</code> with null <code>trigger_count</code> / <code>trigger_window</code>. Treat
+those as legacy audit findings, not as operative thresholds. Review the
+proposal history and current policy intent, then explicitly save the desired
+canonical fields before activation or remediation. Do not blindly copy the
+metadata onto an active rule: a null threshold can be intentional, and adding
+a count can re-arm an existing incident and cause a handler to execute again.</p>
 <h3 id="on-demand-deep-analysis">On-Demand Deep Analysis<a class="headerlink" href="#on-demand-deep-analysis" title="Permanent link">&para;</a></h3>
 <p>Admins can request a deeper analysis of any incident at any time. This is separate from the automatic triage — it runs a more thorough investigation designed to clean up related open incidents and propose rules.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>POST /api/incident/incident/&lt;id&gt;

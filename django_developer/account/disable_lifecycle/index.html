@@ -3855,6 +3855,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#account-closure-delegation-account_closure_handler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Account Closure Delegation (ACCOUNT_CLOSURE_HANDLER)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Account Closure Delegation (ACCOUNT_CLOSURE_HANDLER)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#handler-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Handler contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#file-only-deliberately" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File-only, deliberately
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-and-retry-the-token-is-already-spent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure and retry: the token is already spent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#no-bypass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No bypass
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#back-compat-for-legacy-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4136,6 +4197,98 @@ templates that trigger the sweep.</p>
 flipping <code>is_active=False</code>. The service replaces <code>metadata</code> with a fresh dict
 containing only <code>protected.disable.*</code>, preserving any prior cycle in history
 while wiping every other metadata key (which may carry user PII).</p>
+<hr />
+<h2 id="account-closure-delegation-account_closure_handler">Account Closure Delegation (<code>ACCOUNT_CLOSURE_HANDLER</code>)<a class="headerlink" href="#account-closure-delegation-account_closure_handler" title="Permanent link">&para;</a></h2>
+<p>Permanent closure and reversible disable are different mechanisms. Everything
+above this section is <strong>disable</strong> — reversible, <code>is_active=False</code>, data intact.
+This section is <strong>closure</strong> — <code>pii_anonymize()</code>, irreversible. <code>services/disable.py</code>
+plays no part in it beyond the <code>record_anonymize</code> call noted above.</p>
+<p>The framework owns the closure entry point (<code>POST account/deactivate/confirm</code>)
+but cannot know everywhere a product stores personal data. So the framework does
+not try to enumerate it: the product runs its own closure, in the order it
+decides, and calls <code>pii_anonymize()</code> as the last step.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># settings file — NOT a DB-backed Setting row, see below</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">ACCOUNT_CLOSURE_HANDLER</span> <span class="o">=</span> <span class="s2">&quot;myapp.services.closure.close_account&quot;</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># myapp/services/closure.py</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">close_account</span><span class="p">(</span><span class="n">user</span><span class="p">):</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">purge_everything_we_own</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>   <span class="c1"># memberships still exist here</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">user</span><span class="o">.</span><span class="n">pii_anonymize</span><span class="p">()</span>            <span class="c1"># always last</span>
+</code></pre></div>
+<p>Unset — the default — the confirm endpoint anonymizes directly, exactly as it did
+before this setting existed. Nothing to configure for a deployment that does not
+need it.</p>
+<h3 id="handler-contract">Handler contract<a class="headerlink" href="#handler-contract" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Called as <code>handler(user)</code>, account still active, <code>GroupMember</code> rows intact</td>
+<td><code>pii_anonymize()</code> step 8 deletes memberships; anything the product reaches <em>through</em> them must be purged first or it is orphaned</td>
+</tr>
+<tr>
+<td>The handler owns the final <code>user.pii_anonymize()</code></td>
+<td>The framework does <strong>not</strong> call it after a handler runs</td>
+</tr>
+<tr>
+<td>Returning without closing the account is a <strong>failure</strong>, not a success</td>
+<td>Otherwise a no-op handler earns "your account has been deactivated" for a fully intact account. The framework re-reads the row afterwards and requires the closure to have landed — it does not do the anonymizing, it insists that it happened</td>
+</tr>
+<tr>
+<td>Must not deactivate the account or revoke credentials before that final anonymize</td>
+<td>A partial purge that breaks re-authentication strands the closure permanently: the token is already spent, and an inactive account can neither re-initiate nor be re-run (confirm short-circuits on <code>is_active</code>)</td>
+</tr>
+<tr>
+<td>Must be idempotent</td>
+<td>A failed run may have partially purged, and recovery re-runs the whole handler</td>
+</tr>
+<tr>
+<td>Fails closed — raise to abort</td>
+<td>No anonymization, no success response, account left active</td>
+</tr>
+<tr>
+<td>Resolved by dotted path at call time</td>
+<td>A deployment can point it anywhere importable; nothing is resolved at import time</td>
+</tr>
+</tbody>
+</table>
+<p>"Erasure complete" is a product-defined condition, so product-specific
+fail-closed rules (aborting when a personal group has an unexpected second
+member, say) belong in the handler, not in the framework.</p>
+<h3 id="file-only-deliberately">File-only, deliberately<a class="headerlink" href="#file-only-deliberately" title="Permanent link">&para;</a></h3>
+<p>This key is read with <code>settings.get_static</code>, so it comes from the settings
+<strong>file</strong> and nothing else. A DB-backed <code>Setting</code> row with this key is ignored.</p>
+<p>That is a security boundary, not an oversight. <code>settings.get</code> resolves the
+DB/Redis <code>Setting</code> store ahead of file settings, and <code>Setting</code> rows are
+REST-writable by anyone holding <code>manage_settings</code>/<code>groups</code>. Since this value
+names code that the web worker imports and calls, honouring a DB row would
+promote a config-write permission into arbitrary code execution. Same reasoning
+as <code>AUTH_PHONE_VERIFY_DEV_BYPASS_CODE</code>; <code>test_closure_handler_is_file_only</code> pins
+it.</p>
+<h3 id="failure-and-retry-the-token-is-already-spent">Failure and retry: the token is already spent<a class="headerlink" href="#failure-and-retry-the-token-is-already-spent" title="Permanent link">&para;</a></h3>
+<p><code>verify_deactivate_token</code> consumes the token <strong>at verification</strong>, before the
+endpoint body runs. A handler that fails has therefore already burned it.</p>
+<p>Recovery is <strong>re-initiation</strong>, not a same-token retry: the account is still
+active and can authenticate, so the user runs <code>POST account/deactivate</code> again and
+confirms with a fresh token. Single-use-at-verify is a deliberate replay defense
+— do not reorder it to allow retries. This is also why handler idempotency is
+contractual rather than advisory.</p>
+<p>On failure the caller gets a generic "restart deactivation" error. The handler's
+own exception message is never surfaced: the endpoint is public (the token is the
+credential), and a closure that dies mid-purge can easily put the PII it was
+deleting into its own error text. For the same reason the
+<code>account:closure_failed</code> incident records the dotted path and the outcome only —
+the traceback goes to the server log, which is the operator's own domain.</p>
+<h3 id="no-bypass">No bypass<a class="headerlink" href="#no-bypass" title="Permanent link">&para;</a></h3>
+<p><code>run_account_closure</code> is the only caller of <code>pii_anonymize()</code> in the account app,
+and a source-pin test in <code>tests/test_user_mgmt/deactivation.py</code> keeps it that
+way. A future admin-erasure surface must go through <code>run_account_closure</code> — it
+cannot quietly skip a deployment's handler.</p>
 <hr />
 <h2 id="back-compat-for-legacy-keys">Back-Compat for Legacy Keys<a class="headerlink" href="#back-compat-for-legacy-keys" title="Permanent link">&para;</a></h2>
 <p>Legacy protected metadata keys are still honoured on read for one release:</p>

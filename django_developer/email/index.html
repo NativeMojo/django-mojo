@@ -3797,6 +3797,22 @@
 <li><a href="sending/">Sending Email</a> — Direct send, templates, Mailbox API</li>
 <li><a href="receiving/">Receiving Email</a> — Inbound email handling</li>
 </ul>
+<p>Run <code>python manage.py aws-check --section email --check</code> for a non-persistent
+SES/domain/DKIM/sandbox/topic/receiving audit plus system Mailbox and shipped
+template checks. Apply mode can create absent SES identity/DKIM requests, SNS
+topics/subscriptions and empty identity-topic mappings; any non-empty differing
+mapping is preserved. HTTPS subscriptions are created only when the matching
+<code>&lt;kind&gt;_endpoint</code> or <code>sns_&lt;kind&gt;_endpoint</code> is already present in the domain's
+metadata. Inbound topics are considered only when receiving is enabled. Apply
+also creates missing templates and, when explicitly given <code>--mailbox-email</code>, a
+missing outbound default. It does not change DNS, request sandbox exit, send
+test mail, or overwrite existing SES mappings.</p>
+<p>Create-missing topic names are stable: <code>ses-&lt;domain&gt;-&lt;kind&gt;</code>, where kind is
+<code>bounce</code>, <code>complaint</code>, <code>delivery</code>, or (when enabled) <code>inbound</code>. New topics are
+tagged with <code>managed-by=django-mojo</code>, <code>purpose=ses-notifications</code>, and exact
+deployment/domain values. A same-name topic with different or missing ownership
+tags is a conflict and is never adopted automatically. Existing non-empty SES
+mappings remain authoritative and are recorded instead of rewired.</p>
 
 
 

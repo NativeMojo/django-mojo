@@ -4221,6 +4221,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#llm-proposed-rule-thresholds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LLM-Proposed Rule Thresholds
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#agent-memory" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5697,7 +5708,29 @@ dispatch guards, and built-in handlers.</p>
 </ol>
 <p>In both dedup cases the tool response includes <code>deduplicated: true</code>. The agent's system prompt also receives an "Open Tickets for This Category" section listing up to 10 open tickets for the same category, with explicit instructions to prefer <code>add_ticket_note</code> over <code>create_ticket</code> when a matching ticket already exists.</p>
 <p><code>add_ticket_note</code> — Accepts an optional <code>incident_id</code> parameter. When provided, the tool automatically appends a clickable incident reference card to the note's context references, linking the note back to the specific incident that triggered it. This is the preferred approach when the LLM is adding findings from a new incident to an existing ticket.</p>
-<p><code>create_rule</code> — Before creating a new <code>RuleSet</code>, the tool computes a canonical signature from <code>category | handler | sorted rule conditions</code> and scans existing <code>llm_proposed</code> RuleSets in the same category. If a pending match is found, its <code>metadata.occurrence_count</code> is incremented and a note is appended to the existing approval ticket rather than spawning a second one. If an active (enabled) match is found, the proposal is silently skipped. If the pending rule's approval ticket has been closed, a fresh ticket is opened on the existing RuleSet.</p>
+<p><code>create_rule</code> — Before creating a new <code>RuleSet</code>, the tool computes a canonical signature from <code>category | handler | sorted rule conditions</code> and compares existing <code>llm_proposed</code> RuleSets in the same category. An active proposal is skipped only when both its signature and canonical threshold/bundle policy match. A pending same-category proposal receives an occurrence-count bump only when that policy matches; a different policy gets its own RuleSet and approval ticket so it remains reviewable. Legacy metadata-only threshold aliases do not participate in this comparison because they are not runtime policy. If a matching pending rule's approval ticket has been closed, a fresh ticket is opened on the existing RuleSet.</p>
+<h3 id="llm-proposed-rule-thresholds">LLM-Proposed Rule Thresholds<a class="headerlink" href="#llm-proposed-rule-thresholds" title="Permanent link">&para;</a></h3>
+<p>The incident agent's <code>create_rule</code> tool accepts <code>min_count</code> and
+<code>window_minutes</code> as aliases for the canonical <code>RuleSet.trigger_count</code> and
+<code>RuleSet.trigger_window</code> fields. New proposals persist those model fields at
+creation time; the aliases are not copied into <code>RuleSet.metadata</code>. The approval
+note displays both the operative threshold and the bundle window, so reviewers
+see the policy that approval will activate.</p>
+<p>Both aliases must be positive integers, and <code>window_minutes</code> requires
+<code>min_count</code>. A multi-event threshold (<code>min_count &gt; 1</code>) is rejected unless
+<code>bundle_by</code> is a non-boolean integer from the <code>RuleSet</code> choices and is not
+<code>NONE</code>, <code>bundle_minutes</code> is positive, and the bundle window is at least as long
+as <code>window_minutes</code>. This ensures the requested number of events can remain on
+one incident long enough to reach the threshold. Calls that fail validation
+return the tool's normal <code>{ok: false, error: ...}</code> result without creating a
+partial RuleSet or approval ticket.</p>
+<p>Proposals created before this contract may have <code>metadata.min_count</code> or
+<code>metadata.window_minutes</code> while their canonical trigger fields are null. Those
+legacy rows are not promoted automatically: null trigger fields can also be an
+intentional first-event policy, and changing an active rule can re-arm a
+pending incident. Audit such <code>llm_proposed</code> RuleSets explicitly, compare their
+proposal history with current operator intent, and set <code>trigger_count</code> /
+<code>trigger_window</code> manually when remediation is appropriate.</p>
 <h3 id="agent-memory">Agent Memory<a class="headerlink" href="#agent-memory" title="Permanent link">&para;</a></h3>
 <p>Each RuleSet can have an <code>agent_memory</code> field in its metadata. The agent reads this at the start of each invocation and can update it with learnings. This provides continuity across invocations — the agent remembers patterns it has seen before for this rule type.</p>
 <h3 id="custom-agent-prompts">Custom Agent Prompts<a class="headerlink" href="#custom-agent-prompts" title="Permanent link">&para;</a></h3>

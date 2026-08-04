@@ -3250,6 +3250,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#cloudwatch-lifecycle-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CloudWatch lifecycle events
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4222,6 +4233,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#cloudwatch-lifecycle-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CloudWatch lifecycle events
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4935,6 +4957,14 @@ hour per unit), so counts reflect distinct conditions, not raw volume.</p>
 </tr>
 </tbody>
 </table>
+<h2 id="cloudwatch-lifecycle-events">CloudWatch lifecycle events<a class="headerlink" href="#cloudwatch-lifecycle-events" title="Permanent link">&para;</a></h2>
+<p>CloudWatch SNS transitions use <code>scope=aws:cloudwatch</code> and
+<code>category=aws:cloudwatch:alarm</code>. <code>ALARM</code> opens work only when an explicit
+RuleSet matches. <code>INSUFFICIENT_DATA</code> is informational and leaves an active
+incident open; <code>OK</code> resolves that incident and records recovery. Local Tickets
+and linked Maestro items are not automatically closed. Duplicate SNS delivery
+does not create duplicate events or work items. See the
+<a href="../../aws/cloudwatch/#cloudwatch-alarm-events">CloudWatch API reference</a>.</p>
 
 
 

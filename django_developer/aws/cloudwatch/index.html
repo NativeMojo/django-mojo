@@ -3882,13 +3882,63 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#rest-api" class="md-nav__link">
+  <a href="#metric-rest-api" class="md-nav__link">
     <span class="md-ellipsis">
       
-        REST API
+        Metric REST API
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sns-alarm-ingestion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SNS alarm ingestion
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="SNS alarm ingestion">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#incident-policy-and-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Incident policy and lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#durable-data-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Durable data model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#aws-setup-and-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AWS setup and verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3973,7 +4023,7 @@ live time-series metrics from AWS CloudWatch for three resource types:</p>
 shape. Existing frontend chart components work without modification.</p>
 <hr />
 <h2 id="aws-iam-permissions-required">AWS IAM Permissions Required<a class="headerlink" href="#aws-iam-permissions-required" title="Permanent link">&para;</a></h2>
-<p>The IAM user or role referenced by <code>AWS_KEY</code> / <code>AWS_SECRET</code> must have at minimum:</p>
+<p>The effective IAM identity must have at minimum:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;Version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2012-10-17&quot;</span><span class="p">,</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;Statement&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
@@ -3990,9 +4040,11 @@ shape. Existing frontend chart components work without modification.</p>
 <a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span><span class="p">]</span>
 <a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="p">}</span>
 </code></pre></div>
-<p>No new Django settings are required — <code>CloudWatchHelper</code> reads the same
-<code>AWS_KEY</code>, <code>AWS_SECRET</code>, and <code>AWS_REGION</code> already used by SES, S3, and other
-AWS helpers.</p>
+<p>Metric reads require no new Django settings. <code>CloudWatchHelper</code> uses a complete
+<code>AWS_KEY</code> / <code>AWS_SECRET</code> pair when configured; when both are empty it follows
+boto3's environment, profile, container and instance/task-role credential
+chain. A partial pair is rejected. <code>AWS_REGION</code> selects the region. SNS alarm
+ingestion is configured separately with the exact-topic allowlist below.</p>
 <hr />
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>
@@ -4019,6 +4071,11 @@ AWS helpers.</p>
 <td><code>us-east-1</code></td>
 <td>AWS region for all CloudWatch calls</td>
 </tr>
+<tr>
+<td><code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code></td>
+<td><code>[]</code></td>
+<td>Static exact SNS topic ARN allowlist for alarm ingestion; empty denies all topics</td>
+</tr>
 </tbody>
 </table>
 <hr />
@@ -4026,7 +4083,7 @@ AWS helpers.</p>
 <h3 id="instantiation">Instantiation<a class="headerlink" href="#instantiation" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.aws</span><span class="w"> </span><span class="kn">import</span> <span class="n">CloudWatchHelper</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># Uses AWS_KEY / AWS_SECRET / AWS_REGION from settings</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># Uses a complete settings pair, or boto3&#39;s default credential chain</span>
 <a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">cw</span> <span class="o">=</span> <span class="n">CloudWatchHelper</span><span class="p">()</span>
 <a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># Or pass explicit credentials for multi-account scenarios</span>
@@ -4382,8 +4439,8 @@ by the REST layer.</p>
 <a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="n">normalize_stat</span><span class="p">(</span><span class="s2">&quot;max&quot;</span><span class="p">)</span>                  <span class="c1"># -&gt; &quot;Maximum&quot;</span>
 </code></pre></div>
 <hr />
-<h2 id="rest-api">REST API<a class="headerlink" href="#rest-api" title="Permanent link">&para;</a></h2>
-<p>Two endpoints under the <code>aws</code> URL prefix, both requiring <code>manage_aws</code> — gated
+<h2 id="metric-rest-api">Metric REST API<a class="headerlink" href="#metric-rest-api" title="Permanent link">&para;</a></h2>
+<p>The two metric endpoints under the <code>aws</code> URL prefix require <code>manage_aws</code> — gated
 with <code>@md.requires_global_perms</code>, so the grant must be on the caller's
 <strong>global</strong> <code>User.permissions</code> (no group/member fallback; see
 <a href="../../core/permissions/#global-vs-group-scoped-permission-checks">Global vs Group-Scoped Permission Checks</a>):</p>
@@ -4414,20 +4471,111 @@ raw <code>id</code>) when targeting a specific instance via <code>fetch</code>'s
 <p>See the <a href="../../../web_developer/aws/cloudwatch/">web developer reference</a> for full
 request/response documentation.</p>
 <hr />
-<h2 id="module-layout">Module Layout<a class="headerlink" href="#module-layout" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>mojo/helpers/aws/cloudwatch.py       # CloudWatchHelper, mapping tables, module helpers
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>mojo/apps/aws/rest/cloudwatch.py     # REST endpoints (wired via rest/__init__.py)
+<h2 id="sns-alarm-ingestion">SNS alarm ingestion<a class="headerlink" href="#sns-alarm-ingestion" title="Permanent link">&para;</a></h2>
+<p>For deployment-wide audit and create-missing setup, use
+<a href="../aws_check/"><code>python manage.py aws-check</code></a>. It enforces the required two-phase
+topic ARN allowlist before creating the HTTPS subscription or alarms.</p>
+<p>django-mojo can receive CloudWatch alarm state changes through SNS at:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>POST /api/aws/cloudwatch/sns/alarm
 </code></pre></div>
-<p>No models or migrations — all data comes live from CloudWatch.</p>
+<p>The endpoint is public because SNS cannot authenticate as a django-mojo User,
+but it is not anonymous in practice. Every envelope must have a valid AWS SNS
+signature and its <code>TopicArn</code> must exactly match a static deployment allowlist:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</span> <span class="o">=</span> <span class="p">[</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="s2">&quot;arn:aws:sns:us-east-1:123456789012:operations&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="p">]</span>
+</code></pre></div>
+<p>An empty or missing list denies every topic. The SES <code>EmailDomain</code> topic fields
+are deliberately unrelated, and the alarm endpoint never honors
+<code>SNS_VALIDATION_BYPASS_DEBUG</code>. Subscription confirmation is accepted only when
+the signed confirmation URL is HTTPS on the matching AWS SNS service, carries
+the signed topic/token, does not redirect, and returns 2xx.</p>
+<p><code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code> is read as a static setting, so change it in
+deployment configuration and restart application processes when updating the
+allowlist. SNS envelopes are limited to 300 KiB.</p>
+<h3 id="incident-policy-and-lifecycle">Incident policy and lifecycle<a class="headerlink" href="#incident-policy-and-lifecycle" title="Permanent link">&para;</a></h3>
+<p>Alarm events use <code>scope="aws:cloudwatch"</code> and
+<code>category="aws:cloudwatch:alarm"</code>. The global <code>*</code> RuleSet is intentionally not
+consulted: receiving alarms is safe to enable before choosing an escalation
+policy. Add an explicit RuleSet to create incidents or tickets:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.incident.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">BundleBy</span><span class="p">,</span> <span class="n">RuleSet</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;aws:cloudwatch&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Production CloudWatch alarms&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="n">bundle_by</span><span class="o">=</span><span class="n">BundleBy</span><span class="o">.</span><span class="n">MODEL_NAME_AND_ID</span><span class="p">,</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    <span class="n">bundle_minutes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>    <span class="n">handler</span><span class="o">=</span><span class="s2">&quot;ticket://?priority=8&amp;category=operations&amp;board=3&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="p">)</span>
+</code></pre></div>
+<p><code>MODEL_NAME_AND_ID</code> groups one active alarm occurrence. <code>OK</code> resolves that
+machine incident, records recovery on its tickets and synced Maestro item, and
+clears the occurrence; a later <code>ALARM</code> opens a new occurrence. Tickets and
+Maestro items remain human-owned and are not force-closed. <code>INSUFFICIENT_DATA</code>
+is recorded on the active incident without resolving it.</p>
+<p>SNS and logical-transition identities are stored durably. Replays resume any
+incomplete handler dispatch with deterministic Job keys but do not create a
+second Event, Incident, Ticket, or Maestro item. Older out-of-order transitions
+remain audit events and cannot regress the alarm's current state.</p>
+<p>Persisted metadata is bounded to the alarm identity, account/region, states,
+reason/time, alarm type, and metric namespace/name/dimensions. Raw SNS bodies,
+alarm actions/descriptions, log query text, and unexpected credential-like
+fields are not stored.</p>
+<h3 id="durable-data-model">Durable data model<a class="headerlink" href="#durable-data-model" title="Permanent link">&para;</a></h3>
+<p><code>CloudWatchAlarm</code> stores the SHA-256 identity key, exact alarm ARN, current
+state/time, and pointers to the active Incident and opening transition.
+<code>CloudWatchAlarmTransition</code> stores the topic/message identity, old/new states,
+state-change time, linked Event/Incident, and durable handler-dispatch status.
+Unique constraints cover both SNS message identity and logical transition
+identity.</p>
+<p>Both models are read-only through their generated REST surfaces
+(<code>CAN_CREATE</code>, <code>CAN_UPDATE</code>, and <code>CAN_DELETE</code> are false). Their <code>RestMeta</code>
+view permissions require <code>manage_aws</code> or <code>security</code>; callers cannot mutate
+lifecycle rows through the API.</p>
+<h3 id="aws-setup-and-verification">AWS setup and verification<a class="headerlink" href="#aws-setup-and-verification" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Create a dedicated SNS topic and place its exact ARN in
+   <code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code>. Its topic policy should grant
+   <code>sns:Publish</code> only to the intended CloudWatch alarm sources/accounts; do not
+   reuse a topic that application principals can publish to.</li>
+<li>Subscribe the HTTPS endpoint above and wait for the signed confirmation to
+   succeed.</li>
+<li>Configure the CloudWatch alarm action to publish to that topic.</li>
+<li>Add an explicit CloudWatch RuleSet if the signal should become an incident,
+   ticket, or Maestro item. Register Maestro first with
+   <code>python manage.py register_maestro</code> when using <code>ticket://?board=&lt;id&gt;</code>.</li>
+<li>On a disposable/test alarm, verify both directions through AWS rather than
+   forging an SNS signature:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>aws<span class="w"> </span>cloudwatch<span class="w"> </span>set-alarm-state<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span>--alarm-name<span class="w"> </span>django-mojo-ingress-test<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span>--state-value<span class="w"> </span>ALARM<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span>--state-reason<span class="w"> </span><span class="s2">&quot;django-mojo synthetic ingress test&quot;</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>aws<span class="w"> </span>cloudwatch<span class="w"> </span>set-alarm-state<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span>--alarm-name<span class="w"> </span>django-mojo-ingress-test<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">  </span>--state-value<span class="w"> </span>OK<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">  </span>--state-reason<span class="w"> </span><span class="s2">&quot;django-mojo synthetic recovery test&quot;</span>
+</code></pre></div>
+<h2 id="module-layout">Module Layout<a class="headerlink" href="#module-layout" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>mojo/helpers/aws/cloudwatch.py       # CloudWatchHelper, mapping tables, module helpers
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>mojo/apps/aws/rest/cloudwatch.py     # REST endpoints (wired via rest/__init__.py)
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>mojo/apps/aws/rest/sns.py            # signed SNS/CloudWatch receiver
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>mojo/apps/aws/services/sns.py        # SNS verification and confirmation
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>mojo/apps/aws/services/cloudwatch_alarms.py  # normalization and lifecycle
+</code></pre></div>
+<p>Metric reads remain live-only. Alarm ingestion stores internal
+<code>CloudWatchAlarm</code> and <code>CloudWatchAlarmTransition</code> lifecycle rows.</p>
 <hr />
 <h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
-<p>Tests live in <code>tests/test_aws/cloudwatch.py</code>.</p>
+<p>Tests live in <code>tests/test_aws/cloudwatch.py</code> and
+<code>tests/test_aws/alarm_ingress.py</code>.</p>
 <p>Permission and parameter validation tests always run (no AWS credentials needed).
 Live metric tests check for <code>AWS_KEY</code> in the live server settings and call
 <code>raise TestitSkip(...)</code> when credentials are absent — the same pattern used by
 email/phone verification gate tests.</p>
 <p>Run in your Django project environment:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>python manage.py testit test_aws.cloudwatch
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>python manage.py testit test_aws.cloudwatch
 </code></pre></div>
 
 

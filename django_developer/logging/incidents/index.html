@@ -2228,6 +2228,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cloudwatch-alarm-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CloudWatch alarm events
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -5497,6 +5514,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cloudwatch-alarm-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CloudWatch alarm events
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -7259,6 +7293,17 @@ fresh query.</p>
 </tr>
 </tbody>
 </table>
+<h3 id="cloudwatch-alarm-events">CloudWatch alarm events<a class="headerlink" href="#cloudwatch-alarm-events" title="Permanent link">&para;</a></h3>
+<p>The AWS SNS receiver records CloudWatch transitions as
+<code>scope="aws:cloudwatch"</code>, <code>category="aws:cloudwatch:alarm"</code>. It calls the
+incident engine without wildcard fallback, so only an explicit scope/category
+RuleSet can open work. Use <code>BundleBy.MODEL_NAME_AND_ID</code> with
+<code>bundle_minutes=None</code>: <code>model_id</code> identifies one active alarm occurrence and
+changes after recovery. <code>ALARM</code> evaluates policy, <code>INSUFFICIENT_DATA</code> preserves
+the active incident, and <code>OK</code> resolves it through the same programmatic
+lifecycle path used by <code>ResolveHandler</code>.</p>
+<p>See <a href="../../aws/cloudwatch/#sns-alarm-ingestion">AWS CloudWatch monitoring</a> for
+the receiver, allowlist, idempotency, and ticket/Maestro configuration.</p>
 <p>The rest of the <code>GEOLOCATION_INTERNAL_*</code> family (the attacker allowlists, the
 breadth gate, the shared-egress suppressor, the dry-run switch) is documented in
 <a href="../../account/geoip/#threat-intelligence">account/geoip.md</a>. All of them are

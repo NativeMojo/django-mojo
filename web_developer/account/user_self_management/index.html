@@ -5786,11 +5786,14 @@ while already logged in and the connection is created automatically.</p>
 </blockquote>
 <hr />
 <h2 id="14-account-deactivation">14. Account Deactivation<a class="headerlink" href="#14-account-deactivation" title="Permanent link">&para;</a></h2>
-<p>Self-service account deactivation via a two-step email confirmation flow. Uses
-the existing <code>pii_anonymize()</code> method which anonymises all PII (username, email,
-phone, display name, DOB, metadata), rotates <code>auth_key</code> (invalidating all JWTs),
-and sets <code>is_active = False</code>. The user row is preserved for FK integrity and
-audit trail — this is not a hard delete.</p>
+<p>Self-service account deactivation via a two-step email confirmation flow. By
+default, confirmation calls <code>pii_anonymize()</code> directly, which anonymises all
+PII (username, email, phone, display name, DOB, metadata), rotates <code>auth_key</code>
+(invalidating all JWTs), and sets <code>is_active = False</code>. A deployment that
+configures <code>ACCOUNT_CLOSURE_HANDLER</code> runs its own cleanup first and calls
+<code>pii_anonymize()</code> itself as the last step — either way the end state is the
+same. The user row is preserved for FK integrity and audit trail — this is not
+a hard delete.</p>
 <p>OAuth-only users (no password set) are fully supported — the email confirmation
 link is sufficient proof of ownership.</p>
 <h3 id="step-1-request-deactivation">Step 1 — Request deactivation<a class="headerlink" href="#step-1-request-deactivation" title="Permanent link">&para;</a></h3>
@@ -5820,7 +5823,9 @@ a <code>dv:</code> token (15-minute TTL, single-use).</p>
 <ol>
 <li>Token is validated (single-use, expiry, correct kind)</li>
 <li>An <code>account:deactivated</code> incident is logged while the username is still readable</li>
-<li><code>pii_anonymize()</code> runs — all PII cleared, <code>auth_key</code> rotated, account disabled</li>
+<li>The closure runs — all PII cleared, <code>auth_key</code> rotated, account disabled.
+   A deployment that sets <code>ACCOUNT_CLOSURE_HANDLER</code> runs its own cleanup here
+   first; either way the account ends up anonymised</li>
 <li>All active JWTs are immediately invalid</li>
 </ol>
 <p><strong>Important:</strong> After a successful confirm, clear all stored tokens on the client.
@@ -5862,8 +5867,21 @@ Any subsequent API call with the old JWT will return 401.</p>
 <td>Unauthenticated request to Step 1</td>
 <td>401/403</td>
 </tr>
+<tr>
+<td>Deployment's closure handler failed</td>
+<td>400 — <strong>retryable, see below</strong></td>
+</tr>
 </tbody>
 </table>
+<p><strong>The retryable failure case.</strong> If the deployment configures
+<code>ACCOUNT_CLOSURE_HANDLER</code> and that handler fails, confirm returns 400 with a
+generic "Account closure could not be completed. Please restart deactivation."
+The account is <strong>still active and fully usable</strong> — nothing was anonymised.</p>
+<p>The token is spent either way (it is consumed at validation, before the handler
+runs), so there is no point re-posting it — that returns "Token already used".
+Recovery is to start over at Step 1 and get a fresh token. Treat this like any
+other retryable error in the UI: keep the user signed in and offer "try again",
+not "your account is in a broken state".</p>
 <p><strong>Settings:</strong></p>
 <table>
 <thead>
@@ -5883,6 +5901,11 @@ Any subsequent API call with the old JWT will return 401.</p>
 <td><code>ALLOW_SELF_DEACTIVATION</code></td>
 <td><code>True</code></td>
 <td>Feature flag — set <code>False</code> to disable entirely</td>
+</tr>
+<tr>
+<td><code>ACCOUNT_CLOSURE_HANDLER</code></td>
+<td><code>None</code></td>
+<td>Backend-only. Dotted path to a product callable that owns closure; unset, the framework anonymises directly</td>
 </tr>
 </tbody>
 </table>

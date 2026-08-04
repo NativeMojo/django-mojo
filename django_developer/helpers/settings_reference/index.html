@@ -929,6 +929,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#account" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ACCOUNT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#allow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4659,6 +4670,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#account" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ACCOUNT
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#allow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5487,6 +5509,19 @@
 </ul>
 <h2 id="runtime-keys">Runtime Keys<a class="headerlink" href="#runtime-keys" title="Permanent link">&para;</a></h2>
 <p>These are read through <code>mojo.helpers.settings.settings</code> during normal runtime.</p>
+<h3 id="account">ACCOUNT<a class="headerlink" href="#account" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>ACCOUNT_CLOSURE_HANDLER</code> — <strong>file-only</strong> (read with <code>settings.get_static</code>).
+  Dotted path to a product callable <code>handler(user)</code> that owns permanent account
+  closure, called by the <code>account/deactivate/confirm</code> endpoint in place of a
+  direct <code>user.pii_anonymize()</code>. Default <code>None</code> — unset, the confirm endpoint
+  anonymizes directly. A DB-backed <code>Setting</code> row is deliberately ignored: the
+  value names code the worker imports and calls, so honouring a DB row would
+  turn <code>manage_settings</code> into arbitrary code execution. Fails closed — an
+  unresolvable path, a raising handler, or a handler that returns without
+  closing the account all anonymize nothing and leave the account active. See
+  <a href="../../account/disable_lifecycle/#account-closure-delegation-account_closure_handler">Account Closure Delegation</a>.</li>
+</ul>
 <h3 id="allow">ALLOW<a class="headerlink" href="#allow" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>ALLOW_EMAIL_CHANGE</code></li>
@@ -5669,6 +5704,14 @@
 <h3 id="aws">AWS<a class="headerlink" href="#aws" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>AWS_DEFAULT_REGION</code></li>
+<li><code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code> — <strong>file-only</strong>
+  (<code>settings.get_static</code>, <code>kind="list"</code>), default <code>[]</code>. Exact SNS topic ARN
+  allowlist for <code>/api/aws/cloudwatch/sns/alarm</code>; missing/empty denies all.</li>
+<li><code>AWS_MONITORING_NAME</code> — <strong>file-only</strong>, optional stable deployment slug used
+  by <code>aws-check</code> for owned SNS topic and CloudWatch alarm names. Falls back to
+  the static <code>BASE_URL</code> hostname.</li>
+<li><code>AWS_CHECK_CRON_MAX_AGE</code> — <strong>file-only</strong>, default <code>180</code> seconds. Maximum age
+  of a completed cron-dispatch heartbeat accepted by <code>aws-check</code>.</li>
 <li><code>AWS_KEY</code></li>
 <li><code>AWS_REGION</code></li>
 <li><code>AWS_SECRET</code></li>
@@ -6158,8 +6201,12 @@ restart. See
 </ul>
 <h3 id="sns">SNS<a class="headerlink" href="#sns" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>SNS_CERT_TTL_SECONDS</code></li>
-<li><code>SNS_VALIDATION_BYPASS_DEBUG</code></li>
+<li><code>SNS_CERT_TTL_SECONDS</code> — <strong>file-only</strong> (<code>settings.get_static</code>, <code>kind="int"</code>),
+  default <code>3600</code>. Process-local SNS signing-certificate cache lifetime in
+  seconds.</li>
+<li><code>SNS_VALIDATION_BYPASS_DEBUG</code> — <strong>file-only</strong> (<code>settings.get_static</code>,
+  <code>kind="bool"</code>), default <code>False</code>. Development-only SES receiver bypass; never
+  applies to CloudWatch alarms.</li>
 </ul>
 <h3 id="threat">THREAT<a class="headerlink" href="#threat" title="Permanent link">&para;</a></h3>
 <ul>

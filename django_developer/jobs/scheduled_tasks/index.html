@@ -3914,6 +3914,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Cron: dispatch_scheduled_tasks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dispatcher-heartbeat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dispatcher heartbeat
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4246,10 +4263,21 @@
 <p>Notification failures are logged but do not affect the task result.</p>
 <hr />
 <h2 id="cron-dispatch_scheduled_tasks">Cron: dispatch_scheduled_tasks<a class="headerlink" href="#cron-dispatch_scheduled_tasks" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># mojo/apps/jobs/cronjobs.py</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nd">@schedule</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="s2">&quot;0&quot;</span><span class="p">)</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">dispatch_scheduled_tasks</span><span class="p">(</span><span class="n">now</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="o">...</span>
+<h3 id="dispatcher-heartbeat">Dispatcher heartbeat<a class="headerlink" href="#dispatcher-heartbeat" title="Permanent link">&para;</a></h3>
+<p><code>mojo.helpers.cron.run_now()</code> records an expiring per-run Redis heartbeat at
+start and completion. Run IDs are isolated, so an older overlapping completion
+cannot hide a newer failed/incomplete invocation. Redis heartbeat failures are
+logged but never stop scheduled functions.</p>
+<p>Audit the external dispatcher, jobs runners and scheduler together with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--section<span class="w"> </span>cron<span class="w"> </span>--check
+</code></pre></div>
+<p>The external scheduler should invoke
+<code>cron.load_app_cron(); cron.run_now()</code> at least once per minute; <code>aws-check</code>
+prints the exact shell command when no fresh heartbeat exists.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># mojo/apps/jobs/cronjobs.py</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nd">@schedule</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="s2">&quot;0&quot;</span><span class="p">)</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">dispatch_scheduled_tasks</span><span class="p">(</span><span class="n">now</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="o">...</span>
 </code></pre></div>
 <p><code>now</code> defaults to <code>timezone.now()</code>. Pass an aware UTC datetime to dispatch as of a simulated instant — the cron runner always calls it with no arguments, so the scheduled path is unchanged. Tests use this to drive dispatch deterministically instead of racing the wall clock.</p>
 <p>Runs at the top of every hour. For each enabled <code>ScheduledTask</code>:</p>
@@ -4264,9 +4292,9 @@
 <p>An idempotency key (<code>schtask:&lt;task_id&gt;:&lt;unix_ts&gt;</code>) prevents double-dispatch if the cron fires more than once in the same hour.</p>
 <hr />
 <h2 id="async-job-run_scheduled_task">Async Job: run_scheduled_task<a class="headerlink" href="#async-job-run_scheduled_task" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># mojo/apps/jobs/asyncjobs.py</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">run_scheduled_task</span><span class="p">(</span><span class="n">job</span><span class="p">):</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="o">...</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># mojo/apps/jobs/asyncjobs.py</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">run_scheduled_task</span><span class="p">(</span><span class="n">job</span><span class="p">):</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="o">...</span>
 </code></pre></div>
 <p>Called by the job engine when the scheduled time arrives. <code>job.payload</code> must contain <code>task_id</code>.</p>
 <p>Execution flow:</p>
@@ -4297,7 +4325,7 @@
 </tbody>
 </table>
 <p>Add to your <code>settings.py</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">SCHEDULED_TASK_MAX_PER_USER</span> <span class="o">=</span> <span class="mi">25</span>  <span class="c1"># increase the per-user cap</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">SCHEDULED_TASK_MAX_PER_USER</span> <span class="o">=</span> <span class="mi">25</span>  <span class="c1"># increase the per-user cap</span>
 </code></pre></div>
 
 
