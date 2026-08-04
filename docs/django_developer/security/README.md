@@ -555,6 +555,31 @@ In both dedup cases the tool response includes `deduplicated: true`. The agent's
 
 `create_rule` — Before creating a new `RuleSet`, the tool computes a canonical signature from `category | handler | sorted rule conditions` and scans existing `llm_proposed` RuleSets in the same category. If a pending match is found, its `metadata.occurrence_count` is incremented and a note is appended to the existing approval ticket rather than spawning a second one. If an active (enabled) match is found, the proposal is silently skipped. If the pending rule's approval ticket has been closed, a fresh ticket is opened on the existing RuleSet.
 
+### LLM-Proposed Rule Thresholds
+
+The incident agent's `create_rule` tool accepts `min_count` and
+`window_minutes` as aliases for the canonical `RuleSet.trigger_count` and
+`RuleSet.trigger_window` fields. New proposals persist those model fields at
+creation time; the aliases are not copied into `RuleSet.metadata`. The approval
+note displays both the operative threshold and the bundle window, so reviewers
+see the policy that approval will activate.
+
+Both aliases must be positive integers, and `window_minutes` requires
+`min_count`. A multi-event threshold (`min_count > 1`) is rejected unless
+`bundle_by` is enabled, `bundle_minutes` is positive, and the bundle window is
+at least as long as `window_minutes`. This ensures the requested number of
+events can remain on one incident long enough to reach the threshold. Calls
+that fail validation return the tool's normal `{ok: false, error: ...}` result
+without creating a partial RuleSet or approval ticket.
+
+Proposals created before this contract may have `metadata.min_count` or
+`metadata.window_minutes` while their canonical trigger fields are null. Those
+legacy rows are not promoted automatically: null trigger fields can also be an
+intentional first-event policy, and changing an active rule can re-arm a
+pending incident. Audit such `llm_proposed` RuleSets explicitly, compare their
+proposal history with current operator intent, and set `trigger_count` /
+`trigger_window` manually when remediation is appropriate.
+
 ### Agent Memory
 
 Each RuleSet can have an `agent_memory` field in its metadata. The agent reads this at the start of each invocation and can update it with learnings. This provides continuity across invocations — the agent remembers patterns it has seen before for this rule type.

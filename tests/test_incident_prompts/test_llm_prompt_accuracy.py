@@ -44,6 +44,35 @@ def test_llm_agent_source_has_no_ingestion_dedup_claim(opts):
         "#1122 cleanup must not delete the real noise-control instructions")
 
 
+@th.django_unit_test("llm_agent prompt and schema describe operative thresholds")
+def test_llm_agent_threshold_contract(opts):
+    from mojo.apps.incident.handlers import llm_agent
+
+    create_rule = next(tool for tool in llm_agent.TOOLS if tool["name"] == "create_rule")
+    properties = create_rule["input_schema"]["properties"]
+    th.assert_eq(
+        properties["min_count"].get("minimum"), 1,
+        "create_rule.min_count must advertise the RuleSet field's positive minimum")
+    th.assert_eq(
+        properties["window_minutes"].get("minimum"), 1,
+        "create_rule.window_minutes must advertise the RuleSet field's positive minimum")
+    th.assert_true(
+        "RuleSet.trigger_count" in properties["min_count"]["description"],
+        "create_rule.min_count must name its canonical RuleSet.trigger_count mapping")
+    th.assert_true(
+        "RuleSet.trigger_window" in properties["window_minutes"]["description"],
+        "create_rule.window_minutes must name its canonical RuleSet.trigger_window mapping")
+
+    for prompt_name in ("SYSTEM_PROMPT", "ANALYSIS_PROMPT"):
+        prompt = getattr(llm_agent, prompt_name)
+        th.assert_true(
+            "enforced thresholds" in prompt,
+            f"{prompt_name} must state that proposed thresholds are enforced")
+        th.assert_true(
+            "bundle_minutes" in prompt and "window_minutes" in prompt,
+            f"{prompt_name} must explain the bundle/threshold reachability constraint")
+
+
 @th.django_unit_test("incident docs claim no ingestion dedup")
 def test_docs_have_no_ingestion_dedup_claim(opts):
     from pathlib import Path

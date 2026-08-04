@@ -609,6 +609,20 @@ High-level events that don't match any rule are automatically sent to the LLM if
 
 The LLM creates rules in a **disabled** state and opens a ticket for human approval. Respond to the ticket to approve, modify, or reject the proposed rule.
 
+For new thresholded proposals, the approval note shows the operative event
+count, counting window, and bundle window. The disabled RuleSet already stores
+that policy in `trigger_count` and `trigger_window`; approval only activates
+the persisted values. Reviewers should confirm that the bundle window is long
+enough to retain the events needed by the threshold before approving.
+
+Older proposals may instead carry `metadata.min_count` or
+`metadata.window_minutes` with null `trigger_count` / `trigger_window`. Treat
+those as legacy audit findings, not as operative thresholds. Review the
+proposal history and current policy intent, then explicitly save the desired
+canonical fields before activation or remediation. Do not blindly copy the
+metadata onto an active rule: a null threshold can be intentional, and adding
+a count can re-arm an existing incident and cause a handler to execute again.
+
 ### On-Demand Deep Analysis
 
 Admins can request a deeper analysis of any incident at any time. This is separate from the automatic triage — it runs a more thorough investigation designed to clean up related open incidents and propose rules.

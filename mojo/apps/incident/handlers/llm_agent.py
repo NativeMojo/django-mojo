@@ -66,7 +66,8 @@ You have access to tools that let you query the system and take actions.
 When creating rules, ALWAYS configure bundling to prevent duplicate incidents:
 - bundle_by: groups events into a single incident (4=source_ip is most common)
 - bundle_minutes: time window for grouping (30-60 min is typical)
-- min_count + window_minutes: recorded on the proposal for reviewer context; thresholds are enforced via trigger_count/trigger_window once set on the RuleSet
+- min_count + window_minutes: enforced thresholds mapped to RuleSet.trigger_count + RuleSet.trigger_window
+- For min_count > 1, bundling must keep events on one incident: bundle_by must be enabled and bundle_minutes must be at least window_minutes
 - There is NO ingestion-time dedup: every reported occurrence is its own event row, so row counts reflect true volume. Exception: some diagnostic categories are rate-limited at the call site (at most one event per key per window) — for those, one row can represent many occurrences.
 Without proper bundling, rapid-fire events (like OSSEC bursts) create hundreds of separate incidents.
 """
@@ -102,7 +103,8 @@ a RuleSet that will auto-handle this pattern in the future — so no new open in
 - bundle_by: 0=none, 1=hostname, 2=model_name, 3=model_name+id, 4=source_ip, 5=hostname+model_name,
   7=source_ip+model_name, 8=source_ip+model_name+id, 9=source_ip+hostname
 - bundle_minutes: time window for grouping (30-60 min typical)
-- min_count + window_minutes: recorded on the proposal for reviewer context (enforced thresholds live on the RuleSet as trigger_count/trigger_window)
+- min_count + window_minutes: enforced thresholds mapped to RuleSet.trigger_count + RuleSet.trigger_window
+- For min_count > 1, set bundle_by and make bundle_minutes at least as long as window_minutes so the threshold is reachable
 """
 
 # Claude API tool definitions
@@ -286,8 +288,16 @@ TOOLS = [
                         "required": ["field", "comparator", "value"],
                     },
                 },
-                "min_count": {"type": "integer", "description": "Minimum events before triggering (threshold)"},
-                "window_minutes": {"type": "integer", "description": "Time window for threshold counting"},
+                "min_count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Minimum events before triggering; stored as RuleSet.trigger_count.",
+                },
+                "window_minutes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Threshold counting window in minutes; stored as RuleSet.trigger_window.",
+                },
                 "bundle_by": {
                     "type": "integer",
                     "description": "How to group events into incidents to prevent duplicates. 0=none, 2=model_name, 3=model_name+id, 4=source_ip, 7=source_ip+model_name, 8=source_ip+model_name+id, 9=source_ip+hostname. Default 4 (source_ip) is usually correct.",
@@ -932,8 +942,42 @@ def _find_open_proposal_ticket(category):
     return None, None
 
 
+def _validate_rule_thresholds(params):
+    min_count = params.get("min_count")
+    window_minutes = params.get("window_minutes")
+
+    for name, value in (("min_count", min_count), ("window_minutes", window_minutes)):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+        ):
+            return f"{name} must be a positive integer"
+
+    if window_minutes is not None and min_count is None:
+        return "window_minutes requires min_count"
+
+    if min_count is not None and min_count > 1:
+        bundle_by = params.get("bundle_by", 4)
+        bundle_minutes = params.get("bundle_minutes", 30)
+        if bundle_by == 0:
+            return "min_count greater than 1 requires bundle_by to be enabled"
+        if (
+            isinstance(bundle_minutes, bool)
+            or not isinstance(bundle_minutes, int)
+            or bundle_minutes <= 0
+        ):
+            return "min_count greater than 1 requires a positive bundle_minutes window"
+        if window_minutes is not None and bundle_minutes < window_minutes:
+            return "bundle_minutes must be at least window_minutes so the threshold is reachable"
+
+    return None
+
+
 def _tool_create_rule(params):
     from mojo.apps.incident.models import RuleSet, Rule, Ticket
+
+    threshold_error = _validate_rule_thresholds(params)
+    if threshold_error:
+        return {"ok": False, "error": threshold_error}
 
     category = params["category"]
     handler = params["handler"]
@@ -978,10 +1022,6 @@ def _tool_create_rule(params):
         "llm_reasoning": params["reasoning"],
         "occurrence_count": 1,
     }
-    if params.get("min_count"):
-        metadata["min_count"] = params["min_count"]
-    if params.get("window_minutes"):
-        metadata["window_minutes"] = params["window_minutes"]
     if params.get("delete_on_resolution"):
         metadata["delete_on_resolution"] = True
 
@@ -991,6 +1031,8 @@ def _tool_create_rule(params):
         handler=handler,
         bundle_by=params.get("bundle_by", 4),
         bundle_minutes=params.get("bundle_minutes", 30),
+        trigger_count=params.get("min_count"),
+        trigger_window=params.get("window_minutes"),
         priority=params.get("priority", 50),
         is_active=False,
         metadata=metadata,
@@ -1010,6 +1052,17 @@ def _tool_create_rule(params):
     delete_note = ""
     if metadata.get("delete_on_resolution"):
         delete_note = "\n**Delete on Resolution**: Yes (noise pattern — incidents auto-deleted when resolved/closed)\n"
+
+    threshold_note = ""
+    if params.get("min_count") is not None:
+        window_text = ""
+        if params.get("window_minutes") is not None:
+            window_text = f" within {params['window_minutes']} minutes"
+        bundle_minutes = params.get("bundle_minutes", 30)
+        threshold_note = (
+            f"**Threshold**: {params['min_count']} events{window_text}\n"
+            f"**Bundle Window**: {bundle_minutes} minutes\n"
+        )
 
     # Create the ticket with llm_enabled and requires_approval metadata
     ticket_metadata = {
@@ -1032,6 +1085,7 @@ def _tool_create_rule(params):
         f"**Name**: {params['name']}\n"
         f"**Category**: {category}\n"
         f"**Handler**: {handler}\n"
+        f"{threshold_note}"
         f"{delete_note}"
         f"**Reasoning**: {params['reasoning']}"
     )
