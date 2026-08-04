@@ -537,12 +537,15 @@ def test_closure_handler_raises_fails_closed(opts):
     assert_eq(user.username, original_username,
               "Account must NOT be anonymised after a failed closure")
 
-    incidents = Event.objects.filter(uid=user.pk, category="account:closure_failed")
+    # Matched on the handler path, not uid: reporter._create_event_dict lets an
+    # authenticated ACTIVE_REQUEST override an explicit uid, and in-process tests
+    # inherit whatever context a concurrent test left behind.
+    incidents = Event.objects.filter(
+        category="account:closure_failed", details__contains=HANDLER_RAISES)
     assert_true(incidents.exists(),
-                "A failed closure must record an account:closure_failed incident")
+                "A failed closure must record an account:closure_failed incident "
+                "naming the handler")
     details = " ".join(i.details or "" for i in incidents)
-    assert_true(HANDLER_RAISES in details,
-                f"Incident should name the configured handler, got: {details}")
     assert_true("exploded" not in details and original_email not in details,
                 f"Incident must record handler name and outcome only, got: {details}")
 
@@ -567,8 +570,8 @@ def test_closure_incomplete_is_a_failure(opts):
     assert_eq(user.username, original_username, "Account must NOT be anonymised")
 
     details = " ".join(
-        i.details or "" for i in
-        Event.objects.filter(uid=user.pk, category="account:closure_failed"))
+        i.details or "" for i in Event.objects.filter(
+            category="account:closure_failed", details__contains=HANDLER_NO_ANON))
     assert_true("incomplete" in details,
                 f"Incident should record the incomplete outcome, got: {details}")
 
@@ -594,8 +597,9 @@ def test_closure_handler_bad_path_fails_closed(opts):
         assert_true(user.is_active, f"{label}: account must stay ACTIVE")
         assert_eq(user.username, original_username, f"{label}: account must NOT be anonymised")
         assert_true(
-            Event.objects.filter(uid=user.pk, category="account:closure_failed").exists(),
-            f"{label}: must record an account:closure_failed incident")
+            Event.objects.filter(
+                category="account:closure_failed", details__contains=path).exists(),
+            f"{label}: must record an account:closure_failed incident naming the path")
 
 
 @th.django_unit_test("closure delegation: a DB Setting row cannot install a handler (THE regression)")
