@@ -1120,6 +1120,20 @@ RuleSet.objects.create(
 | `GEOLOCATION_INTERNAL_THREAT_WINDOW_HOURS` | `24` | Window the `ip_recent_*` rule fields and the `is_known_attacker` / `is_known_abuser` predicates count over |
 | `GEOLOCATION_RECHECK_THREATS_MAX` | `500` | Rows the daily `recheck_active_threats` decay cron processes |
 
+### CloudWatch alarm events
+
+The AWS SNS receiver records CloudWatch transitions as
+`scope="aws:cloudwatch"`, `category="aws:cloudwatch:alarm"`. It calls the
+incident engine without wildcard fallback, so only an explicit scope/category
+RuleSet can open work. Use `BundleBy.MODEL_NAME_AND_ID` with
+`bundle_minutes=None`: `model_id` identifies one active alarm occurrence and
+changes after recovery. `ALARM` evaluates policy, `INSUFFICIENT_DATA` preserves
+the active incident, and `OK` resolves it through the same programmatic
+lifecycle path used by `ResolveHandler`.
+
+See [AWS CloudWatch monitoring](../aws/cloudwatch.md#sns-alarm-ingestion) for
+the receiver, allowlist, idempotency, and ticket/Maestro configuration.
+
 The rest of the `GEOLOCATION_INTERNAL_*` family (the attacker allowlists, the
 breadth gate, the shared-egress suppressor, the dry-run switch) is documented in
 [account/geoip.md](../account/geoip.md#threat-intelligence). All of them are

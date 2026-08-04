@@ -197,6 +197,9 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 ### AWS
 
 - `AWS_DEFAULT_REGION`
+- `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` — **file-only**
+  (`settings.get_static`, `kind="list"`), default `[]`. Exact SNS topic ARN
+  allowlist for `/api/aws/cloudwatch/sns/alarm`; missing/empty denies all.
 - `AWS_KEY`
 - `AWS_REGION`
 - `AWS_SECRET`
@@ -687,8 +690,12 @@ restart. See
 
 ### SNS
 
-- `SNS_CERT_TTL_SECONDS`
-- `SNS_VALIDATION_BYPASS_DEBUG`
+- `SNS_CERT_TTL_SECONDS` — **file-only** (`settings.get_static`, `kind="int"`),
+  default `3600`. Process-local SNS signing-certificate cache lifetime in
+  seconds.
+- `SNS_VALIDATION_BYPASS_DEBUG` — **file-only** (`settings.get_static`,
+  `kind="bool"`), default `False`. Development-only SES receiver bypass; never
+  applies to CloudWatch alarms.
 
 ### THREAT
 

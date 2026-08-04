@@ -423,3 +423,13 @@ Incidents stay at `pending` until `trigger_count` is reached, then transition to
 | `group` | Events, Incidents | Group ID |
 | `dr_start`, `dr_end` | All | Date range |
 | `parent` | History, TicketNotes | Parent incident/ticket ID |
+
+## CloudWatch lifecycle events
+
+CloudWatch SNS transitions use `scope=aws:cloudwatch` and
+`category=aws:cloudwatch:alarm`. `ALARM` opens work only when an explicit
+RuleSet matches. `INSUFFICIENT_DATA` is informational and leaves an active
+incident open; `OK` resolves that incident and records recovery. Local Tickets
+and linked Maestro items are not automatically closed. Duplicate SNS delivery
+does not create duplicate events or work items. See the
+[CloudWatch API reference](../aws/cloudwatch.md#cloudwatch-alarm-events).

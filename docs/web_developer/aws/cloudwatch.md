@@ -1,7 +1,9 @@
 # AWS CloudWatch Monitoring API
 
-Live AWS infrastructure metrics for EC2, RDS, and ElastiCache — exposed through
-two endpoints that mirror the [metrics app](../metrics/metrics.md) exactly.
+Live AWS infrastructure metrics for EC2, RDS, and ElastiCache are exposed
+through two read endpoints that mirror the
+[metrics app](../metrics/metrics.md) exactly. A separate public endpoint
+receives signed CloudWatch alarm deliveries from AWS SNS.
 
 Slugs in all responses are **friendly names**, not raw AWS IDs:
 
@@ -10,10 +12,11 @@ Slugs in all responses are **friendly names**, not raw AWS IDs:
 
 Use the `slug` value from the `resources` endpoint when targeting specific instances via the `fetch` endpoint's `slugs` parameter.
 
-**Permission required:** `manage_aws` on all endpoints — checked as a
+**Permission required for the two GET endpoints:** `manage_aws`, checked as a
 **global** `User.permissions` grant only (`@md.requires_global_perms`); a
-`manage_aws` permission held only at the group/member level does not
-authorize these endpoints.
+`manage_aws` permission held only at the group/member level does not authorize
+metric reads. The SNS alarm POST is public and instead requires a valid AWS SNS
+signature from an exactly allowlisted topic.
 
 ---
 
@@ -23,6 +26,7 @@ authorize these endpoints.
 |---|---|---|
 | GET | `/api/aws/cloudwatch/resources` | List all EC2, RDS, and ElastiCache resources with friendly names |
 | GET | `/api/aws/cloudwatch/fetch` | Time-series metric data for one or more instances |
+| POST | `/api/aws/cloudwatch/sns/alarm` | Public AWS SNS delivery endpoint; signature and exact-topic allowlist required |
 
 ---
 
@@ -229,12 +233,14 @@ The AWS user or role configured in your project needs:
 }
 ```
 
-No additional Django settings are needed — the CloudWatch helper reuses
-`AWS_KEY`, `AWS_SECRET`, and `AWS_REGION` already configured for SES and S3.
+No additional Django settings are needed for metric reads — the CloudWatch
+helper reuses `AWS_KEY`, `AWS_SECRET`, and `AWS_REGION` already configured for
+SES and S3. Alarm delivery requires the deployment to set
+`AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` to the exact accepted SNS topic ARN(s).
 
 ---
 
-## Error Responses
+## Metric endpoint error responses
 
 | Status | Meaning |
 |---|---|
@@ -242,3 +248,97 @@ No additional Django settings are needed — the CloudWatch helper reuses
 | `401` | Not authenticated |
 | `403` | Authenticated but missing `manage_aws` permission |
 | `500` | AWS API error — check server logs for details |
+
+---
+
+## CloudWatch alarm events
+
+The SNS alarm endpoint is AWS-facing infrastructure, not a browser API. Clients
+should not POST alarm JSON themselves: SNS signs the outer envelope and the
+server rejects unsigned messages or topics absent from the deployment's exact
+allowlist.
+
+**Authentication/permission:** no User session or Django permission is used.
+Authorization consists of the SNS signature, strict AWS certificate URL, and
+an exact `TopicArn` match in `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`. A missing or
+empty allowlist denies all delivery. Deployments should use a dedicated topic
+whose AWS policy restricts `sns:Publish` to the intended CloudWatch alarm
+sources/accounts; an SNS signature alone does not prove that CloudWatch authored
+the inner message.
+
+### Request format
+
+SNS posts its standard JSON envelope as the raw request body (commonly with
+`Content-Type: text/plain`). A notification has this shape; `Message` is itself
+a JSON-encoded CloudWatch alarm state-change document:
+
+```json
+{
+  "Type": "Notification",
+  "MessageId": "11111111-2222-3333-4444-555555555555",
+  "TopicArn": "arn:aws:sns:us-east-1:123456789012:operations",
+  "Message": "{\"AlarmName\":\"api-errors\",\"AlarmArn\":\"arn:aws:cloudwatch:us-east-1:123456789012:alarm:api-errors\",\"AWSAccountId\":\"123456789012\",\"NewStateValue\":\"ALARM\",\"OldStateValue\":\"OK\",\"NewStateReason\":\"Threshold crossed\",\"StateChangeTime\":\"2026-08-04T03:00:00.000+0000\",\"Trigger\":{\"Namespace\":\"AWS/ApplicationELB\",\"MetricName\":\"HTTPCode_Target_5XX_Count\",\"Dimensions\":[]}}",
+  "Timestamp": "2026-08-04T03:00:00.000Z",
+  "SignatureVersion": "2",
+  "SigningCertURL": "https://sns.us-east-1.amazonaws.com/SimpleNotificationService-example.pem",
+  "Signature": "base64-signature"
+}
+```
+
+Clients should never synthesize this envelope. Configure an SNS subscription
+and let AWS sign and deliver it. The endpoint also accepts signed SNS
+`SubscriptionConfirmation` envelopes and follows only a strict, non-redirecting
+AWS confirmation URL.
+
+Accepted state changes appear in the incident feed with:
+
+- `scope`: `aws:cloudwatch`
+- `category`: `aws:cloudwatch:alarm`
+- bounded metadata for alarm/account/region/state/reason/time and metric
+  namespace/name/dimensions
+
+Alarm ingestion is opt-in at the policy layer. Without a CloudWatch-specific
+RuleSet, the Event is retained but no Incident or Ticket is created. With a
+matching rule, `ALARM` can open an incident and run configured handlers such as
+`ticket://?board=<id>`.
+
+`INSUFFICIENT_DATA` records uncertainty without closing current work. `OK`
+resolves the matching Incident and adds recovery history/notes. An existing
+Ticket or Maestro item stays open for the human workflow to close; a later
+`ALARM` starts a new incident occurrence. SNS replays do not duplicate these
+records.
+
+### Response format
+
+An accepted notification returns the durable transition identifier and whether
+the delivery matched an existing SNS/logical transition:
+
+```json
+{
+  "status": true,
+  "data": {
+    "duplicate": false,
+    "transition_id": 123
+  }
+}
+```
+
+A confirmed subscription returns:
+
+```json
+{
+  "status": true,
+  "data": {
+    "confirmed": true,
+    "status_code": 200
+  }
+}
+```
+
+| Status | Meaning |
+|---|---|
+| `200` | Notification accepted (including an idempotent duplicate), or subscription confirmed |
+| `400` | Malformed SNS/CloudWatch payload or unsupported SNS message type |
+| `403` | Generic signature, certificate-URL, header-consistency, or topic authorization failure |
+| `405` | Method other than POST |
+| `503` | Certificate fetch, confirmation, processing, or durable handler dispatch should be retried by SNS |

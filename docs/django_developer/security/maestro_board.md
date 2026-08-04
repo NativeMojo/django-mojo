@@ -179,3 +179,12 @@ notes/history never enqueue outbound work, preventing echoes.
 
 The server half of this contract is Maestro item 32. Do not enable one side
 against an unpinned incompatible version.
+
+## CloudWatch alarm routing
+
+CloudWatch SNS ingestion never calls Maestro directly. Configure an explicit
+`aws:cloudwatch` RuleSet with `ticket://?board=<id>` to create a local Ticket;
+the normal Ticket -> `MaestroItemLink` job path then creates or updates the
+remote item. Alarm recovery resolves the machine Incident and synchronizes a
+recovery note, but leaves Ticket/board closure to the human workflow. See
+[CloudWatch SNS alarm ingestion](../aws/cloudwatch.md#sns-alarm-ingestion).

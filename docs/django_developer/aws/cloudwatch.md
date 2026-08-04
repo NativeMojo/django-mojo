@@ -46,9 +46,10 @@ The IAM user or role referenced by `AWS_KEY` / `AWS_SECRET` must have at minimum
 }
 ```
 
-No new Django settings are required — `CloudWatchHelper` reads the same
+Metric reads require no new Django settings: `CloudWatchHelper` reads the same
 `AWS_KEY`, `AWS_SECRET`, and `AWS_REGION` already used by SES, S3, and other
-AWS helpers.
+AWS helpers. SNS alarm ingestion is configured separately with the exact-topic
+allowlist below.
 
 ---
 
@@ -59,6 +60,7 @@ AWS helpers.
 | `AWS_KEY` | — | AWS access key ID |
 | `AWS_SECRET` | — | AWS secret access key |
 | `AWS_REGION` | `us-east-1` | AWS region for all CloudWatch calls |
+| `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` | `[]` | Static exact SNS topic ARN allowlist for alarm ingestion; empty denies all topics |
 
 ---
 
@@ -295,9 +297,9 @@ normalize_stat("max")                  # -> "Maximum"
 
 ---
 
-## REST API
+## Metric REST API
 
-Two endpoints under the `aws` URL prefix, both requiring `manage_aws` — gated
+The two metric endpoints under the `aws` URL prefix require `manage_aws` — gated
 with `@md.requires_global_perms`, so the grant must be on the caller's
 **global** `User.permissions` (no group/member fallback; see
 [Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks)):
@@ -316,20 +318,129 @@ request/response documentation.
 
 ---
 
+## SNS alarm ingestion
+
+django-mojo can receive CloudWatch alarm state changes through SNS at:
+
+```text
+POST /api/aws/cloudwatch/sns/alarm
+```
+
+The endpoint is public because SNS cannot authenticate as a django-mojo User,
+but it is not anonymous in practice. Every envelope must have a valid AWS SNS
+signature and its `TopicArn` must exactly match a static deployment allowlist:
+
+```python
+AWS_CLOUDWATCH_ALARM_TOPIC_ARNS = [
+    "arn:aws:sns:us-east-1:123456789012:operations",
+]
+```
+
+An empty or missing list denies every topic. The SES `EmailDomain` topic fields
+are deliberately unrelated, and the alarm endpoint never honors
+`SNS_VALIDATION_BYPASS_DEBUG`. Subscription confirmation is accepted only when
+the signed confirmation URL is HTTPS on the matching AWS SNS service, carries
+the signed topic/token, does not redirect, and returns 2xx.
+
+`AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` is read as a static setting, so change it in
+deployment configuration and restart application processes when updating the
+allowlist. SNS envelopes are limited to 300 KiB.
+
+### Incident policy and lifecycle
+
+Alarm events use `scope="aws:cloudwatch"` and
+`category="aws:cloudwatch:alarm"`. The global `*` RuleSet is intentionally not
+consulted: receiving alarms is safe to enable before choosing an escalation
+policy. Add an explicit RuleSet to create incidents or tickets:
+
+```python
+from mojo.apps.incident.models import BundleBy, RuleSet
+
+RuleSet.objects.create(
+    category="aws:cloudwatch",
+    name="Production CloudWatch alarms",
+    bundle_by=BundleBy.MODEL_NAME_AND_ID,
+    bundle_minutes=None,
+    handler="ticket://?priority=8&category=operations&board=3",
+)
+```
+
+`MODEL_NAME_AND_ID` groups one active alarm occurrence. `OK` resolves that
+machine incident, records recovery on its tickets and synced Maestro item, and
+clears the occurrence; a later `ALARM` opens a new occurrence. Tickets and
+Maestro items remain human-owned and are not force-closed. `INSUFFICIENT_DATA`
+is recorded on the active incident without resolving it.
+
+SNS and logical-transition identities are stored durably. Replays resume any
+incomplete handler dispatch with deterministic Job keys but do not create a
+second Event, Incident, Ticket, or Maestro item. Older out-of-order transitions
+remain audit events and cannot regress the alarm's current state.
+
+Persisted metadata is bounded to the alarm identity, account/region, states,
+reason/time, alarm type, and metric namespace/name/dimensions. Raw SNS bodies,
+alarm actions/descriptions, log query text, and unexpected credential-like
+fields are not stored.
+
+### Durable data model
+
+`CloudWatchAlarm` stores the SHA-256 identity key, exact alarm ARN, current
+state/time, and pointers to the active Incident and opening transition.
+`CloudWatchAlarmTransition` stores the topic/message identity, old/new states,
+state-change time, linked Event/Incident, and durable handler-dispatch status.
+Unique constraints cover both SNS message identity and logical transition
+identity.
+
+Both models are read-only through their generated REST surfaces
+(`CAN_CREATE`, `CAN_UPDATE`, and `CAN_DELETE` are false). Their `RestMeta`
+view permissions require `manage_aws` or `security`; callers cannot mutate
+lifecycle rows through the API.
+
+### AWS setup and verification
+
+1. Create a dedicated SNS topic and place its exact ARN in
+   `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`. Its topic policy should grant
+   `sns:Publish` only to the intended CloudWatch alarm sources/accounts; do not
+   reuse a topic that application principals can publish to.
+2. Subscribe the HTTPS endpoint above and wait for the signed confirmation to
+   succeed.
+3. Configure the CloudWatch alarm action to publish to that topic.
+4. Add an explicit CloudWatch RuleSet if the signal should become an incident,
+   ticket, or Maestro item. Register Maestro first with
+   `python manage.py register_maestro` when using `ticket://?board=<id>`.
+5. On a disposable/test alarm, verify both directions through AWS rather than
+   forging an SNS signature:
+
+```bash
+aws cloudwatch set-alarm-state \
+  --alarm-name django-mojo-ingress-test \
+  --state-value ALARM \
+  --state-reason "django-mojo synthetic ingress test"
+
+aws cloudwatch set-alarm-state \
+  --alarm-name django-mojo-ingress-test \
+  --state-value OK \
+  --state-reason "django-mojo synthetic recovery test"
+```
+
 ## Module Layout
 
 ```
 mojo/helpers/aws/cloudwatch.py       # CloudWatchHelper, mapping tables, module helpers
 mojo/apps/aws/rest/cloudwatch.py     # REST endpoints (wired via rest/__init__.py)
+mojo/apps/aws/rest/sns.py            # signed SNS/CloudWatch receiver
+mojo/apps/aws/services/sns.py        # SNS verification and confirmation
+mojo/apps/aws/services/cloudwatch_alarms.py  # normalization and lifecycle
 ```
 
-No models or migrations — all data comes live from CloudWatch.
+Metric reads remain live-only. Alarm ingestion stores internal
+`CloudWatchAlarm` and `CloudWatchAlarmTransition` lifecycle rows.
 
 ---
 
 ## Testing
 
-Tests live in `tests/test_aws/cloudwatch.py`.
+Tests live in `tests/test_aws/cloudwatch.py` and
+`tests/test_aws/alarm_ingress.py`.
 
 Permission and parameter validation tests always run (no AWS credentials needed).
 Live metric tests check for `AWS_KEY` in the live server settings and call
