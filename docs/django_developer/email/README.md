@@ -16,3 +16,10 @@ metadata. Inbound topics are considered only when receiving is enabled. Apply
 also creates missing templates and, when explicitly given `--mailbox-email`, a
 missing outbound default. It does not change DNS, request sandbox exit, send
 test mail, or overwrite existing SES mappings.
+
+Create-missing topic names are stable: `ses-<domain>-<kind>`, where kind is
+`bounce`, `complaint`, `delivery`, or (when enabled) `inbound`. New topics are
+tagged with `managed-by=django-mojo`, `purpose=ses-notifications`, and exact
+deployment/domain values. A same-name topic with different or missing ownership
+tags is a conflict and is never adopted automatically. Existing non-empty SES
+mappings remain authoritative and are recorded instead of rewired.
