@@ -30,7 +30,7 @@ import boto3
 import json
 from botocore.exceptions import ClientError
 
-from mojo.helpers.aws.client import get_session
+from mojo.helpers.aws.client import get_client, get_session
 from mojo.helpers.aws.ses import EmailSender
 from mojo.helpers.aws.sns import SNSTopic, SNSSubscription
 from mojo.helpers.aws.s3 import S3Bucket
@@ -94,13 +94,15 @@ class AuditReport:
     audit_pass: bool = False
 
 
-def _get_ses_client(region: str, access_key: Optional[str], secret_key: Optional[str]):
-    session = get_session(
-        access_key or settings.AWS_KEY,
-        secret_key or settings.AWS_SECRET,
-        region or getattr(settings, "AWS_REGION", "us-east-1"),
+def _get_ses_client(region: str, access_key: Optional[str], secret_key: Optional[str],
+                    client_factory=None):
+    factory = client_factory or get_client
+    return factory(
+        "ses",
+        access_key=access_key or settings.AWS_KEY,
+        secret_key=secret_key or settings.AWS_SECRET,
+        region=region or getattr(settings, "AWS_REGION", "us-east-1"),
     )
-    return session.client("ses")
 
 
 def _request_ses_verification_and_dkim(
@@ -503,6 +505,7 @@ def audit_domain_config(
     secret_key: Optional[str] = None,
     desired_receiving: Optional[Dict[str, Any]] = None,
     desired_topics: Optional[Dict[str, str]] = None,
+    client_factory=None,
 ) -> AuditReport:
     """
     Inspect SES identity verification/DKIM/notifications and receiving rules,
@@ -513,18 +516,19 @@ def audit_domain_config(
       If not provided, will be derived from the EmailDomain model fields.
     """
     region = region or getattr(settings, "AWS_REGION", "us-east-1")
-    ses = _get_ses_client(region, access_key, secret_key)
+    ses = _get_ses_client(region, access_key, secret_key, client_factory=client_factory)
+    factory = client_factory or get_client
 
     items: List[AuditItem] = []
     checks: Dict[str, bool] = {}
 
     # 0) SES account sandbox/production access (region-specific)
     try:
-        sesv2 = boto3.client(
+        sesv2 = factory(
             "sesv2",
-            aws_access_key_id=access_key or settings.AWS_KEY,
-            aws_secret_access_key=secret_key or settings.AWS_SECRET,
-            region_name=region,
+            access_key=access_key or settings.AWS_KEY,
+            secret_key=secret_key or settings.AWS_SECRET,
+            region=region,
         )
         acct = sesv2.get_account()
         prod = bool(acct.get("ProductionAccessEnabled", False))
@@ -684,11 +688,11 @@ def audit_domain_config(
 
         # S3 bucket head check (read-only)
         try:
-            s3 = boto3.client(
+            s3 = factory(
                 "s3",
-                aws_access_key_id=access_key or settings.AWS_KEY,
-                aws_secret_access_key=secret_key or settings.AWS_SECRET,
-                region_name=region,
+                access_key=access_key or settings.AWS_KEY,
+                secret_key=secret_key or settings.AWS_SECRET,
+                region=region,
             )
             s3.head_bucket(Bucket=want_bucket)
             checks["s3_bucket_exists"] = True
@@ -787,11 +791,11 @@ def audit_domain_config(
     checks["sns_topics_exist"] = None
     checks["sns_subscriptions_confirmed"] = None
     try:
-        sns = boto3.client(
+        sns = factory(
             "sns",
-            aws_access_key_id=access_key or settings.AWS_KEY,
-            aws_secret_access_key=secret_key or settings.AWS_SECRET,
-            region_name=region,
+            access_key=access_key or settings.AWS_KEY,
+            secret_key=secret_key or settings.AWS_SECRET,
+            region=region,
         )
         # Include bounce/complaint/delivery + inbound (from desired_receiving) if present
         topic_map: Dict[str, Optional[str]] = {

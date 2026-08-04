@@ -51,6 +51,30 @@ def test_ensure_default_rules_is_idempotent(opts):
     RuleSet.objects.all().delete()
 
 
+@th.django_unit_test()
+def test_cloudwatch_rules_are_opt_in_and_preserve_operator_edits(opts):
+    """AWS policy is explicit and create-only, not part of generic defaults."""
+    from mojo.apps.aws.services.cloudwatch_alarms import SCOPE
+    from mojo.apps.incident.models.rule import RuleSet
+
+    RuleSet.objects.filter(category=SCOPE).delete()
+    RuleSet.ensure_default_rules()
+    assert not RuleSet.objects.filter(category=SCOPE).exists(), \
+        "Generic defaults must not install AWS policy on non-AWS deployments"
+
+    ruleset, created = RuleSet.ensure_cloudwatch_rules()
+    assert created is True, "The first explicit CloudWatch setup should create a RuleSet"
+    assert "notify://" in ruleset.handler, "The default CloudWatch policy should notify operators"
+    assert "block://" not in ruleset.handler, "Operational alarms must never block IPs"
+
+    ruleset.handler = ""
+    ruleset.save(update_fields=["handler"])
+    same, created_again = RuleSet.ensure_cloudwatch_rules()
+    same.refresh_from_db()
+    assert created_again is False, "CloudWatch defaults must be idempotent"
+    assert same.handler == "", "Reruns must preserve an operator-edited handler"
+    RuleSet.objects.filter(category=SCOPE).delete()
+
 # ---------------------------------------------------------------------------
 # Auth rules
 # ---------------------------------------------------------------------------

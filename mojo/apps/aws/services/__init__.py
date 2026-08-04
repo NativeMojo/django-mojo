@@ -29,4 +29,12 @@ __all__ = [
     # Exceptions
     "EmailDomainNotFound",
     "InvalidConfiguration",
+    "AWSCheckRunner",
 ]
+
+
+def __getattr__(name):
+    if name == "AWSCheckRunner":
+        from .aws_check import AWSCheckRunner
+        return AWSCheckRunner
+    raise AttributeError(name)

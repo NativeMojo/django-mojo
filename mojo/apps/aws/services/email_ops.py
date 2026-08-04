@@ -371,6 +371,8 @@ def audit_email_domain(
     secret_key: Optional[str] = None,
     rule_set: Optional[str] = None,
     rule_name: Optional[str] = None,
+    persist=True,
+    client_factory=None,
 ) -> AuditResult:
     """
     Audit AWS SES configuration for an email domain.
@@ -416,6 +418,7 @@ def audit_email_domain(
                 "complaint": getattr(domain, "sns_topic_complaint_arn", None),
                 "delivery": getattr(domain, "sns_topic_delivery_arn", None),
             },
+            client_factory=client_factory,
         )
 
         # Update domain status based on audit results
@@ -453,13 +456,13 @@ def audit_email_domain(
         if domain.can_recv != can_recv:
             updates["can_recv"] = can_recv
 
-        if updates:
+        if updates and persist:
             logger.info(f"Updating domain {domain.name} (pk={domain_pk}) with changes: {updates}")
             for k, v in updates.items():
                 setattr(domain, k, v)
             domain.save(update_fields=list(updates.keys()) + ["modified"])
             logger.info(f"Successfully updated domain {domain.name} status to '{new_status}'")
-        else:
+        elif not updates:
             logger.info(f"Domain {domain.name} status unchanged: {domain.status}")
 
         return AuditResult(

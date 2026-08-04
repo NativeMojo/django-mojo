@@ -286,6 +286,21 @@ class RuleSet(models.Model, MojoModel):
         cls.ensure_catchall_rules()
 
     @classmethod
+    def ensure_cloudwatch_rules(cls):
+        """Create the opt-in AWS alarm policy without changing generic defaults."""
+        from mojo.apps.aws.services.cloudwatch_alarms import SCOPE
+        return cls._create_ruleset(
+            category=SCOPE,
+            name="AWS CloudWatch - Operations",
+            priority=10,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.MODEL_NAME_AND_ID,
+            bundle_minutes=None,
+            handler="notify://perm@manage_security",
+            rules=[],
+        )
+
+    @classmethod
     def ensure_catchall_rules(cls):
         """
         Create a catch-all RuleSet that matches any event without a specific ruleset.
