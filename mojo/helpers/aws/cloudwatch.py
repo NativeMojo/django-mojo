@@ -11,7 +11,7 @@ frontend chart components and the REST layer work without modification.
 import datetime
 import botocore
 
-from .client import get_session
+from .client import get_client, get_session
 from mojo.helpers import dates as mdates
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
@@ -190,14 +190,30 @@ class CloudWatchHelper:
     Pass explicit values to override for multi-account scenarios.
     """
 
-    def __init__(self, access_key=None, secret_key=None, region=None):
+    def __init__(self, access_key=None, secret_key=None, region=None,
+                 session=None, client_factory=None, timeout=3):
         self.access_key = access_key or settings.AWS_KEY
         self.secret_key = secret_key or settings.AWS_SECRET
         self.region = region or getattr(settings, "AWS_REGION", "us-east-1")
+        self.session = session
+        self.client_factory = client_factory or get_client
+        self.timeout = timeout
         self._cw = None
         self._ec2 = None
         self._rds = None
         self._elasticache = None
+
+    def _aws_client(self, service):
+        if self.session is None:
+            self.session = get_session(
+                self.access_key, self.secret_key, self.region,
+            )
+        return self.client_factory(
+            service,
+            session=self.session,
+            region=self.region,
+            timeout=self.timeout,
+        )
 
     # ------------------------------------------------------------------
     # Lazy client accessors
@@ -206,29 +222,25 @@ class CloudWatchHelper:
     @property
     def cw(self):
         if self._cw is None:
-            session = get_session(self.access_key, self.secret_key, self.region)
-            self._cw = session.client("cloudwatch")
+            self._cw = self._aws_client("cloudwatch")
         return self._cw
 
     @property
     def ec2(self):
         if self._ec2 is None:
-            session = get_session(self.access_key, self.secret_key, self.region)
-            self._ec2 = session.client("ec2")
+            self._ec2 = self._aws_client("ec2")
         return self._ec2
 
     @property
     def rds(self):
         if self._rds is None:
-            session = get_session(self.access_key, self.secret_key, self.region)
-            self._rds = session.client("rds")
+            self._rds = self._aws_client("rds")
         return self._rds
 
     @property
     def elasticache(self):
         if self._elasticache is None:
-            session = get_session(self.access_key, self.secret_key, self.region)
-            self._elasticache = session.client("elasticache")
+            self._elasticache = self._aws_client("elasticache")
         return self._elasticache
 
     # ------------------------------------------------------------------

@@ -1,8 +1,62 @@
 import datetime
 import importlib
+import json
+import time
+import uuid
 from typing import Callable, List, Dict, Any
 from django.apps import apps
 from mojo.decorators.cron import schedule
+from mojo.helpers import logit
+
+
+CRON_HEARTBEAT_PREFIX = "mojo:cron:heartbeat"
+CRON_HEARTBEAT_INDEX = f"{CRON_HEARTBEAT_PREFIX}:runs"
+CRON_HEARTBEAT_TTL = 86400
+
+
+def _heartbeat_client():
+    from mojo.helpers.redis import get_connection
+    return get_connection()
+
+
+def _heartbeat_key(run_id):
+    return f"{CRON_HEARTBEAT_PREFIX}:run:{run_id}"
+
+
+def _write_heartbeat(run_id, payload, started_timestamp, redis_client=None):
+    """Write one expiring run record; heartbeat failures never stop cron."""
+    try:
+        client = redis_client or _heartbeat_client()
+        pipe = client.pipeline(transaction=True)
+        pipe.set(
+            _heartbeat_key(run_id), json.dumps(payload, sort_keys=True),
+            ex=CRON_HEARTBEAT_TTL,
+        )
+        pipe.zadd(CRON_HEARTBEAT_INDEX, {run_id: started_timestamp})
+        pipe.zremrangebyscore(CRON_HEARTBEAT_INDEX, 0, time.time() - CRON_HEARTBEAT_TTL)
+        pipe.expire(CRON_HEARTBEAT_INDEX, CRON_HEARTBEAT_TTL)
+        pipe.execute()
+    except Exception as exc:
+        logit.warning(f"cron heartbeat write failed: {exc}")
+
+
+def get_cron_heartbeats(limit=10, redis_client=None):
+    """Return the newest durable cron run records without hiding Redis errors."""
+    client = redis_client or _heartbeat_client()
+    run_ids = client.zrevrange(CRON_HEARTBEAT_INDEX, 0, max(0, limit - 1))
+    records = []
+    for run_id in run_ids:
+        if isinstance(run_id, bytes):
+            run_id = run_id.decode("utf-8")
+        raw = client.get(_heartbeat_key(run_id))
+        if not raw:
+            continue
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        record = json.loads(raw)
+        if record.get("run_id") == run_id:
+            records.append(record)
+    return records
 
 def run_now() -> None:
     """
@@ -12,8 +66,40 @@ def run_now() -> None:
     date and time, and executes each of them.
     """
     functions_to_run = find_scheduled_functions()
-    for func in functions_to_run:
-        func()
+    run_id = uuid.uuid4().hex
+    started = datetime.datetime.now(datetime.timezone.utc)
+    started_timestamp = started.timestamp()
+    payload = {
+        "version": 1,
+        "run_id": run_id,
+        "state": "started",
+        "started_at": started.isoformat(),
+        "matched_count": len(functions_to_run),
+        "completed_count": 0,
+        "failed_count": 0,
+    }
+    _write_heartbeat(run_id, dict(payload), started_timestamp)
+    completed = 0
+    try:
+        for func in functions_to_run:
+            func()
+            completed += 1
+    except Exception as exc:
+        payload.update({
+            "state": "failed",
+            "completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "completed_count": completed,
+            "failed_count": 1,
+            "failure": type(exc).__name__,
+        })
+        _write_heartbeat(run_id, dict(payload), started_timestamp)
+        raise
+    payload.update({
+        "state": "completed",
+        "completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "completed_count": completed,
+    })
+    _write_heartbeat(run_id, dict(payload), started_timestamp)
 
 def find_scheduled_functions() -> List[Callable]:
     """

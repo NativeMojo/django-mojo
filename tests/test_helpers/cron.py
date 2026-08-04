@@ -1,5 +1,6 @@
 from testit import helpers as th
 import datetime
+from unittest import mock
 from unittest.mock import patch, MagicMock
 
 @th.unit_setup()
@@ -472,8 +473,10 @@ def test_run_now(opts):
             executed.append('other')
 
         # Mock datetime to return 11:50
-        with patch('mojo.helpers.cron.datetime') as mock_datetime:
+        with patch('mojo.helpers.cron.datetime') as mock_datetime, \
+             patch('mojo.helpers.cron._write_heartbeat') as heartbeat:
             mock_datetime.datetime.now.return_value = opts.test_time
+            mock_datetime.timezone = datetime.timezone
 
             # Run scheduled functions
             run_now()
@@ -483,12 +486,68 @@ def test_run_now(opts):
             assert 'specific' in executed, "specific_time should have executed"
             assert 'other' not in executed, "other_time should not have executed"
             assert len(executed) == 2, f"Expected 2 functions to execute, got {len(executed)}: {executed}"
+            states = [call.args[1]["state"] for call in heartbeat.call_args_list]
+            assert states == ["started", "completed"], f"Expected start/completion heartbeats, got {states}"
     finally:
         # Restore original registered functions so parallel tests are not affected
         if hasattr(schedule, 'scheduled_functions'):
             schedule.scheduled_functions[:] = existing
         else:
             schedule.scheduled_functions = existing
+
+
+@th.django_unit_test()
+def test_run_now_records_failure_and_reraises(opts):
+    """A task failure is observable without changing run_now's exception contract."""
+    from mojo.helpers.cron import run_now
+    from mojo.decorators.cron import schedule
+
+    existing = list(getattr(schedule, 'scheduled_functions', []))
+    schedule.scheduled_functions = []
+    try:
+        @schedule(minutes='*')
+        def broken():
+            raise RuntimeError("expected")
+
+        with patch('mojo.helpers.cron._write_heartbeat') as heartbeat:
+            try:
+                run_now()
+            except RuntimeError:
+                pass
+            else:
+                assert False, "run_now must preserve the scheduled task exception"
+        states = [call.args[1]["state"] for call in heartbeat.call_args_list]
+        assert states == ["started", "failed"], f"Expected a failed completion heartbeat, got {states}"
+        failure = heartbeat.call_args_list[-1].args[1]
+        assert failure["failure"] == "RuntimeError", "Heartbeat must record only the exception class"
+    finally:
+        schedule.scheduled_functions[:] = existing
+
+
+@th.django_unit_test()
+def test_cron_heartbeat_records_are_isolated_by_run(opts):
+    """Overlapping completions cannot overwrite a newer run's state."""
+    from mojo.helpers import cron
+
+    client = mock.Mock()
+    pipe = client.pipeline.return_value
+    cron._write_heartbeat("older", {"run_id": "older", "state": "completed"}, 1, client)
+    cron._write_heartbeat("newer", {"run_id": "newer", "state": "started"}, 2, client)
+    keys = [call.args[0] for call in pipe.set.call_args_list]
+    assert keys == [cron._heartbeat_key("older"), cron._heartbeat_key("newer")], \
+        f"Each run needs an isolated heartbeat key, got {keys}"
+    assert pipe.expire.call_count == 2, "The heartbeat index must also expire"
+
+
+@th.django_unit_test()
+def test_cron_heartbeat_write_is_fail_open(opts):
+    """Redis failure must never prevent scheduled work from running."""
+    from mojo.helpers import cron
+
+    client = mock.Mock()
+    client.pipeline.side_effect = RuntimeError("redis unavailable")
+    cron._write_heartbeat("run", {"run_id": "run"}, 1, client)
+    assert client.pipeline.call_count == 1, "The failed Redis write should be attempted once"
 
 
 @th.django_unit_test()
