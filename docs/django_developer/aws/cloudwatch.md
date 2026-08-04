@@ -26,7 +26,7 @@ shape. Existing frontend chart components work without modification.
 
 ## AWS IAM Permissions Required
 
-The IAM user or role referenced by `AWS_KEY` / `AWS_SECRET` must have at minimum:
+The effective IAM identity must have at minimum:
 
 ```json
 {
@@ -46,10 +46,11 @@ The IAM user or role referenced by `AWS_KEY` / `AWS_SECRET` must have at minimum
 }
 ```
 
-Metric reads require no new Django settings: `CloudWatchHelper` reads the same
-`AWS_KEY`, `AWS_SECRET`, and `AWS_REGION` already used by SES, S3, and other
-AWS helpers. SNS alarm ingestion is configured separately with the exact-topic
-allowlist below.
+Metric reads require no new Django settings. `CloudWatchHelper` uses a complete
+`AWS_KEY` / `AWS_SECRET` pair when configured; when both are empty it follows
+boto3's environment, profile, container and instance/task-role credential
+chain. A partial pair is rejected. `AWS_REGION` selects the region. SNS alarm
+ingestion is configured separately with the exact-topic allowlist below.
 
 ---
 
@@ -71,7 +72,7 @@ allowlist below.
 ```python
 from mojo.helpers.aws import CloudWatchHelper
 
-# Uses AWS_KEY / AWS_SECRET / AWS_REGION from settings
+# Uses a complete settings pair, or boto3's default credential chain
 cw = CloudWatchHelper()
 
 # Or pass explicit credentials for multi-account scenarios

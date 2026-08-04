@@ -77,6 +77,28 @@ class AWSCheckRunner:
     def _approve(self, message):
         return bool(self.apply and (self.yes or self.confirm(message)))
 
+    def _ensure_mutation_identity(self, section):
+        """Fail closed before any apply-mode AWS mutation, even in section runs."""
+        if self.primary_identity:
+            return True
+        try:
+            self.primary_identity = self._identity()
+            self._add(section, "pass", "mutation.identity_verified",
+                      "Selected AWS identity is verified for apply mode", self.primary_identity)
+            return True
+        except (NoCredentialsError, PartialCredentialsError) as exc:
+            code = "credentials.missing"
+            error = exc
+        except (ConnectTimeoutError, ReadTimeoutError, EndpointConnectionError) as exc:
+            code = "sts.timeout"
+            error = exc
+        except (ClientError, BotoCoreError) as exc:
+            code = "sts.denied" if isinstance(exc, ClientError) else "sts.error"
+            error = exc
+        self._add(section, "fail", f"mutation.{code}", error,
+                  remediation="Verify the selected AWS identity before rerunning apply mode.")
+        return False
+
     def _session(self, access_key=None, secret_key=None, region=None):
         if access_key is None and secret_key is None and self.session is not None:
             return self.session
@@ -106,6 +128,18 @@ class AWSCheckRunner:
                 continue
             try:
                 getattr(self, f"check_{section}")()
+            except (NoCredentialsError, PartialCredentialsError) as exc:
+                self._add(section, "fail", f"{section}.credentials_missing", exc,
+                          remediation="Configure a complete key pair, profile, or task/instance role.")
+            except (ConnectTimeoutError, ReadTimeoutError, EndpointConnectionError) as exc:
+                self._add(section, "fail", f"{section}.service_unreachable", exc,
+                          remediation="Check AWS network access, endpoint and selected region, then rerun.")
+            except ClientError as exc:
+                aws_code = _error_code(exc)
+                code = "denied" if aws_code in ("403", "AccessDenied", "AccessDeniedException") else "service_error"
+                self._add(section, "fail", f"{section}.{code}", exc, {"aws_code": aws_code})
+            except BotoCoreError as exc:
+                self._add(section, "fail", f"{section}.service_error", exc)
             except Exception as exc:
                 logger.exception("aws-check section failed: %s", section)
                 self._add(section, "fail", f"{section}.internal_error",
@@ -265,6 +299,8 @@ class AWSCheckRunner:
 
     def check_s3(self):
         from mojo.apps.fileman.models import FileManager
+        if self.apply and not self._ensure_mutation_identity("s3"):
+            return
         managers = list(FileManager.objects.filter(
             user__isnull=True, group__isnull=True, is_active=True,
             is_default=True, backend_type=FileManager.AWS_S3,
@@ -379,6 +415,17 @@ class AWSCheckRunner:
                 pending = sorted(key for key, value in report.checks.items() if value is False)
                 self._add("email", "pass" if report.audit_pass else "pending", "email.domain_audit",
                           f"SES audit completed for {domain.name}", {"domain": domain.name, "pending_checks": pending})
+                if self.apply and self._email_has_create_candidates(domain, report):
+                    if not self._ensure_mutation_identity("email"):
+                        continue
+                    if self._approve(f"Create only missing SES identity/topic wiring for {domain.name}?"):
+                        changed = self._create_missing_email_resources(domain, report)
+                        self._add(
+                            "email", "pending" if changed else "warn", "email.missing_resources_created",
+                            "Created missing SES resources; external verification may still be pending"
+                            if changed else "No unambiguous SES resources were eligible for creation",
+                            {"domain": domain.name, "created": changed}, changed=bool(changed),
+                        )
             except Exception as exc:
                 self._add("email", "fail", "email.audit_error", exc, {"domain": domain.name})
         defaults = list(Mailbox.objects.filter(is_system_default=True).order_by("id")[:3])
@@ -410,6 +457,91 @@ class AWSCheckRunner:
             self._add("email", "warn", "templates.missing", "Shipped email templates are missing", {"missing": missing})
         else:
             self._add("email", "pass", "templates.complete", "All shipped email templates are present", {"count": len(seed_names)})
+
+    def _email_has_create_candidates(self, domain, report):
+        by_resource = {item.resource: item for item in report.items}
+        identity = by_resource.get("ses.identity.verification")
+        dkim = by_resource.get("ses.identity.dkim")
+        identity_missing = bool(identity and identity.current is None)
+        dkim_missing = bool(dkim and not (dkim.current or {}).get("VerificationStatus")) \
+            if dkim and isinstance(dkim.current, dict) else False
+        topic_fields = (
+            "sns_topic_bounce_arn", "sns_topic_complaint_arn", "sns_topic_delivery_arn",
+            "sns_topic_inbound_arn",
+        )
+        return identity_missing or dkim_missing or any(not getattr(domain, field, None) for field in topic_fields)
+
+    def _create_missing_email_resources(self, domain, report):
+        """Create only absent SES identity/SNS wiring; preserve every non-empty drift."""
+        if any(item.status == "conflict" for item in report.items):
+            return []
+        ses, sns = self._client("ses"), self._client("sns")
+        created = []
+        by_resource = {item.resource: item for item in report.items}
+        identity = by_resource.get("ses.identity.verification")
+        if identity and identity.current is None:
+            ses.verify_domain_identity(Domain=domain.name)
+            created.append("ses-identity")
+        dkim = by_resource.get("ses.identity.dkim")
+        if dkim and isinstance(dkim.current, dict) and not dkim.current.get("VerificationStatus"):
+            ses.verify_domain_dkim(Domain=domain.name)
+            created.append("ses-dkim")
+
+        topic_rows = self._list_paginated(sns, "list_topics", "Topics")
+        topics_by_name = {
+            row.get("TopicArn", "").rsplit(":", 1)[-1]: row.get("TopicArn") for row in topic_rows
+        }
+        safe_domain = domain.name.replace(".", "-")
+        fields = {
+            "bounce": "sns_topic_bounce_arn", "complaint": "sns_topic_complaint_arn",
+            "delivery": "sns_topic_delivery_arn", "inbound": "sns_topic_inbound_arn",
+        }
+        updates = []
+        topic_arns = {}
+        for kind, field in fields.items():
+            configured = getattr(domain, field, None)
+            if configured:
+                topic_arns[kind] = configured
+                continue
+            name = f"ses-{safe_domain}-{kind}"
+            arn = topics_by_name.get(name)
+            if not arn:
+                arn = sns.create_topic(Name=name).get("TopicArn")
+                created.append(f"sns-topic:{kind}")
+            if arn:
+                setattr(domain, field, arn)
+                updates.append(field)
+                topic_arns[kind] = arn
+        if updates:
+            domain.save(update_fields=updates + ["modified"])
+
+        attributes = ses.get_identity_notification_attributes(Identities=[domain.name])
+        current = (attributes.get("NotificationAttributes", {}).get(domain.name, {}) or {})
+        for notification, kind in (("Bounce", "bounce"), ("Complaint", "complaint"), ("Delivery", "delivery")):
+            arn = topic_arns.get(kind)
+            existing = current.get(f"{notification}Topic")
+            if arn and not existing:
+                ses.set_identity_notification_topic(
+                    Identity=domain.name, NotificationType=notification, SnsTopic=arn,
+                )
+                created.append(f"ses-mapping:{kind}")
+        metadata = domain.metadata if isinstance(domain.metadata, dict) else {}
+        for kind, arn in topic_arns.items():
+            endpoint = metadata.get(f"{kind}_endpoint") or metadata.get(f"sns_{kind}_endpoint")
+            if not endpoint:
+                continue
+            subscriptions = self._list_paginated(
+                sns, "list_subscriptions_by_topic", "Subscriptions", TopicArn=arn,
+            )
+            matching = [row for row in subscriptions if
+                        row.get("Protocol") == "https" and row.get("Endpoint") == endpoint]
+            if not matching:
+                sns.subscribe(
+                    TopicArn=arn, Protocol="https", Endpoint=endpoint,
+                    ReturnSubscriptionArn=True,
+                )
+                created.append(f"sns-subscription:{kind}")
+        return created
 
     def _list_paginated(self, client, method, result_key, **params):
         rows, token = [], None
@@ -462,8 +594,11 @@ class AWSCheckRunner:
         return desired
 
     def check_monitoring(self):
+        if self.apply and not self._ensure_mutation_identity("monitoring"):
+            return
         sns, cloudwatch = self._client("sns"), self._client("cloudwatch")
         slug = self._deployment_slug()
+        expected_tags = {**OWNERSHIP_TAGS, "deployment": slug}
         topic_name = f"django-mojo-{slug}-operations"[:256]
         topic_arn = next((row.get("TopicArn") for row in self._list_paginated(sns, "list_topics", "Topics")
                           if row.get("TopicArn", "").rsplit(":", 1)[-1] == topic_name), None)
@@ -478,8 +613,10 @@ class AWSCheckRunner:
             return
         else:
             tags = {row.get("Key"): row.get("Value") for row in sns.list_tags_for_resource(ResourceArn=topic_arn).get("Tags", [])}
-            if not all(tags.get(key) == value for key, value in OWNERSHIP_TAGS.items()):
-                self._add("monitoring", "fail", "sns.topic_conflict", "Same-name SNS topic is not django-mojo-owned", {"topic_arn": topic_arn})
+            if not all(tags.get(key) == value for key, value in expected_tags.items()):
+                self._add("monitoring", "fail", "sns.topic_conflict",
+                          "Same-name SNS topic is not owned by this django-mojo deployment",
+                          {"topic_arn": topic_arn})
                 return
             self._add("monitoring", "pass", "sns.topic_owned", "Owned operations SNS topic exists", {"topic_arn": topic_arn})
         allowlist = _setting("AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", [], kind="list") or []
@@ -512,11 +649,19 @@ class AWSCheckRunner:
                 current = existing[0]
                 tags = cloudwatch.list_tags_for_resource(ResourceARN=current.get("AlarmArn")).get("Tags", [])
                 tag_map = {row.get("Key"): row.get("Value") for row in tags}
-                if not all(tag_map.get(key) == value for key, value in OWNERSHIP_TAGS.items()):
+                if not all(tag_map.get(key) == value for key, value in expected_tags.items()):
                     conflicts.append(alarm["AlarmName"])
                 else:
                     comparable = ("Namespace", "MetricName", "Statistic", "ComparisonOperator", "Threshold", "Period", "EvaluationPeriods", "DatapointsToAlarm", "TreatMissingData", "AlarmActions", "OKActions")
-                    if any(current.get(key) != alarm.get(key) for key in comparable):
+                    current_dimensions = sorted(
+                        (row.get("Name"), row.get("Value")) for row in current.get("Dimensions", [])
+                    )
+                    desired_dimensions = sorted(
+                        (row.get("Name"), row.get("Value")) for row in alarm.get("Dimensions", [])
+                    )
+                    if current_dimensions != desired_dimensions or any(
+                        current.get(key) != alarm.get(key) for key in comparable
+                    ):
                         drifted.append(alarm["AlarmName"])
                 continue
             if not self._approve(f"Create missing CloudWatch alarm {alarm['AlarmName']}?"):

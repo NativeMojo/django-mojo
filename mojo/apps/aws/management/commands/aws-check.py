@@ -62,5 +62,9 @@ class Command(BaseCommand):
                 f"\nSummary: PASS={counts['pass']} WARN={counts['warn']} FAIL={counts['fail']} "
                 f"PENDING={counts['pending']} SKIP={counts['skip']}"
             )
+            rerun = "python manage.py aws-check --check"
+            for section in options["section"] or []:
+                rerun += f" --section {section}"
+            self.stdout.write(f"Rerun: {rerun}")
         if report["overall"] == "fail":
             raise CommandError("AWS readiness checks failed", returncode=1)

@@ -18,6 +18,10 @@ python manage.py aws-check --section s3 --check     # repeat --section as needed
 ```
 
 `--region`, `--aws-profile`, and `--timeout` select the bounded AWS context.
+Timeout must be 1–30 seconds. A profile overrides static `AWS_KEY` / `AWS_SECRET`;
+otherwise a complete static pair is used, falling back to boto3's environment,
+container, instance or task-role chain when both are empty. A partial static
+pair is a failure.
 `--bucket-name` and `--mailbox-email` supply non-secret create details.
 `--probe-s3` separately authorizes a UUID sentinel put/get/delete test. If its
 cleanup fails, the report prints the exact key. `--adopt-bucket` is an explicit
@@ -25,9 +29,36 @@ repair for an interrupted create/tag operation: ownership must be proven by
 `ListBuckets`, the region must match, and existing tags are merged rather than
 replaced.
 
+`--check` and `--apply` are mutually exclusive; `--yes` requires `--apply`.
+JSON mode is read-only and cannot be combined with apply, yes or probe flags.
+A non-TTY invocation is audit-only unless `--apply --yes` is explicit; an S3
+probe also requires apply authorization.
+
 Exit 0 means no required check failed; WARN, PENDING and SKIP may remain. Exit
-1 means readiness failed. Exit 2 means the CLI request was invalid. JSON uses
-`schema_version=1` and includes stable status/code/remediation fields.
+1 means readiness failed. Exit 2 means the CLI request was invalid. Statuses
+mean: PASS is ready, WARN is usable but needs attention, FAIL blocks readiness,
+PENDING awaits an external/operator step, and SKIP was deliberately not run.
+JSON uses `schema_version=1` and stable section/status/code/message/details/
+remediation/changed items:
+
+```json
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-04T12:00:00+00:00",
+  "region": "us-west-2",
+  "overall": "pass",
+  "counts": {"pass": 8, "warn": 1, "fail": 0, "pending": 1, "skip": 0},
+  "items": [{
+    "section": "monitoring",
+    "status": "pending",
+    "code": "sns.topic_not_allowlisted",
+    "message": "Operations topic ARN is not in the static receiver allowlist",
+    "details": {"topic_arn": "arn:aws:sns:us-west-2:123456789012:django-mojo-example-operations"},
+    "remediation": "Add the exact ARN to AWS_CLOUDWATCH_ALARM_TOPIC_ARNS, restart Django, then rerun.",
+    "changed": false
+  }]
+}
+```
 
 ## Sections
 
@@ -75,12 +106,34 @@ and RDS free storage <= 10 GiB. They use stable names, ownership tags,
 CWAgent memory/disk are not guessed because portable thresholds/dimensions do
 not exist.
 
-## IAM outline
+The topic name is `django-mojo-<deployment>-operations`; alarm names are
+`django-mojo/<deployment>/<resource-type>/<resource-id>/<signal>`. Owned
+resources carry `managed-by=django-mojo`, `purpose=cloudwatch-incidents`, and
+`deployment=<slug>`. Existing owned drift is reported and preserved; a
+same-name resource without those ownership tags is a conflict.
 
-Audit needs STS identity; Redis/database access; S3 head/public-block/CORS;
-SES identity/account/receipt-rule reads; SNS list/tag/subscription reads;
-CloudWatch alarm/tag reads; and EC2/RDS/ElastiCache describe permissions.
-Apply additionally needs the corresponding create/tag/subscribe,
-`cloudwatch:PutMetricAlarm`, and optional S3 object permissions. Grant only the
-selected sections and deployment resources. The command never deletes AWS
-resources, edits deployment files, changes DNS, or sends email.
+After a signed delivery receipt, apply can create the opt-in RuleSet
+`AWS CloudWatch - Operations` in category `aws:cloudwatch`, bundling by alarm
+model and ID. Its handler is `notify://perm@manage_security`; it does not page,
+open a direct ticket, block an IP, or bypass the incident lifecycle. The normal
+global default-rule seeder never installs it on non-AWS deployments.
+
+## Least-privilege IAM actions
+
+Grant only actions for the selected sections and scope resource ARNs wherever
+AWS supports it:
+
+| Section/mode | Required AWS actions |
+|---|---|
+| identity/all AWS checks | `sts:GetCallerIdentity` |
+| S3 audit | `s3:ListBucket`, `s3:GetBucketLocation`, `s3:GetBucketPublicAccessBlock`, `s3:GetBucketCORS` |
+| S3 create/adopt | `s3:CreateBucket`, `s3:PutBucketPublicAccessBlock`, `s3:GetBucketTagging`, `s3:PutBucketTagging`; adoption also needs `s3:ListAllMyBuckets` |
+| S3 probe | `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` on `__django_mojo_aws_check__/*` |
+| SES/email audit | `ses:GetIdentityVerificationAttributes`, `ses:GetIdentityDkimAttributes`, `ses:GetAccountSendingEnabled`, `ses:GetSendQuota`, `ses:GetIdentityNotificationAttributes`, `ses:DescribeReceiptRuleSet`, `sns:GetTopicAttributes`, `sns:ListTopics`, `sns:ListSubscriptionsByTopic`, `s3:GetBucketPolicy` |
+| SES/email create-missing | `ses:VerifyDomainIdentity`, `ses:VerifyDomainDkim`, `ses:SetIdentityNotificationTopic`, `sns:CreateTopic`, `sns:Subscribe` |
+| Monitoring audit | `sns:ListTopics`, `sns:ListTagsForResource`, `sns:ListSubscriptionsByTopic`, `cloudwatch:DescribeAlarms`, `cloudwatch:ListTagsForResource`, `ec2:DescribeInstances`, `rds:DescribeDBInstances`, `elasticache:DescribeCacheClusters` |
+| Monitoring apply | `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe`, `cloudwatch:PutMetricAlarm`, `cloudwatch:TagResource` |
+
+Cron, rule, mailbox and template checks use Django database/Redis access rather
+than IAM. The command never deletes AWS resources, edits deployment files,
+changes DNS, requests SES production access, or sends email.
