@@ -449,6 +449,40 @@ def test_idempotency_key_handling(opts):
 
 
 @th.django_unit_test()
+def test_failed_unstarted_idempotent_publish_is_resumed(opts):
+    """A durable outbox can resume a job whose first Redis mirror failed."""
+    from mojo.apps.jobs import publish
+    from mojo.apps.jobs.models import Job
+
+    idempotency_key = f"test_resume_{uuid.uuid4().hex[:8]}"
+    first_id = publish(
+        func="mojo.apps.jobs.examples.sample_jobs.send_email",
+        payload={"recipients": ["resume@example.com"]},
+        channel=opts.test_channel,
+        idempotency_key=idempotency_key,
+    )
+    first = Job.objects.get(pk=first_id)
+    first.status = "failed"
+    first.last_error = "Failed to queue: simulated"
+    first.save(update_fields=["status", "last_error", "modified"])
+    opts.redis.delete(opts.keys.queue(opts.test_channel))
+
+    resumed_id = publish(
+        func="mojo.apps.jobs.examples.sample_jobs.send_email",
+        payload={"recipients": ["resume@example.com"]},
+        channel=opts.test_channel,
+        idempotency_key=idempotency_key,
+    )
+    resumed = Job.objects.get(idempotency_key=idempotency_key)
+
+    assert resumed_id != first_id, "An unstarted failed publish must be recreated"
+    assert resumed.pk == resumed_id, "The idempotency key must point at the resumed Job"
+    assert resumed.status == "pending", "The resumed Job must be pending for execution"
+    assert Job.objects.filter(idempotency_key=idempotency_key).count() == 1, \
+        "Resume must retain exactly one Job row for the idempotency key"
+
+
+@th.django_unit_test()
 def test_cleanup_publish_execute(opts):
     """Clean up test data."""
     from mojo.apps.jobs.models import Job, JobEvent

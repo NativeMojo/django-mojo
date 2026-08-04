@@ -109,7 +109,7 @@ class Ticket(models.Model, MojoModel):
         kwargs = {"parent": self, "note": note, "group": self.group, "user": user}
         if metadata:
             kwargs["metadata"] = metadata
-        TicketNote.objects.create(**kwargs)
+        return TicketNote.objects.create(**kwargs)
 
 class TicketNote(models.Model, MojoModel):
     class Meta:

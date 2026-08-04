@@ -8,6 +8,8 @@ from .incoming_email import IncomingEmail
 from .email_attachment import EmailAttachment
 from .sent_message import SentMessage
 from .email_template import EmailTemplate
+from .cloudwatch_alarm import CloudWatchAlarm
+from .cloudwatch_alarm_transition import CloudWatchAlarmTransition
 
 __all__ = [
     "EmailDomain",
@@ -16,4 +18,6 @@ __all__ = [
     "EmailAttachment",
     "SentMessage",
     "EmailTemplate",
+    "CloudWatchAlarm",
+    "CloudWatchAlarmTransition",
 ]

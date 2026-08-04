@@ -2,13 +2,19 @@ import socket
 import time
 
 
-def report_event(details, title=None, category="api_error", level=1, request=None, scope="global", **kwargs):
+def record_event(details, title=None, category="api_error", level=1, request=None, scope="global", **kwargs):
     from .models import Event
     event_data = _create_event_dict(details, title, category, level, request, scope, **kwargs)
     event = Event(**event_data)
     event.sync_metadata()
     event.save()
+    return event
+
+
+def report_event(details, title=None, category="api_error", level=1, request=None, scope="global", **kwargs):
+    event = record_event(details, title, category, level, request, scope, **kwargs)
     event.publish()
+    return event
 
 
 # Set True the first time the Redis suppression path fails while fail_open is on,

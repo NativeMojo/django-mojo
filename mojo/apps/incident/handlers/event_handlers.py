@@ -423,6 +423,16 @@ class TicketHandler:
                     assignee = None
 
             incident = getattr(event, "incident", None)
+            if (
+                incident
+                and event.category == "aws:cloudwatch:alarm"
+                and incident.status in ("resolved", "closed")
+            ):
+                logger.info(
+                    "TicketHandler: skipping recovered CloudWatch incident %s",
+                    incident.pk,
+                )
+                return True
             if incident and incident.rule_set_id:
                 existing = Ticket.objects.filter(
                     incident__rule_set_id=incident.rule_set_id,
@@ -545,28 +555,8 @@ class ResolveHandler:
         note = self.params.get("note") or "Auto-resolved by handler chain"
 
         try:
-            incident.status = status
-            incident.save(update_fields=["status"])
-            incident.add_history("status_changed", note=note)
-
-            # Mirror the metrics recorded by on_rest_saved
-            if status == "resolved":
-                try:
-                    from mojo.apps import metrics
-                    from mojo.helpers.settings import settings
-                    if settings.INCIDENT_EVENT_METRICS:
-                        metrics.record(
-                            "incidents:resolved",
-                            account="incident",
-                            min_granularity=settings.get_static(
-                                "INCIDENT_METRICS_MIN_GRANULARITY", "hours"
-                            ),
-                        )
-                except Exception:
-                    pass
-
-            incident.check_delete_on_resolution()
-            return True
+            from mojo.apps.incident.services.lifecycle import resolve_incident
+            return resolve_incident(incident, status=status, note=note)
         except Exception:
             logger.exception("ResolveHandler failed for event %s", event.pk)
             return False

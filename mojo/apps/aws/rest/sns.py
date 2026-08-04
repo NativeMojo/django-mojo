@@ -1,7 +1,4 @@
-from typing import Any, Dict, Optional
 import json
-import time
-import requests
 
 from mojo import decorators as md
 from mojo import JsonResponse
@@ -15,184 +12,14 @@ from mojo.helpers.aws.inbound_email import process_inbound_email_from_s3
 logger = logit.get_logger("email", "email.log")
 
 
-# Simple in-memory cache for SNS signing certificates
-# Key: SigningCertURL, Value: (fetched_at_epoch_seconds, pem_bytes)
-_SNS_CERT_CACHE: Dict[str, tuple[float, bytes]] = {}
-_SNS_CERT_TTL_SECONDS = settings.get_static('SNS_CERT_TTL_SECONDS', 3600)  # default 1 hour
-
-
-def _json_loads_safe(data: str) -> Optional[Dict[str, Any]]:
+def _json_loads_safe(data):
     try:
         return json.loads(data)
     except Exception:
         return None
 
 
-def _validate_sns_signature(sns: Dict[str, Any]) -> bool:
-    """
-    Validate Amazon SNS signature for SubscriptionConfirmation and Notification messages.
-
-    Behavior:
-    - When settings.DEBUG is True and settings.get('SNS_VALIDATION_BYPASS_DEBUG', False) is True,
-      this returns True to simplify local development.
-    - Otherwise performs full validation and uses an in-memory certificate cache to
-      reduce network calls to the SigningCertURL.
-    """
-    try:
-        import base64
-        from urllib.parse import urlparse
-        from cryptography import x509
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives.asymmetric import padding
-        from cryptography.hazmat.backends import default_backend  # noqa: F401
-    except Exception as e:
-        logger.error(f"SNS signature validation unavailable (missing dependencies): {e}")
-        return False
-
-    # DEBUG bypass (opt-in)
-    if getattr(settings, "DEBUG", False) and bool(getattr(settings, "SNS_VALIDATION_BYPASS_DEBUG", False)):
-        logger.info("SNS signature validation bypassed (DEBUG mode with SNS_VALIDATION_BYPASS_DEBUG=True)")
-        return True
-
-    signing_cert_url = sns.get("SigningCertURL")
-    signature_b64 = sns.get("Signature")
-    msg_type = sns.get("Type")
-
-    if not signing_cert_url or not signature_b64 or not msg_type:
-        return False
-
-    # Validate SigningCertURL
-    parsed = urlparse(signing_cert_url)
-    if parsed.scheme.lower() != "https":
-        logger.warning("SNS SigningCertURL is not HTTPS")
-        return False
-    hostname = (parsed.hostname or "").lower()
-    # Allow sns.amazonaws.com and sns.<region>.amazonaws.com
-    if not (hostname == "sns.amazonaws.com" or (hostname.endswith(".amazonaws.com") and hostname.startswith("sns."))):
-        logger.warning(f"SNS SigningCertURL host not allowed: {hostname}")
-        return False
-
-    # Build canonical string per AWS docs
-    def build_canonical_notification(m: Dict[str, Any]) -> bytes:
-        # Order: Message, MessageId, Subject (if present), Timestamp, TopicArn, Type
-        lines = []
-        def add(k):
-            v = m.get(k)
-            if v is not None:
-                lines.append(f"{k}\n{v}\n")
-        add("Message")
-        add("MessageId")
-        if m.get("Subject") is not None:
-            add("Subject")
-        add("Timestamp")
-        add("TopicArn")
-        add("Type")
-        return "".join(lines).encode("utf-8")
-
-    def build_canonical_subscription(m: Dict[str, Any]) -> bytes:
-        # Order: Message, MessageId, SubscribeURL, Timestamp, Token, TopicArn, Type
-        lines = []
-        def add(k):
-            v = m.get(k)
-            if v is not None:
-                lines.append(f"{k}\n{v}\n")
-        add("Message")
-        add("MessageId")
-        add("SubscribeURL")
-        add("Timestamp")
-        add("Token")
-        add("TopicArn")
-        add("Type")
-        return "".join(lines).encode("utf-8")
-
-    if msg_type in ("Notification",):
-        canonical = build_canonical_notification(sns)
-    elif msg_type in ("SubscriptionConfirmation", "UnsubscribeConfirmation"):
-        canonical = build_canonical_subscription(sns)
-    else:
-        # Unknown type; do not accept
-        return False
-
-    # Fetch certificate with caching
-    pem_bytes: Optional[bytes] = None
-    cache_entry = _SNS_CERT_CACHE.get(signing_cert_url)
-    now = time.time()
-    if cache_entry:
-        fetched_at, cached_pem = cache_entry
-        if now - fetched_at < _SNS_CERT_TTL_SECONDS:
-            pem_bytes = cached_pem
-        else:
-            # expired, drop from cache
-            _SNS_CERT_CACHE.pop(signing_cert_url, None)
-    if pem_bytes is None:
-        try:
-            resp = requests.get(signing_cert_url, timeout=10)
-            resp.raise_for_status()
-            pem_bytes = resp.content
-            _SNS_CERT_CACHE[signing_cert_url] = (now, pem_bytes)
-        except Exception as e:
-            logger.error(f"Failed to fetch SNS SigningCert: {e}")
-            return False
-
-    # Parse certificate and verify signature
-    try:
-        cert = x509.load_pem_x509_certificate(pem_bytes)
-        pubkey = cert.public_key()
-    except Exception as e:
-        logger.error(f"Failed to load SNS SigningCert: {e}")
-        return False
-
-    # Verify signature (try SHA1 then SHA256 for compatibility)
-    try:
-        signature = base64.b64decode(signature_b64)
-    except Exception as e:
-        logger.error(f"Invalid SNS signature (base64 decode): {e}")
-        return False
-
-    for hash_algo in (hashes.SHA1(), hashes.SHA256()):
-        try:
-            pubkey.verify(
-                signature,
-                canonical,
-                padding.PKCS1v15(),
-                hash_algo
-            )
-            return True
-        except Exception:
-            continue
-
-    logger.error("SNS signature verification failed")
-    return False
-
-
-def _handle_subscription_confirmation(sns: Dict[str, Any]) -> Dict[str, Any]:
-    subscribe_url = sns.get("SubscribeURL")
-    topic_arn = sns.get("TopicArn")
-    if subscribe_url:
-        try:
-            resp = requests.get(subscribe_url, timeout=10)
-            logger.info(f"SNS subscription confirmed for topic {topic_arn}: {resp.status_code}")
-            return {"confirmed": True, "status_code": resp.status_code}
-        except Exception as e:
-            logger.error(f"Failed to confirm SNS subscription for topic {topic_arn}: {e}")
-            return {"confirmed": False, "error": str(e)}
-    logger.warning("SubscriptionConfirmation missing SubscribeURL")
-    return {"confirmed": False, "error": "missing_subscribe_url"}
-
-
-def _parse_sns_request(request) -> Optional[Dict[str, Any]]:
-    # SNS sends JSON in the raw body (content-type text/plain or json), not x-www-form-urlencoded
-    try:
-        body = request.body.decode("utf-8") if hasattr(request, "body") else (request.DATA or "")
-    except Exception:
-        body = request.DATA or ""
-    if isinstance(body, dict):
-        # Some frameworks may parse JSON automatically
-        return body
-    return _json_loads_safe(body)
-
-
-def _handle_inbound_notification(message: Dict[str, Any]) -> None:
+def _handle_inbound_notification(message):
     """
     Handle SES inbound event delivered via SNS:
     - Determine S3 bucket/key from receipt.action and mail.messageId/prefix
@@ -233,7 +60,7 @@ def _handle_inbound_notification(message: Dict[str, Any]) -> None:
         logger.error(f"Inbound processing failed for s3://{bucket}/{key}: {e}")
 
 
-def _handle_bounce_notification(message: Dict[str, Any]) -> None:
+def _handle_bounce_notification(message):
     """
     Handle SES bounce notification delivered via SNS.
     Updates SentMessage status to 'bounced' with details.
@@ -256,7 +83,7 @@ def _handle_bounce_notification(message: Dict[str, Any]) -> None:
     sent.save(update_fields=["status", "status_reason", "modified"])
 
 
-def _handle_complaint_notification(message: Dict[str, Any]) -> None:
+def _handle_complaint_notification(message):
     """
     Handle SES complaint notification delivered via SNS.
     Updates SentMessage status to 'complained' with details.
@@ -279,7 +106,7 @@ def _handle_complaint_notification(message: Dict[str, Any]) -> None:
     sent.save(update_fields=["status", "status_reason", "modified"])
 
 
-def _handle_delivery_notification(message: Dict[str, Any]) -> None:
+def _handle_delivery_notification(message):
     """
     Handle SES delivery notification delivered via SNS.
     Updates SentMessage status to 'delivered' with details.
@@ -302,7 +129,7 @@ def _handle_delivery_notification(message: Dict[str, Any]) -> None:
     sent.save(update_fields=["status", "status_reason", "modified"])
 
 
-def _handle_sns(kind: str, request):
+def _handle_sns(kind, request):
     """
     Common SNS webhook handler:
     - Validates SNS signature (TODO)
@@ -312,8 +139,10 @@ def _handle_sns(kind: str, request):
     if request.method != "POST":
         return JsonResponse({"error": "Method not allowed"}, status=405)
 
-    sns = _parse_sns_request(request)
-    if not sns:
+    from mojo.apps.aws.services import sns as sns_service
+    try:
+        sns = sns_service.parse_request(request)
+    except sns_service.SNSPayloadError:
         return JsonResponse({"error": "Invalid SNS payload"}, status=400)
 
     # Optional: compare with HTTP header x-amz-sns-message-type for consistency
@@ -321,11 +150,8 @@ def _handle_sns(kind: str, request):
     topic_arn = sns.get("TopicArn")
     logger.info(f"SNS webhook ({kind}) Type={msg_type} TopicArn={topic_arn}")
 
-    # Validate SNS signature and allowed topic
-    if not _validate_sns_signature(sns):
-        return JsonResponse({"error": "Invalid SNS signature"}, status=403)
     # Ensure TopicArn matches a configured/known ARN
-    def _is_allowed_topic(topic: Optional[str]) -> bool:
+    def _is_allowed_topic(topic):
         if not topic:
             return False
         try:
@@ -340,12 +166,24 @@ def _handle_sns(kind: str, request):
         except Exception as e:
             logger.error(f"TopicArn allow-check failed: {e}")
             return False
-    if not _is_allowed_topic(topic_arn):
-        return JsonResponse({"error": "Disallowed TopicArn"}, status=403)
+    allowed_topics = [topic_arn] if _is_allowed_topic(topic_arn) else []
+    try:
+        sns_service.verify_envelope(
+            sns, allowed_topics, request=request, allow_debug=True,
+        )
+    except sns_service.SNSTransientError:
+        return JsonResponse({"error": "SNS verification unavailable"}, status=503)
+    except sns_service.SNSAuthorizationError:
+        return JsonResponse({"error": "SNS authorization failed"}, status=403)
 
     if msg_type == "SubscriptionConfirmation":
-        res = _handle_subscription_confirmation(sns)
-        return JsonResponse({"status": True, "data": res})
+        try:
+            status_code = sns_service.confirm_subscription(sns)
+        except sns_service.SNSTransientError:
+            return JsonResponse({"error": "SNS confirmation failed"}, status=503)
+        except sns_service.SNSAuthorizationError:
+            return JsonResponse({"error": "SNS authorization failed"}, status=403)
+        return JsonResponse({"status": True, "data": {"confirmed": True, "status_code": status_code}})
 
     if msg_type == "Notification":
         # SNS Message may be a JSON string
@@ -405,3 +243,59 @@ def on_sns_delivery(request):
     Public webhook endpoint for SES delivery notifications.
     """
     return _handle_sns("delivery", request)
+
+
+@md.URL("cloudwatch/sns/alarm")
+@md.public_endpoint()
+def on_cloudwatch_alarm(request):
+    """Receive signed, allowlisted CloudWatch alarm notifications from SNS."""
+    from mojo.apps.aws.services import sns as sns_service
+    from mojo.apps.aws.services.cloudwatch_alarms import (
+        CloudWatchDispatchError,
+        CloudWatchPayloadError,
+        process_notification,
+    )
+
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    try:
+        envelope = sns_service.parse_request(request)
+    except sns_service.SNSPayloadError:
+        return JsonResponse({"error": "Invalid SNS payload"}, status=400)
+
+    allowed_topics = settings.get_static(
+        "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", [], kind="list"
+    )
+    try:
+        sns_service.verify_envelope(
+            envelope, allowed_topics, request=request, allow_debug=False,
+        )
+    except sns_service.SNSTransientError:
+        return JsonResponse({"error": "SNS verification unavailable"}, status=503)
+    except sns_service.SNSAuthorizationError:
+        return JsonResponse({"error": "SNS authorization failed"}, status=403)
+
+    msg_type = envelope.get("Type")
+    if msg_type == "SubscriptionConfirmation":
+        try:
+            status_code = sns_service.confirm_subscription(envelope)
+        except sns_service.SNSTransientError:
+            return JsonResponse({"error": "SNS confirmation failed"}, status=503)
+        except sns_service.SNSAuthorizationError:
+            return JsonResponse({"error": "SNS authorization failed"}, status=403)
+        return JsonResponse({
+            "status": True,
+            "data": {"confirmed": True, "status_code": status_code},
+        })
+    if msg_type != "Notification":
+        return JsonResponse({"error": "Unsupported SNS message type"}, status=400)
+    try:
+        result = process_notification(envelope)
+    except CloudWatchPayloadError:
+        return JsonResponse({"error": "Invalid CloudWatch alarm payload"}, status=400)
+    except CloudWatchDispatchError:
+        return JsonResponse({"error": "Alarm dispatch incomplete"}, status=503)
+    except Exception:
+        logger.exception("CloudWatch SNS processing failed")
+        return JsonResponse({"error": "Alarm processing failed"}, status=503)
+    return JsonResponse({"status": True, "data": result})

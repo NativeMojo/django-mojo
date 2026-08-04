@@ -1,3 +1,4 @@
+import hashlib
 import re
 from django.db import models
 from django.core.validators import MinValueValidator
@@ -145,7 +146,7 @@ class RuleSet(models.Model, MojoModel):
         CAN_DELETE = True
 
 
-    def run_handler(self, event, incident=None):
+    def run_handler(self, event, incident=None, idempotency_prefix=None, strict=False):
         """
         Dispatch all handlers configured on this RuleSet as async jobs.
 
@@ -169,7 +170,7 @@ class RuleSet(models.Model, MojoModel):
             specs = re.split(r',(?=(?:job|email|sms|notify|ticket|maestro|block|llm|resolve)://)', self.handler.strip())
             published = False
 
-            for spec in filter(None, [s.strip() for s in specs]):
+            for index, spec in enumerate(filter(None, [s.strip() for s in specs])):
                 handler_url = urlparse(spec)
                 if handler_url.scheme not in ("job", "email", "sms", "notify", "block", "ticket", "maestro", "llm", "resolve"):
                     continue
@@ -184,6 +185,11 @@ class RuleSet(models.Model, MojoModel):
                         "mojo.apps.incident.handlers.event_handlers.execute_handler",
                         payload,
                         channel="incident_handlers",
+                        idempotency_key=(
+                            f"{idempotency_prefix}:{index}:"
+                            f"{hashlib.sha256(spec.encode('utf-8')).hexdigest()[:12]}"[:64]
+                            if idempotency_prefix else None
+                        ),
                     )
                     published = True
                 except Exception:
@@ -192,10 +198,14 @@ class RuleSet(models.Model, MojoModel):
                     if incident:
                         incident.add_history(f"handler:{handler_url.scheme}",
                             note=f"Handler {spec} failed to publish")
+                    if strict:
+                        raise
 
             return published
         except Exception:
             logger.exception("Error dispatching handlers for ruleset %s", self.pk)
+            if strict:
+                raise
             return False
 
     def _create_ticket_from_handler(self, event, incident, handler_url, params):

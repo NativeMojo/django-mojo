@@ -387,6 +387,16 @@ def publish(
             # Idempotent request - return existing job ID
             try:
                 existing = Job.objects.get(idempotency_key=idempotency_key)
+                if existing.status == 'failed' and existing.attempt == 0:
+                    existing.delete()
+                    return publish(
+                        func, payload, channel=channel, delay=delay, run_at=run_at,
+                        broadcast=broadcast, max_retries=max_retries,
+                        backoff_base=backoff_base, backoff_max=backoff_max,
+                        expires_in=expires_in, expires_at=expires_at,
+                        max_exec_seconds=max_exec_seconds,
+                        idempotency_key=idempotency_key,
+                    )
                 logit.info(f"Idempotent job request, returning existing: {existing.id}")
                 return existing.id
             except Job.DoesNotExist:

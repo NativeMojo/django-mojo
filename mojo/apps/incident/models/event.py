@@ -248,7 +248,7 @@ class Event(models.Model, MojoModel):
         # Update the metadata with these values
         self.metadata.update(field_values)
 
-    def publish(self):
+    def publish(self, use_catchall=True, dispatch_handlers=True):
         from mojo.apps.incident.models import RuleSet
         # Record metrics and find the RuleSet by category
         self.record_event_metrics()
@@ -256,12 +256,19 @@ class Event(models.Model, MojoModel):
         rule_set = RuleSet.check_by_category(self.scope, self)
         if rule_set is None:
             rule_set = RuleSet.check_by_category(self.category, self)
-        if rule_set is None:
+        if rule_set is None and use_catchall:
             rule_set = RuleSet.check_by_category("*", self)
 
         # Honor action=ignore from RuleSet metadata (accept both "ignore" and "ignore://")
         if rule_set and rule_set.handler and rule_set.handler.strip().rstrip(":/") == "ignore":
-            return
+            return {
+                "rule_set": rule_set,
+                "incident": None,
+                "should_dispatch": False,
+            }
+
+        incident = None
+        should_dispatch = False
 
         # Read trigger config from model fields
         trigger_count = None
@@ -326,7 +333,9 @@ class Event(models.Model, MojoModel):
                 if rule_set:
                     transitioned_to_new = (prev_status == "pending" and incident.status == "new")
                     if (created and (trigger_count is None or meets_threshold)) or transitioned_to_new:
-                        rule_set.run_handler(self, incident)
+                        should_dispatch = bool(rule_set.handler)
+                        if dispatch_handlers:
+                            rule_set.run_handler(self, incident)
                         # Track event count at trigger so re-trigger knows the baseline
                         if retrigger_every is not None:
                             try:
@@ -350,7 +359,9 @@ class Event(models.Model, MojoModel):
                                 incident.save(update_fields=["metadata"])
                                 incident.add_history("handler_retriggered",
                                     note=f"Re-triggered: {total} events (retrigger_every: {retrigger_every})")
-                                rule_set.run_handler(self, incident)
+                                should_dispatch = bool(rule_set.handler)
+                                if dispatch_handlers:
+                                    rule_set.run_handler(self, incident)
                         except Exception:
                             logger.exception("Error during re-trigger check (incident=%s)", incident.pk)
                 elif created and LLM_API_KEY:
@@ -368,6 +379,12 @@ class Event(models.Model, MojoModel):
                         )
                     except Exception:
                         pass
+
+        return {
+            "rule_set": rule_set,
+            "incident": incident,
+            "should_dispatch": should_dispatch,
+        }
 
     def record_event_metrics(self):
         if settings.INCIDENT_EVENT_METRICS:

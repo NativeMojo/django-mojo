@@ -291,6 +291,11 @@ def push_source(source, board_id=None):
             link = source.maestro_links.get()
         else:
             _record_link_created(source, link)
+            if source._meta.model_name == "ticket":
+                for note_id in source.notes.filter(
+                    metadata__type="cloudwatch_recovery"
+                ).values_list("id", flat=True):
+                    enqueue_note(link.pk, "ticket", note_id)
     else:
         _post(f"link/item/{link.remote_item_id}", payload)
     link.last_synced = timezone.now()
