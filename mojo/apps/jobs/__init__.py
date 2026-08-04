@@ -356,6 +356,7 @@ def publish(
         backoff_max = JOBS_DEFAULT_BACKOFF_MAX
 
     # Create job in database
+    mirror_existing_job = False
     try:
         with transaction.atomic():
             job = Job.objects.create(
@@ -387,22 +388,55 @@ def publish(
             # Idempotent request - return existing job ID
             try:
                 existing = Job.objects.get(idempotency_key=idempotency_key)
-                if existing.status == 'failed' and existing.attempt == 0:
-                    existing.delete()
-                    return publish(
-                        func, payload, channel=channel, delay=delay, run_at=run_at,
-                        broadcast=broadcast, max_retries=max_retries,
-                        backoff_base=backoff_base, backoff_max=backoff_max,
-                        expires_in=expires_in, expires_at=expires_at,
-                        max_exec_seconds=max_exec_seconds,
+                can_resume = (
+                    existing.status == 'failed'
+                    and existing.attempt == 0
+                    and existing.last_error.startswith('Failed to queue:')
+                )
+                if not can_resume and existing.status != 'pending':
+                    logit.info(f"Idempotent job request, returning existing: {existing.id}")
+                    return existing.id
+                if can_resume and (
+                    existing.func != func_path
+                    or existing.payload != payload
+                    or existing.channel != channel
+                    or existing.broadcast != broadcast
+                ):
+                    raise ValueError(
+                        "Idempotency key belongs to different failed job content"
+                    )
+                with transaction.atomic():
+                    existing = Job.objects.select_for_update().get(
                         idempotency_key=idempotency_key,
                     )
-                logit.info(f"Idempotent job request, returning existing: {existing.id}")
-                return existing.id
+                    if (
+                        existing.status == 'failed'
+                        and existing.attempt == 0
+                        and existing.last_error.startswith('Failed to queue:')
+                    ):
+                        existing.status = 'pending'
+                        existing.last_error = ''
+                        existing.stack_trace = ''
+                        existing.finished_at = None
+                        existing.save(update_fields=[
+                            'status', 'last_error', 'stack_trace', 'finished_at',
+                            'modified',
+                        ])
+                    elif existing.status != 'pending':
+                        return existing.id
+                job = existing
+                job_id = existing.id
+                channel = existing.channel
+                run_at = existing.run_at
+                broadcast = existing.broadcast
+                now = timezone.now()
+                mirror_existing_job = True
+                logit.info(f"Mirroring existing idempotent job: {existing.id}")
             except Job.DoesNotExist:
                 pass
-        logit.error(f"Failed to create job in database: {e}")
-        raise RuntimeError(f"Failed to create job: {e}")
+        if not mirror_existing_job:
+            logit.error(f"Failed to create job in database: {e}")
+            raise RuntimeError(f"Failed to create job: {e}")
 
     # Mirror to Redis (Plan B: List + ZSET + Scheduled ZSET)
     try:
@@ -422,14 +456,6 @@ def publish(
             # runs on does not consume `channel`.
             register_sched_channel(channel)
 
-            # Record scheduled event
-            JobEvent.objects.create(
-                job=job,
-                channel=channel,
-                event='scheduled',
-                details={'run_at': run_at.isoformat()}
-            )
-
             logit.info(f"Scheduled job {job_id} on {channel} for {run_at} "
                        f"(zset={'sched_broadcast' if broadcast else 'sched'})")
         else:
@@ -437,31 +463,7 @@ def publish(
             queue_key = keys.queue(channel)
             redis.rpush(queue_key, job_id)
 
-            # Record queued event (for immediate queue)
-            JobEvent.objects.create(
-                job=job,
-                channel=channel,
-                event='queued',
-                details={'queue': queue_key}
-            )
-
             logit.info(f"Queued job {job_id} on {channel} (broadcast={broadcast}) to queue {queue_key}")
-
-        # Emit metric
-
-        metrics.record(
-            slug="jobs.published",
-            when=now,
-            count=1,
-            category="jobs"
-        )
-
-        metrics.record(
-            slug=f"jobs.published.{channel}",
-            when=now,
-            count=1,
-            category="jobs"
-        )
 
     except Exception as e:
         logit.error(f"Failed to mirror job {job_id} to Redis: {e}")
@@ -470,6 +472,36 @@ def publish(
         job.last_error = f"Failed to queue: {e}"
         job.save(update_fields=['status', 'last_error', 'modified'])
         raise RuntimeError(f"Failed to queue job: {e}")
+
+    try:
+        JobEvent.objects.create(
+            job=job,
+            channel=channel,
+            event='scheduled' if run_at and run_at > now else 'queued',
+            details=(
+                {'run_at': run_at.isoformat()}
+                if run_at and run_at > now
+                else {'queue': keys.queue(channel)}
+            ),
+        )
+    except Exception as e:
+        logit.warning(f"Failed to record publish event for job {job_id}: {e}")
+
+    try:
+        metrics.record(
+            slug="jobs.published",
+            when=now,
+            count=1,
+            category="jobs"
+        )
+        metrics.record(
+            slug=f"jobs.published.{channel}",
+            when=now,
+            count=1,
+            category="jobs"
+        )
+    except Exception as e:
+        logit.warning(f"Failed to record publish metrics for job {job_id}: {e}")
 
     return job_id
 

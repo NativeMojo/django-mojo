@@ -362,8 +362,8 @@ def test_payload_is_bounded_and_stale_delivery_does_not_regress(opts):
 def test_delayed_ticket_job_skips_recovered_incident(opts):
     from django.utils import timezone
     from mojo.apps.aws.services.cloudwatch_alarms import process_notification
-    from mojo.apps.incident.handlers.event_handlers import execute_handler
-    from mojo.apps.incident.models import BundleBy, RuleSet, Ticket
+    from mojo.apps.incident.handlers.event_handlers import TicketHandler, execute_handler
+    from mojo.apps.incident.models import BundleBy, Event, RuleSet, Ticket
     from mojo.apps.jobs.models import Job
 
     _clear_state()
@@ -376,6 +376,9 @@ def test_delayed_ticket_job_skips_recovered_incident(opts):
     )
     started = timezone.now()
     first = process_notification(_envelope("late-alarm", _payload("ALARM", "OK", started)))
+    stale_event = Event.objects.select_related("incident").get(
+        category="aws:cloudwatch:alarm",
+    )
     process_notification(
         _envelope("late-ok", _payload("OK", "ALARM", started + timedelta(minutes=1)))
     )
@@ -383,7 +386,10 @@ def test_delayed_ticket_job_skips_recovered_incident(opts):
     with mock.patch(
         "mojo.apps.incident.handlers.event_handlers.TicketHandler._push_to_maestro"
     ) as push:
+        TicketHandler(
+            None, category="cloudwatch-test", board="17",
+        ).run(stale_event)
         execute_handler(job)
     assert not Ticket.objects.filter(category="cloudwatch-test").exists(), \
-        "A ticket job delayed past recovery must not create stale human work"
+        "Fresh or stale event objects delayed past recovery must not create human work"
     assert not push.called, "A recovered incident must not be pushed to Maestro"

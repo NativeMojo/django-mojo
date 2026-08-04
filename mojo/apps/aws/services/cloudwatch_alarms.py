@@ -290,17 +290,21 @@ def process_notification(envelope):
                 and alarm.active_incident_id
                 and data["new_state"] in ("OK", "INSUFFICIENT_DATA")
             ):
-                event.link_to_incident(alarm.active_incident)
-                transition.incident = alarm.active_incident
+                from mojo.apps.incident.models import Incident
+                active_incident = Incident.objects.select_for_update().get(
+                    pk=alarm.active_incident_id,
+                )
+                event.link_to_incident(active_incident)
+                transition.incident = active_incident
                 if data["new_state"] == "INSUFFICIENT_DATA":
-                    alarm.active_incident.add_history(
+                    active_incident.add_history(
                         "cloudwatch:insufficient_data",
                         note=f"CloudWatch entered INSUFFICIENT_DATA at {data['state_change_time']}",
                     )
                 else:
-                    _add_recovery_notes(alarm.active_incident, data)
+                    _add_recovery_notes(active_incident, data)
                     resolve_incident(
-                        alarm.active_incident,
+                        active_incident,
                         note=f"CloudWatch recovered at {data['state_change_time']}: {data['reason']}",
                         kind="cloudwatch:recovered",
                     )

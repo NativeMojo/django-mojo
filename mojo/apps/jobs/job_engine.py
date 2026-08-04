@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
 from django.db import close_old_connections
+from django.db.models import F
 
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
@@ -591,8 +592,9 @@ class JobEngine:
                 logger.info(f"Loading job {job_id} from database...")
             close_old_connections()
             if JOBS_DEBUG:
-                logger.info(f"Loading job {job_id} (no lock needed - Redis already claimed it)...")
-            # No select_for_update needed: Redis BRPOP already ensures only one process gets each job
+                logger.info(f"Loading job {job_id} before durable claim...")
+            # The compare-and-set below is the execution lock. Redis delivery
+            # is intentionally treated as at-least-once.
             job = Job.objects.get(id=job_id)
             if JOBS_DEBUG:
                 logger.info(f"Successfully loaded job {job_id} from database")
@@ -608,9 +610,10 @@ class JobEngine:
         try:
             if JOBS_DEBUG:
                 logger.info(f"Executing job {job_id} from channel {channel}")
-            # Check if already processed or canceled
-            if job.status in ('completed', 'canceled'):
-                # Already finished; remove from processing if present
+            # Only one Redis delivery may claim a pending row. Duplicate queue
+            # entries can occur after an ambiguous Redis write or a reaper
+            # retry; the database transition is the execution fence.
+            if job.status != 'pending':
                 self._remove_from_processing(channel, job_id)
                 return
 
@@ -638,12 +641,17 @@ class JobEngine:
                 metrics.record("jobs.expired")
                 return
 
-            # Mark as running
-            job.status = 'running'
-            job.started_at = dates.utcnow()
-            job.runner_id = self.runner_id
-            job.attempt += 1
-            job.save(update_fields=['status', 'started_at', 'runner_id', 'attempt'])
+            started_at = dates.utcnow()
+            claimed = Job.objects.filter(pk=job_id, status='pending').update(
+                status='running',
+                started_at=started_at,
+                runner_id=self.runner_id,
+                attempt=F('attempt') + 1,
+            )
+            if not claimed:
+                self._remove_from_processing(channel, job_id)
+                return
+            job.refresh_from_db()
 
             # Event: running
             try:
@@ -846,13 +854,24 @@ class JobEngine:
                                     )
                                     continue
 
-                                # Job can be retried - requeue it
+                                # Job can be retried. Return the durable row to
+                                # pending before publishing another Redis copy;
+                                # execute_job's compare-and-set claim fences
+                                # duplicate deliveries of the same ID.
+                                if job.status == 'running':
+                                    reset = Job.objects.filter(
+                                        pk=job.pk, status='running',
+                                    ).update(status='pending', runner_id=None)
+                                    if not reset:
+                                        self._remove_from_processing(ch, jid)
+                                        continue
+                                    job.status = 'pending'
+                                    job.runner_id = None
+                                elif job.status != 'pending':
+                                    self._remove_from_processing(ch, jid)
+                                    continue
                                 self._remove_from_processing(ch, jid)
                                 self.redis.rpush(self.keys.queue(ch), jid)
-
-                                # Increment attempt count to track reaper retries
-                                job.attempt += 1
-                                job.save(update_fields=['attempt'])
 
                                 JobEvent.objects.create(
                                     job=job, channel=ch, event='retry',

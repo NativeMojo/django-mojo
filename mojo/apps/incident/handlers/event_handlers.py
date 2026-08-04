@@ -402,7 +402,8 @@ class TicketHandler:
 
     def run(self, event):
         try:
-            from mojo.apps.incident.models import Ticket
+            from django.db import transaction
+            from mojo.apps.incident.models import Incident, Ticket
             title = self.params.get("title") or (getattr(event, "title", None) or "Auto-generated ticket")
             description = self.params.get("description") or (getattr(event, "details", None) or "")
             status = self.params.get("status", "open")
@@ -422,47 +423,57 @@ class TicketHandler:
                 except Exception:
                     assignee = None
 
-            incident = getattr(event, "incident", None)
-            if (
-                incident
-                and event.category == "aws:cloudwatch:alarm"
-                and incident.status in ("resolved", "closed")
-            ):
-                logger.info(
-                    "TicketHandler: skipping recovered CloudWatch incident %s",
-                    incident.pk,
-                )
-                return True
-            if incident and incident.rule_set_id:
-                existing = Ticket.objects.filter(
-                    incident__rule_set_id=incident.rule_set_id,
-                    group_id=incident.group_id,
-                ).exclude(status__in=("resolved", "closed")).first()
-                if existing is not None:
-                    logger.info("TicketHandler: reusing ticket %s for rule_set %s", existing.pk, incident.rule_set_id)
-                    existing.add_note(
-                        f"Recurring incident #{incident.pk}", None,
-                        metadata={"type": "incident_recurrence", "incident_id": incident.pk},
-                    )
-                    incident.add_history(
-                        "handler:ticket_reused",
-                        note=f"Reused ticket #{existing.pk} for this occurrence",
-                    )
-                    if self._wants_maestro():
-                        self._push_to_maestro(existing, self.params.get("board"))
-                    return True
+            incident_id = getattr(event, "incident_id", None)
+            with transaction.atomic():
+                incident = None
+                if incident_id:
+                    incident = Incident.objects.select_for_update().get(pk=incident_id)
+                    if (
+                        event.category == "aws:cloudwatch:alarm"
+                        and incident.status in ("resolved", "closed")
+                    ):
+                        logger.info(
+                            "TicketHandler: skipping recovered CloudWatch incident %s",
+                            incident.pk,
+                        )
+                        return True
 
-            ticket = Ticket.objects.create(
-                title=title,
-                description=description,
-                status=status,
-                priority=priority,
-                category=category,
-                assignee=assignee,
-                incident=incident,
-                group=getattr(incident, "group", None),
-                metadata={**getattr(event, "metadata", {})},
-            )
+                ticket = None
+                if incident and incident.rule_set_id:
+                    ticket = Ticket.objects.filter(
+                        incident__rule_set_id=incident.rule_set_id,
+                        group_id=incident.group_id,
+                    ).exclude(status__in=("resolved", "closed")).first()
+                    if ticket is not None:
+                        logger.info(
+                            "TicketHandler: reusing ticket %s for rule_set %s",
+                            ticket.pk,
+                            incident.rule_set_id,
+                        )
+                        ticket.add_note(
+                            f"Recurring incident #{incident.pk}", None,
+                            metadata={
+                                "type": "incident_recurrence",
+                                "incident_id": incident.pk,
+                            },
+                        )
+                        incident.add_history(
+                            "handler:ticket_reused",
+                            note=f"Reused ticket #{ticket.pk} for this occurrence",
+                        )
+
+                if ticket is None:
+                    ticket = Ticket.objects.create(
+                        title=title,
+                        description=description,
+                        status=status,
+                        priority=priority,
+                        category=category,
+                        assignee=assignee,
+                        incident=incident,
+                        group=getattr(incident, "group", None),
+                        metadata={**getattr(event, "metadata", {})},
+                    )
             if self._wants_maestro():
                 self._push_to_maestro(ticket, self.params.get("board"))
             return True
