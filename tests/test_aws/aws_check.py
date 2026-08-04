@@ -144,3 +144,46 @@ def test_aws_check_yes_requires_apply(opts):
         assert exc.returncode == 2, f"Invalid CLI combinations must exit 2, got {exc.returncode}"
     else:
         assert False, "--yes without --apply must be rejected"
+
+
+@th.django_unit_test()
+def test_runner_uses_static_credentials_unless_profile_selected(opts):
+    from mojo.apps.aws.services import aws_check
+
+    values = _setting_values(
+        AWS_REGION="us-west-2", AWS_KEY="configured-key", AWS_SECRET="configured-secret",
+    )
+    with mock.patch.object(aws_check, "_setting", side_effect=values), \
+            mock.patch.object(aws_check, "get_session") as get_session:
+        aws_check.AWSCheckRunner()._session()
+        get_session.assert_called_once_with(
+            access_key="configured-key", secret_key="configured-secret",
+            region="us-west-2", profile=None,
+        )
+
+        get_session.reset_mock()
+        aws_check.AWSCheckRunner(profile="operators")._session()
+        get_session.assert_called_once_with(
+            access_key=None, secret_key=None, region="us-west-2", profile="operators",
+        )
+
+
+@th.django_unit_test()
+def test_adopt_bucket_requires_private_public_access_block(opts):
+    from mojo.apps.aws.services import aws_check
+
+    s3 = mock.Mock()
+    s3.list_buckets.return_value = {"Buckets": [{"Name": "owned-bucket"}]}
+    s3.get_bucket_location.return_value = {"LocationConstraint": "us-west-2"}
+    s3.get_public_access_block.return_value = {
+        "PublicAccessBlockConfiguration": {"BlockPublicAcls": True},
+    }
+    runner = aws_check.AWSCheckRunner(region="us-west-2", clients={"s3": s3})
+
+    try:
+        runner._adopt_bucket("owned-bucket")
+    except RuntimeError as exc:
+        assert "public-access block" in str(exc), f"Unexpected adoption error: {exc}"
+    else:
+        assert False, "Unsafe bucket adoption should fail"
+    s3.put_bucket_tagging.assert_not_called()

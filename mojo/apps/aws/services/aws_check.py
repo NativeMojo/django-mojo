@@ -80,6 +80,9 @@ class AWSCheckRunner:
     def _session(self, access_key=None, secret_key=None, region=None):
         if access_key is None and secret_key is None and self.session is not None:
             return self.session
+        if access_key is None and secret_key is None and not self.profile:
+            access_key = _setting("AWS_KEY")
+            secret_key = _setting("AWS_SECRET")
         return get_session(
             access_key=access_key, secret_key=secret_key, region=region or self.region,
             profile=self.profile if not access_key and not secret_key else None,
@@ -240,6 +243,11 @@ class AWSCheckRunner:
         location = s3.get_bucket_location(Bucket=bucket).get("LocationConstraint") or "us-east-1"
         if location != self.region:
             raise RuntimeError(f"bucket is in {location}, not selected region {self.region}")
+        block = s3.get_public_access_block(Bucket=bucket).get("PublicAccessBlockConfiguration", {})
+        if not all(block.get(key) is True for key in (
+            "BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets",
+        )):
+            raise RuntimeError("bucket adoption requires all public-access block controls")
         tags = self._bucket_tags(s3, bucket)
         tags.update({**OWNERSHIP_TAGS, "deployment": self._deployment_slug()})
         s3.put_bucket_tagging(Bucket=bucket, Tagging={"TagSet": [
