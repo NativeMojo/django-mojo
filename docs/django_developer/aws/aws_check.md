@@ -100,8 +100,10 @@ The command uses the signed receiver already exposed at
 5. Run the documented disposable-alarm ALARM→OK test. The durable transition receipt proves delivery.
 6. Apply the default RuleSet only after delivery is verified.
 
-Default alarms are EC2 status-check failure, EC2/RDS/ElastiCache CPU >= 90%,
-and RDS free storage <= 10 GiB. They use stable names, ownership tags,
+Default alarms are EC2 `StatusCheckFailed` Maximum >= 1 for 2 of 2 one-minute
+periods; EC2/RDS/ElastiCache `CPUUtilization` Average >= 90% for 3 of 3
+five-minute periods; and RDS `FreeStorageSpace` Average <= 10 GiB for 3 of 3
+five-minute periods. They use stable names, ownership tags,
 `TreatMissingData=notBreaching`, and ALARM/OK actions. Connection counts and
 CWAgent memory/disk are not guessed because portable thresholds/dimensions do
 not exist.
@@ -129,8 +131,8 @@ AWS supports it:
 | S3 audit | `s3:ListBucket`, `s3:GetBucketLocation`, `s3:GetBucketPublicAccessBlock`, `s3:GetBucketCORS` |
 | S3 create/adopt | `s3:CreateBucket`, `s3:PutBucketPublicAccessBlock`, `s3:GetBucketTagging`, `s3:PutBucketTagging`; adoption also needs `s3:ListAllMyBuckets` |
 | S3 probe | `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` on `__django_mojo_aws_check__/*` |
-| SES/email audit | `ses:GetIdentityVerificationAttributes`, `ses:GetIdentityDkimAttributes`, `ses:GetAccountSendingEnabled`, `ses:GetSendQuota`, `ses:GetIdentityNotificationAttributes`, `ses:DescribeReceiptRuleSet`, `sns:GetTopicAttributes`, `sns:ListTopics`, `sns:ListSubscriptionsByTopic`, `s3:GetBucketPolicy` |
-| SES/email create-missing | `ses:VerifyDomainIdentity`, `ses:VerifyDomainDkim`, `ses:SetIdentityNotificationTopic`, `sns:CreateTopic`, `sns:Subscribe` |
+| SES/email audit | `ses:GetAccount`, `ses:GetIdentityVerificationAttributes`, `ses:GetIdentityDkimAttributes`, `ses:GetIdentityNotificationAttributes`, `ses:DescribeReceiptRuleSet`, `sns:GetTopicAttributes`, `sns:ListSubscriptionsByTopic`, `s3:ListBucket` for optional inbound storage |
+| SES/email create-missing | `ses:VerifyDomainIdentity`, `ses:VerifyDomainDkim`, `ses:SetIdentityNotificationTopic`, `sns:ListTopics`, `sns:ListTagsForResource`, `sns:CreateTopic`, `sns:Subscribe` |
 | Monitoring audit | `sns:ListTopics`, `sns:ListTagsForResource`, `sns:ListSubscriptionsByTopic`, `cloudwatch:DescribeAlarms`, `cloudwatch:ListTagsForResource`, `ec2:DescribeInstances`, `rds:DescribeDBInstances`, `elasticache:DescribeCacheClusters` |
 | Monitoring apply | `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe`, `cloudwatch:PutMetricAlarm`, `cloudwatch:TagResource` |
 

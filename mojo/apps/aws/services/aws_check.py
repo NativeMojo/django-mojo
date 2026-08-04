@@ -347,7 +347,14 @@ class AWSCheckRunner:
         try:
             response = s3.head_bucket(Bucket=bucket)
             actual = (response.get("ResponseMetadata", {}).get("HTTPHeaders", {}) or {}).get("x-amz-bucket-region")
-            self._add("s3", "pass", "bucket.accessible", "S3 bucket is accessible", {"bucket": bucket, "region": actual or region})
+            if actual and actual != region:
+                self._add("s3", "fail", "bucket.region_mismatch",
+                          "S3 bucket region differs from the FileManager configuration",
+                          {"bucket": bucket, "bucket_region": actual, "configured_region": region},
+                          remediation="Correct the FileManager AWS region; aws-check will not rewrite it.")
+                return
+            self._add("s3", "pass", "bucket.accessible", "S3 bucket is accessible",
+                      {"bucket": bucket, "region": actual or region})
         except ClientError as exc:
             code = _error_code(exc)
             status_code = "bucket.denied" if code in ("403", "AccessDenied") else "bucket.missing" if code in ("404", "NoSuchBucket") else "bucket.error"
@@ -410,7 +417,7 @@ class AWSCheckRunner:
                         continue
                 report = audit_email_domain(
                     domain.pk, persist=False,
-                    client_factory=lambda service, **kwargs: get_client(service, timeout=self.timeout, **kwargs),
+                    client_factory=self._email_client_factory(domain),
                 )
                 pending = sorted(key for key, value in report.checks.items() if value is False)
                 self._add("email", "pass" if report.audit_pass else "pending", "email.domain_audit",
@@ -467,9 +474,21 @@ class AWSCheckRunner:
             if dkim and isinstance(dkim.current, dict) else False
         topic_fields = (
             "sns_topic_bounce_arn", "sns_topic_complaint_arn", "sns_topic_delivery_arn",
-            "sns_topic_inbound_arn",
         )
+        if domain.receiving_enabled:
+            topic_fields += ("sns_topic_inbound_arn",)
         return identity_missing or dkim_missing or any(not getattr(domain, field, None) for field in topic_fields)
+
+    def _email_client_factory(self, domain):
+        """Keep every email audit call in the record's or runner's selected context."""
+        def factory(service, **kwargs):
+            if domain.aws_key or domain.aws_secret:
+                return self._client(
+                    service, domain.aws_key, domain.aws_secret,
+                    domain.aws_region or self.region,
+                )
+            return self._client(service)
+        return factory
 
     def _create_missing_email_resources(self, domain, report):
         """Create only absent SES identity/SNS wiring; preserve every non-empty drift."""
@@ -487,6 +506,8 @@ class AWSCheckRunner:
             ses.verify_domain_dkim(Domain=domain.name)
             created.append("ses-dkim")
 
+        attributes = ses.get_identity_notification_attributes(Identities=[domain.name])
+        current = (attributes.get("NotificationAttributes", {}).get(domain.name, {}) or {})
         topic_rows = self._list_paginated(sns, "list_topics", "Topics")
         topics_by_name = {
             row.get("TopicArn", "").rsplit(":", 1)[-1]: row.get("TopicArn") for row in topic_rows
@@ -494,7 +515,14 @@ class AWSCheckRunner:
         safe_domain = domain.name.replace(".", "-")
         fields = {
             "bounce": "sns_topic_bounce_arn", "complaint": "sns_topic_complaint_arn",
-            "delivery": "sns_topic_delivery_arn", "inbound": "sns_topic_inbound_arn",
+            "delivery": "sns_topic_delivery_arn",
+        }
+        if domain.receiving_enabled:
+            fields["inbound"] = "sns_topic_inbound_arn"
+        notification_names = {"bounce": "Bounce", "complaint": "Complaint", "delivery": "Delivery"}
+        expected_tags = {
+            "managed-by": "django-mojo", "purpose": "ses-notifications",
+            "deployment": self._deployment_slug(), "domain": domain.name,
         }
         updates = []
         topic_arns = {}
@@ -503,10 +531,29 @@ class AWSCheckRunner:
             if configured:
                 topic_arns[kind] = configured
                 continue
+            notification = notification_names.get(kind)
+            existing_mapping = current.get(f"{notification}Topic") if notification else None
+            if existing_mapping:
+                setattr(domain, field, existing_mapping)
+                updates.append(field)
+                topic_arns[kind] = existing_mapping
+                created.append(f"topic-reference:{kind}")
+                continue
             name = f"ses-{safe_domain}-{kind}"
             arn = topics_by_name.get(name)
+            if arn:
+                tags = {
+                    row.get("Key"): row.get("Value") for row in
+                    sns.list_tags_for_resource(ResourceArn=arn).get("Tags", [])
+                }
+                if not all(tags.get(key) == value for key, value in expected_tags.items()):
+                    raise RuntimeError(
+                        f"same-name SES topic {name} is not owned by this deployment/domain"
+                    )
             if not arn:
-                arn = sns.create_topic(Name=name).get("TopicArn")
+                arn = sns.create_topic(Name=name, Tags=[
+                    {"Key": key, "Value": value} for key, value in sorted(expected_tags.items())
+                ]).get("TopicArn")
                 created.append(f"sns-topic:{kind}")
             if arn:
                 setattr(domain, field, arn)
@@ -515,8 +562,6 @@ class AWSCheckRunner:
         if updates:
             domain.save(update_fields=updates + ["modified"])
 
-        attributes = ses.get_identity_notification_attributes(Identities=[domain.name])
-        current = (attributes.get("NotificationAttributes", {}).get(domain.name, {}) or {})
         for notification, kind in (("Bounce", "bounce"), ("Complaint", "complaint"), ("Delivery", "delivery")):
             arn = topic_arns.get(kind)
             existing = current.get(f"{notification}Topic")

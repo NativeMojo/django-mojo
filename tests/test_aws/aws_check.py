@@ -202,6 +202,34 @@ def test_adopt_bucket_requires_private_public_access_block(opts):
 
 
 @th.django_unit_test()
+def test_s3_configured_region_mismatch_fails(opts):
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.aws.services import aws_check
+
+    FileManager.objects.filter(
+        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
+    ).delete()
+    manager = FileManager.objects.create(
+        name="aws-check-region-test", backend_type=FileManager.AWS_S3,
+        backend_url="s3://aws-check-region-test", is_active=True, is_default=True,
+        is_public=False,
+    )
+    manager.set_aws_region("us-west-2")
+    manager.save()
+    s3 = mock.Mock()
+    s3.head_bucket.return_value = {"ResponseMetadata": {"HTTPHeaders": {
+        "x-amz-bucket-region": "us-east-1",
+    }}}
+    report = aws_check.AWSCheckRunner(
+        region="us-west-2", clients={"s3": s3},
+    ).run(["s3"])
+    mismatch = next(item for item in report["items"] if item["code"] == "bucket.region_mismatch")
+    assert mismatch["status"] == "fail", f"Region mismatch must fail, got {mismatch}"
+    s3.get_public_access_block.assert_not_called()
+    manager.delete()
+
+
+@th.django_unit_test()
 def test_apply_section_fails_before_mutation_without_verified_identity(opts):
     from botocore.exceptions import NoCredentialsError
     from mojo.apps.aws.services import aws_check
@@ -292,7 +320,7 @@ def test_email_create_missing_preserves_existing_mapping_and_reruns_cleanly(opts
         name="example.com", sns_topic_bounce_arn=None,
         sns_topic_complaint_arn="arn:configured-complaint",
         sns_topic_delivery_arn="arn:configured-delivery",
-        sns_topic_inbound_arn="arn:configured-inbound", metadata={}, save=mock.Mock(),
+        sns_topic_inbound_arn=None, receiving_enabled=False, metadata={}, save=mock.Mock(),
     )
     report = SimpleNamespace(items=[
         SimpleNamespace(resource="ses.identity.verification", current="Success", status="ok"),
@@ -303,14 +331,58 @@ def test_email_create_missing_preserves_existing_mapping_and_reruns_cleanly(opts
     runner = aws_check.AWSCheckRunner(clients={"ses": ses, "sns": sns})
 
     created = runner._create_missing_email_resources(domain, report)
-    assert created == ["sns-topic:bounce"], f"Only the absent topic should be created, got {created}"
+    assert created == ["topic-reference:bounce"], \
+        f"The existing operator mapping should be adopted without creating a topic, got {created}"
     ses.set_identity_notification_topic.assert_not_called()
+    sns.create_topic.assert_not_called()
     domain.save.assert_called_once()
 
     sns.list_topics.return_value = {"Topics": [{"TopicArn": domain.sns_topic_bounce_arn}]}
     created = runner._create_missing_email_resources(domain, report)
     assert created == [], f"A healthy rerun must be a no-op, got {created}"
-    assert sns.create_topic.call_count == 1
+    sns.create_topic.assert_not_called()
+
+
+@th.django_unit_test()
+def test_email_uses_selected_context_and_rejects_unowned_topic_collision(opts):
+    from mojo.apps.aws.services import aws_check
+
+    domain = SimpleNamespace(
+        name="example.com", aws_key=None, aws_secret=None, aws_region="us-east-1",
+        receiving_enabled=False, sns_topic_bounce_arn=None,
+        sns_topic_complaint_arn="arn:configured-complaint",
+        sns_topic_delivery_arn="arn:configured-delivery", sns_topic_inbound_arn=None,
+        metadata={}, save=mock.Mock(),
+    )
+    runner = aws_check.AWSCheckRunner(profile="operators")
+    with mock.patch.object(runner, "_client") as selected_client:
+        runner._email_client_factory(domain)(
+            "ses", access_key="settings-key", secret_key="settings-secret", region="us-east-1",
+        )
+    selected_client.assert_called_once_with("ses")
+
+    topic = "arn:aws:sns:us-east-1:123456789012:ses-example-com-bounce"
+    ses, sns = mock.Mock(), mock.Mock()
+    ses.get_identity_notification_attributes.return_value = {
+        "NotificationAttributes": {"example.com": {}},
+    }
+    sns.list_topics.return_value = {"Topics": [{"TopicArn": topic}]}
+    sns.list_tags_for_resource.return_value = {"Tags": []}
+    report = SimpleNamespace(items=[
+        SimpleNamespace(resource="ses.identity.verification", current="Success", status="ok"),
+        SimpleNamespace(resource="ses.identity.dkim", current={
+            "Enabled": True, "VerificationStatus": "Success",
+        }, status="ok"),
+    ])
+    runner = aws_check.AWSCheckRunner(clients={"ses": ses, "sns": sns})
+    try:
+        runner._create_missing_email_resources(domain, report)
+    except RuntimeError as exc:
+        assert "not owned" in str(exc), f"Unexpected collision error: {exc}"
+    else:
+        assert False, "An unowned same-name SES topic must not be adopted"
+    domain.save.assert_not_called()
+    sns.create_topic.assert_not_called()
 
 
 @th.django_unit_test()
