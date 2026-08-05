@@ -8,6 +8,7 @@ import traceback
 import inspect
 import argparse
 import threading
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from importlib import import_module
 
@@ -22,6 +23,40 @@ TEST_ROOT = paths.APPS_ROOT / "tests"
 _LOCK_FILE = os.path.join(paths.VAR_ROOT, "testit.lock")
 
 _resume = objict(active=False, module=None, test_name=None, reached=False)
+
+
+def _should_reset_test_logs(opts):
+    return not getattr(opts, "resume", False) and not getattr(opts, "list_extras", False)
+
+
+def _reset_test_logs(log_root=None):
+    """Start a fresh run with empty framework logs.
+
+    Base files are truncated in place so an already-running uvicorn process
+    keeps writing to the same inode. Numbered rotation backups belong to the
+    previous run and are removed. Failures are returned and never abort tests.
+    """
+    log_root = Path(paths.LOG_ROOT if log_root is None else log_root)
+    if not log_root.exists():
+        return []
+
+    failures = []
+    candidates = set(log_root.glob("*.log"))
+    candidates.update(log_root.glob("*.log.*"))
+    for log_path in sorted(candidates):
+        if not log_path.is_file():
+            continue
+        try:
+            suffix = log_path.name.rsplit(".log.", 1)
+            is_numbered_backup = len(suffix) == 2 and suffix[1].isdigit()
+            if is_numbered_backup:
+                log_path.unlink()
+            elif log_path.name.endswith(".log"):
+                with log_path.open("w", encoding="utf-8"):
+                    pass
+        except (OSError, PermissionError) as exc:
+            failures.append(f"{log_path.name}: {exc}")
+    return failures
 
 # ---------------------------------------------------------------------------
 # Interactive abort — set by keyboard listener or signal handler
@@ -1344,6 +1379,10 @@ def main(opts):
             print(f"==> Resuming from: {_resume.module}.{_resume.test_name}")
         else:
             print("==> No checkpoint found, running all tests")
+
+    if _should_reset_test_logs(opts):
+        for reset_failure in _reset_test_logs():
+            sys.stderr.write(f"Warning: could not reset test log {reset_failure}\n")
 
     opts.logger = logit.get_logger("testit", "testit.log")
 

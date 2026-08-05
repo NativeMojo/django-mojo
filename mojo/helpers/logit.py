@@ -28,8 +28,109 @@ except (OSError, PermissionError) as e:
 # Constants
 MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB
 LOG_BACKUP_COUNT = 3
+MAX_LOG_RECORD_BYTES = 16 * 1024
+MAX_LOG_VALUE_BYTES = 4 * 1024
 COLOR_LOGS = True
 LOG_MANAGER = None
+
+_OUTPUT_TRUNCATION_MARKER = "\033[0m… <output truncated>"
+
+
+def _normalize_byte_limit(value, default):
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _safe_log_text(value):
+    """Return UTF-8 encodable text without letting malformed Unicode break logging."""
+    if not isinstance(value, str):
+        value = str(value)
+    return value.encode("utf-8", errors="backslashreplace").decode("utf-8")
+
+
+def _utf8_size(value):
+    return len(_safe_log_text(value).encode("utf-8"))
+
+
+def _utf8_prefix(value, max_bytes):
+    if max_bytes <= 0:
+        return ""
+    encoded = _safe_log_text(value).encode("utf-8")
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _strip_incomplete_ansi(value):
+    """Drop a trailing partial ANSI escape before appending a reset/marker."""
+    escape_at = value.rfind("\033")
+    if escape_at >= 0 and "m" not in value[escape_at:]:
+        return value[:escape_at]
+    return value
+
+
+def _short_marker(max_bytes):
+    if max_bytes <= 0:
+        return ""
+    return "." * min(3, max_bytes)
+
+
+def _truncate_rendered(value, max_bytes, marker=_OUTPUT_TRUNCATION_MARKER):
+    """Bound a complete rendered value while keeping Unicode and ANSI well-formed."""
+    max_bytes = _normalize_byte_limit(max_bytes, MAX_LOG_RECORD_BYTES)
+    value = _safe_log_text(value)
+    if _utf8_size(value) <= max_bytes:
+        return value
+    if max_bytes <= 0:
+        return ""
+
+    marker = _safe_log_text(marker)
+    marker_size = _utf8_size(marker)
+    if marker_size > max_bytes:
+        return _short_marker(max_bytes)
+
+    prefix = _utf8_prefix(value, max_bytes - marker_size)
+    prefix = _strip_incomplete_ansi(prefix)
+    return prefix + marker
+
+
+def _truncate_scalar(value, max_bytes):
+    """Clip scalar content and report the exact omitted UTF-8 byte count."""
+    max_bytes = _normalize_byte_limit(max_bytes, MAX_LOG_VALUE_BYTES)
+    value = _safe_log_text(value)
+    total_size = _utf8_size(value)
+    if total_size <= max_bytes:
+        return value
+
+    prefix = _utf8_prefix(value, max_bytes)
+    omitted = total_size - _utf8_size(prefix)
+    return f"{prefix}… <{omitted} more bytes>"
+
+
+class _BoundedPrettyOutput:
+    """StringIO-compatible writer that stops recursive formatting at its cap."""
+
+    def __init__(self, max_bytes):
+        self.max_bytes = max_bytes
+        self.output = StringIO()
+        self.truncated = False
+
+    def write(self, value):
+        if self.truncated:
+            return 0
+        value = _safe_log_text(value)
+        current = self.output.getvalue()
+        if _utf8_size(current) + _utf8_size(value) <= self.max_bytes:
+            return self.output.write(value)
+
+        bounded = _truncate_rendered(current + value, self.max_bytes)
+        self.output = StringIO(bounded)
+        self.truncated = True
+        return len(value)
+
+    def getvalue(self):
+        return self.output.getvalue()
+
 
 def get_logger(name, filename=None, debug=False):
     global LOG_MANAGER
@@ -45,8 +146,8 @@ def pretty_print(msg):
 pp = pretty_print
 
 
-def pretty_format(msg):
-    return PrettyLogger.pretty_format(msg)
+def pretty_format(msg, max_length=MAX_LOG_RECORD_BYTES, value_max_length=MAX_LOG_VALUE_BYTES):
+    return PrettyLogger.pretty_format(msg, max_length, value_max_length)
 
 
 def color_print(msg, color, end="\n"):
@@ -245,8 +346,8 @@ class Logger:
                 output.append("")
                 output.append(PrettyLogger.pretty_format(arg))
             else:
-                output.append(str(arg))
-        return "\n".join(output)
+                output.append(_truncate_scalar(arg, MAX_LOG_RECORD_BYTES))
+        return _truncate_rendered("\n".join(output), MAX_LOG_RECORD_BYTES)
 
     def info(self, *args):
         self.logger.info(self._build_log(*args))
@@ -304,15 +405,24 @@ class ColorFormatter(logging.Formatter):
 # Utility for Pretty Logging
 class PrettyLogger:
     @staticmethod
-    def pretty_format(data, max_length=500000) -> str:
+    def pretty_format(data, max_length=MAX_LOG_RECORD_BYTES,
+                      value_max_length=MAX_LOG_VALUE_BYTES):
         """Formats complex data structures for logging."""
-        output = StringIO()
-        PrettyLogger._recursive_format(data, output, 0, max_length)
+        max_length = _normalize_byte_limit(max_length, MAX_LOG_RECORD_BYTES)
+        value_max_length = _normalize_byte_limit(value_max_length, MAX_LOG_VALUE_BYTES)
+        if max_length <= 0:
+            return ""
+        output = _BoundedPrettyOutput(max_length)
+        PrettyLogger._recursive_format(data, output, 0, value_max_length)
         return output.getvalue()
 
     @staticmethod
-    def _recursive_format(data, output=sys.stdout, indent=0, max_length=80):
+    def _recursive_format(data, output=sys.stdout, indent=0,
+                          value_max_length=MAX_LOG_VALUE_BYTES):
         """Recursive function to pretty-print dictionaries and lists with proper indentation and colors."""
+
+        if getattr(output, "truncated", False):
+            return
 
         base_indent = " " * indent  # Current level indentation
         next_indent = " " * (indent + 2)  # Indentation for nested structures
@@ -322,8 +432,14 @@ class PrettyLogger:
             output.write("{\n")  # Open dict at current indent
             last_index = len(data) - 1
             for i, (key, value) in enumerate(data.items()):
+                if getattr(output, "truncated", False):
+                    break
+                key = _truncate_scalar(key, value_max_length)
                 output.write(next_indent + f"\033[34m\"{key}\"\033[0m: ")
-                PrettyLogger._recursive_format(value, output, indent + 2, max_length)
+                PrettyLogger._recursive_format(
+                    value, output, indent + 2, value_max_length)
+                if getattr(output, "truncated", False):
+                    break
                 if i != last_index:
                     output.write(",")  # Add comma for all but last key-value pair
                 output.write("\n")
@@ -334,18 +450,26 @@ class PrettyLogger:
             output.write("[\n")  # Open list at correct indent
             last_index = len(data) - 1
             for i, item in enumerate(data):
+                if getattr(output, "truncated", False):
+                    break
                 output.write(next_indent)
-                PrettyLogger._recursive_format(item, output, indent + 2, max_length)
+                PrettyLogger._recursive_format(
+                    item, output, indent + 2, value_max_length)
+                if getattr(output, "truncated", False):
+                    break
                 if i != last_index:
                     output.write(",")  # Add comma for all but last item
                 output.write("\n")
             output.write(base_indent + "]")  # Close list at correct indent
         elif isinstance(data, Decimal):
-            output.write(f"\033[32m{str(data)}\033[0m")  # Green for Decimal
+            value = _truncate_scalar(data, value_max_length)
+            output.write(f"\033[32m{value}\033[0m")  # Green for Decimal
         elif isinstance(data, str):
-            output.write(f"\033[31m\"{data}\"\033[0m")  # Red for strings
+            value = _truncate_scalar(data, value_max_length)
+            output.write(f"\033[31m\"{value}\"\033[0m")  # Red for strings
         else:
-            output.write(f"\033[33m{str(data)}\033[0m")  # Yellow for other types
+            value = _truncate_scalar(data, value_max_length)
+            output.write(f"\033[33m{value}\033[0m")  # Yellow for other types
 
     @staticmethod
     def log_json(data, logger=None):

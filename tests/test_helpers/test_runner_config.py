@@ -360,3 +360,77 @@ def test_read_dev_server_conf_uses_var_override(opts):
                      "host should come from the var/dev_server.conf override")
         th.assert_eq(port, 9999,
                      "port should come from the var/dev_server.conf override, parsed as int")
+
+
+@th.unit_test("fresh test runs clear framework logs but preserve unrelated files")
+def test_reset_test_logs_clears_base_and_backups(opts):
+    from pathlib import Path
+    import tempfile
+    from testit.runner import _reset_test_logs
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        log_root = Path(tmpdir)
+        base_log = log_root / "testit.log"
+        backup_log = log_root / "testit.log.1"
+        unrelated = log_root / "keep.txt"
+        base_log.write_text("old run\n", encoding="utf-8")
+        backup_log.write_text("older run\n", encoding="utf-8")
+        unrelated.write_text("keep me\n", encoding="utf-8")
+
+        failures = _reset_test_logs(log_root)
+
+        assert failures == [], f"Reset should succeed for writable temp logs, got {failures!r}"
+        assert base_log.exists(), "Base log should be truncated in place, not removed"
+        assert base_log.read_bytes() == b"", (
+            f"Base log should be empty after reset, got {base_log.read_bytes()!r}"
+        )
+        assert not backup_log.exists(), "Numbered backup should be removed for a fresh run"
+        assert unrelated.read_text(encoding="utf-8") == "keep me\n", (
+            "Files outside the *.log / *.log.N test-log patterns must remain untouched"
+        )
+
+
+@th.unit_test("test log reset failures are isolated and reported")
+def test_reset_test_logs_continues_after_one_failure(opts):
+    from pathlib import Path
+    import tempfile
+    from unittest import mock
+    from testit.runner import _reset_test_logs
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        log_root = Path(tmpdir)
+        bad_log = log_root / "bad.log"
+        good_log = log_root / "good.log"
+        bad_log.write_text("cannot clear\n", encoding="utf-8")
+        good_log.write_text("clear me\n", encoding="utf-8")
+        original_open = Path.open
+
+        def flaky_open(path, *args, **kwargs):
+            if path.name == "bad.log":
+                raise OSError("synthetic reset failure")
+            return original_open(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "open", flaky_open):
+            failures = _reset_test_logs(log_root)
+
+        assert len(failures) == 1, f"Exactly one reset failure should be reported, got {failures!r}"
+        assert "bad.log" in failures[0], f"Failure should identify bad.log, got {failures!r}"
+        assert good_log.read_bytes() == b"", (
+            f"A failure clearing bad.log must not block good.log, got {good_log.read_bytes()!r}"
+        )
+
+
+@th.unit_test("only fresh executing runs reset test logs")
+def test_should_reset_test_logs_conditions(opts):
+    from objict import objict
+    from testit.runner import _should_reset_test_logs
+
+    assert _should_reset_test_logs(objict(resume=False, list_extras=False)) is True, (
+        "A fresh test execution should clear prior framework logs"
+    )
+    assert _should_reset_test_logs(objict(resume=True, list_extras=False)) is False, (
+        "--continue is the same logical run and must preserve its existing logs"
+    )
+    assert _should_reset_test_logs(objict(resume=False, list_extras=True)) is False, (
+        "--list-extras executes no tests and must not clear diagnostic logs"
+    )
