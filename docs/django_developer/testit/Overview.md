@@ -87,6 +87,19 @@ Use `bin/run_tests` — it handles starting and stopping the test server automat
 
 All arguments are passed directly to `bin/testit.py`. If the server is already running, `bin/run_tests` will not stop it after the suite completes.
 
+### Test log lifecycle
+
+After it acquires the run lock, every fresh executing run starts with empty
+framework log files under `testproject/var/logs/`. Base `*.log` files are
+truncated in place, which keeps open server file descriptors valid, and stale
+numbered `*.log.N` rotation backups are removed. A failure to clear one file is
+reported as a warning and does not abort the test run.
+
+`--continue` preserves the logs because it resumes the same logical run.
+`--list-extras` also leaves them untouched because it executes no tests. The
+uvicorn process log at `testproject/var/asgi.log` is outside the framework log
+directory and is not part of this reset.
+
 ### Dev-server host/port (`dev_server.conf`)
 
 The test server's host and port come from a small `key=value` file with two keys:

@@ -99,6 +99,18 @@ logit.pretty_print({"key": "value", "nested": {"a": 1}})
 formatted = logit.pretty_format(my_dict)
 ```
 
+Pretty-formatted values are byte-bounded before they reach a file handler. The
+default complete-record limit is 16 KiB of UTF-8, and individual structured
+keys and scalar values are clipped after 4 KiB. Scalar clipping reports the
+exact omitted size (`… <N more bytes>`); aggregate clipping uses
+`… <output truncated>`. Clipping never splits a UTF-8 code point, and records
+that already fit keep their existing formatting.
+
+`pretty_format()` accepts `max_length` and `value_max_length` overrides when a
+caller needs a smaller display budget. `Logger._build_log()` still enforces the
+16 KiB complete-record limit across all arguments, including plain strings, so
+an override cannot make an on-disk framework record unbounded.
+
 ## In Models
 
 `MojoModel` provides `self.log()` which wraps logit and writes to the `Log` database model:

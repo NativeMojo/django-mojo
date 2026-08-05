@@ -136,3 +136,9 @@ Internally `_build_log(*args)` simply `"\n".join(str(arg) …)`s every argument,
   `str(b)`, and the `%s` stay literal. Always build the message with an f-string:
   `logit.info(f"did {a} -> {b}")`. (This exact bug lived in
   `account.asyncjobs.push_abuse_signals`; item 1100 fixed both its printf lines.)
+- **A complete file-log record is capped at 16 KiB of UTF-8.** Structured keys
+  and scalar values use a 4 KiB inner cap. Visible `… <N more bytes>` and
+  `… <output truncated>` markers distinguish scalar and aggregate clipping;
+  small records retain their previous representation. The cap covers all
+  arguments together, including plain response bodies and mixed string/dict
+  calls.
