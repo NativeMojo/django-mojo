@@ -4202,6 +4202,18 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">logit</span><span class="o">.</span><span class="n">pretty_print</span><span class="p">({</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;value&quot;</span><span class="p">,</span> <span class="s2">&quot;nested&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;a&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">}})</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">formatted</span> <span class="o">=</span> <span class="n">logit</span><span class="o">.</span><span class="n">pretty_format</span><span class="p">(</span><span class="n">my_dict</span><span class="p">)</span>
 </code></pre></div>
+<p>Pretty-formatted values are byte-bounded before they reach a file handler. The
+default complete-record limit is 16 KiB of UTF-8, and individual structured
+keys and scalar values are clipped after 4 KiB. Scalar clipping reports the
+exact omitted size (<code>… &lt;N more bytes&gt;</code>); aggregate clipping uses
+<code>… &lt;output truncated&gt;</code>. Clipping never splits a UTF-8 code point, and records
+that already fit keep their existing formatting. User-controlled terminal
+control characters are escaped as visible text before formatting so logged
+values cannot inject terminal commands.</p>
+<p><code>pretty_format()</code> accepts <code>max_length</code> and <code>value_max_length</code> overrides when a
+caller needs a smaller display budget. <code>Logger._build_log()</code> still enforces the
+16 KiB complete-record limit across all arguments, including plain strings, so
+an override cannot make an on-disk framework record unbounded.</p>
 <h2 id="in-models">In Models<a class="headerlink" href="#in-models" title="Permanent link">&para;</a></h2>
 <p><code>MojoModel</code> provides <code>self.log()</code> which wraps logit and writes to the <code>Log</code> database model:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># In a model method</span>

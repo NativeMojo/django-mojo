@@ -4277,7 +4277,9 @@
 <h2 id="file-logging-helpers-logitinfo-logitwarning-argument-semantics">File-logging helpers (<code>logit.info</code> / <code>logit.warning</code>) — argument semantics<a class="headerlink" href="#file-logging-helpers-logitinfo-logitwarning-argument-semantics" title="Permanent link">&para;</a></h2>
 <p>The file-logging helpers (<code>logit.info(*args)</code>, <code>logit.warning(*args)</code>,
 <code>logit.error(*args)</code>, etc.) are <strong>not</strong> printf and do <strong>not</strong> route by channel.
-Internally <code>_build_log(*args)</code> simply <code>"\n".join(str(arg) …)</code>s every argument, so:</p>
+Internally <code>_build_log(*args)</code> renders each dictionary with <code>pretty_format()</code>,
+converts other values to text, and places every positional argument on its own
+line, so:</p>
 <ul>
 <li><strong>Arg 0 is a cosmetic pseudo-channel, not a router.</strong> <code>logit.warning("account",
   "message")</code> writes two lines — <code>account</code> then <code>message</code>. The first argument does
@@ -4289,6 +4291,13 @@ Internally <code>_build_log(*args)</code> simply <code>"\n".join(str(arg) …)</
   <code>str(b)</code>, and the <code>%s</code> stay literal. Always build the message with an f-string:
   <code>logit.info(f"did {a} -&gt; {b}")</code>. (This exact bug lived in
   <code>account.asyncjobs.push_abuse_signals</code>; item 1100 fixed both its printf lines.)</li>
+<li><strong>A complete file-log record is capped at 16 KiB of UTF-8.</strong> Structured keys
+  and scalar values use a 4 KiB inner cap. Visible <code>… &lt;N more bytes&gt;</code> and
+  <code>… &lt;output truncated&gt;</code> markers distinguish scalar and aggregate clipping;
+  small records retain their previous representation. The cap covers all
+  arguments together, including plain response bodies and mixed string/dict
+  calls. Terminal control characters in user values are escaped as visible
+  text before the record is written.</li>
 </ul>
 
 

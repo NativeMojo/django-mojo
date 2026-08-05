@@ -3767,6 +3767,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#test-log-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test log lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#dev-server-hostport-dev_serverconf" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4182,6 +4193,18 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
   <code>./bin/run_tests --agent</code></li>
 </ul>
 <p>All arguments are passed directly to <code>bin/testit.py</code>. If the server is already running, <code>bin/run_tests</code> will not stop it after the suite completes.</p>
+<h3 id="test-log-lifecycle">Test log lifecycle<a class="headerlink" href="#test-log-lifecycle" title="Permanent link">&para;</a></h3>
+<p>After it acquires the run lock, every fresh executing run starts with empty
+framework log files under <code>testproject/var/logs/</code>. Base <code>*.log</code> files are
+truncated in place, which keeps open server file descriptors valid, and stale
+numbered <code>*.log.N</code> rotation backups are removed. A failure to clear one file is
+reported as a warning and does not abort the test run. Symlinked, multiply
+linked, and other non-regular base-log paths are refused, and file identity is
+rechecked before truncation to detect a path changed during the reset.</p>
+<p><code>--continue</code> preserves the logs because it resumes the same logical run.
+<code>--list-extras</code> also leaves them untouched because it executes no tests. The
+uvicorn process log at <code>testproject/var/asgi.log</code> is outside the framework log
+directory and is not part of this reset.</p>
 <h3 id="dev-server-hostport-dev_serverconf">Dev-server host/port (<code>dev_server.conf</code>)<a class="headerlink" href="#dev-server-hostport-dev_serverconf" title="Permanent link">&para;</a></h3>
 <p>The test server's host and port come from a small <code>key=value</code> file with two keys:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>host=127.0.0.1
