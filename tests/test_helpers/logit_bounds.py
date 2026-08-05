@@ -132,6 +132,23 @@ def test_pretty_format_stops_after_total_cap(opts):
     assert "output truncated" in rendered, rendered
 
 
+@th.unit_test("pretty_format escapes user-controlled terminal sequences")
+def test_pretty_format_escapes_terminal_controls(opts):
+    from mojo.helpers.logit import PrettyLogger
+
+    malicious = "\033]8;;https://evil.test\007click\033]8;;\007" + ("x" * 1000)
+    rendered = PrettyLogger.pretty_format(
+        {"payload": malicious}, max_length=256, value_max_length=96)
+    assert "\033]8" not in rendered, (
+        f"User-controlled OSC sequences must not remain executable: {rendered!r}"
+    )
+    assert "\007" not in rendered, f"Terminal bell must be escaped: {rendered!r}"
+    assert "\\x1b]8" in rendered, (
+        f"Escaped terminal control should remain visible for diagnosis: {rendered!r}"
+    )
+    assert "more bytes" in rendered, rendered
+
+
 @th.unit_test("Logger._build_log owns one cap across strings and dictionaries")
 def test_build_log_caps_complete_record(opts):
     from mojo.helpers.logit import Logger, MAX_LOG_RECORD_BYTES

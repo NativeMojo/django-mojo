@@ -104,7 +104,9 @@ default complete-record limit is 16 KiB of UTF-8, and individual structured
 keys and scalar values are clipped after 4 KiB. Scalar clipping reports the
 exact omitted size (`… <N more bytes>`); aggregate clipping uses
 `… <output truncated>`. Clipping never splits a UTF-8 code point, and records
-that already fit keep their existing formatting.
+that already fit keep their existing formatting. User-controlled terminal
+control characters are escaped as visible text before formatting so logged
+values cannot inject terminal commands.
 
 `pretty_format()` accepts `max_length` and `value_max_length` overrides when a
 caller needs a smaller display budget. `Logger._build_log()` still enforces the

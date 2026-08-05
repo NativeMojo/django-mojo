@@ -392,6 +392,7 @@ def test_reset_test_logs_clears_base_and_backups(opts):
 
 @th.unit_test("test log reset failures are isolated and reported")
 def test_reset_test_logs_continues_after_one_failure(opts):
+    import os
     from pathlib import Path
     import tempfile
     from unittest import mock
@@ -403,20 +404,73 @@ def test_reset_test_logs_continues_after_one_failure(opts):
         good_log = log_root / "good.log"
         bad_log.write_text("cannot clear\n", encoding="utf-8")
         good_log.write_text("clear me\n", encoding="utf-8")
-        original_open = Path.open
+        original_open = os.open
 
         def flaky_open(path, *args, **kwargs):
-            if path.name == "bad.log":
+            if Path(path).name == "bad.log":
                 raise OSError("synthetic reset failure")
             return original_open(path, *args, **kwargs)
 
-        with mock.patch.object(Path, "open", flaky_open):
+        with mock.patch.object(os, "open", flaky_open):
             failures = _reset_test_logs(log_root)
 
         assert len(failures) == 1, f"Exactly one reset failure should be reported, got {failures!r}"
         assert "bad.log" in failures[0], f"Failure should identify bad.log, got {failures!r}"
         assert good_log.read_bytes() == b"", (
             f"A failure clearing bad.log must not block good.log, got {good_log.read_bytes()!r}"
+        )
+
+
+@th.unit_test("test log reset refuses symlinked base logs")
+def test_reset_test_logs_does_not_follow_symlinks(opts):
+    from pathlib import Path
+    import tempfile
+    from testit.runner import _reset_test_logs
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        temp_root = Path(tmpdir)
+        log_root = temp_root / "logs"
+        log_root.mkdir()
+        target = temp_root / "outside.txt"
+        target.write_text("must survive\n", encoding="utf-8")
+        linked_log = log_root / "linked.log"
+        linked_log.symlink_to(target)
+
+        failures = _reset_test_logs(log_root)
+
+        assert target.read_text(encoding="utf-8") == "must survive\n", (
+            "A symlinked *.log must never truncate its target"
+        )
+        assert linked_log.is_symlink(), "Rejected base-log symlink should remain inspectable"
+        assert len(failures) == 1 and "linked.log" in failures[0], (
+            f"Refused symlink should produce one actionable warning, got {failures!r}"
+        )
+
+
+@th.unit_test("test log reset refuses multiply linked base logs")
+def test_reset_test_logs_does_not_truncate_hard_links(opts):
+    import os
+    from pathlib import Path
+    import tempfile
+    from testit.runner import _reset_test_logs
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        temp_root = Path(tmpdir)
+        log_root = temp_root / "logs"
+        log_root.mkdir()
+        target = temp_root / "outside.txt"
+        target.write_text("must survive\n", encoding="utf-8")
+        linked_log = log_root / "linked.log"
+        os.link(target, linked_log)
+
+        failures = _reset_test_logs(log_root)
+
+        assert target.read_text(encoding="utf-8") == "must survive\n", (
+            "A multiply linked *.log must never truncate the shared inode"
+        )
+        assert linked_log.read_text(encoding="utf-8") == "must survive\n"
+        assert len(failures) == 1 and "linked.log" in failures[0], (
+            f"Refused hard link should produce one actionable warning, got {failures!r}"
         )
 
 

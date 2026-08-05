@@ -124,7 +124,9 @@ class RestMeta:
 
 The file-logging helpers (`logit.info(*args)`, `logit.warning(*args)`,
 `logit.error(*args)`, etc.) are **not** printf and do **not** route by channel.
-Internally `_build_log(*args)` simply `"\n".join(str(arg) …)`s every argument, so:
+Internally `_build_log(*args)` renders each dictionary with `pretty_format()`,
+converts other values to text, and places every positional argument on its own
+line, so:
 
 - **Arg 0 is a cosmetic pseudo-channel, not a router.** `logit.warning("account",
   "message")` writes two lines — `account` then `message`. The first argument does
@@ -141,4 +143,5 @@ Internally `_build_log(*args)` simply `"\n".join(str(arg) …)`s every argument,
   `… <output truncated>` markers distinguish scalar and aggregate clipping;
   small records retain their previous representation. The cap covers all
   arguments together, including plain response bodies and mixed string/dict
-  calls.
+  calls. Terminal control characters in user values are escaped as visible
+  text before the record is written.

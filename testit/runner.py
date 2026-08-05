@@ -2,6 +2,7 @@ import ast
 import copy
 import json
 import os
+import stat
 import sys
 import time
 import traceback
@@ -29,6 +30,29 @@ def _should_reset_test_logs(opts):
     return not getattr(opts, "resume", False) and not getattr(opts, "list_extras", False)
 
 
+def _truncate_regular_log(log_path):
+    """Truncate one unchanged regular file without following a symlink."""
+    before = log_path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise OSError("refusing to truncate a non-regular log file")
+    if before.st_nlink != 1:
+        raise OSError("refusing to truncate a multiply linked log file")
+
+    flags = os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(log_path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise OSError("refusing to truncate a non-regular log file")
+        if opened.st_nlink != 1:
+            raise OSError("refusing to truncate a multiply linked log file")
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise OSError("log file changed while preparing to truncate it")
+        os.ftruncate(descriptor, 0)
+    finally:
+        os.close(descriptor)
+
+
 def _reset_test_logs(log_root=None):
     """Start a fresh run with empty framework logs.
 
@@ -52,8 +76,7 @@ def _reset_test_logs(log_root=None):
             if is_numbered_backup:
                 log_path.unlink()
             elif log_path.name.endswith(".log"):
-                with log_path.open("w", encoding="utf-8"):
-                    pass
+                _truncate_regular_log(log_path)
         except (OSError, PermissionError) as exc:
             failures.append(f"{log_path.name}: {exc}")
     return failures

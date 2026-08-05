@@ -50,6 +50,20 @@ def _safe_log_text(value):
     return value.encode("utf-8", errors="backslashreplace").decode("utf-8")
 
 
+def _escape_terminal_controls(value):
+    """Make user-controlled terminal control bytes visible and inert."""
+    escaped = []
+    for char in _safe_log_text(value):
+        codepoint = ord(char)
+        if char in ("\n", "\t"):
+            escaped.append(char)
+        elif codepoint < 32 or 127 <= codepoint <= 159:
+            escaped.append(f"\\x{codepoint:02x}")
+        else:
+            escaped.append(char)
+    return "".join(escaped)
+
+
 def _utf8_size(value):
     return len(_safe_log_text(value).encode("utf-8"))
 
@@ -62,7 +76,7 @@ def _utf8_prefix(value, max_bytes):
 
 
 def _strip_incomplete_ansi(value):
-    """Drop a trailing partial ANSI escape before appending a reset/marker."""
+    """Drop a partial framework-owned SGR sequence before adding a marker."""
     escape_at = value.rfind("\033")
     if escape_at >= 0 and "m" not in value[escape_at:]:
         return value[:escape_at]
@@ -97,7 +111,7 @@ def _truncate_rendered(value, max_bytes, marker=_OUTPUT_TRUNCATION_MARKER):
 def _truncate_scalar(value, max_bytes):
     """Clip scalar content and report the exact omitted UTF-8 byte count."""
     max_bytes = _normalize_byte_limit(max_bytes, MAX_LOG_VALUE_BYTES)
-    value = _safe_log_text(value)
+    value = _escape_terminal_controls(value)
     total_size = _utf8_size(value)
     if total_size <= max_bytes:
         return value

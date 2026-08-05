@@ -93,7 +93,9 @@ After it acquires the run lock, every fresh executing run starts with empty
 framework log files under `testproject/var/logs/`. Base `*.log` files are
 truncated in place, which keeps open server file descriptors valid, and stale
 numbered `*.log.N` rotation backups are removed. A failure to clear one file is
-reported as a warning and does not abort the test run.
+reported as a warning and does not abort the test run. Symlinked, multiply
+linked, and other non-regular base-log paths are refused, and file identity is
+rechecked before truncation to detect a path changed during the reset.
 
 `--continue` preserves the logs because it resumes the same logical run.
 `--list-extras` also leaves them untouched because it executes no tests. The
