@@ -170,6 +170,7 @@ INSTALLED_APPS = [
     "mojo.apps.incident",
     "mojo.apps.aws",
     "mojo.apps.dnsman",
+    "mojo.apps.edge",
     "mojo.apps.jobs",
     "mojo.apps.docit",
     "mojo.apps.docit_kb",

@@ -1,0 +1,227 @@
+"""
+edge REST — fail-closed permissions, tenant isolation, and the house guard.
+
+These run against the live dev server, so `mock.patch` in this process does not
+reach the handler. Every fixture is inert: domains are GoDaddy-backed with no
+credential and no test here reaches a provider or a node.
+
+The load-bearing assertion in this file is `test_tenant_cannot_declare_upstream`.
+`Vhost.upstream` being a foreign key is only a real constraint if a tenant
+cannot create rows on the other end of it — otherwise the FK is a text field
+with extra steps.
+"""
+
+from testit import helpers as th
+
+from tests.test_edge._helpers import (
+    cleanup, declare_reserved_names, login, make_certificate, make_domain,
+    make_group, make_upstream, make_user, make_vhost,
+)
+
+
+@th.django_unit_setup()
+def setup_rest_permissions(opts):
+    cleanup()
+    declare_reserved_names()
+
+    opts.group = make_group("edgerest")
+    opts.other_group = make_group("edgeother")
+
+    opts.nobody, opts.nobody_email, opts.nobody_pw = make_user()
+    opts.viewer, opts.viewer_email, opts.viewer_pw = make_user(["view_dns"])
+    opts.manager, opts.manager_email, opts.manager_pw = make_user(["manage_dns"])
+    opts.admin, opts.admin_email, opts.admin_pw = make_user(
+        ["manage_dns"], is_superuser=True)
+
+    # A tenant vhost, and a HOUSE one (group-less domain = platform property).
+    opts.domain = make_domain(group=opts.group)
+    opts.certificate = make_certificate(opts.domain)
+    opts.vhost = make_vhost(opts.domain, opts.certificate, label="www")
+
+    opts.house_domain = make_domain(group=None)
+    opts.house_cert = make_certificate(opts.house_domain)
+    opts.house_vhost = make_vhost(opts.house_domain, opts.house_cert, label="www")
+
+    opts.other_domain = make_domain(group=opts.other_group)
+    opts.other_cert = make_certificate(opts.other_domain)
+    opts.other_vhost = make_vhost(opts.other_domain, opts.other_cert, label="www")
+
+    opts.upstream = make_upstream(host="127.0.0.1", port=8000)
+
+
+@th.django_unit_test("anonymous callers are refused on every edge surface")
+def test_anonymous_refused(opts):
+    opts.client.logout()
+    for path in ["/api/edge/vhost", "/api/edge/upstream"]:
+        resp = opts.client.get(path)
+        assert resp.status_code in (401, 403), \
+            f"{path} served an anonymous caller (status {resp.status_code})"
+
+    resp = opts.client.post("/api/edge/upstream/declare", json=dict(
+        name="up-anon", kind="http", host="127.0.0.1", port=8000))
+    assert resp.status_code in (401, 403), \
+        f"an anonymous caller reached upstream/declare (status {resp.status_code})"
+
+
+@th.django_unit_test("a user with no dns permission cannot read vhosts")
+def test_no_perm_cannot_read(opts):
+    login(opts, opts.nobody_email, opts.nobody_pw)
+    resp = opts.client.get("/api/edge/vhost")
+    assert resp.status_code in (401, 403), \
+        f"a user without view_dns read the vhost list (status {resp.status_code})"
+
+
+@th.django_unit_test("view_dns reads vhosts but cannot write them")
+def test_viewer_cannot_write(opts):
+    login(opts, opts.viewer_email, opts.viewer_pw)
+
+    resp = opts.client.get("/api/edge/vhost")
+    assert resp.status_code == 200, \
+        f"view_dns should read the vhost list, got {resp.status_code}"
+
+    resp = opts.client.post("/api/edge/vhost", json=dict(
+        domain=opts.domain.pk, certificate=opts.certificate.pk,
+        label="viewerwrite", kind="static"))
+    assert resp.status_code in (401, 403), \
+        f"view_dns created a vhost (status {resp.status_code})"
+
+
+@th.django_unit_test("a tenant admin cannot DECLARE an upstream")
+def test_tenant_cannot_declare_upstream(opts):
+    """The foreign key is only a constraint if this is refused.
+
+    A tenant who could add an Upstream row would simply declare one pointing at
+    the metadata service and select it from their vhost — the exact escalation
+    the structured model exists to prevent.
+    """
+    login(opts, opts.manager_email, opts.manager_pw)
+    resp = opts.client.post("/api/edge/upstream/declare", json=dict(
+        name="up-tenant", kind="http", host="169.254.169.254", port=80))
+    assert resp.status_code in (401, 403), \
+        f"a manage_dns holder declared an upstream (status {resp.status_code})"
+
+    resp = opts.client.post("/api/edge/upstream/declare", json=dict(
+        group=opts.group.pk, name="up-tenant2", kind="http",
+        host="10.0.0.9", port=8000))
+    assert resp.status_code in (401, 403), (
+        "naming their own group let a tenant admin declare an upstream "
+        f"(status {resp.status_code})")
+
+
+@th.django_unit_test("a platform admin declares an upstream, and IMDS is still refused")
+def test_admin_declares_upstream(opts):
+    login(opts, opts.admin_email, opts.admin_pw)
+
+    resp = opts.client.post("/api/edge/upstream/declare", json=dict(
+        name="up-admin1", kind="http", host="127.0.0.1", port=8001))
+    assert resp.status_code == 200, \
+        f"a platform admin could not declare an upstream: {resp.status_code} {resp.body}"
+
+    resp = opts.client.post("/api/edge/upstream/declare", json=dict(
+        name="up-admin2", kind="http", host="169.254.169.254", port=80))
+    assert resp.status_code not in (200, 201), (
+        "even a platform admin must not be able to point an upstream at the "
+        f"instance metadata service (status {resp.status_code})")
+
+
+@th.django_unit_test("upstream destination fields are not writable over REST")
+def test_upstream_destination_is_immutable(opts):
+    """NO_SAVE_FIELDS pins host/port/socket_path/kind.
+
+    Without this, a manage_dns holder could repoint an existing house upstream
+    at anything — reaching the same place as declaring one.
+    """
+    login(opts, opts.admin_email, opts.admin_pw)
+    resp = opts.client.post(f"/api/edge/upstream/{opts.upstream.pk}", json=dict(
+        host="169.254.169.254", port=80))
+    opts.upstream.refresh_from_db()
+    assert opts.upstream.host == "127.0.0.1", (
+        "an upstream's host was rewritten over REST — NO_SAVE_FIELDS is not "
+        f"holding (status {resp.status_code}, host now {opts.upstream.host})")
+
+
+@th.django_unit_test("a global manage_dns grant does not reach a HOUSE vhost")
+def test_house_vhost_guard(opts):
+    """Vhost scopes through domain__group; a house domain resolves that to None
+    and the check falls through to GLOBAL permissions. The platform guard is
+    what stands there — same shape as dnsman's house-certificate guard."""
+    login(opts, opts.manager_email, opts.manager_pw)
+    resp = opts.client.get(f"/api/edge/vhost/{opts.house_vhost.pk}")
+    assert resp.status_code in (401, 403), (
+        "a global manage_dns holder read a house vhost — the platform's own "
+        f"serving config (status {resp.status_code})")
+
+
+@th.django_unit_test("a platform admin can read a house vhost")
+def test_house_vhost_admin_allowed(opts):
+    login(opts, opts.admin_email, opts.admin_pw)
+    resp = opts.client.get(f"/api/edge/vhost/{opts.house_vhost.pk}")
+    assert resp.status_code == 200, \
+        f"a platform admin could not read a house vhost: {resp.status_code} {resp.body}"
+
+
+@th.django_unit_test("an unauthenticated caller cannot tell a house vhost from a tenant one")
+def test_house_guard_is_not_an_oracle(opts):
+    """The model check runs BEFORE the platform guard for this reason.
+
+    Leading with the guard would answer 403 'platform administrators' for a
+    house vhost and 401 for a tenant one — a free classification oracle over
+    sequential pks.
+    """
+    opts.client.logout()
+    house = opts.client.get(f"/api/edge/vhost/{opts.house_vhost.pk}")
+    tenant = opts.client.get(f"/api/edge/vhost/{opts.vhost.pk}")
+    assert house.status_code == tenant.status_code, (
+        "a house vhost and a tenant vhost answered an anonymous caller "
+        f"differently ({house.status_code} vs {tenant.status_code}) — that "
+        "classifies the platform's own inventory")
+
+
+@th.django_unit_test("a tenant cannot read another tenant's vhost")
+def test_tenant_isolation(opts):
+    from mojo.apps.account.models import GroupMember
+
+    user, email, password = make_user()
+    member, _ = GroupMember.objects.get_or_create(user=user, group=opts.group)
+    member.permissions = {"manage_dns": True}
+    member.save()
+
+    login(opts, email, password)
+    resp = opts.client.get(
+        f"/api/edge/vhost/{opts.other_vhost.pk}?group={opts.group.pk}")
+    assert resp.status_code in (401, 403, 404), (
+        "a tenant admin read another tenant's vhost "
+        f"(status {resp.status_code})")
+
+
+@th.django_unit_test("a vhost list is scoped to the caller's tenant")
+def test_vhost_list_scoped(opts):
+    from mojo.apps.account.models import GroupMember
+
+    user, email, password = make_user()
+    member, _ = GroupMember.objects.get_or_create(user=user, group=opts.group)
+    member.permissions = {"manage_dns": True}
+    member.save()
+
+    login(opts, email, password)
+    resp = opts.client.get(f"/api/edge/vhost?group={opts.group.pk}")
+    assert resp.status_code == 200, \
+        f"a tenant admin could not list their own vhosts: {resp.status_code}"
+
+    ids = {row.get("id") for row in (resp.json.get("data") or [])}
+    assert opts.other_vhost.pk not in ids, \
+        "another tenant's vhost appeared in a scoped list"
+    assert opts.house_vhost.pk not in ids, \
+        "a house vhost appeared in a tenant's list"
+
+
+@th.django_unit_test("a vhost cannot be moved between domains over REST")
+def test_domain_is_immutable(opts):
+    """Re-pointing `domain` would move the row between TENANTS."""
+    login(opts, opts.admin_email, opts.admin_pw)
+    resp = opts.client.post(f"/api/edge/vhost/{opts.vhost.pk}", json=dict(
+        domain=opts.other_domain.pk))
+    opts.vhost.refresh_from_db()
+    assert opts.vhost.domain_id == opts.domain.pk, (
+        "a vhost was moved to another tenant's domain over REST "
+        f"(status {resp.status_code})")
