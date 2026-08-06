@@ -42,7 +42,9 @@ fm = FileManager.get_for_user_group(user, group)
 
 ## FileManager Settings
 
-Each `FileManager` has a `settings` JSONField for backend-specific configuration:
+Each `FileManager` stores backend-specific settings through the encrypted
+`MojoSecrets.mojo_secrets` text field. Use the model helpers rather than reading
+or writing that encrypted blob directly:
 
 ```python
 # Access a setting
@@ -148,6 +150,30 @@ therefore requires `is_superuser`; direct ORM/bootstrap code is unaffected.
 Changing `assume_role_arn` or `external_id` also changes the manager's
 public-access config fingerprint, so cached audit evidence collected under the
 old identity is invalidated.
+
+#### S3 credential boundary
+
+FileManager credentials are written with `set_aws_key()` and
+`set_aws_secret()` and read by trusted backend code through the raw `aws_key`
+and `aws_secret` properties. Those raw properties are internal-only and must
+never be added to a REST graph.
+
+The `default`, `list`, and `basic` REST graphs expose only
+`aws_key_masked` and `aws_secret_masked`. A configured value longer than four
+characters keeps only its last four characters visible; a non-empty value of
+four characters or fewer is fully masked. An absent value is returned as an
+empty string. File responses that nest a manager use the same safe `basic`
+graph, and an unknown FileManager graph falls back to the safe `default`
+graph.
+
+REST create and update requests still accept `aws_key` and `aws_secret` as
+write-only inputs through the model's custom setters. The masked properties are
+response-only: generic REST save ignores them. Clients should omit unchanged
+credentials and must never echo a displayed mask as a replacement value.
+
+This response-contract change does not rotate, rewrite, or migrate stored
+credentials and does not change backend authentication. No data migration is
+required.
 
 #### Public-access reconciliation
 

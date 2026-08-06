@@ -25,10 +25,41 @@ FileManagers are storage backend configurations. Admins create and manage them; 
   "name": "documents",
   "backend_type": "s3",
   "backend_url": "s3://my-bucket/docs/",
+  "aws_region": "us-east-1",
+  "aws_key": "<access-key-id>",
+  "aws_secret": "<secret-access-key>",
   "is_default": false,
   "group": 7
 }
 ```
+
+### S3 credential inputs and responses
+
+| Field | Direction | Description |
+|---|---|---|
+| `aws_region` | Input and output | S3 region used by the manager. |
+| `aws_key` | Write-only input | Access key id accepted on create or update. Never returned. |
+| `aws_secret` | Write-only input | Secret access key accepted on create or update. Never returned. |
+| `aws_key_masked` | Response only | Masked access-key hint. Only the last four characters of a long value remain visible. |
+| `aws_secret_masked` | Response only | Masked secret hint. Only the last four characters of a long value remain visible. |
+
+FileManager list and detail responses, including managers nested in File
+responses, omit `aws_key` and `aws_secret`. They return only the masked fields:
+
+```json
+{
+  "aws_region": "us-east-1",
+  "aws_key_masked": "****************1234",
+  "aws_secret_masked": "************************5678"
+}
+```
+
+Non-empty values of four characters or fewer are fully masked, and absent
+credentials appear as empty strings. The masked fields are display hints, not
+update values. Generic REST save ignores `aws_key_masked` and
+`aws_secret_masked`, but clients should not submit them. To keep credentials
+unchanged, omit `aws_key` and `aws_secret` from the update. Never echo a mask
+back as a replacement credential.
 
 ### User field behavior
 

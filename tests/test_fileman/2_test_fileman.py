@@ -1,6 +1,8 @@
 """
 Tests for the fileman File and FileManager models and REST endpoints.
 """
+import hashlib
+import json
 import os
 import tempfile
 from testit import helpers as th
@@ -8,6 +10,44 @@ from testit.helpers import assert_true, assert_eq
 
 TEST_USER = "fileman_test_user"
 TEST_PWORD = "fileman##mojo99"
+GRAPH_CANARY_MANAGER = "fm_graph_canary_1440"
+GRAPH_CANARY_FILENAME = "fm_graph_canary_1440.txt"
+GRAPH_ACCESS_KEY = "T1440ACCESSKEYCANARY9876"
+GRAPH_SECRET_KEY = "t1440-secret-canary-value-5432"
+
+
+def _iter_payload(value):
+    """Yield every nested mapping key and value without stringifying secrets."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            yield key, child
+            yield from _iter_payload(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            yield from _iter_payload(child)
+
+
+def _assert_masked_payload(payload, context):
+    """Prove one serialized surface contains masks and no credential material."""
+    expected_key = "*" * (len(GRAPH_ACCESS_KEY) - 4) + GRAPH_ACCESS_KEY[-4:]
+    expected_secret = "*" * (len(GRAPH_SECRET_KEY) - 4) + GRAPH_SECRET_KEY[-4:]
+    pairs = list(_iter_payload(payload))
+    keys = [key for key, _value in pairs]
+    key_masks = [value for key, value in pairs if key == "aws_key_masked"]
+    secret_masks = [value for key, value in pairs if key == "aws_secret_masked"]
+    encoded = json.dumps(payload, sort_keys=True, default=str)
+
+    for raw_name in ("aws_key", "aws_secret", "mojo_secrets", "secrets"):
+        assert_true(raw_name not in keys, f"{context} must not expose the secret-container key {raw_name}")
+    assert_true(GRAPH_ACCESS_KEY not in encoded, f"{context} must not contain the raw access-key canary")
+    assert_true(GRAPH_SECRET_KEY not in encoded, f"{context} must not contain the raw secret canary")
+    assert_true(expected_key in key_masks, f"{context} must expose only the expected access-key mask")
+    assert_true(expected_secret in secret_masks, f"{context} must expose only the expected secret mask")
+
+
+def _secret_digest(value):
+    """Compare synthetic credentials without rendering them in test failures."""
+    return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
 
 
 def _write_dummy_file(tmpdir, storage_file_path):
@@ -270,6 +310,174 @@ def test_rest_file_delete(opts):
     resp = opts.client.delete(f"/api/fileman/file/{opts.initiated_file_id}")
     assert_eq(resp.status_code, 200, f"delete should return 200, got {resp.status_code}")
     assert_true(not File.objects.filter(pk=opts.initiated_file_id).exists(), "file row should be deleted")
+
+
+# ---------------------------------------------------------------------------
+# Security regression: FileManager credential graphs
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("FileManager: credential masks cover empty and short values")
+def test_fm_credential_mask_boundaries(opts):
+    from mojo.apps.fileman.models import FileManager
+
+    cases = [
+        ("", ""),
+        ("x", "*"),
+        ("wxyz", "****"),
+        ("abcde", "*bcde"),
+    ]
+    for raw_value, expected_mask in cases:
+        fm = FileManager()
+        fm.set_aws_key(raw_value)
+        fm.set_aws_secret(raw_value)
+        assert_eq(
+            fm.aws_key_masked,
+            expected_mask,
+            f"access-key masking must follow the explicit {len(raw_value)}-character boundary policy",
+        )
+        assert_eq(
+            fm.aws_secret_masked,
+            expected_mask,
+            f"secret masking must follow the explicit {len(raw_value)}-character boundary policy",
+        )
+
+
+@th.django_unit_test("FileManager: every direct, REST, nested, and fallback graph masks credentials")
+def test_fm_credential_graphs_never_expose_raw_values(opts):
+    from mojo.apps.fileman.models import FileManager, File
+
+    FileManager.objects.filter(name=GRAPH_CANARY_MANAGER).delete()
+    opts.client.login(TEST_USER, TEST_PWORD)
+    assert_true(opts.client.is_authenticated, "credential graph regression requires an authenticated REST caller")
+
+    try:
+        manager = FileManager.objects.create(
+            name=GRAPH_CANARY_MANAGER,
+            backend_type="file",
+            backend_url="file://",
+            user=opts.user,
+            is_active=True,
+            is_default=False,
+            is_public=False,
+        )
+        manager_id = manager.id
+
+        client_logger = opts.client.logger
+        try:
+            # RestClient logs request JSON verbatim. Suppress it only for this
+            # synthetic secret-bearing request, then restore it unconditionally.
+            opts.client.logger = None
+            credential_resp = opts.client.post(f"/api/fileman/manager/{manager_id}", {
+                "aws_region": "us-west-2",
+                "aws_key": GRAPH_ACCESS_KEY,
+                "aws_secret": GRAPH_SECRET_KEY,
+            })
+        finally:
+            opts.client.logger = client_logger
+        assert_eq(credential_resp.status_code, 200, "authenticated generic REST save must accept write-only credentials")
+        manager = FileManager.objects.get(pk=manager_id)
+
+        assert_true(
+            _secret_digest(manager.aws_key) == _secret_digest(GRAPH_ACCESS_KEY),
+            "trusted backend code must retain the access-key value accepted through REST",
+        )
+        assert_true(
+            _secret_digest(manager.aws_secret) == _secret_digest(GRAPH_SECRET_KEY),
+            "trusted backend code must retain the secret value accepted through REST",
+        )
+        encrypted_blob = manager.mojo_secrets or ""
+        assert_true(GRAPH_ACCESS_KEY not in encrypted_blob, "encrypted storage must not contain plaintext access-key material")
+        assert_true(GRAPH_SECRET_KEY not in encrypted_blob, "encrypted storage must not contain plaintext secret material")
+
+        omitted_resp = opts.client.post(f"/api/fileman/manager/{manager_id}", {
+            "description": "credential omission preserves stored values",
+        })
+        assert_eq(omitted_resp.status_code, 200, "an unrelated REST update must succeed with credentials omitted")
+        manager.refresh_from_db()
+        assert_true(
+            _secret_digest(manager.aws_key) == _secret_digest(GRAPH_ACCESS_KEY),
+            "omitting aws_key must preserve the stored credential",
+        )
+        assert_true(
+            _secret_digest(manager.aws_secret) == _secret_digest(GRAPH_SECRET_KEY),
+            "omitting aws_secret must preserve the stored credential",
+        )
+
+        mask_input_resp = opts.client.post(f"/api/fileman/manager/{manager_id}", {
+            "aws_key_masked": "response-mask-is-not-an-input",
+            "aws_secret_masked": "response-mask-is-not-an-input",
+        })
+        assert_eq(mask_input_resp.status_code, 200, "response-only mask fields are ignored by generic REST save")
+        manager.refresh_from_db()
+        assert_true(
+            _secret_digest(manager.aws_key) == _secret_digest(GRAPH_ACCESS_KEY),
+            "aws_key_masked input must not overwrite the access key",
+        )
+        assert_true(
+            _secret_digest(manager.aws_secret) == _secret_digest(GRAPH_SECRET_KEY),
+            "aws_secret_masked input must not overwrite the secret",
+        )
+
+        for graph in ("default", "list", "basic"):
+            extra = FileManager.RestMeta.GRAPHS[graph].get("extra") or []
+            assert_true("aws_key" not in extra, f"FileManager {graph} graph must exclude raw aws_key")
+            assert_true("aws_key_masked" in extra, f"FileManager {graph} graph must include aws_key_masked")
+            assert_true("aws_secret" not in extra, f"FileManager {graph} graph must exclude raw aws_secret")
+            assert_true("aws_secret_masked" in extra, f"FileManager {graph} graph must include aws_secret_masked")
+            _assert_masked_payload(manager.to_dict(graph=graph), f"direct FileManager {graph} graph")
+
+        _assert_masked_payload(
+            manager.to_dict(graph="fm_graph_canary_unknown"),
+            "direct FileManager unknown-graph fallback",
+        )
+
+        detail_resp = opts.client.get(f"/api/fileman/manager/{manager_id}")
+        assert_eq(detail_resp.status_code, 200, "FileManager detail must remain readable")
+        _assert_masked_payload(detail_resp.response.data, "FileManager REST detail")
+
+        list_resp = opts.client.get(
+            f"/api/fileman/manager?name={GRAPH_CANARY_MANAGER}&graph=list"
+        )
+        assert_eq(list_resp.status_code, 200, "FileManager list must remain readable")
+        assert_eq(list_resp.response.count, 1, "stable-name filter must isolate the credential canary manager")
+        _assert_masked_payload(list_resp.response.data, "FileManager REST list")
+
+        unknown_resp = opts.client.get(
+            f"/api/fileman/manager/{manager_id}?graph=fm_graph_canary_unknown"
+        )
+        assert_eq(unknown_resp.status_code, 200, "unknown FileManager graph must safely fall back to default")
+        _assert_masked_payload(unknown_resp.response.data, "FileManager REST unknown-graph fallback")
+
+        manager.set_setting("use_shortlinks", False)
+        manager.save(update_fields=["mojo_secrets", "modified"])
+        file_obj = File.objects.create(
+            filename=GRAPH_CANARY_FILENAME,
+            storage_filename=GRAPH_CANARY_FILENAME,
+            storage_file_path=GRAPH_CANARY_FILENAME,
+            file_size=1,
+            content_type="text/plain",
+            upload_token="fm-graph-canary-upload-token",
+            file_manager=manager,
+            user=opts.user,
+        )
+
+        _assert_masked_payload(file_obj.to_dict(graph="list"), "direct nested File list graph")
+        _assert_masked_payload(file_obj.to_dict(graph="detailed"), "direct nested File detail graph")
+
+        file_list_resp = opts.client.get(
+            f"/api/fileman/file?filename={GRAPH_CANARY_FILENAME}&graph=list"
+        )
+        assert_eq(file_list_resp.status_code, 200, "nested File list must remain readable")
+        assert_eq(file_list_resp.response.count, 1, "filename filter must isolate the nested graph canary")
+        _assert_masked_payload(file_list_resp.response.data, "nested File REST list")
+
+        file_detail_resp = opts.client.get(
+            f"/api/fileman/file/{file_obj.id}?graph=detailed"
+        )
+        assert_eq(file_detail_resp.status_code, 200, "nested File detail must remain readable")
+        _assert_masked_payload(file_detail_resp.response.data, "nested File REST detail")
+    finally:
+        FileManager.objects.filter(name=GRAPH_CANARY_MANAGER).delete()
 
 
 # ---------------------------------------------------------------------------
