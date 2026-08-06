@@ -36,6 +36,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | [shortlink/](shortlink/README.md) | Short URL creation, redirect behavior, OG previews |
 | [aws/cloudwatch](aws/cloudwatch.md) | Live AWS infrastructure metrics (EC2, RDS, ElastiCache) |
 | [aws/guardduty](aws/guardduty.md) | Public AWS SNS endpoint that receives signed GuardDuty findings |
+| [aws/s3](aws/s3.md) | Global S3 bucket inventory, private creation, access posture, and confirmed empty operations |
 | [dnsman/](dnsman/README.md) | Domain search/purchase, DNS records, WHOIS/privacy, TLS certificates |
 | [filevault/](filevault/README.md) | Encrypted file vault |
 | [assistant/](assistant/README.md) | LLM admin assistant — natural language queries, conversations |
