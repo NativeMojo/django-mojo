@@ -13,6 +13,9 @@ does exactly that.
 REST reference for API consumers:
 [web_developer/edge](../../web_developer/edge/README.md).
 
+Site releases (what is being *served*, as opposed to how):
+[webapps.md](webapps.md).
+
 ## The constraint everything else follows from
 
 **A vhost is never a text field an admin types nginx directives into.**
