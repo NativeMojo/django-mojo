@@ -22,9 +22,15 @@ from mojo import errors as merrors
 # dict — so a domain term like "security" would still pass for any group admin
 # holding it in their own tenant, which is exactly the hole being closed.
 # `sys.geoip_sync` forces the check onto the granter's GLOBAL dict instead.
+#
+# edge_node authorizes GET /api/edge/desired_state and GET /api/edge/material,
+# which together hand a caller every enabled vhost in a fleet pool AND the
+# private key of every certificate those vhosts reference — including the
+# platform's own. It is a node identity, never a tenant one.
 APIKEY_PERMS_PROTECTION_DEFAULTS = {
     "geoip_sync": "sys.geoip_sync",
     "dnsman_acme_federation": "sys.dnsman_acme_federation",
+    "edge_node": "sys.edge_node",
 }
 
 
