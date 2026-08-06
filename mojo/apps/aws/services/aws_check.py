@@ -20,6 +20,9 @@ from mojo.helpers.settings import settings
 logger = logit.get_logger("aws_check", "aws.log")
 STATUSES = ("pass", "warn", "fail", "pending", "skip")
 SECTIONS = ("prerequisites", "identity", "cron", "s3", "email", "monitoring", "rules")
+# `versions` is opt-in: it is selectable with --section but never part of a
+# default run, and it can only ever report pass/warn/pending — never fail.
+ALL_SECTIONS = SECTIONS + ("versions",)
 OWNERSHIP_TAGS = {"managed-by": "django-mojo", "purpose": "cloudwatch-incidents"}
 
 
@@ -131,10 +134,13 @@ class AWSCheckRunner:
 
     def run(self, sections=None):
         selected = list(sections or SECTIONS)
-        unknown = sorted(set(selected) - set(SECTIONS))
+        unknown = sorted(set(selected) - set(ALL_SECTIONS))
         if unknown:
             raise ValueError(f"unknown section(s): {', '.join(unknown)}")
-        for section in SECTIONS:
+        # Iterate ALL_SECTIONS, not SECTIONS: `selected` still DEFAULTS to
+        # SECTIONS, but an explicitly requested opt-in section must actually
+        # execute rather than validate and then do nothing.
+        for section in ALL_SECTIONS:
             if section not in selected:
                 continue
             try:
@@ -815,3 +821,68 @@ class AWSCheckRunner:
         else:
             self._add("rules", "warn", "rules.cloudwatch_missing", "CloudWatch incident defaults are not installed",
                       remediation="Rerun with --apply after receiver delivery is verified.")
+        # Version-drift events are generated in-process, so this RuleSet does
+        # NOT sit behind the monitoring_ready/delivery_seen gate above — that
+        # gate exists because CloudWatch alarms need a confirmed SNS receiver.
+        from mojo.apps.aws.services.version_drift import RULESET_CATEGORY
+        versions = RuleSet.objects.filter(
+            category=RULESET_CATEGORY, name="Health - AWS Version Drift").first()
+        if versions:
+            self._add("rules", "pass", "rules.aws_versions_present",
+                      "AWS version drift incident defaults are installed", {"ruleset_id": versions.pk})
+        elif self._approve("Create the AWS version drift incident RuleSet?"):
+            versions, created = RuleSet.ensure_aws_version_rules()
+            self._add("rules", "pass", "rules.aws_versions_created",
+                      "Created AWS version drift incident defaults",
+                      {"ruleset_id": versions.pk}, changed=created)
+        else:
+            self._add("rules", "warn", "rules.aws_versions_missing",
+                      "AWS version drift incident defaults are not installed",
+                      remediation=("Rerun with --apply --section rules and set "
+                                   "AWS_VERSION_DRIFT_ENABLED=True to schedule the scan."))
+
+    def check_versions(self):
+        """Opt-in managed-service version inventory. Never reports `fail`.
+
+        AccessDenied is the expected first-run outcome given the extra IAM
+        actions this needs, so every failure path returns early with `warn` or
+        `pending` BEFORE run()'s per-section wrapper — which would call
+        _add(..., "fail", ...) and make `aws-check --check --section versions`
+        exit 1 in CI.
+        """
+        from mojo.apps.aws.services.version_drift import VersionDriftScanner
+        try:
+            report = VersionDriftScanner(
+                region=self.region, profile=self.profile,
+                timeout=self.timeout, clients=self.clients,
+            ).scan()
+        except Exception as exc:
+            self._add("versions", "warn", "versions.scan_error", exc,
+                      remediation="Rerun: manage.py aws-check --check --section versions")
+            return
+        if report.get("status") != "ok":
+            self._add("versions", "pending", "versions.unavailable",
+                      report.get("reason") or "AWS was not reachable for a version inventory",
+                      {"region": report.get("region")},
+                      remediation="Configure AWS credentials for this box, then rerun.")
+            return
+        for warning in report.get("warnings") or []:
+            self._add("versions", "warn", "versions.denied", warning.get("message"),
+                      {"iam_action": warning.get("iam_action"), "aws_code": warning.get("aws_code")},
+                      remediation=f"Grant {warning.get('iam_action')} to the selected identity.")
+        findings = report.get("findings") or []
+        if not findings:
+            self._add("versions", "pass", "versions.current",
+                      "No managed service has a major version upgrade available",
+                      {"region": report.get("region")})
+            return
+        for finding in findings:
+            days = finding.get("days_remaining")
+            near = days is not None
+            self._add("versions", "warn" if near else "pending",
+                      "versions.deadline" if near else "versions.upgrade_available",
+                      (f"{finding.get('kind')} {finding.get('resource_id')} runs "
+                       f"{finding.get('engine')} {finding.get('current_version')}; "
+                       f"{finding.get('available_major')} is available"),
+                      finding,
+                      remediation=f"Plan the major version upgrade: {finding.get('release_notes_url')}")

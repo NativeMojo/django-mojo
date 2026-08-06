@@ -3,7 +3,7 @@ import sys
 
 from django.core.management.base import BaseCommand, CommandError
 
-from mojo.apps.aws.services.aws_check import AWSCheckRunner, SECTIONS
+from mojo.apps.aws.services.aws_check import ALL_SECTIONS, AWSCheckRunner
 
 
 class Command(BaseCommand):
@@ -14,7 +14,7 @@ class Command(BaseCommand):
         parser.add_argument("--apply", action="store_true", help="Allow confirmation-gated create-missing actions")
         parser.add_argument("--yes", action="store_true", help="Approve create-missing actions (requires --apply)")
         parser.add_argument("--json", action="store_true", help="Emit versioned JSON; implies --check")
-        parser.add_argument("--section", action="append", choices=SECTIONS, help="Audit only this section; repeatable")
+        parser.add_argument("--section", action="append", choices=ALL_SECTIONS, help="Audit only this section; repeatable")
         parser.add_argument("--timeout", type=int, default=3, help="AWS connect/read timeout in seconds (1-30)")
         parser.add_argument("--region", help="AWS region override")
         parser.add_argument("--aws-profile", help="Non-secret boto3 profile override")
