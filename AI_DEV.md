@@ -198,3 +198,7 @@ Items use the YAML frontmatter in `planning/_template.md`, with sections added p
 2. **Resolution** (`/build` → `close.sh`): `## Resolution` with closed date, branch, files changed, tests added.
 
 This progressive format means every resolved file in `planning/done/` tells the full story from intake to fix.
+
+> `planning/done/` is **gitignored** — it exists only on the machine that ran the
+> fallback flow. Work-item history is never committed; the maestro board is the
+> record. See the workspace rule doc `no-work-item-history-in-repos`.

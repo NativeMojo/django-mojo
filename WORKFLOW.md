@@ -205,9 +205,15 @@ by `planning/.config`, so they need no editing.**
 | `planning/inbox/` | New, unscoped items (no ID yet). | ✅ (empty dir) |
 | `planning/confirmed/` | Scoped + planned items (have ID + `## Plan`). | ✅ (empty dir) |
 | `planning/in_progress/` | Actively being built (WIP = 1). | ✅ (empty dir) |
-| `planning/done/` | Closed items — the project's decision history. | ✅ (empty dir) |
-| `planning/future/` | Parked ideas. | ✅ (empty dir) |
-| `planning/rejected/` | Declined items, kept for rationale. | ✅ (empty dir) |
+| `planning/done/` | Closed items. **Gitignored** — created at runtime, never committed. | ⛔ |
+| `planning/future/` | Parked ideas. **Gitignored.** | ⛔ |
+| `planning/rejected/` | Declined items, kept for rationale. **Gitignored.** | ⛔ |
+| `planning/built/` | Build-start snapshots. **Gitignored** — do not write these at all when maestro is reachable. | ⛔ |
+
+> **Work-item history is never committed.** The maestro board is the record —
+> it holds the workspec, plan, challenge, commit trail and verification, which
+> is strictly more than a file ever did. Repos carry code. See the workspace
+> rule doc `no-work-item-history-in-repos`.
 
 ### Root docs & config
 

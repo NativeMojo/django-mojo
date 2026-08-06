@@ -38,8 +38,15 @@ dist/
 testproject/
 .hypothesis
 
-# Maestro scoping scratch copies (planning/built/ IS committed — see CLAUDE.md)
+# Work-item history is NOT committed — the maestro board is the record.
+# Scoping scratch copies, build-start snapshots, and the closed/parked/declined
+# archives all stay local. See CLAUDE.md.
 planning/.cache/
+planning/built/
+planning/building/
+planning/done/
+planning/future/
+planning/rejected/
 
 # Docs
 docs_site/

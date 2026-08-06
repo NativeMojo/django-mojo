@@ -91,17 +91,23 @@ on claim, WIP = 1 per project) and the repo-specific
 post-build agent trio (test-runner, docs-updater, security-review), and
 optional build routing.
 
-A work item is board-backed XOR file-backed — never both. `planning/` itself
-still holds:
-- `done/` — the pre-migration historical archive (183 items closed before the
-  2026-07-19 maestro move), plus any future fallback-mode closures. Browse
-  with `scripts/board.sh done` or `git log`.
-- `future/` / `rejected/` — pre-migration parked/declined items, kept for
-  rationale only.
-- `.cache/` (gitignored) — scratch working copy `/maestro-scope` and
-  `/maestro-build` pull an item's description into for the session.
-- `built/` — commit-time snapshots `/maestro-build` writes at claim time (the
-  board item remains the source of truth; these are a local paper trail).
+A work item is board-backed XOR file-backed — never both.
+
+**Work-item history is NEVER committed.** As of 2026-08-06 the repo carries no
+task archive and no build-status snapshots: the maestro board is the record,
+and it already holds strictly more (workspec, plan, challenge dispositions,
+commit trail, verification). Do not write `planning/built/<id>.md` at claim
+time, do not commit closed/parked/declined items, and do not re-add a
+`planning/` archive in any form. All of it is gitignored.
+
+> The pre-migration archive (183 items closed before the 2026-07-19 maestro
+> move) plus 72 build snapshots were removed in the same change. They remain
+> reachable through `git log` history if ever needed.
+
+`planning/` keeps only the local-fallback scaffolding — `_template.md`,
+`.next_id`, `.config`, and the empty stage folders. Everything the fallback
+flow generates at runtime (`.cache/`, `built/`, `building/`, `done/`,
+`future/`, `rejected/`) stays local and untracked.
 
 ### Local Fallback Workflow
 
@@ -141,15 +147,17 @@ still work exactly as before, entirely file-based:
   BLOCKED (its `depends_on` aren't all in `planning/done/`).
 
 ```
-planning/
+planning/                 # only the first four entries are tracked
   .next_id       # next item number (single bare integer)
   _template.md   # the one item template
   inbox/         # new, unscoped items (no id yet) — fallback only
   confirmed/     # scoped + planned items (have id + plan) — fallback only
   in_progress/   # actively being built (claimed by /build; WIP = 1) — fallback only
-  done/          # closed items (pre-migration archive + any fallback closures)
-  future/        # parked ideas — not ready to scope (just a folder)
-  rejected/      # declined items, kept for rationale (just a folder)
+  ---- everything below is gitignored, created at runtime, never committed ----
+  done/          # fallback-mode closures
+  future/        # parked ideas — not ready to scope
+  rejected/      # declined items, kept for rationale
+  built/ building/ .cache/   # build snapshots and scoping scratch
 ```
 
 `future/` and `rejected/` are plain parking folders — no id is allocated. Park or
