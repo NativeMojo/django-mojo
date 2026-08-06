@@ -165,6 +165,62 @@ def test_access_denied_is_blind_and_exits_nonzero(opts):
 
 
 @th.django_unit_test()
+def test_a_rejected_credential_is_blind_not_info(opts):
+    """AuthFailure is what EC2 returns for a deactivated key. It is not a
+    permission error, so it misses DENIED_CODES — but the check did not run,
+    and a gate that exits 0 because its key was revoked is the fail-open case
+    the BLIND status exists to close."""
+    from botocore.exceptions import ClientError
+
+    from mojo.deploy import check_setup as cs
+
+    for code_name in ("AuthFailure", "InvalidClientTokenId", "ExpiredToken",
+                      "SignatureDoesNotMatch"):
+        report = cs.Report()
+
+        def boom():
+            raise ClientError({"Error": {"Code": code_name}}, "DescribeInstances")
+
+        result = cs.safe(report, "ec2", "describe_instances", boom,
+                         default="fallback")
+
+        th.assert_eq(result, "fallback",
+                     f"safe() must return the default for {code_name} rather "
+                     f"than propagating")
+        th.assert_eq(report.counts()[cs.BLIND], 1,
+                     f"{code_name} means the credential was rejected and the "
+                     f"check never ran, so it must be BLIND, not INFO — "
+                     f"got {report.counts()}")
+
+
+@th.django_unit_test()
+def test_a_missing_credential_is_blind_not_info(opts):
+    """NoCredentialsError is a BotoCoreError, so it used to fall into the INFO
+    branch alongside genuine transient transport errors. A section that never
+    ran because there was no credential must gate."""
+    from botocore.exceptions import EndpointConnectionError, NoCredentialsError
+
+    from mojo.deploy import check_setup as cs
+
+    cases = (
+        NoCredentialsError(),
+        EndpointConnectionError(endpoint_url="https://ec2.us-west-2.amazonaws.com/"),
+    )
+    for err in cases:
+        report = cs.Report()
+
+        def boom():
+            raise err
+
+        cs.safe(report, "ec2", "describe_instances", boom, default=None)
+
+        th.assert_eq(report.counts()[cs.BLIND], 1,
+                     f"{type(err).__name__} means this check was never "
+                     f"performed and must be BLIND, not INFO — "
+                     f"got {report.counts()}")
+
+
+@th.django_unit_test()
 def test_safe_reports_a_botocore_error_as_info_not_blind(opts):
     from botocore.exceptions import BotoCoreError
 

@@ -331,7 +331,15 @@ def sync(s3, config, target, remote_name, dry_run):
     # fail on a genuinely fresh node for a reason that has nothing to do with S3.
     target_dir = os.path.dirname(os.path.abspath(target))
     os.makedirs(target_dir, exist_ok=True)
-    sweep_stale_staging(target_dir)
+    # The sweep deletes directories as root, so it must not run under --dry-run:
+    # an operator reaching for --dry-run to inspect a node without touching it
+    # gets exactly that. (makedirs stays -- it is idempotent, and the dry-run
+    # still stages a download below in order to report the sha it would install.)
+    if dry_run:
+        log.info("[dry-run] would sweep stale staging directories under %s",
+                 target_dir)
+    else:
+        sweep_stale_staging(target_dir)
 
     etag, published_sha = remote_digest(s3, bucket, key)
     local_sha = file_sha256(target)

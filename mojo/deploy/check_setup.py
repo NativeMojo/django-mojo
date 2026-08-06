@@ -92,6 +92,16 @@ THROTTLE_CODES = (
     "Throttling", "ThrottlingException", "RequestLimitExceeded",
     "TooManyRequestsException", "RequestThrottled", "SlowDown",
 )
+# The credential itself is bad or expired. These are NOT permission errors, so
+# they miss DENIED_CODES, but they mean the check did not run just the same --
+# and a gate that exits 0 because its key was revoked is the fail-open case this
+# module exists to close. AuthFailure in particular is what EC2 returns for a
+# deactivated key.
+UNUSABLE_CODES = (
+    "AuthFailure", "InvalidClientTokenId", "SignatureDoesNotMatch",
+    "UnrecognizedClientException", "ExpiredToken", "ExpiredTokenException",
+    "InvalidAccessKeyId", "OptInRequired", "SubscriptionRequiredException",
+)
 
 
 class Report:
@@ -224,7 +234,10 @@ def safe(report, section, name, func, default=None):
     gap tells you nothing about the other twenty checks — but one that quietly
     downgrades AccessDenied to a note and still exits 0 is worse, because it
     reports a clean section it never read."""
-    from botocore.exceptions import BotoCoreError, ClientError
+    from botocore.exceptions import (BotoCoreError, ClientError,
+                                     EndpointConnectionError,
+                                     NoCredentialsError,
+                                     PartialCredentialsError)
 
     try:
         return func()
@@ -241,11 +254,28 @@ def safe(report, section, name, func, default=None):
                          f"AWS throttled this call ({code}), so this check was "
                          "not performed",
                          "re-run the audit")
+        elif code in UNUSABLE_CODES:
+            report.blind(section, f"{name}: credential unusable",
+                         f"the audit credential was rejected ({code}), so this "
+                         "check was not performed",
+                         "check that the audit credential is active and not "
+                         "expired, then re-run")
         else:
             report.info(section, f"{name}: error", str(err))
         return default
     except BotoCoreError as err:
-        report.info(section, f"{name}: error", str(err))
+        # Not every transport error means the check could not run -- a timeout
+        # is worth retrying, not gating on. But a missing credential or an
+        # unreachable endpoint means this section was never read, and reporting
+        # that as INFO would exit 0 on an audit that saw nothing.
+        if isinstance(err, (NoCredentialsError, PartialCredentialsError,
+                            EndpointConnectionError)):
+            report.blind(section, f"{name}: credential or endpoint unavailable",
+                         f"{type(err).__name__}, so this check was not performed",
+                         "confirm the audit credential and network reachability, "
+                         "then re-run")
+        else:
+            report.info(section, f"{name}: error", str(err))
         return default
 
 

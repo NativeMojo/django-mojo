@@ -386,6 +386,60 @@ def test_sync_is_a_noop_when_the_local_file_already_matches(opts):
 
 
 @th.django_unit_test()
+def test_sync_dry_run_does_not_sweep_stale_staging(opts):
+    """The stale-staging sweep deletes directories as root. An operator who
+    reaches for --dry-run to inspect a node without touching it must get
+    exactly that, so the sweep is gated on it."""
+    from mojo.deploy import config_sync as cs
+
+    root = _tempdir()
+    try:
+        target = os.path.join(root, "django.conf")
+        _write(target, "SECRET=old\n")
+        stale = os.path.join(root, cs.STAGING_PREFIX + "leftover")
+        os.makedirs(stale)
+
+        s3 = _s3_publishing("SECRET=new\n")
+        config = {"AWS_CONFIG_BUCKET": "b", "AWS_CONFIG_PREFIX": "p"}
+
+        code = cs.sync(s3, config, target, "django.conf", True)
+
+        th.assert_eq(code, 0, "a dry run must report success")
+        th.assert_true(os.path.isdir(stale),
+                       "--dry-run must leave a stale staging directory alone; "
+                       "deleting it as root is a change, and --dry-run "
+                       "promises to change nothing")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_sync_sweeps_stale_staging_when_not_a_dry_run(opts):
+    """The other half: a real run must still reclaim the leaked directories,
+    otherwise 0700 dirs holding partial config accumulate forever."""
+    from mojo.deploy import config_sync as cs
+
+    root = _tempdir()
+    try:
+        target = os.path.join(root, "django.conf")
+        _write(target, "SECRET=old\n")
+        stale = os.path.join(root, cs.STAGING_PREFIX + "leftover")
+        os.makedirs(stale)
+
+        s3 = _s3_publishing("SECRET=new\n")
+        config = {"AWS_CONFIG_BUCKET": "b", "AWS_CONFIG_PREFIX": "p"}
+
+        cs.sync(s3, config, target, "django.conf", False)
+
+        th.assert_true(not os.path.exists(stale),
+                       "a real run must sweep stale staging directories — they "
+                       "hold partial config at 0700 and accumulate on every "
+                       "failed tick")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
 def test_sync_dry_run_writes_nothing(opts):
     from mojo.deploy import config_sync as cs
 
