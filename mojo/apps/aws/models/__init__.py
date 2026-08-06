@@ -10,6 +10,7 @@ from .sent_message import SentMessage
 from .email_template import EmailTemplate
 from .cloudwatch_alarm import CloudWatchAlarm
 from .cloudwatch_alarm_transition import CloudWatchAlarmTransition
+from .guardduty_finding import GuardDutyFinding
 
 __all__ = [
     "EmailDomain",
@@ -20,4 +21,5 @@ __all__ = [
     "EmailTemplate",
     "CloudWatchAlarm",
     "CloudWatchAlarmTransition",
+    "GuardDutyFinding",
 ]
