@@ -112,6 +112,43 @@ metrics.set_view_perms("group-123", "view_metrics")
 metrics.set_write_perms("group-123", "record_metrics")
 ```
 
+## REST Discovery Catalog
+
+`GET /api/metrics/discover` exposes three progressively scoped name registries:
+
+- `resource=accounts` reads the maintained `mets:_accounts_` set, unions the
+  canonical `public` and `global` names, and filters every candidate through
+  the same `check_view_permissions()` helper used by fetches.
+- `resource=categories&account=<name>` reads `mets:<account>:cats` only after
+  that account's view check succeeds.
+- `resource=slugs&account=<name>` reads `mets:<account>:slugs`, or
+  `mets:<account>:c:<category>` when an exact category is supplied, only after
+  the same account check.
+
+`add_metrics_slug()` now adds its account to `mets:_accounts_` as well as its
+slug to the account registry. Consequently normal `record()` calls and direct
+slug registration maintain discovery without a backfill or cluster scan.
+Configured accounts already enter the same set through the permission setters.
+One atomic Redis Lua operation checks the account set with `SCARD` and returns
+`SMEMBERS` only while the set contains at most 1,000 maintained candidates.
+Consequently concurrent growth cannot materialize or authorize an oversized
+set. Discovery never calls the historical data-key scan or gauge helpers; old
+unindexed accounts enter on their next time-series record and remain usable
+through exact account entry meanwhile.
+
+All resources sort unique names lexicographically, apply optional
+case-insensitive substring search, then calculate total `count` and slice by
+`start`/`size`. The requested size defaults to 50 and is capped at 500.
+`page_count` describes only the returned page and `next_start` is the next
+numeric offset or null.
+
+Slug strings are returned exactly as registered. A dimensional slug such as
+`api:request:status:200` must be passed whole to `/api/metrics/series` or
+`/api/metrics/fetch`; discovery consumers must never normalize it or keep only
+the last colon-delimited segment. `fetch_values()` and `/series` preserve full
+keys. The older `fetch()` response currently labels returned series by the last
+segment, so do not use its response keys as catalog identifiers.
+
 ## Group Fan-Out
 
 `/api/metrics/fetch` supports a `child_kind` query param that sums a metric across all active descendants of a parent group whose `kind` matches:

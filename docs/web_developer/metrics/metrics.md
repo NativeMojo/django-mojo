@@ -19,21 +19,84 @@
 | GET | `/api/metrics/series` | Fetch current values for multiple slugs (alias: `/api/metrics/value/get`) |
 | GET | `/api/metrics/value/get` | Fetch current values for slugs |
 | GET | `/api/metrics/categories` | List metric categories |
+| GET | `/api/metrics/discover` | Discover permission-filtered accounts, categories, or full time-series slugs |
+
+## Discover Accounts, Categories, and Slugs
+
+**GET** `/api/metrics/discover`
+
+The endpoint returns one resource per request so an explorer can progressively
+select an account, category, and exact time-series slug.
+
+| `resource` | Required filters | Optional filters |
+|---|---|---|
+| `accounts` | none | `search` |
+| `categories` | `account` | `search` |
+| `slugs` | `account` | exact `category`, `search` |
+
+Every request also accepts `start` (default 0, minimum 0) and `size` (default
+50, range 1–500). `account` and `category` are capped at 256 characters;
+`search` is capped at 128 and is a case-insensitive substring filter. Names are
+sorted lexicographically after filtering and before slicing. Unknown,
+duplicate, bracketed, dotted, non-scalar, or invalid resource/filter parameters
+return 400; generic list controls such as `sort` and `graph` are not accepted.
+Validation uses the framework-normalized request data, so repeated or shaped
+values (for example `search=x&search=y` or `search[term]=x`) are rejected.
+
+```http
+GET /api/metrics/discover?resource=slugs&account=group-42&category=http&size=50
+```
+
+```json
+{
+  "status": true,
+  "resource": "slugs",
+  "filters": {"account": "group-42", "category": "http", "search": ""},
+  "data": ["api:request:status:200", "api:request:status:500"],
+  "start": 0,
+  "size": 50,
+  "count": 2,
+  "page_count": 2,
+  "next_start": null
+}
+```
+
+`count` is the total visible match count before paging; `page_count` is the
+number of names in this page. `next_start` is the next numeric offset when
+more names remain, otherwise null. An offset at or beyond `count`, a missing
+category, or an unmatched search returns an empty successful page while
+retaining the correct visible total.
+
+Account enumeration requires authenticated global `view_metrics` or `metrics`
+access and then filters every candidate through that account's live view
+policy. Hidden accounts never affect counts. In particular, a global metrics
+grant does not bypass a custom account's configured permission. Direct
+category/slug discovery uses the selected account's normal policy, so
+`public` and custom-public registries remain anonymously readable. A denied
+account returns the same generic 403 as fetch and is checked before its names
+are read.
+
+Slugs are exact opaque identifiers. Preserve the complete colon-delimited
+string and send it unchanged to `/api/metrics/series` or `/api/metrics/fetch`.
+`/series` preserves full response keys. The older `/fetch` response currently
+labels each series with only the last colon segment, so never derive
+catalog identifiers from those response keys. Gauge names (`value/get` and
+`value/set`) are not part of discovery.
 
 ## Fetch Time-Series
 
 **GET** `/api/metrics/fetch`
 
 ```
-GET /api/metrics/fetch?slug=page_views&granularity=days&dr_start=2024-01-01&dr_end=2024-01-31
+GET /api/metrics/fetch?slug=page_views&granularity=days&dt_start=2024-01-01&dt_end=2024-01-31
 ```
 
 | Param | Default | Description |
 |---|---|---|
 | `slug` | required | Metric name (or comma-separated list) |
 | `granularity` | `hours` | `minutes`, `hours`, `days`, `weeks`, `months`, `years` |
-| `dr_start` | auto | Start datetime |
-| `dr_end` | auto | End datetime |
+| `dt_start` | auto | Start datetime |
+| `dt_end` | auto | End datetime |
 | `account` | `global` | Account namespace |
 | `with_labels` | `false` | Include time labels in response |
 | `child_kind` | unset | When set with `account=group-<parent_id>`, sums the metric across all active descendants of the parent whose `kind` matches. See [Parent-Group Fan-Out](#parent-group-fan-out). |

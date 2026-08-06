@@ -77,7 +77,12 @@ slug names over opening raw anonymous writes.
 
 ## Category Permission: `metrics`
 
-The `metrics` category permission grants full read+write access to all metrics across all account types (global, group, user). This is the recommended permission for admin users who need full metrics access.
+The `metrics` category permission grants full read+write access to the standard
+global, group, and user account types. It is the recommended permission for
+administrators of those metrics. A custom account's configured permission
+remains authoritative: `metrics` does not bypass an unrelated custom permission
+string. A custom account is readable only when its policy is `public` or the
+caller satisfies the configured permission.
 
 Fine-grained alternatives:
 
@@ -187,6 +192,33 @@ When the account is `user-<id>`:
 
 Users can always see their own metrics. Admins with `metrics` can see anyone's.
 
+## Discovery Permission Order
+
+`GET /api/metrics/discover` dispatches among `accounts`, `categories`, and
+`slugs` without introducing a second permission system.
+
+Account enumeration first validates the complete query grammar, then checks
+the existing `global` account view gate. Only after that does it check the
+maintained account-index cardinality and materialize candidates. Every
+candidate is passed through `check_view_permissions()` independently. An
+expected `PermissionDeniedException` omits that name; Redis, database, or
+programming errors abort the request. Therefore hidden candidates contribute
+neither rows nor `count`, and a partial backend failure can never look like a
+complete catalog.
+
+Category and slug discovery validate the grammar and reserved account syntax,
+then complete the explicit account view check before reading any Redis
+category/slug registry. This preserves public, global, group, user, custom,
+reference-key, override-key, and group-token behavior. It also means a global
+`view_metrics` holder still cannot read a custom account whose configured
+permission they do not hold. The endpoint performs no separate Group/User
+existence query; syntactically valid missing group accounts keep the existing
+identity-specific helper behavior.
+
+The account catalog is authenticated global Admin discovery. Direct
+category/slug discovery remains anonymous for `public` and custom accounts
+whose view policy is `public`.
+
 ## REST Endpoints and Their Permission Checks
 
 | Endpoint | Method | Permission Check |
@@ -199,6 +231,8 @@ Users can always see their own metrics. Admins with `metrics` can see anyone's.
 | `/api/metrics/categories` | GET | `check_view_permissions(request, account)` |
 | `/api/metrics/category_slugs` | GET | `check_view_permissions(request, account)` |
 | `/api/metrics/category_delete` | DELETE | `check_write_permissions(request, account)` |
+| `/api/metrics/discover?resource=accounts` | GET | `check_view_permissions(request, "global")`, then each candidate's view check |
+| `/api/metrics/discover?resource=categories|slugs` | GET | `check_view_permissions(request, account)` before registry access |
 | `/api/metrics/permissions` | GET/POST/DELETE | `@md.requires_global_perms("manage_incidents", "metrics", "manage_metrics")` |
 
 Unlike the account-based checks above, `/api/metrics/permissions` (which
