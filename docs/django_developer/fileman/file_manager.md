@@ -92,14 +92,62 @@ and system manager. `--probe-s3` is separately confirmed and uses only a unique
 sentinel key that is deleted in `finally`; it never lists or deletes user
 objects. Existing buckets and policies are preserved.
 
-Configure via FileManager settings or in `settings.py`:
+Bucket and prefix come from `backend_url` (`s3://my-bucket/some/prefix`).
+Credentials come from the manager's own settings, falling back to these
+`settings.py` keys when a manager is created through REST:
 
 ```python
-AWS_ACCESS_KEY_ID = "..."
-AWS_SECRET_ACCESS_KEY = "..."
-AWS_STORAGE_BUCKET_NAME = "my-bucket"
-AWS_S3_REGION_NAME = "us-east-1"
+AWS_KEY = "..."       # optional — leave unset to use the instance profile
+AWS_SECRET = "..."
+AWS_REGION = "us-east-1"
 ```
+
+#### Credential resolution
+
+All S3 calls a manager makes — uploads, downloads, CORS, the public-access
+audit — run through **one** session built by the backend. See
+[../aws/credentials.md](../aws/credentials.md) for the underlying factories.
+
+| Setting | Meaning |
+|---|---|
+| `aws_key` | Static access key id. Optional. |
+| `aws_secret` | Static secret. Required if `aws_key` is set, and vice versa. |
+| `aws_region` | Region. Defaults to `us-east-1`. |
+| `assume_role_arn` | Cross-account role to assume. When set, the settings above become only the *source* identity used to call `sts:AssumeRole`. **Superuser-writable only.** |
+| `external_id` | `sts:ExternalId` for the trust policy. Omitted from the STS call when unset. **Superuser-writable only.** Write-only — reads back as `has_external_id`. |
+| `role_session_name` | STS session name. Defaults to `django-mojo-fileman-<manager pk>`. **Superuser-writable only.** |
+| `assume_role_duration` | Role session seconds. Defaults to 43200 (12 hours). **Superuser-writable only.** |
+
+**Leaving `aws_key`/`aws_secret` unset is a supported configuration**, not a
+misconfiguration: the session falls through to botocore's default chain, which
+ends at the EC2 instance profile or ECS task role. Setting exactly one of the
+pair is an error and fails fast with a readable message rather than silently
+acting as a different identity.
+
+**Credential settings are read from the primary parent manager.** The backend
+resolves them through `file_manager.primary_settings`, which walks up the
+`parent` chain to the root. Setting `aws_key` or `assume_role_arn` on a child
+manager has no effect on that child's storage calls — configure the root.
+
+**Presigned URL lifetimes are clamped under an assumed role.** A URL signed with
+STS temporary credentials stops working the moment those credentials expire,
+regardless of its own `ExpiresIn`. botocore refreshes the role 10–15 minutes
+ahead of expiry, so the backend caps `ExpiresIn` at whatever the live credential
+has left. With the default 12-hour role duration this is never the binding
+constraint for a 1-hour URL; with a short `assume_role_duration` it will be, and
+the returned URL simply expires sooner than requested. The lifetime actually
+requested for downloads is `urls_expire_in` (default 3600).
+
+**Why the role settings are superuser-only:** REST save dispatches a `set_<key>`
+method for any key in the payload, and `SAVE_PERMS` for FileManager is the
+group-level `files`/`manage_files` permission. Without the gate, anyone who can
+administer files could point the platform's own credentials at a role they
+control — a confused deputy. Writing any of the four role settings through REST
+therefore requires `is_superuser`; direct ORM/bootstrap code is unaffected.
+
+Changing `assume_role_arn` or `external_id` also changes the manager's
+public-access config fingerprint, so cached audit evidence collected under the
+old identity is invalidated.
 
 #### Public-access reconciliation
 

@@ -76,6 +76,28 @@ Credential material is never prompted, printed or persisted by this command.
 If a FileManager or EmailDomain has stored credentials, its STS account/region
 is checked separately; cross-account or cross-region apply fails closed.
 
+### FileManagers configured with `assume_role_arn`
+
+A FileManager may reach a bucket in another AWS account by assuming a role — see
+[credentials.md](credentials.md) and
+[../fileman/file_manager.md](../fileman/file_manager.md). `aws-check` does **not**
+resolve that role. The `s3` section validates the manager's stored static keys —
+the *source* identity — and then talks to S3 with those keys directly, rather
+than through the backend's assumed session.
+
+Two consequences for a cross-account manager:
+
+- `fileman.cross_context` is **expected, not a defect** whenever the manager's
+  stored keys or region differ from the selected ones. It reports exactly what a
+  cross-account configuration is: an identity other than the one `aws-check`
+  selected. Do not "fix" it by rewriting the manager's region or keys.
+- When `cross_context` does *not* fire — the usual case, since the source
+  identity normally lives in our own account — the `bucket.*` checks that follow
+  describe the **source** identity's access to the tenant's bucket, which is
+  normally none. Read them as inconclusive for this manager, and verify it with
+  the manager's own `test_connection` action instead; that one goes through the
+  assumed session.
+
 ## Cron deployment
 
 Run the dispatcher at least once per minute:
