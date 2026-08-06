@@ -24,6 +24,10 @@ class FakeNS(object):
         return self.target
 
 
+class FakeCNAME(FakeNS):
+    """CNAME and NS both expose their destination through ``.target``."""
+
+
 class FakeAddress(object):
     """Stands in for an A/AAAA rdata (dnspython exposes `.address`)."""
     def __init__(self, address):
@@ -159,6 +163,47 @@ def test_find_zone_nameservers_reports_error_when_no_zone_found(opts):
     assert found.zone is None, f"Expected no zone when nothing answers NS, got {found.zone}"
     assert found.nameservers == [], f"Expected no nameservers, got {found.nameservers}"
     assert found.error, "Expected an error message when no authoritative zone is found"
+
+
+@th.django_unit_test()
+def test_verify_one_hop_cname_accepts_exact_direct_target(opts):
+    from mojo.helpers.dns import probe
+
+    answers = {
+        ("_acme-challenge.example.com", "CNAME"): [
+            FakeCNAME("opaque.acme-hub.example.net")],
+    }
+    fake = _fake_dns(answers)
+    with mock.patch.object(probe, "dns_resolver", fake):
+        result = probe.verify_one_hop_cname(
+            "_acme-challenge.example.com.",
+            "OPAQUE.acme-hub.example.net.")
+
+    assert result.ok is True, f"Expected the exact direct CNAME to pass, got {result}"
+
+
+@th.django_unit_test()
+def test_verify_one_hop_cname_rejects_wrong_or_chained_target(opts):
+    from mojo.helpers.dns import probe
+
+    wrong = {
+        ("_acme-challenge.example.com", "CNAME"): [FakeCNAME("wrong.example.net")],
+    }
+    with mock.patch.object(probe, "dns_resolver", _fake_dns(wrong)):
+        result = probe.verify_one_hop_cname(
+            "_acme-challenge.example.com", "opaque.acme-hub.example.net")
+    assert result.ok is False, "Expected a CNAME to the wrong target to fail"
+
+    chained = {
+        ("_acme-challenge.example.com", "CNAME"): [
+            FakeCNAME("opaque.acme-hub.example.net")],
+        ("opaque.acme-hub.example.net", "CNAME"): [FakeCNAME("third.example.net")],
+    }
+    with mock.patch.object(probe, "dns_resolver", _fake_dns(chained)):
+        result = probe.verify_one_hop_cname(
+            "_acme-challenge.example.com", "opaque.acme-hub.example.net")
+    assert result.ok is False, "Expected a second CNAME hop to fail"
+    assert "one hop" in result.error, f"Expected a bounded one-hop refusal, got {result.error}"
 
 
 # ---------------------------------------------------------------------------

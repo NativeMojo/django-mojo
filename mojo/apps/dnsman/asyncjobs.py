@@ -85,6 +85,21 @@ def poll_domain_operations(job):
             f"adopted={result.adopted},expired={result.expired},errors={result.errors}")
 
 
+def sweep_acme_hub_leases(job):
+    """Expire and reconcile durable ACME hub challenge leases."""
+    from mojo.apps.dnsman.services import acme_hub
+
+    result = acme_hub.sweep()
+    if result.errors:
+        logit.error(f"dnsman: ACME hub sweep finished with {result.errors} errors")
+    else:
+        logit.info(
+            f"dnsman: ACME hub sweep expired={result.expired} "
+            f"reconciled={result.reconciled}")
+    return (f"completed:expired={result.expired},"
+            f"reconciled={result.reconciled},errors={result.errors}")
+
+
 def certificate_updated(job):
     """
     Broadcast handler for the certificate sync channel.

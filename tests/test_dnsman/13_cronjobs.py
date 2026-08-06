@@ -12,6 +12,7 @@ to it.
 
 from unittest import mock
 
+from objict import objict
 from testit import helpers as th
 
 
@@ -77,3 +78,30 @@ def test_poll_job_func_resolves(opts):
         f"{cronjobs.POLL_JOB} does not resolve to a handler"
     assert callable(getattr(module, func_name)), \
         f"{cronjobs.POLL_JOB} resolves to something that is not callable"
+
+
+@th.django_unit_test("the ACME lease sweep cron publishes retryable work")
+def test_acme_sweep_publishes_job(opts):
+    from mojo.apps.dnsman import cronjobs
+
+    published = []
+    with mock.patch.object(
+            cronjobs.jobs, "publish",
+            lambda func=None, payload=None, **kwargs: published.append((func, payload)) or "job-acme"):
+        result = cronjobs.sweep_acme_hub_leases()
+
+    assert published == [(cronjobs.ACME_HUB_SWEEP_JOB, {})], \
+        f"expected exactly the ACME sweep handler, got {published}"
+    assert result == "job-acme", "cron dispatcher should return the published job id"
+
+
+@th.django_unit_test("the ACME lease sweep job reports bounded counts")
+def test_acme_sweep_handler(opts):
+    from mojo.apps.dnsman import asyncjobs
+    from mojo.apps.dnsman.services import acme_hub
+
+    with mock.patch.object(
+            acme_hub, "sweep", return_value=objict(expired=2, reconciled=1, errors=0)):
+        result = asyncjobs.sweep_acme_hub_leases(objict(payload={}))
+    assert result == "completed:expired=2,reconciled=1,errors=0", \
+        f"handler should expose counts only, got {result}"

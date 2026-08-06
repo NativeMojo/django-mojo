@@ -14,6 +14,7 @@ from mojo.helpers import logit
 
 
 POLL_JOB = "mojo.apps.dnsman.asyncjobs.poll_domain_operations"
+ACME_HUB_SWEEP_JOB = "mojo.apps.dnsman.asyncjobs.sweep_acme_hub_leases"
 
 
 # The cron field values MUST be strings. `minutes=5` raises a TypeError inside
@@ -30,6 +31,12 @@ def poll_domain_operations():
     list for the real operation.
     """
     return jobs.publish(func=POLL_JOB, payload={})
+
+
+@schedule(minutes="*/5")
+def sweep_acme_hub_leases():
+    """Queue durable ACME lease expiry/reconciliation work."""
+    return jobs.publish(func=ACME_HUB_SWEEP_JOB, payload={})
 
 
 @schedule(minutes="0", hours="*/6")

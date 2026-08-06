@@ -7,6 +7,8 @@ from .domain import Domain
 from .domain_purchase import DomainPurchase
 from .acme_account import AcmeAccount
 from .certificate import Certificate
+from .acme_hub_delegation import AcmeHubDelegation
+from .acme_hub_challenge_lease import AcmeHubChallengeLease
 
 __all__ = [
     "DnsCredential",
@@ -14,4 +16,6 @@ __all__ = [
     "DomainPurchase",
     "AcmeAccount",
     "Certificate",
+    "AcmeHubDelegation",
+    "AcmeHubChallengeLease",
 ]

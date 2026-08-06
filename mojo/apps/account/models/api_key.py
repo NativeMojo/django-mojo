@@ -24,6 +24,7 @@ from mojo import errors as merrors
 # `sys.geoip_sync` forces the check onto the granter's GLOBAL dict instead.
 APIKEY_PERMS_PROTECTION_DEFAULTS = {
     "geoip_sync": "sys.geoip_sync",
+    "dnsman_acme_federation": "sys.dnsman_acme_federation",
 }
 
 

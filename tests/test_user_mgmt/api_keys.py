@@ -163,6 +163,15 @@ def test_apikey_has_permission(opts):
     assert api_key.has_permission(["edit_data", "missing"]) is False, "list OR: all denied"
 
 
+@th.unit_test("dnsman ACME federation is protected by the framework ApiKey floor")
+def test_dnsman_acme_federation_protection_floor(opts):
+    from mojo.apps.account.models.api_key import _apikey_perms_protection
+
+    protection = _apikey_perms_protection()
+    assert protection.get("dnsman_acme_federation") == "sys.dnsman_acme_federation", \
+        f"ACME federation must require a system grant to provision, got {protection}"
+
+
 @th.unit_test("apikey_is_group_allowed")
 def test_apikey_is_group_allowed(opts):
     """is_group_allowed() permits own group and descendants, denies others."""

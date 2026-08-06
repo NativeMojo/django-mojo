@@ -125,11 +125,66 @@ def _pinned_resolver(addresses, timeout=QUERY_TIMEOUT):
 
 
 def _rdata_host(rdata):
-    """Hostname out of an NS rdata."""
+    """Hostname out of an NS or CNAME rdata."""
     target = getattr(rdata, "target", None)
     if target is not None:
         return normalize_name(target)
     return normalize_name(rdata)
+
+
+def query_cname(fqdn, timeout=QUERY_TIMEOUT):
+    """Resolve only the CNAME RRset directly attached to ``fqdn``.
+
+    The system resolver is suitable here because this is proof of the
+    tenant-controlled public delegation, not propagation verification for a
+    record the hub just wrote.  Missing names and names without a CNAME return
+    an empty target list; transport/resolver failures remain distinguishable.
+    """
+    if not DNS_AVAILABLE:
+        return objict(targets=[], error="dnspython not installed")
+
+    name = normalize_name(fqdn)
+    if not name:
+        return objict(targets=[], error="invalid name")
+    try:
+        answers = _default_resolver(timeout).resolve(name, "CNAME")
+    except (dns_resolver.NXDOMAIN, dns_resolver.NoAnswer):
+        return objict(targets=[], error=None)
+    except Exception as err:
+        return objict(targets=[], error=str(err))
+
+    targets = []
+    for rdata in answers:
+        target = _rdata_host(rdata)
+        if target and target not in targets:
+            targets.append(target)
+    return objict(targets=targets, error=None)
+
+
+def verify_one_hop_cname(source, expected_target, timeout=QUERY_TIMEOUT):
+    """Prove ``source`` is exactly one public CNAME hop to ``expected_target``.
+
+    Returns ``objict(ok, error)`` without leaking unrelated DNS answers.  A
+    target that is itself a CNAME is refused: accepting it would make the
+    tenant proof depend on a second, mutable hop outside the stored contract.
+    """
+    source = normalize_name(source)
+    expected_target = normalize_name(expected_target)
+    if not source or not expected_target or source == expected_target:
+        return objict(ok=False, error="invalid CNAME delegation")
+
+    first = query_cname(source, timeout=timeout)
+    if first.error:
+        return objict(ok=False, error="CNAME lookup failed")
+    if first.targets != [expected_target]:
+        return objict(ok=False, error="CNAME delegation does not match the allocation")
+
+    second = query_cname(expected_target, timeout=timeout)
+    if second.error:
+        return objict(ok=False, error="CNAME target lookup failed")
+    if second.targets:
+        return objict(ok=False, error="CNAME delegation must be exactly one hop")
+    return objict(ok=True, error=None)
 
 
 def _rdata_address(rdata):
