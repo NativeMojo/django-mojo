@@ -1,12 +1,14 @@
-# Build Baseline — Establish Green BEFORE Touching Code
+# Build Verification — What to Run, and When a Baseline Is Worth It
 
-Non-negotiable. Before writing ANY code for a build/fix task, capture a baseline
-test run so that every later failure is unambiguously attributable to your change.
-This eliminates the wasteful "is this failure mine?" investigation after the fact.
+**The work item's verification tier decides.** `/maestro-scope` sets it (`none` /
+`targeted` / `full`) and pushes it as the item's `quality_contract`; `/maestro-build`
+reads it and runs exactly that. This file is the django-mojo half of that contract:
+the commands, the module mapping, and which changes count as `full` **here**.
 
-**The baseline is scoped to what your change can affect** — not the whole suite.
-Attribution is still decided up front by evidence; you just buy it for the area you
-are touching instead of for all ~3,300 tests, every time, twice.
+A baseline is not free — the suite serializes on one port and one Postgres database
+(see `.claude/rules/git.md`), so it is minutes of the user's time, every build, twice.
+Buy it when attributing a failure after the fact would actually be hard. That is the
+`full` tier, and only that tier.
 
 ## Vocabulary — say what you mean
 
@@ -14,7 +16,7 @@ Three different things used to all get called "the full suite". They are not the
 
 | Term | Command | What it runs |
 |---|---|---|
-| **scoped run** | `bin/run_tests --agent -t <module> [-t <module>]` | Only the named modules. **The default baseline.** |
+| **scoped run** | `bin/run_tests --agent -t <module> [-t <module>]` | Only the named modules. |
 | **whole suite** | `bin/run_tests --agent` | Every module in the default tier. |
 | **`--full`** | `bin/run_tests --agent --full` | Whole suite **plus** opt-in modules (`requires_extra`). |
 
@@ -23,26 +25,54 @@ heavier thing. Say "whole suite" or "`--full`".
 
 ## The rule
 
-1. **Choose the scope** (see below), then run it **before the first edit**:
-   `bin/run_tests --agent -t <module> ...`
-   Always `--agent`. One test run at a time (shared port + Postgres — see
-   `.claude/rules/git.md`).
-2. Read **`testproject/var/test_failures.json`** (NOT terminal output). Record in the
-   work item: the scope you chose, total / passed / failed / skipped, and the names of
-   any pre-existing failures.
-3. **Interpret the baseline:**
-   - **All green** → every failure you see afterwards in that scope is YOURS. Fix all of
-     them before closing. No exceptions, no "pre-existing" excuses.
-   - **Some red at baseline** → STOP and tell the user the area is already failing before
-     you started. Do not build on red unless the user explicitly says to proceed; if they
-     do, the recorded pre-existing set is the ONLY thing you may attribute to "not mine."
-4. **After implementing**, re-run **the same scope** and compare. The only acceptable end
-   state is: baseline failures (if any the user accepted) and nothing new.
-5. **Widen once at the end** if your change grew past the scope you picked, or if any
-   escalation trigger below became true while you were building. Re-scoping mid-build is
-   normal — silently keeping a too-narrow scope is not.
+Read the tier from the item's `quality_contract` (or its `### Verification` block),
+then:
 
-## Choosing the scope
+- **`none`** → **no test run, before or after.** Do the thing the plan's `Why:` line
+  named in its place — load the config and read back the resolved value, run the one
+  command the change affects — and report that instead.
+- **`targeted`** → **no baseline.** Build, then run the modules the plan named:
+  `bin/run_tests --agent -t <module> ...`. Stop there. Running the whole suite to
+  feel safe spends the user's minutes on your comfort.
+- **`full`** → **baseline before the first edit**, whole suite after.
+  1. `bin/run_tests --agent` before touching anything.
+  2. Read `testproject/var/test_failures.json` (NOT terminal output). Record on the
+     item: total / passed / failed / skipped, and the names of any pre-existing
+     failures.
+  3. **Red baseline → STOP** and tell the user the area is already failing before you
+     started. Don't build on red without their say-so; if they say go, that recorded
+     set is the ONLY thing you may attribute to "not mine."
+  4. After implementing, re-run and compare. The acceptable end state is: the accepted
+     baseline failures and nothing new.
+
+**A bug's regression test runs at every tier**, on its own, before and after the fix —
+a regression test nobody saw fail proves nothing. It costs seconds and is never the
+thing a tier is protecting you from.
+
+**Escalate freely, downgrade never.** If the diff picked up something the plan didn't
+anticipate — a migration, a shared helper, a changed contract, a second app — move up
+a tier, run it, and say in the report that you escalated and why. Moving *down* a tier
+is the user's call, not yours.
+
+**No tier on the item** (untracked work, `/maestro-vibe`, a plan written before tiers
+existed) → pick one yourself from the list below and say which and why. Do **not**
+default to `full` because nothing told you otherwise — that is the exact cost this
+mechanism exists to remove.
+
+## What counts as `full` in this repo
+
+Any of these — don't deliberate:
+
+- The change touches shared framework code: `mojo/helpers/`, `mojo/models/`,
+  `mojo/decorators/`, `mojo/middleware/`, `mojo/rest/`, or `testit/`.
+- Any model, migration, or `RestMeta` change (blast radius is every serializer/graph).
+- The change touches **3 or more** apps.
+- You cannot confidently name the blast radius. Not knowing IS the trigger.
+
+Everything else is `targeted`, or `none` when a test run would prove nothing at all
+(docs, comments, planning files, skill and prose files).
+
+## Choosing the modules for a `targeted` run
 
 Map what you changed to the modules that cover it:
 
@@ -52,18 +82,25 @@ Map what you changed to the modules that cover it:
   `test_global_perms` and `test_user_mgmt`; a change to auth touches `test_auth`,
   `test_register`, `test_mfa`, `test_oauth`.
 - Not sure which module covers it? `grep -rl "<symbol>" tests/` and take what it finds.
-- **When in doubt, widen.** A scope that is too narrow silently loses attribution — the
-  one property this rule exists to protect. A scope that is too wide only costs seconds.
+- **Name them explicitly.** "The relevant tests" is not a plan — it is the build
+  session guessing with the scoper's authority.
+- **When in doubt, widen.** A module too many costs seconds; a module too few loses
+  the coverage the tier was claiming.
 
-## Escalate to the WHOLE SUITE when
+## Attributing a red test without a baseline
 
-Any of these is true — do not deliberate, just run the whole suite:
+A baseline answers exactly one question: *was this failure already there?* Below
+`full`, buy that answer only when something actually fails:
 
-- The change touches shared framework code: `mojo/helpers/`, `mojo/models/`,
-  `mojo/decorators/`, `mojo/middleware/`, `mojo/rest/`, or `testit/`.
-- Any model, migration, or `RestMeta` change (blast radius is every serializer/graph).
-- The change touches **3 or more** apps.
-- You cannot confidently name the blast radius. Not knowing IS the trigger.
+1. **Read the failure first.** Most name your change unambiguously — the file, the
+   assertion, the symbol you just touched. That settles it at zero cost.
+2. If it doesn't: `git stash -u`, re-run **that same targeted test**, `git stash pop`.
+   Seconds, and it settles the question exactly where the doubt is.
+3. A failure that predates you gets **reported, not silently fixed** — it isn't yours
+   and isn't part of this item. Say so in the summary.
+
+`full` keeps its up-front baseline because attributing a red *whole suite* after the
+fact is neither cheap nor unambiguous.
 
 ## When to run `--full`
 
@@ -72,19 +109,18 @@ Any of these is true — do not deliberate, just run the whole suite:
 - Otherwise `--full` is not part of routine work, and failures that appear only under it
   are out of scope for a normal build unless the user asks.
 
-## Why
-
-- Attribution must be decided UP FRONT, by evidence, not reconstructed later by
-  stashing/guessing. Re-running clean HEAD after the fact to ask "was it me?" is
-  exactly the waste this rule removes. A scoped baseline still answers the only
-  question that matters: *was this area already red before I touched it?*
-- Green before → green after stays a checkable invariant. Scoping changes how much you
-  pay for it, not whether you have it.
-
 ## Notes
 
 - The report is at **`testproject/var/test_failures.json`** (`VAR_ROOT` is
   `testproject/var`, not `./var`).
 - Use `--agent` always; read the JSON report, never parse terminal scrollback.
-- Verifying a build is ONE run at the end of the work, not a run per agent. Do not
-  ask the `test-runner` agent to repeat a whole-suite run you have already done.
+  Never `--plain` — it disables the rich progress UI and parallel execution.
+- **One test run at a time.** Shared port + shared Postgres. Never spawn parallel
+  agents that each run tests.
+- **Scoping runs no tests.** `/maestro-scope` decides the tier; it does not verify.
+  The one exception is reproducing a bug you are scoping: that single test, alone,
+  never while a build is running.
+- Verifying a build is ONE run at the end of the work, not a run per agent. Do not ask
+  the `test-runner` agent to repeat a run you have already done. In a multi-item run,
+  the closing run is the union of every item's modules, once, at the highest tier any
+  item carries.

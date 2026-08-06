@@ -186,7 +186,7 @@ Agents in `.claude/agents/` run in isolated context windows. The `/build` skill 
 
 | Agent | Purpose |
 |---|---|
-| `test-runner` | Runs the scoped suite (whole suite only on an escalation trigger — see `.claude/rules/build-baseline.md`). Fixes trivial errors (syntax, imports). Reports complex failures without fixing them. |
+| `test-runner` | Runs the item's tier (whole suite only at `full` — see `.claude/rules/build-baseline.md`). Fixes trivial errors (syntax, imports). Reports complex failures without fixing them. |
 | `docs-updater` | Reads git diff. Updates `docs/django_developer/` and `docs/web_developer/` to match code changes. |
 | `security-review` | Reviews git diff for permission gaps, data exposure, injection risks, auth bypasses, secret leakage. |
 

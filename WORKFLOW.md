@@ -69,7 +69,7 @@ context between them**, so a build session starts clean.
     │                  the session VERIFIES its output before close
     │       fanout   — L/XL + disjoint file partitions only; builders write code,
     │                  the orchestrator is the SOLE test-runner
-    │   • establishes a GREEN test baseline, then implements
+    │   • reads the item's verification tier (baseline only at `full`), implements
     │       (a failing regression test FIRST, for bugs)
     │   • runs tests, updates docs, commits (no push)
     │   • spawns 3 post-build agents in parallel:
@@ -119,7 +119,7 @@ actual builds.
 | `scripts/board.sh` | The pipeline at a glance — one cheap line per item (`id · stage · type · priority · state · title`). Only the output costs tokens, not the files it scans. `board.sh confirmed` / `board.sh future` filters to a stage. |
 | `/request <desc>` | Chat front door. Captures new work as an un-ID'd `inbox/` item. Determines the type itself. |
 | `/scope <item>` | Triage/pushback + intake + planning. A cheap drafter proposes; the session verifies first-hand. Allocates the ID, writes the `## Plan`, stamps build routing. |
-| `/build <item>` | Implements a scoped item per its `build_strategy` (inline/delegate/fanout): claim → baseline → code + tests → commit → post-build agents → close. Verifies a delegate before close. |
+| `/build <item>` | Implements a scoped item per its `build_strategy` (inline/delegate/fanout): claim → read tier → code + tests → commit → post-build agents → close. Verifies a delegate before close. |
 | `/memory` | Shows Claude Code's local project memory (read-only). |
 
 On the board, a `confirmed/` item shows `UNPLANNED` (intook but no plan yet — a
@@ -159,7 +159,7 @@ path; the rest are always active.
 |---|---|---|---|
 | `rules/core.md` | always | `request.DATA`, no type hints, KISS, fail-closed security, domain-logic placement | 🔧 |
 | `rules/git.md` | always | **No branches/worktrees without permission** (tests share a port + Postgres DB → no parallel runs); commit format & trailer | ✏️ |
-| `rules/build-baseline.md` | always | Capture a **green test baseline before the first edit** so every later failure is attributable | ✏️ |
+| `rules/build-baseline.md` | always | **What to run at each verification tier**; a pre-edit baseline only at `full`, plus how to attribute a red test without one | ✏️ |
 | `rules/docs.md` | always | Keep both doc tracks + `CHANGELOG.md` in sync | 🔧 |
 | `rules/models.md` | `mojo/**/models/` | MojoModel inheritance, `created`/`modified`, RestMeta, one-model-per-file | 🔧 |
 | `rules/rest.md` | `mojo/**/rest/` | URL patterns, CRUD handlers, `POST_SAVE_ACTIONS` | 🔧 |
@@ -302,7 +302,8 @@ memory.md           →  empty "Working Memory" scaffold (Key Decisions / Watch 
 2. **Rules** (`.claude/rules/`) — keep the *file set and the always/scoped
    split*, but rewrite the content for your stack. Portable in spirit:
    `git.md` (no unauthorized branches; the test-isolation reason), and
-   `build-baseline.md` (green-before-you-start). Fully project-specific:
+   `build-baseline.md` (verification tiers; baseline only when it's worth it).
+   Fully project-specific:
    `core.md`, `models.md`, `rest.md`, `testing.md`, `performance.md`, `docs.md`.
    Point each scoped rule's `globs:` at your source layout.
 3. **Agents** (`.claude/agents/`) — copy the three post-build agents; edit their
@@ -351,8 +352,9 @@ deterministic pipeline runs anywhere.
   relays it as done.
 - **No branches/worktrees without explicit permission** — same reason (parallel
   checkouts collide on the port + DB). Work in place on `main`.
-- **Green baseline before the first edit.** Capture it, record it in the item;
-  then every new failure is unambiguously yours.
+- **The item's verification tier decides what runs.** A pre-edit baseline only at
+  `full`; below that, attribute a red test after the fact (read it, else stash and
+  re-run that one test). Escalate freely, downgrade never.
 - **IDs are allocated once, by `intake.sh`, never reused** — even if the counter
   is stale or an item was merged back, it reconciles against the tree.
 - **`PLAN PENDING` is the build gate** — an intook-but-unplanned item is refused

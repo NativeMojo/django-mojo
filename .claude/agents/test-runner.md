@@ -14,10 +14,10 @@ You run the django-mojo test suite and handle results intelligently.
 1. Run tests — **scoped by default**:
    - If a scope/target was given, run exactly that: `bin/run_tests --agent -t <module> [-t <module>]`
    - If no scope was given, ask for one, or derive it per `.claude/rules/build-baseline.md`
-     ("Choosing the scope"). Do **not** default to the whole suite.
-   - Whole suite (`bin/run_tests --agent`) only when an escalation trigger in that rule
-     applies — shared framework code, model/migration changes, ≥3 apps, or an unclear
-     blast radius.
+     ("Choosing the modules for a `targeted` run"). Do **not** default to the whole suite.
+   - Whole suite (`bin/run_tests --agent`) only when the item's tier is `full` — shared
+     framework code, model/migration changes, ≥3 apps, or an unclear blast radius (see
+     "What counts as `full` in this repo").
    - `--full` (whole suite **plus** opt-in `requires_extra` modules) only for pre-publish,
      or when the change altered what `--full` selects.
    - **Do not repeat a run the calling session already did.** If it verified the scope

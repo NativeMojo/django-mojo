@@ -25,18 +25,22 @@ Read `CLAUDE.md` for conventions. Read the item file in `planning/confirmed/`.
   self-contained, so you shouldn't need to re-explore from scratch.
 - Run `scripts/ready.sh <file>`. If it reports `BLOCKED`, stop and say so; only
   proceed on `READY`.
-- **Establish a green baseline BEFORE the first edit** (see
-  `.claude/rules/build-baseline.md`): run the scope your change can affect
-  (`bin/run_tests --agent -t <module> ...`; whole suite only on an escalation
-  trigger, and NOT `--full` unless the user asks), read
-  `testproject/var/test_failures.json`, and record the scope + total/passed/failed + any pre-existing
-  failures in the item's `## Notes`. If the baseline is not all-green, STOP and tell
-  the user — do not build on red unless they say to. A green baseline means every
-  failure after your change is yours to fix.
+- **Pick the verification tier before the first edit** (see
+  `.claude/rules/build-baseline.md`). The item's `### Verification` block names it;
+  if the plan is silent, pick one yourself from that rule and say which and why —
+  never default to `full` because nothing told you otherwise.
+  - **`none` / `targeted`** → **no baseline.** Build, then run what the tier names.
+    If a test goes red and the failure doesn't obviously name your change,
+    `git stash -u`, re-run that one test, `git stash pop` — seconds, and it settles
+    attribution where the doubt actually is.
+  - **`full`** → baseline BEFORE the first edit: `bin/run_tests --agent` (NOT
+    `--full` unless the user asks), read `testproject/var/test_failures.json`, and
+    record total/passed/failed + any pre-existing failures in the item's `## Notes`.
+    Not all-green → STOP and tell the user; do not build on red unless they say to.
   **Ordering in a shared tree:** run the claim (`scripts/start.sh`, Workflow
-  step 1) BEFORE the baseline — the WIP lock doubles as the test-suite lock
-  against concurrent builder sessions; a baseline run outside the claim can
-  collide with another session's suite.
+  step 1) BEFORE any test run — the WIP lock doubles as the test-suite lock
+  against concurrent builder sessions; a run outside the claim can collide with
+  another session's suite.
 - Work **in place** on the current branch. Do **not** create a branch or git
   worktree unless the user explicitly asked — the suite uses a dedicated port and a
   shared PostgreSQL DB, so parallel checkouts collide (see `.claude/rules/git.md`).
@@ -53,21 +57,21 @@ and `git commit`.
 
 - **inline** — run this skill in-session, exactly as the Workflow below.
 - **delegate** — spawn ONE builder sub-agent (model = `build_model`) that executes
-  this entire skill end-to-end: claim → baseline → implement → test → docs →
+  this entire skill end-to-end: claim → read tier → implement → test → docs →
   commit → post-build agents → close. Its prompt must point it at this file,
   `CLAUDE.md`, `.claude/rules/`, and the item file, and state explicitly: the
   item's `## Plan` is user-approved (skip the interactive confirmation gate);
   work in place on main (never branch/worktree); it is the ONLY test runner; the
   commit trailer names **its own** model; commits go by explicit pathspec (see
-  `.claude/rules/git.md`); never push; if the baseline is red, STOP and report
-  back instead of building. While it runs, the orchestrator stays
+  `.claude/rules/git.md`); never push; if the item is `full` and its baseline
+  comes back red, STOP and report back instead of building. While it runs, the orchestrator stays
   hands-off the working tree — no edits, no test runs. On completion, verify
   (item Resolution, `testproject/var/test_failures.json`, `git log -p` spot-check) and relay.
   If the sub-agent cannot spawn the post-build agents itself, it performs those
   three passes inline, sequentially.
 - **fanout** — L/XL items ONLY, and only when the plan defines **disjoint file
-  partitions** (refuse otherwise). Orchestrator: claim + record the baseline
-  BEFORE spawning; spawn one builder per partition (all share this one working
+  partitions** (refuse otherwise). Orchestrator: claim, and — only if the item is
+  `full` — record the baseline, BEFORE spawning; spawn one builder per partition (all share this one working
   tree — worktrees are forbidden), each implements code + tests for its partition
   and **NEVER runs `bin/run_tests`** (state this in every builder prompt);
   integrate their reports, then run targeted tests and the default suite
@@ -95,8 +99,8 @@ and `git commit`.
 6. Update relevant docs (`docs/django_developer/`, `docs/web_developer/`).
 7. Git commit (NO push). Stage specific files by name — never `git add -A`.
 8. Spawn the post-build agents in parallel and report their results:
-   - **test-runner** — runs the scoped suite (whole suite only on an escalation
-     trigger — see `.claude/rules/build-baseline.md`), beyond your targeted tests
+   - **test-runner** — runs the item's tier (whole suite only at `full` — see
+     `.claude/rules/build-baseline.md`), beyond your targeted tests
    - **docs-updater** — read the diff, update both doc tracks
    - **security-review** — review the diff for permission/injection/auth issues
 9. Fill `tests added:` in the item's Resolution block, then run
