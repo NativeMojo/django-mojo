@@ -351,6 +351,14 @@ the signed topic/token, does not redirect, and returns 2xx.
 deployment configuration and restart application processes when updating the
 allowlist. SNS envelopes are limited to 300 KiB.
 
+There is a sibling receiver for GuardDuty findings at
+`POST /api/aws/guardduty/sns/finding` (see
+[aws/guardduty.md](guardduty.md)). Both share the same signed-SNS preamble, but
+their topic allowlists are **independent**: a topic in
+`AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` cannot deliver findings — or confirm a
+subscription — on the GuardDuty endpoint, and vice versa. Give each signal its
+own topic.
+
 ### Incident policy and lifecycle
 
 Alarm events use `scope="aws:cloudwatch"` and

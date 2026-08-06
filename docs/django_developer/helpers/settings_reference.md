@@ -214,6 +214,13 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` — **file-only**
   (`settings.get_static`, `kind="list"`), default `[]`. Exact SNS topic ARN
   allowlist for `/api/aws/cloudwatch/sns/alarm`; missing/empty denies all.
+- `AWS_GUARDDUTY_FINDING_TOPIC_ARNS` — **file-only**
+  (`settings.get_static`, `kind="list"`), default `[]`. Exact SNS topic ARN
+  allowlist for `/api/aws/guardduty/sns/finding`; missing/empty denies all.
+  Deliberately **separate** from `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` — a topic
+  allowlisted for alarms must not be able to deliver findings, or confirm a
+  subscription, on the GuardDuty receiver. See
+  [../aws/guardduty.md](../aws/guardduty.md).
 - `AWS_MONITORING_NAME` — **file-only**, optional stable deployment slug used
   by `aws-check` for owned SNS topic and CloudWatch alarm names. Falls back to
   the static `BASE_URL` hostname.

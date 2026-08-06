@@ -1134,6 +1134,37 @@ lifecycle path used by `ResolveHandler`.
 See [AWS CloudWatch monitoring](../aws/cloudwatch.md#sns-alarm-ingestion) for
 the receiver, allowlist, idempotency, and ticket/Maestro configuration.
 
+### GuardDuty finding events
+
+The GuardDuty SNS receiver records findings as `scope="aws:guardduty"`,
+`category="aws:guardduty:<finding type>"`. It publishes with
+`use_catchall=False`, so only an explicit scope RuleSet can open work — write
+the policy against the **scope**, since a per-type category would need one
+RuleSet per finding type. `RuleSet.ensure_guardduty_rules()` installs the
+shipped opt-in policy; it is not part of `ensure_default_rules()`.
+
+Severity maps to level deliberately below the threshold: Critical, High and
+Medium all map to **6**, Low to 4, Informational to 2. Nothing reaches
+`INCIDENT_LEVEL_THRESHOLD`, so enabling the receiver alone creates no incident,
+no LLM triage job, and no IP threat stamp — the same posture as CloudWatch
+alarms. 6 rather than 4 for Medium and above because `prune_events` deletes
+`level__lt=6`.
+
+Use `BundleBy.MODEL_NAME_AND_ID` with `bundle_minutes=None`: `model_id` carries
+a rotating occurrence handle that is cleared when the incident goes terminal.
+That rotation is what stops a finding recurring months later from bundling back
+into its resolved incident — `determine_bundle_criteria` has no status filter.
+A repeat while the incident is live links the Event and escalates priority
+without re-dispatching handlers.
+
+`source_ip` is set only when the finding's remote address is an **origin**
+(inbound connection, API call, port probe, Kubernetes API call). An outbound
+connection's peer is a destination our own host chose and is recorded in
+metadata only, so it never reaches inbound threat scoring.
+
+See [AWS GuardDuty ingestion](../aws/guardduty.md) for the EventBridge wire,
+the allowlist, the dedupe contract, and the bounded metadata list.
+
 The rest of the `GEOLOCATION_INTERNAL_*` family (the attacker allowlists, the
 breadth gate, the shared-egress suppressor, the dry-run switch) is documented in
 [account/geoip.md](../account/geoip.md#threat-intelligence). All of them are

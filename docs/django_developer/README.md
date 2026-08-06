@@ -23,6 +23,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [email/](email/README.md) | AWS SES email, templates, mailboxes, inbound handling |
 | [aws/credentials.md](aws/credentials.md) | AWS credential modes — static keys, ambient/instance-profile, and cross-account AssumeRole |
 | [aws/cloudwatch.md](aws/cloudwatch.md) | CloudWatch monitoring — EC2, RDS, and ElastiCache metrics via boto3 |
+| [aws/guardduty.md](aws/guardduty.md) | GuardDuty findings via EventBridge/SNS — severity policy, dedupe and occurrence contract, bounded metadata, opt-in RuleSet |
 | [aws/aws_check.md](aws/aws_check.md) | Audit and safely bootstrap AWS credentials, cron, S3, SES, SNS/CloudWatch and incident defaults |
 | [aws/version_drift.md](aws/version_drift.md) | Daily RDS/Aurora and ElastiCache major-version drift inventory, support deadlines, and the opt-in ticket/board escalation |
 | [dnsman/](dnsman/README.md) | Domains, DNS records across providers, WHOIS/privacy, and centrally-issued TLS certificates |
