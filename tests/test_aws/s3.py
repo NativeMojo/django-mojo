@@ -1,4 +1,5 @@
 import datetime
+import importlib
 import json
 import time
 from unittest import mock
@@ -526,7 +527,7 @@ def test_first_retryable_service_error_is_unknown_for_every_mutating_call(opts):
 
 @th.django_unit_test()
 def test_rest_action_parser_is_a_strict_union(opts):
-    from mojo.apps.aws.rest import s3 as rest_s3
+    rest_s3 = importlib.import_module("mojo.apps.aws.rest.s3")
 
     assert rest_s3._parse_post_action({"set_public": False}, "bucket") == ("set_public", False), \
         "set_public:false must dispatch by key presence"

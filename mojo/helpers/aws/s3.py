@@ -47,6 +47,7 @@ OPERATION_UPLOAD_ATTEMPT_LIMIT = 250
 ABORT_UPLOAD_RETRY_LIMIT = 3
 INVENTORY_PAGE_LIMIT = 10
 INVENTORY_ROW_LIMIT = 10000
+DEFAULT_BUCKET_REGION = "us-east-1"
 
 _SAFE_PROVIDER_CODES = {
     "AccessDenied",
@@ -621,7 +622,10 @@ class S3Bucket:
         """
         self.name = name
         self.client_factory = client_factory or _default_client_factory
-        self.configured_region = region or S3.region_name
+        # HeadBucket region discovery needs a deterministic bootstrap client.
+        # Keep ambient credentials, but do not pass an indeterminate region to
+        # the bucket operation factory.
+        self.configured_region = region or S3.region_name or DEFAULT_BUCKET_REGION
         self.region = None
         self.owner_id = None
         self._s3_control = None
