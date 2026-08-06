@@ -23,6 +23,7 @@ class S3StorageBackend(StorageBackend):
     # Declared on the class as well as in __init__ because some callers build a
     # backend with object.__new__ and never run __init__.
     _session = None
+    assume_role_arn = None
 
     def __init__(self, file_manager, **kwargs):
         super().__init__(file_manager, **kwargs)
