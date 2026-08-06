@@ -33,6 +33,12 @@ Validation performed before dispatch: domain must be `active`; record type must
 be in `DNSMAN_ALLOWED_RECORD_TYPES`; apex `NS`/`SOA` refused; out-of-zone names
 refused.
 
+The optional [ACME federation hub](AcmeFederation.md) does not pass through this
+dispatch layer. It owns one separately configured public Route53 zone and an
+internal exact-target writer that tenants cannot reach through generic record
+CRUD. It does not add a `Domain.provider` value or change direct Route53,
+GoDaddy, or HTTP-01 behavior.
+
 ## Provider differences
 
 | | Route53 | GoDaddy |

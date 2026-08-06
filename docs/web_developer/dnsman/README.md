@@ -54,6 +54,55 @@ UI must gate on these, or it renders controls that 403.**
   With no `?group=` it addresses the house contact and additionally requires a
   platform admin. See [the registrant contact](#the-registrant-contact).
 
+The ACME delegation endpoints are a separate machine-only surface. They accept
+only an `Authorization: apikey …` credential whose underlying key carries the
+protected `dnsman_acme_federation` permission and whose project is active. JWT
+users, group tokens, anonymous requests, permissionless keys, and acting-user
+overrides whose underlying key lacks the permission all receive `403`.
+
+## ACME delegation hub (optional)
+
+The hub is absent by default and has no fallback behavior. A configured
+downstream uses a fresh immutable `client_ref` per onboarding:
+
+### `POST /api/dnsman/acme/delegation`
+
+```json
+{ "domain": "customer.example", "client_ref": "site-install-2026-08" }
+```
+
+The response contains only `client_ref`, normalized `domain`, and the permanent
+`source`/opaque `target`. The same project/ref/domain is idempotent; reusing the
+ref for another domain is refused. Publish the returned source as one CNAME to
+the returned target.
+
+### `POST /api/dnsman/acme/challenge/publish`
+
+```json
+{ "client_ref": "site-install-2026-08", "challenge_ref": "order-123",
+  "values": ["digest-for-apex", "digest-for-wildcard"] }
+```
+
+`values` is the complete digest set for that challenge. The hub first verifies
+the stored source is exactly one CNAME hop to its stored target, then durably
+leases the set and replaces the target RRset with the union of all active
+leases. Success waits for the exact union to be authoritatively visible. A
+retry must use the same `challenge_ref` and values.
+
+### `POST /api/dnsman/acme/challenge/withdraw`
+
+```json
+{ "client_ref": "site-install-2026-08", "challenge_ref": "order-123" }
+```
+
+Idempotently retires only that lease and preserves values from parallel
+challenges. Withdrawal deliberately succeeds after the tenant CNAME has been
+removed, so revocation cannot block cleanup.
+
+Responses may echo `client_ref`, `challenge_ref`, domain/source/target and
+active-value counts. They never contain TXT digests, hosted-zone ids, AWS
+change ids, credentials, or unrelated allocations.
+
 ## Domains
 
 ### `GET /api/dnsman/domain` · `GET /api/dnsman/domain/<pk>`

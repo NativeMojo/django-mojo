@@ -289,6 +289,14 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `DNSMAN_ACME_CONTACT_EMAIL`
 - `DNSMAN_ACME_DIRECTORY_URL`
+- `DNSMAN_ACME_HUB_ZONE` — enables the optional protected ACME delegation hub;
+  file-only. See [ACME federation](../dnsman/AcmeFederation.md).
+- `DNSMAN_ACME_HUB_HOSTED_ZONE_ID`
+- `DNSMAN_ACME_HUB_TTL`
+- `DNSMAN_ACME_HUB_LEASE_SECONDS`
+- `DNSMAN_ACME_HUB_PROPAGATION_TIMEOUT`
+- `DNSMAN_ACME_HUB_PROPAGATION_INTERVAL`
+- `DNSMAN_ACME_HUB_SWEEP_LIMIT`
 - `DNSMAN_ALLOWED_RECORD_TYPES`
 - `DNSMAN_CERT_RENEW_DAYS`
 - `DNSMAN_CERT_SYNC_CHANNEL`

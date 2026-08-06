@@ -19,10 +19,11 @@ mojo/helpers/aws/route53.py      Route53 Domains + hosted-zone primitives (model
                                  — paginated account inventory, report `truncated`
 mojo/helpers/acme/               Minimal ACMEv2 DNS-01 client (jws.py, client.py)
 mojo/helpers/dns/godaddy.py      GoDaddy record API (pre-existing; gained raise_on_error)
-mojo/helpers/dns/probe.py        Authoritative TXT probe — "is this record live yet?"
+mojo/helpers/dns/probe.py        Authoritative TXT probe + exact one-hop CNAME proof
 
 mojo/apps/dnsman/
-  models/        DnsCredential, Domain, DomainPurchase, AcmeAccount, Certificate
+  models/        DnsCredential, Domain, DomainPurchase, AcmeAccount, Certificate,
+                 AcmeHubDelegation, AcmeHubChallengeLease
   services/
     naming.py    Domain/record normalization — the single source of truth
     dns.py       Provider dispatch (UNGATED mechanism)
@@ -31,9 +32,10 @@ mojo/apps/dnsman/
                    discover the house AWS account's inventory
     registrar.py   search / quote / purchase / poll / WHOIS / privacy
     certs.py       ACME DNS-01 issuance, renewal, revocation, sync broadcast
+    acme_hub.py    optional delegated DNS-01 target allocation + lease reconciliation
     email.py       provider-dispatched SES record application
   rest/          thin handlers — this is where permissions are enforced
-  cronjobs.py    thin dispatchers — poll registrations (5m), renew certs (6h)
+  cronjobs.py    thin dispatchers — poll registrations / ACME leases (5m), renew certs (6h)
   asyncjobs.py   issue/renew certificate job handlers
 ```
 
@@ -249,6 +251,13 @@ order, no rate-limit exposure, and hosts stay disposable.
 | `DNSMAN_CERT_RENEW_DAYS` | `30` | Renew when fewer days remain |
 | `DNSMAN_CERT_SYNC_CHANNEL` | `"certs"` | Channel for the cert-updated broadcast |
 | `DNSMAN_DNS_PROPAGATION_TIMEOUT` | `300` | Seconds to wait for authoritative visibility |
+| `DNSMAN_ACME_HUB_ZONE` | unset | Enables the optional delegated DNS-01 hub; file-only |
+| `DNSMAN_ACME_HUB_HOSTED_ZONE_ID` | unset | Optional exact public Route53 zone id; file-only |
+| `DNSMAN_ACME_HUB_TTL` | `60` | Hub TXT TTL (bounded); file-only |
+| `DNSMAN_ACME_HUB_LEASE_SECONDS` | `900` | Hub challenge lease lifetime (bounded); file-only |
+| `DNSMAN_ACME_HUB_PROPAGATION_TIMEOUT` | `300` | Hub Route53/authority timeout (bounded); file-only |
+| `DNSMAN_ACME_HUB_PROPAGATION_INTERVAL` | `5` | Hub propagation polling interval (bounded); file-only |
+| `DNSMAN_ACME_HUB_SWEEP_LIMIT` | `100` | Max allocations reconciled per sweep; file-only |
 
 `jobs.publish` routes to the channel it is given, so the broadcast always lands
 on this channel. `certs` (the default) is in `JOBS_CHANNELS`' default list and is
@@ -261,4 +270,5 @@ sits on a queue nobody reads (which raises a `jobs:unconsumed_channel` incident)
 - [Registrar.md](Registrar.md) — purchase internals and the ops runbook
 - [Providers.md](Providers.md) — adapter interface and provider differences
 - [Certificates.md](Certificates.md) — ACME flow, custody, renewal, sync
+- [AcmeFederation.md](AcmeFederation.md) — optional protected downstream DNS-01 delegation hub
 - [EmailSetupAudit.md](EmailSetupAudit.md) — audit of the pre-existing email path
