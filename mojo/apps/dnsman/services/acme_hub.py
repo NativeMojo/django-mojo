@@ -212,13 +212,23 @@ def _allocation_lock(allocation_id):
             cursor.execute("SELECT pg_advisory_unlock(%s, %s)", [_LOCK_NAMESPACE, lock_id])
 
 
-def _desired_values(allocation):
+def _desired_snapshot(allocation):
     desired = set()
-    leases = AcmeHubChallengeLease.objects.filter(
-        allocation=allocation, state__in=[STATE_PENDING, STATE_ACTIVE])
-    for lease in leases.only("record_values"):
-        desired.update(lease.record_values or [])
-    return sorted(desired)
+    snapshot_ids = []
+    pending_ids = []
+    leases = list(AcmeHubChallengeLease.objects.filter(allocation=allocation)
+        .only("pk", "state", "record_values"))
+    for lease in leases:
+        snapshot_ids.append(lease.pk)
+        if lease.state in (STATE_PENDING, STATE_ACTIVE):
+            desired.update(lease.record_values or [])
+        if lease.state == STATE_PENDING:
+            pending_ids.append(lease.pk)
+    return sorted(desired), snapshot_ids, pending_ids
+
+
+def _desired_values(allocation):
+    return _desired_snapshot(allocation)[0]
 
 
 def _wait_change(change_id, deadline):
@@ -270,28 +280,33 @@ def _write_exact(allocation, values):
     _wait_exact_txt(allocation.target_name, values, deadline)
 
 
+def _reconcile_locked(allocation, request=None, audit_kind="reconciled"):
+    """Reconcile one snapshot while the caller holds the allocation lock."""
+    values, snapshot_ids, pending_ids = _desired_snapshot(allocation)
+    try:
+        _write_exact(allocation, values)
+    except Exception as exc:
+        AcmeHubChallengeLease.objects.filter(pk__in=snapshot_ids).update(
+            last_error=type(exc).__name__, reconciled_at=None)
+        _audit(allocation, request, "provider_failure", count=len(values), level="error")
+        if isinstance(exc, me.MojoException):
+            raise
+        raise me.ValueException("ACME hub provider reconciliation failed", code=503, status=503)
+
+    now = dates.utcnow()
+    AcmeHubChallengeLease.objects.filter(pk__in=pending_ids).update(
+        state=STATE_ACTIVE, reconciled_at=now, last_error=None)
+    AcmeHubChallengeLease.objects.filter(pk__in=snapshot_ids).update(
+        reconciled_at=now, last_error=None)
+    _audit(allocation, request, audit_kind, count=len(values))
+    return values
+
+
 def reconcile(allocation, request=None, audit_kind="reconciled"):
     """Replace the target RRset with the union of all durable live leases."""
     with _allocation_lock(allocation.pk):
-        values = _desired_values(allocation)
-        try:
-            _write_exact(allocation, values)
-        except Exception as exc:
-            AcmeHubChallengeLease.objects.filter(allocation=allocation).update(
-                last_error=type(exc).__name__, reconciled_at=None)
-            _audit(allocation, request, "provider_failure", count=len(values), level="error")
-            if isinstance(exc, me.MojoException):
-                raise
-            raise me.ValueException("ACME hub provider reconciliation failed", code=503, status=503)
-
-        now = dates.utcnow()
-        AcmeHubChallengeLease.objects.filter(
-            allocation=allocation, state=STATE_PENDING).update(
-                state=STATE_ACTIVE, reconciled_at=now, last_error=None)
-        AcmeHubChallengeLease.objects.filter(
-            allocation=allocation).update(reconciled_at=now, last_error=None)
-        _audit(allocation, request, audit_kind, count=len(values))
-        return values
+        return _reconcile_locked(
+            allocation, request=request, audit_kind=audit_kind)
 
 
 def _persist_publish_lease(allocation, challenge_ref, values):
@@ -337,9 +352,10 @@ def publish(group, client_ref, challenge_ref, values, request=None):
         _audit(allocation, request, "publish_refused", count=len(values))
         raise me.ValueException(proof.error or "CNAME delegation proof failed")
 
-    lease = _persist_publish_lease(allocation, challenge_ref, values)
-
-    desired = reconcile(allocation, request=request, audit_kind="published")
+    with _allocation_lock(allocation.pk):
+        lease = _persist_publish_lease(allocation, challenge_ref, values)
+        desired = _reconcile_locked(
+            allocation, request=request, audit_kind="published")
     lease.refresh_from_db()
     return objict(allocation=allocation, lease=lease, active_value_count=len(desired))
 
@@ -347,22 +363,25 @@ def publish(group, client_ref, challenge_ref, values, request=None):
 def withdraw(group, client_ref, challenge_ref, request=None):
     allocation = _allocation_for(group, client_ref)
     challenge_ref = _reference(challenge_ref, "challenge_ref")
-    changed = False
-    with transaction.atomic():
-        lease = AcmeHubChallengeLease.objects.select_for_update().filter(
-            allocation=allocation, challenge_ref=challenge_ref).first()
-        if lease is not None and lease.state not in (STATE_WITHDRAWN, STATE_EXPIRED):
-            lease.state = STATE_WITHDRAWN
-            lease.reconciled_at = None
-            lease.last_error = None
-            lease.save(update_fields=["state", "reconciled_at", "last_error", "modified"])
-            changed = True
+    with _allocation_lock(allocation.pk):
+        changed = False
+        with transaction.atomic():
+            lease = AcmeHubChallengeLease.objects.select_for_update().filter(
+                allocation=allocation, challenge_ref=challenge_ref).first()
+            if lease is not None and lease.state not in (STATE_WITHDRAWN, STATE_EXPIRED):
+                lease.state = STATE_WITHDRAWN
+                lease.reconciled_at = None
+                lease.last_error = None
+                lease.save(update_fields=[
+                    "state", "reconciled_at", "last_error", "modified"])
+                changed = True
 
-    if changed:
-        desired = reconcile(allocation, request=request, audit_kind="withdrawn")
-    else:
-        desired = _desired_values(allocation)
-        _audit(allocation, request, "withdrawn", count=len(desired))
+        if changed:
+            desired = _reconcile_locked(
+                allocation, request=request, audit_kind="withdrawn")
+        else:
+            desired = _desired_values(allocation)
+            _audit(allocation, request, "withdrawn", count=len(desired))
     return objict(allocation=allocation, active_value_count=len(desired))
 
 
@@ -371,27 +390,30 @@ def sweep(limit=None):
     if limit is None:
         limit = _bounded_static("DNSMAN_ACME_HUB_SWEEP_LIMIT", 100, 1, 1000)
     now = dates.utcnow()
-    expired_ids = list(AcmeHubChallengeLease.objects.filter(
-        state__in=[STATE_PENDING, STATE_ACTIVE], expires_at__lte=now
-    ).values_list("pk", flat=True)[:limit * 20])
-    if expired_ids:
-        AcmeHubChallengeLease.objects.filter(pk__in=expired_ids).update(
-            state=STATE_EXPIRED, reconciled_at=None, last_error=None)
-
-    expired_allocation_ids = set(AcmeHubChallengeLease.objects.filter(
-        pk__in=expired_ids).values_list("allocation_id", flat=True))
-
     allocation_ids = list(AcmeHubChallengeLease.objects.filter(
-        Q(pk__in=expired_ids) | Q(reconciled_at__isnull=True)
+        Q(
+            state__in=[STATE_PENDING, STATE_ACTIVE],
+            expires_at__lte=now)
+        | Q(reconciled_at__isnull=True)
     ).values_list("allocation_id", flat=True).distinct()[:limit])
+    expired = 0
     reconciled = 0
     errors = 0
     for allocation in AcmeHubDelegation.objects.filter(pk__in=allocation_ids):
         try:
-            kind = "expired" if allocation.pk in expired_allocation_ids else "reconciled"
-            reconcile(allocation, audit_kind=kind)
-            reconciled += 1
+            with _allocation_lock(allocation.pk):
+                expired_here = AcmeHubChallengeLease.objects.filter(
+                    allocation=allocation,
+                    state__in=[STATE_PENDING, STATE_ACTIVE],
+                    expires_at__lte=now).update(
+                        state=STATE_EXPIRED,
+                        reconciled_at=None,
+                        last_error=None)
+                expired += expired_here
+                kind = "expired" if expired_here else "reconciled"
+                _reconcile_locked(allocation, audit_kind=kind)
+                reconciled += 1
         except Exception:
             errors += 1
             logger.exception(f"ACME hub sweep failed for allocation {allocation.pk}")
-    return objict(expired=len(expired_ids), reconciled=reconciled, errors=errors)
+    return objict(expired=expired, reconciled=reconciled, errors=errors)

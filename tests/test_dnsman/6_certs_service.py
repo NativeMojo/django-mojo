@@ -683,6 +683,102 @@ def test_delegated_renewal_failure_preserves_material(opts):
         f"retry backoff must stay bounded, got {stored.renew_after}"
 
 
+@th.django_unit_test("dnsman certs: material remains available during renewal but not initial issuance")
+def test_material_available_while_renewing(opts):
+    from unittest import mock
+
+    from mojo.apps.account.models import Group
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.rest import certificate as certificate_rest
+    from mojo.apps.dnsman.services import certs
+    from mojo.helpers import dates
+
+    domain = _reset_domain("material-renewing-certs.test")
+    group = Group.objects.create(
+        name=f"material_renewing_{uuid.uuid4().hex[:8]}", kind="organization")
+    domain.group = group
+    domain.save(update_fields=["group", "modified"])
+    now = dates.utcnow()
+    renewing = Certificate.objects.create(
+        domain=domain, common_name=domain.name, sans=[domain.name],
+        status="active", cert_pem="OLD CERT", chain_pem="OLD CHAIN",
+        not_after=now + timedelta(days=10), renew_after=now - timedelta(days=1))
+    initial = Certificate.objects.create(
+        domain=domain, common_name=f"initial.{domain.name}",
+        sans=[f"initial.{domain.name}"], status="issuing")
+    request = objict(user=objict(pk=123), ip="127.0.0.1")
+
+    with _issuance_env(FakeAcmeClient([])), \
+            mock.patch.object(Certificate, "rest_check_permission_or_raise"):
+        renewing.set_private_key_pem("OLD PRIVATE KEY")
+        renewing.save()
+        Certificate.objects.filter(pk=renewing.pk).update(status="issuing")
+        payload = certificate_rest.on_certificate_material(request, pk=renewing.pk)
+        assert payload["private_key_pem"] == "OLD PRIVATE KEY", \
+            "still-valid stored material must remain consumable during renewal"
+        try:
+            certificate_rest.on_certificate_material(request, pk=initial.pk)
+        except Exception as error:
+            assert "not active" in str(error), \
+                f"initial issuance should expose no material, got {error}"
+        else:
+            assert False, "initial issuance must never expose material"
+
+
+@th.django_unit_test("dnsman certs: stale issuing workers are requeued and safely reclaimed")
+def test_stale_issuing_recovery(opts):
+    from unittest import mock
+
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.services import certs
+    from mojo.helpers import dates
+
+    domain = _reset_domain("stale-issuing-certs.test")
+    now = dates.utcnow()
+    Certificate.objects.filter(
+        status="active", renew_after__lte=now).update(
+            renew_after=now + timedelta(days=1))
+    stale_renewal = Certificate.objects.create(
+        domain=domain, common_name=domain.name, sans=[domain.name],
+        status="active", cert_pem="OLD CERT", chain_pem="OLD CHAIN",
+        not_after=now + timedelta(days=10), renew_after=now - timedelta(days=1))
+    stale_initial = Certificate.objects.create(
+        domain=domain, common_name=f"initial.{domain.name}",
+        sans=[f"initial.{domain.name}"], status="issuing")
+    fresh = Certificate.objects.create(
+        domain=domain, common_name=f"fresh.{domain.name}",
+        sans=[f"fresh.{domain.name}"], status="issuing")
+    old_modified = now - timedelta(seconds=certs.issuing_stale_seconds() + 5)
+    chain, unused = _make_chain([domain.name])
+    client = FakeAcmeClient([domain.name], chain=chain)
+
+    with _issuance_env(client) as env:
+        stale_renewal.set_private_key_pem("OLD PRIVATE KEY")
+        stale_renewal.save()
+        Certificate.objects.filter(pk=stale_renewal.pk).update(
+            status="issuing", modified=old_modified)
+        Certificate.objects.filter(pk=stale_initial.pk).update(modified=old_modified)
+
+        queued = certs.renew_due(now=now)
+        duplicate = certs.issue(Certificate.objects.get(pk=fresh.pk))
+        reclaimed = certs.issue(Certificate.objects.get(pk=stale_renewal.pk))
+
+    assert set(queued.certificates) == {stale_renewal.pk, stale_initial.pk}, \
+        f"only stale issuing rows should be requeued, got {queued.certificates}"
+    jobs_by_pk = {
+        published.payload["certificate"]: published.func
+        for published in env.jobs.published if not published.broadcast}
+    assert jobs_by_pk[stale_renewal.pk] == certs.RENEW_JOB, \
+        "stale valid material should requeue the renewal handler"
+    assert jobs_by_pk[stale_initial.pk] == certs.ISSUE_JOB, \
+        "stale initial issuance should requeue the issuance handler"
+    assert duplicate.ok and duplicate.skipped and not duplicate.get("error"), \
+        f"a fresh issuing duplicate should stay inert, got {duplicate}"
+    assert reclaimed.ok and len(client.orders) == 1, \
+        f"a stale dead worker should be reclaimed exactly once, got {reclaimed}"
+    Certificate.objects.filter(pk__in=[stale_initial.pk, fresh.pk]).delete()
+
+
 @th.django_unit_test("dnsman certs: concurrent issue jobs atomically admit only one worker")
 def test_concurrent_issue_claim(opts):
     from unittest import mock

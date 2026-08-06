@@ -316,6 +316,9 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `DNSMAN_CERT_RETRY_BASE_SECONDS` — retry base after a failed renewal whose
   existing material is still valid (default `3600`; clamped to 60–86400
   seconds and exponentially bounded at 86400).
+- `DNSMAN_CERT_ISSUING_STALE_SECONDS` — static grace period before an abandoned
+  `issuing` certificate is requeued (default `1800`; clamped to 60–86400
+  seconds). A live advisory lock still prevents concurrent reclamation.
 - `DNSMAN_CERT_SYNC_CHANNEL`
 - `DNSMAN_DNS_PROPAGATION_TIMEOUT`
 - `DNSMAN_MAX_DOMAIN_PRICE`

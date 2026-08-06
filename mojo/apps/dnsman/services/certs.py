@@ -29,9 +29,10 @@ driven from ``mojo.apps.dnsman.asyncjobs`` and never from a request.
 """
 
 import uuid
+from contextlib import contextmanager
 from datetime import timedelta, timezone as dt_timezone
 
-from django.db import transaction
+from django.db import connection, transaction
 
 from objict import objict
 
@@ -51,6 +52,8 @@ DEFAULT_RENEW_DAYS = 30
 DEFAULT_SYNC_CHANNEL = "certs"
 DEFAULT_RETRY_BASE_SECONDS = 3600
 MAX_RETRY_SECONDS = 86400
+DEFAULT_ISSUING_STALE_SECONDS = 1800
+_ISSUE_LOCK_NAMESPACE = 1421
 
 ISSUE_JOB = "mojo.apps.dnsman.asyncjobs.issue_certificate"
 RENEW_JOB = "mojo.apps.dnsman.asyncjobs.renew_certificate"
@@ -82,6 +85,14 @@ def renew_days():
 
 def sync_channel():
     return settings.get("DNSMAN_CERT_SYNC_CHANNEL", DEFAULT_SYNC_CHANNEL)
+
+
+def issuing_stale_seconds():
+    value = settings.get_static(
+        "DNSMAN_CERT_ISSUING_STALE_SECONDS",
+        DEFAULT_ISSUING_STALE_SECONDS,
+        kind="int")
+    return max(60, min(int(value), 86400))
 
 
 # ----------------------------------------------------------------------
@@ -245,10 +256,13 @@ def request_certificate(domain, names=None):
     return cert
 
 
-def publish_job(func_path, certificate, channel="default"):
+def publish_job(func_path, certificate, channel="default", idempotency_marker=None):
     """Queue a certificate job. The payload carries an id and nothing else."""
     from mojo.apps import jobs
-    if func_path == ISSUE_JOB:
+    if idempotency_marker is not None:
+        idempotency_key = (
+            f"dnsman-cert-recover-{certificate.pk}-{idempotency_marker}")
+    elif func_path == ISSUE_JOB:
         idempotency_key = f"dnsman-cert-issue-{certificate.pk}"
     else:
         marker = int(certificate.renew_after.timestamp()) if certificate.renew_after else "due"
@@ -280,6 +294,36 @@ def _require_delegated_profile(domain, names):
 # ----------------------------------------------------------------------
 # issuance
 # ----------------------------------------------------------------------
+@contextmanager
+def _issue_lock(certificate_id):
+    """Try to own one certificate across every ACME/network round trip."""
+    if connection.vendor != "postgresql":
+        yield True
+        return
+    lock_id = int(certificate_id) % 2147483647
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT pg_try_advisory_lock(%s, %s)",
+            [_ISSUE_LOCK_NAMESPACE, lock_id])
+        acquired = bool(cursor.fetchone()[0])
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_advisory_unlock(%s, %s)",
+                    [_ISSUE_LOCK_NAMESPACE, lock_id])
+
+
+def has_still_valid_material(certificate, now=None):
+    """Whether stored material remains safe to serve during a renewal."""
+    now = now or dates.utcnow()
+    return bool(
+        certificate.not_after
+        and certificate.not_after > now
+        and certificate.cert_pem
+        and certificate.mojo_secrets)
 
 def issue(certificate):
     """
@@ -290,6 +334,16 @@ def issue(certificate):
     which way it went. Callers that want a loud failure — the job handler,
     for one — inspect ``result.ok``.
     """
+    from mojo.apps.dnsman.models import Certificate
+    with _issue_lock(certificate.pk) as acquired:
+        if not acquired:
+            current = Certificate.objects.get(pk=certificate.pk)
+            return objict(ok=True, certificate=current, skipped=True)
+        return _issue_locked(certificate)
+
+
+def _issue_locked(certificate):
+    """Issue while the caller holds the certificate advisory lock."""
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.models.certificate import (
         STATUS_ACTIVE, STATUS_ISSUING, STATUS_PENDING)
@@ -302,15 +356,22 @@ def issue(certificate):
         claimed = Certificate.objects.select_for_update().select_related(
             "domain").get(pk=certificate.pk)
         if claimed.status == STATUS_ISSUING:
-            return objict(ok=True, certificate=claimed, skipped=True)
-        if claimed.status not in (STATUS_PENDING, STATUS_ACTIVE):
+            stale_before = dates.utcnow() - timedelta(
+                seconds=issuing_stale_seconds())
+            if claimed.modified > stale_before:
+                return objict(ok=True, certificate=claimed, skipped=True)
+            renewing = has_still_valid_material(claimed)
+            claimed.last_error = None
+            claimed.save(update_fields=["last_error", "modified"])
+        elif claimed.status not in (STATUS_PENDING, STATUS_ACTIVE):
             return objict(
                 ok=False, certificate=claimed,
                 error=f"Certificate is {claimed.status}, not issuable")
-        renewing = claimed.status == STATUS_ACTIVE
-        claimed.status = STATUS_ISSUING
-        claimed.last_error = None
-        claimed.save(update_fields=["status", "last_error", "modified"])
+        else:
+            renewing = claimed.status == STATUS_ACTIVE
+            claimed.status = STATUS_ISSUING
+            claimed.last_error = None
+            claimed.save(update_fields=["status", "last_error", "modified"])
 
     certificate = claimed
     domain = certificate.domain
@@ -327,6 +388,7 @@ def issue(certificate):
                 me.ValueException("The verified ACME delegation is broken"),
                 renewing)
         try:
+            delegated = delegation.require_current_owner(delegated)
             _require_delegated_profile(domain, names)
             # Proof and any prior ambiguous cleanup happen before the CA order.
             delegation.prove_alias(delegated)
@@ -340,6 +402,8 @@ def issue(certificate):
     delegated_challenge_ref = None
     try:
         account, client = _get_account()
+        if delegated is not None:
+            delegated = delegation.require_current_owner(delegated)
         order = client.new_order(names)
         certificate.acme_order_url = order.get("url")
         certificate.save()
@@ -444,12 +508,7 @@ def _record_issue_failure(certificate, error, renewing):
 
     certificate.refresh_from_db()
     attempts = (certificate.attempts or 0) + 1
-    still_valid = bool(
-        renewing
-        and certificate.not_after
-        and certificate.not_after > dates.utcnow()
-        and certificate.cert_pem
-        and certificate.mojo_secrets)
+    still_valid = bool(renewing and has_still_valid_material(certificate))
     certificate.status = STATUS_ACTIVE if still_valid else STATUS_FAILED
     certificate.last_error = str(error)
     certificate.attempts = attempts
@@ -474,6 +533,7 @@ def _publish_delegated_challenges(row, challenges):
             "Delegated ACME authorizations did not match the immutable source")
     digests = list(challenges[row.source_name])
     challenge_ref = uuid.uuid4().hex
+    delegation.require_current_owner(row)
 
     # Commit cleanup intent before the ambiguous remote publish call.
     AcmeDelegation.objects.filter(pk=row.pk).update(
@@ -505,6 +565,7 @@ def _withdraw_delegated_cleanup(row, challenge_ref, raise_errors=False):
     from mojo.apps.dnsman.services import acme_hub_client, delegation
 
     try:
+        row = delegation.require_current_owner(row)
         result = acme_hub_client.withdraw(str(row.client_ref), challenge_ref)
         delegation.compare_challenge_result(row, result, challenge_ref)
         AcmeDelegation.objects.filter(
@@ -646,7 +707,7 @@ def renew_due(now=None):
     overlapping scans converge on one queued job.
     """
     from mojo.apps.dnsman.models import Certificate
-    from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE
+    from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE, STATUS_ISSUING
 
     now = now or dates.utcnow()
     certificates = []
@@ -660,6 +721,31 @@ def renew_due(now=None):
         except Exception as err:
             logit.error(
                 f"dnsman: could not queue renewal for certificate {cert.pk}: {err}")
+
+    # Worker death after the status claim leaves an issuing row behind.  The
+    # grace period bounds recovery, and the try-lock refuses recovery while a
+    # live worker still owns the certificate even if its ACME round trip runs
+    # longer than that grace period.
+    stale_before = now - timedelta(seconds=issuing_stale_seconds())
+    stale = Certificate.objects.filter(
+        status=STATUS_ISSUING, modified__lte=stale_before).select_related("domain")
+    for cert in stale:
+        with _issue_lock(cert.pk) as acquired:
+            if not acquired:
+                continue
+            current = Certificate.objects.get(pk=cert.pk)
+            if current.status != STATUS_ISSUING or current.modified > stale_before:
+                continue
+            marker = int(current.modified.timestamp())
+            job_func = RENEW_JOB if has_still_valid_material(current, now) else ISSUE_JOB
+        try:
+            job_ids.append(publish_job(
+                job_func, current, idempotency_marker=marker))
+            certificates.append(current.pk)
+        except Exception as err:
+            logit.error(
+                f"dnsman: could not requeue stale issuance for certificate "
+                f"{current.pk}: {err}")
     return objict(count=len(certificates), certificates=certificates, jobs=job_ids)
 
 

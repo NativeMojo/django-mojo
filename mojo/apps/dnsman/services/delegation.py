@@ -21,6 +21,7 @@ ERROR_ALIAS_MISMATCH = "alias_mismatch"
 ERROR_DOMAIN_CLAIMED = "domain_claimed"
 ERROR_HUB_UNAVAILABLE = "hub_unavailable"
 ERROR_HUB_MISMATCH = "hub_allocation_mismatch"
+ERROR_DOMAIN_OWNER = "domain_owner_changed"
 
 
 def is_available():
@@ -97,6 +98,7 @@ def initiate(group, user, domain=None, name=None):
     # The row (and therefore client_ref) is committed before the first remote
     # allocation.  A retry replays the same immutable reference.
     try:
+        row = require_current_owner(row, require_domain=row.domain_id is not None)
         allocation = acme_hub_client.allocate(domain_name, str(row.client_ref))
         _compare_allocation(row, allocation)
     except Exception as error:
@@ -122,11 +124,58 @@ def initiate(group, user, domain=None, name=None):
 def _proof_failure(row, code):
     from mojo.apps.dnsman.models import AcmeDelegation
 
-    state = STATE_BROKEN if row.is_sticky else STATE_PENDING
-    AcmeDelegation.objects.filter(pk=row.pk).update(
-        state=state, last_error_code=code, modified=dates.utcnow())
+    # The caller may have fetched this row before another verifier made the
+    # delegation sticky.  Derive the failure state from the locked persisted
+    # row so stale objects can never demote verified -> pending.
+    with transaction.atomic():
+        stored = AcmeDelegation.objects.select_for_update().get(pk=row.pk)
+        state = STATE_BROKEN if stored.verified_at is not None else STATE_PENDING
+        stored.state = state
+        stored.last_error_code = code
+        stored.save(update_fields=["state", "last_error_code", "modified"])
     row.state = state
     row.last_error_code = code
+
+
+def require_current_owner(row, require_domain=True):
+    """Lock and re-prove the immutable tenant/domain binding before remote I/O."""
+    from mojo.apps.account.models import Group
+    from mojo.apps.dnsman.models import AcmeDelegation, Domain
+
+    refusal = None
+    with transaction.atomic():
+        stored = AcmeDelegation.objects.select_for_update().get(pk=row.pk)
+        group = Group.objects.select_for_update().filter(pk=stored.group_id).first()
+        domain = Domain.objects.select_for_update().filter(pk=stored.domain_id).first()
+        if (
+            not _group_active(group)
+            or group.uuid != stored.tenant_uuid
+        ):
+            stored.state = STATE_RETIRED
+            stored.retired_at = stored.retired_at or dates.utcnow()
+            stored.last_error_code = ERROR_GROUP_INACTIVE
+            refusal = "The delegation tenant is no longer active"
+        elif require_domain and (
+            domain is None
+            or domain.group_id != group.pk
+            or domain.name != stored.domain_name
+        ):
+            stored.state = STATE_BROKEN if stored.verified_at is not None else STATE_RETIRED
+            stored.retired_at = (
+                stored.retired_at or dates.utcnow()
+                if stored.state == STATE_RETIRED else None)
+            stored.last_error_code = ERROR_DOMAIN_OWNER
+            refusal = "The delegated domain is no longer owned by this tenant"
+        if refusal:
+            stored.save(update_fields=[
+                "state", "retired_at", "last_error_code", "modified"])
+
+    if refusal:
+        row.state = stored.state
+        row.retired_at = stored.retired_at
+        row.last_error_code = stored.last_error_code
+        raise me.ValueException(refusal)
+    return stored
 
 
 def prove_alias(row):

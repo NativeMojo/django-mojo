@@ -23,10 +23,17 @@ def _payload(row):
 
 
 def _row(request, pk, perms="VIEW_PERMS"):
+    not_found = lambda: me.ValueException(
+        "ACME delegation not found", code=404, status=404)
     row = AcmeDelegation.objects.filter(pk=pk).exclude(state=STATE_RETIRED).first()
     if row is None:
-        raise me.ValueException("ACME delegation not found", code=404, status=404)
-    AcmeDelegation.rest_check_permission_or_raise(request, perms, row)
+        raise not_found()
+    try:
+        AcmeDelegation.rest_check_permission_or_raise(request, perms, row)
+    except me.PermissionDeniedException:
+        # Sequential ids must not classify a live foreign row versus an
+        # unknown/retired row.
+        raise not_found()
     return row
 
 

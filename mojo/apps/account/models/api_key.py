@@ -38,9 +38,10 @@ def _apikey_perms_protection():
     # otherwise silently drop the floor along with it, which is the failure this
     # merge exists to prevent.
     #
-    # Deployment wins per key: naming an entry explicitly overrides the floor
-    # (including relaxing it — a deliberate, visible act, not an accident).
-    return {**APIKEY_PERMS_PROTECTION_DEFAULTS, **configured}
+    # Deployments may add protected permissions, but the framework floor wins
+    # for its own keys.  Those entries protect cross-tenant/system operations
+    # and must not be relaxable by configuration.
+    return {**configured, **APIKEY_PERMS_PROTECTION_DEFAULTS}
 
 
 class ApiKey(MojoSecrets, MojoModel):

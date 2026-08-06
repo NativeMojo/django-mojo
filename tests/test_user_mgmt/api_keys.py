@@ -1,5 +1,6 @@
 from testit import helpers as th
 from testit import faker
+from unittest import mock
 
 TEST_USER = "apikey_user"
 TEST_PWORD = "apikey##mojo99"
@@ -165,11 +166,25 @@ def test_apikey_has_permission(opts):
 
 @th.unit_test("dnsman ACME federation is protected by the framework ApiKey floor")
 def test_dnsman_acme_federation_protection_floor(opts):
-    from mojo.apps.account.models.api_key import _apikey_perms_protection
+    from mojo.apps.account.models import api_key
 
-    protection = _apikey_perms_protection()
+    protection = api_key._apikey_perms_protection()
     assert protection.get("dnsman_acme_federation") == "sys.dnsman_acme_federation", \
         f"ACME federation must require a system grant to provision, got {protection}"
+
+    configured = {
+        "dnsman_acme_federation": "manage_group",
+        "geoip_sync": "groups",
+        "deployment_sensitive": "sys.deployment_sensitive",
+    }
+    with mock.patch.object(api_key.settings, "get", return_value=configured):
+        protection = api_key._apikey_perms_protection()
+    assert protection["dnsman_acme_federation"] == "sys.dnsman_acme_federation", \
+        f"configuration must not relax the ACME floor, got {protection}"
+    assert protection["geoip_sync"] == "sys.geoip_sync", \
+        f"configuration must not relax the GeoIP floor, got {protection}"
+    assert protection["deployment_sensitive"] == "sys.deployment_sensitive", \
+        "configuration should still be able to add deployment-specific floors"
 
 
 @th.unit_test("apikey_is_group_allowed")

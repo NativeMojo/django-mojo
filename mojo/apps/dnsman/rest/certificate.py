@@ -119,7 +119,9 @@ def on_certificate_material(request, pk=None):
     # Shared with the detail and revoke routes so the rule lives in one place.
     _guard_house_certificate(request, certificate, "House certificate material")
 
-    if certificate.status != "active":
+    if certificate.status != "active" and not (
+            certificate.status == "issuing"
+            and certs.has_still_valid_material(certificate)):
         raise me.ValueException(f"Certificate is {certificate.status}, not active")
 
     private_key_pem = certificate.private_key_pem

@@ -265,6 +265,7 @@ order, no rate-limit exposure, and hosts stay disposable.
 | `DNSMAN_ACME_CONTACT_EMAIL` | `None` | ACME account contact |
 | `DNSMAN_CERT_RENEW_DAYS` | `30` | Renew when fewer days remain |
 | `DNSMAN_CERT_RETRY_BASE_SECONDS` | `3600` | Failed still-valid renewal retry base; clamped 60s–24h and exponentially bounded at 24h |
+| `DNSMAN_CERT_ISSUING_STALE_SECONDS` | `1800` | Requeue an abandoned issuing claim after this grace period; clamped 60s–24h; file-only |
 | `DNSMAN_CERT_SYNC_CHANNEL` | `"certs"` | Channel for the cert-updated broadcast |
 | `DNSMAN_DNS_PROPAGATION_TIMEOUT` | `300` | Seconds to wait for authoritative visibility |
 | `DNSMAN_ACME_HUB_ZONE` | unset | Enables the optional delegated DNS-01 hub; file-only |

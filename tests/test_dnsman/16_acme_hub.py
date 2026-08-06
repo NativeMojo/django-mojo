@@ -192,6 +192,41 @@ def test_ambiguous_write_is_sweep_recoverable(opts):
     assert recovered == [["digest-a"]], f"sweeper reconciled the wrong desired set: {recovered}"
 
 
+@th.django_unit_test("ACME hub reconciliation marks only leases present in its write snapshot")
+def test_reconcile_snapshot_does_not_ack_late_lease(opts):
+    from mojo.apps.dnsman.models import AcmeHubChallengeLease
+    from mojo.apps.dnsman.services import acme_hub
+    from mojo.helpers import dates
+
+    allocation = _allocation(opts)
+    original = AcmeHubChallengeLease.objects.create(
+        allocation=allocation, challenge_ref="challenge-snapshot",
+        record_values=["digest-a"], state="pending",
+        expires_at=dates.add(seconds=300))
+    late = []
+
+    def write_with_crash_window(row, values):
+        assert values == ["digest-a"], f"unexpected snapshot values: {values}"
+        # Simulate state becoming durable after the snapshot but before the
+        # provider acknowledgement. Public persist paths hold the same lock;
+        # this direct insert pins the crash-window bookkeeping invariant.
+        late.append(AcmeHubChallengeLease.objects.create(
+            allocation=row, challenge_ref="challenge-late",
+            record_values=["digest-b"], state="pending",
+            expires_at=dates.add(seconds=300)))
+
+    with mock.patch.object(acme_hub, "_write_exact", side_effect=write_with_crash_window), \
+            mock.patch.object(acme_hub, "_audit"):
+        acme_hub.reconcile(allocation)
+
+    original.refresh_from_db()
+    late[0].refresh_from_db()
+    assert original.state == "active" and original.reconciled_at is not None, \
+        "the lease included in the exact provider write should be acknowledged"
+    assert late[0].state == "pending" and late[0].reconciled_at is None, \
+        "a lease outside the write snapshot must remain pending for the sweeper"
+
+
 @th.django_unit_test("ACME hub sweeper expires stale leases and clears their target")
 def test_sweeper_expires_stale_lease(opts):
     from mojo.helpers import dates

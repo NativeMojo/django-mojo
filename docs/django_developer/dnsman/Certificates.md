@@ -128,7 +128,13 @@ as "no key" would send a consumer off to reissue for no reason.
 Requests serialize on the Domain row and job publishes carry an internal
 idempotency key while retaining the existing `{certificate: pk}` payload.
 Execution atomically claims the Certificate before any CA call; a duplicate
-worker exits without creating an order. When a delegated renewal fails and the
+worker exits without creating an order. The claim is also protected by a
+per-certificate advisory lock held through the remote work. If a worker dies,
+the renewal scan requeues the abandoned `issuing` row after
+`DNSMAN_CERT_ISSUING_STALE_SECONDS` (default 30 minutes); a live lock prevents a
+slow worker from being reclaimed concurrently. Existing still-valid material
+remains available from the material endpoint while renewal is `issuing`.
+Initial issuance never has material to expose. When a delegated renewal fails and the
 existing KMS-held material is still valid, the row returns to `active`, its
 cert/chain/key remain untouched, `last_error`/`attempts` record the failure, and
 `renew_after` moves to a bounded exponential retry (base

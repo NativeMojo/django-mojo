@@ -141,6 +141,75 @@ def test_sticky_proof_state(opts):
         "first verification is sticky: failure becomes broken, never pending/direct"
 
 
+@th.django_unit_test("a stale proof failure cannot demote a concurrently verified delegation")
+def test_stale_proof_failure_preserves_sticky_state(opts):
+    from mojo.apps.dnsman.models import AcmeDelegation
+    from mojo.apps.dnsman.services import delegation
+    from mojo.helpers import dates
+
+    group = _group("delegation_proof_race")
+    stale = _row(group, f"proof-race-{uuid.uuid4().hex[:8]}.example")
+    AcmeDelegation.objects.filter(pk=stale.pk).update(
+        state="verified", verified_at=dates.utcnow())
+
+    delegation._proof_failure(stale, delegation.ERROR_ALIAS_MISMATCH)
+    stored = AcmeDelegation.objects.get(pk=stale.pk)
+    assert stored.state == "broken" and stored.verified_at is not None, \
+        "failure must derive stickiness from the locked database row, not a stale object"
+
+
+@th.django_unit_test("remote delegation work rechecks active immutable ownership")
+def test_remote_work_rechecks_current_owner(opts):
+    from mojo.apps.dnsman.models import Certificate, Domain
+    from mojo.apps.dnsman.services import acme_hub_client, certs, delegation
+
+    cases = []
+    for label in ("suspended", "transferred", "deleted"):
+        group = _group(f"delegation_owner_{label}")
+        name = f"owner-{label}-{uuid.uuid4().hex[:8]}.example"
+        domain = Domain.objects.create(
+            group=group, name=name, provider="mojo", status="active", verified=True)
+        row = _row(group, name, state="verified", domain=domain)
+        cases.append((label, group, domain, row))
+
+    cases[0][1].is_active = False
+    cases[0][1].save(update_fields=["is_active", "modified"])
+    replacement = _group("delegation_owner_replacement")
+    cases[1][2].group = replacement
+    cases[1][2].save(update_fields=["group", "modified"])
+    cases[2][1].delete()
+    cases[2][3].refresh_from_db()
+
+    challenges = {cases[0][3].source_name: ["digest"]}
+    with mock.patch.object(acme_hub_client, "publish") as publish:
+        for label, unused_group, unused_domain, row in cases:
+            try:
+                certs._publish_delegated_challenges(
+                    row, {row.source_name: ["digest"]})
+            except Exception:
+                pass
+            else:
+                assert False, f"{label} ownership must fail before a hub mutation"
+    assert not publish.called, "invalid current ownership must consume no hub mutation"
+
+    with mock.patch.object(certs, "_get_account") as get_account:
+        for label, unused_group, domain, unused_row in cases[:2]:
+            certificate = Certificate.objects.create(
+                domain=domain,
+                common_name=domain.name,
+                sans=[domain.name, f"*.{domain.name}"],
+                status="pending")
+            result = certs.issue(certificate)
+            assert not result.ok, f"{label} ownership must fail issuance closed"
+    assert not get_account.called, \
+        "suspended or transferred ownership must consume no CA account/order call"
+
+    for label, unused_group, unused_domain, row in cases:
+        row.refresh_from_db()
+        assert row.state in ("broken", "retired"), \
+            f"{label} ownership should durably fail closed, got {row.state}"
+
+
 @th.django_unit_test("verification retires a deleted tenant under lock")
 def test_deleted_group_retires(opts):
     from mojo.apps.dnsman.services import delegation
@@ -236,8 +305,32 @@ def test_rest_tenant_isolation(opts):
             f"delegation REST must not expose internal {forbidden}"
 
     foreign = opts.client.get(f"/api/dnsman/delegation/{opts.foreign_row.pk}")
-    assert foreign.status_code in (401, 403, 404), \
-        f"tenant must not read another tenant's delegation, got {foreign.status_code}"
+    unknown = opts.client.get("/api/dnsman/delegation/999999999")
+    foreign_verify = opts.client.post(
+        "/api/dnsman/delegation/verify",
+        json={"delegation": opts.foreign_row.pk})
+    unknown_verify = opts.client.post(
+        "/api/dnsman/delegation/verify",
+        json={"delegation": 999999999})
+    from mojo.apps.dnsman.models import AcmeDelegation
+    AcmeDelegation.objects.filter(pk=opts.foreign_row.pk).update(state="retired")
+    retired = opts.client.get(f"/api/dnsman/delegation/{opts.foreign_row.pk}")
+    retired_verify = opts.client.post(
+        "/api/dnsman/delegation/verify",
+        json={"delegation": opts.foreign_row.pk})
+    signatures = [(response.status_code, response.response) for response in (
+        foreign, unknown, retired)]
+    assert all(status == 404 for status, unused in signatures), \
+        f"foreign, unknown and retired details must share one 404 shape, got {signatures}"
+    assert signatures[0][1] == signatures[1][1] == signatures[2][1], \
+        f"detail refusals must not disclose sequential-id state, got {signatures}"
+    verify_signatures = [
+        (response.status_code, response.response) for response in (
+            foreign_verify, unknown_verify, retired_verify)]
+    assert all(status == 404 for status, unused in verify_signatures), \
+        f"foreign, unknown and retired verify must share 404, got {verify_signatures}"
+    assert verify_signatures[0][1] == verify_signatures[1][1] == verify_signatures[2][1], \
+        f"verify refusals must not disclose sequential-id state, got {verify_signatures}"
 
     listed = opts.client.get(
         f"/api/dnsman/delegation?domain={opts.delegation_domain.pk}")
