@@ -16,6 +16,13 @@ DISCOVERY_MAX_ACCOUNT_LENGTH = 256
 DISCOVERY_MAX_CATEGORY_LENGTH = 256
 DISCOVERY_MAX_SEARCH_LENGTH = 128
 DISCOVERY_QUERY_ERROR = "Invalid metrics discovery query"
+DISCOVERY_ACCOUNTS_LUA = """
+local count = redis.call('SCARD', KEYS[1])
+if count > tonumber(ARGV[1]) then
+    return {count}
+end
+return {count, redis.call('SMEMBERS', KEYS[1])}
+"""
 
 
 DISCOVERY_DOCS = {
@@ -74,13 +81,11 @@ def _bounded_string(query, key, maximum, required=False):
 
 
 def _parse_query(request):
-    """Parse the unnormalized query string so duplicate/shaped keys survive."""
+    """Validate the framework-normalized request data without coercing shapes."""
     allowed = {"resource", "account", "category", "search", "start", "size"}
-    query = {}
-    for key, values in request.GET.lists():
-        if key not in allowed or len(values) != 1:
-            _invalid_query()
-        query[key] = values[0]
+    if any(key not in allowed for key in request.DATA):
+        _invalid_query()
+    query = request.DATA
 
     resource = _bounded_string(query, "resource", 16, required=True)
     if resource not in DISCOVERY_RESOURCES:
@@ -149,13 +154,16 @@ def _search(items, value):
 def _candidate_accounts():
     redis_con = redis.get_connection()
     accounts_key = utils.generate_accounts_key()
-    if redis_con.scard(accounts_key) > DISCOVERY_MAX_ACCOUNTS:
+    result = redis_con.eval(
+        DISCOVERY_ACCOUNTS_LUA, 1, accounts_key, DISCOVERY_MAX_ACCOUNTS)
+    count = int(result[0])
+    if count > DISCOVERY_MAX_ACCOUNTS:
         raise me.ValueException("Metrics discovery account index exceeds its limit")
-    accounts = set(metrics.list_accounts(redis_con=redis_con))
-    # Close the SCARD -> SMEMBERS race before any per-account authorization
-    # work. The pre-check still prevents known-oversized sets from materializing.
-    if len(accounts) > DISCOVERY_MAX_ACCOUNTS:
-        raise me.ValueException("Metrics discovery account index exceeds its limit")
+    members = result[1] if len(result) > 1 else []
+    accounts = {
+        account.decode("utf-8") if isinstance(account, bytes) else account
+        for account in members
+    }
     return accounts.union({"public", "global"})
 
 

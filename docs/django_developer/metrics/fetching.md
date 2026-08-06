@@ -129,10 +129,12 @@ metrics.set_write_perms("group-123", "record_metrics")
 slug to the account registry. Consequently normal `record()` calls and direct
 slug registration maintain discovery without a backfill or cluster scan.
 Configured accounts already enter the same set through the permission setters.
-The account set is checked with `SCARD` before materialization and discovery
-refuses more than 1,000 maintained candidates. It never calls the historical
-data-key scan or gauge helpers; old unindexed accounts enter on their next
-time-series record and remain usable through exact account entry meanwhile.
+One atomic Redis Lua operation checks the account set with `SCARD` and returns
+`SMEMBERS` only while the set contains at most 1,000 maintained candidates.
+Consequently concurrent growth cannot materialize or authorize an oversized
+set. Discovery never calls the historical data-key scan or gauge helpers; old
+unindexed accounts enter on their next time-series record and remain usable
+through exact account entry meanwhile.
 
 All resources sort unique names lexicographically, apply optional
 case-insensitive substring search, then calculate total `count` and slice by

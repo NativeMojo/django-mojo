@@ -40,6 +40,8 @@ Every request also accepts `start` (default 0, minimum 0) and `size` (default
 sorted lexicographically after filtering and before slicing. Unknown,
 duplicate, bracketed, dotted, non-scalar, or invalid resource/filter parameters
 return 400; generic list controls such as `sort` and `graph` are not accepted.
+Validation uses the framework-normalized request data, so repeated or shaped
+values (for example `search=x&search=y` or `search[term]=x`) are rejected.
 
 ```http
 GET /api/metrics/discover?resource=slugs&account=group-42&category=http&size=50

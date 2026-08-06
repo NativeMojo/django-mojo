@@ -181,26 +181,21 @@ def test_direct_parser_shapes(opts):
     from mojo import errors as me
     from mojo.apps.metrics.rest.discovery import _parse_query
 
-    class FakeQuery:
-        def __init__(self, pairs):
-            self.pairs = pairs
-
-        def lists(self):
-            return self.pairs
-
     class FakeRequest:
         pass
 
     cases = [
-        [("resource", ["accounts"]), ("search", [True])],
-        [("resource", ["categories"]), ("account", [["public"]])],
-        [("resource", ["accounts"]), ("start", [False])],
-        [("resource", ["accounts"]), ("size", [{}])],
-        [("resource", ["accounts"]), ("search", ["a", "b"])],
+        {"resource": "accounts", "search": True},
+        {"resource": "categories", "account": ["public"]},
+        {"resource": "accounts", "start": False},
+        {"resource": "accounts", "size": {}},
+        {"resource": "accounts", "search": ["a", "b"]},
+        {"resource": "accounts", "search": {"term": "x"}},
+        {"resource": "accounts", "unknown": "x"},
     ]
-    for pairs in cases:
+    for data in cases:
         request = FakeRequest()
-        request.GET = FakeQuery(pairs)
+        request.DATA = data
         with th.assert_raises(me.ValueException):
             _parse_query(request)
 
@@ -261,28 +256,33 @@ def test_candidate_account_bound_and_sources(opts):
             self.cardinality = cardinality
             self.members = members or set()
             self.materialized = False
+            self.calls = []
+
+        def eval(self, script, key_count, key, limit):
+            self.calls.append((script, key_count, key, limit))
+            if self.cardinality > limit:
+                return [self.cardinality]
+            self.materialized = True
+            return [self.cardinality, list(self.members)]
 
         def scard(self, key):
-            return self.cardinality
+            raise AssertionError("non-atomic SCARD used")
 
         def smembers(self, key):
-            self.materialized = True
-            return self.members
+            raise AssertionError("non-atomic SMEMBERS used")
 
-    over = FakeRedis(1001)
+    over = FakeRedis(100000)
     with patch.object(discovery.redis, "get_connection", return_value=over):
         with th.assert_raises(me.ValueException):
             discovery._candidate_accounts()
     assert over.materialized is False, (
-        "account cap must reject before SMEMBERS materializes the index")
-
-    raced = FakeRedis(
-        1000, {f"t1438_race_{index}".encode() for index in range(1001)})
-    with patch.object(discovery.redis, "get_connection", return_value=raced):
-        with th.assert_raises(me.ValueException):
-            discovery._candidate_accounts()
-    assert raced.materialized is True, (
-        "race fixture must exercise the post-materialization cardinality guard")
+        "atomic account cap must reject without materializing an oversized set")
+    assert len(over.calls) == 1 and over.calls[0][1:] == (
+        1, discovery.utils.generate_accounts_key(),
+        discovery.DISCOVERY_MAX_ACCOUNTS), (
+        f"account inventory must use one keyed bounded Lua call: {over.calls}")
+    assert "SCARD" in over.calls[0][0] and "SMEMBERS" in over.calls[0][0], (
+        "bounded Lua call must own both cardinality and member reads")
 
     bounded = FakeRedis(1, {b"t1438_from_index"})
     with patch.object(discovery.redis, "get_connection", return_value=bounded), \
@@ -537,10 +537,18 @@ def test_authorization_precedes_registry_reads(opts):
     from django.test import RequestFactory
     from mojo import errors as me
     from mojo.apps.metrics.rest import discovery
+    from mojo.helpers.request_parser import parse_request_data
 
     factory = RequestFactory()
-    account_request = factory.get(f"{PATH}?resource=accounts")
-    account_request.user = opts.ordinary
+
+    def make_request(url, user):
+        request = factory.get(url)
+        request.DATA = parse_request_data(request)
+        request.user = user
+        return request
+
+    account_request = make_request(
+        f"{PATH}?resource=accounts", opts.ordinary)
     with patch.object(
             discovery, "_candidate_accounts",
             side_effect=AssertionError("candidate index preceded global gate")) as candidates:
@@ -556,8 +564,7 @@ def test_authorization_precedes_registry_reads(opts):
         (f"{PATH}?resource=categories", me.ValueException),
     ]
     for url, error_type in cases:
-        request = factory.get(url)
-        request.user = opts.global_view
+        request = make_request(url, opts.global_view)
         with patch.object(
                 discovery.metrics, "get_categories",
                 side_effect=AssertionError("registry read preceded authorization")) as read:
@@ -566,9 +573,8 @@ def test_authorization_precedes_registry_reads(opts):
         assert read.call_count == 0, (
             f"denied/malformed request reached the category registry: {url}")
 
-    request = factory.get(
-        f"{PATH}?resource=slugs&account={CUSTOM_HIDDEN}")
-    request.user = opts.global_view
+    request = make_request(
+        f"{PATH}?resource=slugs&account={CUSTOM_HIDDEN}", opts.global_view)
     with patch.object(
             discovery.metrics, "get_account_slugs",
             side_effect=AssertionError("slug read preceded authorization")) as read:
@@ -577,9 +583,9 @@ def test_authorization_precedes_registry_reads(opts):
     assert read.call_count == 0, (
         "denied account reached the all-slug registry")
 
-    request = factory.get(
-        f"{PATH}?resource=slugs&account={CUSTOM_HIDDEN}&category={CATEGORY_ALPHA}")
-    request.user = opts.global_view
+    request = make_request(
+        f"{PATH}?resource=slugs&account={CUSTOM_HIDDEN}&category={CATEGORY_ALPHA}",
+        opts.global_view)
     with patch.object(
             discovery.metrics, "get_category_slugs",
             side_effect=AssertionError("category-slug read preceded authorization")) as read:
