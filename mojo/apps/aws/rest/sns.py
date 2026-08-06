@@ -9,7 +9,11 @@ from mojo.helpers.aws.inbound_email import process_inbound_email_from_s3
 # from mojo.apps.aws.models import SentMessage  # Uncomment when implementing status updates
 # from mojo.apps.aws.models import IncomingEmail  # Uncomment when implementing inbound storage
 
-logger = logit.get_logger("email", "email.log")
+# The SES webhooks in this module belong to the email log; the signed
+# CloudWatch/GuardDuty receivers below do not. Keep both, so an AWS ingestion
+# traceback is never filed under email.log where nobody looks for it.
+email_logger = logit.get_logger("email", "email.log")
+logger = logit.get_logger(__name__, "aws.log")
 
 
 def _json_loads_safe(data):
@@ -41,23 +45,23 @@ def _handle_inbound_notification(message):
         key = f"{prefix}{msg_id}"
 
     if not bucket or not key:
-        logger.error(f"Inbound SNS missing bucket/key; msg_id={msg_id} bucket={bucket} key={key} prefix={prefix}")
+        email_logger.error(f"Inbound SNS missing bucket/key; msg_id={msg_id} bucket={bucket} key={key} prefix={prefix}")
         return
 
     try:
         process_inbound_email_from_s3(bucket, key, recipients_hint=recipients)
-        logger.info(f"Inbound email processed: s3://{bucket}/{key}")
+        email_logger.info(f"Inbound email processed: s3://{bucket}/{key}")
     except Exception as e:
         # Try fallback with '.eml' suffix if initial guess fails
         if msg_id and prefix and not key.endswith(".eml"):
             fallback_key = f"{prefix}{msg_id}.eml"
             try:
                 process_inbound_email_from_s3(bucket, fallback_key, recipients_hint=recipients)
-                logger.info(f"Inbound email processed with fallback key: s3://{bucket}/{fallback_key}")
+                email_logger.info(f"Inbound email processed with fallback key: s3://{bucket}/{fallback_key}")
                 return
             except Exception as e2:
-                logger.error(f"Fallback inbound processing failed for s3://{bucket}/{fallback_key}: {e2}")
-        logger.error(f"Inbound processing failed for s3://{bucket}/{key}: {e}")
+                email_logger.error(f"Fallback inbound processing failed for s3://{bucket}/{fallback_key}: {e2}")
+        email_logger.error(f"Inbound processing failed for s3://{bucket}/{key}: {e}")
 
 
 def _handle_bounce_notification(message):
@@ -68,12 +72,12 @@ def _handle_bounce_notification(message):
     from mojo.apps.aws.models import SentMessage  # local import to avoid circulars
     mid = message.get("mail", {}).get("messageId")
     details = message.get("bounce") or {}
-    logger.info(f"Received bounce for SES MessageId: {mid}")
+    email_logger.info(f"Received bounce for SES MessageId: {mid}")
     if not mid:
         return
     sent = SentMessage.objects.filter(ses_message_id=mid).first()
     if not sent:
-        logger.warning(f"No SentMessage found for bounce MessageId={mid}")
+        email_logger.warning(f"No SentMessage found for bounce MessageId={mid}")
         return
     sent.status = SentMessage.STATUS_BOUNCED
     try:
@@ -91,12 +95,12 @@ def _handle_complaint_notification(message):
     from mojo.apps.aws.models import SentMessage
     mid = message.get("mail", {}).get("messageId")
     details = message.get("complaint") or {}
-    logger.info(f"Received complaint for SES MessageId: {mid}")
+    email_logger.info(f"Received complaint for SES MessageId: {mid}")
     if not mid:
         return
     sent = SentMessage.objects.filter(ses_message_id=mid).first()
     if not sent:
-        logger.warning(f"No SentMessage found for complaint MessageId={mid}")
+        email_logger.warning(f"No SentMessage found for complaint MessageId={mid}")
         return
     sent.status = SentMessage.STATUS_COMPLAINED
     try:
@@ -114,12 +118,12 @@ def _handle_delivery_notification(message):
     from mojo.apps.aws.models import SentMessage
     mid = message.get("mail", {}).get("messageId")
     details = message.get("delivery") or {}
-    logger.info(f"Received delivery for SES MessageId: {mid}")
+    email_logger.info(f"Received delivery for SES MessageId: {mid}")
     if not mid:
         return
     sent = SentMessage.objects.filter(ses_message_id=mid).first()
     if not sent:
-        logger.warning(f"No SentMessage found for delivery MessageId={mid}")
+        email_logger.warning(f"No SentMessage found for delivery MessageId={mid}")
         return
     sent.status = SentMessage.STATUS_DELIVERED
     try:
@@ -148,7 +152,7 @@ def _handle_sns(kind, request):
     # Optional: compare with HTTP header x-amz-sns-message-type for consistency
     msg_type = sns.get("Type")
     topic_arn = sns.get("TopicArn")
-    logger.info(f"SNS webhook ({kind}) Type={msg_type} TopicArn={topic_arn}")
+    email_logger.info(f"SNS webhook ({kind}) Type={msg_type} TopicArn={topic_arn}")
 
     # Ensure TopicArn matches a configured/known ARN
     def _is_allowed_topic(topic):
@@ -164,7 +168,7 @@ def _handle_sns(kind, request):
                 Q(sns_topic_inbound_arn=topic)
             ).exists()
         except Exception as e:
-            logger.error(f"TopicArn allow-check failed: {e}")
+            email_logger.error(f"TopicArn allow-check failed: {e}")
             return False
     allowed_topics = [topic_arn] if _is_allowed_topic(topic_arn) else []
     try:
@@ -200,12 +204,12 @@ def _handle_sns(kind, request):
         elif kind == "delivery" or notification_type == "delivery":
             _handle_delivery_notification(message)
         else:
-            logger.info(f"SNS webhook ({kind}) received unknown notificationType: {notification_type}")
+            email_logger.info(f"SNS webhook ({kind}) received unknown notificationType: {notification_type}")
 
         return JsonResponse({"status": True})
 
     # Unhandled types (UnsubscribeConfirmation, etc.) can be handled here if needed
-    logger.info(f"SNS webhook ({kind}) received unhandled Type: {msg_type}")
+    email_logger.info(f"SNS webhook ({kind}) received unhandled Type: {msg_type}")
     return JsonResponse({"status": True, "info": f"Unhandled Type: {msg_type}"})
 
 
@@ -245,50 +249,74 @@ def on_sns_delivery(request):
     return _handle_sns("delivery", request)
 
 
-@md.URL("cloudwatch/sns/alarm")
-@md.public_endpoint()
-def on_cloudwatch_alarm(request):
-    """Receive signed, allowlisted CloudWatch alarm notifications from SNS."""
+def _receive_signed_sns(request, allowlist_setting):
+    """Run the shared preamble for a signed, allowlisted SNS receiver.
+
+    Returns ``(envelope, response)`` with exactly one side non-None. A non-None
+    ``response`` is final and must be returned verbatim by the caller; a
+    non-None ``envelope`` is a verified ``Notification`` ready for processing.
+
+    ``allowlist_setting`` names the file-only static list of exact topic ARNs
+    this receiver accepts. Each receiver gets its own list on purpose: a topic
+    allowlisted for one signal must not be able to confirm a subscription on
+    another receiver.
+
+    Signature verification is NEVER optional here. ``allow_debug`` is hardcoded
+    False rather than exposed as a parameter, so no future caller can turn a
+    public endpoint into an unauthenticated one by passing a flag. The SES
+    webhooks keep their own looser path in ``_handle_sns``.
+    """
     from mojo.apps.aws.services import sns as sns_service
-    from mojo.apps.aws.services.cloudwatch_alarms import (
-        CloudWatchDispatchError,
-        CloudWatchPayloadError,
-        process_notification,
-    )
 
     if request.method != "POST":
-        return JsonResponse({"error": "Method not allowed"}, status=405)
+        return None, JsonResponse({"error": "Method not allowed"}, status=405)
     try:
         envelope = sns_service.parse_request(request)
     except sns_service.SNSPayloadError:
-        return JsonResponse({"error": "Invalid SNS payload"}, status=400)
+        return None, JsonResponse({"error": "Invalid SNS payload"}, status=400)
 
-    allowed_topics = settings.get_static(
-        "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", [], kind="list"
-    )
+    allowed_topics = settings.get_static(allowlist_setting, [], kind="list")
     try:
         sns_service.verify_envelope(
             envelope, allowed_topics, request=request, allow_debug=False,
         )
     except sns_service.SNSTransientError:
-        return JsonResponse({"error": "SNS verification unavailable"}, status=503)
+        return None, JsonResponse({"error": "SNS verification unavailable"}, status=503)
     except sns_service.SNSAuthorizationError:
-        return JsonResponse({"error": "SNS authorization failed"}, status=403)
+        return None, JsonResponse({"error": "SNS authorization failed"}, status=403)
 
     msg_type = envelope.get("Type")
     if msg_type == "SubscriptionConfirmation":
         try:
             status_code = sns_service.confirm_subscription(envelope)
         except sns_service.SNSTransientError:
-            return JsonResponse({"error": "SNS confirmation failed"}, status=503)
+            return None, JsonResponse({"error": "SNS confirmation failed"}, status=503)
         except sns_service.SNSAuthorizationError:
-            return JsonResponse({"error": "SNS authorization failed"}, status=403)
-        return JsonResponse({
+            return None, JsonResponse({"error": "SNS authorization failed"}, status=403)
+        return None, JsonResponse({
             "status": True,
             "data": {"confirmed": True, "status_code": status_code},
         })
     if msg_type != "Notification":
-        return JsonResponse({"error": "Unsupported SNS message type"}, status=400)
+        return None, JsonResponse({"error": "Unsupported SNS message type"}, status=400)
+    return envelope, None
+
+
+@md.URL("cloudwatch/sns/alarm")
+@md.public_endpoint()
+def on_cloudwatch_alarm(request):
+    """Receive signed, allowlisted CloudWatch alarm notifications from SNS."""
+    from mojo.apps.aws.services.cloudwatch_alarms import (
+        CloudWatchDispatchError,
+        CloudWatchPayloadError,
+        process_notification,
+    )
+
+    envelope, response = _receive_signed_sns(
+        request, "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS",
+    )
+    if response is not None:
+        return response
     try:
         result = process_notification(envelope)
     except CloudWatchPayloadError:
