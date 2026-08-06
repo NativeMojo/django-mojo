@@ -3877,6 +3877,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#discovery-permission-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Discovery Permission Order
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#rest-endpoints-and-their-permission-checks" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4000,7 +4011,12 @@ explicitly:</p>
 <p>Prefer an app-specific collect endpoint that records server-side with bounded
 slug names over opening raw anonymous writes.</p>
 <h2 id="category-permission-metrics">Category Permission: <code>metrics</code><a class="headerlink" href="#category-permission-metrics" title="Permanent link">&para;</a></h2>
-<p>The <code>metrics</code> category permission grants full read+write access to all metrics across all account types (global, group, user). This is the recommended permission for admin users who need full metrics access.</p>
+<p>The <code>metrics</code> category permission grants full read+write access to the standard
+global, group, and user account types. It is the recommended permission for
+administrators of those metrics. A custom account's configured permission
+remains authoritative: <code>metrics</code> does not bypass an unrelated custom permission
+string. A custom account is readable only when its policy is <code>public</code> or the
+caller satisfies the configured permission.</p>
 <p>Fine-grained alternatives:</p>
 <table>
 <thead>
@@ -4099,6 +4115,28 @@ slug names over opening raw anonymous writes.</p>
 <li><strong>Identity check</strong>: Is the requesting user the same as the user ID in the account?</li>
 </ol>
 <p>Users can always see their own metrics. Admins with <code>metrics</code> can see anyone's.</p>
+<h2 id="discovery-permission-order">Discovery Permission Order<a class="headerlink" href="#discovery-permission-order" title="Permanent link">&para;</a></h2>
+<p><code>GET /api/metrics/discover</code> dispatches among <code>accounts</code>, <code>categories</code>, and
+<code>slugs</code> without introducing a second permission system.</p>
+<p>Account enumeration first validates the complete query grammar, then checks
+the existing <code>global</code> account view gate. Only after that does it check the
+maintained account-index cardinality and materialize candidates. Every
+candidate is passed through <code>check_view_permissions()</code> independently. An
+expected <code>PermissionDeniedException</code> omits that name; Redis, database, or
+programming errors abort the request. Therefore hidden candidates contribute
+neither rows nor <code>count</code>, and a partial backend failure can never look like a
+complete catalog.</p>
+<p>Category and slug discovery validate the grammar and reserved account syntax,
+then complete the explicit account view check before reading any Redis
+category/slug registry. This preserves public, global, group, user, custom,
+reference-key, override-key, and group-token behavior. It also means a global
+<code>view_metrics</code> holder still cannot read a custom account whose configured
+permission they do not hold. The endpoint performs no separate Group/User
+existence query; syntactically valid missing group accounts keep the existing
+identity-specific helper behavior.</p>
+<p>The account catalog is authenticated global Admin discovery. Direct
+category/slug discovery remains anonymous for <code>public</code> and custom accounts
+whose view policy is <code>public</code>.</p>
 <h2 id="rest-endpoints-and-their-permission-checks">REST Endpoints and Their Permission Checks<a class="headerlink" href="#rest-endpoints-and-their-permission-checks" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -4148,6 +4186,16 @@ slug names over opening raw anonymous writes.</p>
 <td><code>/api/metrics/category_delete</code></td>
 <td>DELETE</td>
 <td><code>check_write_permissions(request, account)</code></td>
+</tr>
+<tr>
+<td><code>/api/metrics/discover?resource=accounts</code></td>
+<td>GET</td>
+<td><code>check_view_permissions(request, "global")</code>, then each candidate's view check</td>
+</tr>
+<tr>
+<td><code>/api/metrics/discover?resource=categories|slugs</code></td>
+<td>GET</td>
+<td><code>check_view_permissions(request, account)</code> before registry access</td>
 </tr>
 <tr>
 <td><code>/api/metrics/permissions</code></td>

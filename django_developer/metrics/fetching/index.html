@@ -2146,6 +2146,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#rest-discovery-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        REST Discovery Catalog
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#group-fan-out" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4043,6 +4054,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#rest-discovery-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        REST Discovery Catalog
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#group-fan-out" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4186,6 +4208,39 @@
 <a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_view_perms</span><span class="p">(</span><span class="s2">&quot;group-123&quot;</span><span class="p">,</span> <span class="s2">&quot;view_metrics&quot;</span><span class="p">)</span>
 <a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="n">metrics</span><span class="o">.</span><span class="n">set_write_perms</span><span class="p">(</span><span class="s2">&quot;group-123&quot;</span><span class="p">,</span> <span class="s2">&quot;record_metrics&quot;</span><span class="p">)</span>
 </code></pre></div>
+<h2 id="rest-discovery-catalog">REST Discovery Catalog<a class="headerlink" href="#rest-discovery-catalog" title="Permanent link">&para;</a></h2>
+<p><code>GET /api/metrics/discover</code> exposes three progressively scoped name registries:</p>
+<ul>
+<li><code>resource=accounts</code> reads the maintained <code>mets:_accounts_</code> set, unions the
+  canonical <code>public</code> and <code>global</code> names, and filters every candidate through
+  the same <code>check_view_permissions()</code> helper used by fetches.</li>
+<li><code>resource=categories&amp;account=&lt;name&gt;</code> reads <code>mets:&lt;account&gt;:cats</code> only after
+  that account's view check succeeds.</li>
+<li><code>resource=slugs&amp;account=&lt;name&gt;</code> reads <code>mets:&lt;account&gt;:slugs</code>, or
+  <code>mets:&lt;account&gt;:c:&lt;category&gt;</code> when an exact category is supplied, only after
+  the same account check.</li>
+</ul>
+<p><code>add_metrics_slug()</code> now adds its account to <code>mets:_accounts_</code> as well as its
+slug to the account registry. Consequently normal <code>record()</code> calls and direct
+slug registration maintain discovery without a backfill or cluster scan.
+Configured accounts already enter the same set through the permission setters.
+One atomic Redis Lua operation checks the account set with <code>SCARD</code> and returns
+<code>SMEMBERS</code> only while the set contains at most 1,000 maintained candidates.
+Consequently concurrent growth cannot materialize or authorize an oversized
+set. Discovery never calls the historical data-key scan or gauge helpers; old
+unindexed accounts enter on their next time-series record and remain usable
+through exact account entry meanwhile.</p>
+<p>All resources sort unique names lexicographically, apply optional
+case-insensitive substring search, then calculate total <code>count</code> and slice by
+<code>start</code>/<code>size</code>. The requested size defaults to 50 and is capped at 500.
+<code>page_count</code> describes only the returned page and <code>next_start</code> is the next
+numeric offset or null.</p>
+<p>Slug strings are returned exactly as registered. A dimensional slug such as
+<code>api:request:status:200</code> must be passed whole to <code>/api/metrics/series</code> or
+<code>/api/metrics/fetch</code>; discovery consumers must never normalize it or keep only
+the last colon-delimited segment. <code>fetch_values()</code> and <code>/series</code> preserve full
+keys. The older <code>fetch()</code> response currently labels returned series by the last
+segment, so do not use its response keys as catalog identifiers.</p>
 <h2 id="group-fan-out">Group Fan-Out<a class="headerlink" href="#group-fan-out" title="Permanent link">&para;</a></h2>
 <p><code>/api/metrics/fetch</code> supports a <code>child_kind</code> query param that sums a metric across all active descendants of a parent group whose <code>kind</code> matches:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>GET /api/metrics/fetch?slug=visits&amp;account=group-42&amp;child_kind=location

@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/aws/cloudwatch/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/aws/version_drift/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>AWS CloudWatch Monitoring - Django-MOJO</title>
+        <title>AWS managed-service version drift - Django-MOJO</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#aws-cloudwatch-monitoring" class="md-skip">
+        <a href="#aws-managed-service-version-drift" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              AWS CloudWatch Monitoring
+              AWS managed-service version drift
             
           </span>
         </div>
@@ -3733,10 +3733,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#what-is-inventoried" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overview
+        What is inventoried
       
     </span>
   </a>
@@ -3744,10 +3744,99 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#aws-iam-permissions-required" class="md-nav__link">
+  <a href="#what-is-deliberately-not-done" class="md-nav__link">
     <span class="md-ellipsis">
       
-        AWS IAM Permissions Required
+        What is deliberately NOT done
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#standard-support-vs-extended-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standard support vs extended support
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-event-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The event contract
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The event contract">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#two-categories-on-purpose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two categories, on purpose
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#level-scale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Level scale
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-opt-in-ruleset-and-the-board-item" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The opt-in RuleSet and the board item
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The opt-in RuleSet and the board item">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#escalation-on-later-runs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Escalation on later runs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#schedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schedule
       
     </span>
   </a>
@@ -3766,115 +3855,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#using-cloudwatchhelper-directly" class="md-nav__link">
+  <a href="#credentials-and-iam" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Using CloudWatchHelper Directly
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Using CloudWatchHelper Directly">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#instantiation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Instantiation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#high-level-fetch" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        High-Level fetch()
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#fetch-parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        fetch() Parameters
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#category-reference" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Category Reference
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#granularity-and-period-labels" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Granularity and Period Labels
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#resource-discovery" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Resource Discovery
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#namespace-resolution" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Namespace Resolution
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#low-level-get_metric" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Low-Level get_metric()
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#module-level-helpers" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Module-Level Helpers
+        Credentials and IAM
       
     </span>
   </a>
@@ -3882,82 +3866,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#metric-rest-api" class="md-nav__link">
+  <a href="#running-it-by-hand" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Metric REST API
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#sns-alarm-ingestion" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        SNS alarm ingestion
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="SNS alarm ingestion">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#incident-policy-and-lifecycle" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Incident policy and lifecycle
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#durable-data-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Durable data model
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#aws-setup-and-verification" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        AWS setup and verification
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#module-layout" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Module Layout
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#testing" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Testing
+        Running it by hand
       
     </span>
   </a>
@@ -3984,606 +3896,302 @@
   
 
 
-<h1 id="aws-cloudwatch-monitoring">AWS CloudWatch Monitoring<a class="headerlink" href="#aws-cloudwatch-monitoring" title="Permanent link">&para;</a></h1>
-<p>Reference documentation for backend developers integrating AWS CloudWatch metrics
-into a django-mojo project.</p>
-<p>Companion REST API reference: <a href="../../../web_developer/aws/cloudwatch/">docs/web_developer/aws/cloudwatch.md</a></p>
-<hr />
-<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<p>The <code>CloudWatchHelper</code> (in <code>mojo/helpers/aws/cloudwatch.py</code>) wraps boto3 to pull
-live time-series metrics from AWS CloudWatch for three resource types:</p>
+<h1 id="aws-managed-service-version-drift">AWS managed-service version drift<a class="headerlink" href="#aws-managed-service-version-drift" title="Permanent link">&para;</a></h1>
+<p>A daily, read-only inventory of the AWS managed services this deployment runs,
+answering one question a console tour cannot answer cheaply: <strong>is any managed
+database or cache on a major version AWS is about to stop supporting, and
+when?</strong></p>
+<p>The scanner lives in
+<a href="../../../mojo/apps/aws/services/version_drift.py"><code>mojo/apps/aws/services/version_drift.py</code></a>;
+the schedule is <code>mojo/apps/aws/cronjobs.py</code> and the work is
+<code>mojo/apps/aws/asyncjobs.py</code>.</p>
+<h2 id="what-is-inventoried">What is inventoried<a class="headerlink" href="#what-is-inventoried" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>account type</th>
-<th>CloudWatch namespace</th>
-<th>Resources discovered by</th>
+<th>Service</th>
+<th>Unit</th>
+<th>Upgrade signal</th>
+<th>End-of-life date</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>ec2</code></td>
-<td><code>AWS/EC2</code></td>
-<td><code>ec2:DescribeInstances</code></td>
+<td>RDS (non-Aurora)</td>
+<td>DB instance</td>
+<td><code>ValidUpgradeTarget</code> entries with <code>IsMajorVersionUpgrade</code></td>
+<td><code>DescribeDBMajorEngineVersions</code> standard support</td>
 </tr>
 <tr>
-<td><code>rds</code></td>
-<td><code>AWS/RDS</code></td>
-<td><code>rds:DescribeDBInstances</code></td>
+<td>Aurora</td>
+<td>DB <strong>cluster</strong></td>
+<td>same</td>
+<td>same</td>
 </tr>
 <tr>
-<td><code>redis</code></td>
-<td><code>AWS/ElastiCache</code></td>
-<td><code>elasticache:DescribeCacheClusters</code></td>
+<td>ElastiCache</td>
+<td>replication group (or standalone cluster)</td>
+<td>a higher major in <code>DescribeCacheEngineVersions</code> <strong>for the same engine</strong></td>
+<td>none — see below</td>
 </tr>
 </tbody>
 </table>
-<p>The high-level <code>fetch()</code> method mirrors the metrics app API exactly — same
-<code>account</code> / <code>category</code> / <code>slugs</code> parameters, same <code>periods</code> + <code>data</code> response
-shape. Existing frontend chart components work without modification.</p>
-<hr />
-<h2 id="aws-iam-permissions-required">AWS IAM Permissions Required<a class="headerlink" href="#aws-iam-permissions-required" title="Permanent link">&para;</a></h2>
-<p>The effective IAM identity must have at minimum:</p>
+<p>Aurora member instances carry a <code>DBClusterIdentifier</code> and are skipped: the
+cluster is the upgrade unit, so counting the members too would report the same
+upgrade three times.</p>
+<h2 id="what-is-deliberately-not-done">What is deliberately NOT done<a class="headerlink" href="#what-is-deliberately-not-done" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>No autonomous apply.</strong> Nothing here ever calls <code>ModifyDBCluster</code>,
+  <code>ModifyDBInstance</code> or <code>ModifyReplicationGroup</code>. A major version upgrade is a
+  planned, tested change with downtime; the scanner's whole job is to make sure
+  a human decides it on time rather than late.</li>
+<li><strong>No ElastiCache end-of-life dates.</strong> The ElastiCache service model exposes
+  no lifecycle or deprecation member anywhere. Those findings carry
+  <code>deadline: null</code> and say so in their note. A hardcoded EOL table would be a
+  guess with a silent decay date, so there isn't one.</li>
+<li><strong>No minor-version reporting.</strong> RDS auto-minor-version-upgrade already
+  handles that, so a version whose only upgrade targets are minor is not a
+  finding at all.</li>
+<li><strong>No AMI / EC2 image leg</strong>, and no "newest AMI" resolution. Deferred.</li>
+</ul>
+<h2 id="standard-support-vs-extended-support">Standard support vs extended support<a class="headerlink" href="#standard-support-vs-extended-support" title="Permanent link">&para;</a></h2>
+<p>The single most important detail in this feature. <code>DescribeDBMajorEngineVersions</code>
+returns <code>SupportedEngineLifecycles[]</code>, and <strong>Aurora PostgreSQL returns two
+entries</strong>:</p>
+<table>
+<thead>
+<tr>
+<th><code>LifecycleSupportName</code></th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>open-source-rds-standard-support</code></td>
+<td>AWS maintains the major version. <strong>This is the deadline.</strong></td>
+</tr>
+<tr>
+<td><code>open-source-rds-extended-support</code></td>
+<td>Paid extension, roughly three years later.</td>
+</tr>
+</tbody>
+</table>
+<p>The scanner selects the standard entry <strong>by name</strong>. A <code>max()</code> over the two
+would report the deadline about three years late — a silent wrong answer on the
+one output this feature exists to produce. The extended date is carried
+separately as <code>extended_deadline</code>, purely as context. When no standard entry
+exists, <code>deadline</code> is <code>null</code>; it never falls back to extended.</p>
+<h2 id="the-event-contract">The event contract<a class="headerlink" href="#the-event-contract" title="Permanent link">&para;</a></h2>
+<p>One event per run, at most, filed through
+<code>mojo.apps.incident.reporter.report_event</code> (not <code>record_event</code> — only
+<code>report_event</code> calls <code>Event.publish()</code>, which is what runs the rules engine).</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>category</code></td>
+<td><code>system:health:aws_versions</code></td>
+</tr>
+<tr>
+<td><code>scope</code></td>
+<td><code>aws:versions</code></td>
+</tr>
+<tr>
+<td><code>hostname</code></td>
+<td>the deployment slug (<code>AWS_MONITORING_NAME</code>, else the <code>BASE_URL</code> host)</td>
+</tr>
+<tr>
+<td><code>metadata.findings</code></td>
+<td>the finding rows</td>
+</tr>
+<tr>
+<td><code>metadata.warnings</code></td>
+<td>APIs that were denied, by exact IAM action</td>
+</tr>
+</tbody>
+</table>
+<p>Each finding row:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;Version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2012-10-17&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;Statement&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="p">{</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">      </span><span class="nt">&quot;Effect&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Allow&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">      </span><span class="nt">&quot;Action&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">        </span><span class="s2">&quot;cloudwatch:GetMetricStatistics&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">        </span><span class="s2">&quot;ec2:DescribeInstances&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">        </span><span class="s2">&quot;rds:DescribeDBInstances&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">        </span><span class="s2">&quot;elasticache:DescribeCacheClusters&quot;</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">      </span><span class="p">],</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">      </span><span class="nt">&quot;Resource&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;*&quot;</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span><span class="p">]</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="p">}</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;rds-cluster&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;resource_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;prod-aurora&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">&quot;engine&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;aurora-postgresql&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">&quot;current_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;13.12&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">&quot;available_major&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;16.1&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">&quot;deadline&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2027-02-28T00:00:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="nt">&quot;extended_deadline&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2030-02-28T00:00:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="nt">&quot;days_remaining&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">60</span><span class="p">,</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span><span class="nt">&quot;release_notes_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://docs.aws.amazon.com/...&quot;</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="p">}</span>
 </code></pre></div>
-<p>Metric reads require no new Django settings. <code>CloudWatchHelper</code> uses a complete
-<code>AWS_KEY</code> / <code>AWS_SECRET</code> pair when configured; when both are empty it follows
-boto3's environment, profile, container and instance/task-role credential
-chain. A partial pair is rejected. <code>AWS_REGION</code> selects the region. SNS alarm
-ingestion is configured separately with the exact-topic allowlist below.</p>
-<hr />
+<h3 id="two-categories-on-purpose">Two categories, on purpose<a class="headerlink" href="#two-categories-on-purpose" title="Permanent link">&para;</a></h3>
+<p>The <strong>event</strong> category is <code>system:health:aws_versions</code>, so the finding appears
+on <code>/api/incident/health/summary</code> next to the other subsystem rows. The
+<strong>RuleSet</strong> category is <code>aws:versions</code>, matched through the event's <code>scope</code>
+(<code>Event.publish()</code> looks up by scope first, then by category) — exactly how the
+CloudWatch alarm policy is wired.</p>
+<p>They differ because <code>mojo/apps/incident/cronjobs.py</code> bootstraps the default
+health rules only when they are absent, and a RuleSet sitting anywhere in the
+<code>system:health:</code> namespace used to satisfy that guard. Keeping the RuleSet on
+<code>aws:versions</code> means it can never suppress <code>Health - Runner Down</code>. (The guard
+itself now matches the exact rule-set names, so both halves are safe.)</p>
+<h3 id="level-scale">Level scale<a class="headerlink" href="#level-scale" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Everything is current. <strong>No event is filed.</strong></td>
+</tr>
+<tr>
+<td>4</td>
+<td>An API was denied, so the inventory is incomplete.</td>
+</tr>
+<tr>
+<td>5</td>
+<td>A major upgrade is available with no near deadline.</td>
+</tr>
+<tr>
+<td>8</td>
+<td>A published standard-support deadline falls inside <code>AWS_VERSION_DRIFT_DEADLINE_DAYS</code>.</td>
+</tr>
+<tr>
+<td>10</td>
+<td>The deadline has already passed.</td>
+</tr>
+</tbody>
+</table>
+<p>Level 1 files nothing deliberately. The catch-all RuleSet matches <code>Level &gt;= 1</code>
+and has no handler, and <code>Event.publish()</code> creates an Incident whenever a
+RuleSet matched — so a level-1 "all clear" would manufacture a permanent
+Incident in the operator's queue on every single run. Liveness is already
+covered by the cron heartbeats <code>aws-check --section cron</code> reads.</p>
+<h2 id="the-opt-in-ruleset-and-the-board-item">The opt-in RuleSet and the board item<a class="headerlink" href="#the-opt-in-ruleset-and-the-board-item" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.incident.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">RuleSet</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">ensure_aws_version_rules</span><span class="p">()</span>
+</code></pre></div>
+<p>or <code>python manage.py aws-check --apply --section rules</code>.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Name</td>
+<td><code>Health - AWS Version Drift</code></td>
+</tr>
+<tr>
+<td>Category</td>
+<td><code>aws:versions</code></td>
+</tr>
+<tr>
+<td>Rule</td>
+<td><code>level &gt;= 5</code> — a level-1 event can never open a ticket</td>
+</tr>
+<tr>
+<td>Handler</td>
+<td><code>notify://perm@manage_security,ticket://?priority=8&amp;category=aws-version-drift&amp;maestro=1</code></td>
+</tr>
+</tbody>
+</table>
+<p>It is <strong>not</strong> part of <code>RuleSet.ensure_default_rules()</code>; like the CloudWatch
+policy it stays opt-in so non-AWS deployments never get it.</p>
+<p><code>maestro=1</code> makes <code>TicketHandler</code> push the Ticket to the Maestro integration's
+default board, so the upgrade lands as a tracked work item and the Ticket
+itself is the approval artifact — approving the upgrade is closing the item.</p>
+<blockquote>
+<p><strong><code>MAESTRO_API_KEY</code> is a precondition for the board item.</strong>
+<code>TicketHandler._push_to_maestro</code> swallows <code>maestro_sync.get_config()</code>
+failures. With the key unset you get a perfectly good local Ticket and a
+<em>silently absent</em> board item. If you expect the item and it is not there,
+check the key first.</p>
+</blockquote>
+<h3 id="escalation-on-later-runs">Escalation on later runs<a class="headerlink" href="#escalation-on-later-runs" title="Permanent link">&para;</a></h3>
+<p><code>TicketHandler</code>'s reuse branch adds only a "Recurring incident #N" note; it
+touches neither <code>description</code> nor <code>priority</code>, and <code>Ticket</code>'s Maestro sync fires
+only from REST saves. So the asyncjob updates the open drift ticket itself —
+rewriting the description with the current findings, raising <code>priority</code> to the
+event level once it passes 8, and enqueueing the Maestro sync directly.
+Without that the board item would stay frozen at whatever the first run said
+while the deadline approached, which is the opposite of the point.</p>
+<h2 id="schedule">Schedule<a class="headerlink" href="#schedule" title="Permanent link">&para;</a></h2>
+<p><code>@schedule(minutes="0", hours="7")</code> — <strong>daily</strong>, gated on
+<code>AWS_VERSION_DRIFT_ENABLED</code>. <code>mojo.apps.aws</code> is in <code>INSTALLED_APPS</code>, so
+<code>cron.load_app_cron()</code> discovers the module with no registration step.</p>
+<p>Daily rather than monthly on purpose: <code>cron.run_scheduled_functions</code> has no
+per-function <code>try</code> (one sibling raising aborts the batch), and
+<code>find_scheduled_functions</code> is pure wall-clock matching with no last-run state
+and no catch-up. A monthly single-minute window would be the most
+miss-sensitive schedule in the codebase guarding the slowest-moving deadline —
+one bad tick costs 30 days. The scan is a handful of read-only API calls and
+the job is idempotent.</p>
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
 <th>Default</th>
-<th>Description</th>
+<th>Meaning</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>AWS_KEY</code></td>
-<td>—</td>
-<td>AWS access key ID</td>
+<td><code>AWS_VERSION_DRIFT_ENABLED</code></td>
+<td><code>False</code></td>
+<td>Arms the daily cron. File-only (<code>settings.get_static</code>).</td>
 </tr>
 <tr>
-<td><code>AWS_SECRET</code></td>
-<td>—</td>
-<td>AWS secret access key</td>
-</tr>
-<tr>
-<td><code>AWS_REGION</code></td>
-<td><code>us-east-1</code></td>
-<td>AWS region for all CloudWatch calls</td>
-</tr>
-<tr>
-<td><code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code></td>
-<td><code>[]</code></td>
-<td>Static exact SNS topic ARN allowlist for alarm ingestion; empty denies all topics</td>
+<td><code>AWS_VERSION_DRIFT_DEADLINE_DAYS</code></td>
+<td><code>180</code></td>
+<td>A standard-support deadline this close (or closer) raises the event to level 8. File-only.</td>
 </tr>
 </tbody>
 </table>
-<hr />
-<h2 id="using-cloudwatchhelper-directly">Using <code>CloudWatchHelper</code> Directly<a class="headerlink" href="#using-cloudwatchhelper-directly" title="Permanent link">&para;</a></h2>
-<h3 id="instantiation">Instantiation<a class="headerlink" href="#instantiation" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.aws</span><span class="w"> </span><span class="kn">import</span> <span class="n">CloudWatchHelper</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># Uses a complete settings pair, or boto3&#39;s default credential chain</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">cw</span> <span class="o">=</span> <span class="n">CloudWatchHelper</span><span class="p">()</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># Or pass explicit credentials for multi-account scenarios</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">cw</span> <span class="o">=</span> <span class="n">CloudWatchHelper</span><span class="p">(</span><span class="n">access_key</span><span class="o">=</span><span class="s2">&quot;AKIA...&quot;</span><span class="p">,</span> <span class="n">secret_key</span><span class="o">=</span><span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="n">region</span><span class="o">=</span><span class="s2">&quot;eu-west-1&quot;</span><span class="p">)</span>
-</code></pre></div>
-<p>Boto3 clients are created lazily — no network call happens at instantiation.</p>
-<hr />
-<h3 id="high-level-fetch">High-Level <code>fetch()</code><a class="headerlink" href="#high-level-fetch" title="Permanent link">&para;</a></h3>
-<p>The primary interface. Mirrors <code>metrics.fetch()</code> in signature and response shape.</p>
-<blockquote>
-<p><strong>EC2 <code>memory</code> and <code>disk</code> require the CloudWatch Agent.</strong> These categories use
-the <code>CWAgent</code> namespace, which is only populated when the
-<a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Install-CloudWatch-Agent.html">CloudWatch Agent</a>
-is installed and running on the instance. Instances without the agent will
-return all-zero values for these categories.</p>
-</blockquote>
-<p>Slugs in the response are <strong>friendly names</strong>, not raw AWS IDs:</p>
+<p><code>AWS_REGION</code>, <code>AWS_KEY</code>, <code>AWS_SECRET</code> and <code>AWS_MONITORING_NAME</code> are shared with
+the rest of the AWS app — see <a href="../credentials/">credentials.md</a>.</p>
+<h2 id="credentials-and-iam">Credentials and IAM<a class="headerlink" href="#credentials-and-iam" title="Permanent link">&para;</a></h2>
+<p>Two failure modes, treated very differently:</p>
 <ul>
-<li><strong>EC2</strong>: the instance's <code>Name</code> tag value (e.g. <code>"web-server-1"</code>), falling back to the instance ID when no <code>Name</code> tag is set.</li>
-<li><strong>RDS / ElastiCache</strong>: the identifier is already human-readable (e.g. <code>"prod-postgres"</code>, <code>"prod-redis-001"</code>), so it is used as-is.</li>
+<li><strong>No credentials at all</strong> (<code>NoCredentialsError</code>, <code>PartialCredentialsError</code>,
+  an unreachable endpoint) → <code>status: "unavailable"</code>. The job logs and files
+  nothing. This is the normal state on every dev machine and in the test suite,
+  and the cron is off by default anyway.</li>
+<li><strong>Credentials present, one API denied</strong> (<code>ClientError</code>) → the exact missing
+  IAM action is recorded in <code>warnings</code>, the scan continues with partial
+  findings, and a <strong>level-4 event is still filed</strong>. Silence here would make a
+  correctly-locked-down deployment indistinguishable from "nothing is out of
+  date" — precisely the failure this feature exists to prevent.</li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">cw</span><span class="o">.</span><span class="n">fetch</span><span class="p">(</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">account</span><span class="o">=</span><span class="s2">&quot;ec2&quot;</span><span class="p">,</span>          <span class="c1"># resource type: &quot;ec2&quot;, &quot;rds&quot;, &quot;redis&quot;</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span>         <span class="c1"># metric shortname (see table below)</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="c1"># slugs omitted -&gt; all instances discovered automatically</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">granularity</span><span class="o">=</span><span class="s2">&quot;hours&quot;</span><span class="p">,</span>    <span class="c1"># &quot;minutes&quot;, &quot;hours&quot; (default), or &quot;days&quot;</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="n">stat</span><span class="o">=</span><span class="s2">&quot;avg&quot;</span><span class="p">,</span>             <span class="c1"># &quot;avg&quot; (default), &quot;max&quot;, &quot;min&quot;, or &quot;sum&quot;</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="p">)</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># result = {</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1">#     &quot;periods&quot;: [&quot;10:00&quot;, &quot;11:00&quot;, &quot;12:00&quot;],</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="c1">#     &quot;data&quot;: [</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="c1">#         {&quot;slug&quot;: &quot;web-server-1&quot;, &quot;values&quot;: [12.4, 15.1, 9.8]},</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="c1">#         {&quot;slug&quot;: &quot;api-server-2&quot;, &quot;values&quot;: [8.2,  9.1,  7.3]},</span>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="c1">#     ]</span>
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="c1"># }</span>
+<p>Least-privilege read actions:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>rds:DescribeDBClusters
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>rds:DescribeDBInstances
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>rds:DescribeDBEngineVersions
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>rds:DescribeDBMajorEngineVersions
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>elasticache:DescribeCacheClusters
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>elasticache:DescribeCacheEngineVersions
 </code></pre></div>
-<p>When only one slug is returned (or one slug was explicitly requested), <code>data</code> is
-a plain dict instead of a list — identical to the metrics app behaviour:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">cw</span><span class="o">.</span><span class="n">fetch</span><span class="p">(</span><span class="n">account</span><span class="o">=</span><span class="s2">&quot;ec2&quot;</span><span class="p">,</span> <span class="n">category</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span> <span class="n">slugs</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;web-server-1&quot;</span><span class="p">])</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># result = {</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1">#     &quot;periods&quot;: [&quot;10:00&quot;, &quot;11:00&quot;, &quot;12:00&quot;],</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1">#     &quot;data&quot;: {&quot;slug&quot;: &quot;web-server-1&quot;, &quot;values&quot;: [12.4, 15.1, 9.8]}</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1"># }</span>
+<p><code>rds:DescribeDBMajorEngineVersions</code> is also guarded with <code>hasattr</code>, so an older
+botocore degrades to <code>deadline: null</code> instead of raising.</p>
+<h2 id="running-it-by-hand">Running it by hand<a class="headerlink" href="#running-it-by-hand" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--check<span class="w"> </span>--section<span class="w"> </span>versions
 </code></pre></div>
-<p>The <code>slugs</code> parameter accepts <strong>either</strong> the friendly name <strong>or</strong> the raw AWS ID
-— both are resolved to the underlying instance ID before the CloudWatch call is
-made. This means you can pass <code>"web-server-1"</code> or <code>"i-0abc1234"</code> and get the
-same result.</p>
-<p>Buckets with no CloudWatch data points are filled with <code>0.0</code> so <code>periods</code> and
-<code>values</code> are always the same length and cover the full requested range.</p>
-<hr />
-<h3 id="fetch-parameters"><code>fetch()</code> Parameters<a class="headerlink" href="#fetch-parameters" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Parameter</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>account</code></td>
-<td>str</td>
-<td>required</td>
-<td>Resource type: <code>ec2</code>, <code>rds</code>, <code>redis</code></td>
-</tr>
-<tr>
-<td><code>category</code></td>
-<td>str</td>
-<td>required</td>
-<td>Metric shortname (see table below)</td>
-</tr>
-<tr>
-<td><code>slugs</code></td>
-<td>list or str</td>
-<td><code>None</code></td>
-<td>Friendly names or AWS IDs. Omit to fetch all instances automatically.</td>
-</tr>
-<tr>
-<td><code>dt_start</code></td>
-<td>datetime</td>
-<td>24 h ago</td>
-<td>Start of range (UTC)</td>
-</tr>
-<tr>
-<td><code>dt_end</code></td>
-<td>datetime</td>
-<td>now (UTC)</td>
-<td>End of range (UTC)</td>
-</tr>
-<tr>
-<td><code>granularity</code></td>
-<td>str</td>
-<td><code>"hours"</code></td>
-<td><code>"minutes"</code>, <code>"hours"</code>, or <code>"days"</code></td>
-</tr>
-<tr>
-<td><code>stat</code></td>
-<td>str</td>
-<td><code>"avg"</code></td>
-<td><code>"avg"</code>, <code>"max"</code>, <code>"min"</code>, or <code>"sum"</code></td>
-</tr>
-</tbody>
-</table>
-<hr />
-<h3 id="category-reference">Category Reference<a class="headerlink" href="#category-reference" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>category</th>
-<th>EC2</th>
-<th>RDS</th>
-<th>Redis</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>cpu</code></td>
-<td>CPUUtilization</td>
-<td>CPUUtilization</td>
-<td>CPUUtilization</td>
-</tr>
-<tr>
-<td><code>net_in</code></td>
-<td>NetworkIn</td>
-<td>NetworkReceiveThroughput</td>
-<td>NetworkBytesIn</td>
-</tr>
-<tr>
-<td><code>net_out</code></td>
-<td>NetworkOut</td>
-<td>NetworkTransmitThroughput</td>
-<td>NetworkBytesOut</td>
-</tr>
-<tr>
-<td><code>conns</code></td>
-<td>—</td>
-<td>DatabaseConnections</td>
-<td>CurrConnections</td>
-</tr>
-<tr>
-<td><code>free_storage</code></td>
-<td>—</td>
-<td>FreeStorageSpace</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>free_memory</code></td>
-<td>—</td>
-<td>FreeableMemory</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>read_iops</code></td>
-<td>—</td>
-<td>ReadIOPS</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>write_iops</code></td>
-<td>—</td>
-<td>WriteIOPS</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>read_latency</code></td>
-<td>—</td>
-<td>ReadLatency</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>write_latency</code></td>
-<td>—</td>
-<td>WriteLatency</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>cache_memory</code></td>
-<td>—</td>
-<td>—</td>
-<td>BytesUsedForCache</td>
-</tr>
-<tr>
-<td><code>cache_hits</code></td>
-<td>—</td>
-<td>—</td>
-<td>CacheHits</td>
-</tr>
-<tr>
-<td><code>cache_misses</code></td>
-<td>—</td>
-<td>—</td>
-<td>CacheMisses</td>
-</tr>
-<tr>
-<td><code>replication_lag</code></td>
-<td>—</td>
-<td>—</td>
-<td>ReplicationLag</td>
-</tr>
-<tr>
-<td><code>disk_read</code></td>
-<td>DiskReadOps</td>
-<td>—</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>disk_write</code></td>
-<td>DiskWriteOps</td>
-<td>—</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>status_check</code></td>
-<td>StatusCheckFailed</td>
-<td>—</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>memory</code></td>
-<td>mem_used_percent ¹</td>
-<td>—</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>disk</code></td>
-<td>disk_used_percent ¹</td>
-<td>—</td>
-<td>—</td>
-</tr>
-</tbody>
-</table>
-<p>¹ Requires the CloudWatch Agent installed on the instance. Pushed to the <code>CWAgent</code>
-namespace, not <code>AWS/EC2</code>. Instances without the agent return all-zero values.
-The <code>disk</code> category targets the root filesystem (<code>path="/"</code>).</p>
-<p>A <code>ValueError</code> is raised when <code>category</code> is not valid for the given <code>account</code>
-type (e.g. <code>cache_hits</code> on <code>ec2</code>). The REST layer converts this to a <code>400</code>.</p>
-<hr />
-<h3 id="granularity-and-period-labels">Granularity and Period Labels<a class="headerlink" href="#granularity-and-period-labels" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>granularity</th>
-<th>period_seconds</th>
-<th>Label format</th>
-<th>Example</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>minutes</code></td>
-<td>60</td>
-<td><code>HH:MM</code></td>
-<td><code>14:37</code></td>
-</tr>
-<tr>
-<td><code>hours</code></td>
-<td>3600</td>
-<td><code>HH:MM</code></td>
-<td><code>14:00</code></td>
-</tr>
-<tr>
-<td><code>days</code></td>
-<td>86400</td>
-<td><code>YYYY-MM-DD</code></td>
-<td><code>2025-06-01</code></td>
-</tr>
-</tbody>
-</table>
-<hr />
-<h3 id="resource-discovery">Resource Discovery<a class="headerlink" href="#resource-discovery" title="Permanent link">&para;</a></h3>
-<p><code>fetch()</code> calls these automatically when <code>slugs</code> is omitted. You can also call
-them directly:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Returns [{id, slug}, ...] — slug is the friendly chart label</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># EC2: slug = Name tag, or instance ID if no Name tag is set</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># RDS / ElastiCache: slug = id (already human-readable)</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">resources</span> <span class="o">=</span> <span class="n">cw</span><span class="o">.</span><span class="n">list_resource_slugs</span><span class="p">(</span><span class="s2">&quot;ec2&quot;</span><span class="p">)</span>   <span class="c1"># or &quot;rds&quot; / &quot;redis&quot;</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1"># Returns [{id, name, state, instance_type, private_ip, public_ip}, ...]</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">instances</span> <span class="o">=</span> <span class="n">cw</span><span class="o">.</span><span class="n">list_ec2_instances</span><span class="p">()</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># Returns [{id, engine, status, instance_class, endpoint}, ...]</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="n">dbs</span> <span class="o">=</span> <span class="n">cw</span><span class="o">.</span><span class="n">list_rds_instances</span><span class="p">()</span>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="c1"># Returns [{id, engine, status, node_type, num_nodes}, ...]</span>
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="n">clusters</span> <span class="o">=</span> <span class="n">cw</span><span class="o">.</span><span class="n">list_elasticache_clusters</span><span class="p">()</span>
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="c1"># Convenience — returns a plain list of raw AWS ID strings</span>
-<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="n">ids</span> <span class="o">=</span> <span class="n">cw</span><span class="o">.</span><span class="n">list_instance_ids</span><span class="p">(</span><span class="s2">&quot;ec2&quot;</span><span class="p">)</span>   <span class="c1"># or &quot;rds&quot; / &quot;redis&quot;</span>
-</code></pre></div>
-<p>All three list methods use boto3 paginators and handle large accounts correctly.</p>
-<hr />
-<h3 id="namespace-resolution">Namespace Resolution<a class="headerlink" href="#namespace-resolution" title="Permanent link">&para;</a></h3>
-<p>Most categories use a fixed namespace per account type (e.g. <code>AWS/EC2</code>, <code>AWS/RDS</code>).
-A small number of categories require a different namespace — <code>resolve_namespace()</code>
-handles this transparently inside <code>fetch()</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.aws.cloudwatch</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">resolve_namespace</span><span class="p">,</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="n">CATEGORY_NAMESPACE_OVERRIDE</span><span class="p">,</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">CATEGORY_EXTRA_DIMENSIONS</span><span class="p">,</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">)</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="n">resolve_namespace</span><span class="p">(</span><span class="s2">&quot;ec2&quot;</span><span class="p">,</span> <span class="s2">&quot;cpu&quot;</span><span class="p">)</span>     <span class="c1"># -&gt; &quot;AWS/EC2&quot;   (default)</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">resolve_namespace</span><span class="p">(</span><span class="s2">&quot;ec2&quot;</span><span class="p">,</span> <span class="s2">&quot;memory&quot;</span><span class="p">)</span>  <span class="c1"># -&gt; &quot;CWAgent&quot;   (override)</span>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="n">resolve_namespace</span><span class="p">(</span><span class="s2">&quot;ec2&quot;</span><span class="p">,</span> <span class="s2">&quot;disk&quot;</span><span class="p">)</span>    <span class="c1"># -&gt; &quot;CWAgent&quot;   (override)</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>
-<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="c1"># The override table (for reference):</span>
-<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="c1"># CATEGORY_NAMESPACE_OVERRIDE = {</span>
-<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="c1">#     (&quot;ec2&quot;, &quot;memory&quot;): &quot;CWAgent&quot;,</span>
-<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="c1">#     (&quot;ec2&quot;, &quot;disk&quot;):   &quot;CWAgent&quot;,</span>
-<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="c1"># }</span>
-<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>
-<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="c1"># Some CWAgent categories require extra fixed dimensions beyond the primary</span>
-<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="c1"># instance dimension.  EC2 disk needs path=&quot;/&quot; to target the root filesystem.</span>
-<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="c1"># CATEGORY_EXTRA_DIMENSIONS = {</span>
-<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="c1">#     (&quot;ec2&quot;, &quot;disk&quot;): [{&quot;Name&quot;: &quot;path&quot;, &quot;Value&quot;: &quot;/&quot;}],</span>
-<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="c1"># }</span>
-</code></pre></div>
-<p>To add support for a new category that lives in a non-default namespace, add an
-entry to <code>CATEGORY_NAMESPACE_OVERRIDE</code>. If it also requires extra fixed dimensions
-(e.g. a filesystem path), add those to <code>CATEGORY_EXTRA_DIMENSIONS</code>.</p>
-<hr />
-<h3 id="low-level-get_metric">Low-Level <code>get_metric()</code><a class="headerlink" href="#low-level-get_metric" title="Permanent link">&para;</a></h3>
-<p>For namespaces not covered by the three convenience wrappers, call <code>get_metric</code>
-directly:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">data</span> <span class="o">=</span> <span class="n">cw</span><span class="o">.</span><span class="n">get_metric</span><span class="p">(</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;AWS/Lambda&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="n">metric_name</span><span class="o">=</span><span class="s2">&quot;Invocations&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="n">dimensions</span><span class="o">=</span><span class="p">[{</span><span class="s2">&quot;Name&quot;</span><span class="p">:</span> <span class="s2">&quot;FunctionName&quot;</span><span class="p">,</span> <span class="s2">&quot;Value&quot;</span><span class="p">:</span> <span class="s2">&quot;my-lambda&quot;</span><span class="p">}],</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="n">dt_start</span><span class="o">=</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="p">(</span><span class="mi">2025</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">dt_end</span><span class="o">=</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="p">(</span><span class="mi">2025</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="n">period_seconds</span><span class="o">=</span><span class="mi">3600</span><span class="p">,</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="n">stat</span><span class="o">=</span><span class="s2">&quot;Sum&quot;</span><span class="p">,</span>
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="p">)</span>
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="c1"># Returns: {periods, values, slug, namespace, dimension}</span>
-</code></pre></div>
-<hr />
-<h2 id="module-level-helpers">Module-Level Helpers<a class="headerlink" href="#module-level-helpers" title="Permanent link">&para;</a></h2>
-<p>These are exported from <code>mojo/helpers/aws/cloudwatch.py</code> and used internally
-by the REST layer.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.helpers.aws.cloudwatch</span><span class="w"> </span><span class="kn">import</span> <span class="n">resolve_metric</span><span class="p">,</span> <span class="n">resolve_namespace</span><span class="p">,</span> <span class="n">granularity_to_seconds</span><span class="p">,</span> <span class="n">normalize_stat</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">resolve_metric</span><span class="p">(</span><span class="s2">&quot;rds&quot;</span><span class="p">,</span> <span class="s2">&quot;conns&quot;</span><span class="p">)</span>         <span class="c1"># -&gt; &quot;DatabaseConnections&quot;</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">resolve_metric</span><span class="p">(</span><span class="s2">&quot;ec2&quot;</span><span class="p">,</span> <span class="s2">&quot;memory&quot;</span><span class="p">)</span>        <span class="c1"># -&gt; &quot;mem_used_percent&quot;</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="n">resolve_metric</span><span class="p">(</span><span class="s2">&quot;ec2&quot;</span><span class="p">,</span> <span class="s2">&quot;disk&quot;</span><span class="p">)</span>          <span class="c1"># -&gt; &quot;disk_used_percent&quot;</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="n">resolve_metric</span><span class="p">(</span><span class="s2">&quot;ec2&quot;</span><span class="p">,</span> <span class="s2">&quot;cache_hits&quot;</span><span class="p">)</span>    <span class="c1"># -&gt; raises ValueError</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="n">resolve_namespace</span><span class="p">(</span><span class="s2">&quot;ec2&quot;</span><span class="p">,</span> <span class="s2">&quot;cpu&quot;</span><span class="p">)</span>        <span class="c1"># -&gt; &quot;AWS/EC2&quot;</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="n">resolve_namespace</span><span class="p">(</span><span class="s2">&quot;ec2&quot;</span><span class="p">,</span> <span class="s2">&quot;memory&quot;</span><span class="p">)</span>     <span class="c1"># -&gt; &quot;CWAgent&quot;</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="n">resolve_namespace</span><span class="p">(</span><span class="s2">&quot;ec2&quot;</span><span class="p">,</span> <span class="s2">&quot;disk&quot;</span><span class="p">)</span>       <span class="c1"># -&gt; &quot;CWAgent&quot;</span>
-<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="n">granularity_to_seconds</span><span class="p">(</span><span class="s2">&quot;hours&quot;</span><span class="p">)</span>        <span class="c1"># -&gt; 3600</span>
-<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="n">normalize_stat</span><span class="p">(</span><span class="s2">&quot;max&quot;</span><span class="p">)</span>                  <span class="c1"># -&gt; &quot;Maximum&quot;</span>
-</code></pre></div>
-<hr />
-<h2 id="metric-rest-api">Metric REST API<a class="headerlink" href="#metric-rest-api" title="Permanent link">&para;</a></h2>
-<p>The two metric endpoints under the <code>aws</code> URL prefix require <code>manage_aws</code> — gated
-with <code>@md.requires_global_perms</code>, so the grant must be on the caller's
-<strong>global</strong> <code>User.permissions</code> (no group/member fallback; see
-<a href="../../core/permissions/#global-vs-group-scoped-permission-checks">Global vs Group-Scoped Permission Checks</a>):</p>
-<table>
-<thead>
-<tr>
-<th>Method</th>
-<th>URL</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>GET</code></td>
-<td><code>/api/aws/cloudwatch/resources</code></td>
-<td>List EC2, RDS, and ElastiCache resources with friendly names</td>
-</tr>
-<tr>
-<td><code>GET</code></td>
-<td><code>/api/aws/cloudwatch/fetch</code></td>
-<td>Time-series metric data (mirrors metrics/fetch)</td>
-</tr>
-</tbody>
-</table>
-<p>The <code>resources</code> endpoint now includes a <code>slug</code> field on every entry — the same
-friendly name that will appear in chart labels. Use this <code>slug</code> value (not the
-raw <code>id</code>) when targeting a specific instance via <code>fetch</code>'s <code>slugs</code> parameter.</p>
-<p>See the <a href="../../../web_developer/aws/cloudwatch/">web developer reference</a> for full
-request/response documentation.</p>
-<hr />
-<h2 id="sns-alarm-ingestion">SNS alarm ingestion<a class="headerlink" href="#sns-alarm-ingestion" title="Permanent link">&para;</a></h2>
-<p>For deployment-wide audit and create-missing setup, use
-<a href="../aws_check/"><code>python manage.py aws-check</code></a>. It enforces the required two-phase
-topic ARN allowlist before creating the HTTPS subscription or alarms.</p>
-<p>django-mojo can receive CloudWatch alarm state changes through SNS at:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>POST /api/aws/cloudwatch/sns/alarm
-</code></pre></div>
-<p>The endpoint is public because SNS cannot authenticate as a django-mojo User,
-but it is not anonymous in practice. Every envelope must have a valid AWS SNS
-signature and its <code>TopicArn</code> must exactly match a static deployment allowlist:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</span> <span class="o">=</span> <span class="p">[</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="s2">&quot;arn:aws:sns:us-east-1:123456789012:operations&quot;</span><span class="p">,</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="p">]</span>
-</code></pre></div>
-<p>An empty or missing list denies every topic. The SES <code>EmailDomain</code> topic fields
-are deliberately unrelated, and the alarm endpoint never honors
-<code>SNS_VALIDATION_BYPASS_DEBUG</code>. Subscription confirmation is accepted only when
-the signed confirmation URL is HTTPS on the matching AWS SNS service, carries
-the signed topic/token, does not redirect, and returns 2xx.</p>
-<p><code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code> is read as a static setting, so change it in
-deployment configuration and restart application processes when updating the
-allowlist. SNS envelopes are limited to 300 KiB.</p>
-<p>There is a sibling receiver for GuardDuty findings at
-<code>POST /api/aws/guardduty/sns/finding</code> (see
-<a href="../guardduty/">aws/guardduty.md</a>). Both share the same signed-SNS preamble, but
-their topic allowlists are <strong>independent</strong>: a topic in
-<code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code> cannot deliver findings — or confirm a
-subscription — on the GuardDuty endpoint, and vice versa. Give each signal its
-own topic.</p>
-<h3 id="incident-policy-and-lifecycle">Incident policy and lifecycle<a class="headerlink" href="#incident-policy-and-lifecycle" title="Permanent link">&para;</a></h3>
-<p>Alarm events use <code>scope="aws:cloudwatch"</code> and
-<code>category="aws:cloudwatch:alarm"</code>. The global <code>*</code> RuleSet is intentionally not
-consulted: receiving alarms is safe to enable before choosing an escalation
-policy. Add an explicit RuleSet to create incidents or tickets:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">mojo.apps.incident.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">BundleBy</span><span class="p">,</span> <span class="n">RuleSet</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">RuleSet</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">category</span><span class="o">=</span><span class="s2">&quot;aws:cloudwatch&quot;</span><span class="p">,</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;Production CloudWatch alarms&quot;</span><span class="p">,</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="n">bundle_by</span><span class="o">=</span><span class="n">BundleBy</span><span class="o">.</span><span class="n">MODEL_NAME_AND_ID</span><span class="p">,</span>
-<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    <span class="n">bundle_minutes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>    <span class="n">handler</span><span class="o">=</span><span class="s2">&quot;ticket://?priority=8&amp;category=operations&amp;board=3&quot;</span><span class="p">,</span>
-<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="p">)</span>
-</code></pre></div>
-<p><code>MODEL_NAME_AND_ID</code> groups one active alarm occurrence. <code>OK</code> resolves that
-machine incident, records recovery on its tickets and synced Maestro item, and
-clears the occurrence; a later <code>ALARM</code> opens a new occurrence. Tickets and
-Maestro items remain human-owned and are not force-closed. <code>INSUFFICIENT_DATA</code>
-is recorded on the active incident without resolving it.</p>
-<p>SNS and logical-transition identities are stored durably. Replays resume any
-incomplete handler dispatch with deterministic Job keys but do not create a
-second Event, Incident, Ticket, or Maestro item. Older out-of-order transitions
-remain audit events and cannot regress the alarm's current state.</p>
-<p>Persisted metadata is bounded to the alarm identity, account/region, states,
-reason/time, alarm type, and metric namespace/name/dimensions. Raw SNS bodies,
-alarm actions/descriptions, log query text, and unexpected credential-like
-fields are not stored.</p>
-<h3 id="durable-data-model">Durable data model<a class="headerlink" href="#durable-data-model" title="Permanent link">&para;</a></h3>
-<p><code>CloudWatchAlarm</code> stores the SHA-256 identity key, exact alarm ARN, current
-state/time, and pointers to the active Incident and opening transition.
-<code>CloudWatchAlarmTransition</code> stores the topic/message identity, old/new states,
-state-change time, linked Event/Incident, and durable handler-dispatch status.
-Unique constraints cover both SNS message identity and logical transition
-identity.</p>
-<p>Both models are read-only through their generated REST surfaces
-(<code>CAN_CREATE</code>, <code>CAN_UPDATE</code>, and <code>CAN_DELETE</code> are false). Their <code>RestMeta</code>
-view permissions require <code>manage_aws</code> or <code>security</code>; callers cannot mutate
-lifecycle rows through the API.</p>
-<h3 id="aws-setup-and-verification">AWS setup and verification<a class="headerlink" href="#aws-setup-and-verification" title="Permanent link">&para;</a></h3>
-<ol>
-<li>Create a dedicated SNS topic and place its exact ARN in
-   <code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code>. Its topic policy should grant
-   <code>sns:Publish</code> only to the intended CloudWatch alarm sources/accounts; do not
-   reuse a topic that application principals can publish to.</li>
-<li>Subscribe the HTTPS endpoint above and wait for the signed confirmation to
-   succeed.</li>
-<li>Configure the CloudWatch alarm action to publish to that topic.</li>
-<li>Add an explicit CloudWatch RuleSet if the signal should become an incident,
-   ticket, or Maestro item. Register Maestro first with
-   <code>python manage.py register_maestro</code> when using <code>ticket://?board=&lt;id&gt;</code>.</li>
-<li>On a disposable/test alarm, verify both directions through AWS rather than
-   forging an SNS signature:</li>
-</ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>aws<span class="w"> </span>cloudwatch<span class="w"> </span>set-alarm-state<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span>--alarm-name<span class="w"> </span>django-mojo-ingress-test<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span>--state-value<span class="w"> </span>ALARM<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span>--state-reason<span class="w"> </span><span class="s2">&quot;django-mojo synthetic ingress test&quot;</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>aws<span class="w"> </span>cloudwatch<span class="w"> </span>set-alarm-state<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span>--alarm-name<span class="w"> </span>django-mojo-ingress-test<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">  </span>--state-value<span class="w"> </span>OK<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">  </span>--state-reason<span class="w"> </span><span class="s2">&quot;django-mojo synthetic recovery test&quot;</span>
-</code></pre></div>
-<h2 id="module-layout">Module Layout<a class="headerlink" href="#module-layout" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>mojo/helpers/aws/cloudwatch.py       # CloudWatchHelper, mapping tables, module helpers
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>mojo/apps/aws/rest/cloudwatch.py     # REST endpoints (wired via rest/__init__.py)
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>mojo/apps/aws/rest/sns.py            # signed SNS/CloudWatch receiver
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>mojo/apps/aws/services/sns.py        # SNS verification and confirmation
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>mojo/apps/aws/services/cloudwatch_alarms.py  # normalization and lifecycle
-</code></pre></div>
-<p>Metric reads remain live-only. Alarm ingestion stores internal
-<code>CloudWatchAlarm</code> and <code>CloudWatchAlarmTransition</code> lifecycle rows.</p>
-<hr />
-<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
-<p>Tests live in <code>tests/test_aws/cloudwatch.py</code> and
-<code>tests/test_aws/alarm_ingress.py</code>.</p>
-<p>Permission and parameter validation tests always run (no AWS credentials needed).
-Live metric tests check for <code>AWS_KEY</code> in the live server settings and call
-<code>raise TestitSkip(...)</code> when credentials are absent — the same pattern used by
-email/phone verification gate tests.</p>
-<p>Run in your Django project environment:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>python manage.py testit test_aws.cloudwatch
-</code></pre></div>
+<p>The <code>versions</code> section is opt-in (never part of a default run) and can only
+report <code>pass</code>, <code>warn</code> or <code>pending</code> — never <code>fail</code> — so a first run before the
+IAM grant is in place cannot exit 1 in CI. See
+<a href="../aws_check/">aws_check.md</a>.</p>
 
 
 

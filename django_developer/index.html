@@ -3943,6 +3943,10 @@
 <td><a href="helpers/">helpers/</a></td>
 <td>logit, dates, settings, settings reference keys, crypto, request, response, redis, and other utilities</td>
 </tr>
+<tr>
+<td><a href="deploy/">deploy/</a></td>
+<td>Node deployment tooling that runs before Django settings exist — S3 config sync and the read-only AWS account audit</td>
+</tr>
 </tbody>
 </table>
 <h2 id="built-in-apps">Built-in Apps<a class="headerlink" href="#built-in-apps" title="Permanent link">&para;</a></h2>
@@ -3975,16 +3979,36 @@
 <td>AWS SES email, templates, mailboxes, inbound handling</td>
 </tr>
 <tr>
+<td><a href="aws/credentials/">aws/credentials.md</a></td>
+<td>AWS credential modes — static keys, ambient/instance-profile, and cross-account AssumeRole</td>
+</tr>
+<tr>
 <td><a href="aws/cloudwatch/">aws/cloudwatch.md</a></td>
 <td>CloudWatch monitoring — EC2, RDS, and ElastiCache metrics via boto3</td>
+</tr>
+<tr>
+<td><a href="aws/guardduty/">aws/guardduty.md</a></td>
+<td>GuardDuty findings via EventBridge/SNS — severity policy, dedupe and occurrence contract, bounded metadata, opt-in RuleSet</td>
 </tr>
 <tr>
 <td><a href="aws/aws_check/">aws/aws_check.md</a></td>
 <td>Audit and safely bootstrap AWS credentials, cron, S3, SES, SNS/CloudWatch and incident defaults</td>
 </tr>
 <tr>
+<td><a href="aws/s3/">aws/s3.md</a></td>
+<td>Bounded S3 inventory, verified public/private posture, private creation, and confirmed version-aware emptying</td>
+</tr>
+<tr>
+<td><a href="aws/version_drift/">aws/version_drift.md</a></td>
+<td>Daily RDS/Aurora and ElastiCache major-version drift inventory, support deadlines, and the opt-in ticket/board escalation</td>
+</tr>
+<tr>
 <td><a href="dnsman/">dnsman/</a></td>
 <td>Domains, DNS records across providers, WHOIS/privacy, and centrally-issued TLS certificates</td>
+</tr>
+<tr>
+<td><a href="edge/">edge/</a></td>
+<td>nginx vhosts as structured rows, and the node-side installer that lands certs + vhosts as one validated generation</td>
 </tr>
 <tr>
 <td><a href="jobs/">jobs/</a></td>

@@ -117,6 +117,22 @@
          <lastmod>2026-08-06</lastmod>
     </url>
     <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/aws/credentials/</loc>
+         <lastmod>2026-08-06</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/aws/guardduty/</loc>
+         <lastmod>2026-08-06</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/aws/s3/</loc>
+         <lastmod>2026-08-06</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/aws/version_drift/</loc>
+         <lastmod>2026-08-06</lastmod>
+    </url>
+    <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/chat/</loc>
          <lastmod>2026-08-06</lastmod>
     </url>
@@ -173,6 +189,10 @@
          <lastmod>2026-08-06</lastmod>
     </url>
     <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/deploy/</loc>
+         <lastmod>2026-08-06</lastmod>
+    </url>
+    <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/dnsman/</loc>
          <lastmod>2026-08-06</lastmod>
     </url>
@@ -202,6 +222,14 @@
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/django_developer/docit/knowledge/</loc>
+         <lastmod>2026-08-06</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/edge/</loc>
+         <lastmod>2026-08-06</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/django_developer/edge/webapps/</loc>
          <lastmod>2026-08-06</lastmod>
     </url>
     <url>
@@ -565,6 +593,14 @@
          <lastmod>2026-08-06</lastmod>
     </url>
     <url>
+         <loc>https://NativeMojo.github.io/django-mojo/web_developer/aws/guardduty/</loc>
+         <lastmod>2026-08-06</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/web_developer/aws/s3/</loc>
+         <lastmod>2026-08-06</lastmod>
+    </url>
+    <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/chat/</loc>
          <lastmod>2026-08-06</lastmod>
     </url>
@@ -602,6 +638,14 @@
     </url>
     <url>
          <loc>https://NativeMojo.github.io/django-mojo/web_developer/docit/</loc>
+         <lastmod>2026-08-06</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/web_developer/edge/</loc>
+         <lastmod>2026-08-06</lastmod>
+    </url>
+    <url>
+         <loc>https://NativeMojo.github.io/django-mojo/web_developer/edge/releases/</loc>
          <lastmod>2026-08-06</lastmod>
     </url>
     <url>

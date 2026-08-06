@@ -4447,6 +4447,16 @@ not authorize this endpoint.</p>
 <a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a><span class="p">}</span>
 </code></pre></div>
 <p>Rows are sorted by <code>category</code>. Only subsystems that have ever fired a health event appear — the list is self-discovering. An empty <code>data</code> array means no health events have been recorded yet.</p>
+<p>One extra category can appear here on AWS deployments that opt in:
+<code>system:health:aws_versions</code>, filed at most once a day when a managed RDS,
+Aurora or ElastiCache service has a major version upgrade available. Its
+<code>level</code> is 4 (the inventory was incomplete because an AWS API was denied), 5
+(upgrade available, no near deadline), 8 (AWS standard support ends soon) or
+10 (support has already ended). The finding rows themselves are in the
+event's metadata (<code>findings</code>, each with <code>resource_id</code>, <code>engine</code>,
+<code>current_version</code>, <code>available_major</code>, <code>deadline</code>, <code>extended_deadline</code> and
+<code>days_remaining</code>), so a UI can render the per-resource detail without a
+second call.</p>
 <p><strong>Optional <code>?prefix=</code> param</strong> — defaults to <code>system:health:</code>. Pass a different prefix to query other namespaced category roots:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>GET /api/incident/health/summary?prefix=custom:health:
 </code></pre></div>
@@ -4791,6 +4801,12 @@ terminal-status skip), so a repeat is a safe no-op.</p>
 <td><code>system:health:{type}</code></td>
 <td>5-10</td>
 <td>Infrastructure issues</td>
+</tr>
+<tr>
+<td>AWS version drift</td>
+<td><code>system:health:aws_versions</code></td>
+<td>4-10</td>
+<td>Managed service on a major version losing support</td>
 </tr>
 </tbody>
 </table>

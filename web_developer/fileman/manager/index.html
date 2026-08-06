@@ -3767,6 +3767,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#s3-credential-inputs-and-responses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        S3 credential inputs and responses
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#user-field-behavior" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3779,6 +3790,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#aws-credential-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AWS credential fields
+      
+    </span>
+  </a>
   
 </li>
       
@@ -3862,10 +3884,64 @@
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;documents&quot;</span><span class="p">,</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;backend_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;s3&quot;</span><span class="p">,</span>
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">&quot;backend_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;s3://my-bucket/docs/&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">&quot;is_default&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">}</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">&quot;aws_region&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;us-east-1&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">&quot;aws_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;access-key-id&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">&quot;aws_secret&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;secret-access-key&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="nt">&quot;is_default&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">}</span>
 </code></pre></div>
+<h3 id="s3-credential-inputs-and-responses">S3 credential inputs and responses<a class="headerlink" href="#s3-credential-inputs-and-responses" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Direction</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>aws_region</code></td>
+<td>Input and output</td>
+<td>S3 region used by the manager.</td>
+</tr>
+<tr>
+<td><code>aws_key</code></td>
+<td>Write-only input</td>
+<td>Access key id accepted on create or update. Never returned.</td>
+</tr>
+<tr>
+<td><code>aws_secret</code></td>
+<td>Write-only input</td>
+<td>Secret access key accepted on create or update. Never returned.</td>
+</tr>
+<tr>
+<td><code>aws_key_masked</code></td>
+<td>Response only</td>
+<td>Masked access-key hint. Only the last four characters of a long value remain visible.</td>
+</tr>
+<tr>
+<td><code>aws_secret_masked</code></td>
+<td>Response only</td>
+<td>Masked secret hint. Only the last four characters of a long value remain visible.</td>
+</tr>
+</tbody>
+</table>
+<p>FileManager list and detail responses, including managers nested in File
+responses, omit <code>aws_key</code> and <code>aws_secret</code>. They return only the masked fields:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;aws_region&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;us-east-1&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;aws_key_masked&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;****************1234&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;aws_secret_masked&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;************************5678&quot;</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">}</span>
+</code></pre></div>
+<p>Non-empty values of four characters or fewer are fully masked, and absent
+credentials appear as empty strings. The masked fields are display hints, not
+update values. Generic REST save ignores <code>aws_key_masked</code> and
+<code>aws_secret_masked</code>, but clients should not submit them. To keep credentials
+unchanged, omit <code>aws_key</code> and <code>aws_secret</code> from the update. Never echo a mask
+back as a replacement credential.</p>
 <h3 id="user-field-behavior">User field behavior<a class="headerlink" href="#user-field-behavior" title="Permanent link">&para;</a></h3>
 <p>The <code>user</code> field is <strong>not</strong> auto-stamped on create. Omitting <code>user</code> (or sending <code>user: null</code>) creates a group-scoped or system-scoped manager — this is the normal case for shared storage. Pass an explicit <code>user</code> id only to create a user-owned manager.</p>
 <table>
@@ -3891,6 +3967,71 @@
 </tbody>
 </table>
 <p><code>group</code> is auto-filled from the caller's active group (<code>request.group</code>) when not specified in the body.</p>
+<h2 id="aws-credential-fields">AWS credential fields<a class="headerlink" href="#aws-credential-fields" title="Permanent link">&para;</a></h2>
+<p>An S3 manager can carry credentials in the request body. All of these are
+settings, not model columns — send them as ordinary fields.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Write</th>
+<th>Read back as</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>aws_key</code></td>
+<td><code>manage_files</code> / <code>files</code></td>
+<td><code>aws_key</code></td>
+</tr>
+<tr>
+<td><code>aws_secret</code></td>
+<td><code>manage_files</code> / <code>files</code></td>
+<td><code>aws_secret_masked</code> (last 4 chars)</td>
+</tr>
+<tr>
+<td><code>aws_region</code></td>
+<td><code>manage_files</code> / <code>files</code></td>
+<td><code>aws_region</code></td>
+</tr>
+<tr>
+<td><code>assume_role_arn</code></td>
+<td><strong>superuser only</strong></td>
+<td><code>assume_role_arn</code></td>
+</tr>
+<tr>
+<td><code>external_id</code></td>
+<td><strong>superuser only</strong></td>
+<td><code>has_external_id</code> (boolean)</td>
+</tr>
+<tr>
+<td><code>role_session_name</code></td>
+<td><strong>superuser only</strong></td>
+<td><em>(not serialized)</em></td>
+</tr>
+<tr>
+<td><code>assume_role_duration</code></td>
+<td><strong>superuser only</strong></td>
+<td><em>(not serialized)</em></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Sending any of the four role fields as a non-superuser returns 403</strong>, even
+  with <code>manage_files</code>. Those fields decide which AWS identity the platform acts
+  as, so redirecting them is a privilege escalation rather than a storage
+  setting.</li>
+<li><strong><code>external_id</code> is write-only.</strong> It is never returned in any form — not even
+  masked — because it is short and its whole purpose is to be unguessable by
+  someone who already knows the role ARN. The <code>default</code> and <code>list</code> graphs expose
+  only <code>has_external_id: true|false</code>. Send the value again to change it; there
+  is no way to read the current one back.</li>
+<li><strong>Omitting <code>aws_key</code> and <code>aws_secret</code> is valid.</strong> The server then uses its own
+  ambient AWS credentials. Sending only one of the pair is rejected when the
+  connection is next tested, with an explicit "AWS key configured without a
+  secret (or vice versa)".</li>
+</ul>
+<p>Use the <code>test_connection</code> action to verify a configuration after saving.</p>
 <blockquote>
 <p><strong>System-scoped managers are superuser-only.</strong> A manager created with no <code>user</code> <strong>and</strong> no group (no <code>group</code> in the body and no active group on the request) is <em>system-scoped</em> and can become the system default. Creating one via REST returns <strong>403</strong> unless the caller is a superuser. Supply a <code>group</code> — or operate within a group context — to create a group-scoped manager as a regular user.</p>
 </blockquote>

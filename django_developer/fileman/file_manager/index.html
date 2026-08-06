@@ -3857,6 +3857,28 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#credential-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Credential resolution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#s3-credential-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        S3 credential boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#public-access-reconciliation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3988,7 +4010,9 @@
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">fm</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_for_user_group</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">group</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="filemanager-settings">FileManager Settings<a class="headerlink" href="#filemanager-settings" title="Permanent link">&para;</a></h2>
-<p>Each <code>FileManager</code> has a <code>settings</code> JSONField for backend-specific configuration:</p>
+<p>Each <code>FileManager</code> stores backend-specific settings through the encrypted
+<code>MojoSecrets.mojo_secrets</code> text field. Use the model helpers rather than reading
+or writing that encrypted blob directly:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Access a setting</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">expiry</span> <span class="o">=</span> <span class="n">fm</span><span class="o">.</span><span class="n">get_setting</span><span class="p">(</span><span class="s2">&quot;urls_expire_in&quot;</span><span class="p">,</span> <span class="mi">3600</span><span class="p">)</span>  <span class="c1"># URL expiry in seconds</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">is_pub</span> <span class="o">=</span> <span class="n">fm</span><span class="o">.</span><span class="n">is_public</span>                             <span class="c1"># Whether files are publicly accessible</span>
@@ -4043,12 +4067,100 @@ audit state. <code>--apply --bucket-name &lt;name&gt;</code> can create a missin
 and system manager. <code>--probe-s3</code> is separately confirmed and uses only a unique
 sentinel key that is deleted in <code>finally</code>; it never lists or deletes user
 objects. Existing buckets and policies are preserved.</p>
-<p>Configure via FileManager settings or in <code>settings.py</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">AWS_ACCESS_KEY_ID</span> <span class="o">=</span> <span class="s2">&quot;...&quot;</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">AWS_SECRET_ACCESS_KEY</span> <span class="o">=</span> <span class="s2">&quot;...&quot;</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">AWS_STORAGE_BUCKET_NAME</span> <span class="o">=</span> <span class="s2">&quot;my-bucket&quot;</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">AWS_S3_REGION_NAME</span> <span class="o">=</span> <span class="s2">&quot;us-east-1&quot;</span>
+<p>Bucket and prefix come from <code>backend_url</code> (<code>s3://my-bucket/some/prefix</code>).
+Credentials come from the manager's own settings, falling back to these
+<code>settings.py</code> keys when a manager is created through REST:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">AWS_KEY</span> <span class="o">=</span> <span class="s2">&quot;...&quot;</span>       <span class="c1"># optional — leave unset to use the instance profile</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">AWS_SECRET</span> <span class="o">=</span> <span class="s2">&quot;...&quot;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">AWS_REGION</span> <span class="o">=</span> <span class="s2">&quot;us-east-1&quot;</span>
 </code></pre></div>
+<h4 id="credential-resolution">Credential resolution<a class="headerlink" href="#credential-resolution" title="Permanent link">&para;</a></h4>
+<p>All S3 calls a manager makes — uploads, downloads, CORS, the public-access
+audit — run through <strong>one</strong> session built by the backend. See
+<a href="../../aws/credentials/">../aws/credentials.md</a> for the underlying factories.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>aws_key</code></td>
+<td>Static access key id. Optional.</td>
+</tr>
+<tr>
+<td><code>aws_secret</code></td>
+<td>Static secret. Required if <code>aws_key</code> is set, and vice versa.</td>
+</tr>
+<tr>
+<td><code>aws_region</code></td>
+<td>Region. Defaults to <code>us-east-1</code>.</td>
+</tr>
+<tr>
+<td><code>assume_role_arn</code></td>
+<td>Cross-account role to assume. When set, the settings above become only the <em>source</em> identity used to call <code>sts:AssumeRole</code>. <strong>Superuser-writable only.</strong></td>
+</tr>
+<tr>
+<td><code>external_id</code></td>
+<td><code>sts:ExternalId</code> for the trust policy. Omitted from the STS call when unset. <strong>Superuser-writable only.</strong> Write-only — reads back as <code>has_external_id</code>.</td>
+</tr>
+<tr>
+<td><code>role_session_name</code></td>
+<td>STS session name. Defaults to <code>django-mojo-fileman-&lt;manager pk&gt;</code>. <strong>Superuser-writable only.</strong></td>
+</tr>
+<tr>
+<td><code>assume_role_duration</code></td>
+<td>Role session seconds. Defaults to 43200 (12 hours). <strong>Superuser-writable only.</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Leaving <code>aws_key</code>/<code>aws_secret</code> unset is a supported configuration</strong>, not a
+misconfiguration: the session falls through to botocore's default chain, which
+ends at the EC2 instance profile or ECS task role. Setting exactly one of the
+pair is an error and fails fast with a readable message rather than silently
+acting as a different identity.</p>
+<p><strong>Credential settings are read from the primary parent manager.</strong> The backend
+resolves them through <code>file_manager.primary_settings</code>, which walks up the
+<code>parent</code> chain to the root. Setting <code>aws_key</code> or <code>assume_role_arn</code> on a child
+manager has no effect on that child's storage calls — configure the root.</p>
+<p><strong>Presigned URL lifetimes are clamped under an assumed role.</strong> A URL signed with
+STS temporary credentials stops working the moment those credentials expire,
+regardless of its own <code>ExpiresIn</code>. botocore refreshes the role 10–15 minutes
+ahead of expiry, so the backend caps <code>ExpiresIn</code> at whatever the live credential
+has left. With the default 12-hour role duration this is never the binding
+constraint for a 1-hour URL; with a short <code>assume_role_duration</code> it will be, and
+the returned URL simply expires sooner than requested. The lifetime actually
+requested for downloads is <code>urls_expire_in</code> (default 3600).</p>
+<p><strong>Why the role settings are superuser-only:</strong> REST save dispatches a <code>set_&lt;key&gt;</code>
+method for any key in the payload, and <code>SAVE_PERMS</code> for FileManager is the
+group-level <code>files</code>/<code>manage_files</code> permission. Without the gate, anyone who can
+administer files could point the platform's own credentials at a role they
+control — a confused deputy. Writing any of the four role settings through REST
+therefore requires <code>is_superuser</code>; direct ORM/bootstrap code is unaffected.</p>
+<p>Changing <code>assume_role_arn</code> or <code>external_id</code> also changes the manager's
+public-access config fingerprint, so cached audit evidence collected under the
+old identity is invalidated.</p>
+<h4 id="s3-credential-boundary">S3 credential boundary<a class="headerlink" href="#s3-credential-boundary" title="Permanent link">&para;</a></h4>
+<p>FileManager credentials are written with <code>set_aws_key()</code> and
+<code>set_aws_secret()</code> and read by trusted backend code through the raw <code>aws_key</code>
+and <code>aws_secret</code> properties. Those raw properties are internal-only and must
+never be added to a REST graph.</p>
+<p>The <code>default</code>, <code>list</code>, and <code>basic</code> REST graphs expose only
+<code>aws_key_masked</code> and <code>aws_secret_masked</code>. A configured value longer than four
+characters keeps only its last four characters visible; a non-empty value of
+four characters or fewer is fully masked. An absent value is returned as an
+empty string. File responses that nest a manager use the same safe <code>basic</code>
+graph, and an unknown FileManager graph falls back to the safe <code>default</code>
+graph.</p>
+<p>REST create and update requests still accept <code>aws_key</code> and <code>aws_secret</code> as
+write-only inputs through the model's custom setters. The masked properties are
+response-only: generic REST save ignores them. Clients should omit unchanged
+credentials and must never echo a displayed mask as a replacement value.</p>
+<p>This response-contract change does not rotate, rewrite, or migrate stored
+credentials and does not change backend authentication. No data migration is
+required.</p>
 <h4 id="public-access-reconciliation">Public-access reconciliation<a class="headerlink" href="#public-access-reconciliation" title="Permanent link">&para;</a></h4>
 <p>For a user-scoped S3 manager, <code>is_public</code> is a stored classification that must
 agree with the storage service. FileManager performs a policy-level check when

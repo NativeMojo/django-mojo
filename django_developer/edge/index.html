@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/aws/aws_check/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/edge/">
       
       
       
@@ -18,19 +18,19 @@
         
       
       
-      <link rel="icon" href="../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
-        <title>AWS deployment readiness (aws-check) - Django-MOJO</title>
+        <title>edge — nginx vhosts, and installing them to the fleet - Django-MOJO</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
-        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -49,7 +49,7 @@
       
     
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#aws-deployment-readiness-aws-check" class="md-skip">
+        <a href="#edge-nginx-vhosts-and-installing-them-to-the-fleet" class="md-skip">
           Skip to content
         </a>
       
@@ -88,7 +88,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              AWS deployment readiness (aws-check)
+              edge — nginx vhosts, and installing them to the fleet
             
           </span>
         </div>
@@ -221,7 +221,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../.." class="md-tabs__link">
+      <a href="../.." class="md-tabs__link">
         
   
   
@@ -242,7 +242,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../" class="md-tabs__link">
+        <a href="../" class="md-tabs__link">
           
   
   
@@ -262,7 +262,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../web_developer/" class="md-tabs__link">
+        <a href="../../web_developer/" class="md-tabs__link">
           
   
   
@@ -296,7 +296,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -326,7 +326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../.." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -407,7 +407,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -489,7 +489,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/" class="md-nav__link">
+      <a href="../core/" class="md-nav__link">
         
   
   
@@ -517,7 +517,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/mojo_model/" class="md-nav__link">
+      <a href="../core/mojo_model/" class="md-nav__link">
         
   
   
@@ -545,7 +545,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/decorators/" class="md-nav__link">
+      <a href="../core/decorators/" class="md-nav__link">
         
   
   
@@ -573,7 +573,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/middleware/" class="md-nav__link">
+      <a href="../core/middleware/" class="md-nav__link">
         
   
   
@@ -601,7 +601,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/graphs/" class="md-nav__link">
+      <a href="../core/graphs/" class="md-nav__link">
         
   
   
@@ -629,7 +629,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/cache/" class="md-nav__link">
+      <a href="../core/cache/" class="md-nav__link">
         
   
   
@@ -719,7 +719,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/" class="md-nav__link">
+      <a href="../helpers/" class="md-nav__link">
         
   
   
@@ -747,7 +747,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/logit/" class="md-nav__link">
+      <a href="../helpers/logit/" class="md-nav__link">
         
   
   
@@ -775,7 +775,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/dates/" class="md-nav__link">
+      <a href="../helpers/dates/" class="md-nav__link">
         
   
   
@@ -803,7 +803,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/settings/" class="md-nav__link">
+      <a href="../helpers/settings/" class="md-nav__link">
         
   
   
@@ -831,7 +831,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/settings_reference/" class="md-nav__link">
+      <a href="../helpers/settings_reference/" class="md-nav__link">
         
   
   
@@ -859,7 +859,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/crypto/" class="md-nav__link">
+      <a href="../helpers/crypto/" class="md-nav__link">
         
   
   
@@ -887,7 +887,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/request/" class="md-nav__link">
+      <a href="../helpers/request/" class="md-nav__link">
         
   
   
@@ -915,7 +915,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/response/" class="md-nav__link">
+      <a href="../helpers/response/" class="md-nav__link">
         
   
   
@@ -943,7 +943,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/other/" class="md-nav__link">
+      <a href="../helpers/other/" class="md-nav__link">
         
   
   
@@ -1033,7 +1033,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/" class="md-nav__link">
+      <a href="../account/" class="md-nav__link">
         
   
   
@@ -1061,7 +1061,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/user/" class="md-nav__link">
+      <a href="../account/user/" class="md-nav__link">
         
   
   
@@ -1089,7 +1089,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/group/" class="md-nav__link">
+      <a href="../account/group/" class="md-nav__link">
         
   
   
@@ -1117,7 +1117,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/auth/" class="md-nav__link">
+      <a href="../account/auth/" class="md-nav__link">
         
   
   
@@ -1145,7 +1145,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/webhook_signing/" class="md-nav__link">
+      <a href="../account/webhook_signing/" class="md-nav__link">
         
   
   
@@ -1173,7 +1173,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/webhook_subscriptions/" class="md-nav__link">
+      <a href="../account/webhook_subscriptions/" class="md-nav__link">
         
   
   
@@ -1263,7 +1263,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../logging/" class="md-nav__link">
+      <a href="../logging/" class="md-nav__link">
         
   
   
@@ -1291,7 +1291,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../logging/logit/" class="md-nav__link">
+      <a href="../logging/logit/" class="md-nav__link">
         
   
   
@@ -1319,7 +1319,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../logging/incidents/" class="md-nav__link">
+      <a href="../logging/incidents/" class="md-nav__link">
         
   
   
@@ -1409,7 +1409,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../files/README.md" class="md-nav__link">
+      <a href="../files/README.md" class="md-nav__link">
         
   
   
@@ -1437,7 +1437,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../files/file.md" class="md-nav__link">
+      <a href="../files/file.md" class="md-nav__link">
         
   
   
@@ -1465,7 +1465,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../files/file_manager.md" class="md-nav__link">
+      <a href="../files/file_manager.md" class="md-nav__link">
         
   
   
@@ -1555,7 +1555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../email/" class="md-nav__link">
+      <a href="../email/" class="md-nav__link">
         
   
   
@@ -1583,7 +1583,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../email/architecture/" class="md-nav__link">
+      <a href="../email/architecture/" class="md-nav__link">
         
   
   
@@ -1611,7 +1611,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../email/sending/" class="md-nav__link">
+      <a href="../email/sending/" class="md-nav__link">
         
   
   
@@ -1639,7 +1639,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../email/receiving/" class="md-nav__link">
+      <a href="../email/receiving/" class="md-nav__link">
         
   
   
@@ -1729,7 +1729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../jobs/" class="md-nav__link">
+      <a href="../jobs/" class="md-nav__link">
         
   
   
@@ -1757,7 +1757,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../jobs/publishing/" class="md-nav__link">
+      <a href="../jobs/publishing/" class="md-nav__link">
         
   
   
@@ -1785,7 +1785,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../jobs/writing_jobs/" class="md-nav__link">
+      <a href="../jobs/writing_jobs/" class="md-nav__link">
         
   
   
@@ -1813,7 +1813,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../jobs/job_model/" class="md-nav__link">
+      <a href="../jobs/job_model/" class="md-nav__link">
         
   
   
@@ -1903,7 +1903,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../metrics/" class="md-nav__link">
+      <a href="../metrics/" class="md-nav__link">
         
   
   
@@ -1931,7 +1931,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../metrics/recording/" class="md-nav__link">
+      <a href="../metrics/recording/" class="md-nav__link">
         
   
   
@@ -1959,7 +1959,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../metrics/fetching/" class="md-nav__link">
+      <a href="../metrics/fetching/" class="md-nav__link">
         
   
   
@@ -2049,7 +2049,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../realtime/" class="md-nav__link">
+      <a href="../realtime/" class="md-nav__link">
         
   
   
@@ -2077,7 +2077,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../realtime/architecture/" class="md-nav__link">
+      <a href="../realtime/architecture/" class="md-nav__link">
         
   
   
@@ -2105,7 +2105,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../realtime/publishing/" class="md-nav__link">
+      <a href="../realtime/publishing/" class="md-nav__link">
         
   
   
@@ -2133,7 +2133,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../realtime/hooks/" class="md-nav__link">
+      <a href="../realtime/hooks/" class="md-nav__link">
         
   
   
@@ -2169,7 +2169,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../phonehub/" class="md-nav__link">
+      <a href="../phonehub/" class="md-nav__link">
         
   
   
@@ -2197,7 +2197,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../filevault/" class="md-nav__link">
+      <a href="../filevault/" class="md-nav__link">
         
   
   
@@ -2225,7 +2225,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docit/" class="md-nav__link">
+      <a href="../docit/" class="md-nav__link">
         
   
   
@@ -2314,7 +2314,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/" class="md-nav__link">
+      <a href="../../web_developer/" class="md-nav__link">
         
   
   
@@ -2396,7 +2396,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/core/" class="md-nav__link">
+      <a href="../../web_developer/core/" class="md-nav__link">
         
   
   
@@ -2424,7 +2424,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/core/authentication/" class="md-nav__link">
+      <a href="../../web_developer/core/authentication/" class="md-nav__link">
         
   
   
@@ -2452,7 +2452,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/core/request_response/" class="md-nav__link">
+      <a href="../../web_developer/core/request_response/" class="md-nav__link">
         
   
   
@@ -2480,7 +2480,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/core/filtering/" class="md-nav__link">
+      <a href="../../web_developer/core/filtering/" class="md-nav__link">
         
   
   
@@ -2508,7 +2508,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/core/pagination/" class="md-nav__link">
+      <a href="../../web_developer/core/pagination/" class="md-nav__link">
         
   
   
@@ -2536,7 +2536,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/core/graphs/" class="md-nav__link">
+      <a href="../../web_developer/core/graphs/" class="md-nav__link">
         
   
   
@@ -2626,7 +2626,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/" class="md-nav__link">
+      <a href="../../web_developer/account/" class="md-nav__link">
         
   
   
@@ -2654,7 +2654,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/authentication/" class="md-nav__link">
+      <a href="../../web_developer/account/authentication/" class="md-nav__link">
         
   
   
@@ -2682,7 +2682,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/user/" class="md-nav__link">
+      <a href="../../web_developer/account/user/" class="md-nav__link">
         
   
   
@@ -2710,7 +2710,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/group/" class="md-nav__link">
+      <a href="../../web_developer/account/group/" class="md-nav__link">
         
   
   
@@ -2738,7 +2738,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/admin_portal/" class="md-nav__link">
+      <a href="../../web_developer/account/admin_portal/" class="md-nav__link">
         
   
   
@@ -2766,7 +2766,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/api_keys/" class="md-nav__link">
+      <a href="../../web_developer/account/api_keys/" class="md-nav__link">
         
   
   
@@ -2794,7 +2794,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/webhook_signing/" class="md-nav__link">
+      <a href="../../web_developer/account/webhook_signing/" class="md-nav__link">
         
   
   
@@ -2822,7 +2822,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/webhook_subscriptions/" class="md-nav__link">
+      <a href="../../web_developer/account/webhook_subscriptions/" class="md-nav__link">
         
   
   
@@ -2912,7 +2912,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/logging/" class="md-nav__link">
+      <a href="../../web_developer/logging/" class="md-nav__link">
         
   
   
@@ -2940,7 +2940,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/logging/logs/" class="md-nav__link">
+      <a href="../../web_developer/logging/logs/" class="md-nav__link">
         
   
   
@@ -2968,7 +2968,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/logging/incidents/" class="md-nav__link">
+      <a href="../../web_developer/logging/incidents/" class="md-nav__link">
         
   
   
@@ -3058,7 +3058,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/files/README.md" class="md-nav__link">
+      <a href="../../web_developer/files/README.md" class="md-nav__link">
         
   
   
@@ -3086,7 +3086,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/files/upload.md" class="md-nav__link">
+      <a href="../../web_developer/files/upload.md" class="md-nav__link">
         
   
   
@@ -3114,7 +3114,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/files/files.md" class="md-nav__link">
+      <a href="../../web_developer/files/files.md" class="md-nav__link">
         
   
   
@@ -3204,7 +3204,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/email/" class="md-nav__link">
+      <a href="../../web_developer/email/" class="md-nav__link">
         
   
   
@@ -3232,7 +3232,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/email/email/" class="md-nav__link">
+      <a href="../../web_developer/email/email/" class="md-nav__link">
         
   
   
@@ -3322,7 +3322,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/jobs/" class="md-nav__link">
+      <a href="../../web_developer/jobs/" class="md-nav__link">
         
   
   
@@ -3350,7 +3350,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/jobs/jobs/" class="md-nav__link">
+      <a href="../../web_developer/jobs/jobs/" class="md-nav__link">
         
   
   
@@ -3440,7 +3440,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/metrics/" class="md-nav__link">
+      <a href="../../web_developer/metrics/" class="md-nav__link">
         
   
   
@@ -3468,7 +3468,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/metrics/metrics/" class="md-nav__link">
+      <a href="../../web_developer/metrics/metrics/" class="md-nav__link">
         
   
   
@@ -3558,7 +3558,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/realtime/" class="md-nav__link">
+      <a href="../../web_developer/realtime/" class="md-nav__link">
         
   
   
@@ -3586,7 +3586,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/realtime/websocket/" class="md-nav__link">
+      <a href="../../web_developer/realtime/websocket/" class="md-nav__link">
         
   
   
@@ -3622,7 +3622,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/phonehub/" class="md-nav__link">
+      <a href="../../web_developer/phonehub/" class="md-nav__link">
         
   
   
@@ -3650,7 +3650,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/filevault/" class="md-nav__link">
+      <a href="../../web_developer/filevault/" class="md-nav__link">
         
   
   
@@ -3678,7 +3678,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/docit/" class="md-nav__link">
+      <a href="../../web_developer/docit/" class="md-nav__link">
         
   
   
@@ -3733,10 +3733,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#modes-and-exit-status" class="md-nav__link">
+  <a href="#the-constraint-everything-else-follows-from" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Modes and exit status
+        The constraint everything else follows from
       
     </span>
   </a>
@@ -3744,22 +3744,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#sections" class="md-nav__link">
+  <a href="#layout" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Sections
+        Layout
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Sections">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Models
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Models">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#filemanagers-configured-with-assume_role_arn" class="md-nav__link">
+  <a href="#upstream-the-reason-the-foreign-key-is-a-constraint" class="md-nav__link">
     <span class="md-ellipsis">
       
-        FileManagers configured with assume_role_arn
+        Upstream — the reason the foreign key is a constraint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vhost-one-server-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Vhost — one server block
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-house-guard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The house guard
       
     </span>
   </a>
@@ -3772,10 +3805,60 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cron-deployment" class="md-nav__link">
+  <a href="#the-generation-lifecycle" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cron deployment
+        The generation lifecycle
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The generation lifecycle">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-install-sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The install sequence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pools
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#triggers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Triggers
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#machine-endpoints-and-the-permission-that-gates-them" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Machine endpoints and the permission that gates them
       
     </span>
   </a>
@@ -3783,10 +3866,38 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cloudwatchsns-two-phase-setup" class="md-nav__link">
+  <a href="#the-privilege-boundary-state-it-plainly" class="md-nav__link">
     <span class="md-ellipsis">
       
-        CloudWatch/SNS two-phase setup
+        The privilege boundary — state it plainly
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The privilege boundary — state it plainly">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-sudoers-rule-and-the-one-that-would-be-a-root-escalation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The sudoers rule, and the one that would be a root escalation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
       
     </span>
   </a>
@@ -3794,10 +3905,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#least-privilege-iam-actions" class="md-nav__link">
+  <a href="#testing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Least-privilege IAM actions
+        Testing
       
     </span>
   </a>
@@ -3805,10 +3916,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#not-the-same-as-python-m-mojodeploycheck_setup" class="md-nav__link">
+  <a href="#what-this-replaces" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Not the same as python -m mojo.deploy.check_setup
+        What this replaces
       
     </span>
   </a>
@@ -3835,313 +3946,348 @@
   
 
 
-<h1 id="aws-deployment-readiness-aws-check">AWS deployment readiness (<code>aws-check</code>)<a class="headerlink" href="#aws-deployment-readiness-aws-check" title="Permanent link">&para;</a></h1>
-<p><code>python manage.py aws-check</code> audits the AWS and operational wiring required by
-django-mojo. It is audit-first: a normal non-interactive invocation never
-mutates AWS or Django state, and apply mode creates only confirmed missing
-resources. Existing resources that differ from defaults are reported and
-preserved.</p>
-<h2 id="modes-and-exit-status">Modes and exit status<a class="headerlink" href="#modes-and-exit-status" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w">                         </span><span class="c1"># audit; interactive TTY may offer missing creates</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--check<span class="w">                 </span><span class="c1"># strictly read-only, never prompts</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--json<span class="w">                  </span><span class="c1"># read-only versioned JSON</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--apply<span class="w">                 </span><span class="c1"># confirm each eligible create</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--apply<span class="w"> </span>--yes<span class="w">           </span><span class="c1"># approve create-missing actions only</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--section<span class="w"> </span>s3<span class="w"> </span>--check<span class="w">     </span><span class="c1"># repeat --section as needed</span>
-</code></pre></div>
-<p><code>--region</code>, <code>--aws-profile</code>, and <code>--timeout</code> select the bounded AWS context.
-Timeout must be 1–30 seconds. A profile overrides static <code>AWS_KEY</code> / <code>AWS_SECRET</code>;
-otherwise a complete static pair is used, falling back to boto3's environment,
-container, instance or task-role chain when both are empty. A partial static
-pair is a failure.
-<code>--bucket-name</code> and <code>--mailbox-email</code> supply non-secret create details.
-<code>--probe-s3</code> separately authorizes a UUID sentinel put/get/delete test. If its
-cleanup fails, the report prints the exact key. <code>--adopt-bucket</code> is an explicit
-repair for an interrupted create/tag operation: ownership must be proven by
-<code>ListBuckets</code>, the region must match, and existing tags are merged rather than
-replaced.</p>
-<p><code>--check</code> and <code>--apply</code> are mutually exclusive; <code>--yes</code> requires <code>--apply</code>.
-JSON mode is read-only and cannot be combined with apply, yes or probe flags.
-A non-TTY invocation is audit-only unless <code>--apply --yes</code> is explicit; an S3
-probe also requires apply authorization.</p>
-<p>Exit 0 means no required check failed; WARN, PENDING and SKIP may remain. Exit
-1 means readiness failed. Exit 2 means the CLI request was invalid. Statuses
-mean: PASS is ready, WARN is usable but needs attention, FAIL blocks readiness,
-PENDING awaits an external/operator step, and SKIP was deliberately not run.
-JSON uses <code>schema_version=1</code> and stable section/status/code/message/details/
-remediation/changed items:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;generated_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-04T12:00:00+00:00&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;region&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;us-west-2&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">&quot;overall&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pass&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">&quot;counts&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;pass&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;warn&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;fail&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;pending&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;skip&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">&quot;items&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">&quot;section&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;monitoring&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pending&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sns.topic_not_allowlisted&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Operations topic ARN is not in the static receiver allowlist&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="nt">&quot;details&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;topic_arn&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;arn:aws:sns:us-west-2:123456789012:django-mojo-example-operations&quot;</span><span class="p">},</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="nt">&quot;remediation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Add the exact ARN to AWS_CLOUDWATCH_ALARM_TOPIC_ARNS, restart Django, then rerun.&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">    </span><span class="nt">&quot;changed&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">  </span><span class="p">}]</span>
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="p">}</span>
-</code></pre></div>
-<h2 id="sections">Sections<a class="headerlink" href="#sections" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Section</th>
-<th>Checks</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>prerequisites</code></td>
-<td>selected region and public HTTPS <code>BASE_URL</code></td>
-</tr>
-<tr>
-<td><code>identity</code></td>
-<td>bounded STS identity using static keys, profile, environment, container or instance/task role</td>
-</tr>
-<tr>
-<td><code>cron</code></td>
-<td>recent dispatcher run plus jobs Redis, runner heartbeats and scheduler lock</td>
-</tr>
-<tr>
-<td><code>s3</code></td>
-<td>one system-default S3 FileManager, bucket/region/IAM, Public Access Block, CORS and optional sentinel</td>
-</tr>
-<tr>
-<td><code>email</code></td>
-<td>SES identity/DKIM/sandbox/topics/receiving audit, outbound Mailbox and shipped templates</td>
-</tr>
-<tr>
-<td><code>monitoring</code></td>
-<td>owned SNS topic, exact static allowlist, HTTPS subscription, owned alarms and receiver receipt</td>
-</tr>
-<tr>
-<td><code>rules</code></td>
-<td>opt-in create-only CloudWatch and version-drift incident policies</td>
-</tr>
-<tr>
-<td><code>versions</code></td>
-<td><strong>opt-in</strong> managed-service major version drift (RDS/Aurora, ElastiCache) — never part of a default run, and never reports FAIL</td>
-</tr>
-</tbody>
-</table>
-<p><code>versions</code> is the one section that is not in the default set: select it with
-<code>--section versions</code>. It can only report PASS, WARN or PENDING, so a run made
-before its extra IAM actions are granted cannot exit 1 in CI. See
-<a href="../version_drift/">version_drift.md</a>.</p>
-<p>Credential material is never prompted, printed or persisted by this command.
-If a FileManager or EmailDomain has stored credentials, its STS account/region
-is checked separately; cross-account or cross-region apply fails closed.</p>
-<h3 id="filemanagers-configured-with-assume_role_arn">FileManagers configured with <code>assume_role_arn</code><a class="headerlink" href="#filemanagers-configured-with-assume_role_arn" title="Permanent link">&para;</a></h3>
-<p>A FileManager may reach a bucket in another AWS account by assuming a role — see
-<a href="../credentials/">credentials.md</a> and
-<a href="../../fileman/file_manager/">../fileman/file_manager.md</a>. <code>aws-check</code> does <strong>not</strong>
-resolve that role. The <code>s3</code> section validates the manager's stored static keys —
-the <em>source</em> identity — and then talks to S3 with those keys directly, rather
-than through the backend's assumed session.</p>
-<p>Two consequences for a cross-account manager:</p>
-<ul>
-<li><code>fileman.cross_context</code> is <strong>expected, not a defect</strong> whenever the manager's
-  stored keys or region differ from the selected ones. It reports exactly what a
-  cross-account configuration is: an identity other than the one <code>aws-check</code>
-  selected. Do not "fix" it by rewriting the manager's region or keys.</li>
-<li>When <code>cross_context</code> does <em>not</em> fire — the usual case, since the source
-  identity normally lives in our own account — the <code>bucket.*</code> checks that follow
-  describe the <strong>source</strong> identity's access to the tenant's bucket, which is
-  normally none. Read them as inconclusive for this manager, and verify it with
-  the manager's own <code>test_connection</code> action instead; that one goes through the
-  assumed session.</li>
-</ul>
-<h2 id="cron-deployment">Cron deployment<a class="headerlink" href="#cron-deployment" title="Permanent link">&para;</a></h2>
-<p>Run the dispatcher at least once per minute:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>shell<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;from mojo.helpers import cron; cron.load_app_cron(); cron.run_now()&quot;</span>
-</code></pre></div>
-<p>Each invocation writes an expiring per-run heartbeat. Overlapping invocations
-cannot overwrite one another. Heartbeat write failure is fail-open for cron but
-is visible to <code>aws-check</code>.</p>
-<h2 id="cloudwatchsns-two-phase-setup">CloudWatch/SNS two-phase setup<a class="headerlink" href="#cloudwatchsns-two-phase-setup" title="Permanent link">&para;</a></h2>
-<p>The command uses the signed receiver already exposed at
-<code>/api/aws/cloudwatch/sns/alarm</code>:</p>
-<ol>
-<li>Create or discover the tagged operations topic and copy its ARN from the report.</li>
-<li>Add that exact ARN to file-only <code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code>, restart Django, and rerun.</li>
-<li>Apply the HTTPS subscription and wait for confirmation.</li>
-<li>Apply missing alarms. Existing owned drift is WARN; non-owned reserved-name collisions are FAIL.</li>
-<li>Run the documented disposable-alarm ALARM→OK test. The durable transition receipt proves delivery.</li>
-<li>Apply the default RuleSet only after delivery is verified.</li>
-</ol>
-<p>Default alarms are EC2 <code>StatusCheckFailed</code> Maximum &gt;= 1 for 2 of 2 one-minute
-periods; EC2/RDS/ElastiCache <code>CPUUtilization</code> Average &gt;= 90% for 3 of 3
-five-minute periods; and, on <strong>non-Aurora RDS engines only</strong>, <code>FreeStorageSpace</code>
-Average &lt;= 10 GiB for 3 of 3 five-minute periods. They use stable names,
-ownership tags, <code>TreatMissingData=notBreaching</code>, and ALARM/OK actions.
-Connection counts and CWAgent memory/disk are not guessed because portable
-thresholds/dimensions do not exist.</p>
-<p>Aurora (<code>aurora</code>, <code>aurora-mysql</code>, <code>aurora-postgresql</code>, and any future <code>aurora-*</code>
-engine) publishes <strong>no per-instance free-space metric</strong> — its storage is a shared
-auto-scaling cluster volume, and local scratch space is reported as
-<code>FreeLocalStorage</code>, whose safe threshold varies by instance class. A
-<code>FreeStorageSpace</code> alarm on an Aurora instance therefore never receives a
-datapoint and, with <code>TreatMissingData=notBreaching</code>, sits permanently green while
-monitoring nothing. <code>aws-check</code> no longer creates one and instead reports the
-gap explicitly:</p>
-<table>
-<thead>
-<tr>
-<th>Code</th>
-<th>Status</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>alarms.aurora_storage_unmonitored</code></td>
-<td>WARN</td>
-<td>Aurora instances were discovered and have no storage alarm. Details list the instance ids. Add a <code>FreeLocalStorage</code> alarm sized to each instance class, or watch the cluster volume in the RDS console.</td>
-</tr>
-<tr>
-<td><code>alarms.stale_aurora_storage</code></td>
-<td>WARN</td>
-<td>Owned <code>FreeStorageSpace</code> alarms created by an earlier django-mojo version still exist on Aurora instances. Details list the exact alarm names and remediation gives the <code>aws cloudwatch delete-alarms --alarm-names ...</code> command.</td>
-</tr>
-</tbody>
-</table>
-<p>Both are reported before the SNS allowlist and subscription-confirmation gates,
-so a half-configured deployment still sees them. <code>aws-check</code> never deletes AWS
-resources, so the stale alarms must be removed by hand; an owned alarm on the
-reserved name that has already been hand-edited to a different metric (for
-example <code>FreeLocalStorage</code>) is preserved and reported as <code>alarms.drifted</code>
-instead.</p>
-<p>The topic name is <code>django-mojo-&lt;deployment&gt;-operations</code>; alarm names are
-<code>django-mojo/&lt;deployment&gt;/&lt;resource-type&gt;/&lt;resource-id&gt;/&lt;signal&gt;</code>. Owned
-resources carry <code>managed-by=django-mojo</code>, <code>purpose=cloudwatch-incidents</code>, and
-<code>deployment=&lt;slug&gt;</code>. Existing owned drift is reported and preserved; a
-same-name resource without those ownership tags is a conflict.</p>
-<p>After a signed delivery receipt, apply can create the opt-in RuleSet
-<code>AWS CloudWatch - Operations</code> in category <code>aws:cloudwatch</code>, bundling by alarm
-model and ID. Its handler is <code>notify://perm@manage_security</code>; it does not page,
-open a direct ticket, block an IP, or bypass the incident lifecycle. The normal
-global default-rule seeder never installs it on non-AWS deployments.</p>
-<p>The <code>rules</code> section reports and can create a <strong>second</strong> opt-in RuleSet,
-<code>Health - AWS Version Drift</code> in category <code>aws:versions</code>, whose handler is
-<code>notify://perm@manage_security,ticket://?priority=8&amp;category=aws-version-drift&amp;maestro=1</code>.
-It does <strong>not</strong> sit behind the <code>monitoring_ready</code> / <code>delivery_seen</code> gate above:
-that gate exists because CloudWatch alarms need a confirmed SNS receiver,
-whereas version-drift events are generated in-process. See
-<a href="../version_drift/">version_drift.md</a>.</p>
-<h2 id="least-privilege-iam-actions">Least-privilege IAM actions<a class="headerlink" href="#least-privilege-iam-actions" title="Permanent link">&para;</a></h2>
-<p>Grant only actions for the selected sections and scope resource ARNs wherever
-AWS supports it:</p>
-<table>
-<thead>
-<tr>
-<th>Section/mode</th>
-<th>Required AWS actions</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>identity/all AWS checks</td>
-<td><code>sts:GetCallerIdentity</code></td>
-</tr>
-<tr>
-<td>S3 audit</td>
-<td><code>s3:ListBucket</code>, <code>s3:GetBucketPublicAccessBlock</code>, <code>s3:GetBucketCORS</code></td>
-</tr>
-<tr>
-<td>S3 create/adopt</td>
-<td><code>s3:CreateBucket</code>, <code>s3:GetBucketLocation</code>, <code>s3:PutBucketPublicAccessBlock</code>, <code>s3:GetBucketTagging</code>, <code>s3:PutBucketTagging</code>; adoption also needs <code>s3:ListAllMyBuckets</code></td>
-</tr>
-<tr>
-<td>S3 probe</td>
-<td><code>s3:PutObject</code>, <code>s3:GetObject</code>, <code>s3:DeleteObject</code> on <code>__django_mojo_aws_check__/*</code></td>
-</tr>
-<tr>
-<td>SES/email audit</td>
-<td><code>ses:GetAccount</code>, <code>ses:GetIdentityVerificationAttributes</code>, <code>ses:GetIdentityDkimAttributes</code>, <code>ses:GetIdentityNotificationAttributes</code>, <code>ses:DescribeReceiptRuleSet</code>, <code>sns:GetTopicAttributes</code>, <code>sns:ListSubscriptionsByTopic</code>, <code>s3:ListBucket</code> for optional inbound storage</td>
-</tr>
-<tr>
-<td>SES/email create-missing</td>
-<td><code>ses:VerifyDomainIdentity</code>, <code>ses:VerifyDomainDkim</code>, <code>ses:SetIdentityNotificationTopic</code>, <code>sns:ListTopics</code>, <code>sns:ListTagsForResource</code>, <code>sns:CreateTopic</code>, <code>sns:TagResource</code>, <code>sns:Subscribe</code></td>
-</tr>
-<tr>
-<td>Monitoring audit</td>
-<td><code>sns:ListTopics</code>, <code>sns:ListTagsForResource</code>, <code>sns:ListSubscriptionsByTopic</code>, <code>cloudwatch:DescribeAlarms</code>, <code>cloudwatch:ListTagsForResource</code>, <code>ec2:DescribeInstances</code>, <code>rds:DescribeDBInstances</code>, <code>elasticache:DescribeCacheClusters</code></td>
-</tr>
-<tr>
-<td>Monitoring apply</td>
-<td><code>sns:CreateTopic</code>, <code>sns:TagResource</code>, <code>sns:Subscribe</code>, <code>cloudwatch:PutMetricAlarm</code>, <code>cloudwatch:TagResource</code></td>
-</tr>
-<tr>
-<td>Versions audit (opt-in)</td>
-<td><code>rds:DescribeDBClusters</code>, <code>rds:DescribeDBInstances</code>, <code>rds:DescribeDBEngineVersions</code>, <code>rds:DescribeDBMajorEngineVersions</code>, <code>elasticache:DescribeCacheClusters</code>, <code>elasticache:DescribeCacheEngineVersions</code></td>
-</tr>
-</tbody>
-</table>
-<p>Cron, rule, mailbox and template checks use Django database/Redis access rather
-than IAM. The command never deletes AWS resources, edits deployment files,
-changes DNS, requests SES production access, or sends email.</p>
-<h2 id="not-the-same-as-python-m-mojodeploycheck_setup">Not the same as <code>python -m mojo.deploy.check_setup</code><a class="headerlink" href="#not-the-same-as-python-m-mojodeploycheck_setup" title="Permanent link">&para;</a></h2>
-<p>django-mojo ships a second AWS auditor, <code>mojo.deploy.check_setup</code>
-(<a href="../../deploy/#check_setup">deploy/README.md</a>). They answer different
-questions and neither replaces the other:</p>
+<h1 id="edge-nginx-vhosts-and-installing-them-to-the-fleet">edge — nginx vhosts, and installing them to the fleet<a class="headerlink" href="#edge-nginx-vhosts-and-installing-them-to-the-fleet" title="Permanent link">&para;</a></h1>
+<p><code>mojo.apps.edge</code> owns <strong>how a domain is served</strong>: the nginx <code>server</code> block, the
+certificate material on disk, and the node-side lifecycle that installs both as
+one validated, revertible generation.</p>
+<p>It sits on top of <code>dnsman</code>, which owns the domain and issues the certificate.
+The dependency is one-way — <code>edge</code> imports <code>dnsman</code>, never the reverse — which
+is why this is a separate app rather than more of dnsman: dnsman is built on
+"this system never touches a node", and everything below <code>services/installer.py</code>
+does exactly that.</p>
+<p>REST reference for API consumers:
+<a href="../../web_developer/edge/">web_developer/edge</a>.</p>
+<p>Site releases (what is being <em>served</em>, as opposed to how):
+<a href="webapps/">webapps.md</a>.</p>
+<h2 id="the-constraint-everything-else-follows-from">The constraint everything else follows from<a class="headerlink" href="#the-constraint-everything-else-follows-from" title="Permanent link">&para;</a></h2>
+<p><strong>A vhost is never a text field an admin types nginx directives into.</strong></p>
+<p>An nginx <code>server</code> block is a program, not a setting. Anyone who can write one
+can <code>proxy_pass</code> to the instance metadata service, <code>root /opt/api/var;</code> and
+serve <code>django.conf</code> over HTTP, claim a <code>server_name</code> that shadows the API, or
+weaken TLS. A free-text field moves privilege escalation from "who can write
+the filesystem" to "who holds a portal permission" — and portal permissions are
+usually <em>broader</em> than box access, not narrower.</p>
+<p>So every value that reaches a config file is one of exactly two things:</p>
 <table>
 <thead>
 <tr>
 <th></th>
-<th><code>manage.py aws-check</code></th>
-<th><code>python3 -m mojo.deploy.check_setup</code></th>
+<th>Example</th>
+<th>Why it is safe</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Needs Django</td>
-<td>yes — reads settings, models, Redis</td>
-<td>no; runs before <code>django.conf</code> exists</td>
+<td><strong>Derived from a foreign key</strong></td>
+<td><code>server_name</code> from <code>Vhost.domain</code>, the web root from <code>Vhost.pk</code>, the proxy target from <code>Vhost.upstream</code></td>
+<td>Ownership decides it. You cannot name a zone you do not hold, or a directory that is not yours.</td>
 </tr>
 <tr>
-<td>Scope</td>
-<td>this deployment's own resources, named by configuration</td>
-<td>the whole AWS account, whatever is in it</td>
-</tr>
-<tr>
-<td>Mutates</td>
-<td>yes, with <code>--apply</code> — creates missing buckets, topics, subscriptions, alarms</td>
-<td>never; every call is a Describe/Get/List</td>
-</tr>
-<tr>
-<td>Covers</td>
-<td>S3/SES/SNS/CloudWatch wiring, cron, mailboxes, templates, incident rule defaults</td>
-<td>EC2 and security-group posture, load balancer, RDS/Aurora, ElastiCache, EBS/backup/CloudTrail/GuardDuty, account-wide S3, IAM users and keys</td>
-</tr>
-<tr>
-<td>Run from</td>
-<td>the app box, as the app</td>
-<td>anywhere with credentials, including a laptop</td>
+<td><strong>Matched against a whitelist regex</strong></td>
+<td><code>Vhost.label</code>, <code>Upstream.host</code>, <code>Vhost.pool</code></td>
+<td>It cannot carry a metacharacter at all.</td>
 </tr>
 </tbody>
 </table>
-<p>Where they overlap, <code>check_setup</code> is deliberately reduced to the delta:</p>
+<p>There is deliberately <strong>no escaping helper</strong>. An escape function is how a new
+field eventually routes around validation.</p>
+<h2 id="layout">Layout<a class="headerlink" href="#layout" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>mojo/apps/edge/
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  models/
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    upstream.py     Upstream — the allowlist of places traffic may go
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    vhost.py        Vhost — one server block, as structured data
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  validators.py     Every value that can reach a file passes through here
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>  services/
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    render.py       Vhost rows -&gt; nginx text; the generation id
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    installer.py    Node-side: stage, validate, swap, reload, revert
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>  rest/
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    upstream.py     Read + the platform-admin `declare` action
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    vhost.py        CRUD, with the house-vhost guard
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    node.py         desired_state + material — machine endpoints
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>  asyncjobs.py      install_generation (broadcast), converge (cron)
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>  cronjobs.py       The 10-minute convergence sweep
+</code></pre></div>
+<h2 id="models">Models<a class="headerlink" href="#models" title="Permanent link">&para;</a></h2>
+<h3 id="upstream-the-reason-the-foreign-key-is-a-constraint"><code>Upstream</code> — the reason the foreign key is a constraint<a class="headerlink" href="#upstream-the-reason-the-foreign-key-is-a-constraint" title="Permanent link">&para;</a></h3>
+<p><code>Vhost.upstream</code> being an FK only means something if a tenant cannot create
+rows on the other end of it. So <strong>declaring an upstream is a platform-admin
+act</strong> (<code>POST edge/upstream/declare</code> → <code>require_platform_admin</code>), and every
+destination field is in <code>NO_SAVE_FIELDS</code> so an existing row cannot be
+repointed either.</p>
+<p>Loopback and RFC1918 addresses <strong>are</strong> valid upstreams: the real upstream on
+every node is <code>127.0.0.1:&lt;asgi port&gt;</code>, and internal services legitimately live
+on private addresses. What keeps a tenant away from them is that they cannot
+declare one, not an address filter. Link-local (<code>169.254.0.0/16</code> — every
+cloud's metadata service) is refused for everybody, platform admins included.</p>
+<p>A group-less <code>Upstream</code> is a house row offered to every tenant.</p>
+<h3 id="vhost-one-server-block"><code>Vhost</code> — one server block<a class="headerlink" href="#vhost-one-server-block" title="Permanent link">&para;</a></h3>
+<p><code>server_name</code> is <strong>derived</strong>: <code>label + "." + domain.name</code>, or the apex when
+<code>label</code> is empty. The web root is <strong>derived from the row's own pk</strong>.</p>
+<blockquote>
+<p><strong>There is no <code>root_slug</code>.</strong> An earlier design had one. A tenant-writable
+slug becomes a cross-tenant read the moment webapp releases land: point it at
+another tenant's slug and serve their private build output — source maps,
+embedded config, admin bundle — from your own domain. An integer primary key
+cannot traverse, collide, or name someone else's content.</p>
+</blockquote>
+<p><code>headers</code> is not a field in v1. The base config sets the security headers, and
+every structured field is another renderer input to test.</p>
+<p>Constraints worth knowing about:</p>
 <ul>
-<li><strong>Monitoring.</strong> <code>aws-check</code>'s monitoring section owns SNS topic existence and
-  the alarm inventory, discovers them account-wide, and can create what is
-  missing. <code>check_setup</code> therefore checks only what this command does not:
-  subscriptions stuck at <code>PendingConfirmation</code>, alarms sitting in
-  <code>INSUFFICIENT_DATA</code>, and whether application log groups exist and expire.</li>
-<li><strong>S3.</strong> This command inspects the public-access block on the one bucket
-  FileManager is configured with. <code>check_setup</code> sweeps <em>every</em> bucket in the
-  account and additionally reports versioning, default encryption and public
-  bucket policies.</li>
+<li><strong><code>UniqueConstraint(["domain", "label"], condition=is_enabled)</code></strong> is the
+  server_name collision defence. <strong>Not <code>nginx -t</code></strong> — nginx treats a duplicate
+  <code>server_name</code> as a <em>warning</em>, silently drops one block, and exits 0. A
+  disabled row may sit alongside an enabled one so a replacement can be staged.</li>
+<li><strong><code>CheckConstraint</code></strong> on the kind/upstream pairing, enforced in the DB as
+  well as in <code>save()</code>, so a bulk write cannot produce a hybrid row the renderer
+  has no branch for.</li>
 </ul>
-<p>Use <code>aws-check</code> to get a deployment working and keep it wired up. Use
-<code>check_setup</code> to answer "is this whole account set up sanely", especially
-before a security review — and note that its topology assertions are off unless
-you ask for them.</p>
+<p>Validation lives in <code>Model.save()</code>, not a REST hook, so a service-layer or
+shell write is exactly as safe as a REST one.</p>
+<h3 id="the-house-guard">The house guard<a class="headerlink" href="#the-house-guard" title="Permanent link">&para;</a></h3>
+<p>A vhost whose <code>domain.group_id</code> is null is platform property. <code>Vhost</code> scopes
+through <code>GROUP_FIELD = "domain__group"</code>, and for a house domain that resolves
+to <code>None</code> — at which point the permission check falls through to the caller's
+<strong>global</strong> permissions, so any global <code>manage_dns</code> holder would pass. The guard
+in <code>rest/vhost.py</code> is load-bearing, and it runs <strong>after</strong> the model check on
+purpose: leading with it would answer 403 for a house vhost and 401 for a
+tenant one, classifying the platform's inventory for a caller who can read
+neither. Same shape and same reasoning as dnsman's house-certificate guard.</p>
+<h2 id="the-generation-lifecycle">The generation lifecycle<a class="headerlink" href="#the-generation-lifecycle" title="Permanent link">&para;</a></h2>
+<p>A <strong>generation</strong> is the complete set of files a node should be serving,
+identified by a sha256 over the desired-state <em>inputs</em> (never the rendered
+text — the text embeds the generation directory).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>EDGE_ROOT (default /opt/api/var/edge)
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  generations/&lt;generation&gt;/
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>      nginx.conf                     harness, pre-filter `nginx -t` only
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>      conf.d/&lt;vhost-id&gt;.conf
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>      certs/&lt;cert-id&gt;/{fullchain.pem,privkey.pem}   0600, app-user owned
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>      www/&lt;vhost-id&gt;/                the web root (a release symlink later)
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  current -&gt; generations/&lt;generation&gt;
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  installed.json                     {generation, excluded[]}
+</code></pre></div>
+<p><code>/etc/nginx/conf.d/mojo.conf</code> is a one-line
+<code>include /opt/api/var/edge/current/conf.d/*.conf;</code>, written once at
+provisioning time and never by this code.</p>
+<p>Rendered configs name certificates by <strong>absolute generation path</strong>, not through
+<code>current</code>. That is what lets <code>nginx -t</code> validate the <em>new</em> material rather than
+the installed material, and it makes the swap a single <code>os.replace</code> of one
+symlink — with rollback being the same operation pointed at a retained
+generation whose own files are still on disk.</p>
+<h3 id="the-install-sequence">The install sequence<a class="headerlink" href="#the-install-sequence" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>fetch desired state (from the DB, via render.desired_state)
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>if generation == installed.json.generation: return          idempotent no-op
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>render generations/&lt;new&gt;/, write certificate material 0600
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    material unfetchable:  house vhost  -&gt; abort
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>                           tenant vhost -&gt; exclude it, report an incident
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>nginx -t -c generations/&lt;new&gt;/nginx.conf                    cheap pre-filter
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>os.replace(current -&gt; generations/&lt;new&gt;)                    nothing has reloaded
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>nginx -t                                                    against the REAL config
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    fail, or &quot;conflicting server name&quot; on stderr -&gt; revert current, incident, raise
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    ok -&gt; systemctl reload nginx, write installed.json, prune
+</code></pre></div>
+<p>Three properties this buys, each with its own test:</p>
+<ul>
+<li><strong>Validation against the real config.</strong> A harness only approximates the
+  deployment's own <code>nginx.conf</code> — a <code>map</code>, <code>upstream</code> or <code>limit_req_zone</code>
+  defined there and referenced by generated output passes or fails differently
+  under it. Doing the authoritative check <em>after</em> the swap is safe because
+  nginx serves the running configuration until something reloads it, so a bad
+  <code>current</code> is reverted before it can ever be loaded.</li>
+<li><strong>A collision is a failure even though nginx exits 0.</strong> The installer scans
+  stderr for <code>conflicting server name</code>.</li>
+<li><strong>One tenant cannot freeze the fleet.</strong> Certificate material can be
+  unreadable for reasons unrelated to the row (<code>KSMSecrets</code> returns an empty
+  mapping when KMS is down). A single abort path would stop every node in the
+  pool from converging — including on an urgent renewal of the platform's own
+  certificate — and would fail silent-but-serving until something expired.</li>
+</ul>
+<p><strong>Stale config serves; missing config does not.</strong> No code path deletes or
+repoints <code>current</code> on a failure, so a node whose database is unreachable at
+boot comes up on the retained generation.</p>
+<h3 id="pools">Pools<a class="headerlink" href="#pools" title="Permanent link">&para;</a></h3>
+<p><code>Vhost.pool</code> (default <code>"default"</code>) is the per-node dimension. Nodes poll for
+their own pool and the generation hash covers only that pool's rows, so a
+staging pool or an isolated tenant node costs one filter clause rather than a
+second convergence mechanism.</p>
+<h3 id="triggers">Triggers<a class="headerlink" href="#triggers" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Trigger</th>
+<th>What it is for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>edge.install_generation</code> broadcast on the <code>edge</code> channel</td>
+<td>Something changed and we were told</td>
+</tr>
+<tr>
+<td><code>converge_edge</code> cron, every 10 minutes</td>
+<td>A node that missed a broadcast, booted from an AMI, or had its runner stopped</td>
+</tr>
+<tr>
+<td>dnsman's <code>certificate_updated</code></td>
+<td>A renewal landed</td>
+</tr>
+</tbody>
+</table>
+<p>The sweep is what makes convergence a property rather than a hope: every
+broadcast is best-effort, and nothing maintains a node inventory.</p>
+<h2 id="machine-endpoints-and-the-permission-that-gates-them">Machine endpoints and the permission that gates them<a class="headerlink" href="#machine-endpoints-and-the-permission-that-gates-them" title="Permanent link">&para;</a></h2>
+<p><code>GET /api/edge/desired_state</code> and <code>GET /api/edge/material/&lt;pk&gt;</code> are gated with
+<strong><code>requires_global_perms("edge_node", allow_api_keys=True)</code></strong> — never
+<code>requires_perms</code>.</p>
+<p>That distinction is not stylistic. <code>requires_perms</code> falls back to
+<code>request.group.user_has_permission(...)</code> using a <strong>client-supplied <code>?group=</code>
+param</strong> (<code>REQUIRES_PERMS_IS_GROUP</code> defaults to True), and unlike the ApiKey
+floor the GroupMember side has no framework protection map —
+<code>_member_perms_protection()</code> returns <code>{}</code> by default, so an unlisted permission
+falls through to "is this caller a group admin?", which every tenant admin is
+inside their own group. Under <code>requires_perms</code> that composes into: grant
+yourself <code>edge_node</code> as a member of your own group, read every vhost in the
+pool, then read every referenced certificate's private key, house certificates
+included.</p>
+<p><code>edge_node</code> is also on <code>APIKEY_PERMS_PROTECTION_DEFAULTS</code>, so the ApiKey half
+is closed too: granting it requires the granter's global <code>sys.edge_node</code>.</p>
+<p><strong>Why a second material endpoint exists.</strong> dnsman's
+<code>certificate/material/&lt;pk&gt;</code> runs <code>require_platform_admin</code>, which refuses
+key-backed sessions outright — and every platform vhost sits on a house domain,
+so a node's ApiKey is refused on exactly the certificates it exists to install.
+Weakening that gate was not an option. <code>edge/material</code> is <strong>strictly tighter</strong>
+for this use: it serves only certificates an enabled <code>Vhost</code> actually
+references, so a node key reads what it installs and nothing else, and an
+unknown certificate is indistinguishable from an unreferenced one.</p>
+<h2 id="the-privilege-boundary-state-it-plainly">The privilege boundary — state it plainly<a class="headerlink" href="#the-privilege-boundary-state-it-plainly" title="Permanent link">&para;</a></h2>
+<p>The installer runs as the <strong>app user</strong> in the job runner. Everything goes
+through one function (<code>installer._run</code>) with a <strong>constant argv list</strong> built
+from file settings — never <code>settings.get</code>, which would resolve a DB-backed
+<code>Setting</code> row and make the argv row data.</p>
+<h3 id="the-sudoers-rule-and-the-one-that-would-be-a-root-escalation">The sudoers rule, and the one that would be a root escalation<a class="headerlink" href="#the-sudoers-rule-and-the-one-that-would-be-a-root-escalation" title="Permanent link">&para;</a></h3>
+<p>Exactly two commands need root, and <strong>neither takes an argument</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a># /etc/sudoers.d/mojo-edge
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>mojo ALL=(root) NOPASSWD: /usr/sbin/nginx -t
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>mojo ALL=(root) NOPASSWD: /usr/bin/systemctl reload nginx
+</code></pre></div>
+<blockquote>
+<p><strong>Do not add a rule for the staged check.</strong> It is tempting to also permit
+<code>nginx -t -c /opt/api/var/edge/generations/*/nginx.conf</code> — that is the
+command the pre-filter runs, and the generation hash forces a wildcard. It
+would be a root escalation, not a config check: <strong><code>nginx -t</code> processes
+<code>load_module</code> while parsing and <code>dlopen()</code>s the named object as whatever user
+it runs as.</strong> The app user writes that config file, so one
+<code>load_module /tmp/evil.so;</code> line in it is arbitrary root code execution — and
+because the hash is in the path, the wildcard cannot be narrowed away.</p>
+<p>The staged check therefore runs <strong>unprivileged</strong>, which it can, because every
+file it reads is app-owned and <code>-t</code> binds no ports. That is why
+<code>render_nginx_harness</code> puts <code>pid</code>, <code>error_log</code> and every <code>*_temp_path</code> inside
+the generation directory: an app user cannot write nginx's packaged prefix,
+so the defaults would fail the check for permissions rather than for config.</p>
+</blockquote>
+<p>Absolute binary paths matter — a sudoers rule naming a bare <code>nginx</code> is
+satisfied by anything first on <code>PATH</code>.</p>
+<blockquote>
+<p>The structured-model constraint at the top of this document defends against a
+malicious <strong>admin</strong>. It does nothing about a compromised <strong>API process</strong>,
+which now has a path to nginx configuration. What bounds that is the sudoers
+narrowness plus the app user owning only <code>EDGE_ROOT</code> — not the renderer.</p>
+</blockquote>
+<p>Writing that sudoers rule and the <code>/etc/nginx/conf.d/mojo.conf</code> include is
+<strong>django-mojo-skeleton work</strong> and is a deployment dependency of this app. Until
+it exists, the installer can be unit-tested but cannot be exercised on a node.</p>
+<h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>EDGE_ROOT</code></td>
+<td><code>/opt/api/var/edge</code></td>
+<td>Generations, <code>current</code>, <code>installed.json</code></td>
+</tr>
+<tr>
+<td><code>EDGE_WWW_BASE</code></td>
+<td><code>/opt/www</code></td>
+<td>Where installed releases live</td>
+</tr>
+<tr>
+<td><code>EDGE_SOCKET_BASE</code></td>
+<td><code>/run/mojo</code></td>
+<td>Unix upstream sockets must resolve under this</td>
+</tr>
+<tr>
+<td><code>EDGE_RESERVED_SERVER_NAMES</code></td>
+<td>—</td>
+<td>Names no vhost may claim. <strong>See below.</strong></td>
+</tr>
+<tr>
+<td><code>EDGE_TLS_PROTOCOLS</code></td>
+<td><code>TLSv1.2 TLSv1.3</code></td>
+<td>The TLS floor</td>
+</tr>
+<tr>
+<td><code>EDGE_TLS_CIPHERS</code></td>
+<td>modern suite</td>
+<td>The TLS floor</td>
+</tr>
+<tr>
+<td><code>EDGE_KEEP_GENERATIONS</code></td>
+<td><code>5</code></td>
+<td>Retained generations (rollback depth)</td>
+</tr>
+<tr>
+<td><code>EDGE_POOLS</code></td>
+<td><code>["default"]</code></td>
+<td>Pools the convergence sweep covers</td>
+</tr>
+<tr>
+<td><code>EDGE_NGINX_TEST_CMD</code></td>
+<td><code>["sudo","-n","nginx","-t"]</code></td>
+<td>Root check, no arguments</td>
+</tr>
+<tr>
+<td><code>EDGE_NGINX_STAGED_TEST_CMD</code></td>
+<td><code>["nginx","-t","-c"]</code></td>
+<td>Staged check, <strong>unprivileged</strong></td>
+</tr>
+<tr>
+<td><code>EDGE_NGINX_RELOAD_CMD</code></td>
+<td><code>["sudo","-n","systemctl","reload","nginx"]</code></td>
+<td>Constant argv</td>
+</tr>
+<tr>
+<td><code>EDGE_COMMAND_TIMEOUT</code></td>
+<td><code>60</code></td>
+<td>Seconds</td>
+</tr>
+</tbody>
+</table>
+<p><strong><code>EDGE_RESERVED_SERVER_NAMES</code> fails closed.</strong> The reserved set is Django's
+<code>ALLOWED_HOSTS</code> (concrete entries only) plus this setting. If <code>ALLOWED_HOSTS</code>
+is <code>["*"]</code> or empty <em>and</em> this setting is unset, <strong>no vhost can be enabled</strong> —
+a deployment that cannot name its own hostname cannot protect it, and silently
+allowing every name is the shadowing attack. Declare it.</p>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<p><code>tests/test_edge/</code> — validators, models and constraints, REST permissions,
+render injection, golden files, desired state, and the installer.</p>
+<p><code>7_nginx_real.py</code> feeds the generated configuration to a <strong>real</strong> <code>nginx -t</code>
+under <code>--extra extended</code> (or <code>--full</code>). It <strong>fails rather than skips</strong> when
+nginx is absent: a renderer whose output nobody ever handed to nginx is one
+that will eventually emit invalid configuration. Install nginx on any host that
+runs the extended tier.</p>
+<h2 id="what-this-replaces">What this replaces<a class="headerlink" href="#what-this-replaces" title="Permanent link">&para;</a></h2>
+<p><code>certbot_sync.py</code> in django-mojo-skeleton, and with it the gatekeeper role, the
+S3 certificate bucket, <code>PRIMARY_BALANCER_HOST</code>, the primary/replica direction,
+and the operator-only <code>vhosts/</code> S3 prefix. A node asks "what should I be
+serving?" and installs the answer.</p>
+<p>Removing them is skeleton-side work and is sequenced: install this app on every
+node → verify <code>installed.json</code> fleet-wide → then delete the old path.</p>
 
 
 
@@ -4197,10 +4343,10 @@ you ask for them.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

@@ -4034,6 +4034,21 @@ and widening that set casually is a known bug pattern in this codebase.</p>
 <p>Models with a <code>group</code> FK get native group scoping automatically
 (<code>mojo/models/rest.py</code> keys on <code>hasattr(cls, "group")</code>). <code>Certificate</code> has no
 direct group and declares <code>GROUP_FIELD = "domain__group"</code>.</p>
+<p>Credential assignment is the deliberate exception to the normal Group model
+surface. <code>GET /api/dnsman/credential/group-choice</code> returns only active group
+<code>id</code>/<code>name</code> choices to an interactive user holding a <strong>global</strong> <code>manage_dns</code> or
+<code>security</code> grant (or to a superuser). GroupMember grants, ApiKeys (including an
+acting-user key), and GroupScopedTokens cannot satisfy this gate. This does not
+widen <code>Group.RestMeta.VIEW_PERMS</code>, and <code>dns</code> remains absent from
+<code>DOMAIN_CATEGORIES</code>.</p>
+<p>The handler reads <code>request.GET.lists()</code> directly instead of <code>request.DATA</code>.
+That route-local exception is load-bearing: the generic parser normalizes
+duplicate, bracketed, and dotted input before the handler could reject those
+shapes. Only scalar <code>id</code>, <code>search</code>, <code>start</code>, and <code>size</code> are accepted; generic
+model-list controls and the dispatcher's reserved <code>group</code> parameter are not.
+Eligible rows match <code>Group.is_effectively_active(max_depth=8)</code> in one lazy
+queryset — self plus ancestor hops 1 through 8 are checked, while hop 9 is
+deliberately outside the shared contract.</p>
 <p><strong><code>services/*.py</code> perform no permission checks.</strong> Gating lives entirely in
 <code>rest/</code>. This is what lets the certificate service plant challenge records with
 no user in scope, and it means every custom REST handler must call

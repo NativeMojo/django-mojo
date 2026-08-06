@@ -5708,11 +5708,26 @@
 <li><code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code> — <strong>file-only</strong>
   (<code>settings.get_static</code>, <code>kind="list"</code>), default <code>[]</code>. Exact SNS topic ARN
   allowlist for <code>/api/aws/cloudwatch/sns/alarm</code>; missing/empty denies all.</li>
+<li><code>AWS_GUARDDUTY_FINDING_TOPIC_ARNS</code> — <strong>file-only</strong>
+  (<code>settings.get_static</code>, <code>kind="list"</code>), default <code>[]</code>. Exact SNS topic ARN
+  allowlist for <code>/api/aws/guardduty/sns/finding</code>; missing/empty denies all.
+  Deliberately <strong>separate</strong> from <code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code> — a topic
+  allowlisted for alarms must not be able to deliver findings, or confirm a
+  subscription, on the GuardDuty receiver. See
+  <a href="../../aws/guardduty/">../aws/guardduty.md</a>.</li>
 <li><code>AWS_MONITORING_NAME</code> — <strong>file-only</strong>, optional stable deployment slug used
   by <code>aws-check</code> for owned SNS topic and CloudWatch alarm names. Falls back to
   the static <code>BASE_URL</code> hostname.</li>
 <li><code>AWS_CHECK_CRON_MAX_AGE</code> — <strong>file-only</strong>, default <code>180</code> seconds. Maximum age
   of a completed cron-dispatch heartbeat accepted by <code>aws-check</code>.</li>
+<li><code>AWS_VERSION_DRIFT_ENABLED</code> — <strong>file-only</strong> (<code>settings.get_static</code>), bool,
+  default <code>False</code>. Arms the daily managed-service version drift scan
+  (<code>mojo.apps.aws.cronjobs.check_version_drift</code>). Read inside the cron
+  function, so it is not frozen at import.</li>
+<li><code>AWS_VERSION_DRIFT_DEADLINE_DAYS</code> — <strong>file-only</strong>, int, default <code>180</code>. A
+  published standard-support end date this close (or closer) raises the drift
+  event to level 8; an already-past date is level 10. See
+  <a href="../../aws/version_drift/">../aws/version_drift.md</a>.</li>
 <li><code>AWS_KEY</code></li>
 <li><code>AWS_REGION</code></li>
 <li><code>AWS_SECRET</code></li>

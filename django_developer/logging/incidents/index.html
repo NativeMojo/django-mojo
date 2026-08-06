@@ -2242,6 +2242,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#guardduty-finding-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GuardDuty finding events
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -5528,6 +5539,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#guardduty-finding-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GuardDuty finding events
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7304,6 +7326,31 @@ the active incident, and <code>OK</code> resolves it through the same programmat
 lifecycle path used by <code>ResolveHandler</code>.</p>
 <p>See <a href="../../aws/cloudwatch/#sns-alarm-ingestion">AWS CloudWatch monitoring</a> for
 the receiver, allowlist, idempotency, and ticket/Maestro configuration.</p>
+<h3 id="guardduty-finding-events">GuardDuty finding events<a class="headerlink" href="#guardduty-finding-events" title="Permanent link">&para;</a></h3>
+<p>The GuardDuty SNS receiver records findings as <code>scope="aws:guardduty"</code>,
+<code>category="aws:guardduty:&lt;finding type&gt;"</code>. It publishes with
+<code>use_catchall=False</code>, so only an explicit scope RuleSet can open work — write
+the policy against the <strong>scope</strong>, since a per-type category would need one
+RuleSet per finding type. <code>RuleSet.ensure_guardduty_rules()</code> installs the
+shipped opt-in policy; it is not part of <code>ensure_default_rules()</code>.</p>
+<p>Severity maps to level deliberately below the threshold: Critical, High and
+Medium all map to <strong>6</strong>, Low to 4, Informational to 2. Nothing reaches
+<code>INCIDENT_LEVEL_THRESHOLD</code>, so enabling the receiver alone creates no incident,
+no LLM triage job, and no IP threat stamp — the same posture as CloudWatch
+alarms. 6 rather than 4 for Medium and above because <code>prune_events</code> deletes
+<code>level__lt=6</code>.</p>
+<p>Use <code>BundleBy.MODEL_NAME_AND_ID</code> with <code>bundle_minutes=None</code>: <code>model_id</code> carries
+a rotating occurrence handle that is cleared when the incident goes terminal.
+That rotation is what stops a finding recurring months later from bundling back
+into its resolved incident — <code>determine_bundle_criteria</code> has no status filter.
+A repeat while the incident is live links the Event and escalates priority
+without re-dispatching handlers.</p>
+<p><code>source_ip</code> is set only when the finding's remote address is an <strong>origin</strong>
+(inbound connection, API call, port probe, Kubernetes API call). An outbound
+connection's peer is a destination our own host chose and is recorded in
+metadata only, so it never reaches inbound threat scoring.</p>
+<p>See <a href="../../aws/guardduty/">AWS GuardDuty ingestion</a> for the EventBridge wire,
+the allowlist, the dedupe contract, and the bounded metadata list.</p>
 <p>The rest of the <code>GEOLOCATION_INTERNAL_*</code> family (the attacker allowlists, the
 breadth gate, the shared-egress suppressor, the dry-run switch) is documented in
 <a href="../../account/geoip/#threat-intelligence">account/geoip.md</a>. All of them are

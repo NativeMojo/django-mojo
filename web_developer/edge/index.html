@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/aws/aws_check/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/web_developer/edge/">
       
       
       
@@ -18,19 +18,19 @@
         
       
       
-      <link rel="icon" href="../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
-        <title>AWS deployment readiness (aws-check) - Django-MOJO</title>
+        <title>edge — vhost and upstream API - Django-MOJO</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
-        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -49,7 +49,7 @@
       
     
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#aws-deployment-readiness-aws-check" class="md-skip">
+        <a href="#edge-vhost-and-upstream-api" class="md-skip">
           Skip to content
         </a>
       
@@ -88,7 +88,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              AWS deployment readiness (aws-check)
+              edge — vhost and upstream API
             
           </span>
         </div>
@@ -221,7 +221,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../.." class="md-tabs__link">
+      <a href="../.." class="md-tabs__link">
         
   
   
@@ -242,7 +242,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../" class="md-tabs__link">
+        <a href="../../django_developer/" class="md-tabs__link">
           
   
   
@@ -262,7 +262,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../web_developer/" class="md-tabs__link">
+        <a href="../" class="md-tabs__link">
           
   
   
@@ -296,7 +296,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -326,7 +326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../.." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -407,7 +407,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../" class="md-nav__link">
+      <a href="../../django_developer/" class="md-nav__link">
         
   
   
@@ -489,7 +489,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/" class="md-nav__link">
+      <a href="../../django_developer/core/" class="md-nav__link">
         
   
   
@@ -517,7 +517,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/mojo_model/" class="md-nav__link">
+      <a href="../../django_developer/core/mojo_model/" class="md-nav__link">
         
   
   
@@ -545,7 +545,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/decorators/" class="md-nav__link">
+      <a href="../../django_developer/core/decorators/" class="md-nav__link">
         
   
   
@@ -573,7 +573,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/middleware/" class="md-nav__link">
+      <a href="../../django_developer/core/middleware/" class="md-nav__link">
         
   
   
@@ -601,7 +601,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/graphs/" class="md-nav__link">
+      <a href="../../django_developer/core/graphs/" class="md-nav__link">
         
   
   
@@ -629,7 +629,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../core/cache/" class="md-nav__link">
+      <a href="../../django_developer/core/cache/" class="md-nav__link">
         
   
   
@@ -719,7 +719,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/" class="md-nav__link">
+      <a href="../../django_developer/helpers/" class="md-nav__link">
         
   
   
@@ -747,7 +747,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/logit/" class="md-nav__link">
+      <a href="../../django_developer/helpers/logit/" class="md-nav__link">
         
   
   
@@ -775,7 +775,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/dates/" class="md-nav__link">
+      <a href="../../django_developer/helpers/dates/" class="md-nav__link">
         
   
   
@@ -803,7 +803,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/settings/" class="md-nav__link">
+      <a href="../../django_developer/helpers/settings/" class="md-nav__link">
         
   
   
@@ -831,7 +831,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/settings_reference/" class="md-nav__link">
+      <a href="../../django_developer/helpers/settings_reference/" class="md-nav__link">
         
   
   
@@ -859,7 +859,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/crypto/" class="md-nav__link">
+      <a href="../../django_developer/helpers/crypto/" class="md-nav__link">
         
   
   
@@ -887,7 +887,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/request/" class="md-nav__link">
+      <a href="../../django_developer/helpers/request/" class="md-nav__link">
         
   
   
@@ -915,7 +915,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/response/" class="md-nav__link">
+      <a href="../../django_developer/helpers/response/" class="md-nav__link">
         
   
   
@@ -943,7 +943,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../helpers/other/" class="md-nav__link">
+      <a href="../../django_developer/helpers/other/" class="md-nav__link">
         
   
   
@@ -1033,7 +1033,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/" class="md-nav__link">
+      <a href="../../django_developer/account/" class="md-nav__link">
         
   
   
@@ -1061,7 +1061,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/user/" class="md-nav__link">
+      <a href="../../django_developer/account/user/" class="md-nav__link">
         
   
   
@@ -1089,7 +1089,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/group/" class="md-nav__link">
+      <a href="../../django_developer/account/group/" class="md-nav__link">
         
   
   
@@ -1117,7 +1117,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/auth/" class="md-nav__link">
+      <a href="../../django_developer/account/auth/" class="md-nav__link">
         
   
   
@@ -1145,7 +1145,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/webhook_signing/" class="md-nav__link">
+      <a href="../../django_developer/account/webhook_signing/" class="md-nav__link">
         
   
   
@@ -1173,7 +1173,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../account/webhook_subscriptions/" class="md-nav__link">
+      <a href="../../django_developer/account/webhook_subscriptions/" class="md-nav__link">
         
   
   
@@ -1263,7 +1263,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../logging/" class="md-nav__link">
+      <a href="../../django_developer/logging/" class="md-nav__link">
         
   
   
@@ -1291,7 +1291,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../logging/logit/" class="md-nav__link">
+      <a href="../../django_developer/logging/logit/" class="md-nav__link">
         
   
   
@@ -1319,7 +1319,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../logging/incidents/" class="md-nav__link">
+      <a href="../../django_developer/logging/incidents/" class="md-nav__link">
         
   
   
@@ -1409,7 +1409,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../files/README.md" class="md-nav__link">
+      <a href="../../django_developer/files/README.md" class="md-nav__link">
         
   
   
@@ -1437,7 +1437,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../files/file.md" class="md-nav__link">
+      <a href="../../django_developer/files/file.md" class="md-nav__link">
         
   
   
@@ -1465,7 +1465,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../files/file_manager.md" class="md-nav__link">
+      <a href="../../django_developer/files/file_manager.md" class="md-nav__link">
         
   
   
@@ -1555,7 +1555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../email/" class="md-nav__link">
+      <a href="../../django_developer/email/" class="md-nav__link">
         
   
   
@@ -1583,7 +1583,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../email/architecture/" class="md-nav__link">
+      <a href="../../django_developer/email/architecture/" class="md-nav__link">
         
   
   
@@ -1611,7 +1611,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../email/sending/" class="md-nav__link">
+      <a href="../../django_developer/email/sending/" class="md-nav__link">
         
   
   
@@ -1639,7 +1639,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../email/receiving/" class="md-nav__link">
+      <a href="../../django_developer/email/receiving/" class="md-nav__link">
         
   
   
@@ -1729,7 +1729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../jobs/" class="md-nav__link">
+      <a href="../../django_developer/jobs/" class="md-nav__link">
         
   
   
@@ -1757,7 +1757,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../jobs/publishing/" class="md-nav__link">
+      <a href="../../django_developer/jobs/publishing/" class="md-nav__link">
         
   
   
@@ -1785,7 +1785,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../jobs/writing_jobs/" class="md-nav__link">
+      <a href="../../django_developer/jobs/writing_jobs/" class="md-nav__link">
         
   
   
@@ -1813,7 +1813,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../jobs/job_model/" class="md-nav__link">
+      <a href="../../django_developer/jobs/job_model/" class="md-nav__link">
         
   
   
@@ -1903,7 +1903,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../metrics/" class="md-nav__link">
+      <a href="../../django_developer/metrics/" class="md-nav__link">
         
   
   
@@ -1931,7 +1931,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../metrics/recording/" class="md-nav__link">
+      <a href="../../django_developer/metrics/recording/" class="md-nav__link">
         
   
   
@@ -1959,7 +1959,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../metrics/fetching/" class="md-nav__link">
+      <a href="../../django_developer/metrics/fetching/" class="md-nav__link">
         
   
   
@@ -2049,7 +2049,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../realtime/" class="md-nav__link">
+      <a href="../../django_developer/realtime/" class="md-nav__link">
         
   
   
@@ -2077,7 +2077,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../realtime/architecture/" class="md-nav__link">
+      <a href="../../django_developer/realtime/architecture/" class="md-nav__link">
         
   
   
@@ -2105,7 +2105,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../realtime/publishing/" class="md-nav__link">
+      <a href="../../django_developer/realtime/publishing/" class="md-nav__link">
         
   
   
@@ -2133,7 +2133,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../realtime/hooks/" class="md-nav__link">
+      <a href="../../django_developer/realtime/hooks/" class="md-nav__link">
         
   
   
@@ -2169,7 +2169,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../phonehub/" class="md-nav__link">
+      <a href="../../django_developer/phonehub/" class="md-nav__link">
         
   
   
@@ -2197,7 +2197,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../filevault/" class="md-nav__link">
+      <a href="../../django_developer/filevault/" class="md-nav__link">
         
   
   
@@ -2225,7 +2225,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docit/" class="md-nav__link">
+      <a href="../../django_developer/docit/" class="md-nav__link">
         
   
   
@@ -2314,7 +2314,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -2396,7 +2396,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/core/" class="md-nav__link">
+      <a href="../core/" class="md-nav__link">
         
   
   
@@ -2424,7 +2424,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/core/authentication/" class="md-nav__link">
+      <a href="../core/authentication/" class="md-nav__link">
         
   
   
@@ -2452,7 +2452,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/core/request_response/" class="md-nav__link">
+      <a href="../core/request_response/" class="md-nav__link">
         
   
   
@@ -2480,7 +2480,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/core/filtering/" class="md-nav__link">
+      <a href="../core/filtering/" class="md-nav__link">
         
   
   
@@ -2508,7 +2508,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/core/pagination/" class="md-nav__link">
+      <a href="../core/pagination/" class="md-nav__link">
         
   
   
@@ -2536,7 +2536,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/core/graphs/" class="md-nav__link">
+      <a href="../core/graphs/" class="md-nav__link">
         
   
   
@@ -2626,7 +2626,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/" class="md-nav__link">
+      <a href="../account/" class="md-nav__link">
         
   
   
@@ -2654,7 +2654,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/authentication/" class="md-nav__link">
+      <a href="../account/authentication/" class="md-nav__link">
         
   
   
@@ -2682,7 +2682,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/user/" class="md-nav__link">
+      <a href="../account/user/" class="md-nav__link">
         
   
   
@@ -2710,7 +2710,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/group/" class="md-nav__link">
+      <a href="../account/group/" class="md-nav__link">
         
   
   
@@ -2738,7 +2738,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/admin_portal/" class="md-nav__link">
+      <a href="../account/admin_portal/" class="md-nav__link">
         
   
   
@@ -2766,7 +2766,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/api_keys/" class="md-nav__link">
+      <a href="../account/api_keys/" class="md-nav__link">
         
   
   
@@ -2794,7 +2794,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/webhook_signing/" class="md-nav__link">
+      <a href="../account/webhook_signing/" class="md-nav__link">
         
   
   
@@ -2822,7 +2822,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/account/webhook_subscriptions/" class="md-nav__link">
+      <a href="../account/webhook_subscriptions/" class="md-nav__link">
         
   
   
@@ -2912,7 +2912,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/logging/" class="md-nav__link">
+      <a href="../logging/" class="md-nav__link">
         
   
   
@@ -2940,7 +2940,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/logging/logs/" class="md-nav__link">
+      <a href="../logging/logs/" class="md-nav__link">
         
   
   
@@ -2968,7 +2968,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/logging/incidents/" class="md-nav__link">
+      <a href="../logging/incidents/" class="md-nav__link">
         
   
   
@@ -3058,7 +3058,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/files/README.md" class="md-nav__link">
+      <a href="../files/README.md" class="md-nav__link">
         
   
   
@@ -3086,7 +3086,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/files/upload.md" class="md-nav__link">
+      <a href="../files/upload.md" class="md-nav__link">
         
   
   
@@ -3114,7 +3114,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/files/files.md" class="md-nav__link">
+      <a href="../files/files.md" class="md-nav__link">
         
   
   
@@ -3204,7 +3204,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/email/" class="md-nav__link">
+      <a href="../email/" class="md-nav__link">
         
   
   
@@ -3232,7 +3232,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/email/email/" class="md-nav__link">
+      <a href="../email/email/" class="md-nav__link">
         
   
   
@@ -3322,7 +3322,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/jobs/" class="md-nav__link">
+      <a href="../jobs/" class="md-nav__link">
         
   
   
@@ -3350,7 +3350,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/jobs/jobs/" class="md-nav__link">
+      <a href="../jobs/jobs/" class="md-nav__link">
         
   
   
@@ -3440,7 +3440,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/metrics/" class="md-nav__link">
+      <a href="../metrics/" class="md-nav__link">
         
   
   
@@ -3468,7 +3468,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/metrics/metrics/" class="md-nav__link">
+      <a href="../metrics/metrics/" class="md-nav__link">
         
   
   
@@ -3558,7 +3558,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/realtime/" class="md-nav__link">
+      <a href="../realtime/" class="md-nav__link">
         
   
   
@@ -3586,7 +3586,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/realtime/websocket/" class="md-nav__link">
+      <a href="../realtime/websocket/" class="md-nav__link">
         
   
   
@@ -3622,7 +3622,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/phonehub/" class="md-nav__link">
+      <a href="../phonehub/" class="md-nav__link">
         
   
   
@@ -3650,7 +3650,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/filevault/" class="md-nav__link">
+      <a href="../filevault/" class="md-nav__link">
         
   
   
@@ -3678,7 +3678,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../web_developer/docit/" class="md-nav__link">
+      <a href="../docit/" class="md-nav__link">
         
   
   
@@ -3733,10 +3733,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#modes-and-exit-status" class="md-nav__link">
+  <a href="#the-shape-to-expect" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Modes and exit status
+        The shape to expect
       
     </span>
   </a>
@@ -3744,22 +3744,33 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#sections" class="md-nav__link">
+  <a href="#vhosts" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Sections
+        Vhosts
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Sections">
+    <nav class="md-nav" aria-label="Vhosts">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#filemanagers-configured-with-assume_role_arn" class="md-nav__link">
+  <a href="#fields" class="md-nav__link">
     <span class="md-ellipsis">
       
-        FileManagers configured with assume_role_arn
+        Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors-worth-handling-explicitly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors worth handling explicitly
       
     </span>
   </a>
@@ -3772,10 +3783,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cron-deployment" class="md-nav__link">
+  <a href="#upstreams" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cron deployment
+        Upstreams
       
     </span>
   </a>
@@ -3783,32 +3794,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cloudwatchsns-two-phase-setup" class="md-nav__link">
+  <a href="#machine-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       
-        CloudWatch/SNS two-phase setup
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#least-privilege-iam-actions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Least-privilege IAM actions
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#not-the-same-as-python-m-mojodeploycheck_setup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Not the same as python -m mojo.deploy.check_setup
+        Machine endpoints
       
     </span>
   </a>
@@ -3835,313 +3824,140 @@
   
 
 
-<h1 id="aws-deployment-readiness-aws-check">AWS deployment readiness (<code>aws-check</code>)<a class="headerlink" href="#aws-deployment-readiness-aws-check" title="Permanent link">&para;</a></h1>
-<p><code>python manage.py aws-check</code> audits the AWS and operational wiring required by
-django-mojo. It is audit-first: a normal non-interactive invocation never
-mutates AWS or Django state, and apply mode creates only confirmed missing
-resources. Existing resources that differ from defaults are reported and
-preserved.</p>
-<h2 id="modes-and-exit-status">Modes and exit status<a class="headerlink" href="#modes-and-exit-status" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w">                         </span><span class="c1"># audit; interactive TTY may offer missing creates</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--check<span class="w">                 </span><span class="c1"># strictly read-only, never prompts</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--json<span class="w">                  </span><span class="c1"># read-only versioned JSON</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--apply<span class="w">                 </span><span class="c1"># confirm each eligible create</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--apply<span class="w"> </span>--yes<span class="w">           </span><span class="c1"># approve create-missing actions only</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--section<span class="w"> </span>s3<span class="w"> </span>--check<span class="w">     </span><span class="c1"># repeat --section as needed</span>
-</code></pre></div>
-<p><code>--region</code>, <code>--aws-profile</code>, and <code>--timeout</code> select the bounded AWS context.
-Timeout must be 1–30 seconds. A profile overrides static <code>AWS_KEY</code> / <code>AWS_SECRET</code>;
-otherwise a complete static pair is used, falling back to boto3's environment,
-container, instance or task-role chain when both are empty. A partial static
-pair is a failure.
-<code>--bucket-name</code> and <code>--mailbox-email</code> supply non-secret create details.
-<code>--probe-s3</code> separately authorizes a UUID sentinel put/get/delete test. If its
-cleanup fails, the report prints the exact key. <code>--adopt-bucket</code> is an explicit
-repair for an interrupted create/tag operation: ownership must be proven by
-<code>ListBuckets</code>, the region must match, and existing tags are merged rather than
-replaced.</p>
-<p><code>--check</code> and <code>--apply</code> are mutually exclusive; <code>--yes</code> requires <code>--apply</code>.
-JSON mode is read-only and cannot be combined with apply, yes or probe flags.
-A non-TTY invocation is audit-only unless <code>--apply --yes</code> is explicit; an S3
-probe also requires apply authorization.</p>
-<p>Exit 0 means no required check failed; WARN, PENDING and SKIP may remain. Exit
-1 means readiness failed. Exit 2 means the CLI request was invalid. Statuses
-mean: PASS is ready, WARN is usable but needs attention, FAIL blocks readiness,
-PENDING awaits an external/operator step, and SKIP was deliberately not run.
-JSON uses <code>schema_version=1</code> and stable section/status/code/message/details/
-remediation/changed items:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;generated_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-04T12:00:00+00:00&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;region&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;us-west-2&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">&quot;overall&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pass&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">&quot;counts&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;pass&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;warn&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;fail&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;pending&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;skip&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">&quot;items&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">&quot;section&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;monitoring&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pending&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sns.topic_not_allowlisted&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Operations topic ARN is not in the static receiver allowlist&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="nt">&quot;details&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;topic_arn&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;arn:aws:sns:us-west-2:123456789012:django-mojo-example-operations&quot;</span><span class="p">},</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="nt">&quot;remediation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Add the exact ARN to AWS_CLOUDWATCH_ALARM_TOPIC_ARNS, restart Django, then rerun.&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">    </span><span class="nt">&quot;changed&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">  </span><span class="p">}]</span>
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="p">}</span>
-</code></pre></div>
-<h2 id="sections">Sections<a class="headerlink" href="#sections" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Section</th>
-<th>Checks</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>prerequisites</code></td>
-<td>selected region and public HTTPS <code>BASE_URL</code></td>
-</tr>
-<tr>
-<td><code>identity</code></td>
-<td>bounded STS identity using static keys, profile, environment, container or instance/task role</td>
-</tr>
-<tr>
-<td><code>cron</code></td>
-<td>recent dispatcher run plus jobs Redis, runner heartbeats and scheduler lock</td>
-</tr>
-<tr>
-<td><code>s3</code></td>
-<td>one system-default S3 FileManager, bucket/region/IAM, Public Access Block, CORS and optional sentinel</td>
-</tr>
-<tr>
-<td><code>email</code></td>
-<td>SES identity/DKIM/sandbox/topics/receiving audit, outbound Mailbox and shipped templates</td>
-</tr>
-<tr>
-<td><code>monitoring</code></td>
-<td>owned SNS topic, exact static allowlist, HTTPS subscription, owned alarms and receiver receipt</td>
-</tr>
-<tr>
-<td><code>rules</code></td>
-<td>opt-in create-only CloudWatch and version-drift incident policies</td>
-</tr>
-<tr>
-<td><code>versions</code></td>
-<td><strong>opt-in</strong> managed-service major version drift (RDS/Aurora, ElastiCache) — never part of a default run, and never reports FAIL</td>
-</tr>
-</tbody>
-</table>
-<p><code>versions</code> is the one section that is not in the default set: select it with
-<code>--section versions</code>. It can only report PASS, WARN or PENDING, so a run made
-before its extra IAM actions are granted cannot exit 1 in CI. See
-<a href="../version_drift/">version_drift.md</a>.</p>
-<p>Credential material is never prompted, printed or persisted by this command.
-If a FileManager or EmailDomain has stored credentials, its STS account/region
-is checked separately; cross-account or cross-region apply fails closed.</p>
-<h3 id="filemanagers-configured-with-assume_role_arn">FileManagers configured with <code>assume_role_arn</code><a class="headerlink" href="#filemanagers-configured-with-assume_role_arn" title="Permanent link">&para;</a></h3>
-<p>A FileManager may reach a bucket in another AWS account by assuming a role — see
-<a href="../credentials/">credentials.md</a> and
-<a href="../../fileman/file_manager/">../fileman/file_manager.md</a>. <code>aws-check</code> does <strong>not</strong>
-resolve that role. The <code>s3</code> section validates the manager's stored static keys —
-the <em>source</em> identity — and then talks to S3 with those keys directly, rather
-than through the backend's assumed session.</p>
-<p>Two consequences for a cross-account manager:</p>
+<h1 id="edge-vhost-and-upstream-api">edge — vhost and upstream API<a class="headerlink" href="#edge-vhost-and-upstream-api" title="Permanent link">&para;</a></h1>
+<p>How a domain gets served. Pairs with <a href="../dnsman/">dnsman</a>, which owns
+the domain and issues the certificate.</p>
+<p>Backend reference: <a href="../../django_developer/edge/">django_developer/edge</a>.</p>
+<p>Releasing site builds (register, promote, roll back):
+<a href="releases/">releases.md</a>.</p>
+<h2 id="the-shape-to-expect">The shape to expect<a class="headerlink" href="#the-shape-to-expect" title="Permanent link">&para;</a></h2>
+<p>You never send nginx configuration. A vhost is a small set of choices, and the
+API derives everything that ends up in a config file:</p>
 <ul>
-<li><code>fileman.cross_context</code> is <strong>expected, not a defect</strong> whenever the manager's
-  stored keys or region differ from the selected ones. It reports exactly what a
-  cross-account configuration is: an identity other than the one <code>aws-check</code>
-  selected. Do not "fix" it by rewriting the manager's region or keys.</li>
-<li>When <code>cross_context</code> does <em>not</em> fire — the usual case, since the source
-  identity normally lives in our own account — the <code>bucket.*</code> checks that follow
-  describe the <strong>source</strong> identity's access to the tenant's bucket, which is
-  normally none. Read them as inconclusive for this manager, and verify it with
-  the manager's own <code>test_connection</code> action instead; that one goes through the
-  assumed session.</li>
+<li><strong><code>server_name</code></strong> comes from the <code>domain</code> you name plus a <code>label</code> — you
+  cannot type it, and you cannot claim a name under a domain your group does
+  not own.</li>
+<li><strong>The web root</strong> comes from the vhost's own id.</li>
+<li><strong>The proxy destination</strong> is a reference to a declared <code>upstream</code>, never a
+  URL you supply.</li>
 </ul>
-<h2 id="cron-deployment">Cron deployment<a class="headerlink" href="#cron-deployment" title="Permanent link">&para;</a></h2>
-<p>Run the dispatcher at least once per minute:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>shell<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;from mojo.helpers import cron; cron.load_app_cron(); cron.run_now()&quot;</span>
+<p>A request carrying anything nginx would treat as syntax is rejected, not
+escaped.</p>
+<h2 id="vhosts">Vhosts<a class="headerlink" href="#vhosts" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET    /api/edge/vhost                list (scoped to your group)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>GET    /api/edge/vhost/&lt;id&gt;           detail
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>POST   /api/edge/vhost                create
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>POST   /api/edge/vhost/&lt;id&gt;           update
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>DELETE /api/edge/vhost/&lt;id&gt;           delete
 </code></pre></div>
-<p>Each invocation writes an expiring per-run heartbeat. Overlapping invocations
-cannot overwrite one another. Heartbeat write failure is fail-open for cron but
-is visible to <code>aws-check</code>.</p>
-<h2 id="cloudwatchsns-two-phase-setup">CloudWatch/SNS two-phase setup<a class="headerlink" href="#cloudwatchsns-two-phase-setup" title="Permanent link">&para;</a></h2>
-<p>The command uses the signed receiver already exposed at
-<code>/api/aws/cloudwatch/sns/alarm</code>:</p>
-<ol>
-<li>Create or discover the tagged operations topic and copy its ARN from the report.</li>
-<li>Add that exact ARN to file-only <code>AWS_CLOUDWATCH_ALARM_TOPIC_ARNS</code>, restart Django, and rerun.</li>
-<li>Apply the HTTPS subscription and wait for confirmation.</li>
-<li>Apply missing alarms. Existing owned drift is WARN; non-owned reserved-name collisions are FAIL.</li>
-<li>Run the documented disposable-alarm ALARM→OK test. The durable transition receipt proves delivery.</li>
-<li>Apply the default RuleSet only after delivery is verified.</li>
-</ol>
-<p>Default alarms are EC2 <code>StatusCheckFailed</code> Maximum &gt;= 1 for 2 of 2 one-minute
-periods; EC2/RDS/ElastiCache <code>CPUUtilization</code> Average &gt;= 90% for 3 of 3
-five-minute periods; and, on <strong>non-Aurora RDS engines only</strong>, <code>FreeStorageSpace</code>
-Average &lt;= 10 GiB for 3 of 3 five-minute periods. They use stable names,
-ownership tags, <code>TreatMissingData=notBreaching</code>, and ALARM/OK actions.
-Connection counts and CWAgent memory/disk are not guessed because portable
-thresholds/dimensions do not exist.</p>
-<p>Aurora (<code>aurora</code>, <code>aurora-mysql</code>, <code>aurora-postgresql</code>, and any future <code>aurora-*</code>
-engine) publishes <strong>no per-instance free-space metric</strong> — its storage is a shared
-auto-scaling cluster volume, and local scratch space is reported as
-<code>FreeLocalStorage</code>, whose safe threshold varies by instance class. A
-<code>FreeStorageSpace</code> alarm on an Aurora instance therefore never receives a
-datapoint and, with <code>TreatMissingData=notBreaching</code>, sits permanently green while
-monitoring nothing. <code>aws-check</code> no longer creates one and instead reports the
-gap explicitly:</p>
+<p><strong>Permissions:</strong> <code>view_dns</code> to read; <code>manage_dns</code> (or <code>security</code>) to write.</p>
+<h3 id="fields">Fields<a class="headerlink" href="#fields" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
-<th>Code</th>
-<th>Status</th>
-<th>Meaning</th>
+<th>Field</th>
+<th>Writable</th>
+<th>Notes</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>alarms.aurora_storage_unmonitored</code></td>
-<td>WARN</td>
-<td>Aurora instances were discovered and have no storage alarm. Details list the instance ids. Add a <code>FreeLocalStorage</code> alarm sized to each instance class, or watch the cluster volume in the RDS console.</td>
+<td><code>domain</code></td>
+<td>on create only</td>
+<td>Owns the name and the tenancy. Immutable afterwards — changing it would move the vhost between groups.</td>
 </tr>
 <tr>
-<td><code>alarms.stale_aurora_storage</code></td>
-<td>WARN</td>
-<td>Owned <code>FreeStorageSpace</code> alarms created by an earlier django-mojo version still exist on Aurora instances. Details list the exact alarm names and remediation gives the <code>aws cloudwatch delete-alarms --alarm-names ...</code> command.</td>
+<td><code>label</code></td>
+<td>yes</td>
+<td><code>""</code> serves the apex, <code>"*"</code> the wildcard, otherwise one DNS label (<code>^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$</code>).</td>
+</tr>
+<tr>
+<td><code>kind</code></td>
+<td>yes</td>
+<td><code>static</code>, <code>spa</code>, or <code>proxy</code>.</td>
+</tr>
+<tr>
+<td><code>upstream</code></td>
+<td>yes</td>
+<td><strong>Required</strong> for <code>proxy</code>, <strong>rejected</strong> otherwise.</td>
+</tr>
+<tr>
+<td><code>certificate</code></td>
+<td>yes</td>
+<td>Must belong to the same domain and cover the derived name.</td>
+</tr>
+<tr>
+<td><code>pool</code></td>
+<td>yes</td>
+<td>Which fleet pool serves it. Default <code>"default"</code>.</td>
+</tr>
+<tr>
+<td><code>is_enabled</code></td>
+<td>yes</td>
+<td>Only enabled vhosts are served.</td>
 </tr>
 </tbody>
 </table>
-<p>Both are reported before the SNS allowlist and subscription-confirmation gates,
-so a half-configured deployment still sees them. <code>aws-check</code> never deletes AWS
-resources, so the stale alarms must be removed by hand; an owned alarm on the
-reserved name that has already been hand-edited to a different metric (for
-example <code>FreeLocalStorage</code>) is preserved and reported as <code>alarms.drifted</code>
-instead.</p>
-<p>The topic name is <code>django-mojo-&lt;deployment&gt;-operations</code>; alarm names are
-<code>django-mojo/&lt;deployment&gt;/&lt;resource-type&gt;/&lt;resource-id&gt;/&lt;signal&gt;</code>. Owned
-resources carry <code>managed-by=django-mojo</code>, <code>purpose=cloudwatch-incidents</code>, and
-<code>deployment=&lt;slug&gt;</code>. Existing owned drift is reported and preserved; a
-same-name resource without those ownership tags is a conflict.</p>
-<p>After a signed delivery receipt, apply can create the opt-in RuleSet
-<code>AWS CloudWatch - Operations</code> in category <code>aws:cloudwatch</code>, bundling by alarm
-model and ID. Its handler is <code>notify://perm@manage_security</code>; it does not page,
-open a direct ticket, block an IP, or bypass the incident lifecycle. The normal
-global default-rule seeder never installs it on non-AWS deployments.</p>
-<p>The <code>rules</code> section reports and can create a <strong>second</strong> opt-in RuleSet,
-<code>Health - AWS Version Drift</code> in category <code>aws:versions</code>, whose handler is
-<code>notify://perm@manage_security,ticket://?priority=8&amp;category=aws-version-drift&amp;maestro=1</code>.
-It does <strong>not</strong> sit behind the <code>monitoring_ready</code> / <code>delivery_seen</code> gate above:
-that gate exists because CloudWatch alarms need a confirmed SNS receiver,
-whereas version-drift events are generated in-process. See
-<a href="../version_drift/">version_drift.md</a>.</p>
-<h2 id="least-privilege-iam-actions">Least-privilege IAM actions<a class="headerlink" href="#least-privilege-iam-actions" title="Permanent link">&para;</a></h2>
-<p>Grant only actions for the selected sections and scope resource ARNs wherever
-AWS supports it:</p>
+<p><code>server_name</code> is returned on every graph as a read-only extra.</p>
+<h3 id="errors-worth-handling-explicitly">Errors worth handling explicitly<a class="headerlink" href="#errors-worth-handling-explicitly" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
-<th>Section/mode</th>
-<th>Required AWS actions</th>
+<th>Situation</th>
+<th>Response</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>identity/all AWS checks</td>
-<td><code>sts:GetCallerIdentity</code></td>
+<td>Two <strong>enabled</strong> vhosts on the same <code>domain</code> + <code>label</code></td>
+<td>400 — disable the old one first, or stage the replacement with <code>is_enabled: false</code></td>
 </tr>
 <tr>
-<td>S3 audit</td>
-<td><code>s3:ListBucket</code>, <code>s3:GetBucketPublicAccessBlock</code>, <code>s3:GetBucketCORS</code></td>
+<td><code>certificate</code> belongs to another domain, or does not cover the name</td>
+<td>400</td>
 </tr>
 <tr>
-<td>S3 create/adopt</td>
-<td><code>s3:CreateBucket</code>, <code>s3:GetBucketLocation</code>, <code>s3:PutBucketPublicAccessBlock</code>, <code>s3:GetBucketTagging</code>, <code>s3:PutBucketTagging</code>; adoption also needs <code>s3:ListAllMyBuckets</code></td>
+<td><code>proxy</code> with no <code>upstream</code>, or <code>static</code>/<code>spa</code> with one</td>
+<td>400</td>
 </tr>
 <tr>
-<td>S3 probe</td>
-<td><code>s3:PutObject</code>, <code>s3:GetObject</code>, <code>s3:DeleteObject</code> on <code>__django_mojo_aws_check__/*</code></td>
+<td><code>label</code> containing a dot, uppercase, or any punctuation</td>
+<td>400</td>
 </tr>
 <tr>
-<td>SES/email audit</td>
-<td><code>ses:GetAccount</code>, <code>ses:GetIdentityVerificationAttributes</code>, <code>ses:GetIdentityDkimAttributes</code>, <code>ses:GetIdentityNotificationAttributes</code>, <code>ses:DescribeReceiptRuleSet</code>, <code>sns:GetTopicAttributes</code>, <code>sns:ListSubscriptionsByTopic</code>, <code>s3:ListBucket</code> for optional inbound storage</td>
-</tr>
-<tr>
-<td>SES/email create-missing</td>
-<td><code>ses:VerifyDomainIdentity</code>, <code>ses:VerifyDomainDkim</code>, <code>ses:SetIdentityNotificationTopic</code>, <code>sns:ListTopics</code>, <code>sns:ListTagsForResource</code>, <code>sns:CreateTopic</code>, <code>sns:TagResource</code>, <code>sns:Subscribe</code></td>
-</tr>
-<tr>
-<td>Monitoring audit</td>
-<td><code>sns:ListTopics</code>, <code>sns:ListTagsForResource</code>, <code>sns:ListSubscriptionsByTopic</code>, <code>cloudwatch:DescribeAlarms</code>, <code>cloudwatch:ListTagsForResource</code>, <code>ec2:DescribeInstances</code>, <code>rds:DescribeDBInstances</code>, <code>elasticache:DescribeCacheClusters</code></td>
-</tr>
-<tr>
-<td>Monitoring apply</td>
-<td><code>sns:CreateTopic</code>, <code>sns:TagResource</code>, <code>sns:Subscribe</code>, <code>cloudwatch:PutMetricAlarm</code>, <code>cloudwatch:TagResource</code></td>
-</tr>
-<tr>
-<td>Versions audit (opt-in)</td>
-<td><code>rds:DescribeDBClusters</code>, <code>rds:DescribeDBInstances</code>, <code>rds:DescribeDBEngineVersions</code>, <code>rds:DescribeDBMajorEngineVersions</code>, <code>elasticache:DescribeCacheClusters</code>, <code>elasticache:DescribeCacheEngineVersions</code></td>
+<td>The name is reserved by the deployment (it is the API's own hostname)</td>
+<td>400</td>
 </tr>
 </tbody>
 </table>
-<p>Cron, rule, mailbox and template checks use Django database/Redis access rather
-than IAM. The command never deletes AWS resources, edits deployment files,
-changes DNS, requests SES production access, or sends email.</p>
-<h2 id="not-the-same-as-python-m-mojodeploycheck_setup">Not the same as <code>python -m mojo.deploy.check_setup</code><a class="headerlink" href="#not-the-same-as-python-m-mojodeploycheck_setup" title="Permanent link">&para;</a></h2>
-<p>django-mojo ships a second AWS auditor, <code>mojo.deploy.check_setup</code>
-(<a href="../../deploy/#check_setup">deploy/README.md</a>). They answer different
-questions and neither replaces the other:</p>
-<table>
-<thead>
-<tr>
-<th></th>
-<th><code>manage.py aws-check</code></th>
-<th><code>python3 -m mojo.deploy.check_setup</code></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Needs Django</td>
-<td>yes — reads settings, models, Redis</td>
-<td>no; runs before <code>django.conf</code> exists</td>
-</tr>
-<tr>
-<td>Scope</td>
-<td>this deployment's own resources, named by configuration</td>
-<td>the whole AWS account, whatever is in it</td>
-</tr>
-<tr>
-<td>Mutates</td>
-<td>yes, with <code>--apply</code> — creates missing buckets, topics, subscriptions, alarms</td>
-<td>never; every call is a Describe/Get/List</td>
-</tr>
-<tr>
-<td>Covers</td>
-<td>S3/SES/SNS/CloudWatch wiring, cron, mailboxes, templates, incident rule defaults</td>
-<td>EC2 and security-group posture, load balancer, RDS/Aurora, ElastiCache, EBS/backup/CloudTrail/GuardDuty, account-wide S3, IAM users and keys</td>
-</tr>
-<tr>
-<td>Run from</td>
-<td>the app box, as the app</td>
-<td>anywhere with credentials, including a laptop</td>
-</tr>
-</tbody>
-</table>
-<p>Where they overlap, <code>check_setup</code> is deliberately reduced to the delta:</p>
-<ul>
-<li><strong>Monitoring.</strong> <code>aws-check</code>'s monitoring section owns SNS topic existence and
-  the alarm inventory, discovers them account-wide, and can create what is
-  missing. <code>check_setup</code> therefore checks only what this command does not:
-  subscriptions stuck at <code>PendingConfirmation</code>, alarms sitting in
-  <code>INSUFFICIENT_DATA</code>, and whether application log groups exist and expire.</li>
-<li><strong>S3.</strong> This command inspects the public-access block on the one bucket
-  FileManager is configured with. <code>check_setup</code> sweeps <em>every</em> bucket in the
-  account and additionally reports versioning, default encryption and public
-  bucket policies.</li>
-</ul>
-<p>Use <code>aws-check</code> to get a deployment working and keep it wired up. Use
-<code>check_setup</code> to answer "is this whole account set up sanely", especially
-before a security review — and note that its topology assertions are off unless
-you ask for them.</p>
+<p>A vhost may be created <strong>disabled</strong> with a certificate that does not yet cover
+it — useful while a certificate is being reissued. The coverage and
+reserved-name checks apply at enable time.</p>
+<h2 id="upstreams">Upstreams<a class="headerlink" href="#upstreams" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>GET  /api/edge/upstream               list the ones you may select
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>GET  /api/edge/upstream/&lt;id&gt;          detail
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>POST /api/edge/upstream/&lt;id&gt;          update  (only `is_enabled` is writable)
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>POST /api/edge/upstream/declare       create   — PLATFORM ADMIN ONLY
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>POST /api/edge/upstream/retire        disable  — PLATFORM ADMIN ONLY
+</code></pre></div>
+<p><strong>You will normally only call the read endpoints.</strong> Declaring an upstream is
+restricted to platform administrators, because this row is the allowlist that
+makes a proxy vhost safe — if any tenant could add one, the reference would
+stop being a constraint. Build the vhost form as a <strong>select</strong> over
+<code>GET /api/edge/upstream</code>, which returns your group's upstreams plus the
+platform's shared ones.</p>
+<p><code>host</code>, <code>port</code>, <code>socket_path</code> and <code>kind</code> are not writable over REST at all,
+including for platform admins — an existing upstream cannot be repointed, only
+retired and replaced.</p>
+<h2 id="machine-endpoints">Machine endpoints<a class="headerlink" href="#machine-endpoints" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/edge/desired_state?pool=default
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>GET /api/edge/material/&lt;certificate-id&gt;
+</code></pre></div>
+<p>These are for <strong>serving nodes</strong>, not for browser clients. They require the
+global <code>edge_node</code> permission, which is protected: a group administrator cannot
+grant it to an API key, and a member-scoped grant plus <code>?group=</code> does not open
+them. Nothing in a portal should call these.</p>
+<p><code>desired_state</code> carries certificate <strong>identifiers only</strong> — never key material.</p>
 
 
 
@@ -4197,10 +4013,10 @@ you ask for them.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

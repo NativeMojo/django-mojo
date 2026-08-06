@@ -4933,6 +4933,11 @@
 <td>Disk threshold exceeded</td>
 </tr>
 <tr>
+<td><code>system:health:aws_versions</code></td>
+<td>Health</td>
+<td>AWS managed-service major version drift (opt-in)</td>
+</tr>
+<tr>
 <td><code>api_error</code></td>
 <td>App</td>
 <td>Application error (default category)</td>
@@ -6041,6 +6046,11 @@ into the kernel firewall fleet-wide.</p>
 </tr>
 </tbody>
 </table>
+<p>A seventh health category, <code>system:health:aws_versions</code>, is filed by a separate
+opt-in daily job rather than by <code>check_system_health</code> — see
+<a href="../aws/version_drift/">AWS version drift</a>. It appears on the same
+<code>/api/incident/health/summary</code> strip, at level 4 (inventory incomplete), 5
+(major upgrade available), 8 (support deadline near) or 10 (deadline passed).</p>
 <h3 id="enable-health-monitoring">Enable Health Monitoring<a class="headerlink" href="#enable-health-monitoring" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># In Django settings</span>
 <a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="n">HEALTH_MONITORING_ENABLED</span> <span class="o">=</span> <span class="kc">True</span>
@@ -6546,8 +6556,21 @@ into the kernel firewall fleet-wide.</p>
 <td><code>notify://perm@manage_security</code></td>
 <td>HOSTNAME, 30min</td>
 </tr>
+<tr>
+<td>AWS Version Drift</td>
+<td><code>aws:versions</code> (matched by event <strong>scope</strong>)</td>
+<td>level &gt;= 5</td>
+<td><code>notify://perm@manage_security,ticket://?priority=8&amp;category=aws-version-drift&amp;maestro=1</code></td>
+<td>NONE</td>
+</tr>
 </tbody>
 </table>
+<p><code>ensure_health_rules()</code> creates the first three. The AWS one is opt-in
+(<code>RuleSet.ensure_aws_version_rules()</code> or <code>aws-check --apply --section rules</code>)
+and deliberately sits on <code>aws:versions</code> rather than inside the
+<code>system:health:</code> namespace, so it can never satisfy the health-defaults
+bootstrap guard in <code>mojo/apps/incident/cronjobs.py</code> and suppress the three
+above.</p>
 <p>Health rules <strong>never</strong> use <code>block://</code> — infrastructure issues should not block IPs.</p>
 <h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
 <ul>
