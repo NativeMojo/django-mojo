@@ -71,10 +71,18 @@ downstream uses a fresh immutable `client_ref` per onboarding:
 { "domain": "customer.example", "client_ref": "site-install-2026-08" }
 ```
 
-The response contains only `client_ref`, normalized `domain`, and the permanent
-`source`/opaque `target`. The same project/ref/domain is idempotent; reusing the
-ref for another domain is refused. Publish the returned source as one CNAME to
-the returned target.
+```json
+{
+  "client_ref": "site-install-2026-08",
+  "domain": "customer.example",
+  "source": "_acme-challenge.customer.example",
+  "target": "4a0f0123456789abcdef0123456789ab.acme-hub.example.net"
+}
+```
+
+This is the exact `data` object inside the standard success envelope. The same
+project/ref/domain is idempotent; reusing the ref for another domain is refused.
+Publish the returned source as one CNAME to the returned target.
 
 ### `POST /api/dnsman/acme/challenge/publish`
 
@@ -89,6 +97,21 @@ leases the set and replaces the target RRset with the union of all active
 leases. Success waits for the exact union to be authoritatively visible. A
 retry must use the same `challenge_ref` and values.
 
+```json
+{
+  "client_ref": "site-install-2026-08",
+  "domain": "customer.example",
+  "source": "_acme-challenge.customer.example",
+  "target": "4a0f0123456789abcdef0123456789ab.acme-hub.example.net",
+  "challenge_ref": "order-123",
+  "active_value_count": 2
+}
+```
+
+`active_value_count` is the size of the deduplicated TXT union, not a lease
+count. Replaying a ref with different values, or republishing an expired or
+withdrawn ref, is refused.
+
 ### `POST /api/dnsman/acme/challenge/withdraw`
 
 ```json
@@ -99,9 +122,16 @@ Idempotently retires only that lease and preserves values from parallel
 challenges. Withdrawal deliberately succeeds after the tenant CNAME has been
 removed, so revocation cannot block cleanup.
 
-Responses may echo `client_ref`, `challenge_ref`, domain/source/target and
-active-value counts. They never contain TXT digests, hosted-zone ids, AWS
-change ids, credentials, or unrelated allocations.
+The response uses the same six-field challenge shape shown for publish, with
+the remaining `active_value_count`; an unknown/already-retired reference is a
+successful no-op. Hub responses never contain TXT digests, hosted-zone ids,
+AWS change ids, credentials, or unrelated allocations.
+
+References are 1–128 safe identifier characters. `values` accepts 1–20 entries
+(duplicates are deduplicated), each 1–1024 characters with no NUL/CR/LF. All
+three endpoints return 200 on success and share one sliding bucket: 120
+requests/minute per IP and 300 per project. A limit response is 429 with
+`Retry-After`.
 
 ### Downstream client behavior
 
@@ -126,15 +156,36 @@ separate flows and remain unchanged.
 The consuming dnsman deployment wraps that machine transport in normal
 tenant-gated endpoints:
 
-- `POST /api/dnsman/delegation/initiate` with either `{ "domain": 12 }` or
-  `{ "group": 4, "name": "external.example" }`. It returns the permanent
-  `source` and opaque `target` the tenant must publish as one CNAME. An external
-  name remains pending and does not reserve a `Domain.name` yet.
-- `GET /api/dnsman/delegation?domain=12` and
-  `GET /api/dnsman/delegation/<id>` return status for the authorized tenant.
-- `POST /api/dnsman/delegation/verify` with `{ "delegation": 9 }` performs
-  authoritative exact one-hop proof. For an external name, only successful
-  proof creates its certificate-only Domain.
+| Endpoint | Permission | Request / behavior |
+|---|---|---|
+| `POST /api/dnsman/delegation/initiate` | `manage_dns` or `security` | Either `{ "domain": 12 }` or `{ "group": 4, "name": "external.example" }`; returns the permanent CNAME source/target. An external name remains pending and does not reserve `Domain.name`. |
+| `GET /api/dnsman/delegation?domain=12` | `view_dns`, `manage_dns`, or `security` | Returns a list (maximum 100, newest first) for that authorized Domain. |
+| `GET /api/dnsman/delegation/<id>` | `view_dns`, `manage_dns`, or `security` | Returns one authorized non-retired delegation. |
+| `POST /api/dnsman/delegation/verify` | `manage_dns` or `security` | `{ "delegation": 9 }`; proves the exact one-hop alias and creates an external name's certificate-only Domain only after success. |
+
+Every tenant route returns this exact object (the list route returns an array of
+them):
+
+```json
+{
+  "id": 9,
+  "created": "2026-08-06T12:00:00+00:00",
+  "modified": "2026-08-06T12:03:00+00:00",
+  "domain": 12,
+  "domain_name": "external.example",
+  "source": "_acme-challenge.external.example",
+  "target": "4a0f0123456789abcdef0123456789ab.acme-hub.example.net",
+  "state": "verified",
+  "verified_at": "2026-08-06T12:03:00+00:00",
+  "last_error_code": null
+}
+```
+
+`domain` and `verified_at` are null for an external pending name. Timestamps are
+ISO 8601 strings. `last_error_code` is a bounded diagnostic (for example
+`alias_lookup_failed`, `alias_mismatch`, `domain_claimed`, `group_inactive`,
+`configuration`, `transport`, `response`, `http`, or
+`hub_allocation_mismatch`); do not show it as end-user copy.
 
 Public states are `pending`, `verified`, and `broken`; retired tombstones are
 never serialized. Pending is inert. After first verification routing is sticky:
@@ -273,7 +324,10 @@ for it; the flag exists purely so a client can feature-detect batch search
 and `registrar/suggest` against an older backend that predates them.
 `delegated_acme.available` is false only when the downstream hub URL and key
 are both absent. `target_suffix` is null because the hub assigns an opaque full
-target during initiation; clients must use that returned target verbatim.
+target during initiation; clients must use that returned target verbatim. A
+partial or unsafe URL/key configuration fails capability discovery instead of
+masquerading as `available: false`; that is a deployment error, not a disabled
+feature.
 
 ## The registrant contact
 
@@ -588,3 +642,11 @@ Standard mojo error envelope. Notable cases:
 | Price over cap | `400` naming the price and the limit (actionable, leaks nothing) |
 | GoDaddy domain sent to a registrar-only endpoint | `400` "management-only" |
 | Certificate material while KMS is down | `503` "temporarily unavailable" |
+| Hub endpoint called without an eligible protected ApiKey | `403` |
+| Hub input/ref conflict, unknown allocation, retired challenge ref, or failed CNAME proof | `400` |
+| Hub rate limit | `429` plus `Retry-After` |
+| Hub disabled, wrong/unavailable public zone, provider failure, or propagation timeout | `503` |
+| Tenant delegation missing/retired | `404` |
+| Tenant delegation cross-tenant or missing read/write permission | `403` |
+| Tenant initiate shape, alias proof, active-group, or domain-claim failure | `400` |
+| Tenant downstream client configuration/allocation transport failure | `503` |

@@ -95,7 +95,8 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   permission key → the permission(s) the granter must hold to assign it to an
   `ApiKey`, gating `ApiKey.set_permissions` on REST write. The effective map is
   `{**ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS, **configured}` — currently the
-  floor is `{"geoip_sync": "sys.geoip_sync"}`. A value configured here overrides
+  floor is `{"geoip_sync": "sys.geoip_sync", "dnsman_acme_federation":
+  "sys.dnsman_acme_federation"}`. A value configured here overrides
   the floor for that key (including relaxing it); anything the floor names and
   the deployment does not stays protected. It is a merge rather than a plain
   default because `settings.get` returns a configured value wholesale, which

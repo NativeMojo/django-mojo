@@ -9,10 +9,15 @@ Route53/GoDaddy certificate issuance, and Maestro Sites HTTP-01.
 
 An operator provisions an `ApiKey` on the downstream project's `Group` with
 `dnsman_acme_federation`. That permission is in django-mojo's protected API-key
-floor and therefore requires the global `sys.dnsman_acme_federation` grant to
-assign. The three endpoints reject JWT users, group tokens, anonymous callers,
-keys without the underlying permission, override sessions whose underlying key
-lacks it, and keys whose project or ancestor project is inactive.
+floor. An ordinary group administrator cannot assign it: the normal member path
+requires the global `sys.dnsman_acme_federation` grant, while the existing
+global `manage_users` / `manage_groups` key-administration override can also
+assign it. The three endpoints reject JWT users, group tokens, anonymous
+callers, keys without the underlying permission, override sessions whose
+underlying key lacks it, and keys whose project or ancestor project is inactive.
+Authorization and ownership always come from `request.api_key.group`; a
+caller-supplied group and an override user's organization are never identities
+for this surface.
 
 The downstream onboards a domain with a fresh immutable `client_ref`. The hub
 returns a permanent allocation:
@@ -57,6 +62,90 @@ tenant DNS record endpoints.
 Audit rows cover allocation, publish/refusal, withdrawal, expiry and provider
 failure with project, API-key/request attribution and counts. TXT digests,
 hosted-zone ids, AWS change ids and credentials are never logged or returned.
+
+## Hub HTTP contract
+
+All three routes are `POST` requests under `/api/dnsman`, require
+`Authorization: apikey <token>`, and return HTTP 200 with the normal mojo
+envelope on success. `client_ref` and `challenge_ref` are 1–128 characters,
+start with a letter or digit, and otherwise accept letters, digits, `.`, `_`,
+`:`, and `-`. A publish accepts 1–20 entries (duplicates are deduplicated),
+each 1–1024 characters; NUL, CR, and LF are rejected.
+
+`POST /api/dnsman/acme/delegation`:
+
+```json
+{ "domain": "customer.example", "client_ref": "site-install-2026-08" }
+```
+
+```json
+{
+  "status": true,
+  "code": 200,
+  "data": {
+    "client_ref": "site-install-2026-08",
+    "domain": "customer.example",
+    "source": "_acme-challenge.customer.example",
+    "target": "4a0f0123456789abcdef0123456789ab.acme-hub.example.net"
+  }
+}
+```
+
+The same project/ref/domain replay returns the same target. The same ref with a
+different domain is a 400 immutable-reference conflict.
+
+`POST /api/dnsman/acme/challenge/publish` accepts:
+
+```json
+{
+  "client_ref": "site-install-2026-08",
+  "challenge_ref": "order-123",
+  "values": ["digest-for-apex", "digest-for-wildcard"]
+}
+```
+
+It adds `challenge_ref` and `active_value_count` to the allocation payload:
+
+```json
+{
+  "status": true,
+  "code": 200,
+  "data": {
+    "client_ref": "site-install-2026-08",
+    "domain": "customer.example",
+    "source": "_acme-challenge.customer.example",
+    "target": "4a0f0123456789abcdef0123456789ab.acme-hub.example.net",
+    "challenge_ref": "order-123",
+    "active_value_count": 2
+  }
+}
+```
+
+A replay must carry the same values. A withdrawn or expired reference cannot
+be republished. `active_value_count` is the size of the deduplicated union
+currently required by all live leases, not the number of leases.
+
+`POST /api/dnsman/acme/challenge/withdraw` accepts only the two references and
+returns the same challenge response shape with the remaining union count:
+
+```json
+{ "client_ref": "site-install-2026-08", "challenge_ref": "order-123" }
+```
+
+Unknown and already-retired challenge references are idempotent successes.
+All three routes share a sliding rate-limit bucket: 120 requests/minute per IP
+and 300 requests/minute per project (the limiter's API-key dimension is grouped
+by the key's group), returning 429 with `Retry-After` when engaged.
+
+| HTTP | Meaning |
+|---:|---|
+| `400` | Missing/invalid input, unknown allocation, immutable-ref conflict, retired challenge ref, or missing/mismatched/chained CNAME proof |
+| `403` | Not an ApiKey, missing protected permission, inactive key, or effectively inactive project |
+| `429` | Shared hub rate limit exceeded |
+| `503` | Hub disabled/misconfigured, exact public zone unavailable, Route53 failure, or propagation/reconciliation timeout |
+
+Errors use the normal `{"status": false, "code": <HTTP>, "error": "..."}`
+envelope. They never echo submitted TXT values or infrastructure identifiers.
 
 ## File-only settings
 
@@ -115,6 +204,12 @@ Only connect/read ambiguity and HTTP 502/503/504 are retried, at most once;
 400/401/403/409/429 and redirects are not. Missing configuration or any client
 failure is loud and never falls back to Route53, GoDaddy, or another challenge.
 
+Client failures expose only bounded metadata: `kind`, `retriable`, and (for
+HTTP responses) `http_status`. Configuration/request validation is not
+retriable; transport ambiguity is retriable; only 502/503/504 HTTP responses
+are marked retriable. Remote response bodies, configured URLs/API keys, and TXT
+values are never copied into exception text.
+
 ## Downstream tenant lifecycle
 
 `AcmeDelegation` is the consuming deployment's durable tenant-side tombstone.
@@ -141,3 +236,31 @@ ambiguous timeout. Certificate workers claim a row atomically and Jobs uses an
 idempotency key, so duplicate requests/jobs consume one order. A failed renewal
 keeps still-valid KMS-held material active and advances `renew_after` with a
 bounded retry instead of permanently failing the serving certificate.
+
+The tenant REST payload is deliberately narrower than either tombstone model:
+
+```json
+{
+  "id": 9,
+  "created": "2026-08-06T12:00:00+00:00",
+  "modified": "2026-08-06T12:03:00+00:00",
+  "domain": 12,
+  "domain_name": "customer.example",
+  "source": "_acme-challenge.customer.example",
+  "target": "4a0f0123456789abcdef0123456789ab.acme-hub.example.net",
+  "state": "verified",
+  "verified_at": "2026-08-06T12:03:00+00:00",
+  "last_error_code": null
+}
+```
+
+For an external pending name, `domain` and `verified_at` are null. Initiate and
+verify require `manage_dns` (or `security`); detail/list require `view_dns`,
+`manage_dns`, or `security`. A missing/retired detail is 404, cross-tenant
+access is 403, invalid request combinations and failed proof/name claims are
+400, and missing/invalid downstream hub configuration or allocation transport
+failure is 503. `last_error_code` is a bounded machine diagnostic such as
+`alias_lookup_failed`, `alias_mismatch`, `domain_claimed`, `group_inactive`,
+`configuration`, `transport`, `response`, `http`, or
+`hub_allocation_mismatch`; UI copy should be driven by the HTTP error and state,
+not by displaying that internal code verbatim.
