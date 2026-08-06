@@ -54,7 +54,7 @@ UI must gate on these, or it renders controls that 403.**
   With no `?group=` it addresses the house contact and additionally requires a
   platform admin. See [the registrant contact](#the-registrant-contact).
 
-The ACME delegation endpoints are a separate machine-only surface. They accept
+The `/acme/*` hub endpoints are a separate machine-only surface. They accept
 only an `Authorization: apikey …` credential whose underlying key carries the
 protected `dnsman_acme_federation` permission and whose project is active. JWT
 users, group tokens, anonymous requests, permissionless keys, and acting-user
@@ -120,6 +120,29 @@ probe the returned target for propagation, and always withdraw that same
 reference afterward. A verified or broken delegation never silently falls back
 to direct Route53/GoDaddy. Those direct providers and Maestro Sites HTTP-01 are
 separate flows and remain unchanged.
+
+### Tenant delegation lifecycle
+
+The consuming dnsman deployment wraps that machine transport in normal
+tenant-gated endpoints:
+
+- `POST /api/dnsman/delegation/initiate` with either `{ "domain": 12 }` or
+  `{ "group": 4, "name": "external.example" }`. It returns the permanent
+  `source` and opaque `target` the tenant must publish as one CNAME. An external
+  name remains pending and does not reserve a `Domain.name` yet.
+- `GET /api/dnsman/delegation?domain=12` and
+  `GET /api/dnsman/delegation/<id>` return status for the authorized tenant.
+- `POST /api/dnsman/delegation/verify` with `{ "delegation": 9 }` performs
+  authoritative exact one-hop proof. For an external name, only successful
+  proof creates its certificate-only Domain.
+
+Public states are `pending`, `verified`, and `broken`; retired tombstones are
+never serialized. Pending is inert. After first verification routing is sticky:
+a missing/changed/chained alias becomes broken and certificate issuance fails
+closed without silently using Route53/GoDaddy. Delegated v1 accepts exactly the
+apex-plus-wildcard profile. These endpoints use normal `view_dns`/`manage_dns`
+tenant isolation and never return the hub ApiKey, client reference, cleanup
+reference, TXT digest, PEM, or private key.
 
 ## Domains
 
@@ -227,6 +250,9 @@ UI from this, not from probing `registrar/quote` and reading the refusal.
     { "name": "godaddy", "purchase": false, "requires_credential": true }
   ],
   "acme": { "configured": true, "staging": true },
+  "delegated_acme": { "available": false, "record_type": "CNAME",
+    "target_suffix": null, "profile": "apex_wildcard",
+    "requires_provider_credentials": false },
   "cert_renew_days": 30 }
 ```
 
@@ -245,6 +271,9 @@ staging cert as "active" without surfacing that. `search_batch_limit` mirrors
 calls. `suggestions_enabled` is always `true` today — there is no kill switch
 for it; the flag exists purely so a client can feature-detect batch search
 and `registrar/suggest` against an older backend that predates them.
+`delegated_acme.available` is false only when the downstream hub URL and key
+are both absent. `target_suffix` is null because the hub assigns an opaque full
+target during initiation; clients must use that returned target verbatim.
 
 ## The registrant contact
 
@@ -502,7 +531,8 @@ refused up front with a reason naming the TLD, rather than appearing to succeed.
 ## Certificates
 
 Certificates are issued centrally over ACME DNS-01 and held here. Because
-DNS-01 only needs a TXT record, this works for **both** providers.
+DNS-01 only needs a TXT record, this works through both direct providers or a
+verified delegated target.
 
 ### `POST /api/dnsman/certificate/request`
 ```json
@@ -510,6 +540,10 @@ DNS-01 only needs a TXT record, this works for **both** providers.
 ```
 Defaults to the apex plus its wildcard. Issuance runs as a background job and
 takes minutes — this returns immediately with a `pending` certificate.
+Concurrent identical requests/jobs are deduplicated. For delegated domains the
+only accepted names are exactly the apex plus wildcard. A failed delegated
+renewal leaves still-valid active material available and schedules a bounded
+retry; surface `last_error`, but do not replace a still-active serving cert.
 
 ### `GET /api/dnsman/certificate` · `GET /api/dnsman/certificate/<pk>`
 Status, SANs, issuer, serial, validity window, `renew_after`, and

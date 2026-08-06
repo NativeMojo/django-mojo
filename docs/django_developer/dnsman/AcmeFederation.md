@@ -114,3 +114,30 @@ and map remote bodies to typed, bounded errors safe for certificate/job status.
 Only connect/read ambiguity and HTTP 502/503/504 are retried, at most once;
 400/401/403/409/429 and redirects are not. Missing configuration or any client
 failure is loud and never falls back to Route53, GoDaddy, or another challenge.
+
+## Downstream tenant lifecycle
+
+`AcmeDelegation` is the consuming deployment's durable tenant-side tombstone.
+It commits a UUID `client_ref`, tenant/user snapshots and normalized name before
+the first `allocate()` call, then stores the returned source/target once and
+compares every later hub reply to them. Pending external names do not create or
+reserve a globally unique `Domain`; authoritative exact one-hop proof creates
+`Domain(provider="mojo")` atomically. That provider is certificate-only and is
+never registered with general DNS CRUD.
+
+The public lifecycle is `pending → verified ↔ broken`; `retired` tombstones are
+internal. Pending is inert. Once verified, routing is sticky: a changed,
+missing, chained or conflicting alias marks the delegation broken and issuance
+fails closed without falling back to the Domain's old Route53/GoDaddy adapter.
+Verification locks and rechecks the original tenant identity and its effective
+active state before creating a Domain, so a deleted/deactivated tenant cannot
+turn an external name into a house asset.
+
+Delegated v1 accepts exactly apex plus wildcard. Issuance re-proves the alias
+before creating a CA order, publishes both digests in one hub lease, probes the
+opaque target for the exact values, and records cleanup intent before publish.
+The same immutable reference is withdrawn in `finally`, including after an
+ambiguous timeout. Certificate workers claim a row atomically and Jobs uses an
+idempotency key, so duplicate requests/jobs consume one order. A failed renewal
+keeps still-valid KMS-held material active and advances `renew_after` with a
+bounded retry instead of permanently failing the serving certificate.

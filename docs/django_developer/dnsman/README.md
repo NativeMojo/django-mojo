@@ -23,7 +23,7 @@ mojo/helpers/dns/probe.py        Authoritative TXT probe + exact one-hop CNAME p
 
 mojo/apps/dnsman/
   models/        DnsCredential, Domain, DomainPurchase, AcmeAccount, Certificate,
-                 AcmeHubDelegation, AcmeHubChallengeLease
+                 AcmeHubDelegation, AcmeHubChallengeLease, AcmeDelegation
   services/
     naming.py    Domain/record normalization — the single source of truth
     dns.py       Provider dispatch (UNGATED mechanism)
@@ -33,6 +33,7 @@ mojo/apps/dnsman/
     registrar.py   search / quote / purchase / poll / WHOIS / privacy
     certs.py       ACME DNS-01 issuance, renewal, revocation, sync broadcast
     acme_hub.py    optional delegated DNS-01 target allocation + lease reconciliation
+    delegation.py  downstream tenant allocation, proof, tombstone + Domain binding
     email.py       provider-dispatched SES record application
   rest/          thin handlers — this is where permissions are enforced
   cronjobs.py    thin dispatchers — poll registrations / ACME leases (5m), renew certs (6h)
@@ -45,8 +46,9 @@ database.
 
 ## Provider dispatch
 
-`Domain.provider` is `route53` or `godaddy`. `services/dns.py` resolves a domain
-to an adapter and calls one uniform interface:
+`Domain.provider` is `route53`, `godaddy`, or certificate-only `mojo`.
+`services/dns.py` resolves only the first two to an adapter and calls one
+uniform interface:
 
 ```python
 list_records(domain)                                          # -> [objict(type, name, record_values, ttl)]
@@ -76,9 +78,11 @@ error anywhere — hence the dedicated adapter test in both directions.
 
 ### Credentials are forced, and the gate is central
 
-Route53 rides the process AWS credentials. Any other provider must bring its
-own, held in `DnsCredential` — not on the `Domain` row, because one provider
+Route53 rides the process AWS credentials. GoDaddy brings its own, held in
+`DnsCredential` — not on the `Domain` row, because one provider
 account holds many domains and rotation has to happen in exactly one place.
+`mojo` is a verified delegated-ACME marker, never a general DNS provider, and
+requires no provider credential.
 
 `services/dns.get_adapter()` is the single fail-closed gate: a `godaddy` domain
 whose credential is null, inactive, or unverified raises **before any network
@@ -117,7 +121,7 @@ gate a custom pk-fetching endpoint.
 
 ## Domain lifecycle
 
-Three ways in, and no bare create route (`CAN_CREATE = False`):
+Four ways in, and no bare create route (`CAN_CREATE = False`):
 
 1. **Purchase** — `registrar.quote()` then `registrar.purchase()`
 2. **Adopt** — `onboarding.adopt_route53()`, an existing house-account zone,
@@ -125,6 +129,9 @@ Three ways in, and no bare create route (`CAN_CREATE = False`):
    of a zone in the house account, which for anyone else would be a
    cross-tenant zone-claim primitive.
 3. **BYO** — `onboarding.register_existing()`, proven by the linked credential
+4. **Delegated ACME external name** — `delegation.initiate()` stores an inert
+   allocation; `delegation.verify()` creates a certificate-only `mojo` Domain
+   only after authoritative exact one-hop CNAME proof and an active-tenant lock
 
 ### Finding what to adopt
 
@@ -205,9 +212,9 @@ operation twice cannot double-flip a row.
 
 ## Certificates
 
-Issued over **ACME DNS-01**, which needs only a TXT record — so it works
-identically for both providers and needs no webserver. Issuance and renewal run
-centrally as jobs, never on a serving box.
+Issued over **ACME DNS-01**, which needs only a TXT record — so it works through
+both direct providers or a verified delegated target and needs no webserver.
+Issuance and renewal run centrally as jobs, never on a serving box.
 
 The private key is KMS-envelope-encrypted (`KSMSecrets`) and leaves the database
 through exactly one gated, access-logged endpoint. It is in no graph and in no
@@ -225,6 +232,14 @@ Two details that break naive implementations:
 `DNSMAN_ACME_DIRECTORY_URL` defaults to Let's Encrypt **staging**, so an
 unconfigured deployment cannot burn production rate limits. Going live is a
 deliberate settings change.
+
+Delegation is opt-in. A pending allocation never changes direct issuance.
+After first verification routing is sticky; broken proof fails closed without
+Route53/GoDaddy fallback. The v1 profile is exactly apex plus wildcard, with
+both digests published through the challenge-specific hub client and withdrawn
+from a durable cleanup intent in `finally`. Duplicate requests/jobs serialize,
+and a failed delegated renewal preserves still-valid material with bounded
+retry rather than converting it to permanently failed.
 
 ### Why hosts pull instead of being pushed to
 
@@ -249,6 +264,7 @@ order, no rate-limit exposure, and hosts stay disposable.
 | `DNSMAN_ACME_DIRECTORY_URL` | Let's Encrypt **staging** | Deliberately not production |
 | `DNSMAN_ACME_CONTACT_EMAIL` | `None` | ACME account contact |
 | `DNSMAN_CERT_RENEW_DAYS` | `30` | Renew when fewer days remain |
+| `DNSMAN_CERT_RETRY_BASE_SECONDS` | `3600` | Failed still-valid renewal retry base; clamped 60s–24h and exponentially bounded at 24h |
 | `DNSMAN_CERT_SYNC_CHANNEL` | `"certs"` | Channel for the cert-updated broadcast |
 | `DNSMAN_DNS_PROPAGATION_TIMEOUT` | `300` | Seconds to wait for authoritative visibility |
 | `DNSMAN_ACME_HUB_ZONE` | unset | Enables the optional delegated DNS-01 hub; file-only |
@@ -258,6 +274,8 @@ order, no rate-limit exposure, and hosts stay disposable.
 | `DNSMAN_ACME_HUB_PROPAGATION_TIMEOUT` | `300` | Hub Route53/authority timeout (bounded); file-only |
 | `DNSMAN_ACME_HUB_PROPAGATION_INTERVAL` | `5` | Hub propagation polling interval (bounded); file-only |
 | `DNSMAN_ACME_HUB_SWEEP_LIMIT` | `100` | Max allocations reconciled per sweep; file-only |
+| `DNSMAN_ACME_HUB_URL` | unset | Downstream hub HTTPS origin; file-only |
+| `DNSMAN_ACME_HUB_API_KEY` | unset | Downstream protected project ApiKey; file-only |
 
 `jobs.publish` routes to the channel it is given, so the broadcast always lands
 on this channel. `certs` (the default) is in `JOBS_CHANNELS`' default list and is

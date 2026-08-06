@@ -57,6 +57,14 @@ finally:
   clear every challenge record we planted
 ```
 
+For a verified tenant `AcmeDelegation`, the challenge-writer branch changes but
+the ACME/custody flow does not. The alias is authoritatively re-proved before
+`new order`; both apex/wildcard digests are published together through the
+challenge-specific hub client at the stored opaque target; propagation probes
+that target; and the durable cleanup reference is idempotently withdrawn in
+`finally`. Pending delegation is ignored. Verified/broken routing is sticky and
+never silently falls back to direct DNS.
+
 ### The wildcard trap
 
 `example.com` and `*.example.com` produce **two separate authorizations that
@@ -116,6 +124,15 @@ as "no key" would send a consumer off to reissue for no reason.
 
 `renew_certificates` (every 6h) queues a job per certificate past `renew_after`
 (`not_after` − `DNSMAN_CERT_RENEW_DAYS`, default 30).
+
+Requests serialize on the Domain row and job publishes carry an internal
+idempotency key while retaining the existing `{certificate: pk}` payload.
+Execution atomically claims the Certificate before any CA call; a duplicate
+worker exits without creating an order. When a delegated renewal fails and the
+existing KMS-held material is still valid, the row returns to `active`, its
+cert/chain/key remain untouched, `last_error`/`attempts` record the failure, and
+`renew_after` moves to a bounded exponential retry (base
+`DNSMAN_CERT_RETRY_BASE_SECONDS`, default one hour; hard maximum 24 hours).
 
 On every successful issue or renewal, dnsman broadcasts a `certificate_updated`
 job on `DNSMAN_CERT_SYNC_CHANNEL` carrying **only** the certificate id, domain

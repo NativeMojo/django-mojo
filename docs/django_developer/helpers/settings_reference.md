@@ -312,6 +312,9 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   [ACME federation](../dnsman/AcmeFederation.md#downstream-challenge-client).
 - `DNSMAN_ALLOWED_RECORD_TYPES`
 - `DNSMAN_CERT_RENEW_DAYS`
+- `DNSMAN_CERT_RETRY_BASE_SECONDS` — retry base after a failed renewal whose
+  existing material is still valid (default `3600`; clamped to 60–86400
+  seconds and exponentially bounded at 86400).
 - `DNSMAN_CERT_SYNC_CHANNEL`
 - `DNSMAN_DNS_PROPAGATION_TIMEOUT`
 - `DNSMAN_MAX_DOMAIN_PRICE`

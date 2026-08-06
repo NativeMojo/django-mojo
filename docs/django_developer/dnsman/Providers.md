@@ -36,8 +36,11 @@ refused.
 The optional [ACME federation hub](AcmeFederation.md) does not pass through this
 dispatch layer. It owns one separately configured public Route53 zone and an
 internal exact-target writer that tenants cannot reach through generic record
-CRUD. It does not add a `Domain.provider` value or change direct Route53,
-GoDaddy, or HTTP-01 behavior.
+CRUD. A verified external name gets `Domain.provider="mojo"` solely as a
+certificate-only marker; `get_adapter()` deliberately refuses it. Existing
+Route53/GoDaddy domains keep their provider value even when a verified sticky
+delegation selects the remote certificate writer. Direct DNS and HTTP-01
+behavior are unchanged.
 
 The downstream `services/acme_hub_client.py` is equally separate. It exposes
 only target allocation plus challenge-lease publish/withdraw against fixed hub
@@ -130,8 +133,8 @@ dnsman always builds its managers with `raise_on_error=True`.
 
 ## Credentials
 
-Route53 uses the process AWS credentials. Everything else must bring its own
-`DnsCredential`.
+Route53 uses the process AWS credentials. GoDaddy brings a `DnsCredential`.
+The `mojo` marker needs neither because it has no general DNS adapter.
 
 The gate is central, in `get_adapter()`: a `godaddy` domain whose credential is
 null, `is_active=False`, or `verified=False` raises **before any network call**.
