@@ -301,6 +301,41 @@ class RuleSet(models.Model, MojoModel):
         )
 
     @classmethod
+    def ensure_guardduty_rules(cls):
+        """Create the opt-in AWS GuardDuty finding policy.
+
+        Events reach this RuleSet through their `scope` (`aws:guardduty`),
+        exactly like the CloudWatch policy — their `category` carries the
+        per-finding type suffix and would need one RuleSet per type.
+
+        `MODEL_NAME_AND_ID` is safe here ONLY because the receiver rotates
+        `Event.model_id` per occurrence (see
+        `mojo.apps.aws.services.guardduty_findings`): the id names the live
+        occurrence and changes once its incident is resolved.
+
+        Never added to ensure_default_rules(): like ensure_cloudwatch_rules it
+        stays opt-in so non-AWS deployments never get it. Without it the whole
+        dispatch path is inert, because a GuardDuty event with no RuleSet
+        never sets `should_dispatch`.
+        """
+        from mojo.apps.aws.services.guardduty_findings import SCOPE
+        return cls._create_ruleset(
+            category=SCOPE,
+            name="AWS GuardDuty - Threat Detection",
+            priority=10,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.MODEL_NAME_AND_ID,
+            bundle_minutes=None,
+            handler="notify://perm@manage_security",
+            rules=[
+                # Medium and above (severity >= 4.0 maps to level 6). Low and
+                # informational findings stay audit-only.
+                {"name": "Level >= 6", "field_name": "level",
+                 "comparator": ">=", "value": "6", "value_type": "int"},
+            ],
+        )
+
+    @classmethod
     def ensure_aws_version_rules(cls):
         """Create the opt-in AWS managed-service version drift policy.
 

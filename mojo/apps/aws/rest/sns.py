@@ -327,3 +327,39 @@ def on_cloudwatch_alarm(request):
         logger.exception("CloudWatch SNS processing failed")
         return JsonResponse({"error": "Alarm processing failed"}, status=503)
     return JsonResponse({"status": True, "data": result})
+
+
+@md.URL("guardduty/sns/finding")
+@md.public_endpoint()
+def on_guardduty_finding(request):
+    """Receive signed, allowlisted GuardDuty findings from SNS (via EventBridge).
+
+    The topic allowlist is deliberately separate from the CloudWatch one: a
+    topic allowlisted for alarms must not be able to confirm a subscription or
+    deliver findings here.
+
+    ``request.DATA`` is deliberately not used — SNS posts a raw signed body
+    that has to be verified byte-for-byte, which is why ``parse_request``
+    reads ``request.body``.
+    """
+    from mojo.apps.aws.services.guardduty_findings import (
+        GuardDutyDispatchError,
+        GuardDutyPayloadError,
+        process_notification,
+    )
+
+    envelope, response = _receive_signed_sns(
+        request, "AWS_GUARDDUTY_FINDING_TOPIC_ARNS",
+    )
+    if response is not None:
+        return response
+    try:
+        result = process_notification(envelope)
+    except GuardDutyPayloadError:
+        return JsonResponse({"error": "Invalid GuardDuty finding payload"}, status=400)
+    except GuardDutyDispatchError:
+        return JsonResponse({"error": "Finding dispatch incomplete"}, status=503)
+    except Exception:
+        logger.exception("GuardDuty SNS processing failed")
+        return JsonResponse({"error": "Finding processing failed"}, status=503)
+    return JsonResponse({"status": True, "data": result})
