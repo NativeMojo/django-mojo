@@ -149,15 +149,24 @@ def make_vhost(domain, certificate=None, label="", kind="static",
         upstream=upstream, pool=pool, is_enabled=is_enabled)
 
 
-def cleanup(prefix="edge-"):
-    """Drop rows a previous run left behind. Long-lived DB — see testing rules."""
+def cleanup():
+    """Drop rows a previous run left behind. Long-lived DB — see testing rules.
+
+    **Order matters and the scope cannot be narrowed.** `Vhost.upstream` is
+    `on_delete=PROTECT`, so every test vhost must go before any upstream does —
+    including vhosts belonging to a different test module in the same run.
+    An earlier version took a prefix argument and narrowed only the vhost
+    delete, which raised ProtectedError and silently broke the calling module's
+    setup. Every test fixture in this app uses the `edge-`/`up-` prefixes
+    precisely so this can be unconditional.
+    """
     from mojo.apps.dnsman.models import Certificate, Domain
     from mojo.apps.edge.models import Upstream, Vhost
 
-    Vhost.objects.filter(domain__name__startswith=prefix).delete()
-    Certificate.objects.filter(domain__name__startswith=prefix).delete()
-    Domain.objects.filter(name__startswith=prefix).delete()
+    Vhost.objects.filter(domain__name__startswith="edge-").delete()
     Upstream.objects.filter(name__startswith="up-").delete()
+    Certificate.objects.filter(domain__name__startswith="edge-").delete()
+    Domain.objects.filter(name__startswith="edge-").delete()
 
 
 def raises(func, *args, **kwargs):

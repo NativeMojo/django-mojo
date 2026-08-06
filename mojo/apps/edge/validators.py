@@ -76,6 +76,36 @@ def server_name_for(domain_name, label):
     return f"{label}.{domain_name}"
 
 
+def validate_server_name(server_name):
+    """Every label of a derived server name, checked.
+
+    **Do not assume `Domain.name` is already safe.** It is normalised in
+    `Domain.on_rest_pre_save` — the REST path only — so a row created through
+    the ORM, a service, a data migration or a shell can hold anything the
+    column's `max_length` allows, including nginx syntax. Scoping this item
+    asserted the opposite and was wrong; a test caught it.
+
+    So the vhost layer validates the WHOLE derived name rather than trusting
+    the domain half of it.
+    """
+    if not isinstance(server_name, str) or not server_name:
+        raise me.ValueException("a vhost requires a server name")
+    if len(server_name) > 253:
+        raise me.ValueException("server name is too long")
+    candidate = server_name
+    if candidate.startswith("*."):
+        candidate = candidate[2:]
+    parts = candidate.split(".")
+    if len(parts) < 2:
+        raise me.ValueException(
+            f"{server_name} is not a fully qualified domain name")
+    for part in parts:
+        if not LABEL_RE.match(part):
+            raise me.ValueException(
+                f"{server_name} is not a valid server name")
+    return server_name
+
+
 def reserved_server_names():
     """Names no vhost may ever claim — the API's own hostnames.
 
@@ -298,6 +328,10 @@ def validate_vhost(vhost):
         raise me.ValueException("a vhost requires a domain")
 
     server_name = server_name_for(vhost.domain.name, vhost.label or "")
+    # Checked unconditionally, enabled or not: an unvalidatable name is a
+    # broken row whichever way its flag is set, and storing one would leave a
+    # landmine for whoever enables it later.
+    validate_server_name(server_name)
 
     # The reserved-name and certificate-coverage checks gate ENABLING. A
     # disabled row is inert — it renders nothing — and refusing to store one
