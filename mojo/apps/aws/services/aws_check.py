@@ -872,9 +872,12 @@ class AWSCheckRunner:
                       remediation=f"Grant {warning.get('iam_action')} to the selected identity.")
         findings = report.get("findings") or []
         if not findings:
-            self._add("versions", "pass", "versions.current",
-                      "No managed service has a major version upgrade available",
-                      {"region": report.get("region")})
+            # Only claim "current" when the inventory was actually complete —
+            # a denied API must never read as a clean bill of health.
+            if not report.get("warnings"):
+                self._add("versions", "pass", "versions.current",
+                          "No managed service has a major version upgrade available",
+                          {"region": report.get("region")})
             return
         for finding in findings:
             days = finding.get("days_remaining")
