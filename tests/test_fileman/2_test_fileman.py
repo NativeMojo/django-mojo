@@ -1,6 +1,7 @@
 """
 Tests for the fileman File and FileManager models and REST endpoints.
 """
+import hashlib
 import json
 import os
 import tempfile
@@ -42,6 +43,11 @@ def _assert_masked_payload(payload, context):
     assert_true(GRAPH_SECRET_KEY not in encoded, f"{context} must not contain the raw secret canary")
     assert_true(expected_key in key_masks, f"{context} must expose only the expected access-key mask")
     assert_true(expected_secret in secret_masks, f"{context} must expose only the expected secret mask")
+
+
+def _secret_digest(value):
+    """Compare synthetic credentials without rendering them in test failures."""
+    return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
 
 
 def _write_dummy_file(tmpdir, storage_file_path):
@@ -356,16 +362,29 @@ def test_fm_credential_graphs_never_expose_raw_values(opts):
         )
         manager_id = manager.id
 
-        credential_resp = opts.client.post(f"/api/fileman/manager/{manager_id}", {
-            "aws_region": "us-west-2",
-            "aws_key": GRAPH_ACCESS_KEY,
-            "aws_secret": GRAPH_SECRET_KEY,
-        })
+        client_logger = opts.client.logger
+        try:
+            # RestClient logs request JSON verbatim. Suppress it only for this
+            # synthetic secret-bearing request, then restore it unconditionally.
+            opts.client.logger = None
+            credential_resp = opts.client.post(f"/api/fileman/manager/{manager_id}", {
+                "aws_region": "us-west-2",
+                "aws_key": GRAPH_ACCESS_KEY,
+                "aws_secret": GRAPH_SECRET_KEY,
+            })
+        finally:
+            opts.client.logger = client_logger
         assert_eq(credential_resp.status_code, 200, "authenticated generic REST save must accept write-only credentials")
         manager = FileManager.objects.get(pk=manager_id)
 
-        assert_eq(manager.aws_key, GRAPH_ACCESS_KEY, "trusted backend code must retain raw access-key reads")
-        assert_eq(manager.aws_secret, GRAPH_SECRET_KEY, "trusted backend code must retain raw secret reads")
+        assert_true(
+            _secret_digest(manager.aws_key) == _secret_digest(GRAPH_ACCESS_KEY),
+            "trusted backend code must retain the access-key value accepted through REST",
+        )
+        assert_true(
+            _secret_digest(manager.aws_secret) == _secret_digest(GRAPH_SECRET_KEY),
+            "trusted backend code must retain the secret value accepted through REST",
+        )
         encrypted_blob = manager.mojo_secrets or ""
         assert_true(GRAPH_ACCESS_KEY not in encrypted_blob, "encrypted storage must not contain plaintext access-key material")
         assert_true(GRAPH_SECRET_KEY not in encrypted_blob, "encrypted storage must not contain plaintext secret material")
@@ -375,8 +394,14 @@ def test_fm_credential_graphs_never_expose_raw_values(opts):
         })
         assert_eq(omitted_resp.status_code, 200, "an unrelated REST update must succeed with credentials omitted")
         manager.refresh_from_db()
-        assert_eq(manager.aws_key, GRAPH_ACCESS_KEY, "omitting aws_key must preserve the stored credential")
-        assert_eq(manager.aws_secret, GRAPH_SECRET_KEY, "omitting aws_secret must preserve the stored credential")
+        assert_true(
+            _secret_digest(manager.aws_key) == _secret_digest(GRAPH_ACCESS_KEY),
+            "omitting aws_key must preserve the stored credential",
+        )
+        assert_true(
+            _secret_digest(manager.aws_secret) == _secret_digest(GRAPH_SECRET_KEY),
+            "omitting aws_secret must preserve the stored credential",
+        )
 
         mask_input_resp = opts.client.post(f"/api/fileman/manager/{manager_id}", {
             "aws_key_masked": "response-mask-is-not-an-input",
@@ -384,8 +409,14 @@ def test_fm_credential_graphs_never_expose_raw_values(opts):
         })
         assert_eq(mask_input_resp.status_code, 200, "response-only mask fields are ignored by generic REST save")
         manager.refresh_from_db()
-        assert_eq(manager.aws_key, GRAPH_ACCESS_KEY, "aws_key_masked input must not overwrite the access key")
-        assert_eq(manager.aws_secret, GRAPH_SECRET_KEY, "aws_secret_masked input must not overwrite the secret")
+        assert_true(
+            _secret_digest(manager.aws_key) == _secret_digest(GRAPH_ACCESS_KEY),
+            "aws_key_masked input must not overwrite the access key",
+        )
+        assert_true(
+            _secret_digest(manager.aws_secret) == _secret_digest(GRAPH_SECRET_KEY),
+            "aws_secret_masked input must not overwrite the secret",
+        )
 
         for graph in ("default", "list", "basic"):
             extra = FileManager.RestMeta.GRAPHS[graph].get("extra") or []
