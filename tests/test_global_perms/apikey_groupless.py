@@ -333,13 +333,9 @@ def test_geoip_sync_floor_survives_deployment_map(opts):
         User.objects.filter(pk=user.pk).delete()
 
 
-@th.django_unit_test("groupless: a deployment can explicitly override the geoip_sync floor")
-def test_geoip_sync_floor_is_overridable(opts):
-    """The floor is a default, not a ceiling.
-
-    Naming geoip_sync explicitly must take effect — a framework dictating
-    policy a deployment cannot change is a worse failure than the one fixed.
-    """
+@th.django_unit_test("groupless: framework ApiKey floor keys cannot be relaxed by deployment config")
+def test_framework_apikey_floors_are_unrelaxable(opts):
+    """Framework floor entries win while deployment-specific entries survive."""
     from mojo.apps.account.models import User, Group, GroupMember, ApiKey
     from mojo.apps.account.models.setting import Setting
     from mojo.apps.account.models.api_key import _apikey_perms_protection
@@ -348,20 +344,33 @@ def test_geoip_sync_floor_is_overridable(opts):
     user, grp, email, pw = _floor_group_admin(_uuid.uuid4().hex[:8])
     Setting.remove("APIKEY_PERMS_PROTECTION")
     try:
-        Setting.set("APIKEY_PERMS_PROTECTION", {"geoip_sync": "manage_group"})
+        Setting.set("APIKEY_PERMS_PROTECTION", {
+            "geoip_sync": "manage_group",
+            "dnsman_acme_federation": "manage_group",
+            "deployment_sensitive": "sys.deployment_sensitive",
+        })
         effective = _apikey_perms_protection()
-        assert effective.get("geoip_sync") == "manage_group", \
-            f"an explicit deployment entry must override the floor: {effective!r}"
+        assert effective.get("geoip_sync") == "sys.geoip_sync", \
+            f"deployment config must not relax the GeoIP floor: {effective!r}"
+        assert effective.get("dnsman_acme_federation") == "sys.dnsman_acme_federation", \
+            f"deployment config must not relax the ACME federation floor: {effective!r}"
+        assert effective.get("deployment_sensitive") == "sys.deployment_sensitive", \
+            f"deployment-specific protection must survive the merge: {effective!r}"
 
         clear_rate_limits(ip="127.0.0.1", key="login")
         assert opts.client.login(email, pw), f"login failed: {opts.client.last_response.body}"
-        resp = opts.client.post("/api/group/apikey", {
-            "group": grp.pk, "name": "floor_override", "permissions": {"geoip_sync": True}})
-        assert resp.status_code == 200, \
-            f"an explicitly relaxed requirement must be honored, got {resp.status_code}: {opts.client.last_response.body}"
-        key = ApiKey.objects.filter(group=grp, name="floor_override").first()
-        assert key is not None and key.permissions.get("geoip_sync") is True, \
-            f"geoip_sync must land under the relaxed rule, got {key.permissions if key else None}"
+        for permission in ("geoip_sync", "dnsman_acme_federation"):
+            resp = opts.client.post("/api/group/apikey", {
+                "group": grp.pk,
+                "name": f"floor_unrelaxable_{permission}",
+                "permissions": {permission: True},
+            })
+            assert resp.status_code == 403, \
+                f"{permission} must remain protected despite configured relaxation, " \
+                f"got {resp.status_code}: {opts.client.last_response.body}"
+            assert not ApiKey.objects.filter(
+                group=grp, permissions__contains={permission: True}).exists(), \
+                f"{permission} must not land under a configured relaxation"
     finally:
         opts.client.logout()
         Setting.remove("APIKEY_PERMS_PROTECTION")
