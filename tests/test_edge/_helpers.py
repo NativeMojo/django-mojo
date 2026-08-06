@@ -149,6 +149,53 @@ def make_vhost(domain, certificate=None, label="", kind="static",
         upstream=upstream, pool=pool, is_enabled=is_enabled)
 
 
+RELEASE_BUCKET = "edge-test-releases"
+
+
+def declare_release_buckets(buckets=None):
+    """Declare the release buckets. Registering a site fails closed without it."""
+    from mojo.apps.account.models.setting import Setting
+
+    Setting.set("EDGE_RELEASE_BUCKETS", list(buckets or [RELEASE_BUCKET]),
+                group=None)
+
+
+def make_webapp(group, slug=None, vhost=None, bucket=None, auto_promote=False):
+    from mojo.apps.edge.models import WebApp
+
+    if slug is None:
+        slug = f"app{_uuid.uuid4().hex[:8]}"
+    web_app = WebApp(
+        group=group, slug=slug, vhost=vhost,
+        bucket=bucket or RELEASE_BUCKET, prefix="pending",
+        auto_promote=auto_promote)
+    web_app.save()
+    # `storage_prefix` needs a pk, so the derived value lands on the second
+    # save — the same two-step the REST create path takes via on_rest_created.
+    web_app.prefix = web_app.storage_prefix()
+    web_app.save()
+    return web_app
+
+
+def make_manifest(paths=("index.html",)):
+    import hashlib
+
+    return [
+        dict(path=path,
+             sha256=hashlib.sha256(path.encode()).hexdigest(),
+             size=len(path))
+        for path in paths
+    ]
+
+
+def make_release(web_app, version, status="pending", manifest=None):
+    from mojo.apps.edge.models import WebAppRelease
+
+    return WebAppRelease.objects.create(
+        webapp=web_app, version=version, status=status,
+        manifest=manifest if manifest is not None else make_manifest())
+
+
 def cleanup():
     """Drop rows a previous run left behind. Long-lived DB — see testing rules.
 
@@ -161,8 +208,14 @@ def cleanup():
     precisely so this can be unconditional.
     """
     from mojo.apps.dnsman.models import Certificate, Domain
-    from mojo.apps.edge.models import Upstream, Vhost
+    from mojo.apps.edge.models import Upstream, Vhost, WebApp, WebAppRelease
 
+    # WebApp -> current_release is SET_NULL and WebAppRelease -> webapp is
+    # CASCADE, so the pointer has to be cleared before the rows go, or the
+    # delete order decides whether it works.
+    WebApp.objects.filter(slug__startswith="app").update(current_release=None)
+    WebAppRelease.objects.filter(webapp__group__name__startswith="edge").delete()
+    WebApp.objects.filter(group__name__startswith="edge").delete()
     Vhost.objects.filter(domain__name__startswith="edge-").delete()
     Upstream.objects.filter(name__startswith="up-").delete()
     Certificate.objects.filter(domain__name__startswith="edge-").delete()

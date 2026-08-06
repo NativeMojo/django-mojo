@@ -22,19 +22,27 @@ from mojo.helpers import logit
 from mojo.helpers.settings import settings
 
 
+# NOTE ON `\Z`, and why it is not `$`.
+#
+# In Python `$` matches at the end of the string OR just before a trailing
+# newline. Every regex here was written with `$` and every one of them accepted
+# a trailing "\n" — `LABEL_RE.match("www\n")` was True, which is a newline
+# injected straight into an nginx config file. `\Z` is the real end of string.
+# A test caught this on the version field; the same bug was present in all six.
+#
 # A single DNS label. No dots (a label cannot climb into another zone), and by
 # construction no `;`, `{`, `}`, `#`, `$`, quote, space, CR or LF.
-LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 # Upstream hosts. No scheme, no path, no port smuggling, no newline. IPv6
 # literals are NOT supported in v1 — they would need bracketing in the rendered
 # config, and every real upstream so far is a hostname, an IPv4 address, or a
 # unix socket. Widening this is a deliberate change with a renderer change
 # beside it, not a regex tweak.
-UPSTREAM_HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$")
+UPSTREAM_HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?\Z")
 
 # Upstream / vhost names used as filename components.
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 
 
 def www_base():
@@ -305,6 +313,105 @@ def validate_pool(pool):
         raise me.ValueException(
             "pool must be lowercase letters, digits, '-' or '_'")
     return pool
+
+
+# ----------------------------------------------------------------------
+# web apps and releases
+# ----------------------------------------------------------------------
+
+# A build id or git SHA. No slashes, no dots-only, nothing that could climb an
+# S3 prefix — this string becomes part of an object key.
+VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+
+# A path INSIDE a release bundle. Relative, forward slashes only.
+RELEASE_PATH_RE = re.compile(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\Z")
+
+SHA256_RE = re.compile(r"^[a-f0-9]{64}\Z")
+
+
+def release_buckets():
+    """Buckets a release may be uploaded to. Fail closed when undeclared.
+
+    The API signs uploads with the platform's own AWS credentials, so a
+    caller-chosen bucket would mean signing writes into anything those
+    credentials can reach.
+    """
+    return settings.get("EDGE_RELEASE_BUCKETS", [], kind="list") or []
+
+
+def validate_release_bucket(bucket):
+    allowed = release_buckets()
+    if not allowed:
+        raise me.ValueException(
+            "No release buckets are declared (EDGE_RELEASE_BUCKETS); "
+            "refusing to register a web app")
+    if bucket not in allowed:
+        raise me.ValueException(f"{bucket} is not a declared release bucket")
+    return bucket
+
+
+def validate_release_version(version):
+    if not isinstance(version, str) or not VERSION_RE.match(version):
+        raise me.ValueException(
+            "version must be letters, digits, '.', '_' or '-'")
+    if version in (".", ".."):
+        raise me.ValueException("version is not a usable name")
+    return version
+
+
+def validate_web_app(web_app):
+    if not web_app.slug or not NAME_RE.match(web_app.slug):
+        raise me.ValueException(
+            "slug must be lowercase letters, digits, '-' or '_'")
+    validate_release_bucket(web_app.bucket or "")
+    if not web_app.group_id:
+        raise me.ValueException("a web app requires a group")
+    return web_app
+
+
+def validate_manifest(manifest):
+    """Check a CI-declared manifest before a single upload URL is minted.
+
+    Each entry becomes an S3 object key and a presigned URL, so an unvalidated
+    `path` is a write primitive pointed at the platform's own credentials.
+    """
+    max_files = int(settings.get("EDGE_RELEASE_MAX_FILES", 5000))
+
+    if not isinstance(manifest, list) or not manifest:
+        raise me.ValueException("manifest must be a non-empty list")
+    if len(manifest) > max_files:
+        raise me.ValueException(
+            f"manifest has {len(manifest)} files; the limit is {max_files}")
+
+    seen = set()
+    cleaned = []
+    for entry in manifest:
+        if not isinstance(entry, dict):
+            raise me.ValueException("each manifest entry must be an object")
+        path = entry.get("path")
+        sha256 = (entry.get("sha256") or "").lower()
+        size = entry.get("size")
+
+        if not isinstance(path, str) or not RELEASE_PATH_RE.match(path):
+            raise me.ValueException(f"illegal path in manifest: {path!r}")
+        # RELEASE_PATH_RE cannot match a leading slash or an empty segment, but
+        # it CAN match ".." as a whole segment — spell that out rather than
+        # relying on a reader to notice.
+        if any(part in (".", "..") for part in path.split("/")):
+            raise me.ValueException(f"illegal path in manifest: {path!r}")
+        if path in seen:
+            raise me.ValueException(f"duplicate path in manifest: {path!r}")
+        seen.add(path)
+
+        if not SHA256_RE.match(sha256):
+            raise me.ValueException(
+                f"manifest entry {path!r} needs a hex sha256")
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise me.ValueException(
+                f"manifest entry {path!r} needs a non-negative integer size")
+
+        cleaned.append(dict(path=path, sha256=sha256, size=size))
+    return cleaned
 
 
 def validate_vhost(vhost):

@@ -490,6 +490,68 @@ class S3Item:
             Params={'Bucket': self.bucket_name, 'Key': self.key}
         )
 
+    def generate_presigned_put(self, expires: int = 3600,
+                               sha256_b64: Optional[str] = None,
+                               content_length: Optional[int] = None) -> str:
+        """
+        Generate a presigned URL that permits a PUT of THIS key and no other.
+
+        Scope, stated precisely, because it is the security property callers
+        rely on: the signature covers the bucket, the key, and any parameters
+        named below. A holder can write that one object until the URL expires;
+        they cannot list, cannot read, and cannot choose a different key.
+
+        When `sha256_b64` is supplied it is bound into the signature as
+        `x-amz-checksum-sha256`, so **S3 itself rejects a body that does not
+        hash to it** — integrity stops depending on the client being honest,
+        or on a later verification pass being remembered.
+
+        Note the encoding: S3 wants the checksum base64-encoded, while a
+        manifest naturally carries hex. Convert with
+        `base64.b64encode(bytes.fromhex(digest))`; passing hex here produces a
+        signature the upload can never satisfy.
+
+        Args:
+            expires: Expiration in seconds (default one hour)
+            sha256_b64: Base64-encoded SHA-256 of the body, bound into the URL
+            content_length: Exact byte length, bound into the URL
+
+        Returns:
+            Presigned PUT URL
+        """
+        params = {'Bucket': self.bucket_name, 'Key': self.key}
+        if sha256_b64:
+            params['ChecksumSHA256'] = sha256_b64
+        if content_length is not None:
+            params['ContentLength'] = int(content_length)
+        return S3.client.generate_presigned_url(
+            'put_object',
+            ExpiresIn=expires,
+            Params=params
+        )
+
+    def head(self) -> Optional[Dict]:
+        """
+        Object metadata, or None when the key is absent.
+
+        Returns the raw HeadObject response so callers can read
+        `ChecksumSHA256` and `ContentLength` — which is how an upload is
+        verified without pulling the bytes back through this process.
+
+        `ChecksumSHA256` is only present when the object was written with one;
+        an upload that bypassed the presigned URL's bound checksum will not
+        have it, and a caller treating "absent" as "matches" would undo the
+        entire verification step.
+        """
+        try:
+            return S3.client.head_object(
+                Bucket=self.bucket_name, Key=self.key)
+        except botocore.exceptions.ClientError as err:
+            code = err.response.get("Error", {}).get("Code")
+            if code in ("404", "NoSuchKey", "NotFound"):
+                return None
+            raise
+
     def download(self, file_obj: Optional[BinaryIO] = None) -> BinaryIO:
         """
         Download the S3 object.

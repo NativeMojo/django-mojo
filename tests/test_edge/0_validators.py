@@ -59,6 +59,41 @@ def test_label_rejects_injection(opts):
             f"validate_label accepted {candidate!r} — that value can reach nginx"
 
 
+@th.django_unit_test("a TRAILING newline is refused by every validator")
+def test_trailing_newline_everywhere(opts):
+    """Python's `$` matches before a trailing newline. `\\Z` does not.
+
+    REGRESSION. Every regex in `validators.py` was written with `$`, and every
+    one of them accepted a trailing "\\n" — `LABEL_RE.match("www\\n")` was True,
+    which puts a newline directly into an nginx config file. A test on the
+    release-version field caught it; the same bug was present in all six
+    patterns, so all six are pinned here.
+    """
+    from mojo.apps.edge import validators
+
+    cases = [
+        (validators.validate_label, "www\n"),
+        (validators.validate_label, "www\r\n"),
+        (validators.validate_upstream_host, "example.com\n"),
+        (validators.validate_pool, "default\n"),
+        (validators.validate_release_version, "v1\n"),
+        (validators.validate_server_name, "www.example.com\n"),
+    ]
+    for func, candidate in cases:
+        err = raises(func, candidate)
+        assert err is not None, (
+            f"{func.__name__} accepted {candidate!r} — a trailing newline "
+            f"reaches the config file")
+
+    err = raises(validators.validate_manifest,
+                 [dict(path="index.html\n", sha256="a" * 64, size=1)])
+    assert err is not None, "validate_manifest accepted a path with a newline"
+
+    err = raises(validators.validate_manifest,
+                 [dict(path="index.html", sha256="a" * 64 + "\n", size=1)])
+    assert err is not None, "validate_manifest accepted a sha256 with a newline"
+
+
 @th.django_unit_test("label accepts apex, wildcard and ordinary labels")
 def test_label_accepts_legitimate(opts):
     from mojo.apps.edge import validators

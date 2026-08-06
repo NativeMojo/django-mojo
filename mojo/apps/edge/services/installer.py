@@ -219,7 +219,7 @@ def _write_material(generation, certificate):
     return True
 
 
-def stage_generation(vhosts, generation):
+def stage_generation(vhosts, generation, webapps=None):
     """Build `generations/<generation>/` completely. Returns excluded vhost ids.
 
     Raises InstallError when a HOUSE vhost cannot be staged: that is the
@@ -264,13 +264,53 @@ def stage_generation(vhosts, generation):
     with open(os.path.join(gen_dir, "nginx.conf"), "w") as handle:
         handle.write(render.render_nginx_harness(generation))
 
-    # A web root that does not exist makes nginx answer 500 instead of 404.
-    # #1435 replaces these directories with symlinks to an installed release.
-    for vhost in installable:
-        if vhost.kind in ("static", "spa"):
-            os.makedirs(render.www_dir(generation, vhost.pk), exist_ok=True)
-
+    stage_web_roots(generation, installable, webapps or [])
     return excluded
+
+
+def release_dir(vhost_id, version):
+    """Where a release's files live, OUTSIDE any generation.
+
+    Retained across generations on purpose: that is what makes a rollback a
+    symlink flip rather than a re-download.
+    """
+    from mojo.apps.edge import validators
+
+    validators.validate_release_version(version)
+    return os.path.join(validators.www_base(), str(int(vhost_id)),
+                        "releases", version)
+
+
+def stage_web_roots(generation, vhosts, webapps):
+    """Point every file-serving vhost's web root at its installed release.
+
+    **The pointer lives INSIDE the generation.** An earlier design put a
+    `current` symlink next to the release, outside the atomic swap — so a
+    failed `nginx -t` abandoned the config change but left the content already
+    moved, and the node served a new bundle under old config: a state neither
+    generation describes. Staging it here means one `os.replace` of `current`
+    swaps configuration and content together, and a rollback reverts both.
+    """
+    by_vhost = {row["vhost"]: row for row in webapps}
+
+    for vhost in vhosts:
+        if vhost.kind not in ("static", "spa"):
+            continue
+
+        link = render.www_dir(generation, vhost.pk)
+        row = by_vhost.get(vhost.pk)
+        if row is None:
+            # No release yet. An empty directory makes nginx answer 404 rather
+            # than 500, which is the better of two bad answers.
+            os.makedirs(link, exist_ok=True)
+            continue
+
+        target = release_dir(vhost.pk, row["release"]["version"])
+        if not os.path.isdir(target):
+            raise InstallError(
+                f"release {row['release']['version']} for vhost {vhost.pk} "
+                f"is not on disk at {target}")
+        _symlink_swap(link, target)
 
 
 def prune_generations(keep=None):
@@ -315,8 +355,14 @@ def install(pool="default", force=False):
 
     from mojo.apps.edge.rest.node import enabled_vhosts
 
+    from mojo.apps.edge.services import releases
+
     vhosts = enabled_vhosts(pool)
-    payload = render.desired_state(vhosts)
+    # Built exactly as the REST endpoint builds it — same two calls, same
+    # order. If these ever diverge, a node installs one thing while the fleet's
+    # desired-state answer describes another.
+    webapps = releases.desired_webapps(vhosts)
+    payload = render.desired_state(vhosts, webapps=webapps)
     generation = payload["generation"]
 
     installed = read_installed()
@@ -326,7 +372,7 @@ def install(pool="default", force=False):
     os.makedirs(os.path.join(render.edge_root(), "generations"), exist_ok=True)
     previous = current_target()
 
-    excluded = stage_generation(vhosts, generation)
+    excluded = stage_generation(vhosts, generation, webapps)
 
     gen_dir = render.generation_dir(generation)
     ok, output = _nginx_check(os.path.join(gen_dir, "nginx.conf"))

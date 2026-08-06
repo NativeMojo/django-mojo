@@ -57,10 +57,14 @@ def on_desired_state(request):
     key pulls it from `material` below, which is one gated, access-logged call
     per certificate rather than a fleet-wide key broadcast on every poll.
     """
+    from mojo.apps.edge.services import releases
+
     pool = request.DATA.get("pool", None) or "default"
     vhosts = enabled_vhosts(pool)
 
-    payload = render.desired_state(vhosts)
+    # The generation hash covers the webapps key too — a promote that did not
+    # move the hash would never reach a node.
+    payload = render.desired_state(vhosts, webapps=releases.desired_webapps(vhosts))
     payload["pool"] = pool
     payload["certificates"] = [
         dict(id=v.certificate_id,
