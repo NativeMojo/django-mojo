@@ -344,24 +344,45 @@ def test_query_counts(opts):
     from django.db import connection
     from django.test import RequestFactory
     from django.test.utils import CaptureQueriesContext
+    from mojo import errors as me
     from mojo.apps.dnsman.rest.credential import on_credential_group_choice
 
     factory = RequestFactory()
 
-    def run(params):
-        request = factory.get(PATH, data=params)
+    def run(params=None, path=PATH, expect_error=False):
+        request = factory.get(path) if params is None else factory.get(path, data=params)
         request.user = opts.manager
         with CaptureQueriesContext(connection) as captured:
-            result = on_credential_group_choice(request)
+            try:
+                result = on_credential_group_choice(request)
+            except me.ValueException:
+                if not expect_error:
+                    raise
+                result = None
         group_queries = [entry["sql"] for entry in captured.captured_queries
                          if "account_group" in entry["sql"]]
         return result, group_queries
 
+    def assert_minimal_projection(queries):
+        data_query = next(sql for sql in queries if "COUNT(" not in sql.upper())
+        select_clause = data_query.partition(" FROM ")[0]
+        assert '"account_group"."id"' in select_clause, select_clause
+        assert '"account_group"."name"' in select_clause, select_clause
+        assert "is_active" not in select_clause and "parent_id" not in select_clause, (
+            f"choice query selected fields beyond id/name: {select_clause}")
+
     exact, exact_queries = run({"id": opts.alpha.pk})
     assert exact["count"] == 1 and len(exact_queries) == 1, exact_queries
+    assert_minimal_projection(exact_queries)
+
+    exact_miss, exact_miss_queries = run({"id": 9223372036854775807})
+    assert exact_miss["count"] == 0 and len(exact_miss_queries) == 1, \
+        exact_miss_queries
+    assert_minimal_projection(exact_miss_queries)
 
     listed, list_queries = run({"size": 10})
     assert listed["data"] and len(list_queries) == 2, list_queries
+    assert_minimal_projection(list_queries)
 
     searched, search_queries = run({"search": "gc_page_", "size": 10})
     assert searched["count"] == 55 and len(search_queries) == 2, search_queries
@@ -370,11 +391,25 @@ def test_query_counts(opts):
         {"search": "gc_page_", "start": 100000, "size": 10})
     assert empty_page["data"] == [] and len(empty_queries) == 2, empty_queries
 
+    for params, path in [
+            ({"id": 9223372036854775808}, PATH),
+            ({"start": 100001}, PATH),
+            ({"size": 51}, PATH),
+            (None, f"{PATH}?id=1&id=2")]:
+        result, invalid_queries = run(
+            params=params, path=path, expect_error=True)
+        assert result is None and invalid_queries == [], (
+            f"invalid query input must fail before touching Group: {invalid_queries}")
+
 
 @th.django_unit_test("deactivated choice cannot be linked and creates no credential")
 def test_deactivated_choice_link_fails_before_persistence(opts):
+    from unittest.mock import patch
+    from django.test import RequestFactory
+    from mojo import errors as me
     from mojo.apps.account.models import Group
     from mojo.apps.dnsman.models import DnsCredential
+    from mojo.apps.dnsman.rest import credential as credential_rest
 
     group = Group.objects.create(name="gc_link_target", kind="organization")
     _login(opts, opts.manager_email, opts.manager_pw)
@@ -397,3 +432,23 @@ def test_deactivated_choice_link_fails_before_persistence(opts):
         f"an inactive selected group must be refused, got {linked.status_code}"
     assert DnsCredential.objects.count() == before, \
         "a refused link must persist no credential"
+
+    # The live-server assertion above proves dispatch re-resolves the stale id.
+    # This in-process handler probe instruments the provider boundary itself:
+    # an unresolved request.group must refuse before onboarding is called.
+    request = RequestFactory().post("/api/dnsman/credential/link")
+    request.user = opts.manager
+    request.group = None
+    request.DATA = {
+        "group": group.pk,
+        "provider": "godaddy",
+        "api_key": "must-not-reach-provider",
+        "api_secret": "must-not-persist",
+    }
+    with patch.object(
+            credential_rest.onboarding, "link_credential",
+            side_effect=AssertionError("stale group reached provider onboarding")) as link:
+        with th.assert_raises(me.ValueException):
+            credential_rest.on_credential_link(request)
+    assert link.call_count == 0, \
+        "stale choice must be rejected before onboarding/provider verification"

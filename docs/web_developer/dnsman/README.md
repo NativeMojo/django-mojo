@@ -292,13 +292,23 @@ which may resolve and touch it before route authorization; the choice endpoint
 does not accept it as a filter. Portal adapters should send only the four
 route-owned parameters above. Each row contains exactly `id` and `name`.
 
+Choices are advisory UI data, not an authorization decision or a reservation.
+A group can be deactivated after discovery. The link request below must still
+send the chosen `group`; the dispatcher resolves it again at request time and
+linking refuses before provider verification or persistence if it is no longer
+active.
+
 ### `POST /api/dnsman/credential/link`
 ```json
-{ "provider": "godaddy", "api_key": "...", "api_secret": "...", "name": "Acme GoDaddy" }
+{ "group": 4, "provider": "godaddy", "api_key": "...", "api_secret": "...",
+  "name": "Acme GoDaddy" }
 ```
 The credential is verified against the provider before anything is stored — a
 failed first link persists nothing. Pass `credential: <pk>` to rotate an
 existing one in place; the new pair must verify before it replaces the old.
+`group` remains required on rotation for dispatch-time permission and active-
+group checks, but rotation never re-homes the credential: it stays on its
+existing group.
 
 Responses expose only masked values (`api_key_masked`, `api_secret_masked`).
 The secret is never returned by any endpoint, in any graph, ever.
