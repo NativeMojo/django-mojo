@@ -38,6 +38,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | [aws/guardduty](aws/guardduty.md) | Public AWS SNS endpoint that receives signed GuardDuty findings |
 | [aws/s3](aws/s3.md) | Global S3 bucket inventory, private creation, access posture, and confirmed empty operations |
 | [dnsman/](dnsman/README.md) | Domain search/purchase, DNS records, WHOIS/privacy, TLS certificates |
+| [edge/](edge/README.md) | nginx vhosts and declared upstreams — how a domain gets served |
 | [filevault/](filevault/README.md) | Encrypted file vault |
 | [assistant/](assistant/README.md) | LLM admin assistant — natural language queries, conversations |
 | [github/](github/README.md) | GitHub App installations — list, create, update, delete |
