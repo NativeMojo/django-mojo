@@ -1,16 +1,294 @@
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
+from mojo.helpers.aws.client import get_client
 from objict import objict
 import boto3
 import botocore
+from botocore.exceptions import (
+    ClientError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    NoCredentialsError,
+    PartialCredentialsError,
+    ReadTimeoutError,
+)
 from urllib.parse import urlparse
+import copy
 import io
 import tempfile
 import json
+import re
 import threading
+import time
 from typing import Optional, Union, BinaryIO, Dict, List, Any, Tuple
 
 logger = logit.get_logger(__name__)
+
+
+PRIVATE_PUBLIC_ACCESS_BLOCK = {
+    "BlockPublicAcls": True,
+    "IgnorePublicAcls": True,
+    "BlockPublicPolicy": True,
+    "RestrictPublicBuckets": True,
+}
+PUBLIC_POLICY_ACCESS_BLOCK = {
+    "BlockPublicAcls": True,
+    "IgnorePublicAcls": True,
+    "BlockPublicPolicy": False,
+    "RestrictPublicBuckets": False,
+}
+MANAGED_PUBLIC_READ_SID = "DjangoMojoBucketPublicRead"
+
+OPERATION_DEADLINE_SECONDS = 25
+OPERATION_PROVIDER_CALL_LIMIT = 200
+OPERATION_LIST_PAGE_LIMIT = 20
+OPERATION_DELETE_BATCH_LIMIT = 50
+OPERATION_UPLOAD_ATTEMPT_LIMIT = 250
+ABORT_UPLOAD_RETRY_LIMIT = 3
+INVENTORY_PAGE_LIMIT = 10
+INVENTORY_ROW_LIMIT = 10000
+
+_SAFE_PROVIDER_CODES = {
+    "AccessDenied",
+    "AllAccessDisabled",
+    "AuthorizationHeaderMalformed",
+    "BucketAlreadyExists",
+    "BucketAlreadyOwnedByYou",
+    "Conflict",
+    "ExpiredToken",
+    "InvalidAccessKeyId",
+    "InvalidBucketName",
+    "InvalidRequest",
+    "InvalidToken",
+    "MethodNotAllowed",
+    "NoSuchBucket",
+    "NoSuchBucketPolicy",
+    "NoSuchPublicAccessBlockConfiguration",
+    "NoSuchUpload",
+    "NotFound",
+    "PermanentRedirect",
+    "RequestTimeout",
+    "ServiceUnavailable",
+    "SignatureDoesNotMatch",
+    "SlowDown",
+    "Throttling",
+    "ThrottlingException",
+    "TooManyRequestsException",
+    "credentials_unavailable",
+    "network_unavailable",
+    "region_unavailable",
+    "work_limit",
+}
+_MISSING_BUCKET_CODES = {"404", "NoSuchBucket", "NotFound"}
+_RETRYABLE_CODES = {
+    "RequestTimeout",
+    "ServiceUnavailable",
+    "SlowDown",
+    "Throttling",
+    "ThrottlingException",
+    "TooManyRequestsException",
+}
+_CREDENTIAL_CODES = {
+    "ExpiredToken",
+    "InvalidAccessKeyId",
+    "InvalidToken",
+    "SignatureDoesNotMatch",
+}
+_REGION_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+
+
+class S3OperationError(Exception):
+    """A bounded, wire-safe S3 operation failure."""
+
+    def __init__(self, operation, provider_code="provider_error", status=502,
+                 retryable=False, mutation_state="none", message=None,
+                 data=None, error_code=None):
+        self.operation = str(operation or "s3")[:64]
+        self.provider_code = _safe_provider_code(provider_code)
+        self.status = int(status)
+        self.retryable = bool(retryable)
+        self.mutation_state = mutation_state if mutation_state in ("none", "partial", "unknown") else "unknown"
+        self.message = message or "S3 provider operation failed"
+        self.data = copy.deepcopy(data) if isinstance(data, dict) else {}
+        self.error_code = error_code or (
+            "s3_operation_incomplete" if self.status == 409 and self.mutation_state != "none"
+            else "s3_provider_error"
+        )
+        super().__init__(self.message)
+
+    def __str__(self):
+        return "S3 operation failed"
+
+    def __repr__(self):
+        return "S3OperationError(operation=%r, provider_code=%r, status=%r)" % (
+            self.operation,
+            self.provider_code,
+            self.status,
+        )
+
+    def failure(self):
+        return {
+            "operation": self.operation,
+            "provider_code": self.provider_code,
+            "retryable": self.retryable,
+        }
+
+
+def _safe_provider_code(code):
+    code = str(code or "provider_error")[:64]
+    if code in _SAFE_PROVIDER_CODES:
+        return code
+    if code.isdigit() and code in ("301", "400", "403", "404", "409", "429", "500", "502", "503", "504"):
+        return code
+    return "provider_error"
+
+
+def _semantic_equal(left, right):
+    try:
+        return json.dumps(_semantic_value(left), sort_keys=True, separators=(",", ":")) == json.dumps(
+            _semantic_value(right), sort_keys=True, separators=(",", ":")
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _semantic_value(value):
+    if isinstance(value, dict):
+        return {key: _semantic_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        items = [_semantic_value(item) for item in value]
+        return sorted(items, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
+    return value
+
+
+def _client_error_parts(exc):
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return "provider_error", None
+    error = response.get("Error")
+    code = error.get("Code") if isinstance(error, dict) else None
+    metadata = response.get("ResponseMetadata")
+    status = metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
+    try:
+        status = int(status) if status is not None else None
+    except (TypeError, ValueError):
+        status = None
+    return str(code or status or "provider_error"), status
+
+
+def _region_hint(exc):
+    response = getattr(exc, "response", None)
+    metadata = response.get("ResponseMetadata") if isinstance(response, dict) else None
+    headers = metadata.get("HTTPHeaders") if isinstance(metadata, dict) else None
+    hint = headers.get("x-amz-bucket-region") if isinstance(headers, dict) else None
+    if isinstance(hint, str) and _REGION_RE.fullmatch(hint) and len(hint) <= 32:
+        return hint
+    return None
+
+
+def _response_region(response, fallback=None):
+    metadata = response.get("ResponseMetadata") if isinstance(response, dict) else None
+    headers = metadata.get("HTTPHeaders") if isinstance(metadata, dict) else None
+    region = headers.get("x-amz-bucket-region") if isinstance(headers, dict) else None
+    if region is None:
+        region = fallback
+    if isinstance(region, str) and _REGION_RE.fullmatch(region) and len(region) <= 32:
+        return region
+    return None
+
+
+def _map_provider_error(exc, operation, mutation_state="none"):
+    if isinstance(exc, S3OperationError):
+        return exc
+    if isinstance(exc, (NoCredentialsError, PartialCredentialsError)):
+        return S3OperationError(
+            operation, "credentials_unavailable",
+            status=409 if mutation_state != "none" else 503,
+            retryable=True,
+            mutation_state=mutation_state,
+        )
+    if isinstance(exc, (EndpointConnectionError, ConnectTimeoutError, ReadTimeoutError)):
+        state = "unknown" if mutation_state != "none" else "none"
+        return S3OperationError(
+            operation, "network_unavailable",
+            status=409 if state != "none" else 503,
+            retryable=True,
+            mutation_state=state,
+        )
+    if isinstance(exc, ClientError):
+        raw_code, http_status = _client_error_parts(exc)
+        code = _safe_provider_code(raw_code)
+        retryable = code in _RETRYABLE_CODES or http_status in (429, 500, 502, 503, 504)
+        if code in ("AccessDenied", "AllAccessDisabled", "403") or http_status == 403:
+            status = 403
+        elif code in _MISSING_BUCKET_CODES or http_status == 404:
+            status = 404
+        elif code in ("BucketAlreadyExists", "BucketAlreadyOwnedByYou", "Conflict", "PermanentRedirect") or http_status in (301, 409):
+            status = 409
+        elif code in _CREDENTIAL_CODES or retryable:
+            status = 503
+        else:
+            status = 502
+        state = mutation_state
+        if mutation_state != "none" and (retryable or http_status is None or http_status >= 500):
+            state = "unknown"
+        if state != "none":
+            status = 409
+        return S3OperationError(operation, code, status=status, retryable=retryable, mutation_state=state)
+    return S3OperationError(operation, "provider_error", status=502, mutation_state=mutation_state)
+
+
+class S3OperationBudget:
+    """Finite provider-work budget for one logical bucket operation."""
+
+    def __init__(self, clock=None):
+        self.clock = clock or time.monotonic
+        self.started = self.clock()
+        self.provider_calls = 0
+        self.list_pages = 0
+        self.delete_batches = 0
+        self.upload_attempts = 0
+
+    def _raise_limit(self, operation, mutation_state):
+        raise S3OperationError(
+            operation,
+            "work_limit",
+            status=409,
+            retryable=True,
+            mutation_state=mutation_state,
+            error_code="s3_operation_incomplete",
+        )
+
+    def before_call(self, operation, mutation_state="none"):
+        if self.clock() - self.started >= OPERATION_DEADLINE_SECONDS:
+            self._raise_limit(operation, mutation_state)
+        if self.provider_calls >= OPERATION_PROVIDER_CALL_LIMIT:
+            self._raise_limit(operation, mutation_state)
+        self.provider_calls += 1
+
+    def count_list_page(self, operation, mutation_state="none"):
+        if self.list_pages >= OPERATION_LIST_PAGE_LIMIT:
+            self._raise_limit(operation, mutation_state)
+        self.list_pages += 1
+
+    def count_delete_batch(self, operation, mutation_state="none"):
+        if self.delete_batches >= OPERATION_DELETE_BATCH_LIMIT:
+            self._raise_limit(operation, mutation_state)
+        self.delete_batches += 1
+
+    def count_upload_attempt(self, operation, mutation_state="none"):
+        if self.upload_attempts >= OPERATION_UPLOAD_ATTEMPT_LIMIT:
+            self._raise_limit(operation, mutation_state)
+        self.upload_attempts += 1
+
+
+def _default_client_factory(service, access_key=None, secret_key=None, region=None):
+    return get_client(
+        service,
+        access_key=access_key,
+        secret_key=secret_key,
+        region=region,
+    )
 
 class S3Config:
     """S3 configuration holder with lazy initialization of clients and resources."""
@@ -33,10 +311,12 @@ class S3Config:
     @property
     def client(self):
         if self._client is None:
-            self._client = boto3.client('s3',
-                                       aws_access_key_id=self.key,
-                                       aws_secret_access_key=self.secret,
-                                       region_name=self.region_name)
+            self._client = get_client(
+                "s3",
+                access_key=self.key,
+                secret_key=self.secret,
+                region=self.region_name,
+            )
         return self._client
 
     @staticmethod
@@ -53,15 +333,44 @@ class S3Config:
         Returns:
             List of bucket names
         """
+        rows = []
         try:
-            response = S3.client.list_buckets()
-            return [
-                {"id": b["Name"], "name": b["Name"], "created": b["CreationDate"].timestamp()}
-                for b in response.get("Buckets", [])
-            ]
-        except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to list buckets: {e}")
-            return []
+            paginator = S3.client.get_paginator("list_buckets")
+            pages = paginator.paginate(MaxBuckets=1000)
+            for page_number, response in enumerate(pages, start=1):
+                if page_number > INVENTORY_PAGE_LIMIT:
+                    raise S3OperationError(
+                        "list_buckets", "work_limit", status=503, retryable=True,
+                    )
+                buckets = response.get("Buckets", []) if isinstance(response, dict) else None
+                if not isinstance(buckets, list):
+                    raise S3OperationError("list_buckets", "provider_error", status=502)
+                for bucket in buckets:
+                    name = bucket.get("Name") if isinstance(bucket, dict) else None
+                    created = bucket.get("CreationDate") if isinstance(bucket, dict) else None
+                    if not isinstance(name, str) or not name or not hasattr(created, "timestamp"):
+                        raise S3OperationError("list_buckets", "provider_error", status=502)
+                    try:
+                        created_value = created.timestamp()
+                    except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+                        raise S3OperationError("list_buckets", "provider_error", status=502) from exc
+                    rows.append({"id": name, "name": name, "created": created_value})
+                    if len(rows) > INVENTORY_ROW_LIMIT:
+                        raise S3OperationError(
+                            "list_buckets", "work_limit", status=503, retryable=True,
+                        )
+                continuation = response.get("ContinuationToken") or response.get("NextContinuationToken")
+                if page_number == INVENTORY_PAGE_LIMIT and continuation:
+                    raise S3OperationError(
+                        "list_buckets", "work_limit", status=503, retryable=True,
+                    )
+            return rows
+        except S3OperationError:
+            raise
+        except Exception as exc:
+            error = _map_provider_error(exc, "list_buckets")
+            logger.warning("S3 inventory failed provider_code=%s", error.provider_code)
+            raise error from exc
 
 # Initialize the global S3 configuration
 S3 = S3Config(settings.AWS_KEY, settings.AWS_SECRET, settings.AWS_REGION)
@@ -302,7 +611,8 @@ class S3Bucket:
     with sensible defaults.
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, client_factory=None, clock=None, budget=None,
+                 region=None):
         """
         Initialize a bucket manager for the specified bucket.
 
@@ -310,20 +620,255 @@ class S3Bucket:
             name: The name of the S3 bucket
         """
         self.name = name
-        self.exists = self._check_exists()
+        self.client_factory = client_factory or _default_client_factory
+        self.configured_region = region or S3.region_name
+        self.region = None
+        self.owner_id = None
+        self._s3_control = None
+        self.budget = budget or S3OperationBudget(clock=clock)
+        self._client = self._make_client("s3", self.configured_region)
+        self._exists_resolved = False
+        self._acknowledged_mutation = False
+        self._unknown_mutation = False
+        self.exists = self._resolve_exists()
+
+    def _make_client(self, service, region):
+        try:
+            return self.client_factory(
+                service,
+                access_key=S3.key,
+                secret_key=S3.secret,
+                region=region,
+            )
+        except Exception as exc:
+            raise _map_provider_error(exc, "create_client") from exc
+
+    def _mutation_state(self, ambiguous=False):
+        if ambiguous or self._unknown_mutation:
+            return "unknown"
+        if self._acknowledged_mutation:
+            return "partial"
+        return "none"
+
+    def _call(self, operation, method, mutation=False, **kwargs):
+        prior_state = self._mutation_state()
+        self.budget.before_call(operation, mutation_state=prior_state)
+        try:
+            response = method(**kwargs)
+            if mutation:
+                self._acknowledged_mutation = True
+            return response
+        except Exception as exc:
+            issued_state = prior_state
+            if mutation and not isinstance(exc, ClientError):
+                issued_state = "unknown"
+                self._unknown_mutation = True
+            error = _map_provider_error(exc, operation, mutation_state=issued_state)
+            logger.warning(
+                "S3 operation failed action=%s bucket=%s provider_code=%s state=%s",
+                operation,
+                self.name,
+                error.provider_code,
+                error.mutation_state,
+            )
+            raise error from exc
+
+    def _head_once(self, client, operation="head_bucket", expected_owner=None):
+        kwargs = {"Bucket": self.name}
+        if expected_owner:
+            kwargs["ExpectedBucketOwner"] = expected_owner
+        self.budget.before_call(operation, mutation_state=self._mutation_state())
+        try:
+            return client.head_bucket(**kwargs)
+        except Exception:
+            raise
+
+    def _resolve_exists(self, refresh=False):
+        if self._exists_resolved and not refresh:
+            return self.exists
+        initial = self._client
+        try:
+            response = self._head_once(initial)
+            region = _response_region(response)
+        except ClientError as exc:
+            raw_code, status = _client_error_parts(exc)
+            if raw_code in _MISSING_BUCKET_CODES or status == 404:
+                self._exists_resolved = True
+                self.exists = False
+                return False
+            region = _region_hint(exc)
+            if not region:
+                error = _map_provider_error(exc, "head_bucket")
+                logger.warning(
+                    "S3 operation failed action=head_bucket bucket=%s provider_code=%s state=none",
+                    self.name,
+                    error.provider_code,
+                )
+                raise error from exc
+        except Exception as exc:
+            error = _map_provider_error(exc, "head_bucket")
+            raise error from exc
+
+        if not region:
+            raise S3OperationError("head_bucket", "region_unavailable", status=409)
+
+        regional = self._make_client("s3", region)
+        try:
+            verified = self._head_once(regional)
+        except ClientError as exc:
+            raw_code, status = _client_error_parts(exc)
+            if raw_code in _MISSING_BUCKET_CODES or status == 404:
+                self._exists_resolved = True
+                self.exists = False
+                return False
+            error = _map_provider_error(exc, "head_bucket")
+            raise error from exc
+        except Exception as exc:
+            error = _map_provider_error(exc, "head_bucket")
+            raise error from exc
+        verified_region = _response_region(verified)
+        if verified_region != region:
+            raise S3OperationError("head_bucket", "region_unavailable", status=409)
+        self._client = regional
+        self.region = region
+        self.exists = True
+        self._exists_resolved = True
+        return True
 
     def _check_exists(self) -> bool:
         """Check if the bucket exists."""
+        return self._resolve_exists()
+
+    def _bind_owner(self):
+        if self.owner_id:
+            return self.owner_id
+        sts = self._make_client("sts", self.region or self.configured_region)
+        response = self._call("get_caller_identity", sts.get_caller_identity)
+        account = response.get("Account") if isinstance(response, dict) else None
+        if not isinstance(account, str) or not re.fullmatch(r"[0-9]{12}", account):
+            raise S3OperationError("get_caller_identity", "provider_error", status=502)
+        self.owner_id = account
+        self._s3_control = self._make_client("s3control", self.region or self.configured_region)
+        return account
+
+    def _expected(self, values=None):
+        result = dict(values or {})
+        if self.owner_id:
+            result["ExpectedBucketOwner"] = self.owner_id
+        return result
+
+    def _verify_owner_bound_head(self):
         try:
-            S3.client.head_bucket(Bucket=self.name)
-            return True
-        except botocore.exceptions.ClientError as e:
-            if e.response['Error']['Code'] == '404':
-                return False
-            # If it's a different error (e.g., 403 forbidden), still return False
-            # but log the error
-            logger.warning(f"Error checking bucket existence: {e}")
-            return False
+            self._head_once(self._client, expected_owner=self.owner_id)
+        except Exception as exc:
+            error = _map_provider_error(exc, "head_bucket", self._mutation_state())
+            raise error from exc
+
+    def _read_public_access_block(self):
+        try:
+            response = self._call(
+                "get_public_access_block",
+                self._client.get_public_access_block,
+                **self._expected({"Bucket": self.name}),
+            )
+        except S3OperationError as error:
+            if error.provider_code == "NoSuchPublicAccessBlockConfiguration":
+                return None
+            raise
+        value = response.get("PublicAccessBlockConfiguration") if isinstance(response, dict) else None
+        if not isinstance(value, dict):
+            raise S3OperationError("get_public_access_block", "provider_error", status=502,
+                                   mutation_state=self._mutation_state())
+        return {key: value.get(key) is True for key in PRIVATE_PUBLIC_ACCESS_BLOCK}
+
+    def _put_public_access_block(self, configuration):
+        prior_unknown = self._unknown_mutation
+        try:
+            self._call(
+                "put_public_access_block",
+                self._client.put_public_access_block,
+                mutation=True,
+                **self._expected({
+                    "Bucket": self.name,
+                    "PublicAccessBlockConfiguration": dict(configuration),
+                }),
+            )
+        except S3OperationError as error:
+            if error.mutation_state != "unknown":
+                raise
+            try:
+                if self._read_public_access_block() == configuration:
+                    self._unknown_mutation = prior_unknown
+                    self._acknowledged_mutation = True
+                    return
+            except S3OperationError:
+                pass
+            raise error
+
+    def _verify_public_access_block(self, expected):
+        actual = self._read_public_access_block()
+        if actual != expected:
+            raise S3OperationError(
+                "verify_public_access_block",
+                "provider_error",
+                status=409,
+                mutation_state=self._mutation_state(),
+                error_code="s3_operation_incomplete",
+            )
+        return actual
+
+    def create_private(self, region=None):
+        """Create an idempotent private bucket and verify its safety lock."""
+        if self.exists:
+            return {"id": self.name, "name": self.name, "created_new": False}
+
+        create_region = region or self.configured_region
+        if not isinstance(create_region, str) or not _REGION_RE.fullmatch(create_region):
+            raise S3OperationError("create_bucket", "region_unavailable", status=409)
+        self.region = create_region
+        self._client = self._make_client("s3", create_region)
+        params = {"Bucket": self.name}
+        if create_region != "us-east-1":
+            params["CreateBucketConfiguration"] = {"LocationConstraint": create_region}
+
+        created_new = True
+        try:
+            self._call("create_bucket", self._client.create_bucket, mutation=True, **params)
+            self.exists = True
+            self._exists_resolved = True
+        except S3OperationError as error:
+            if error.provider_code == "BucketAlreadyExists":
+                raise
+            if error.provider_code == "BucketAlreadyOwnedByYou":
+                created_new = None
+            elif error.mutation_state == "unknown":
+                created_new = None
+            else:
+                raise
+            try:
+                self._exists_resolved = False
+                if not self._resolve_exists(refresh=True):
+                    raise error
+            except S3OperationError:
+                raise error
+
+        try:
+            self._put_public_access_block(PRIVATE_PUBLIC_ACCESS_BLOCK)
+            self._verify_public_access_block(PRIVATE_PUBLIC_ACCESS_BLOCK)
+        except S3OperationError as error:
+            data = {"name": self.name, "action": "create", "created_new": created_new,
+                    "complete": False, "mutation_state": self._mutation_state()}
+            raise S3OperationError(
+                error.operation,
+                error.provider_code,
+                status=409,
+                retryable=error.retryable,
+                mutation_state=self._mutation_state(),
+                message="S3 bucket creation did not reach a verified private state",
+                data=data,
+                error_code="s3_operation_incomplete",
+            ) from error
+        return {"id": self.name, "name": self.name, "created_new": created_new}
 
     def create(self, region: Optional[str] = None, public_access: bool = False) -> bool:
         """
@@ -336,40 +881,28 @@ class S3Bucket:
         Returns:
             True if bucket was created, False if it already exists
         """
-        if self.exists:
-            logger.info(f"Bucket {self.name} already exists")
-            return False
-
-        # Use configured region if none specified
-        if region is None:
-            region = S3.region_name
-
-        create_params = {'Bucket': self.name}
-
-        # Add region configuration if specified
-        if region and region != 'us-east-1':
-            create_params['CreateBucketConfiguration'] = {
-                'LocationConstraint': region
-            }
-
         try:
-            S3.client.create_bucket(**create_params)
-            self.exists = True
-
-            # Configure public access blocking based on the public_access parameter
-            if not public_access:
-                S3.client.put_public_access_block(
-                    Bucket=self.name,
-                    PublicAccessBlockConfiguration={
-                        'BlockPublicAcls': True,
-                        'IgnorePublicAcls': True,
-                        'BlockPublicPolicy': True,
-                        'RestrictPublicBuckets': True
-                    }
-                )
-            return True
-        except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to create bucket {self.name}: {e}")
+            if self.exists:
+                return False
+            if public_access:
+                create_region = region or self.configured_region
+                self.region = create_region
+                self._client = self._make_client("s3", create_region)
+                params = {"Bucket": self.name}
+                if create_region != "us-east-1":
+                    params["CreateBucketConfiguration"] = {"LocationConstraint": create_region}
+                self._call("create_bucket", self._client.create_bucket, mutation=True, **params)
+                self.exists = True
+                self._exists_resolved = True
+                return True
+            result = self.create_private(region=region)
+            return result.get("created_new") is not False
+        except S3OperationError as error:
+            logger.warning(
+                "S3 legacy create failed bucket=%s provider_code=%s",
+                self.name,
+                error.provider_code,
+            )
             return False
 
     def delete(self, force: bool = False) -> bool:
@@ -454,6 +987,259 @@ class S3Bucket:
             logger.error(f"Failed to set policy for bucket {self.name}: {e}")
             return False
 
+    def _managed_public_statement(self):
+        return {
+            "Sid": MANAGED_PUBLIC_READ_SID,
+            "Effect": "Allow",
+            "Principal": "*",
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::%s/*" % self.name,
+        }
+
+    def _normalize_policy(self, policy):
+        if not isinstance(policy, dict):
+            raise S3OperationError("get_bucket_policy", "provider_error", status=409)
+        normalized = copy.deepcopy(policy)
+        statements = normalized.get("Statement", [])
+        if isinstance(statements, dict):
+            statements = [statements]
+        if not isinstance(statements, list) or any(not isinstance(item, dict) for item in statements):
+            raise S3OperationError("get_bucket_policy", "provider_error", status=409)
+        normalized["Statement"] = statements
+        return normalized
+
+    def _read_bucket_policy(self):
+        try:
+            response = self._call(
+                "get_bucket_policy",
+                self._client.get_bucket_policy,
+                **self._expected({"Bucket": self.name}),
+            )
+        except S3OperationError as error:
+            if error.provider_code == "NoSuchBucketPolicy":
+                return {"Version": "2012-10-17", "Statement": []}
+            raise
+        raw_policy = response.get("Policy") if isinstance(response, dict) else None
+        if not isinstance(raw_policy, str):
+            raise S3OperationError("get_bucket_policy", "provider_error", status=502,
+                                   mutation_state=self._mutation_state())
+        try:
+            return self._normalize_policy(json.loads(raw_policy))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise S3OperationError("get_bucket_policy", "provider_error", status=409,
+                                   mutation_state=self._mutation_state()) from exc
+
+    def _policy_parts(self, policy):
+        managed = self._managed_public_statement()
+        managed_found = False
+        unrelated = copy.deepcopy(policy)
+        unrelated_statements = []
+        for statement in policy.get("Statement", []):
+            if statement.get("Sid") == MANAGED_PUBLIC_READ_SID:
+                if not _semantic_equal(statement, managed):
+                    raise S3OperationError("bucket_policy_conflict", "Conflict", status=409,
+                                           mutation_state=self._mutation_state())
+                managed_found = True
+            else:
+                unrelated_statements.append(copy.deepcopy(statement))
+        unrelated["Statement"] = unrelated_statements
+        return managed_found, unrelated
+
+    def _merge_public_policy(self, policy):
+        managed_found, unrelated = self._policy_parts(policy)
+        merged = copy.deepcopy(policy)
+        if not managed_found:
+            merged["Statement"] = list(merged.get("Statement", [])) + [self._managed_public_statement()]
+        return merged, unrelated, managed_found
+
+    def _put_bucket_policy(self, policy):
+        prior_unknown = self._unknown_mutation
+        try:
+            self._call(
+                "put_bucket_policy",
+                self._client.put_bucket_policy,
+                mutation=True,
+                **self._expected({
+                    "Bucket": self.name,
+                    "Policy": json.dumps(policy, sort_keys=True, separators=(",", ":")),
+                }),
+            )
+        except S3OperationError as error:
+            if error.mutation_state != "unknown":
+                raise
+            try:
+                if _semantic_equal(self._read_bucket_policy(), policy):
+                    self._unknown_mutation = prior_unknown
+                    self._acknowledged_mutation = True
+                    return
+            except S3OperationError:
+                pass
+            raise error
+
+    def _read_account_public_access_block(self):
+        try:
+            response = self._call(
+                "get_account_public_access_block",
+                self._s3_control.get_public_access_block,
+                AccountId=self.owner_id,
+            )
+        except S3OperationError as error:
+            if error.provider_code == "NoSuchPublicAccessBlockConfiguration":
+                return {key: False for key in PRIVATE_PUBLIC_ACCESS_BLOCK}
+            raise
+        value = response.get("PublicAccessBlockConfiguration") if isinstance(response, dict) else None
+        if not isinstance(value, dict):
+            raise S3OperationError("get_account_public_access_block", "provider_error", status=502,
+                                   mutation_state=self._mutation_state())
+        return {key: value.get(key) is True for key in PRIVATE_PUBLIC_ACCESS_BLOCK}
+
+    def _read_policy_status(self):
+        response = self._call(
+            "get_bucket_policy_status",
+            self._client.get_bucket_policy_status,
+            **self._expected({"Bucket": self.name}),
+        )
+        status = response.get("PolicyStatus") if isinstance(response, dict) else None
+        if not isinstance(status, dict) or type(status.get("IsPublic")) is not bool:
+            raise S3OperationError("get_bucket_policy_status", "provider_error", status=502,
+                                   mutation_state=self._mutation_state())
+        return status["IsPublic"]
+
+    def _apply_safety_lock(self):
+        try:
+            self._put_public_access_block(PRIVATE_PUBLIC_ACCESS_BLOCK)
+            self._verify_public_access_block(PRIVATE_PUBLIC_ACCESS_BLOCK)
+            return "applied", False
+        except S3OperationError:
+            return "failed", True
+
+    def set_public(self, requested_public):
+        """Configure and verify whole-bucket policy/PAB public posture."""
+        if type(requested_public) is not bool:
+            raise ValueError("set_public must be a boolean")
+        if not self.exists:
+            raise S3OperationError("head_bucket", "NoSuchBucket", status=404)
+        self._bind_owner()
+        self._verify_owner_bound_head()
+
+        if not requested_public:
+            try:
+                self._put_public_access_block(PRIVATE_PUBLIC_ACCESS_BLOCK)
+                self._verify_public_access_block(PRIVATE_PUBLIC_ACCESS_BLOCK)
+            except S3OperationError as error:
+                if error.mutation_state == "none" and not self._acknowledged_mutation:
+                    data = {
+                        "name": self.name,
+                        "action": "set_public",
+                        "requested_public": False,
+                        "configured_public": None,
+                        "safety_lock": "not_needed",
+                        "complete": False,
+                        "mutation_state": "none",
+                    }
+                    raise S3OperationError(
+                        error.operation, error.provider_code, status=error.status,
+                        retryable=error.retryable, mutation_state="none",
+                        message=error.message, data=data,
+                        error_code=error.error_code,
+                    ) from error
+                data = {
+                    "name": self.name,
+                    "action": "set_public",
+                    "requested_public": False,
+                    "configured_public": None,
+                    "safety_lock": "failed",
+                    "complete": False,
+                    "mutation_state": self._mutation_state(),
+                }
+                raise S3OperationError(
+                    error.operation, error.provider_code, status=409,
+                    retryable=error.retryable,
+                    mutation_state=self._mutation_state(),
+                    message="S3 bucket access change did not reach a verified state",
+                    data=data,
+                    error_code="s3_operation_incomplete",
+                ) from error
+            return {
+                "name": self.name,
+                "configured_public": False,
+                "complete": True,
+                "mutation_state": "complete",
+            }
+
+        # Full read-only preflight before changing bucket policy or PAB.
+        self._read_public_access_block()
+        self._read_bucket_policy()
+        account_pab = self._read_account_public_access_block()
+        self._read_policy_status()
+        if account_pab.get("BlockPublicPolicy") or account_pab.get("RestrictPublicBuckets"):
+            raise S3OperationError(
+                "account_public_access_block",
+                "Conflict",
+                status=409,
+                message="Account public access settings prevent the requested bucket posture",
+            )
+
+        # Re-read immediately before merge because policy writes have no condition token.
+        immediate_policy = self._read_bucket_policy()
+        merged_policy, unrelated_before, managed_found_before = self._merge_public_policy(immediate_policy)
+        try:
+            self._put_public_access_block(PUBLIC_POLICY_ACCESS_BLOCK)
+            self._verify_public_access_block(PUBLIC_POLICY_ACCESS_BLOCK)
+            if not managed_found_before:
+                self._put_bucket_policy(merged_policy)
+
+            verified_pab = self._read_public_access_block()
+            verified_policy = self._read_bucket_policy()
+            managed_found, unrelated_after = self._policy_parts(verified_policy)
+            verified_account = self._read_account_public_access_block()
+            policy_is_public = self._read_policy_status()
+            verified = (
+                verified_pab == PUBLIC_POLICY_ACCESS_BLOCK
+                and managed_found
+                and _semantic_equal(unrelated_before, unrelated_after)
+                and not verified_account.get("BlockPublicPolicy")
+                and not verified_account.get("RestrictPublicBuckets")
+                and policy_is_public is True
+            )
+            if not verified:
+                raise S3OperationError(
+                    "verify_public_access",
+                    "Conflict",
+                    status=409,
+                    mutation_state=self._mutation_state(),
+                    error_code="s3_operation_incomplete",
+                )
+        except S3OperationError as error:
+            safety_lock, unknown = self._apply_safety_lock()
+            state = "unknown" if unknown or error.mutation_state == "unknown" else "partial"
+            data = {
+                "name": self.name,
+                "action": "set_public",
+                "requested_public": True,
+                "configured_public": False if safety_lock == "applied" else None,
+                "safety_lock": safety_lock,
+                "complete": False,
+                "mutation_state": state,
+            }
+            raise S3OperationError(
+                error.operation,
+                error.provider_code,
+                status=409,
+                retryable=error.retryable,
+                mutation_state=state,
+                message="S3 bucket access change did not reach a verified state",
+                data=data,
+                error_code="s3_operation_incomplete",
+            ) from error
+
+        return {
+            "name": self.name,
+            "configured_public": True,
+            "complete": True,
+            "mutation_state": "complete",
+        }
+
     def make_public(self) -> bool:
         """
         Make the bucket publicly readable.
@@ -461,40 +1247,396 @@ class S3Bucket:
         Returns:
             True if successful, False otherwise
         """
-        if not self.exists:
-            logger.warning(f"Bucket {self.name} does not exist")
+        try:
+            self.set_public(True)
+            return True
+        except S3OperationError as error:
+            logger.warning("S3 legacy public failed bucket=%s provider_code=%s",
+                           self.name, error.provider_code)
             return False
 
-        try:
-            # Remove public access block
-            S3.client.put_public_access_block(
-                Bucket=self.name,
-                PublicAccessBlockConfiguration={
-                    'BlockPublicAcls': False,
-                    'IgnorePublicAcls': False,
-                    'BlockPublicPolicy': False,
-                    'RestrictPublicBuckets': False
-                }
+    def _read_versioning(self):
+        response = self._call(
+            "get_bucket_versioning",
+            self._client.get_bucket_versioning,
+            **self._expected({"Bucket": self.name}),
+        )
+        if not isinstance(response, dict):
+            raise S3OperationError("get_bucket_versioning", "provider_error", status=502,
+                                   mutation_state=self._mutation_state())
+        status = response.get("Status")
+        if status not in (None, "Enabled", "Suspended"):
+            raise S3OperationError("get_bucket_versioning", "provider_error", status=502,
+                                   mutation_state=self._mutation_state())
+        return status
+
+    def _list_versions_page(self, max_keys=1000, key_marker=None,
+                            version_marker=None):
+        self.budget.count_list_page("list_object_versions", self._mutation_state())
+        params = self._expected({"Bucket": self.name, "MaxKeys": max_keys})
+        if key_marker is not None:
+            params["KeyMarker"] = key_marker
+        if version_marker is not None:
+            params["VersionIdMarker"] = version_marker
+        return self._call("list_object_versions", self._client.list_object_versions, **params)
+
+    def _list_objects_page(self, max_keys=1000, token=None):
+        self.budget.count_list_page("list_objects_v2", self._mutation_state())
+        params = self._expected({"Bucket": self.name, "MaxKeys": max_keys})
+        if token is not None:
+            params["ContinuationToken"] = token
+        return self._call("list_objects_v2", self._client.list_objects_v2, **params)
+
+    def _list_uploads_page(self, max_uploads=1000, key_marker=None,
+                           upload_marker=None):
+        self.budget.count_list_page("list_multipart_uploads", self._mutation_state())
+        params = self._expected({"Bucket": self.name, "MaxUploads": max_uploads})
+        if key_marker is not None:
+            params["KeyMarker"] = key_marker
+        if upload_marker is not None:
+            params["UploadIdMarker"] = upload_marker
+        return self._call("list_multipart_uploads", self._client.list_multipart_uploads, **params)
+
+    def _empty_state(self):
+        return {
+            "counts": {
+                "deleted_objects": 0,
+                "deleted_versions": 0,
+                "deleted_markers": 0,
+                "aborted_uploads": 0,
+            },
+            "failed": {"objects": 0, "versions": 0, "markers": 0, "uploads": 0},
+            "remaining": {"objects": None, "versions": None, "markers": None, "uploads": None},
+        }
+
+    def _raise_empty_error(self, error, state, message=None):
+        mutation_state = error.mutation_state
+        if self._acknowledged_mutation and mutation_state == "none":
+            mutation_state = "partial"
+        data = {
+            "name": self.name,
+            "action": "empty",
+            "complete": False,
+            "mutation_state": mutation_state,
+            "counts": copy.deepcopy(state["counts"]),
+            "failed": copy.deepcopy(state["failed"]),
+            "remaining": copy.deepcopy(state["remaining"]),
+            "failure": error.failure(),
+        }
+        raise S3OperationError(
+            error.operation,
+            error.provider_code,
+            status=409 if error.provider_code == "work_limit" or mutation_state != "none" else error.status,
+            retryable=error.retryable,
+            mutation_state=mutation_state,
+            message=message or "S3 bucket empty did not reach a verified empty state",
+            data=data,
+            error_code="s3_operation_incomplete" if error.provider_code == "work_limit" or mutation_state != "none" else error.error_code,
+        ) from error
+
+    def _abort_uploads(self, state):
+        key_marker = None
+        upload_marker = None
+        while True:
+            page = self._list_uploads_page(
+                key_marker=key_marker,
+                upload_marker=upload_marker,
+            )
+            uploads = page.get("Uploads", []) if isinstance(page, dict) else None
+            if not isinstance(uploads, list):
+                raise S3OperationError("list_multipart_uploads", "provider_error", status=502,
+                                       mutation_state=self._mutation_state())
+            if uploads:
+                for upload in uploads:
+                    key = upload.get("Key") if isinstance(upload, dict) else None
+                    upload_id = upload.get("UploadId") if isinstance(upload, dict) else None
+                    if not isinstance(key, str) or not isinstance(upload_id, str):
+                        raise S3OperationError("list_multipart_uploads", "provider_error", status=502,
+                                               mutation_state=self._mutation_state())
+                    acknowledged = False
+                    counted = False
+                    terminal = False
+                    for unused in range(ABORT_UPLOAD_RETRY_LIMIT):
+                        self.budget.count_upload_attempt("abort_multipart_upload", self._mutation_state())
+                        try:
+                            self._call(
+                                "abort_multipart_upload",
+                                self._client.abort_multipart_upload,
+                                mutation=True,
+                                **self._expected({
+                                    "Bucket": self.name,
+                                    "Key": key,
+                                    "UploadId": upload_id,
+                                }),
+                            )
+                            acknowledged = True
+                            if not counted:
+                                state["counts"]["aborted_uploads"] += 1
+                                counted = True
+                        except S3OperationError as error:
+                            if error.provider_code != "NoSuchUpload":
+                                state["failed"]["uploads"] += 1
+                                raise
+                        try:
+                            response = self._call(
+                                "list_parts",
+                                self._client.list_parts,
+                                **self._expected({
+                                    "Bucket": self.name,
+                                    "Key": key,
+                                    "UploadId": upload_id,
+                                    "MaxParts": 1,
+                                }),
+                            )
+                            parts = response.get("Parts", []) if isinstance(response, dict) else None
+                            if isinstance(parts, list) and not parts:
+                                terminal = True
+                                break
+                            if not isinstance(parts, list):
+                                raise S3OperationError("list_parts", "provider_error", status=502,
+                                                       mutation_state=self._mutation_state())
+                        except S3OperationError as error:
+                            if error.provider_code == "NoSuchUpload":
+                                terminal = True
+                                break
+                            state["failed"]["uploads"] += 1
+                            raise
+                    if not terminal:
+                        state["failed"]["uploads"] += 1
+                        raise S3OperationError(
+                            "abort_multipart_upload",
+                            "Conflict",
+                            status=409,
+                            mutation_state=self._mutation_state(),
+                            error_code="s3_operation_incomplete",
+                        )
+                # Listing continuation state is stale after aborts. Restart.
+                key_marker = None
+                upload_marker = None
+                continue
+            if not page.get("IsTruncated"):
+                return
+            next_key = page.get("NextKeyMarker")
+            next_upload = page.get("NextUploadIdMarker")
+            if not isinstance(next_key, str) or not isinstance(next_upload, str):
+                raise S3OperationError("list_multipart_uploads", "provider_error", status=502,
+                                       mutation_state=self._mutation_state())
+            key_marker = next_key
+            upload_marker = next_upload
+
+    def _delete_batch(self, identifiers, classifications, state):
+        self.budget.count_delete_batch("delete_objects", self._mutation_state())
+        prior_acknowledged = self._acknowledged_mutation
+        response = self._call(
+            "delete_objects",
+            self._client.delete_objects,
+            mutation=True,
+            **self._expected({
+                "Bucket": self.name,
+                "Delete": {"Objects": identifiers, "Quiet": False},
+            }),
+        )
+        # DeleteObjects acknowledges each identifier separately. A successful
+        # HTTP response is not itself deletion evidence.
+        self._acknowledged_mutation = prior_acknowledged
+        deleted = response.get("Deleted", []) if isinstance(response, dict) else None
+        errors = response.get("Errors", []) if isinstance(response, dict) else None
+        if not isinstance(deleted, list) or not isinstance(errors, list):
+            raise S3OperationError("delete_objects", "provider_error", status=409,
+                                   mutation_state="unknown", error_code="s3_operation_incomplete")
+
+        requested = set(classifications)
+        acknowledged = set()
+        for item in deleted:
+            if not isinstance(item, dict) or not isinstance(item.get("Key"), str):
+                continue
+            identity = (item.get("Key"), item.get("VersionId"))
+            if identity in requested:
+                acknowledged.add(identity)
+        for identity in acknowledged:
+            state["counts"][classifications[identity]] += 1
+        if acknowledged:
+            self._acknowledged_mutation = True
+
+        failed_identities = set()
+        failure_code = None
+        for item in errors:
+            if not isinstance(item, dict) or not isinstance(item.get("Key"), str):
+                failure_code = failure_code or "provider_error"
+                continue
+            identity = (item.get("Key"), item.get("VersionId"))
+            if identity not in requested:
+                failure_code = failure_code or "provider_error"
+                continue
+            failed_identities.add(identity)
+            failure_code = failure_code or _safe_provider_code(item.get("Code"))
+            classification = classifications[identity]
+            failed_key = {
+                "deleted_objects": "objects",
+                "deleted_versions": "versions",
+                "deleted_markers": "markers",
+            }[classification]
+            state["failed"][failed_key] += 1
+
+        unresolved = requested - acknowledged - failed_identities
+        if unresolved or failed_identities or len(acknowledged) != len(requested):
+            if unresolved:
+                failed_state = "unknown"
+            elif acknowledged or prior_acknowledged:
+                failed_state = "partial"
+            else:
+                failed_state = "none"
+            raise S3OperationError(
+                "delete_objects",
+                failure_code or "provider_error",
+                status=409,
+                mutation_state=failed_state,
+                error_code="s3_operation_incomplete",
             )
 
-            # Set public read policy
-            policy = {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Sid": "PublicReadGetObject",
-                        "Effect": "Allow",
-                        "Principal": "*",
-                        "Action": "s3:GetObject",
-                        "Resource": f"arn:aws:s3:::{self.name}/*"
-                    }
-                ]
-            }
+    def _sweep_versions(self, state):
+        key_marker = None
+        version_marker = None
+        while True:
+            page = self._list_versions_page(
+                key_marker=key_marker,
+                version_marker=version_marker,
+            )
+            versions = page.get("Versions", []) if isinstance(page, dict) else None
+            markers = page.get("DeleteMarkers", []) if isinstance(page, dict) else None
+            if not isinstance(versions, list) or not isinstance(markers, list):
+                raise S3OperationError("list_object_versions", "provider_error", status=502,
+                                       mutation_state=self._mutation_state())
+            identifiers = []
+            classifications = {}
+            for item, marker in [(item, False) for item in versions] + [(item, True) for item in markers]:
+                key = item.get("Key") if isinstance(item, dict) else None
+                version_id = item.get("VersionId") if isinstance(item, dict) else None
+                if not isinstance(key, str) or not isinstance(version_id, str):
+                    raise S3OperationError("list_object_versions", "provider_error", status=502,
+                                           mutation_state=self._mutation_state())
+                identity = (key, version_id)
+                identifiers.append({"Key": key, "VersionId": version_id})
+                if marker:
+                    classifications[identity] = "deleted_markers"
+                elif version_id == "null":
+                    classifications[identity] = "deleted_objects"
+                else:
+                    classifications[identity] = "deleted_versions"
+                if len(identifiers) == 1000:
+                    break
+            if identifiers:
+                self._delete_batch(identifiers, classifications, state)
+                key_marker = None
+                version_marker = None
+                continue
+            if not page.get("IsTruncated"):
+                return
+            next_key = page.get("NextKeyMarker")
+            next_version = page.get("NextVersionIdMarker")
+            if not isinstance(next_key, str) or not isinstance(next_version, str):
+                raise S3OperationError("list_object_versions", "provider_error", status=502,
+                                       mutation_state=self._mutation_state())
+            key_marker = next_key
+            version_marker = next_version
 
-            return self.set_policy(policy)
-        except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to make bucket {self.name} public: {e}")
-            return False
+    def _sweep_unversioned_objects(self, state):
+        token = None
+        while True:
+            if self._read_versioning() is not None:
+                raise S3OperationError(
+                    "versioning_changed",
+                    "Conflict",
+                    status=409,
+                    mutation_state=self._mutation_state(),
+                    error_code="s3_operation_incomplete",
+                )
+            page = self._list_objects_page(token=token)
+            contents = page.get("Contents", []) if isinstance(page, dict) else None
+            if not isinstance(contents, list):
+                raise S3OperationError("list_objects_v2", "provider_error", status=502,
+                                       mutation_state=self._mutation_state())
+            identifiers = []
+            classifications = {}
+            for item in contents[:1000]:
+                key = item.get("Key") if isinstance(item, dict) else None
+                if not isinstance(key, str):
+                    raise S3OperationError("list_objects_v2", "provider_error", status=502,
+                                           mutation_state=self._mutation_state())
+                identifiers.append({"Key": key})
+                classifications[(key, None)] = "deleted_objects"
+            if identifiers:
+                self._delete_batch(identifiers, classifications, state)
+                token = None
+                continue
+            if not page.get("IsTruncated"):
+                return
+            next_token = page.get("NextContinuationToken")
+            if not isinstance(next_token, str):
+                raise S3OperationError("list_objects_v2", "provider_error", status=502,
+                                       mutation_state=self._mutation_state())
+            token = next_token
+
+    def _final_empty_probes(self, state):
+        objects = self._list_objects_page(max_keys=1)
+        versions = self._list_versions_page(max_keys=1)
+        uploads = self._list_uploads_page(max_uploads=1)
+        object_rows = objects.get("Contents", []) if isinstance(objects, dict) else None
+        version_rows = versions.get("Versions", []) if isinstance(versions, dict) else None
+        marker_rows = versions.get("DeleteMarkers", []) if isinstance(versions, dict) else None
+        upload_rows = uploads.get("Uploads", []) if isinstance(uploads, dict) else None
+        for rows in (object_rows, version_rows, marker_rows, upload_rows):
+            if not isinstance(rows, list):
+                raise S3OperationError("verify_empty", "provider_error", status=502,
+                                       mutation_state=self._mutation_state())
+        state["remaining"] = {
+            "objects": 1 if object_rows else 0,
+            "versions": 1 if version_rows else 0,
+            "markers": 1 if marker_rows else 0,
+            "uploads": 1 if upload_rows else 0,
+        }
+        if any(state["remaining"].values()):
+            raise S3OperationError(
+                "verify_empty",
+                "Conflict",
+                status=409,
+                mutation_state=self._mutation_state(),
+                error_code="s3_operation_incomplete",
+            )
+
+    def empty(self):
+        """Permanently empty a bucket with bounded, acknowledged operations."""
+        state = self._empty_state()
+        if not self.exists:
+            raise S3OperationError("head_bucket", "NoSuchBucket", status=404)
+        try:
+            self._bind_owner()
+            # Complete read-only preflight before the first mutation.
+            self._verify_owner_bound_head()
+            self._read_versioning()
+            self._list_versions_page(max_keys=1)
+            self._list_objects_page(max_keys=1)
+            self._list_uploads_page(max_uploads=1)
+
+            self._abort_uploads(state)
+            versioning = self._read_versioning()
+            self._sweep_versions(state)
+            if versioning is None:
+                self._sweep_unversioned_objects(state)
+            self._read_versioning()
+            self._final_empty_probes(state)
+        except S3OperationError as error:
+            self._raise_empty_error(error, state)
+
+        return {
+            "name": self.name,
+            "complete": True,
+            "mutation_state": "complete",
+            "deleted_objects": state["counts"]["deleted_objects"],
+            "deleted_versions": state["counts"]["deleted_versions"],
+            "deleted_markers": state["counts"]["deleted_markers"],
+            "aborted_uploads": state["counts"]["aborted_uploads"],
+        }
 
     def enable_website(self, index_document: str = 'index.html',
                        error_document: Optional[str] = None) -> bool:
@@ -630,18 +1772,11 @@ class S3Bucket:
 
     def make_private(self):
         try:
-            S3.client.put_public_access_block(
-                Bucket=self.name,
-                PublicAccessBlockConfiguration={
-                    'BlockPublicAcls': True,
-                    'IgnorePublicAcls': True,
-                    'BlockPublicPolicy': True,
-                    'RestrictPublicBuckets': True
-                }
-            )
+            self.set_public(False)
             return True
-        except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to make bucket {self.name} private: {e}")
+        except S3OperationError as error:
+            logger.warning("S3 legacy private failed bucket=%s provider_code=%s",
+                           self.name, error.provider_code)
             return False
 
 
