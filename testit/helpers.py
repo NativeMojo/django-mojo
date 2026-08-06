@@ -23,6 +23,9 @@ TEST_RUN = objict(
     records=[],
     started_at=None,
     finished_at=None,
+    # True once something cut the run short (stop-on-fail, the abort key). Such
+    # a run is not the suite's verdict and must not be reported as one.
+    aborted=False,
 )
 STOP_ON_FAIL = True
 VERBOSE = False
@@ -47,6 +50,17 @@ def _set_display_fn(fn):
 
 class TestitAbort(Exception):
     pass
+
+
+def mark_aborted():
+    """Record that this run was cut short.
+
+    Called at every site that raises TestitAbort, not where one is caught: a
+    stop-on-fail inside a parallel module raises in a worker thread whose
+    handler swallows it without setting the abort event, so only the raise
+    sites see every case.
+    """
+    TEST_RUN.aborted = True
 
 
 class TestitSkip(Exception):
@@ -230,6 +244,7 @@ def _run_unit(func, name, *args, **kwargs):
             logit.color_print(f"{INDENT}{INDENT}{error}", logit.ConsoleLogger.PINK)
 
         if STOP_ON_FAIL:
+            mark_aborted()
             raise TestitAbort()
 
     except Exception as error:
@@ -247,6 +262,7 @@ def _run_unit(func, name, *args, **kwargs):
             if VERBOSE:
                 logit.color_print(traceback.format_exc(), logit.ConsoleLogger.PINK)
         if STOP_ON_FAIL:
+            mark_aborted()
             raise TestitAbort()
     return False
 
@@ -452,6 +468,7 @@ def reset_test_run():
     TEST_RUN.records = []
     TEST_RUN.started_at = None
     TEST_RUN.finished_at = None
+    TEST_RUN.aborted = False
 
 
 def save_results(path):

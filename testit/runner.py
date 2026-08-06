@@ -16,6 +16,7 @@ from importlib import import_module
 from mojo.helpers import logit
 from testit import helpers
 import testit.client
+import testit.maestro
 
 from mojo.helpers import paths
 from objict import objict
@@ -437,6 +438,10 @@ def setup_parser(argv=None):
                         help="Force plain text output (no rich progress UI)")
     parser.add_argument("--full", action="store_true",
                         help="Include every opt-in tier (same as --extra slow,extended)")
+    parser.add_argument("--maestro", action="store_true",
+                        help="Report this run to maestro (needs MAESTRO_URL and MAESTRO_API_KEY)")
+    parser.add_argument("--no-maestro", dest="no_maestro", action="store_true",
+                        help="Never report this run, even when a maestro config block is present")
 
     config_args, _ = config_parser.parse_known_args(argv)
     config_data = {}
@@ -501,6 +506,7 @@ def run_test(opts, module, func_name, module_name, test_name):
             traceback.print_exc()
         if opts.stop:
             save_checkpoint(module_name, test_name)
+            helpers.mark_aborted()
             raise helpers.TestitAbort()
 
 
@@ -521,6 +527,7 @@ def run_setup(opts, module, func_name, module_name, test_name):
             print(f"  Setup Error: {err}")
             traceback.print_exc()
         if opts.stop:
+            helpers.mark_aborted()
             raise helpers.TestitAbort()
         return False
 
@@ -649,6 +656,7 @@ def run_module_tests(opts, module, test_name, module_name):
     for func_name, func in functions:
         if func_name.startswith(prefix):
             if _abort_event.is_set():
+                helpers.mark_aborted()
                 raise helpers.TestitAbort()
             # Track current test for the running display
             dfn = helpers._get_display_fn()
@@ -1136,11 +1144,13 @@ def _report_conf_drift(drifted):
 # ---------------------------------------------------------------------------
 # Agent output
 # ---------------------------------------------------------------------------
-def _write_agent_report(opts, display=None, conf_drift=None):
-    """Write structured test report to var/test_failures.json for LLM agents.
+def _build_agent_report(opts, display=None, conf_drift=None):
+    """Build the structured test report.
 
-    This is the primary output channel for --agent mode. Agents should read
-    this file instead of parsing terminal output.
+    Split out from _write_agent_report so the maestro reporter can obtain the
+    same report without depending on --agent having written the file. Reads
+    nothing off `opts` — anything the caller needs to add belongs at the call
+    site, not in here.
     """
     failures = []
     for record in helpers.TEST_RUN.records:
@@ -1250,17 +1260,47 @@ def _write_agent_report(opts, display=None, conf_drift=None):
             "skipped": helpers.TEST_RUN.skipped,
         },
         "duration": round(duration, 2),
+        # Epoch seconds. The maestro reporter sends this as the run's start
+        # time; an agent reading the file gets it for free.
+        "started_at": helpers.TEST_RUN.started_at,
         "modules": modules,
         "slowest": slowest,
         "failures": failures,
         # Key names only — never the values (see _snapshot_conf).
         "conf_drift": list(conf_drift or []),
     }
+    return report
+
+
+def _write_agent_report(opts, display=None, conf_drift=None):
+    """Write the structured test report to var/test_failures.json for LLM agents.
+
+    This is the primary output channel for --agent mode. Agents should read
+    this file instead of parsing terminal output. Returns the report it wrote.
+    """
+    report = _build_agent_report(opts, display=display, conf_drift=conf_drift)
 
     report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
     os.makedirs(os.path.dirname(report_path), exist_ok=True)
     with open(report_path, "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=2, default=str)
+    return report
+
+
+def _push_refused(opts):
+    """Why this run must not be reported to maestro, or None when it may be.
+
+    maestro answers "is this project green?" from the latest push per suite, so
+    a run that is not the suite's verdict would overwrite a real result with a
+    partial one.
+    """
+    if helpers.TEST_RUN.aborted or _abort_event.is_set():
+        return "run stopped early"
+    if opts.test_modules:
+        return "run was limited with -t"
+    if opts.ignore_modules:
+        return "run skipped modules with --ignore"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1290,6 +1330,7 @@ def _run_module_in_thread(opts_template, module_name, test_root, parent_test_roo
     try:
         for test_name, file_path in test_files:
             if _abort_event.is_set():
+                helpers.mark_aborted()
                 raise helpers.TestitAbort()
             run_module_tests_by_name(opts, module_name, test_name)
     except helpers.TestitAbort:
@@ -1386,7 +1427,12 @@ def main(opts):
     helpers.reset_test_run()
     helpers.STOP_ON_FAIL = bool(opts.stop)
     helpers.VERBOSE = opts.verbose or opts.errors
-    helpers.AGENT_MODE = bool(opts.agent)
+    # Resolved before the suite runs, for two reasons: a misconfiguration
+    # should be reported now rather than ten minutes from now, and reporting a
+    # run implies agent mode — without it no failure carries a file, line or
+    # traceback to report.
+    maestro_settings = testit.maestro.setup(opts)
+    helpers.AGENT_MODE = bool(opts.agent) or bool(maestro_settings)
     helpers.TEST_RUN.started_at = time.time()
 
     # Set up resume state
@@ -1680,8 +1726,9 @@ def main(opts):
     _report_conf_drift(drifted)
 
     # Agent report — structured JSON for LLM consumption
+    report = None
     if opts.agent:
-        _write_agent_report(opts, display=display, conf_drift=drifted)
+        report = _write_agent_report(opts, display=display, conf_drift=drifted)
         report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
         print(f"\n  Agent report: {report_path}")
         if helpers.TEST_RUN.failed > 0:
@@ -1693,6 +1740,19 @@ def main(opts):
 
     # Release run lock
     _release_lock()
+
+    # Report to maestro. After the lock release, so a slow network call never
+    # blocks a waiting run; before the exit below, so a red run still reports.
+    if maestro_settings:
+        refused = _push_refused(opts)
+        if refused:
+            print(f"\n  Maestro: not reporting — {refused}, so this is not the suite's result")
+        else:
+            testit.maestro.report_run(
+                maestro_settings,
+                lambda: report if report is not None else _build_agent_report(
+                    opts, display=display, conf_drift=drifted),
+            )
 
     # Exit with failure status if any test failed
     if helpers.TEST_RUN.failed > 0:

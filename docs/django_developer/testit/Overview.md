@@ -143,9 +143,48 @@ When `rich` is installed and `-j` is greater than 1, the runner shows a live per
 - **`modules`**: per-module breakdown — `tests`, `passed`, `failed`, `skipped`, `duration` for each test module, plus `skipped_reason` when the whole module was skipped
 - **`slowest`**: the 25 slowest individual tests, sorted descending by `duration` — `test_name`, `module`, `test_file`, `status`, `duration`. Module-level `duration` alone can't say which test inside a slow module is the cost; every executed test records its own `duration` (seconds) and this is ranked from it.
 - **`failures`**: per-failure entries with `test_name`, `function`, `status`, `assertion`, `test_source`, `file_path`, `line`, `traceback` (errors only), and `server_log_tail`
+- **`started_at`**: epoch seconds when the run began (the maestro reporter sends this as the run's start time)
 - **`conf_drift`**: names of any `var/django.conf` keys that changed across the run — normally empty. A non-empty list means a `th.server_settings()` context did not restore cleanly and the key is now stranded. Key **names only**; values are never reported, since an override may be a credential.
 
 LLM agents should always use `--agent` and read the JSON report instead of parsing terminal output. Never use `--plain` — it disables the rich UI but doesn't improve agent output.
+
+### Maestro Reporting
+
+A run can report itself to a [maestro](https://maestromojo.com) server, so a teammate or an agent can ask whether a project is passing without access to the machine that ran the tests. The wire format is maestro's published **Test Run Spec v1** (`docs/web_developer/maestro/TestRuns.md` in the maestro repo) — runner-neutral, and documented there rather than restated here.
+
+**It is off unless you turn it on, and environment variables alone never turn it on.** Two enable paths:
+
+```bash
+./bin/run_tests --agent --maestro           # explicit, for CI
+```
+
+```json
+{ "maestro": { "url": "https://maestro.example.com", "suite": "api" } }
+```
+
+…passed with `--config`. A run reports only when an enable path is present **and** a url and key both resolve. `--no-maestro` suppresses it even when configured.
+
+The env-vars-never-enable rule is deliberate: `bin/run_tests` sources the repo's `.env` with `set -a`, and `MAESTRO_API_KEY` is the same name maestro's MCP server uses — so a developer may already have it exported, and inheriting it must not start sending test results anywhere.
+
+| Setting | Environment | Config key | Default |
+|---|---|---|---|
+| Server URL | `MAESTRO_URL` | `maestro.url` | *(none — no default endpoint exists)* |
+| API key | `MAESTRO_API_KEY` | **environment only** | *(none)* |
+| Project id | `MAESTRO_PROJECT` | `maestro.project` | *(omitted — a project-scoped key carries it)* |
+| Suite name | `MAESTRO_SUITE` | `maestro.suite` | server-side `"default"` |
+| Your version | `MAESTRO_VERSION` | `maestro.version` | *(omitted)* |
+| Timeout (s) | `MAESTRO_TIMEOUT` | `maestro.timeout` | `5.0` |
+| Send failure detail | — | `maestro.diagnostics` | `true` |
+
+The **key is read from the environment only** — never from the config file, so a repo never carries one. `MAESTRO_VERSION` is *your project's* version of the code under test (semver, build or deploy tag), which is not the same thing as the commit or as testit's own version; the spec marks it SHOULD-report.
+
+**A push never changes the exit code.** Every failure — offline, outage, bad key, timeout, even a bug in the reporter itself — degrades to one warning line; the exit code stays a function of the tests alone. One honest limit: the timeout bounds each socket operation, not wall clock, so a wedged DNS resolver can still exceed it.
+
+**Partial runs are not reported.** maestro treats the latest push per suite as the project's status, so a run that is not the suite's verdict would overwrite a real result with a fragment. Refused: `-t` and `--ignore` runs, and any run cut short by `-s` or the abort key. `--extra`/`--full` runs *are* reported — they are complete runs of a wider tier, so give a nightly `--full` stream its own `suite` name rather than letting its larger totals alternate with the default tier's.
+
+**What leaves the machine.** The payload is the contract and nothing more: counters, per-suite stats, and — unless `maestro.diagnostics` is `false` — the first 50 failures with their **assertion messages and tracebacks**. Read that literally: `th.assert_eq` interpolates the actual and expected values into its message, so a failing assertion about a token, password or customer record sends that value to the configured server. Set `"diagnostics": false` to report green/red and counts only. The server error-log tail (`server_log_tail`) and test source (`test_source`) are never sent at any setting.
+
+Only `https` is allowed, except to a loopback host — the request carries a bearer key, and it will not be sent in cleartext to anything else. Redirects are never followed.
 
 ### Tiers — default, `slow`, `extended`
 
@@ -210,11 +249,13 @@ Supported keys:
   "verbose": true,
   "nomojo": true,
   "module": "test_auth",
-  "extra": "run-backfill,cleanup"
+  "extra": "run-backfill,cleanup",
+  "maestro": {"url": "https://maestro.example.com", "suite": "api"}
 }
 ```
 
 - `tests` and `ignore` accept strings or lists.
+- `maestro` is a nested object rather than a flat default, and its presence is one of the two ways to enable reporting — see [Maestro Reporting](#maestro-reporting) for the keys. An empty object or `false` reads as "off".
 - `show_errors` is equivalent to `-e`.
 - `extra` accepts either a comma-separated string or a JSON list; at runtime it is exposed as `opts.extra_list` (and `opts.extra` remains a comma-joined string for legacy helpers).
 - Supply fewer flags in automation scripts; let interactive runs override what is needed.
