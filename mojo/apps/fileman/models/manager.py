@@ -1,5 +1,4 @@
 import os
-import boto3
 import hashlib
 import json
 from botocore.exceptions import ClientError
@@ -32,7 +31,8 @@ class FileManager(MojoSecrets, MojoModel):
 
         GRAPHS = {
             "default": {
-                "extra": ["aws_region", "aws_key", "aws_secret_masked", "allowed_origins"],
+                "extra": ["aws_region", "aws_key", "aws_secret_masked", "allowed_origins",
+                          "assume_role_arn", "has_external_id"],
                 "fields": [
                     "created", "id", "name", "use", "backend_type", "backend_url",
                     "is_active", "is_default", "is_public"],
@@ -42,7 +42,8 @@ class FileManager(MojoSecrets, MojoModel):
                 }
             },
             "list": {
-                "extra": ["aws_region", "aws_key", "aws_secret_masked", "allowed_origins"],
+                "extra": ["aws_region", "aws_key", "aws_secret_masked", "allowed_origins",
+                          "assume_role_arn", "has_external_id"],
                 "fields": ["created", "id", "name", "use", "backend_type",  "backend_url",
                     "is_active", "is_default", "is_public"],
                 "graphs": {
@@ -287,6 +288,61 @@ class FileManager(MojoSecrets, MojoModel):
     def set_aws_region(self, secret):
         self.set_secret('aws_region', secret)
 
+    @property
+    def assume_role_arn(self):
+        return self.get_secret('assume_role_arn')
+
+    @property
+    def has_external_id(self):
+        """Only ever report presence.
+
+        An external ID is short and exists precisely to be unguessable by
+        whoever already knows the role ARN, so it gets no masked form —
+        aws_secret_masked reveals both exact length and the trailing four
+        characters, which would be most of a short secret.
+        """
+        return bool(self.get_secret('external_id'))
+
+    @property
+    def assume_role_duration(self):
+        return self.get_secret('assume_role_duration')
+
+    def _require_superuser_for_role_setting(self, name):
+        """Guard the settings that redirect which AWS identity we act as.
+
+        on_rest_save_field dispatches set_<key> for any key in the payload, and
+        SAVE_PERMS is the group-level "files"/"manage_files" permission — so
+        without this an ordinary file admin could point the platform's own
+        credentials at a role of their choosing (confused deputy). Direct ORM
+        use (bootstrap, migrations, tests) has no active request and is trusted.
+        """
+        if self.active_request is None:
+            return
+        actor = self.active_user
+        if actor is None or not getattr(actor, "is_superuser", False):
+            raise me.PermissionDeniedException(
+                reason=f"Only superusers can change the FileManager '{name}' setting",
+                model_name="FileManager",
+                event_type="user_permission_denied",
+                branch="fileman_assume_role_setting",
+            )
+
+    def set_assume_role_arn(self, value):
+        self._require_superuser_for_role_setting('assume_role_arn')
+        self.set_secret('assume_role_arn', value)
+
+    def set_external_id(self, value):
+        self._require_superuser_for_role_setting('external_id')
+        self.set_secret('external_id', value)
+
+    def set_role_session_name(self, value):
+        self._require_superuser_for_role_setting('role_session_name')
+        self.set_secret('role_session_name', value)
+
+    def set_assume_role_duration(self, value):
+        self._require_superuser_for_role_setting('assume_role_duration')
+        self.set_secret('assume_role_duration', value)
+
     def set_allowed_origins(self, origins):
         if isinstance(origins, str) and "," in origins:
             origins = [origin.strip() for origin in origins.split(',')]
@@ -437,6 +493,10 @@ class FileManager(MojoSecrets, MojoModel):
         "endpoint_url",
         "signature_version",
         "addressing_style",
+        # The effective identity changes when the role does, so cached
+        # public-access evidence must not survive a role change.
+        "assume_role_arn",
+        "external_id",
     )
 
     def public_access_config_fingerprint(self):
@@ -629,15 +689,16 @@ class FileManager(MojoSecrets, MojoModel):
 
     # --- CORS helpers for S3 direct upload ---
     def _s3_client(self):
+        # check_cors_config/update_cors are public and not every caller checks
+        # is_s3 first, so keep the readable error rather than letting a
+        # filesystem manager fail with AttributeError inside the backend.
         if not self.is_s3:
             raise ValueError("CORS management is only supported for S3 backends.")
-        session = boto3.Session(
-            aws_access_key_id=self.aws_key,
-            aws_secret_access_key=self.aws_secret,
-            region_name=self.aws_region or "us-east-1",
-        )
-        endpoint_url = self.get_setting("endpoint_url", None)
-        return session.client("s3", endpoint_url=endpoint_url)
+        # Delegate to the backend so CORS runs under exactly the credentials
+        # uploads use. Reading aws_key/aws_secret here consulted this manager's
+        # OWN secrets, while the backend resolves primary_settings from the
+        # parent — a child manager's CORS calls used a different identity.
+        return self.backend.client
 
     def _resolve_allowed_origins_from_value_or_settings(self, value):
         """
