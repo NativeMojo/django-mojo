@@ -49,6 +49,55 @@ def _envelope(message_id, payload, topic=TOPIC):
     }
 
 
+def _confirmation(message_id, token="confirm-token", topic=TOPIC):
+    """A SubscriptionConfirmation envelope shaped exactly as AWS SNS sends it."""
+    from django.utils import timezone
+    from urllib.parse import urlencode
+
+    query = urlencode({
+        "Action": "ConfirmSubscription",
+        "TopicArn": topic,
+        "Token": token,
+    })
+    return {
+        "Type": "SubscriptionConfirmation",
+        "MessageId": message_id,
+        "TopicArn": topic,
+        "Token": token,
+        "Message": "You have chosen to subscribe to the topic",
+        "SubscribeURL": f"https://sns.us-east-1.amazonaws.com/?{query}",
+        "Timestamp": timezone.now().isoformat(),
+        "SignatureVersion": "2",
+        "SigningCertURL": (
+            "https://sns.us-east-1.amazonaws.com/"
+            "SimpleNotificationService-test.pem"
+        ),
+        "Signature": base64.b64encode(b"invalid until signed").decode("ascii"),
+    }
+
+
+def _sign(envelope, key):
+    """Sign an envelope in place with the SNS SignatureVersion 2 canonical form."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from mojo.apps.aws.services import sns
+
+    envelope["Signature"] = base64.b64encode(
+        key.sign(sns._canonical(envelope), padding.PKCS1v15(), hashes.SHA256())
+    ).decode("ascii")
+    return envelope
+
+
+class _Certificate:
+    """Stand-in for the fetched x509 certificate, exposing only public_key()."""
+
+    def __init__(self, public_key):
+        self._public_key = public_key
+
+    def public_key(self):
+        return self._public_key
+
+
 def _clear_state():
     from mojo.apps.aws.models import CloudWatchAlarm, CloudWatchAlarmTransition
     from mojo.apps.incident.models import Event, Incident, MaestroItemLink, RuleSet, Ticket
@@ -208,6 +257,124 @@ def test_public_receiver_requires_signature_and_static_allowlist(opts):
         with mock.patch.object(sns, "_certificate", return_value=Certificate(key.public_key())):
             invalid = on_cloudwatch_alarm(bad_request)
         assert invalid.status_code == 403, "A tampered signed envelope must be rejected"
+    finally:
+        if original is sentinel:
+            delattr(django_settings, "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS")
+        else:
+            django_settings.AWS_CLOUDWATCH_ALARM_TOPIC_ARNS = original
+
+
+@th.django_unit_test()
+def test_signed_sns_preamble_covers_every_exit(opts):
+    """Pin every status code and body the shared SNS preamble can produce.
+
+    The preamble in front of both public SNS receivers is extracted into
+    ``_receive_signed_sns``. Only the 200/403 paths used to be asserted, so a
+    refactor could silently change the method check, the payload rejection, the
+    transient-failure code, the subscription-confirmation body, or the
+    unsupported-type rejection on an unauthenticated public endpoint.
+    """
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from django.conf import settings as django_settings
+    from django.test import RequestFactory
+    from django.utils import timezone
+    from mojo.apps.aws.rest.sns import on_cloudwatch_alarm
+    from mojo.apps.aws.services import sns
+
+    _clear_state()
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    def _post(envelope):
+        return RequestFactory().generic(
+            "POST", "/api/aws/cloudwatch/sns/alarm",
+            data=json.dumps(envelope), content_type="text/plain",
+        )
+
+    sentinel = object()
+    original = getattr(django_settings, "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", sentinel)
+    try:
+        django_settings.AWS_CLOUDWATCH_ALARM_TOPIC_ARNS = [TOPIC]
+
+        get_request = RequestFactory().get("/api/aws/cloudwatch/sns/alarm")
+        with mock.patch.object(sns, "parse_request") as parse_request:
+            not_allowed = on_cloudwatch_alarm(get_request)
+        assert not_allowed.status_code == 405, \
+            f"A non-POST delivery must be refused with 405, got {not_allowed.status_code}"
+        assert not parse_request.called, \
+            "The method check must run before the envelope is parsed"
+
+        unparseable = RequestFactory().generic(
+            "POST", "/api/aws/cloudwatch/sns/alarm",
+            data=b"this is not json", content_type="text/plain",
+        )
+        malformed = on_cloudwatch_alarm(unparseable)
+        assert malformed.status_code == 400, \
+            f"An unparseable SNS envelope must return 400, got {malformed.status_code}"
+
+        notification = _sign(
+            _envelope("preamble-transient", _payload("ALARM", "OK", timezone.now())),
+            key,
+        )
+        with mock.patch.object(
+            sns, "_certificate", side_effect=sns.SNSTransientError("cert fetch down"),
+        ):
+            transient = on_cloudwatch_alarm(_post(notification))
+        assert transient.status_code == 503, \
+            f"A certificate-fetch outage must return a retryable 503, got {transient.status_code}"
+
+        confirmation = _sign(_confirmation("preamble-confirm"), key)
+        with mock.patch.object(
+            sns, "_certificate", return_value=_Certificate(key.public_key()),
+        ), mock.patch.object(
+            sns.requests, "get", return_value=mock.Mock(status_code=200),
+        ):
+            confirmed = on_cloudwatch_alarm(_post(confirmation))
+        assert confirmed.status_code == 200, \
+            f"A signed allowlisted SubscriptionConfirmation must succeed, got {confirmed.status_code}"
+        body = json.loads(confirmed.content)
+        assert body.get("status") is True, \
+            f"The confirmation body must report status=True, got {body!r}"
+        assert body.get("data") == {"confirmed": True, "status_code": 200}, \
+            f"The confirmation body shape must stay exactly as AWS operators see it, got {body!r}"
+
+        with mock.patch.object(
+            sns, "_certificate", return_value=_Certificate(key.public_key()),
+        ), mock.patch.object(
+            sns.requests, "get", side_effect=OSError("network down"),
+        ):
+            confirm_transient = on_cloudwatch_alarm(_post(confirmation))
+        assert confirm_transient.status_code == 503, \
+            f"A failed confirmation callback must return 503, got {confirm_transient.status_code}"
+
+        forged = _sign(
+            dict(
+                _confirmation("preamble-forged"),
+                SubscribeURL=(
+                    "https://example.com/?Action=ConfirmSubscription"
+                    f"&TopicArn={TOPIC}&Token=confirm-token"
+                ),
+            ),
+            key,
+        )
+        with mock.patch.object(
+            sns, "_certificate", return_value=_Certificate(key.public_key()),
+        ), mock.patch.object(sns.requests, "get") as never_called:
+            off_host = on_cloudwatch_alarm(_post(forged))
+        assert off_host.status_code == 403, \
+            f"A confirmation URL off the AWS SNS host must be refused with 403, got {off_host.status_code}"
+        assert not never_called.called, \
+            "A refused confirmation URL must never be fetched"
+
+        unsubscribe = _sign(
+            dict(_confirmation("preamble-unsubscribe"), Type="UnsubscribeConfirmation"),
+            key,
+        )
+        with mock.patch.object(
+            sns, "_certificate", return_value=_Certificate(key.public_key()),
+        ):
+            unsupported = on_cloudwatch_alarm(_post(unsubscribe))
+        assert unsupported.status_code == 400, \
+            f"An SNS type this receiver does not handle must return 400, got {unsupported.status_code}"
     finally:
         if original is sentinel:
             delattr(django_settings, "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS")
