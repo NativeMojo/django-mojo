@@ -183,7 +183,10 @@ def test_private_create_verifies_lock_without_cors_or_delete(opts):
     from mojo.helpers.aws import s3
 
     client = ScriptedClient(
-        head_bucket=[_client_error("NoSuchBucket", 404, "HeadBucket")],
+        head_bucket=[
+            _client_error("NoSuchBucket", 404, "HeadBucket"),
+            dict(REGION_HEADERS),
+        ],
         create_bucket=[{}],
         put_public_access_block=[{}],
         get_public_access_block=[{"PublicAccessBlockConfiguration": dict(s3.PRIVATE_PUBLIC_ACCESS_BLOCK)}],
@@ -195,6 +198,10 @@ def test_private_create_verifies_lock_without_cors_or_delete(opts):
     operations = [name for name, unused in client.calls]
     assert "put_bucket_cors" not in operations, "private create must not install wildcard CORS"
     assert "delete_bucket" not in operations, "private create must never roll back with DeleteBucket"
+    owner_head = [kwargs for name, kwargs in client.calls
+                  if name == "head_bucket" and "ExpectedBucketOwner" in kwargs]
+    assert owner_head and owner_head[0]["ExpectedBucketOwner"] == "123456789012", \
+        f"post-create PAB must follow an owner-bound head, got {client.calls}"
 
 
 @th.django_unit_test()
@@ -208,7 +215,7 @@ def test_private_access_sets_all_four_flags_and_never_writes_policy(opts):
     )
     bucket = s3.S3Bucket("private", client_factory=_factory_for(client))
     result = bucket.set_public(False)
-    assert result["configured_public"] is False and result["complete"] is True, \
+    assert result["is_public"] is False and result["complete"] is True, \
         f"private access result should be verified complete, got {result}"
     operations = [name for name, unused in client.calls]
     assert "put_bucket_policy" not in operations, "private mode must leave policy text untouched"
@@ -262,7 +269,7 @@ def test_public_access_preserves_unrelated_policy_and_blocks_acls(opts):
     ])
     bucket = s3.S3Bucket("public-test", client_factory=_factory_for(client, control))
     result = bucket.set_public(True)
-    assert result["configured_public"] is True and result["complete"] is True, \
+    assert result["is_public"] is True and result["complete"] is True, \
         f"public result should be verified complete, got {result}"
     put_pab = next(kwargs for name, kwargs in client.calls if name == "put_public_access_block")
     assert put_pab["PublicAccessBlockConfiguration"] == s3.PUBLIC_POLICY_ACCESS_BLOCK, \
@@ -367,6 +374,154 @@ def test_delete_errors_stop_without_fabricating_counts_or_identifiers(opts):
             f"identifiers/provider message leaked in error data: {wire}"
     else:
         assert False, "per-item DeleteObjects error must reject empty"
+
+
+@th.django_unit_test()
+def test_empty_versioned_bucket_deletes_null_versions_versions_and_markers(opts):
+    from mojo.helpers.aws import s3
+
+    listed = {
+        "Versions": [
+            {"Key": "null-object", "VersionId": "null"},
+            {"Key": "versioned-object", "VersionId": "version-1"},
+        ],
+        "DeleteMarkers": [{"Key": "marked-object", "VersionId": "marker-1"}],
+    }
+    client = ScriptedClient(
+        head_bucket=_success_heads(3),
+        get_bucket_versioning=[{"Status": "Enabled"}, {"Status": "Enabled"}, {"Status": "Enabled"}],
+        list_object_versions=[listed, listed, {"Versions": [], "DeleteMarkers": []},
+                              {"Versions": [], "DeleteMarkers": []}],
+        list_objects_v2=[{"Contents": []}, {"Contents": []}],
+        list_multipart_uploads=[{"Uploads": []}, {"Uploads": []}, {"Uploads": []}],
+        delete_objects=[{"Deleted": [
+            {"Key": "null-object", "VersionId": "null"},
+            {"Key": "versioned-object", "VersionId": "version-1"},
+            {"Key": "marked-object", "VersionId": "marker-1"},
+        ], "Errors": []}],
+    )
+    result = s3.S3Bucket("versioned-empty", client_factory=_factory_for(client)).empty()
+    assert result["deleted_objects"] == 1, f"null version must count as object, got {result}"
+    assert result["deleted_versions"] == 1, f"non-null version count is wrong: {result}"
+    assert result["deleted_markers"] == 1, f"delete-marker count is wrong: {result}"
+    request = next(kwargs for name, kwargs in client.calls if name == "delete_objects")
+    identifiers = request["Delete"]["Objects"]
+    assert all("VersionId" in item for item in identifiers), \
+        f"versioned cleanup must qualify every delete, got {identifiers}"
+    assert not any(name == "delete_objects" and any("VersionId" not in item for item in kwargs["Delete"]["Objects"])
+                   for name, kwargs in client.calls), \
+        "enabled versioning must never issue a key-only delete"
+
+
+def _multipart_empty_client(abort_response, parts_response):
+    return ScriptedClient(
+        head_bucket=_success_heads(3),
+        get_bucket_versioning=[{}, {}, {}, {}],
+        list_object_versions=[
+            {"Versions": [], "DeleteMarkers": []},
+            {"Versions": [], "DeleteMarkers": []},
+            {"Versions": [], "DeleteMarkers": []},
+        ],
+        list_objects_v2=[{"Contents": []}, {"Contents": []}, {"Contents": []}],
+        list_multipart_uploads=[
+            {"Uploads": [{"Key": "upload-key", "UploadId": "upload-id"}]},
+            {"Uploads": [{"Key": "upload-key", "UploadId": "upload-id"}]},
+            {"Uploads": []},
+            {"Uploads": []},
+        ],
+        abort_multipart_upload=[abort_response],
+        list_parts=[parts_response],
+    )
+
+
+@th.django_unit_test()
+def test_empty_aborts_and_verifies_multipart_upload(opts):
+    from mojo.helpers.aws import s3
+
+    client = _multipart_empty_client(
+        {},
+        _client_error("NoSuchUpload", 404, "ListParts"),
+    )
+    result = s3.S3Bucket("multipart-empty", client_factory=_factory_for(client)).empty()
+    assert result["aborted_uploads"] == 1 and result["complete"] is True, \
+        f"acknowledged abort plus terminal ListParts must complete, got {result}"
+    abort = next(kwargs for name, kwargs in client.calls if name == "abort_multipart_upload")
+    parts = next(kwargs for name, kwargs in client.calls if name == "list_parts")
+    assert abort["ExpectedBucketOwner"] == "123456789012", \
+        f"abort must carry ExpectedBucketOwner, got {abort}"
+    assert parts["MaxParts"] == 1 and parts["UploadId"] == "upload-id", \
+        f"abort must be verified by a bounded ListParts call, got {parts}"
+
+
+@th.django_unit_test()
+def test_empty_handles_no_such_upload_race_without_inventing_count(opts):
+    from mojo.helpers.aws import s3
+
+    client = _multipart_empty_client(
+        _client_error("NoSuchUpload", 404, "AbortMultipartUpload"),
+        _client_error("NoSuchUpload", 404, "ListParts"),
+    )
+    result = s3.S3Bucket("multipart-race", client_factory=_factory_for(client)).empty()
+    assert result["aborted_uploads"] == 0 and result["complete"] is True, \
+        f"concurrent NoSuchUpload proves terminal state without attribution, got {result}"
+
+
+@th.django_unit_test()
+def test_multipart_retryable_failure_is_unknown_and_preserves_zero_count(opts):
+    from mojo.helpers.aws import s3
+
+    client = ScriptedClient(
+        head_bucket=_success_heads(3),
+        get_bucket_versioning=[{}],
+        list_object_versions=[{"Versions": [], "DeleteMarkers": []}],
+        list_objects_v2=[{"Contents": []}],
+        list_multipart_uploads=[
+            {"Uploads": [{"Key": "upload-key", "UploadId": "upload-id"}]},
+            {"Uploads": [{"Key": "upload-key", "UploadId": "upload-id"}]},
+        ],
+        abort_multipart_upload=[_client_error("SlowDown", 503, "AbortMultipartUpload")],
+    )
+    try:
+        s3.S3Bucket("multipart-unknown", client_factory=_factory_for(client)).empty()
+    except s3.S3OperationError as error:
+        assert error.mutation_state == "unknown", \
+            f"first retryable abort outcome must remain unknown, got {error.mutation_state}"
+        assert error.data["counts"]["aborted_uploads"] == 0, \
+            f"ambiguous abort must not invent an acknowledgement, got {error.data}"
+        assert error.data["failed"]["uploads"] == 1, \
+            f"failed upload must be aggregated once, got {error.data}"
+    else:
+        assert False, "retryable AbortMultipartUpload failure must reject empty"
+
+
+@th.django_unit_test()
+def test_first_retryable_service_error_is_unknown_for_every_mutating_call(opts):
+    from mojo.helpers.aws import s3
+
+    operations = [
+        "create_bucket",
+        "put_bucket_policy",
+        "put_public_access_block",
+        "abort_multipart_upload",
+        "delete_objects",
+    ]
+    for operation in operations:
+        heads = [_client_error("NoSuchBucket", 404, "HeadBucket")] if operation == "create_bucket" else _success_heads(2)
+        client = ScriptedClient(head_bucket=heads, **{
+            operation: [_client_error("SlowDown", 503, operation)],
+        })
+        bucket = s3.S3Bucket("unknown-%s" % operation, client_factory=FakeClientFactory({
+            ("s3", "us-east-1"): client,
+        }))
+        try:
+            bucket._call(operation, getattr(client, operation), mutation=True)
+        except s3.S3OperationError as error:
+            assert error.mutation_state == "unknown", \
+                f"first retryable {operation} must be unknown, got {error.mutation_state}"
+            assert error.status == 409 and error.error_code == "s3_operation_incomplete", \
+                f"ambiguous {operation} must use incomplete 409, got {error.status}/{error.error_code}"
+        else:
+            assert False, f"retryable {operation} must raise a structured operation error"
 
 
 @th.django_unit_test()

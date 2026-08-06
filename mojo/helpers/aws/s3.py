@@ -650,6 +650,13 @@ class S3Bucket:
             return "partial"
         return "none"
 
+    def _combined_mutation_state(self, error_state=None):
+        if error_state == "unknown" or self._unknown_mutation:
+            return "unknown"
+        if error_state == "partial" or self._acknowledged_mutation:
+            return "partial"
+        return "none"
+
     def _call(self, operation, method, mutation=False, **kwargs):
         prior_state = self._mutation_state()
         self.budget.before_call(operation, mutation_state=prior_state)
@@ -660,9 +667,15 @@ class S3Bucket:
             return response
         except Exception as exc:
             issued_state = prior_state
-            if mutation and not isinstance(exc, ClientError):
-                issued_state = "unknown"
-                self._unknown_mutation = True
+            if mutation:
+                ambiguous = not isinstance(exc, ClientError)
+                if isinstance(exc, ClientError):
+                    raw_code, http_status = _client_error_parts(exc)
+                    safe_code = _safe_provider_code(raw_code)
+                    ambiguous = safe_code in _RETRYABLE_CODES or http_status in (429, 500, 502, 503, 504)
+                if ambiguous:
+                    issued_state = "unknown"
+                    self._unknown_mutation = True
             error = _map_provider_error(exc, operation, mutation_state=issued_state)
             logger.warning(
                 "S3 operation failed action=%s bucket=%s provider_code=%s state=%s",
@@ -759,10 +772,16 @@ class S3Bucket:
 
     def _verify_owner_bound_head(self):
         try:
-            self._head_once(self._client, expected_owner=self.owner_id)
+            response = self._head_once(self._client, expected_owner=self.owner_id)
         except Exception as exc:
             error = _map_provider_error(exc, "head_bucket", self._mutation_state())
             raise error from exc
+        if _response_region(response) != self.region:
+            raise S3OperationError(
+                "head_bucket", "region_unavailable", status=409,
+                mutation_state=self._mutation_state(),
+            )
+        return response
 
     def _read_public_access_block(self):
         try:
@@ -820,6 +839,8 @@ class S3Bucket:
     def create_private(self, region=None):
         """Create an idempotent private bucket and verify its safety lock."""
         if self.exists:
+            self._bind_owner()
+            self._verify_owner_bound_head()
             return {"id": self.name, "name": self.name, "created_new": False}
 
         create_region = region or self.configured_region
@@ -853,17 +874,20 @@ class S3Bucket:
                 raise error
 
         try:
+            self._bind_owner()
+            self._verify_owner_bound_head()
             self._put_public_access_block(PRIVATE_PUBLIC_ACCESS_BLOCK)
             self._verify_public_access_block(PRIVATE_PUBLIC_ACCESS_BLOCK)
         except S3OperationError as error:
+            state = self._combined_mutation_state(error.mutation_state)
             data = {"name": self.name, "action": "create", "created_new": created_new,
-                    "complete": False, "mutation_state": self._mutation_state()}
+                    "complete": False, "mutation_state": state}
             raise S3OperationError(
                 error.operation,
                 error.provider_code,
                 status=409,
                 retryable=error.retryable,
-                mutation_state=self._mutation_state(),
+                mutation_state=state,
                 message="S3 bucket creation did not reach a verified private state",
                 data=data,
                 error_code="s3_operation_incomplete",
@@ -1132,6 +1156,7 @@ class S3Bucket:
                         "name": self.name,
                         "action": "set_public",
                         "requested_public": False,
+                        "is_public": None,
                         "configured_public": None,
                         "safety_lock": "not_needed",
                         "complete": False,
@@ -1147,21 +1172,24 @@ class S3Bucket:
                     "name": self.name,
                     "action": "set_public",
                     "requested_public": False,
+                    "is_public": None,
                     "configured_public": None,
                     "safety_lock": "failed",
                     "complete": False,
-                    "mutation_state": self._mutation_state(),
+                    "mutation_state": self._combined_mutation_state(error.mutation_state),
                 }
+                state = self._combined_mutation_state(error.mutation_state)
                 raise S3OperationError(
                     error.operation, error.provider_code, status=409,
                     retryable=error.retryable,
-                    mutation_state=self._mutation_state(),
+                    mutation_state=state,
                     message="S3 bucket access change did not reach a verified state",
                     data=data,
                     error_code="s3_operation_incomplete",
                 ) from error
             return {
                 "name": self.name,
+                "is_public": False,
                 "configured_public": False,
                 "complete": True,
                 "mutation_state": "complete",
@@ -1217,6 +1245,7 @@ class S3Bucket:
                 "name": self.name,
                 "action": "set_public",
                 "requested_public": True,
+                "is_public": False if safety_lock == "applied" else None,
                 "configured_public": False if safety_lock == "applied" else None,
                 "safety_lock": safety_lock,
                 "complete": False,
@@ -1235,6 +1264,7 @@ class S3Bucket:
 
         return {
             "name": self.name,
+            "is_public": True,
             "configured_public": True,
             "complete": True,
             "mutation_state": "complete",
