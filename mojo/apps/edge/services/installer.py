@@ -73,11 +73,11 @@ class InstallError(Exception):
 
 
 def keep_generations():
-    return int(settings.get("EDGE_KEEP_GENERATIONS", 5))
+    return int(settings.get_static("EDGE_KEEP_GENERATIONS", 5))
 
 
 def command_timeout():
-    return int(settings.get("EDGE_COMMAND_TIMEOUT", 60))
+    return int(settings.get_static("EDGE_COMMAND_TIMEOUT", 60))
 
 
 # ----------------------------------------------------------------------
@@ -87,19 +87,27 @@ def command_timeout():
 def _nginx_test_argv(config_path=None):
     """`nginx -t`, optionally against a specific config.
 
-    Built from settings and a fixed shape — **never composed from row data**.
-    A vhost's label, an upstream's host and a certificate's name are all
-    validated, but none of them belongs anywhere near an argv list.
+    Built from a FILE setting and a fixed shape — never from row data.
+
+    `get_static`, not `get`, and that is the whole point. `settings.get`
+    resolves a DB-backed `Setting` row FIRST (mojo/helpers/settings/helper.py),
+    and `Setting` is REST-writable by any holder of a global `manage_settings`
+    or `groups` grant. That would make this argv row data: write
+    `EDGE_NGINX_TEST_CMD = ["/bin/sh","-c","..."]` globally, wait up to ten
+    minutes for the convergence broadcast, and the command runs as the app user
+    on EVERY node — the user that owns EDGE_ROOT and every private key in it.
+    Same precedent as `_return_real_error` in mojo/decorators/http.py: a
+    Setting row must not be able to reach a decision like this.
     """
-    argv = list(settings.get("EDGE_NGINX_TEST_CMD", ["sudo", "-n", "nginx", "-t"],
-                             kind="list"))
+    argv = list(settings.get_static(
+        "EDGE_NGINX_TEST_CMD", ["sudo", "-n", "nginx", "-t"], kind="list"))
     if config_path:
         argv = argv + ["-c", str(config_path)]
     return argv
 
 
 def _nginx_reload_argv():
-    return list(settings.get(
+    return list(settings.get_static(
         "EDGE_NGINX_RELOAD_CMD", ["sudo", "-n", "systemctl", "reload", "nginx"],
         kind="list"))
 

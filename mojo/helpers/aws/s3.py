@@ -597,6 +597,51 @@ class S3Item:
 
 # Utility functions for common S3 operations
 
+def presigned_put_url(bucket: str, key: str, expires: int = 3600,
+                      sha256_b64: Optional[str] = None,
+                      content_length: Optional[int] = None) -> str:
+    """A presigned PUT for exactly one key, with no round trip.
+
+    Deliberately NOT routed through `S3Item`: its constructor calls
+    `_check_exists()`, which is a HeadObject. Minting one URL per file in a
+    manifest through the object wrapper would cost a network call per file
+    before anything is uploaded — thousands, for a real front-end build.
+
+    Presigning itself is pure local signing; boto3 contacts nothing. The
+    signature covers the bucket, the key, and any parameter below, so a holder
+    can write that one object until it expires and cannot choose another key.
+
+    `sha256_b64` is BASE64 of the raw digest, not hex — bind a manifest's hex
+    value with `base64.b64encode(bytes.fromhex(digest))`, or you produce a
+    signature the upload can never satisfy.
+    """
+    params = {'Bucket': bucket, 'Key': key}
+    if sha256_b64:
+        params['ChecksumSHA256'] = sha256_b64
+    if content_length is not None:
+        params['ContentLength'] = int(content_length)
+    return S3.client.generate_presigned_url(
+        'put_object', ExpiresIn=expires, Params=params)
+
+
+def head_object(bucket: str, key: str) -> Optional[Dict]:
+    """HeadObject metadata, or None when the key is absent.
+
+    Returns the raw response so a caller can read `ChecksumSHA256` and
+    `ContentLength` — verifying an upload without pulling the bytes back
+    through this process. `ChecksumSHA256` is present only when the object was
+    written with one; treating its absence as a match would undo the whole
+    verification.
+    """
+    try:
+        return S3.client.head_object(Bucket=bucket, Key=key)
+    except botocore.exceptions.ClientError as err:
+        code = err.response.get("Error", {}).get("Code")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return None
+        raise
+
+
 def upload(url: str, file_obj: Union[str, BinaryIO], background: bool = False) -> None:
     """Upload a file to S3."""
     S3Item(url).upload(file_obj, background)

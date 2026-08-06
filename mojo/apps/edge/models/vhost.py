@@ -104,9 +104,13 @@ class Vhost(models.Model, MojoModel):
         LOG_CHANGES = True
         SEARCH_FIELDS = ["label", "kind", "pool"]
         # A declared NO_SAVE_FIELDS list REPLACES the framework default, so the
-        # defaults have to be re-included. `domain` is immutable after create:
-        # moving a vhost between domains would move it between TENANTS.
-        NO_SAVE_FIELDS = ["id", "pk", "created", "uuid", "domain"]
+        # defaults have to be re-included.
+        #
+        # `domain` is deliberately NOT here. NO_SAVE_FIELDS is applied on the
+        # CREATE path too (mojo/models/rest.py), so pinning it would make a
+        # vhost impossible to create over REST at all. Immutability after
+        # create is enforced in on_rest_pre_save below instead.
+        NO_SAVE_FIELDS = ["id", "pk", "created", "uuid"]
         GRAPHS = {
             "basic": {
                 "fields": ["id", "kind", "is_enabled"],
@@ -151,6 +155,24 @@ class Vhost(models.Model, MojoModel):
         `<generation>/www/<this>` as a symlink to the installed release.
         """
         return str(self.pk)
+
+    def on_rest_pre_save(self, changed_fields, created):
+        """`domain` is set once and never moved.
+
+        Re-pointing it would move the row between TENANTS, so it cannot be a
+        plain writable field — but it also cannot live in NO_SAVE_FIELDS, which
+        is enforced on create as well. This is the middle: settable exactly
+        once.
+        """
+        import mojo.errors as me
+
+        if created:
+            if not self.domain_id:
+                raise me.ValueException("a vhost requires a domain")
+            return
+        if "domain" in (changed_fields or {}):
+            raise me.ValueException(
+                "a vhost cannot be moved to another domain")
 
     def save(self, *args, **kwargs):
         """Validate on EVERY write path — see Upstream.save for the reasoning."""

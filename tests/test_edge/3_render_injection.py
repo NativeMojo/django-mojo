@@ -14,6 +14,7 @@ boundary (a row mutated straight into the DB still cannot).
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
+    declare_pools,
     cleanup, declare_reserved_names, make_certificate, make_domain, make_group,
     make_upstream, make_vhost, raises,
 )
@@ -26,6 +27,7 @@ HOSTILE_DOMAIN = "example.com; } server { listen 443; root /etc; #"
 def setup_render(opts):
     cleanup()
     declare_reserved_names()
+    declare_pools()
     opts.group = make_group("edgerender")
     opts.domain = make_domain(name="edge-render-example.com", group=opts.group)
     opts.certificate = make_certificate(opts.domain)
@@ -184,8 +186,11 @@ def test_tls_floor_is_not_reachable(opts):
     fields = {f.name for f in Vhost._meta.get_fields() if hasattr(f, "attname")}
     writable = fields - savable - {"modified"}
 
-    assert writable == {"label", "kind", "upstream", "certificate", "pool",
-                        "is_enabled"}, (
+    # `domain` is writable but settable ONCE — NO_SAVE_FIELDS is enforced on
+    # create too, so pinning it there would make a vhost un-creatable over
+    # REST; `Vhost.on_rest_pre_save` freezes it after create instead.
+    assert writable == {"domain", "label", "kind", "upstream", "certificate",
+                        "pool", "is_enabled"}, (
         "Vhost's writable field set changed — confirm no new field can reach "
         f"the TLS block or the rendered paths. Now: {sorted(writable)}")
 

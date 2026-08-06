@@ -21,6 +21,7 @@ def on_upstream(request, pk=None):
 
 @md.POST('upstream/declare')
 @md.requires_params("name", "kind")
+@md.custom_security("require_platform_admin gate in body")
 def on_upstream_declare(request):
     """Declare a new upstream. **Platform administrators only.**
 
@@ -72,6 +73,7 @@ def on_upstream_declare(request):
 
 @md.POST('upstream/retire')
 @md.requires_params("upstream")
+@md.custom_security("require_platform_admin gate in body")
 def on_upstream_retire(request):
     """Retire an upstream. Platform administrators only, same reasoning.
 

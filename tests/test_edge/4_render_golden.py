@@ -17,6 +17,7 @@ import pathlib
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
+    declare_pools,
     cleanup, declare_reserved_names, make_certificate, make_domain, make_group,
     make_upstream, make_vhost,
 )
@@ -49,6 +50,7 @@ def _compare(name, actual):
 def setup_golden(opts):
     cleanup()
     declare_reserved_names()
+    declare_pools()
     opts.group = make_group("edgegolden")
     # A FIXED domain name: the golden files contain it verbatim.
     opts.domain = make_domain(name="edge-golden.example.com", group=opts.group)

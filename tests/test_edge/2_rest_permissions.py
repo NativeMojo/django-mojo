@@ -14,6 +14,7 @@ with extra steps.
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
+    declare_pools,
     cleanup, declare_reserved_names, login, make_certificate, make_domain,
     make_group, make_upstream, make_user, make_vhost,
 )
@@ -23,6 +24,7 @@ from tests.test_edge._helpers import (
 def setup_rest_permissions(opts):
     cleanup()
     declare_reserved_names()
+    declare_pools()
 
     opts.group = make_group("edgerest")
     opts.other_group = make_group("edgeother")

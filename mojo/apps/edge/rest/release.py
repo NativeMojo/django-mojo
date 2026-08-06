@@ -9,6 +9,7 @@ credential a web developer's pipeline holds could make any build live.
 
 import mojo.decorators as md
 from mojo import errors as me
+from mojo.models.rest import _resolve_stamp_actor
 
 from mojo.apps.edge.models import WebApp, WebAppRelease
 from mojo.apps.edge.services import releases
@@ -57,6 +58,7 @@ def _authorized_webapp(request, pk):
 
 @md.POST('release')
 @md.requires_params("webapp", "version", "manifest")
+@md.custom_security("site ApiKey identity, or manage_dns on the WebApp, in body")
 def on_release_register(request):
     """Declare a release and receive one upload URL per file.
 
@@ -70,9 +72,12 @@ def on_release_register(request):
         web_app,
         request.DATA.get("version"),
         request.DATA.get("manifest"),
-        user=getattr(request, "acting_user", None) or (
-            request.user if getattr(request, "user", None)
-            and getattr(request.user, "pk", None) else None),
+        # _resolve_stamp_actor, not a hand-rolled check: for a reference-mode
+        # ApiKey `request.user` IS the ApiKey, and it has a pk — so the obvious
+        # `user.pk` test passes and hands a non-User to a ForeignKey, which is
+        # a 500 on the CI happy path. This helper returns None for every
+        # non-model identity (ApiKey, ANONYMOUS_USER, the system pseudo-user).
+        user=_resolve_stamp_actor(request),
     )
     return dict(
         release=release.pk,
@@ -86,6 +91,7 @@ def on_release_register(request):
 
 @md.POST('release/complete')
 @md.requires_params("release")
+@md.custom_security("site ApiKey identity, or manage_dns on the WebApp, in body")
 def on_release_complete(request):
     """Verify the declared files actually landed, then mark it uploaded.
 

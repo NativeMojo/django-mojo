@@ -46,11 +46,14 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 
 
 def www_base():
-    return settings.get("EDGE_WWW_BASE", "/opt/www")
+    # get_static throughout this pair of helpers: these define the containment
+    # boundaries themselves, and a boundary a DB row can move is not a
+    # boundary. See services/installer.py::_nginx_test_argv.
+    return settings.get_static("EDGE_WWW_BASE", "/opt/www")
 
 
 def socket_base():
-    return settings.get("EDGE_SOCKET_BASE", "/run/mojo")
+    return settings.get_static("EDGE_SOCKET_BASE", "/run/mojo")
 
 
 # ----------------------------------------------------------------------
@@ -308,10 +311,26 @@ def validate_certificate_covers(certificate, domain_id, server_name):
 # vhosts
 # ----------------------------------------------------------------------
 
+def declared_pools():
+    return settings.get("EDGE_POOLS", ["default"], kind="list") or ["default"]
+
+
 def validate_pool(pool):
+    """A vhost's pool must be one this deployment declared.
+
+    Charset alone is not enough (post-build security review): `pool` is
+    tenant-writable, and an arbitrary value lets a tenant move their vhost into
+    a pool name they invented — including a dedicated or isolated pool, whose
+    nodes would then fetch and install that tenant's certificate. Restricting
+    to the declared set keeps the pool an operator's decision.
+    """
     if not pool or not NAME_RE.match(pool):
         raise me.ValueException(
             "pool must be lowercase letters, digits, '-' or '_'")
+    allowed = declared_pools()
+    if pool not in allowed:
+        raise me.ValueException(
+            f"{pool} is not a declared pool ({', '.join(sorted(allowed))})")
     return pool
 
 
@@ -366,6 +385,20 @@ def validate_web_app(web_app):
     validate_release_bucket(web_app.bucket or "")
     if not web_app.group_id:
         raise me.ValueException("a web app requires a group")
+
+    # The linked vhost must belong to the SAME tenant. Found by the post-build
+    # security review: `vhost` is caller-writable, and the framework's FK-attach
+    # gate resolves a HOUSE vhost (group-less domain) against the caller's
+    # global permissions — so a global manage_dns holder could attach the
+    # platform's own vhost to a web app in a group they control, promote a
+    # release, and serve their own content on the platform's hostname. The
+    # same check also stops an admin of two tenants serving group A's build
+    # output on group B's name.
+    if web_app.vhost_id:
+        vhost_group_id = web_app.vhost.domain.group_id
+        if vhost_group_id != web_app.group_id:
+            raise me.ValueException(
+                "the vhost must belong to this web app's group")
     return web_app
 
 

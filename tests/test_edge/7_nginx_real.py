@@ -27,6 +27,7 @@ from unittest import mock
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
+    declare_pools,
     cleanup, declare_reserved_names, make_certificate, make_domain, make_group,
     make_upstream, make_vhost,
 )
@@ -107,6 +108,7 @@ def _harness(gen_dir, prefix):
 def setup_nginx_real(opts):
     cleanup()
     declare_reserved_names()
+    declare_pools()
     opts.group = make_group("edgenginx")
     opts.domain = make_domain(name="edge-nginx.example.com", group=opts.group)
     opts.certificate = make_certificate(opts.domain)

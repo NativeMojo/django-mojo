@@ -14,6 +14,7 @@ matched against a whitelist regex.
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
+    declare_pools,
     API_HOSTNAME, clear_reserved_names, declare_reserved_names, raises,
 )
 
@@ -47,6 +48,7 @@ INJECTION_STRINGS = [
 @th.django_unit_setup()
 def setup_validators(opts):
     declare_reserved_names()
+    declare_pools()
 
 
 @th.django_unit_test("label rejects every nginx metacharacter and path escape")
@@ -155,6 +157,7 @@ def test_reserved_names_fail_closed(opts):
             "an undeclared deployment must refuse every vhost, not allow every name"
     finally:
         declare_reserved_names()
+    declare_pools()
 
 
 @th.django_unit_test("the instance metadata service can never be an upstream")

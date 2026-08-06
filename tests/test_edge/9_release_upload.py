@@ -16,29 +16,31 @@ from unittest import mock
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
+    declare_pools,
     cleanup, declare_release_buckets, declare_reserved_names, make_manifest,
     make_group, make_webapp, raises,
 )
 
 
-class FakeS3Item:
-    """One fake S3 object namespace, shared by a test through `store`."""
+class FakeS3:
+    """A fake S3 keyspace, shared by a test through `store`.
+
+    Patches the MODULE functions rather than `S3Item`, matching the real seam:
+    presigning deliberately does not go through `S3Item`, whose constructor
+    would issue a HeadObject per file.
+    """
 
     store = {}
 
-    def __init__(self, url):
-        self.url = url
-        # s3://bucket/key...
-        _, _, rest = url.partition("s3://")
-        self.bucket_name, _, self.key = rest.partition("/")
-
-    def generate_presigned_put(self, expires=3600, sha256_b64=None,
-                               content_length=None):
-        return (f"https://{self.bucket_name}.s3.example/{self.key}"
+    @staticmethod
+    def presigned_put_url(bucket, key, expires=3600, sha256_b64=None,
+                          content_length=None):
+        return (f"https://{bucket}.s3.example/{key}"
                 f"?sig=1&len={content_length}&ck={sha256_b64}")
 
-    def head(self):
-        return FakeS3Item.store.get(self.key)
+    @staticmethod
+    def head_object(bucket, key):
+        return FakeS3.store.get(key)
 
 
 def _put(key, sha256_hex=None, size=None, checksum=True):
@@ -48,21 +50,31 @@ def _put(key, sha256_hex=None, size=None, checksum=True):
     entry = {"ContentLength": size}
     if checksum and sha256_hex:
         entry["ChecksumSHA256"] = hex_to_b64(sha256_hex)
-    FakeS3Item.store[key] = entry
+    FakeS3.store[key] = entry
 
 
 @th.django_unit_setup()
 def setup_release_upload(opts):
     cleanup()
     declare_reserved_names()
+    declare_pools()
     declare_release_buckets()
     opts.group = make_group("edgeupload")
     opts.webapp = make_webapp(opts.group, slug="uploads")
-    FakeS3Item.store = {}
+    FakeS3.store = {}
 
 
 def _fake_s3():
-    return mock.patch("mojo.apps.edge.services.releases.s3.S3Item", FakeS3Item)
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+    stack.enter_context(mock.patch(
+        "mojo.apps.edge.services.releases.s3.presigned_put_url",
+        FakeS3.presigned_put_url))
+    stack.enter_context(mock.patch(
+        "mojo.apps.edge.services.releases.s3.head_object",
+        FakeS3.head_object))
+    return stack
 
 
 @th.django_unit_test("register mints exactly one upload URL per declared file")

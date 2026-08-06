@@ -65,13 +65,13 @@ def hex_to_b64(digest_hex):
     return base64.b64encode(bytes.fromhex(digest_hex)).decode("ascii")
 
 
-def _object(web_app, key):
-    return s3.S3Item(f"s3://{web_app.bucket}/{key}")
-
-
 def register(web_app, version, manifest, user=None):
     """Create a `pending` release and mint one upload URL per declared file."""
     validators.validate_release_version(version)
+    # Re-check the bucket at MINT time, not only when the row was created: a
+    # bucket removed from EDGE_RELEASE_BUCKETS would otherwise keep receiving
+    # presigned writes from existing sites.
+    validators.validate_release_bucket(web_app.bucket or "")
     cleaned = validators.validate_manifest(manifest)
 
     if WebAppRelease.objects.filter(webapp=web_app, version=version).exists():
@@ -91,7 +91,8 @@ def register(web_app, version, manifest, user=None):
         checksum = hex_to_b64(entry["sha256"])
         uploads.append(dict(
             path=entry["path"],
-            url=_object(web_app, key).generate_presigned_put(
+            url=s3.presigned_put_url(
+                web_app.bucket, key,
                 expires=upload_ttl(),
                 sha256_b64=checksum,
                 content_length=entry["size"]),
@@ -122,7 +123,7 @@ def complete(release):
     for entry in release.manifest or []:
         key = f"{prefix}/{entry['path']}"
         try:
-            head = _object(web_app, key).head()
+            head = s3.head_object(web_app.bucket, key)
         except Exception as err:
             problems.append(f"{entry['path']}: {err}")
             continue

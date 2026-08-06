@@ -92,16 +92,20 @@ class WebApp(models.Model, MojoModel):
         # Every field below is either a promotion decision or an authorization
         # decision wearing a field's clothes.
         #
-        # `bucket` and `prefix` are here for a specific reason: the API mints
-        # presigned uploads signed with the PLATFORM's static AWS credentials
-        # (mojo/helpers/aws/s3.py has one global S3Config, shared with KMS). A
-        # writable `bucket` would let a tenant holding manage_dns name any
-        # bucket that key can reach — fileman, terraform state, logs — and have
-        # us sign uploads into it. `bucket` comes from an allowlist and
-        # `prefix` is derived; neither is ever accepted from a caller.
+        # `prefix` in particular: the API mints presigned uploads signed with
+        # the PLATFORM's static AWS credentials (mojo/helpers/aws/s3.py has one
+        # global S3Config, shared with KMS), so where those writes land must
+        # never be caller-chosen. It is derived from group and id.
+        #
+        # `bucket` is deliberately NOT pinned. NO_SAVE_FIELDS applies on the
+        # CREATE path too, so pinning it would make a site impossible to
+        # register over REST. Accepting it is safe because `validate_web_app`
+        # restricts it to EDGE_RELEASE_BUCKETS — the allowlist is the control,
+        # not the field being read-only — and on_rest_pre_save freezes it after
+        # create so existing releases cannot be orphaned.
         NO_SAVE_FIELDS = [
             "id", "pk", "created", "uuid",
-            "group", "bucket", "prefix", "api_key", "current_release",
+            "group", "prefix", "api_key", "current_release",
         ]
         GRAPHS = {
             "basic": {
@@ -146,6 +150,14 @@ class WebApp(models.Model, MojoModel):
             # keeping a prefix that no longer matches its group.
             self.prefix = self.storage_prefix()
         return super().save(*args, **kwargs)
+
+    def on_rest_pre_save(self, changed_fields, created):
+        """`bucket` is set once. Moving it would orphan every existing release."""
+        import mojo.errors as me
+
+        if not created and "bucket" in (changed_fields or {}):
+            raise me.ValueException(
+                "a web app's bucket cannot be changed after creation")
 
     def on_rest_created(self):
         """`storage_prefix` needs a pk, which does not exist until the insert."""

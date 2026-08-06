@@ -42,4 +42,31 @@ def on_vhost(request, pk=None):
         vhost = Vhost.get_instance_or_404(pk)
         Vhost.rest_check_permission_or_raise(request, ["VIEW_PERMS"], vhost)
         _guard_house_vhost(request, vhost, "House vhosts")
+    else:
+        _guard_house_domain_create(request)
     return Vhost.on_rest_request(request, pk)
+
+
+def _guard_house_domain_create(request):
+    """CREATING a vhost on a house domain is also platform-only.
+
+    Found by the post-build security review. Guarding only the per-instance
+    paths left the create path open: `on_rest_handle_create` checks SAVE_PERMS
+    with no instance, which for a group-less domain falls through to the
+    caller's GLOBAL permissions — so a global `manage_dns` holder who cannot
+    *read* a house vhost could still *mint* one, claiming a new serving name on
+    a platform-owned zone with a valid house certificate. `Certificate` avoids
+    this by setting `CAN_CREATE = False`; a vhost has to be creatable, so the
+    domain is checked here instead.
+
+    Unlike the read path there is no oracle to protect: the caller supplied the
+    domain id, so refusing tells them nothing they did not already assert.
+    """
+    from mojo.apps.dnsman.models import Domain
+
+    domain_pk = request.DATA.get("domain", None)
+    if not domain_pk:
+        return
+    domain = Domain.objects.filter(pk=domain_pk).first()
+    if domain is not None and domain.group_id is None:
+        require_platform_admin(request, "Creating a vhost on a house domain")

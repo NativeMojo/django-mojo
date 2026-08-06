@@ -17,6 +17,7 @@ red-team pass and was caught by re-reading `mojo/decorators/auth.py`.
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
+    declare_pools,
     cleanup, declare_reserved_names, login, make_certificate, make_domain,
     make_group, make_group_member, make_upstream, make_user, make_vhost,
 )
@@ -29,6 +30,7 @@ def setup_desired_state(opts):
     cleanup()
     ApiKey.objects.filter(name__startswith="edge_node_test_").delete()
     declare_reserved_names()
+    declare_pools()
 
     opts.group = make_group("edgenode")
     opts.domain = make_domain(group=opts.group)

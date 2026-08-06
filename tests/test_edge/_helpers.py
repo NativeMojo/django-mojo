@@ -151,6 +151,20 @@ def make_vhost(domain, certificate=None, label="", kind="static",
 
 RELEASE_BUCKET = "edge-test-releases"
 
+# Pools these tests use. `validate_pool` restricts a vhost to the deployment's
+# DECLARED pools (a tenant must not be able to invent one and land their
+# certificate on an isolated node), so every pool a test uses has to be here.
+TEST_POOLS = [
+    "default", "staging", "nginxreal", "reltest",
+    "itesthappy", "itestexclude", "itesthouse",
+]
+
+
+def declare_pools(pools=None):
+    from mojo.apps.account.models.setting import Setting
+
+    Setting.set("EDGE_POOLS", list(pools or TEST_POOLS), group=None)
+
 
 def declare_release_buckets(buckets=None):
     """Declare the release buckets. Registering a site fails closed without it."""

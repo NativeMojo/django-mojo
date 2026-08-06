@@ -18,6 +18,7 @@ from unittest import mock
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
+    declare_pools,
     cleanup, declare_release_buckets, declare_reserved_names, make_certificate,
     make_domain, make_group, make_release, make_vhost, make_webapp, raises,
 )
@@ -55,6 +56,7 @@ POOL = "reltest"
 def setup_release_installer(opts):
     cleanup()
     declare_reserved_names()
+    declare_pools()
     declare_release_buckets()
     opts.group = make_group("edgerelinstall")
     opts.domain = make_domain(group=opts.group)

@@ -14,6 +14,7 @@ Two layers are asserted separately on purpose:
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
+    declare_pools,
     API_HOSTNAME, cleanup, declare_reserved_names, make_certificate,
     make_domain, make_group, make_upstream, make_vhost, raises,
 )
@@ -23,6 +24,7 @@ from tests.test_edge._helpers import (
 def setup_models(opts):
     cleanup()
     declare_reserved_names()
+    declare_pools()
     opts.group = make_group("edgemodel")
     opts.domain = make_domain(group=opts.group)
     opts.certificate = make_certificate(opts.domain)

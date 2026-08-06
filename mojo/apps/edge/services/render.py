@@ -37,7 +37,10 @@ from mojo.apps.edge.models.vhost import KIND_PROXY, KIND_SPA, KIND_STATIC
 
 
 def edge_root():
-    return settings.get("EDGE_ROOT", "/opt/api/var/edge")
+    # get_static: a DB-backed Setting must not be able to redirect where the
+    # installer writes certificate material. See _nginx_test_argv in
+    # services/installer.py for the full reasoning.
+    return settings.get_static("EDGE_ROOT", "/opt/api/var/edge")
 
 
 def tls_protocols():
