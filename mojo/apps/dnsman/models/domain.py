@@ -5,6 +5,7 @@ from mojo.helpers import logit
 
 PROVIDER_ROUTE53 = "route53"
 PROVIDER_GODADDY = "godaddy"
+PROVIDER_MOJO = "mojo"
 
 STATUS_PENDING = "pending"
 STATUS_REGISTERING = "registering"
@@ -52,7 +53,8 @@ class Domain(models.Model, MojoModel):
         max_length=32,
         default=PROVIDER_ROUTE53,
         db_index=True,
-        help_text="Where this domain's DNS lives: route53 | godaddy.")
+        help_text="Where this domain's DNS lives: route53 | godaddy | mojo. "
+                  "mojo is certificate-only delegated ACME, never general DNS CRUD.")
 
     credential = models.ForeignKey(
         "dnsman.DnsCredential",
@@ -145,8 +147,8 @@ class Domain(models.Model, MojoModel):
 
     @property
     def requires_credential(self):
-        """Route53 rides house AWS credentials; everything else must bring its own."""
-        return self.provider != PROVIDER_ROUTE53
+        """Direct GoDaddy DNS is the only provider that brings credentials."""
+        return self.provider == PROVIDER_GODADDY
 
     @property
     def has_usable_credential(self):

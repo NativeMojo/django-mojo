@@ -13,6 +13,9 @@ The KMS stub is not optional: ``Certificate`` and ``AcmeAccount`` extend
 """
 import contextlib
 import json
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from objict import objict
@@ -311,6 +314,40 @@ def _challenge_name(domain):
     return f"_acme-challenge.{domain.name}"
 
 
+def _delegated_row(domain):
+    from mojo.apps.account.models import Group
+    from mojo.apps.dnsman.models import AcmeDelegation
+    from mojo.helpers import dates
+
+    group = Group.objects.create(
+        name=f"delegated_certs_{uuid.uuid4().hex[:8]}", kind="organization")
+    domain.group = group
+    domain.save(update_fields=["group", "modified"])
+    return AcmeDelegation.objects.create(
+        domain=domain,
+        group=group,
+        tenant_uuid=group.get_uuid(),
+        tenant_name=group.name,
+        domain_name=domain.name,
+        source_name=_challenge_name(domain),
+        target_name=f"{uuid.uuid4().hex}.hub.example.net",
+        state="verified",
+        verified_at=dates.utcnow(),
+    )
+
+
+def _hub_result(row, challenge_ref, count=0):
+    return objict(
+        success=True,
+        client_ref=str(row.client_ref),
+        domain=row.domain_name,
+        source=row.source_name,
+        target=row.target_name,
+        challenge_ref=challenge_ref,
+        active_value_count=count,
+    )
+
+
 # ----------------------------------------------------------------------
 # tests
 # ----------------------------------------------------------------------
@@ -349,6 +386,137 @@ def test_certs_wildcard_and_apex_share_one_record(opts):
         f"got {upsert.record_values}")
     assert len(client.answered) == 2, (
         f"each of the two challenges must be answered, got {len(client.answered)}")
+
+
+@th.django_unit_test("dnsman certs: pending delegation is inert and direct Route53 stays unchanged")
+def test_pending_delegation_is_inert(opts):
+    from unittest import mock
+
+    from mojo.apps.dnsman.models import AcmeDelegation
+    from mojo.apps.dnsman.services import acme_hub_client, certs
+
+    domain = _reset_domain("pending-delegation-certs.test")
+    row = _delegated_row(domain)
+    AcmeDelegation.objects.filter(pk=row.pk).update(
+        state="pending", verified_at=None)
+    names = [domain.name, f"*.{domain.name}"]
+    cert = _pending_certificate(domain, names)
+    chain, unused = _make_chain(names)
+    client = FakeAcmeClient([domain.name, domain.name], chain=chain)
+
+    with _issuance_env(client) as env, \
+            mock.patch.object(acme_hub_client, "publish") as remote_publish:
+        result = certs.issue(cert)
+
+    assert result.ok, f"pending delegation must not disrupt direct issuance: {result}"
+    assert len(env.dns.upserts) == 1, \
+        "pending delegation should leave the direct Route53 challenge writer selected"
+    assert not remote_publish.called, \
+        "pending delegation must never publish through the federation hub"
+
+
+@th.django_unit_test("dnsman certs: verified delegation publishes both digests at the opaque target")
+def test_delegated_challenge_writer(opts):
+    from unittest import mock
+
+    from mojo.apps.dnsman.services import acme_hub_client, certs, delegation
+    from mojo.helpers.dns import probe
+
+    domain = _reset_domain("delegated-writer-certs.test")
+    row = _delegated_row(domain)
+    names = [domain.name, f"*.{domain.name}"]
+    cert = _pending_certificate(domain, names)
+    chain, unused = _make_chain(names)
+    client = FakeAcmeClient([domain.name, domain.name], chain=chain)
+    publishes = []
+    withdrawals = []
+
+    def publish(client_ref, challenge_ref, values):
+        publishes.append((client_ref, challenge_ref, list(values)))
+        return _hub_result(row, challenge_ref, count=len(values))
+
+    def withdraw(client_ref, challenge_ref):
+        withdrawals.append((client_ref, challenge_ref))
+        return _hub_result(row, challenge_ref)
+
+    proof = objict(ok=True, error=None)
+    with _issuance_env(client) as env, \
+            mock.patch.object(delegation.probe, "verify_one_hop_cname", return_value=proof), \
+            mock.patch.object(acme_hub_client, "publish", side_effect=publish), \
+            mock.patch.object(acme_hub_client, "withdraw", side_effect=withdraw), \
+            mock.patch.object(probe, "wait_for_txt", return_value=(True, ["seen"])) as wait:
+        result = certs.issue(cert)
+
+    assert result.ok, f"delegated issuance should succeed, got {result}"
+    assert not env.dns.upserts and not env.dns.clears, \
+        "verified delegation must never fall through to direct provider DNS"
+    assert len(publishes) == 1 and set(publishes[0][2]) == {
+        "digest-tok-0", "digest-tok-1"}, \
+        f"both apex/wildcard digests must publish together, got {publishes}"
+    assert wait.call_args.args[0] == row.target_name, \
+        f"propagation must probe the exact opaque target, got {wait.call_args}"
+    assert withdrawals == [(str(row.client_ref), publishes[0][1])], \
+        f"the exact durable challenge must be withdrawn in finally, got {withdrawals}"
+    row.refresh_from_db()
+    assert row.cleanup_challenge_ref is None, \
+        "successful idempotent withdrawal should clear durable cleanup intent"
+
+
+@th.django_unit_test("dnsman certs: ambiguous delegated publish still withdraws in finally")
+def test_delegated_ambiguous_publish_withdraws(opts):
+    from unittest import mock
+
+    from mojo.apps.dnsman.services import acme_hub_client, certs, delegation
+
+    domain = _reset_domain("delegated-ambiguous-certs.test")
+    row = _delegated_row(domain)
+    names = [domain.name, f"*.{domain.name}"]
+    cert = _pending_certificate(domain, names)
+    client = FakeAcmeClient([domain.name, domain.name], chain="")
+    withdrawals = []
+
+    def withdraw(client_ref, challenge_ref):
+        withdrawals.append((client_ref, challenge_ref))
+        return _hub_result(row, challenge_ref)
+
+    proof = objict(ok=True, error=None)
+    with _issuance_env(client), \
+            mock.patch.object(delegation.probe, "verify_one_hop_cname", return_value=proof), \
+            mock.patch.object(
+                acme_hub_client, "publish",
+                side_effect=acme_hub_client.AcmeHubTransportError("ambiguous")), \
+            mock.patch.object(acme_hub_client, "withdraw", side_effect=withdraw):
+        result = certs.issue(cert)
+
+    assert not result.ok, "an ambiguous remote publish must fail the issuance"
+    assert len(withdrawals) == 1, \
+        f"finally must withdraw even when publish returned no response, got {withdrawals}"
+    row.refresh_from_db()
+    assert row.cleanup_challenge_ref is None, \
+        "successful cleanup after ambiguity should retire the durable intent"
+
+
+@th.django_unit_test("dnsman certs: alias failure consumes no CA order and marks sticky routing broken")
+def test_delegated_alias_failure_precedes_order(opts):
+    from unittest import mock
+
+    from mojo.apps.dnsman.services import certs, delegation
+
+    domain = _reset_domain("delegated-alias-certs.test")
+    row = _delegated_row(domain)
+    names = [domain.name, f"*.{domain.name}"]
+    cert = _pending_certificate(domain, names)
+    client = FakeAcmeClient([domain.name, domain.name], chain="")
+    failure = objict(ok=False, error="CNAME delegation does not match the allocation")
+    with _issuance_env(client), \
+            mock.patch.object(delegation.probe, "verify_one_hop_cname", return_value=failure):
+        result = certs.issue(cert)
+
+    assert not result.ok and not client.orders, \
+        "a missing/changed alias must fail before creating any CA order"
+    row.refresh_from_db()
+    assert row.state == "broken", \
+        "verified delegation must fail closed as broken with no direct fallback"
 
 
 @th.django_unit_test("dnsman certs: a successful issue stores material and cleans up the challenge record")
@@ -467,6 +635,95 @@ def test_certs_propagation_timeout_fails_cleanly(opts):
         f"the planted record should be the one retired, got {env.dns.clears[0].name}")
     assert not client.finalized, (
         "the CSR must never be submitted when the challenge never propagated")
+
+
+@th.django_unit_test("dnsman certs: failed delegated renewal preserves valid material with bounded retry")
+def test_delegated_renewal_failure_preserves_material(opts):
+    from unittest import mock
+
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.services import acme_hub_client, certs, delegation
+    from mojo.helpers import dates
+
+    domain = _reset_domain("delegated-renewal-certs.test")
+    row = _delegated_row(domain)
+    names = [domain.name, f"*.{domain.name}"]
+    now = dates.utcnow()
+    cert = Certificate.objects.create(
+        domain=domain, common_name=domain.name, sans=names, status="active",
+        cert_pem="OLD CERTIFICATE", chain_pem="OLD CHAIN",
+        not_after=now + timedelta(days=20), renew_after=now - timedelta(days=1))
+    client = FakeAcmeClient([domain.name, domain.name], chain="")
+
+    def withdraw(client_ref, challenge_ref):
+        return _hub_result(row, challenge_ref)
+
+    proof = objict(ok=True, error=None)
+    with _issuance_env(client), \
+            mock.patch.object(delegation.probe, "verify_one_hop_cname", return_value=proof), \
+            mock.patch.object(
+                acme_hub_client, "publish",
+                side_effect=acme_hub_client.AcmeHubTransportError("ambiguous")), \
+            mock.patch.object(acme_hub_client, "withdraw", side_effect=withdraw):
+        cert.set_private_key_pem("OLD PRIVATE KEY")
+        cert.save()
+        result = certs.issue(cert)
+        stored = Certificate.objects.get(pk=cert.pk)
+        private_key = stored.private_key_pem
+
+    assert not result.ok, "the delegated hub failure must remain visible"
+    assert stored.status == "active", \
+        f"still-valid renewal material must remain active, got {stored.status}"
+    assert (stored.cert_pem, stored.chain_pem, private_key) == (
+        "OLD CERTIFICATE", "OLD CHAIN", "OLD PRIVATE KEY"), \
+        "a failed renewal must not overwrite certificate custody material"
+    assert stored.renew_after > now, \
+        f"failure must schedule a later retry, got {stored.renew_after}"
+    assert stored.renew_after <= now + timedelta(seconds=certs.MAX_RETRY_SECONDS + 5), \
+        f"retry backoff must stay bounded, got {stored.renew_after}"
+
+
+@th.django_unit_test("dnsman certs: concurrent issue jobs atomically admit only one worker")
+def test_concurrent_issue_claim(opts):
+    from unittest import mock
+
+    from django.db import close_old_connections
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.services import certs
+
+    domain = _reset_domain("concurrent-issue-certs.test")
+    names = [domain.name]
+    cert = _pending_certificate(domain, names)
+    chain, unused = _make_chain(names)
+    client = FakeAcmeClient([domain.name], chain=chain)
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_account():
+        started.set()
+        assert release.wait(10), "test worker timed out waiting for duplicate claim"
+        return None, client
+
+    def first_issue():
+        close_old_connections()
+        try:
+            return certs.issue(Certificate.objects.get(pk=cert.pk))
+        finally:
+            close_old_connections()
+
+    with _issuance_env(client), \
+            mock.patch.object(certs, "_get_account", side_effect=slow_account):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(first_issue)
+            assert started.wait(10), "first worker never reached the ACME boundary"
+            duplicate = certs.issue(Certificate.objects.get(pk=cert.pk))
+            release.set()
+            admitted = future.result(timeout=15)
+
+    assert duplicate.ok and duplicate.skipped is True, \
+        f"duplicate job should be an inert success, got {duplicate}"
+    assert admitted.ok and len(client.orders) == 1, \
+        f"exactly one worker may consume a CA order, got {len(client.orders)}"
 
 
 @th.django_unit_test("dnsman certs: an invalid order records the CA's error instead of raising")
@@ -637,20 +894,21 @@ def test_certs_request_refuses_duplicate_active(opts):
         assert Certificate.objects.filter(domain=domain).count() == 1, (
             "a refused request must not create a Certificate row")
 
-        # Inside its renewal window the same request is legitimate again.
+        # Inside its renewal window the same request is a deduplicated renewal
+        # of the existing material, not a second Certificate row.
         active.renew_after = now - timedelta(days=1)
         active.save()
         fresh = certs.request_certificate(domain)
 
-    assert fresh.status == "pending", (
-        f"a fresh request starts pending, got {fresh.status}")
+    assert fresh.pk == active.pk and fresh.status == "active", (
+        f"a due request should reuse the active certificate, got {fresh.pk}/{fresh.status}")
     assert fresh.sans == names, (
         f"names should default to the apex plus its wildcard, got {fresh.sans}")
     assert len(jobs_stub.published) == 1, (
         f"an accepted request queues exactly one issuance job, got "
         f"{len(jobs_stub.published)}")
-    assert jobs_stub.published[0].func == certs.ISSUE_JOB, (
-        f"the queued job should be the issuance handler, got "
+    assert jobs_stub.published[0].func == certs.RENEW_JOB, (
+        f"the queued job should be the renewal handler, got "
         f"{jobs_stub.published[0].func}")
 
 

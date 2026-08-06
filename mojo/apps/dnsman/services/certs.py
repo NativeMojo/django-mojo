@@ -28,7 +28,10 @@ Issuance takes minutes (CA round trips plus a DNS propagation wait), so it is
 driven from ``mojo.apps.dnsman.asyncjobs`` and never from a request.
 """
 
+import uuid
 from datetime import timedelta, timezone as dt_timezone
+
+from django.db import transaction
 
 from objict import objict
 
@@ -46,6 +49,8 @@ CHALLENGE_TTL = 60
 
 DEFAULT_RENEW_DAYS = 30
 DEFAULT_SYNC_CHANNEL = "certs"
+DEFAULT_RETRY_BASE_SECONDS = 3600
+MAX_RETRY_SECONDS = 86400
 
 ISSUE_JOB = "mojo.apps.dnsman.asyncjobs.issue_certificate"
 RENEW_JOB = "mojo.apps.dnsman.asyncjobs.renew_certificate"
@@ -204,32 +209,72 @@ def request_certificate(domain, names=None):
     see ``asyncjobs.issue_certificate``.
     """
     from mojo.apps.dnsman.models import Certificate
-    from mojo.apps.dnsman.models.certificate import STATUS_PENDING
+    from mojo.apps.dnsman.models.certificate import (
+        STATUS_ACTIVE, STATUS_ISSUING, STATUS_PENDING)
 
     names = normalize_names(domain, names)
-    existing = find_covering_certificate(domain, names)
-    if existing is not None:
-        raise me.ValueException(
-            f"An active certificate ({existing.common_name}) already covers "
-            f"these names and is not due for renewal until {existing.renew_after}")
+    _require_delegated_profile(domain, names)
+    job_func = ISSUE_JOB
+    with transaction.atomic():
+        # The Domain lock serializes two callers before either can create a
+        # duplicate Certificate row for the same requested name set.
+        type(domain).objects.select_for_update().get(pk=domain.pk)
+        candidates = Certificate.objects.select_for_update().filter(
+            domain=domain,
+            status__in=(STATUS_PENDING, STATUS_ISSUING, STATUS_ACTIVE))
+        cert = None
+        for candidate in candidates:
+            if sorted(candidate.sans or []) == sorted(names):
+                cert = candidate
+                break
+        if cert is not None and cert.status == STATUS_ACTIVE:
+            if not cert.renew_after or cert.renew_after > dates.utcnow():
+                raise me.ValueException(
+                    f"An active certificate ({cert.common_name}) already covers "
+                    f"these names and is not due for renewal until {cert.renew_after}")
+            job_func = RENEW_JOB
+        elif cert is None:
+            cert = Certificate.objects.create(
+                domain=domain,
+                common_name=names[0],
+                sans=list(names),
+                status=STATUS_PENDING)
 
-    cert = Certificate(
-        domain=domain,
-        common_name=names[0],
-        sans=list(names),
-        status=STATUS_PENDING)
-    cert.save()
-    publish_job(ISSUE_JOB, cert)
+    if cert.status != STATUS_ISSUING:
+        publish_job(job_func, cert)
     return cert
 
 
 def publish_job(func_path, certificate, channel="default"):
     """Queue a certificate job. The payload carries an id and nothing else."""
     from mojo.apps import jobs
+    if func_path == ISSUE_JOB:
+        idempotency_key = f"dnsman-cert-issue-{certificate.pk}"
+    else:
+        marker = int(certificate.renew_after.timestamp()) if certificate.renew_after else "due"
+        idempotency_key = f"dnsman-cert-renew-{certificate.pk}-{marker}"
     return jobs.publish(
         func_path,
         payload={"certificate": certificate.pk},
-        channel=channel)
+        channel=channel,
+        idempotency_key=idempotency_key)
+
+
+def _require_delegated_profile(domain, names):
+    """Delegated v1 is deliberately only apex plus wildcard."""
+    from mojo.apps.dnsman.models.domain import PROVIDER_MOJO
+    from mojo.apps.dnsman.services import delegation
+
+    row = delegation.for_domain(domain)
+    if row is None and domain.provider != PROVIDER_MOJO:
+        return None
+    expected = sorted([domain.name, f"*.{domain.name}"])
+    if sorted(names) != expected:
+        raise me.ValueException(
+            "Delegated ACME v1 supports exactly the apex plus wildcard profile")
+    if row is None:
+        raise me.ValueException("This delegated ACME domain is not verified")
+    return row
 
 
 # ----------------------------------------------------------------------
@@ -245,21 +290,54 @@ def issue(certificate):
     which way it went. Callers that want a loud failure — the job handler,
     for one — inspect ``result.ok``.
     """
+    from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.models.certificate import (
-        STATUS_ACTIVE, STATUS_FAILED, STATUS_ISSUING)
+        STATUS_ACTIVE, STATUS_ISSUING, STATUS_PENDING)
+    from mojo.apps.dnsman.models.acme_delegation import STATE_VERIFIED
+    from mojo.apps.dnsman.services import delegation
     from mojo.apps.dnsman.services import dns
     from mojo.helpers import acme
 
+    with transaction.atomic():
+        claimed = Certificate.objects.select_for_update().select_related(
+            "domain").get(pk=certificate.pk)
+        if claimed.status == STATUS_ISSUING:
+            return objict(ok=True, certificate=claimed, skipped=True)
+        if claimed.status not in (STATUS_PENDING, STATUS_ACTIVE):
+            return objict(
+                ok=False, certificate=claimed,
+                error=f"Certificate is {claimed.status}, not issuable")
+        renewing = claimed.status == STATUS_ACTIVE
+        claimed.status = STATUS_ISSUING
+        claimed.last_error = None
+        claimed.save(update_fields=["status", "last_error", "modified"])
+
+    certificate = claimed
     domain = certificate.domain
     names = list(certificate.sans or [certificate.common_name])
-
-    certificate.status = STATUS_ISSUING
-    certificate.last_error = None
-    certificate.save()
+    delegated = delegation.for_domain(domain)
+    if delegated is None and domain.provider == "mojo":
+        return _record_issue_failure(
+            certificate, me.ValueException("This delegated ACME domain is not verified"),
+            renewing)
+    if delegated is not None:
+        if delegated.state != STATE_VERIFIED:
+            return _record_issue_failure(
+                certificate,
+                me.ValueException("The verified ACME delegation is broken"),
+                renewing)
+        try:
+            _require_delegated_profile(domain, names)
+            # Proof and any prior ambiguous cleanup happen before the CA order.
+            delegation.prove_alias(delegated)
+            _withdraw_pending_delegated_cleanup(delegated)
+        except Exception as err:
+            return _record_issue_failure(certificate, err, renewing)
 
     # (record_name, digests) actually written, so cleanup removes exactly what
     # issuance planted and nothing else.
     planted = []
+    delegated_challenge_ref = None
     try:
         account, client = _get_account()
         order = client.new_order(names)
@@ -272,19 +350,23 @@ def issue(certificate):
         # A wildcard and its base share `_acme-challenge.example.com`; writing
         # them one at a time would have the second write replace the first and
         # exactly one of the two authorizations would fail.
-        for record_name, digests in challenges.items():
-            dns.upsert_record(
-                domain, "TXT", record_name, list(digests), ttl=CHALLENGE_TTL)
-            planted.append((record_name, list(digests)))
+        if delegated is not None:
+            delegated_challenge_ref = _publish_delegated_challenges(
+                delegated, challenges)
+        else:
+            for record_name, digests in challenges.items():
+                dns.upsert_record(
+                    domain, "TXT", record_name, list(digests), ttl=CHALLENGE_TTL)
+                planted.append((record_name, list(digests)))
 
-        for record_name, digests in challenges.items():
-            ok, seen = dns.wait_for_propagation(
-                domain, "TXT", record_name, list(digests))
-            if not ok:
-                raise me.ValueException(
-                    f"Timed out waiting for {record_name} to publish "
-                    f"{len(digests)} challenge value(s); "
-                    f"saw {list(seen or []) or 'nothing'}")
+            for record_name, digests in challenges.items():
+                ok, seen = dns.wait_for_propagation(
+                    domain, "TXT", record_name, list(digests))
+                if not ok:
+                    raise me.ValueException(
+                        f"Timed out waiting for {record_name} to publish "
+                        f"{len(digests)} challenge value(s); "
+                        f"saw {list(seen or []) or 'nothing'}")
 
         for challenge_url in answers:
             client.answer_challenge(challenge_url)
@@ -324,23 +406,120 @@ def issue(certificate):
         certificate.last_error = None
         certificate.save()
     except Exception as err:
-        certificate.status = STATUS_FAILED
-        certificate.last_error = str(err)
-        certificate.attempts = (certificate.attempts or 0) + 1
-        certificate.save()
-        logit.error(
-            f"dnsman: certificate {certificate.pk} ({certificate.common_name}) "
-            f"issuance failed: {err}")
-        return objict(ok=False, certificate=certificate, error=str(err))
+        return _record_issue_failure(certificate, err, renewing)
     finally:
         # Success or failure, the challenge records go away.
-        cleanup_challenges(domain, planted)
+        if delegated is not None:
+            # `_publish_delegated_challenges` stores the ref on `delegated`
+            # before its remote call.  If that call times out, it cannot return
+            # the ref, but finally still has the durable/object intent.
+            cleanup_ref = (
+                delegated_challenge_ref
+                or delegated.cleanup_challenge_ref)
+            if cleanup_ref:
+                _withdraw_delegated_cleanup(delegated, cleanup_ref)
+        else:
+            cleanup_challenges(domain, planted)
 
     publish_sync(certificate)
     logit.info(
         f"dnsman: issued {certificate.common_name} "
         f"(expires {certificate.not_after}, renew after {certificate.renew_after})")
     return objict(ok=True, certificate=certificate)
+
+
+def _retry_seconds(attempts):
+    try:
+        base = int(settings.get(
+            "DNSMAN_CERT_RETRY_BASE_SECONDS", DEFAULT_RETRY_BASE_SECONDS))
+    except (TypeError, ValueError):
+        base = DEFAULT_RETRY_BASE_SECONDS
+    base = min(max(base, 60), MAX_RETRY_SECONDS)
+    return min(base * (2 ** max((attempts or 1) - 1, 0)), MAX_RETRY_SECONDS)
+
+
+def _record_issue_failure(certificate, error, renewing):
+    """Persist a failure without destroying a still-valid active certificate."""
+    from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE, STATUS_FAILED
+
+    certificate.refresh_from_db()
+    attempts = (certificate.attempts or 0) + 1
+    still_valid = bool(
+        renewing
+        and certificate.not_after
+        and certificate.not_after > dates.utcnow()
+        and certificate.cert_pem
+        and certificate.mojo_secrets)
+    certificate.status = STATUS_ACTIVE if still_valid else STATUS_FAILED
+    certificate.last_error = str(error)
+    certificate.attempts = attempts
+    if still_valid:
+        certificate.renew_after = dates.utcnow() + timedelta(
+            seconds=_retry_seconds(attempts))
+    certificate.save(update_fields=[
+        "status", "last_error", "attempts", "renew_after", "modified"])
+    logit.error(
+        f"dnsman: certificate {certificate.pk} ({certificate.common_name}) "
+        f"issuance failed: {error}")
+    return objict(ok=False, certificate=certificate, error=str(error))
+
+
+def _publish_delegated_challenges(row, challenges):
+    from mojo.apps.dnsman.models import AcmeDelegation
+    from mojo.apps.dnsman.services import acme_hub_client, delegation
+    from mojo.helpers.dns import probe
+
+    if set(challenges) != {row.source_name}:
+        raise me.ValueException(
+            "Delegated ACME authorizations did not match the immutable source")
+    digests = list(challenges[row.source_name])
+    challenge_ref = uuid.uuid4().hex
+
+    # Commit cleanup intent before the ambiguous remote publish call.
+    AcmeDelegation.objects.filter(pk=row.pk).update(
+        cleanup_challenge_ref=challenge_ref,
+        cleanup_requested_at=dates.utcnow(),
+        modified=dates.utcnow())
+    row.cleanup_challenge_ref = challenge_ref
+    row.cleanup_requested_at = dates.utcnow()
+
+    result = acme_hub_client.publish(
+        str(row.client_ref), challenge_ref, digests)
+    delegation.compare_challenge_result(row, result, challenge_ref)
+    ok, seen = probe.wait_for_txt(row.target_name, digests)
+    if not ok:
+        raise me.ValueException(
+            f"Timed out waiting for the delegated ACME target to publish "
+            f"{len(digests)} challenge value(s); saw "
+            f"{len(list(seen or []))} value(s)")
+    return challenge_ref
+
+
+def _withdraw_pending_delegated_cleanup(row):
+    if row.cleanup_challenge_ref:
+        _withdraw_delegated_cleanup(row, row.cleanup_challenge_ref, raise_errors=True)
+
+
+def _withdraw_delegated_cleanup(row, challenge_ref, raise_errors=False):
+    from mojo.apps.dnsman.models import AcmeDelegation
+    from mojo.apps.dnsman.services import acme_hub_client, delegation
+
+    try:
+        result = acme_hub_client.withdraw(str(row.client_ref), challenge_ref)
+        delegation.compare_challenge_result(row, result, challenge_ref)
+        AcmeDelegation.objects.filter(
+            pk=row.pk, cleanup_challenge_ref=challenge_ref).update(
+                cleanup_challenge_ref=None,
+                cleanup_requested_at=None,
+                modified=dates.utcnow())
+        row.cleanup_challenge_ref = None
+        row.cleanup_requested_at = None
+    except Exception as err:
+        logit.error(
+            f"dnsman: could not withdraw delegated ACME challenge for "
+            f"delegation {row.pk}: {err}")
+        if raise_errors:
+            raise
 
 
 def _collect_challenges(client, order):
@@ -462,9 +641,9 @@ def renew_due(now=None):
     """
     Queue a renewal job for every active certificate past its renew_after.
 
-    Returns ``objict(count, certificates, jobs)``. Idempotent enough to run on
-    a schedule: a certificate already being reissued moves off ``active`` and
-    stops matching.
+    Returns ``objict(count, certificates, jobs)``. Jobs carry an idempotency
+    key derived from the certificate and current renewal deadline, so
+    overlapping scans converge on one queued job.
     """
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE

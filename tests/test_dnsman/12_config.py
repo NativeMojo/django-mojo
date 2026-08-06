@@ -37,7 +37,8 @@ def test_config_reports_purchase_state(opts):
 
     for key in ("registrant_contact_configured", "max_domain_price", "currency",
                 "quote_ttl_minutes", "allowed_record_types", "providers", "acme",
-                "cert_renew_days", "search_batch_limit", "suggestions_enabled"):
+                "delegated_acme", "cert_renew_days", "search_batch_limit",
+                "suggestions_enabled"):
         assert key in body, f"config response is missing {key!r}"
 
     assert isinstance(body["registrant_contact_configured"], bool), \
@@ -62,6 +63,15 @@ def test_config_reports_purchase_state(opts):
     # a publicly-untrusted cert apart from a production-issued one.
     assert body["acme"]["staging"] is True, \
         "acme.staging should be True against the default (unconfigured) directory"
+
+    delegated = body["delegated_acme"]
+    assert delegated == {
+        "available": False,
+        "record_type": "CNAME",
+        "target_suffix": None,
+        "profile": "apex_wildcard",
+        "requires_provider_credentials": False,
+    }, f"delegated ACME capability shape is incomplete or unsafe: {delegated}"
 
 
 @th.django_unit_test("config never echoes the registrant contact or any secret")

@@ -132,13 +132,14 @@ def _rdata_host(rdata):
     return normalize_name(rdata)
 
 
-def query_cname(fqdn, timeout=QUERY_TIMEOUT):
-    """Resolve only the CNAME RRset directly attached to ``fqdn``.
+def query_cname(fqdn, nameservers=None, timeout=QUERY_TIMEOUT):
+    """Query the directly attached CNAME RRset at authoritative servers.
 
-    The system resolver is suitable here because this is proof of the
-    tenant-controlled public delegation, not propagation verification for a
-    record the hub just wrote.  Missing names and names without a CNAME return
-    an empty target list; transport/resolver failures remain distinguishable.
+    A recursive answer is not ownership proof: it may be stale, synthesized,
+    or served from a cache after the authoritative value changed.  Resolve the
+    closest public DNS cut, pin a resolver to those server addresses, and ask
+    for CNAME specifically.  Missing names/RRsets are clean empty answers;
+    authority discovery and transport failures remain distinguishable.
     """
     if not DNS_AVAILABLE:
         return objict(targets=[], error="dnspython not installed")
@@ -146,19 +147,36 @@ def query_cname(fqdn, timeout=QUERY_TIMEOUT):
     name = normalize_name(fqdn)
     if not name:
         return objict(targets=[], error="invalid name")
+    zone = None
+    addresses = list(nameservers) if nameservers else []
+    if not addresses:
+        found = find_zone_nameservers(name, timeout=timeout)
+        if found.error:
+            return objict(targets=[], zone=None, nameservers=[], error=found.error)
+        zone = found.zone
+        addresses = resolve_nameserver_addresses(
+            found.nameservers, timeout=timeout)
+        if not addresses:
+            return objict(
+                targets=[], zone=zone, nameservers=[],
+                error=f"could not resolve any nameserver address for zone {zone}")
+
     try:
-        answers = _default_resolver(timeout).resolve(name, "CNAME")
+        answers = _pinned_resolver(addresses, timeout).resolve(name, "CNAME")
     except (dns_resolver.NXDOMAIN, dns_resolver.NoAnswer):
-        return objict(targets=[], error=None)
+        return objict(
+            targets=[], zone=zone, nameservers=addresses, error=None)
     except Exception as err:
-        return objict(targets=[], error=str(err))
+        return objict(
+            targets=[], zone=zone, nameservers=addresses, error=str(err))
 
     targets = []
     for rdata in answers:
         target = _rdata_host(rdata)
         if target and target not in targets:
             targets.append(target)
-    return objict(targets=targets, error=None)
+    return objict(
+        targets=targets, zone=zone, nameservers=addresses, error=None)
 
 
 def verify_one_hop_cname(source, expected_target, timeout=QUERY_TIMEOUT):

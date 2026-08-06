@@ -19,6 +19,7 @@ from mojo.apps.dnsman.models.domain import PROVIDER_ROUTE53, PROVIDER_GODADDY
 from mojo.apps.dnsman.services import registrar
 from mojo.apps.dnsman.services import dns as dns_service
 from mojo.apps.dnsman.services import certs
+from mojo.apps.dnsman.services import delegation
 
 
 def _registrant_contact_configured(group=None):
@@ -49,6 +50,15 @@ def get_config(group=None):
             # server could embed a token in its path. staging is derived by
             # comparison only.
             staging=(directory_url == acme.LETSENCRYPT_STAGING),
+        ),
+        delegated_acme=dict(
+            available=delegation.is_available(),
+            record_type="CNAME",
+            # The hub target is opaque and is returned by initiation; the
+            # downstream transport has no zone-discovery/general DNS surface.
+            target_suffix=None,
+            profile="apex_wildcard",
+            requires_provider_credentials=False,
         ),
         cert_renew_days=certs.renew_days(),
     )

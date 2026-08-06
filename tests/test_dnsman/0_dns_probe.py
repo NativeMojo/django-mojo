@@ -109,6 +109,24 @@ def _zone_answers(txt_records=None):
     return answers
 
 
+def _cname_answers(target="opaque.acme-hub.example.net", chained=None):
+    """Two authoritative cuts plus the tenant's direct CNAME."""
+    import dns.resolver as real_resolver
+
+    answers = {
+        ("_acme-challenge.example.com", "NS"): real_resolver.NoAnswer(),
+        ("example.com", "NS"): [FakeNS("ns1.example.net")],
+        ("ns1.example.net", "A"): [FakeAddress("192.0.2.10")],
+        ("_acme-challenge.example.com", "CNAME"): [FakeCNAME(target)],
+        (target, "NS"): real_resolver.NoAnswer(),
+        ("acme-hub.example.net", "NS"): [FakeNS("ns1.hub.example")],
+        ("ns1.hub.example", "A"): [FakeAddress("192.0.2.20")],
+    }
+    if chained is not None:
+        answers[(target, "CNAME")] = [FakeCNAME(chained)]
+    return answers
+
+
 # ---------------------------------------------------------------------------
 # zone walk-up
 # ---------------------------------------------------------------------------
@@ -169,10 +187,7 @@ def test_find_zone_nameservers_reports_error_when_no_zone_found(opts):
 def test_verify_one_hop_cname_accepts_exact_direct_target(opts):
     from mojo.helpers.dns import probe
 
-    answers = {
-        ("_acme-challenge.example.com", "CNAME"): [
-            FakeCNAME("opaque.acme-hub.example.net")],
-    }
+    answers = _cname_answers()
     fake = _fake_dns(answers)
     with mock.patch.object(probe, "dns_resolver", fake):
         result = probe.verify_one_hop_cname(
@@ -184,21 +199,21 @@ def test_verify_one_hop_cname_accepts_exact_direct_target(opts):
 
 @th.django_unit_test()
 def test_verify_one_hop_cname_rejects_wrong_or_chained_target(opts):
+    import dns.resolver as real_resolver
     from mojo.helpers.dns import probe
 
-    wrong = {
-        ("_acme-challenge.example.com", "CNAME"): [FakeCNAME("wrong.example.net")],
-    }
+    wrong = _cname_answers(target="wrong.example.net")
+    wrong.update({
+        ("wrong.example.net", "NS"): real_resolver.NoAnswer(),
+        ("example.net", "NS"): [FakeNS("ns1.wrong.example")],
+        ("ns1.wrong.example", "A"): [FakeAddress("192.0.2.30")],
+    })
     with mock.patch.object(probe, "dns_resolver", _fake_dns(wrong)):
         result = probe.verify_one_hop_cname(
             "_acme-challenge.example.com", "opaque.acme-hub.example.net")
     assert result.ok is False, "Expected a CNAME to the wrong target to fail"
 
-    chained = {
-        ("_acme-challenge.example.com", "CNAME"): [
-            FakeCNAME("opaque.acme-hub.example.net")],
-        ("opaque.acme-hub.example.net", "CNAME"): [FakeCNAME("third.example.net")],
-    }
+    chained = _cname_answers(chained="third.example.net")
     with mock.patch.object(probe, "dns_resolver", _fake_dns(chained)):
         result = probe.verify_one_hop_cname(
             "_acme-challenge.example.com", "opaque.acme-hub.example.net")

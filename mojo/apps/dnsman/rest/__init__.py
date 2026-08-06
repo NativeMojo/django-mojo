@@ -7,3 +7,4 @@ from .dns import *
 from .whois import *
 from .certificate import *
 from .acme_hub import *
+from .delegation import *

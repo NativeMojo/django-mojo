@@ -112,6 +112,25 @@ def test_get_adapter_refuses_an_unknown_provider(opts):
         f"Expected the refusal to name the unknown provider, got {raised}")
 
 
+@th.django_unit_test()
+def test_mojo_provider_is_certificate_only_not_general_dns(opts):
+    from mojo.apps.dnsman.models import Domain
+    from mojo.apps.dnsman.services import dns
+
+    domain = Domain(
+        name="delegated-only.example", provider="mojo", status="active",
+        verified=True)
+    assert domain.requires_credential is False, \
+        "delegated ACME must not ask a tenant for provider credentials"
+    try:
+        dns.get_adapter(domain)
+    except Exception as error:
+        assert "unknown dns provider" in str(error).lower(), \
+            f"mojo must stay outside general DNS CRUD, got {error}"
+    else:
+        assert False, "mojo must never resolve to a general DnsProvider adapter"
+
+
 # ---------------------------------------------------------------------------
 # parity — the same logical upsert on both providers
 # ---------------------------------------------------------------------------
