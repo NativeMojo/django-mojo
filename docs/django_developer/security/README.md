@@ -115,6 +115,7 @@ Categories are hierarchical strings using `:` as separator. The rule engine matc
 | `system:health:cpu` | Health | CPU threshold exceeded |
 | `system:health:memory` | Health | Memory threshold exceeded |
 | `system:health:disk` | Health | Disk threshold exceeded |
+| `system:health:aws_versions` | Health | AWS managed-service major version drift (opt-in) |
 | `api_error` | App | Application error (default category) |
 | `invalid_password` | Auth | Wrong password for known user |
 | `totp:login_failed` | Auth | TOTP MFA failure |
@@ -806,6 +807,12 @@ The health monitoring system runs every 3 minutes (when enabled) and reports inf
 | Memory usage | `system:health:memory` | 8 | > `HEALTH_MEM_CRIT` (default 90%) |
 | Disk usage | `system:health:disk` | 8 | > `HEALTH_DISK_CRIT` (default 85%) |
 
+A seventh health category, `system:health:aws_versions`, is filed by a separate
+opt-in daily job rather than by `check_system_health` — see
+[AWS version drift](../aws/version_drift.md). It appears on the same
+`/api/incident/health/summary` strip, at level 4 (inventory incomplete), 5
+(major upgrade available), 8 (support deadline near) or 10 (deadline passed).
+
 ### Enable Health Monitoring
 
 ```python
@@ -955,6 +962,14 @@ Every blocking rule a legitimate user could trip carries a `trigger_count`, so o
 | Runner Down | `system:health:runner` | level >= 10 | `notify://perm@manage_security,ticket://?priority=9` | HOSTNAME, 30min |
 | Scheduler Missing | `system:health:scheduler` | level >= 10 | `notify://perm@manage_security,ticket://?priority=9` | NONE, 60min |
 | TCP Overload | `system:health:tcp` | level >= 8 | `notify://perm@manage_security` | HOSTNAME, 30min |
+| AWS Version Drift | `aws:versions` (matched by event **scope**) | level >= 5 | `notify://perm@manage_security,ticket://?priority=8&category=aws-version-drift&maestro=1` | NONE |
+
+`ensure_health_rules()` creates the first three. The AWS one is opt-in
+(`RuleSet.ensure_aws_version_rules()` or `aws-check --apply --section rules`)
+and deliberately sits on `aws:versions` rather than inside the
+`system:health:` namespace, so it can never satisfy the health-defaults
+bootstrap guard in `mojo/apps/incident/cronjobs.py` and suppress the three
+above.
 
 Health rules **never** use `block://` — infrastructure issues should not block IPs.
 

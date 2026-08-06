@@ -160,6 +160,17 @@ GET /api/incident/health/summary
 
 Rows are sorted by `category`. Only subsystems that have ever fired a health event appear — the list is self-discovering. An empty `data` array means no health events have been recorded yet.
 
+One extra category can appear here on AWS deployments that opt in:
+`system:health:aws_versions`, filed at most once a day when a managed RDS,
+Aurora or ElastiCache service has a major version upgrade available. Its
+`level` is 4 (the inventory was incomplete because an AWS API was denied), 5
+(upgrade available, no near deadline), 8 (AWS standard support ends soon) or
+10 (support has already ended). The finding rows themselves are in the
+event's metadata (`findings`, each with `resource_id`, `engine`,
+`current_version`, `available_major`, `deadline`, `extended_deadline` and
+`days_remaining`), so a UI can render the per-resource detail without a
+second call.
+
 **Optional `?prefix=` param** — defaults to `system:health:`. Pass a different prefix to query other namespaced category roots:
 
 ```
@@ -396,6 +407,7 @@ These are the built-in detection sources. Your app can add custom events via the
 | MFA failures | `totp:login_failed` | 1 | MFA bypass attempt |
 | OSSEC alerts | `ossec` | varies | OS-level threats |
 | System health | `system:health:{type}` | 5-10 | Infrastructure issues |
+| AWS version drift | `system:health:aws_versions` | 4-10 | Managed service on a major version losing support |
 
 ## Configuring RuleSets
 

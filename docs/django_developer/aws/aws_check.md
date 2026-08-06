@@ -70,7 +70,13 @@ remediation/changed items:
 | `s3` | one system-default S3 FileManager, bucket/region/IAM, Public Access Block, CORS and optional sentinel |
 | `email` | SES identity/DKIM/sandbox/topics/receiving audit, outbound Mailbox and shipped templates |
 | `monitoring` | owned SNS topic, exact static allowlist, HTTPS subscription, owned alarms and receiver receipt |
-| `rules` | opt-in create-only CloudWatch incident policy |
+| `rules` | opt-in create-only CloudWatch and version-drift incident policies |
+| `versions` | **opt-in** managed-service major version drift (RDS/Aurora, ElastiCache) — never part of a default run, and never reports FAIL |
+
+`versions` is the one section that is not in the default set: select it with
+`--section versions`. It can only report PASS, WARN or PENDING, so a run made
+before its extra IAM actions are granted cannot exit 1 in CI. See
+[version_drift.md](version_drift.md).
 
 Credential material is never prompted, printed or persisted by this command.
 If a FileManager or EmailDomain has stored credentials, its STS account/region
@@ -163,6 +169,14 @@ model and ID. Its handler is `notify://perm@manage_security`; it does not page,
 open a direct ticket, block an IP, or bypass the incident lifecycle. The normal
 global default-rule seeder never installs it on non-AWS deployments.
 
+The `rules` section reports and can create a **second** opt-in RuleSet,
+`Health - AWS Version Drift` in category `aws:versions`, whose handler is
+`notify://perm@manage_security,ticket://?priority=8&category=aws-version-drift&maestro=1`.
+It does **not** sit behind the `monitoring_ready` / `delivery_seen` gate above:
+that gate exists because CloudWatch alarms need a confirmed SNS receiver,
+whereas version-drift events are generated in-process. See
+[version_drift.md](version_drift.md).
+
 ## Least-privilege IAM actions
 
 Grant only actions for the selected sections and scope resource ARNs wherever
@@ -178,6 +192,7 @@ AWS supports it:
 | SES/email create-missing | `ses:VerifyDomainIdentity`, `ses:VerifyDomainDkim`, `ses:SetIdentityNotificationTopic`, `sns:ListTopics`, `sns:ListTagsForResource`, `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe` |
 | Monitoring audit | `sns:ListTopics`, `sns:ListTagsForResource`, `sns:ListSubscriptionsByTopic`, `cloudwatch:DescribeAlarms`, `cloudwatch:ListTagsForResource`, `ec2:DescribeInstances`, `rds:DescribeDBInstances`, `elasticache:DescribeCacheClusters` |
 | Monitoring apply | `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe`, `cloudwatch:PutMetricAlarm`, `cloudwatch:TagResource` |
+| Versions audit (opt-in) | `rds:DescribeDBClusters`, `rds:DescribeDBInstances`, `rds:DescribeDBEngineVersions`, `rds:DescribeDBMajorEngineVersions`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeCacheEngineVersions` |
 
 Cron, rule, mailbox and template checks use Django database/Redis access rather
 than IAM. The command never deletes AWS resources, edits deployment files,

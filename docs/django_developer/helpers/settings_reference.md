@@ -219,6 +219,14 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   the static `BASE_URL` hostname.
 - `AWS_CHECK_CRON_MAX_AGE` — **file-only**, default `180` seconds. Maximum age
   of a completed cron-dispatch heartbeat accepted by `aws-check`.
+- `AWS_VERSION_DRIFT_ENABLED` — **file-only** (`settings.get_static`), bool,
+  default `False`. Arms the daily managed-service version drift scan
+  (`mojo.apps.aws.cronjobs.check_version_drift`). Read inside the cron
+  function, so it is not frozen at import.
+- `AWS_VERSION_DRIFT_DEADLINE_DAYS` — **file-only**, int, default `180`. A
+  published standard-support end date this close (or closer) raises the drift
+  event to level 8; an already-past date is level 10. See
+  [../aws/version_drift.md](../aws/version_drift.md).
 - `AWS_KEY`
 - `AWS_REGION`
 - `AWS_SECRET`
