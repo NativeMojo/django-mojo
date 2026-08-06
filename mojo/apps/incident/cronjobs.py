@@ -7,12 +7,27 @@ LLM_TRIAGE_ENABLED = settings.get_static("LLM_HANDLER_API_KEY", None)
 
 _health_defaults_checked = False
 
+# The exact RuleSet names ensure_health_rules() creates. The guard below must
+# match on these, never on the `system:health:` category prefix: any other
+# RuleSet in that namespace — one created by `aws-check --apply`, which the
+# shipped docs run BEFORE the cron — would make a prefix guard permanently
+# true, so Runner Down / Scheduler Missing / TCP Overload would never be
+# installed and a level-10 runner-down event would fall through to the
+# handler-less catch-all: no notify, no ticket.
+HEALTH_RULE_NAMES = (
+    "Health - Runner Down",
+    "Health - Scheduler Missing",
+    "Health - TCP Connection Overload",
+)
+
 def _ensure_health_defaults():
     global _health_defaults_checked
     if not _health_defaults_checked:
         try:
             from mojo.apps.incident.models import RuleSet
-            if not RuleSet.objects.filter(category__startswith="system:health:").exists():
+            installed = set(RuleSet.objects.filter(
+                name__in=HEALTH_RULE_NAMES).values_list("name", flat=True))
+            if installed != set(HEALTH_RULE_NAMES):
                 RuleSet.ensure_health_rules()
         except Exception:
             pass

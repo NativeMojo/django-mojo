@@ -301,6 +301,34 @@ class RuleSet(models.Model, MojoModel):
         )
 
     @classmethod
+    def ensure_aws_version_rules(cls):
+        """Create the opt-in AWS managed-service version drift policy.
+
+        The category is `aws:versions`, NOT the event's
+        `system:health:aws_versions` — a RuleSet inside the `system:health:`
+        namespace would satisfy the incident cronjob's health-defaults
+        bootstrap guard and suppress the real health rules. Events reach this
+        RuleSet through their `scope`, exactly like the CloudWatch policy.
+
+        Never added to ensure_default_rules(): like ensure_cloudwatch_rules it
+        stays opt-in so non-AWS deployments never get it.
+        """
+        from mojo.apps.aws.services.version_drift import RULESET_CATEGORY
+        return cls._create_ruleset(
+            category=RULESET_CATEGORY,
+            name="Health - AWS Version Drift",
+            priority=5,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.NONE,
+            handler="notify://perm@manage_security,ticket://?priority=8&category=aws-version-drift&maestro=1",
+            rules=[
+                # Level 1 is "everything is current" — it must never open a ticket.
+                {"name": "Level >= 5", "field_name": "level",
+                 "comparator": ">=", "value": "5", "value_type": "int"},
+            ],
+        )
+
+    @classmethod
     def ensure_catchall_rules(cls):
         """
         Create a catch-all RuleSet that matches any event without a specific ruleset.
