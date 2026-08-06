@@ -32,7 +32,7 @@ class FileManager(MojoSecrets, MojoModel):
 
         GRAPHS = {
             "default": {
-                "extra": ["aws_region", "aws_key", "aws_secret_masked", "allowed_origins"],
+                "extra": ["aws_region", "aws_key_masked", "aws_secret_masked", "allowed_origins"],
                 "fields": [
                     "created", "id", "name", "use", "backend_type", "backend_url",
                     "is_active", "is_default", "is_public"],
@@ -42,13 +42,20 @@ class FileManager(MojoSecrets, MojoModel):
                 }
             },
             "list": {
-                "extra": ["aws_region", "aws_key", "aws_secret_masked", "allowed_origins"],
+                "extra": ["aws_region", "aws_key_masked", "aws_secret_masked", "allowed_origins"],
                 "fields": ["created", "id", "name", "use", "backend_type",  "backend_url",
                     "is_active", "is_default", "is_public"],
                 "graphs": {
                     "user": "basic",
                     "group": "basic"
                 }
+            },
+            "basic": {
+                "extra": ["aws_region", "aws_key_masked", "aws_secret_masked", "allowed_origins"],
+                "fields": [
+                    "id", "name", "use", "backend_type", "backend_url",
+                    "is_active", "is_default", "is_public"
+                ]
             }
         }
 
@@ -257,6 +264,7 @@ class FileManager(MojoSecrets, MojoModel):
 
     @property
     def aws_key(self):
+        """Raw access key for trusted backend use; never expose in a REST graph."""
         return self.get_secret('aws_key')
 
     @property
@@ -264,11 +272,18 @@ class FileManager(MojoSecrets, MojoModel):
         return self.get_secret('aws_secret')
 
     @property
+    def aws_key_masked(self):
+        key = self.get_secret('aws_key', '') or ''
+        if len(key) > 4:
+            return '*' * (len(key) - 4) + key[-4:]
+        return '*' * len(key)
+
+    @property
     def aws_secret_masked(self):
-        secret = self.get_secret('aws_secret', '')
+        secret = self.get_secret('aws_secret', '') or ''
         if len(secret) > 4:
             return '*' * (len(secret) - 4) + secret[-4:]
-        return secret
+        return '*' * len(secret)
 
     @property
     def aws_region(self):
