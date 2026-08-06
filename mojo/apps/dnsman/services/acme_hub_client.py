@@ -289,6 +289,9 @@ def _response_data(response):
             chunks.append(bytes(chunk))
     except AcmeHubClientError:
         raise
+    except requests.exceptions.RequestException:
+        raise AcmeHubTransportError(
+            "ACME hub response timed out or lost its connection")
     except Exception:
         raise AcmeHubResponseError("ACME hub response could not be read")
     content = b"".join(chunks)
@@ -349,7 +352,12 @@ def _post(operation, payload):
                     kind="redirect")
             if status != 200:
                 raise _http_error(status)
-            return _response_data(response)
+            try:
+                return _response_data(response)
+            except AcmeHubTransportError:
+                if attempt + 1 < attempts:
+                    continue
+                raise
         finally:
             response.close()
     raise AcmeHubTransportError("ACME hub request failed")

@@ -248,6 +248,17 @@ def test_bounded_retry_policy(opts):
     second = post.call_args_list[1]
     assert first == second, "a retry must replay the exact same URL, headers, payload and timeouts"
 
+    broken_body = FakeResponse(_envelope(_allocation_data()))
+    broken_body.iter_content = mock.Mock(
+        side_effect=real_requests.exceptions.ChunkedEncodingError("partial response"))
+    success_after_body = FakeResponse(_envelope(_allocation_data()))
+    with _hub_settings(), mock.patch.object(
+            client.requests, "post", side_effect=[broken_body, success_after_body]) as post:
+        result = client.allocate(DOMAIN, CLIENT_REF)
+    assert result.success is True and post.call_count == 2, \
+        "a partial/read-ambiguous response body should retry the identical request once"
+    assert broken_body.closed is True, "a partial response must be closed before retrying"
+
     unavailable = FakeResponse({"ignored": True}, status_code=503)
     with _hub_settings(), mock.patch.object(
             client.requests, "post", side_effect=[unavailable, success]) as post:
