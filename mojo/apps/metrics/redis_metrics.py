@@ -201,9 +201,10 @@ def fetch_values(slugs, when=None, granularity="hours", redis_con=None, account=
 # ===========
 
 def add_metrics_slug(slug, redis_con=None, account="global"):
-    """Index a metric slug for the account (set membership is single-key, so fine)."""
+    """Index the account and its metric slug with idempotent set membership."""
     if redis_con is None:
         redis_con = redis.get_connection()
+    redis_con.sadd(utils.generate_accounts_key(), account)
     redis_con.sadd(utils.generate_slugs_key(account), slug)
 
 
