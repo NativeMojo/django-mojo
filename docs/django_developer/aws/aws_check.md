@@ -102,11 +102,32 @@ The command uses the signed receiver already exposed at
 
 Default alarms are EC2 `StatusCheckFailed` Maximum >= 1 for 2 of 2 one-minute
 periods; EC2/RDS/ElastiCache `CPUUtilization` Average >= 90% for 3 of 3
-five-minute periods; and RDS `FreeStorageSpace` Average <= 10 GiB for 3 of 3
-five-minute periods. They use stable names, ownership tags,
-`TreatMissingData=notBreaching`, and ALARM/OK actions. Connection counts and
-CWAgent memory/disk are not guessed because portable thresholds/dimensions do
-not exist.
+five-minute periods; and, on **non-Aurora RDS engines only**, `FreeStorageSpace`
+Average <= 10 GiB for 3 of 3 five-minute periods. They use stable names,
+ownership tags, `TreatMissingData=notBreaching`, and ALARM/OK actions.
+Connection counts and CWAgent memory/disk are not guessed because portable
+thresholds/dimensions do not exist.
+
+Aurora (`aurora`, `aurora-mysql`, `aurora-postgresql`, and any future `aurora-*`
+engine) publishes **no per-instance free-space metric** — its storage is a shared
+auto-scaling cluster volume, and local scratch space is reported as
+`FreeLocalStorage`, whose safe threshold varies by instance class. A
+`FreeStorageSpace` alarm on an Aurora instance therefore never receives a
+datapoint and, with `TreatMissingData=notBreaching`, sits permanently green while
+monitoring nothing. `aws-check` no longer creates one and instead reports the
+gap explicitly:
+
+| Code | Status | Meaning |
+|---|---|---|
+| `alarms.aurora_storage_unmonitored` | WARN | Aurora instances were discovered and have no storage alarm. Details list the instance ids. Add a `FreeLocalStorage` alarm sized to each instance class, or watch the cluster volume in the RDS console. |
+| `alarms.stale_aurora_storage` | WARN | Owned `FreeStorageSpace` alarms created by an earlier django-mojo version still exist on Aurora instances. Details list the exact alarm names and remediation gives the `aws cloudwatch delete-alarms --alarm-names ...` command. |
+
+Both are reported before the SNS allowlist and subscription-confirmation gates,
+so a half-configured deployment still sees them. `aws-check` never deletes AWS
+resources, so the stale alarms must be removed by hand; an owned alarm on the
+reserved name that has already been hand-edited to a different metric (for
+example `FreeLocalStorage`) is preserved and reported as `alarms.drifted`
+instead.
 
 The topic name is `django-mojo-<deployment>-operations`; alarm names are
 `django-mojo/<deployment>/<resource-type>/<resource-id>/<signal>`. Owned
