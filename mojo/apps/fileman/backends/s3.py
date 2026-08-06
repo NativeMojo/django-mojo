@@ -1,5 +1,4 @@
-import boto3
-from botocore.exceptions import ClientError, NoCredentialsError
+from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
 from botocore.client import Config
 from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime, timedelta
@@ -11,6 +10,8 @@ import json
 import fnmatch
 import requests
 
+from mojo.helpers.aws.client import get_session, get_assumed_session
+
 from .base import StorageBackend
 
 
@@ -18,6 +19,10 @@ class S3StorageBackend(StorageBackend):
     """
     AWS S3 storage backend implementation
     """
+
+    # Declared on the class as well as in __init__ because some callers build a
+    # backend with object.__new__ and never run __init__.
+    _session = None
 
     def __init__(self, file_manager, **kwargs):
         super().__init__(file_manager, **kwargs)
@@ -33,6 +38,15 @@ class S3StorageBackend(StorageBackend):
         self.region_name = self.get_setting('aws_region', 'us-east-1')
         self.access_key_id = self.get_setting('aws_key')
         self.secret_access_key = self.get_setting('aws_secret')
+
+        # Cross-account access. When assume_role_arn is set the credentials
+        # above (or the ambient default chain when they are unset) are only the
+        # source identity used to call sts:AssumeRole.
+        self.assume_role_arn = self.get_setting('assume_role_arn')
+        self.external_id = self.get_setting('external_id')
+        self.role_session_name = self.get_setting('role_session_name')
+        self.assume_role_duration = self.get_setting('assume_role_duration')
+
         self.endpoint_url = self.get_setting('endpoint_url') or f"https://s3.{self.region_name}.amazonaws.com"
         self.signature_version = self.get_setting('signature_version', 's3v4')
         self.addressing_style = self.get_setting('addressing_style', 'auto')
@@ -48,18 +62,63 @@ class S3StorageBackend(StorageBackend):
         self.kms_key_id = self.get_setting('kms_key_id')
 
         # Initialize S3 client
+        self._session = None
         self._client = None
         self._resource = None
+
+    def _build_session(self):
+        """One session per backend, shared by every client it hands out."""
+        if self._session is None:
+            if self.assume_role_arn:
+                self._session = get_assumed_session(
+                    self.assume_role_arn,
+                    region=self.region_name,
+                    external_id=self.external_id,
+                    session_name=self.role_session_name or f"django-mojo-fileman-{self.file_manager.pk}",
+                    duration=self.assume_role_duration,
+                    access_key=self.access_key_id,
+                    secret_key=self.secret_access_key,
+                )
+            else:
+                self._session = get_session(
+                    access_key=self.access_key_id,
+                    secret_key=self.secret_access_key,
+                    region=self.region_name,
+                )
+        return self._session
+
+    def _credential_seconds_remaining(self):
+        """Seconds of life left in the signing credential, or None if unbounded."""
+        try:
+            credentials = self._build_session()._session.get_credentials()
+            if credentials is None:
+                return None
+            # Resolve the deferred AssumeRole call so an expiry actually exists.
+            credentials.get_frozen_credentials()
+            return credentials._seconds_remaining()
+        except Exception:
+            return None
+
+    def _clamp_expires_in(self, expires_in):
+        """Never sign a URL that outlives the credentials that signed it.
+
+        A presigned URL made with STS temporary credentials stops working the
+        moment those credentials expire, whatever its own ExpiresIn says. Under
+        an assumed role the live credential is refreshed 10-15 minutes ahead of
+        expiry, so the usable window is whatever is left right now.
+        """
+        if not self.assume_role_arn or not expires_in:
+            return expires_in
+        remaining = self._credential_seconds_remaining()
+        if remaining is None:
+            return expires_in
+        return max(1, min(int(expires_in), int(remaining)))
 
     @property
     def client(self):
         """Lazy initialization of S3 client"""
         if self._client is None:
-            session = boto3.Session(
-                aws_access_key_id=self.access_key_id,
-                aws_secret_access_key=self.secret_access_key,
-                region_name=self.region_name
-            )
+            session = self._build_session()
 
             config = Config(
                 signature_version=self.signature_version,
@@ -86,11 +145,7 @@ class S3StorageBackend(StorageBackend):
     def resource(self):
         """Lazy initialization of S3 resource"""
         if self._resource is None:
-            session = boto3.Session(
-                aws_access_key_id=self.access_key_id,
-                aws_secret_access_key=self.secret_access_key,
-                region_name=self.region_name
-            )
+            session = self._build_session()
 
             self._resource = session.resource(
                 's3',
@@ -184,7 +239,7 @@ class S3StorageBackend(StorageBackend):
                     'Bucket': self.bucket_name,
                     'Key': file_path
                 },
-                ExpiresIn=expires_in
+                ExpiresIn=self._clamp_expires_in(expires_in)
             )
         return url
 
@@ -224,6 +279,8 @@ class S3StorageBackend(StorageBackend):
                            expires_in: int = 3600) -> Dict[str, Any]:
         """Generate a pre-signed URL for direct upload to S3"""
         try:
+            expires_in = self._clamp_expires_in(expires_in)
+
             # Conditions for the upload
             conditions = []
 
@@ -425,16 +482,15 @@ class S3StorageBackend(StorageBackend):
         if not self.bucket_name:
             errors.append("S3 bucket name is required")
 
-        if not self.access_key_id:
-            errors.append("AWS access key ID is required")
-
-        if not self.secret_access_key:
-            errors.append("AWS secret access key is required")
+        if self.assume_role_arn and not str(self.assume_role_arn).startswith("arn:"):
+            errors.append("assume_role_arn must be an IAM role ARN (arn:...)")
 
         # Test connection if configuration looks valid
         if not errors:
             try:
                 self.client.head_bucket(Bucket=self.bucket_name)
+            except PartialCredentialsError:
+                errors.append("AWS key configured without a secret (or vice versa)")
             except NoCredentialsError:
                 errors.append("Invalid AWS credentials")
             except ClientError as e:
@@ -452,6 +508,8 @@ class S3StorageBackend(StorageBackend):
         try:
             self.client.head_bucket(Bucket=self.bucket_name)
             return True
+        except PartialCredentialsError:
+            raise ValueError("AWS key configured without a secret (or vice versa)")
         except NoCredentialsError:
             raise ValueError("Invalid AWS credentials")
         except ClientError as e:
@@ -532,11 +590,10 @@ class S3StorageBackend(StorageBackend):
         return False
 
     def _get_account_public_access_block(self):
-        session = boto3.Session(
-            aws_access_key_id=self.access_key_id,
-            aws_secret_access_key=self.secret_access_key,
-            region_name=self.region_name,
-        )
+        # Must use the same session as self.client: under an assumed role a
+        # separate session would audit a different account than the one the
+        # bucket calls actually run against.
+        session = self._build_session()
         account_id = session.client("sts").get_caller_identity()["Account"]
         response = session.client("s3control").get_public_access_block(AccountId=account_id)
         return response.get("PublicAccessBlockConfiguration") or {}
