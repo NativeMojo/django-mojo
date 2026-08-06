@@ -144,8 +144,8 @@ Slug strings are returned exactly as registered. A dimensional slug such as
 `api:request:status:200` must be passed whole to `/api/metrics/series` or
 `/api/metrics/fetch`; discovery consumers must never normalize it or keep only
 the last colon-delimited segment. `fetch_values()` and `/series` preserve full
-keys. The older multi-series `fetch()` response currently labels results by the
-last segment, so do not use its response keys as catalog identifiers.
+keys. The older `fetch()` response currently labels returned series by the last
+segment, so do not use its response keys as catalog identifiers.
 
 ## Group Fan-Out
 

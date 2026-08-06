@@ -276,6 +276,14 @@ def test_candidate_account_bound_and_sources(opts):
     assert over.materialized is False, (
         "account cap must reject before SMEMBERS materializes the index")
 
+    raced = FakeRedis(
+        1000, {f"t1438_race_{index}".encode() for index in range(1001)})
+    with patch.object(discovery.redis, "get_connection", return_value=raced):
+        with th.assert_raises(me.ValueException):
+            discovery._candidate_accounts()
+    assert raced.materialized is True, (
+        "race fixture must exercise the post-materialization cardinality guard")
+
     bounded = FakeRedis(1, {b"t1438_from_index"})
     with patch.object(discovery.redis, "get_connection", return_value=bounded), \
             patch.object(discovery.metrics, "list_accounts_with_data",

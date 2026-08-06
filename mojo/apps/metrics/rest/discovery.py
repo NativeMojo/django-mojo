@@ -151,7 +151,12 @@ def _candidate_accounts():
     accounts_key = utils.generate_accounts_key()
     if redis_con.scard(accounts_key) > DISCOVERY_MAX_ACCOUNTS:
         raise me.ValueException("Metrics discovery account index exceeds its limit")
-    return set(metrics.list_accounts(redis_con=redis_con)).union({"public", "global"})
+    accounts = set(metrics.list_accounts(redis_con=redis_con))
+    # Close the SCARD -> SMEMBERS race before any per-account authorization
+    # work. The pre-check still prevents known-oversized sets from materializing.
+    if len(accounts) > DISCOVERY_MAX_ACCOUNTS:
+        raise me.ValueException("Metrics discovery account index exceeds its limit")
+    return accounts.union({"public", "global"})
 
 
 def _visible_accounts(request, candidates):

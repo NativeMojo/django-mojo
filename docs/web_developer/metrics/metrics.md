@@ -76,8 +76,8 @@ are read.
 
 Slugs are exact opaque identifiers. Preserve the complete colon-delimited
 string and send it unchanged to `/api/metrics/series` or `/api/metrics/fetch`.
-`/series` preserves full response keys. The older multi-slug `/fetch` response
-currently labels each series with only the last colon segment, so never derive
+`/series` preserves full response keys. The older `/fetch` response currently
+labels each series with only the last colon segment, so never derive
 catalog identifiers from those response keys. Gauge names (`value/get` and
 `value/set`) are not part of discovery.
 
