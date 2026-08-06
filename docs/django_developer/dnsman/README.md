@@ -113,6 +113,23 @@ Models with a `group` FK get native group scoping automatically
 (`mojo/models/rest.py` keys on `hasattr(cls, "group")`). `Certificate` has no
 direct group and declares `GROUP_FIELD = "domain__group"`.
 
+Credential assignment is the deliberate exception to the normal Group model
+surface. `GET /api/dnsman/credential/group-choice` returns only active group
+`id`/`name` choices to an interactive user holding a **global** `manage_dns` or
+`security` grant (or to a superuser). GroupMember grants, ApiKeys (including an
+acting-user key), and GroupScopedTokens cannot satisfy this gate. This does not
+widen `Group.RestMeta.VIEW_PERMS`, and `dns` remains absent from
+`DOMAIN_CATEGORIES`.
+
+The handler reads `request.GET.lists()` directly instead of `request.DATA`.
+That route-local exception is load-bearing: the generic parser normalizes
+duplicate, bracketed, and dotted input before the handler could reject those
+shapes. Only scalar `id`, `search`, `start`, and `size` are accepted; generic
+model-list controls and the dispatcher's reserved `group` parameter are not.
+Eligible rows match `Group.is_effectively_active(max_depth=8)` in one lazy
+queryset — self plus ancestor hops 1 through 8 are checked, while hop 9 is
+deliberately outside the shared contract.
+
 **`services/*.py` perform no permission checks.** Gating lives entirely in
 `rest/`. This is what lets the certificate service plant challenge records with
 no user in scope, and it means every custom REST handler must call
