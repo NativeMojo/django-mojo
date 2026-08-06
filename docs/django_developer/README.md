@@ -10,6 +10,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 |---|---|
 | [core/](core/README.md) | MojoModel, REST framework, decorators, middleware, serialization |
 | [helpers/](helpers/README.md) | logit, dates, settings, settings reference keys, crypto, request, response, redis, and other utilities |
+| [deploy/](deploy/README.md) | Node deployment tooling that runs before Django settings exist — S3 config sync and the read-only AWS account audit |
 
 ## Built-in Apps
 

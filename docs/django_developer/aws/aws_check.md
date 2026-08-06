@@ -160,3 +160,34 @@ AWS supports it:
 Cron, rule, mailbox and template checks use Django database/Redis access rather
 than IAM. The command never deletes AWS resources, edits deployment files,
 changes DNS, requests SES production access, or sends email.
+
+## Not the same as `python -m mojo.deploy.check_setup`
+
+django-mojo ships a second AWS auditor, `mojo.deploy.check_setup`
+([deploy/README.md](../deploy/README.md#check_setup)). They answer different
+questions and neither replaces the other:
+
+| | `manage.py aws-check` | `python3 -m mojo.deploy.check_setup` |
+|---|---|---|
+| Needs Django | yes — reads settings, models, Redis | no; runs before `django.conf` exists |
+| Scope | this deployment's own resources, named by configuration | the whole AWS account, whatever is in it |
+| Mutates | yes, with `--apply` — creates missing buckets, topics, subscriptions, alarms | never; every call is a Describe/Get/List |
+| Covers | S3/SES/SNS/CloudWatch wiring, cron, mailboxes, templates, incident rule defaults | EC2 and security-group posture, load balancer, RDS/Aurora, ElastiCache, EBS/backup/CloudTrail/GuardDuty, account-wide S3, IAM users and keys |
+| Run from | the app box, as the app | anywhere with credentials, including a laptop |
+
+Where they overlap, `check_setup` is deliberately reduced to the delta:
+
+- **Monitoring.** `aws-check`'s monitoring section owns SNS topic existence and
+  the alarm inventory, discovers them account-wide, and can create what is
+  missing. `check_setup` therefore checks only what this command does not:
+  subscriptions stuck at `PendingConfirmation`, alarms sitting in
+  `INSUFFICIENT_DATA`, and whether application log groups exist and expire.
+- **S3.** This command inspects the public-access block on the one bucket
+  FileManager is configured with. `check_setup` sweeps *every* bucket in the
+  account and additionally reports versioning, default encryption and public
+  bucket policies.
+
+Use `aws-check` to get a deployment working and keep it wired up. Use
+`check_setup` to answer "is this whole account set up sanely", especially
+before a security review — and note that its topology assertions are off unless
+you ask for them.
