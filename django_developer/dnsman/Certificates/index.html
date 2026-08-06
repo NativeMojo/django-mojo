@@ -3915,6 +3915,13 @@ ever disappoints.</p>
 <a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>finally:
 <a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>  clear every challenge record we planted
 </code></pre></div>
+<p>For a verified tenant <code>AcmeDelegation</code>, the challenge-writer branch changes but
+the ACME/custody flow does not. The alias is authoritatively re-proved before
+<code>new order</code>; both apex/wildcard digests are published together through the
+challenge-specific hub client at the stored opaque target; propagation probes
+that target; and the durable cleanup reference is idempotently withdrawn in
+<code>finally</code>. Pending delegation is ignored. Verified/broken routing is sticky and
+never silently falls back to direct DNS.</p>
 <h3 id="the-wildcard-trap">The wildcard trap<a class="headerlink" href="#the-wildcard-trap" title="Permanent link">&para;</a></h3>
 <p><code>example.com</code> and <code>*.example.com</code> produce <strong>two separate authorizations that
 share one record name</strong> — <code>_acme-challenge.example.com</code> — and both digests must
@@ -3960,6 +3967,20 @@ as "no key" would send a consumer off to reissue for no reason.</p>
 <h2 id="renewal-and-sync">Renewal and sync<a class="headerlink" href="#renewal-and-sync" title="Permanent link">&para;</a></h2>
 <p><code>renew_certificates</code> (every 6h) queues a job per certificate past <code>renew_after</code>
 (<code>not_after</code> − <code>DNSMAN_CERT_RENEW_DAYS</code>, default 30).</p>
+<p>Requests serialize on the Domain row and job publishes carry an internal
+idempotency key while retaining the existing <code>{certificate: pk}</code> payload.
+Execution atomically claims the Certificate before any CA call; a duplicate
+worker exits without creating an order. The claim is also protected by a
+per-certificate advisory lock held through the remote work. If a worker dies,
+the renewal scan requeues the abandoned <code>issuing</code> row after
+<code>DNSMAN_CERT_ISSUING_STALE_SECONDS</code> (default 30 minutes); a live lock prevents a
+slow worker from being reclaimed concurrently. Existing still-valid material
+remains available from the material endpoint while renewal is <code>issuing</code>.
+Initial issuance never has material to expose. When a delegated renewal fails and the
+existing KMS-held material is still valid, the row returns to <code>active</code>, its
+cert/chain/key remain untouched, <code>last_error</code>/<code>attempts</code> record the failure, and
+<code>renew_after</code> moves to a bounded exponential retry (base
+<code>DNSMAN_CERT_RETRY_BASE_SECONDS</code>, default one hour; hard maximum 24 hours).</p>
 <p>On every successful issue or renewal, dnsman broadcasts a <code>certificate_updated</code>
 job on <code>DNSMAN_CERT_SYNC_CHANNEL</code> carrying <strong>only</strong> the certificate id, domain
 and expiry. Subscribed hosts pull the material themselves and reload locally.</p>

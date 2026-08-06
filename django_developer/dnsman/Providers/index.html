@@ -3883,6 +3883,20 @@ in <code>rest/</code>.</p>
 <p>Validation performed before dispatch: domain must be <code>active</code>; record type must
 be in <code>DNSMAN_ALLOWED_RECORD_TYPES</code>; apex <code>NS</code>/<code>SOA</code> refused; out-of-zone names
 refused.</p>
+<p>The optional <a href="../AcmeFederation/">ACME federation hub</a> does not pass through this
+dispatch layer. It owns one separately configured public Route53 zone and an
+internal exact-target writer that tenants cannot reach through generic record
+CRUD. A verified external name gets <code>Domain.provider="mojo"</code> solely as a
+certificate-only marker; <code>get_adapter()</code> deliberately refuses it. Existing
+Route53/GoDaddy domains keep their provider value even when a verified sticky
+delegation selects the remote certificate writer. Direct DNS and HTTP-01
+behavior are unchanged.</p>
+<p>The downstream <code>services/acme_hub_client.py</code> is equally separate. It exposes
+only target allocation plus challenge-lease publish/withdraw against fixed hub
+paths; it is not a <code>DnsProvider</code>, is not returned by <code>get_adapter()</code>, and cannot
+accept a caller-selected record name. Missing or failed hub configuration is a
+loud typed failure with no provider fallback. Direct Route53/GoDaddy issuance
+and Maestro Sites HTTP-01 therefore keep their existing dispatch paths.</p>
 <h2 id="provider-differences">Provider differences<a class="headerlink" href="#provider-differences" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -3989,8 +4003,8 @@ for the rare case where surviving values carry different TTLs.</p>
 consumes this helper and depends on the historical swallow-everything behaviour.
 dnsman always builds its managers with <code>raise_on_error=True</code>.</p>
 <h2 id="credentials">Credentials<a class="headerlink" href="#credentials" title="Permanent link">&para;</a></h2>
-<p>Route53 uses the process AWS credentials. Everything else must bring its own
-<code>DnsCredential</code>.</p>
+<p>Route53 uses the process AWS credentials. GoDaddy brings a <code>DnsCredential</code>.
+The <code>mojo</code> marker needs neither because it has no general DNS adapter.</p>
 <p>The gate is central, in <code>get_adapter()</code>: a <code>godaddy</code> domain whose credential is
 null, <code>is_active=False</code>, or <code>verified=False</code> raises <strong>before any network call</strong>.
 Individual call sites do not repeat the check — one gate, one place to audit.</p>

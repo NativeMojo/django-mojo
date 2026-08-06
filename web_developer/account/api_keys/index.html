@@ -4252,6 +4252,14 @@
 </tr>
 </tbody>
 </table>
+<p>Two federation permissions are protected from ordinary group administrators:
+<code>geoip_sync</code> and <code>dnsman_acme_federation</code>. On the normal member assignment
+path they require the corresponding global <code>sys.geoip_sync</code> or
+<code>sys.dnsman_acme_federation</code> grant; a platform <code>manage_users</code> / <code>manage_groups</code>
+administrator can also provision them through the existing global key-admin
+override. Do not present either as a routine tenant permission toggle. The ACME
+hub additionally accepts only an active project's ApiKey carrying the latter —
+JWT users and group tokens cannot call it. See <a href="../../dnsman/#acme-delegation-hub-optional">dnsman</a>.</p>
 <p><strong>Response:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>

@@ -5589,7 +5589,8 @@
   permission key → the permission(s) the granter must hold to assign it to an
   <code>ApiKey</code>, gating <code>ApiKey.set_permissions</code> on REST write. The effective map is
   <code>{**ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS, **configured}</code> — currently the
-  floor is <code>{"geoip_sync": "sys.geoip_sync"}</code>. A value configured here overrides
+  floor is <code>{"geoip_sync": "sys.geoip_sync", "dnsman_acme_federation":
+  "sys.dnsman_acme_federation"}</code>. A value configured here overrides
   the floor for that key (including relaxing it); anything the floor names and
   the deployment does not stays protected. It is a merge rather than a plain
   default because <code>settings.get</code> returns a configured value wholesale, which
@@ -5783,8 +5784,35 @@
 <ul>
 <li><code>DNSMAN_ACME_CONTACT_EMAIL</code></li>
 <li><code>DNSMAN_ACME_DIRECTORY_URL</code></li>
+<li><code>DNSMAN_ACME_HUB_ZONE</code> — enables the optional protected ACME delegation hub;
+  file-only. See <a href="../../dnsman/AcmeFederation/">ACME federation</a>.</li>
+<li><code>DNSMAN_ACME_HUB_HOSTED_ZONE_ID</code></li>
+<li><code>DNSMAN_ACME_HUB_TTL</code></li>
+<li><code>DNSMAN_ACME_HUB_LEASE_SECONDS</code></li>
+<li><code>DNSMAN_ACME_HUB_PROPAGATION_TIMEOUT</code></li>
+<li><code>DNSMAN_ACME_HUB_PROPAGATION_INTERVAL</code></li>
+<li><code>DNSMAN_ACME_HUB_SWEEP_LIMIT</code></li>
+<li><code>DNSMAN_ACME_HUB_URL</code> — downstream challenge client's HTTPS hub origin;
+  file-only, with plain HTTP allowed only for localhost/loopback development.</li>
+<li><code>DNSMAN_ACME_HUB_API_KEY</code> — downstream project's protected federation ApiKey;
+  file-only and never logged.</li>
+<li><code>DNSMAN_ACME_HUB_CONNECT_TIMEOUT</code> — downstream connect timeout (default <code>5</code>,
+  strict range 0.1–30 seconds).</li>
+<li><code>DNSMAN_ACME_HUB_READ_TIMEOUT</code> — downstream read timeout (default <code>30</code>,
+  strict range 0.1–120 seconds).</li>
+<li><code>DNSMAN_ACME_HUB_RETRIES</code> — identical idempotent downstream retries (default
+  <code>1</code>, accepted values <code>0</code> or <code>1</code>). The client retries only connect/read
+  ambiguity and HTTP 502/503/504; it never retries redirects or
+  400/401/403/409/429. There is no downstream zone-name setting. See
+  <a href="../../dnsman/AcmeFederation/#downstream-challenge-client">ACME federation</a>.</li>
 <li><code>DNSMAN_ALLOWED_RECORD_TYPES</code></li>
 <li><code>DNSMAN_CERT_RENEW_DAYS</code></li>
+<li><code>DNSMAN_CERT_RETRY_BASE_SECONDS</code> — retry base after a failed renewal whose
+  existing material is still valid (default <code>3600</code>; clamped to 60–86400
+  seconds and exponentially bounded at 86400).</li>
+<li><code>DNSMAN_CERT_ISSUING_STALE_SECONDS</code> — static grace period before an abandoned
+  <code>issuing</code> certificate is requeued (default <code>1800</code>; clamped to 60–86400
+  seconds). A live advisory lock still prevents concurrent reclamation.</li>
 <li><code>DNSMAN_CERT_SYNC_CHANNEL</code></li>
 <li><code>DNSMAN_DNS_PROPAGATION_TIMEOUT</code></li>
 <li><code>DNSMAN_MAX_DOMAIN_PRICE</code></li>

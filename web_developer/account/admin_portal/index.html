@@ -4449,6 +4449,14 @@ list and error-response detail.</p>
 <p>Use this to set the initial state of your toggle UI. Any key not present or set to <code>false</code> means the user does not have that permission.</p>
 <h3 id="fine-grained-permissions-advanced">Fine-Grained Permissions (Advanced)<a class="headerlink" href="#fine-grained-permissions-advanced" title="Permanent link">&para;</a></h3>
 <p>Category permissions cover most use cases. Fine-grained permissions exist for when you need read-only access or scoped access within a domain. You do <strong>not</strong> need to show these in a standard admin UI — they are for special cases.</p>
+<p>Protected machine-federation grants are not ordinary fine-grained toggles.
+<code>geoip_sync</code> and <code>dnsman_acme_federation</code> are protected from group
+administrators; provision them only in a platform key-management workflow.
+Their normal member assignment paths require matching global <code>sys.*</code> grants,
+and a global <code>manage_users</code> / <code>manage_groups</code> administrator can also assign
+them. In particular, the <a href="../../dnsman/#acme-delegation-hub-optional">ACME hub</a>
+is machine-only: even a JWT user holding similarly named permissions cannot
+call its <code>/api/dnsman/acme/*</code> routes.</p>
 <table>
 <thead>
 <tr>

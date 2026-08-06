@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/dnsman/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/dnsman/AcmeFederation/">
       
       
       
@@ -18,19 +18,19 @@
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
-        <title>dnsman — domains, DNS, email records and TLS certificates - Django-MOJO</title>
+        <title>ACME delegation federation hub - Django-MOJO</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -49,7 +49,7 @@
       
     
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#dnsman-domains-dns-email-records-and-tls-certificates" class="md-skip">
+        <a href="#acme-delegation-federation-hub" class="md-skip">
           Skip to content
         </a>
       
@@ -88,7 +88,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../../.." title="Django-MOJO" class="md-header__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              dnsman — domains, DNS, email records and TLS certificates
+              ACME delegation federation hub
             
           </span>
         </div>
@@ -221,7 +221,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href="../../.." class="md-tabs__link">
         
   
   
@@ -242,7 +242,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../" class="md-tabs__link">
+        <a href="../../" class="md-tabs__link">
           
   
   
@@ -262,7 +262,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../web_developer/" class="md-tabs__link">
+        <a href="../../../web_developer/" class="md-tabs__link">
           
   
   
@@ -296,7 +296,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
+    <a href="../../.." title="Django-MOJO" class="md-nav__button md-logo" aria-label="Django-MOJO" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -326,7 +326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../.." class="md-nav__link">
         
   
   
@@ -407,7 +407,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../../" class="md-nav__link">
         
   
   
@@ -489,7 +489,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/" class="md-nav__link">
+      <a href="../../core/" class="md-nav__link">
         
   
   
@@ -517,7 +517,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/mojo_model/" class="md-nav__link">
+      <a href="../../core/mojo_model/" class="md-nav__link">
         
   
   
@@ -545,7 +545,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/decorators/" class="md-nav__link">
+      <a href="../../core/decorators/" class="md-nav__link">
         
   
   
@@ -573,7 +573,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/middleware/" class="md-nav__link">
+      <a href="../../core/middleware/" class="md-nav__link">
         
   
   
@@ -601,7 +601,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/graphs/" class="md-nav__link">
+      <a href="../../core/graphs/" class="md-nav__link">
         
   
   
@@ -629,7 +629,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../core/cache/" class="md-nav__link">
+      <a href="../../core/cache/" class="md-nav__link">
         
   
   
@@ -719,7 +719,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/" class="md-nav__link">
+      <a href="../../helpers/" class="md-nav__link">
         
   
   
@@ -747,7 +747,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/logit/" class="md-nav__link">
+      <a href="../../helpers/logit/" class="md-nav__link">
         
   
   
@@ -775,7 +775,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/dates/" class="md-nav__link">
+      <a href="../../helpers/dates/" class="md-nav__link">
         
   
   
@@ -803,7 +803,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/settings/" class="md-nav__link">
+      <a href="../../helpers/settings/" class="md-nav__link">
         
   
   
@@ -831,7 +831,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/settings_reference/" class="md-nav__link">
+      <a href="../../helpers/settings_reference/" class="md-nav__link">
         
   
   
@@ -859,7 +859,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/crypto/" class="md-nav__link">
+      <a href="../../helpers/crypto/" class="md-nav__link">
         
   
   
@@ -887,7 +887,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/request/" class="md-nav__link">
+      <a href="../../helpers/request/" class="md-nav__link">
         
   
   
@@ -915,7 +915,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/response/" class="md-nav__link">
+      <a href="../../helpers/response/" class="md-nav__link">
         
   
   
@@ -943,7 +943,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../helpers/other/" class="md-nav__link">
+      <a href="../../helpers/other/" class="md-nav__link">
         
   
   
@@ -1033,7 +1033,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/" class="md-nav__link">
+      <a href="../../account/" class="md-nav__link">
         
   
   
@@ -1061,7 +1061,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/user/" class="md-nav__link">
+      <a href="../../account/user/" class="md-nav__link">
         
   
   
@@ -1089,7 +1089,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/group/" class="md-nav__link">
+      <a href="../../account/group/" class="md-nav__link">
         
   
   
@@ -1117,7 +1117,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/auth/" class="md-nav__link">
+      <a href="../../account/auth/" class="md-nav__link">
         
   
   
@@ -1145,7 +1145,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/webhook_signing/" class="md-nav__link">
+      <a href="../../account/webhook_signing/" class="md-nav__link">
         
   
   
@@ -1173,7 +1173,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../account/webhook_subscriptions/" class="md-nav__link">
+      <a href="../../account/webhook_subscriptions/" class="md-nav__link">
         
   
   
@@ -1263,7 +1263,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/" class="md-nav__link">
+      <a href="../../logging/" class="md-nav__link">
         
   
   
@@ -1291,7 +1291,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/logit/" class="md-nav__link">
+      <a href="../../logging/logit/" class="md-nav__link">
         
   
   
@@ -1319,7 +1319,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../logging/incidents/" class="md-nav__link">
+      <a href="../../logging/incidents/" class="md-nav__link">
         
   
   
@@ -1409,7 +1409,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/README.md" class="md-nav__link">
+      <a href="../../files/README.md" class="md-nav__link">
         
   
   
@@ -1437,7 +1437,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/file.md" class="md-nav__link">
+      <a href="../../files/file.md" class="md-nav__link">
         
   
   
@@ -1465,7 +1465,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../files/file_manager.md" class="md-nav__link">
+      <a href="../../files/file_manager.md" class="md-nav__link">
         
   
   
@@ -1555,7 +1555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/" class="md-nav__link">
+      <a href="../../email/" class="md-nav__link">
         
   
   
@@ -1583,7 +1583,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/architecture/" class="md-nav__link">
+      <a href="../../email/architecture/" class="md-nav__link">
         
   
   
@@ -1611,7 +1611,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/sending/" class="md-nav__link">
+      <a href="../../email/sending/" class="md-nav__link">
         
   
   
@@ -1639,7 +1639,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../email/receiving/" class="md-nav__link">
+      <a href="../../email/receiving/" class="md-nav__link">
         
   
   
@@ -1729,7 +1729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/" class="md-nav__link">
+      <a href="../../jobs/" class="md-nav__link">
         
   
   
@@ -1757,7 +1757,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/publishing/" class="md-nav__link">
+      <a href="../../jobs/publishing/" class="md-nav__link">
         
   
   
@@ -1785,7 +1785,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/writing_jobs/" class="md-nav__link">
+      <a href="../../jobs/writing_jobs/" class="md-nav__link">
         
   
   
@@ -1813,7 +1813,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs/job_model/" class="md-nav__link">
+      <a href="../../jobs/job_model/" class="md-nav__link">
         
   
   
@@ -1903,7 +1903,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/" class="md-nav__link">
+      <a href="../../metrics/" class="md-nav__link">
         
   
   
@@ -1931,7 +1931,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/recording/" class="md-nav__link">
+      <a href="../../metrics/recording/" class="md-nav__link">
         
   
   
@@ -1959,7 +1959,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../metrics/fetching/" class="md-nav__link">
+      <a href="../../metrics/fetching/" class="md-nav__link">
         
   
   
@@ -2049,7 +2049,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../realtime/" class="md-nav__link">
+      <a href="../../realtime/" class="md-nav__link">
         
   
   
@@ -2077,7 +2077,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../realtime/architecture/" class="md-nav__link">
+      <a href="../../realtime/architecture/" class="md-nav__link">
         
   
   
@@ -2105,7 +2105,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../realtime/publishing/" class="md-nav__link">
+      <a href="../../realtime/publishing/" class="md-nav__link">
         
   
   
@@ -2133,7 +2133,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../realtime/hooks/" class="md-nav__link">
+      <a href="../../realtime/hooks/" class="md-nav__link">
         
   
   
@@ -2169,7 +2169,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../phonehub/" class="md-nav__link">
+      <a href="../../phonehub/" class="md-nav__link">
         
   
   
@@ -2197,7 +2197,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../filevault/" class="md-nav__link">
+      <a href="../../filevault/" class="md-nav__link">
         
   
   
@@ -2225,7 +2225,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../docit/" class="md-nav__link">
+      <a href="../../docit/" class="md-nav__link">
         
   
   
@@ -2314,7 +2314,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/" class="md-nav__link">
+      <a href="../../../web_developer/" class="md-nav__link">
         
   
   
@@ -2396,7 +2396,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/" class="md-nav__link">
+      <a href="../../../web_developer/core/" class="md-nav__link">
         
   
   
@@ -2424,7 +2424,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/authentication/" class="md-nav__link">
+      <a href="../../../web_developer/core/authentication/" class="md-nav__link">
         
   
   
@@ -2452,7 +2452,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/request_response/" class="md-nav__link">
+      <a href="../../../web_developer/core/request_response/" class="md-nav__link">
         
   
   
@@ -2480,7 +2480,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/filtering/" class="md-nav__link">
+      <a href="../../../web_developer/core/filtering/" class="md-nav__link">
         
   
   
@@ -2508,7 +2508,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/pagination/" class="md-nav__link">
+      <a href="../../../web_developer/core/pagination/" class="md-nav__link">
         
   
   
@@ -2536,7 +2536,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/core/graphs/" class="md-nav__link">
+      <a href="../../../web_developer/core/graphs/" class="md-nav__link">
         
   
   
@@ -2626,7 +2626,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/" class="md-nav__link">
+      <a href="../../../web_developer/account/" class="md-nav__link">
         
   
   
@@ -2654,7 +2654,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/authentication/" class="md-nav__link">
+      <a href="../../../web_developer/account/authentication/" class="md-nav__link">
         
   
   
@@ -2682,7 +2682,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/user/" class="md-nav__link">
+      <a href="../../../web_developer/account/user/" class="md-nav__link">
         
   
   
@@ -2710,7 +2710,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/group/" class="md-nav__link">
+      <a href="../../../web_developer/account/group/" class="md-nav__link">
         
   
   
@@ -2738,7 +2738,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/admin_portal/" class="md-nav__link">
+      <a href="../../../web_developer/account/admin_portal/" class="md-nav__link">
         
   
   
@@ -2766,7 +2766,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/api_keys/" class="md-nav__link">
+      <a href="../../../web_developer/account/api_keys/" class="md-nav__link">
         
   
   
@@ -2794,7 +2794,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/webhook_signing/" class="md-nav__link">
+      <a href="../../../web_developer/account/webhook_signing/" class="md-nav__link">
         
   
   
@@ -2822,7 +2822,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/account/webhook_subscriptions/" class="md-nav__link">
+      <a href="../../../web_developer/account/webhook_subscriptions/" class="md-nav__link">
         
   
   
@@ -2912,7 +2912,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/logging/" class="md-nav__link">
+      <a href="../../../web_developer/logging/" class="md-nav__link">
         
   
   
@@ -2940,7 +2940,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/logging/logs/" class="md-nav__link">
+      <a href="../../../web_developer/logging/logs/" class="md-nav__link">
         
   
   
@@ -2968,7 +2968,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/logging/incidents/" class="md-nav__link">
+      <a href="../../../web_developer/logging/incidents/" class="md-nav__link">
         
   
   
@@ -3058,7 +3058,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/files/README.md" class="md-nav__link">
+      <a href="../../../web_developer/files/README.md" class="md-nav__link">
         
   
   
@@ -3086,7 +3086,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/files/upload.md" class="md-nav__link">
+      <a href="../../../web_developer/files/upload.md" class="md-nav__link">
         
   
   
@@ -3114,7 +3114,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/files/files.md" class="md-nav__link">
+      <a href="../../../web_developer/files/files.md" class="md-nav__link">
         
   
   
@@ -3204,7 +3204,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/email/" class="md-nav__link">
+      <a href="../../../web_developer/email/" class="md-nav__link">
         
   
   
@@ -3232,7 +3232,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/email/email/" class="md-nav__link">
+      <a href="../../../web_developer/email/email/" class="md-nav__link">
         
   
   
@@ -3322,7 +3322,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/jobs/" class="md-nav__link">
+      <a href="../../../web_developer/jobs/" class="md-nav__link">
         
   
   
@@ -3350,7 +3350,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/jobs/jobs/" class="md-nav__link">
+      <a href="../../../web_developer/jobs/jobs/" class="md-nav__link">
         
   
   
@@ -3440,7 +3440,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/metrics/" class="md-nav__link">
+      <a href="../../../web_developer/metrics/" class="md-nav__link">
         
   
   
@@ -3468,7 +3468,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/metrics/metrics/" class="md-nav__link">
+      <a href="../../../web_developer/metrics/metrics/" class="md-nav__link">
         
   
   
@@ -3558,7 +3558,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/realtime/" class="md-nav__link">
+      <a href="../../../web_developer/realtime/" class="md-nav__link">
         
   
   
@@ -3586,7 +3586,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/realtime/websocket/" class="md-nav__link">
+      <a href="../../../web_developer/realtime/websocket/" class="md-nav__link">
         
   
   
@@ -3622,7 +3622,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/phonehub/" class="md-nav__link">
+      <a href="../../../web_developer/phonehub/" class="md-nav__link">
         
   
   
@@ -3650,7 +3650,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/filevault/" class="md-nav__link">
+      <a href="../../../web_developer/filevault/" class="md-nav__link">
         
   
   
@@ -3678,7 +3678,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../web_developer/docit/" class="md-nav__link">
+      <a href="../../../web_developer/docit/" class="md-nav__link">
         
   
   
@@ -3733,10 +3733,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#layout" class="md-nav__link">
+  <a href="#trust-and-dns-shape" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Layout
+        Trust and DNS shape
       
     </span>
   </a>
@@ -3744,38 +3744,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#provider-dispatch" class="md-nav__link">
+  <a href="#persistence-and-reconciliation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Provider dispatch
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Provider dispatch">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#credentials-are-forced-and-the-gate-is-central" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Credentials are forced, and the gate is central
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#permissions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Permissions
+        Persistence and reconciliation
       
     </span>
   </a>
@@ -3783,60 +3755,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#domain-lifecycle" class="md-nav__link">
+  <a href="#zone-safety-and-observability" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Domain lifecycle
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Domain lifecycle">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#finding-what-to-adopt" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Finding what to adopt
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#group-assignment" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Group assignment
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#the-no-failed-rows-invariant" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The no-failed-rows invariant
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-money-path" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The money path
+        Zone safety and observability
       
     </span>
   </a>
@@ -3844,38 +3766,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#certificates" class="md-nav__link">
+  <a href="#hub-http-contract" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Certificates
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Certificates">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#why-hosts-pull-instead-of-being-pushed-to" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Why hosts pull instead of being pushed to
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Settings
+        Hub HTTP contract
       
     </span>
   </a>
@@ -3883,10 +3777,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#further-reading" class="md-nav__link">
+  <a href="#file-only-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Further reading
+        File-only settings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#downstream-challenge-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Downstream challenge client
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#downstream-tenant-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Downstream tenant lifecycle
       
     </span>
   </a>
@@ -3913,383 +3829,303 @@
   
 
 
-<h1 id="dnsman-domains-dns-email-records-and-tls-certificates">dnsman — domains, DNS, email records and TLS certificates<a class="headerlink" href="#dnsman-domains-dns-email-records-and-tls-certificates" title="Permanent link">&para;</a></h1>
-<p><code>mojo.apps.dnsman</code> is the <strong>mechanism</strong> layer for domain-name management:
-buying domains, managing DNS records across more than one provider, WHOIS and
-privacy, applying SES email records, and centrally issuing and holding TLS
-certificates.</p>
-<p>It deliberately carries <strong>no product policy</strong>. Spend caps, allowlists, credits,
-quote/confirm UX and per-tenant purchase rules belong to the application built
-on top. What lives here is the part every product would otherwise rebuild.</p>
-<p>REST reference for API consumers: <a href="../../web_developer/dnsman/">web_developer/dnsman</a>.</p>
-<h2 id="layout">Layout<a class="headerlink" href="#layout" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>mojo/helpers/aws/route53.py      Route53 Domains + hosted-zone primitives (model-free)
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>                                 incl. list_registered_domains() / list_hosted_zones()
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>                                 — paginated account inventory, report `truncated`
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>mojo/helpers/acme/               Minimal ACMEv2 DNS-01 client (jws.py, client.py)
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>mojo/helpers/dns/godaddy.py      GoDaddy record API (pre-existing; gained raise_on_error)
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>mojo/helpers/dns/probe.py        Authoritative TXT probe + exact one-hop CNAME proof
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>mojo/apps/dnsman/
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>  models/        DnsCredential, Domain, DomainPurchase, AcmeAccount, Certificate,
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>                 AcmeHubDelegation, AcmeHubChallengeLease, AcmeDelegation
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>  services/
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    naming.py    Domain/record normalization — the single source of truth
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    dns.py       Provider dispatch (UNGATED mechanism)
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    providers/   route53_provider.py, godaddy_provider.py behind one interface
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    onboarding.py  link a credential, adopt a zone, claim a BYO domain,
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                   discover the house AWS account&#39;s inventory
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    registrar.py   search / quote / purchase / poll / WHOIS / privacy
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    certs.py       ACME DNS-01 issuance, renewal, revocation, sync broadcast
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    acme_hub.py    optional delegated DNS-01 target allocation + lease reconciliation
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    delegation.py  downstream tenant allocation, proof, tombstone + Domain binding
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    email.py       provider-dispatched SES record application
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>  rest/          thin handlers — this is where permissions are enforced
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>  cronjobs.py    thin dispatchers — poll registrations / ACME leases (5m), renew certs (6h)
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>  asyncjobs.py   issue/renew certificate job handlers
+<h1 id="acme-delegation-federation-hub">ACME delegation federation hub<a class="headerlink" href="#acme-delegation-federation-hub" title="Permanent link">&para;</a></h1>
+<p>The optional ACME hub lets a downstream deployment complete DNS-01 without
+receiving credentials for the hub AWS account. It is dormant until
+<code>DNSMAN_ACME_HUB_ZONE</code> is set and is independent of <code>Domain.provider</code>, direct
+Route53/GoDaddy certificate issuance, and Maestro Sites HTTP-01.</p>
+<h2 id="trust-and-dns-shape">Trust and DNS shape<a class="headerlink" href="#trust-and-dns-shape" title="Permanent link">&para;</a></h2>
+<p>An operator provisions an <code>ApiKey</code> on the downstream project's <code>Group</code> with
+<code>dnsman_acme_federation</code>. That permission is in django-mojo's protected API-key
+floor. An ordinary group administrator cannot assign it: the normal member path
+requires the global <code>sys.dnsman_acme_federation</code> grant, while the existing
+global <code>manage_users</code> / <code>manage_groups</code> key-administration override can also
+assign it. The three endpoints reject JWT users, group tokens, anonymous
+callers, keys without the underlying permission, override sessions whose
+underlying key lacks it, and keys whose project or ancestor project is inactive.
+Authorization and ownership always come from <code>request.api_key.group</code>; a
+caller-supplied group and an override user's organization are never identities
+for this surface.</p>
+<p>The downstream onboards a domain with a fresh immutable <code>client_ref</code>. The hub
+returns a permanent allocation:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>source: _acme-challenge.customer.example
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>target: 4a0f…128-bit-random….acme-hub.example.net
 </code></pre></div>
-<p>The helpers are model-free and Django-free on purpose: <code>ses_domain.py</code> can call
-<code>route53.py</code> without importing this app, and both are unit-testable with no
-database.</p>
-<h2 id="provider-dispatch">Provider dispatch<a class="headerlink" href="#provider-dispatch" title="Permanent link">&para;</a></h2>
-<p><code>Domain.provider</code> is <code>route53</code>, <code>godaddy</code>, or certificate-only <code>mojo</code>.
-<code>services/dns.py</code> resolves only the first two to an adapter and calls one
-uniform interface:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">list_records</span><span class="p">(</span><span class="n">domain</span><span class="p">)</span>                                          <span class="c1"># -&gt; [objict(type, name, record_values, ttl)]</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">upsert_record</span><span class="p">(</span><span class="n">domain</span><span class="p">,</span> <span class="n">rtype</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">record_values</span><span class="p">,</span> <span class="n">ttl</span><span class="o">=</span><span class="mi">300</span><span class="p">)</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">delete_record</span><span class="p">(</span><span class="n">domain</span><span class="p">,</span> <span class="n">rtype</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">record_values</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">wait_for_propagation</span><span class="p">(</span><span class="n">domain</span><span class="p">,</span> <span class="n">rtype</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">record_values</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">change_id</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<p>The tenant publishes that one CNAME. Before every challenge publish, the hub
+proves the source is exactly one CNAME hop to the stored target; a chained or
+mismatched CNAME is refused. Withdrawal does not repeat the proof, so revoking
+the CNAME cannot prevent cleanup.</p>
+<h2 id="persistence-and-reconciliation">Persistence and reconciliation<a class="headerlink" href="#persistence-and-reconciliation" title="Permanent link">&para;</a></h2>
+<p><code>AcmeHubDelegation</code> is a permanent tombstone keyed by project UUID plus
+<code>client_ref</code>. The project UUID, normalized domain/source, random target,
+original group attribution, and exact allocation zone name/id never change.
+Changing configuration affects only new allocations and a target is never
+reused, including re-onboarding the same domain with a new reference.</p>
+<p><code>AcmeHubChallengeLease</code> durably stores one immutable <code>challenge_ref</code>, its exact
+complete digest set, state, expiry, and reconciliation timestamps. Publish
+commits pending intent before touching Route53. A PostgreSQL advisory lock per
+allocation covers the whole reconciliation, including the provider write, and
+Route53 always receives the union of every pending/active lease. This preserves
+the apex-plus-wildcard case where two ACME authorizations share one record.</p>
+<p>The five-minute <code>dnsman.cronjobs.sweep_acme_hub_leases</code> dispatcher queues the
+worker sweep. It expires stale leases and retries any unreconciled intent after
+worker death or an ambiguous provider response. Provider failures remain loud;
+there is no fallback to another challenge or provider.</p>
+<h2 id="zone-safety-and-observability">Zone safety and observability<a class="headerlink" href="#zone-safety-and-observability" title="Permanent link">&para;</a></h2>
+<p>Allocation and every write revalidate the stored Route53 zone as an exact,
+public hosted zone whose public NS cut matches Route53's delegation set. The
+writer is internal to <code>services/acme_hub.py</code>; it is not reachable through the
+tenant DNS record endpoints.</p>
+<p>Audit rows cover allocation, publish/refusal, withdrawal, expiry and provider
+failure with project, API-key/request attribution and counts. TXT digests,
+hosted-zone ids, AWS change ids and credentials are never logged or returned.</p>
+<h2 id="hub-http-contract">Hub HTTP contract<a class="headerlink" href="#hub-http-contract" title="Permanent link">&para;</a></h2>
+<p>All three routes are <code>POST</code> requests under <code>/api/dnsman</code>, require
+<code>Authorization: apikey &lt;token&gt;</code>, and return HTTP 200 with the normal mojo
+envelope on success. <code>client_ref</code> and <code>challenge_ref</code> are 1–128 characters,
+start with a letter or digit, and otherwise accept letters, digits, <code>.</code>, <code>_</code>,
+<code>:</code>, and <code>-</code>. A publish accepts 1–20 entries (duplicates are deduplicated),
+each 1–1024 characters; NUL, CR, and LF are rejected.</p>
+<p><code>POST /api/dnsman/acme/delegation</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;customer.example&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;client_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;site-install-2026-08&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
-<blockquote>
-<p><strong><code>record_values</code>, never <code>values</code>.</strong> <code>objict</code> subclasses <code>dict</code>, so an
-attribute named <code>values</code> resolves to the bound <code>dict.values</code> method and
-returns a method object instead of your data. This bit two independent
-implementations during the original build. A test pins the field name.</p>
-</blockquote>
-<p>Everything provider-specific is confined to the adapter, because the two
-back-ends differ in ways that fail <em>silently</em>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">200</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">&quot;client_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;site-install-2026-08&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;customer.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;_acme-challenge.customer.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nt">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;4a0f0123456789abcdef0123456789ab.acme-hub.example.net&quot;</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">}</span>
+</code></pre></div>
+<p>The same project/ref/domain replay returns the same target. The same ref with a
+different domain is a 400 immutable-reference conflict.</p>
+<p><code>POST /api/dnsman/acme/challenge/publish</code> accepts:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;client_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;site-install-2026-08&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;challenge_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;order-123&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">&quot;values&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;digest-for-apex&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;digest-for-wildcard&quot;</span><span class="p">]</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="p">}</span>
+</code></pre></div>
+<p>It adds <code>challenge_ref</code> and <code>active_value_count</code> to the allocation payload:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">200</span><span class="p">,</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="nt">&quot;client_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;site-install-2026-08&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;customer.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;_acme-challenge.customer.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span><span class="nt">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;4a0f0123456789abcdef0123456789ab.acme-hub.example.net&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="nt">&quot;challenge_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;order-123&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">    </span><span class="nt">&quot;active_value_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="p">}</span>
+</code></pre></div>
+<p>A replay must carry the same values. A withdrawn or expired reference cannot
+be republished. <code>active_value_count</code> is the size of the deduplicated union
+currently required by all live leases, not the number of leases.</p>
+<p><code>POST /api/dnsman/acme/challenge/withdraw</code> accepts only the two references and
+returns the same challenge response shape with the remaining union count:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;client_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;site-install-2026-08&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;challenge_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;order-123&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>Unknown and already-retired challenge references are idempotent successes.
+All three routes share a sliding rate-limit bucket: 120 requests/minute per IP
+and 300 requests/minute per project (the limiter's API-key dimension is grouped
+by the key's group), returning 429 with <code>Retry-After</code> when engaged.</p>
 <table>
 <thead>
 <tr>
-<th></th>
-<th>Route53</th>
-<th>GoDaddy</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Record name</td>
-<td>FQDN</td>
-<td>relative label, <code>@</code> at the apex</td>
-</tr>
-<tr>
-<td>TXT values</td>
-<td>must be quoted, chunked at 255 chars</td>
-<td>stored raw</td>
-</tr>
-<tr>
-<td>Write semantics</td>
-<td>true upsert</td>
-<td>PUT <strong>replaces every record</strong> of that (type, name)</td>
-</tr>
-<tr>
-<td>Delete</td>
-<td>supported</td>
-<td>no true delete — rewrite the remainder; the last record of a type cannot be removed</td>
-</tr>
-<tr>
-<td>Propagation</td>
-<td><code>ChangeInfo</code> → <code>INSYNC</code>, then authoritative probe</td>
-<td>authoritative probe only</td>
-</tr>
-</tbody>
-</table>
-<p>Getting TXT quoting wrong breaks SES verification <em>and</em> ACME validation with no
-error anywhere — hence the dedicated adapter test in both directions.</p>
-<h3 id="credentials-are-forced-and-the-gate-is-central">Credentials are forced, and the gate is central<a class="headerlink" href="#credentials-are-forced-and-the-gate-is-central" title="Permanent link">&para;</a></h3>
-<p>Route53 rides the process AWS credentials. GoDaddy brings its own, held in
-<code>DnsCredential</code> — not on the <code>Domain</code> row, because one provider
-account holds many domains and rotation has to happen in exactly one place.
-<code>mojo</code> is a verified delegated-ACME marker, never a general DNS provider, and
-requires no provider credential.</p>
-<p><code>services/dns.get_adapter()</code> is the single fail-closed gate: a <code>godaddy</code> domain
-whose credential is null, inactive, or unverified raises <strong>before any network
-call</strong>. Call sites do not repeat this check.</p>
-<p>A <strong>tenant's</strong> provider key is account-wide, so blast radius is deliberately
-contained: nothing in this app exposes "list every domain in a linked
-credential's account". Ownership is proven per-name at registration, so a member
-can only ever confirm a domain they already knew to name.</p>
-<p>There is exactly one account-wide listing, and it is a different account:
-<code>onboarding.discover_house_domains()</code> lists the <strong>house AWS account</strong>, which the
-platform owns outright and already hands zones out of via <code>adopt_route53</code>. It
-never touches a <code>DnsCredential</code>, so no tenant key is enumerated by it, and its
-REST gate is platform superuser (<code>rest/gates.require_platform_admin</code>). The BYO
-rule above is unchanged and still pinned by a test.</p>
-<h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
-<p><code>view_dns</code> / <code>manage_dns</code>, with <strong><code>security</code></strong> as the domain-category umbrella
-(<code>.claude/rules/models.md</code> requires the category alongside fine-grained perms).</p>
-<p><code>DOMAIN_CATEGORIES</code> in <code>mojo/helpers/perms.py</code> is deliberately <strong>not</strong> widened
-with a <code>dns</code> entry — a bare category term expands to view+manage platform-wide,
-and widening that set casually is a known bug pattern in this codebase.</p>
-<p>Models with a <code>group</code> FK get native group scoping automatically
-(<code>mojo/models/rest.py</code> keys on <code>hasattr(cls, "group")</code>). <code>Certificate</code> has no
-direct group and declares <code>GROUP_FIELD = "domain__group"</code>.</p>
-<p><strong><code>services/*.py</code> perform no permission checks.</strong> Gating lives entirely in
-<code>rest/</code>. This is what lets the certificate service plant challenge records with
-no user in scope, and it means every custom REST handler must call
-<code>rest_check_permission_or_raise</code> itself — <code>@md.uses_model_security</code> does not
-gate a custom pk-fetching endpoint.</p>
-<h2 id="domain-lifecycle">Domain lifecycle<a class="headerlink" href="#domain-lifecycle" title="Permanent link">&para;</a></h2>
-<p>Four ways in, and no bare create route (<code>CAN_CREATE = False</code>):</p>
-<ol>
-<li><strong>Purchase</strong> — <code>registrar.quote()</code> then <code>registrar.purchase()</code></li>
-<li><strong>Adopt</strong> — <code>onboarding.adopt_route53()</code>, an existing house-account zone,
-   no money. Superuser-only at the REST layer: adoption hands a group control
-   of a zone in the house account, which for anyone else would be a
-   cross-tenant zone-claim primitive.</li>
-<li><strong>BYO</strong> — <code>onboarding.register_existing()</code>, proven by the linked credential</li>
-<li><strong>Delegated ACME external name</strong> — <code>delegation.initiate()</code> stores an inert
-   allocation; <code>delegation.verify()</code> creates a certificate-only <code>mojo</code> Domain
-   only after authoritative exact one-hop CNAME proof and an active-tenant lock</li>
-</ol>
-<h3 id="finding-what-to-adopt">Finding what to adopt<a class="headerlink" href="#finding-what-to-adopt" title="Permanent link">&para;</a></h3>
-<p>Adoption is exact-name only, so it can only ever bring in a domain somebody
-already remembered. <code>onboarding.discover_house_domains()</code> is the inventory that
-makes it usable: it lists the house AWS account's <strong>registrations</strong> and <strong>hosted
-zones</strong> — two separate APIs whose sets do not match — merged into one row per
-name, each flagged <code>registered</code> / <code>hosted_zone</code> / <code>tracked</code> / <code>adoptable</code>.</p>
-<p>It creates nothing. Ingest stays an explicit <code>adopt</code> call, never a side effect
-of looking.</p>
-<p>Two things it deliberately refuses to hide:</p>
-<ul>
-<li><strong><code>truncated</code></strong> — the page walk is bounded (<code>max_pages</code>), and a bounded walk
-  that reports as complete is a wrong answer, not a small one.</li>
-<li><strong>Private zones</strong> — VPC-internal, so they resolve nowhere public and are
-  excluded. A name whose <em>only</em> zone is private still appears when it is also
-  registered, flagged un-adoptable, because <code>find_zone_id</code> would otherwise fall
-  back to that private zone. <code>adopt_route53</code> refuses it at the other end too.</li>
-</ul>
-<h3 id="group-assignment">Group assignment<a class="headerlink" href="#group-assignment" title="Permanent link">&para;</a></h3>
-<p>A domain adopted with <code>group=None</code> is <strong>platform-scoped</strong>: no tenant can list or
-fetch it (the framework filters group-scoped lists to the caller's groups, and a
-null group falls through to a check on the caller's <em>global</em> permissions, which
-a <code>GroupMember</code> grant is not).</p>
-<p><code>registrar/assign-group</code> moves such a domain into a group. It is superuser-only
-and <strong>assign-only</strong> — a domain that already has a group is refused, because
-re-homing between tenants is a cross-tenant transfer primitive that nothing
-needs.</p>
-<blockquote>
-<p><strong>Rows that hang off a house domain need their own guard.</strong> <code>Certificate</code>
-scopes through <code>RestMeta.GROUP_FIELD = "domain__group"</code>, and the framework
-skips its <code>request.group</code> rebind when that path resolves to <code>None</code> — so a
-caller-supplied <code>?group=</code> survives into a membership check that honors
-<code>GroupMember</code> grants. A direct <code>group</code> FK does not behave this way (it rebinds
-to <code>None</code> and falls through to global permissions). <code>rest/certificate.py</code>
-therefore guards its per-instance routes explicitly via
-<code>_guard_house_certificate</code>. Any future model scoped through a <code>GROUP_FIELD</code>
-path needs the same treatment.</p>
-</blockquote>
-<h3 id="the-no-failed-rows-invariant">The no-failed-rows invariant<a class="headerlink" href="#the-no-failed-rows-invariant" title="Permanent link">&para;</a></h3>
-<p><strong>A <code>failed</code> Domain row never persists.</strong> Every failure path deletes it and
-leaves <code>DomainPurchase</code> as the audit trail.</p>
-<p>This exists because <code>Domain.name</code> is unique. If failed rows survived, a
-registration that died halfway would permanently poison that name — and with
-<code>CAN_CREATE=False</code> there would be no supported way to clear it. Keeping the
-ledger separate from the live row means the unique constraint only ever guards
-live registrations.</p>
-<h2 id="the-money-path">The money path<a class="headerlink" href="#the-money-path" title="Permanent link">&para;</a></h2>
-<p>Purchasing ships <strong>disabled</strong> (<code>DNSMAN_PURCHASE_ENABLED</code> defaults to <code>False</code>)
-and has no single-call path. The ordering in <code>registrar.purchase()</code> is
-load-bearing:</p>
-<ol>
-<li><code>transaction.atomic()</code> + <code>select_for_update()</code> on the purchase row; verify
-   the token hash, the TTL, and <code>status == "quoted"</code> <strong>as a compare-and-swap
-   under the lock</strong> — so a concurrent second confirm loses cleanly.</li>
-<li>Create <code>Domain(status="registering")</code> <strong>inside</strong> the transaction, so a
-   unique-name collision fires <em>before</em> any money moves.</li>
-<li>Mark the purchase <code>submitted</code>. <strong>Commit.</strong></li>
-<li><em>Only then</em> call the registrar; store the returned operation id.</li>
-</ol>
-<p>Step 4 is outside the transaction on purpose. It leaves exactly one awkward
-state — <code>submitted</code> with no <code>operation_id</code> — and that state is <em>recoverable</em>:
-<code>poll_pending()</code> probes the registrar's operation list for a matching
-registration, adopts it if found, and fails the row after 30 minutes if not.
-The alternative ordering (register, then persist) has an unrecoverable state:
-money spent, nothing recorded.</p>
-<p><code>poll_pending()</code> is idempotent and status-guarded, so observing a completed
-operation twice cannot double-flip a row.</p>
-<h2 id="certificates">Certificates<a class="headerlink" href="#certificates" title="Permanent link">&para;</a></h2>
-<p>Issued over <strong>ACME DNS-01</strong>, which needs only a TXT record — so it works through
-both direct providers or a verified delegated target and needs no webserver.
-Issuance and renewal run centrally as jobs, never on a serving box.</p>
-<p>The private key is KMS-envelope-encrypted (<code>KSMSecrets</code>) and leaves the database
-through exactly one gated, access-logged endpoint. It is in no graph and in no
-job payload.</p>
-<p>Two details that break naive implementations:</p>
-<ul>
-<li><strong>A wildcard and its apex share one <code>_acme-challenge</code> record name</strong> and their
-  two digests must be present <em>simultaneously</em>. Challenges are grouped by record
-  name and written once with the full value list. Writing them one at a time
-  makes the second write erase the first.</li>
-<li><strong>Challenge cleanup runs in a <code>finally</code></strong> — on success and on failure. Orphaned
-  challenge TXT records otherwise accumulate in customer zones.</li>
-</ul>
-<p><code>DNSMAN_ACME_DIRECTORY_URL</code> defaults to Let's Encrypt <strong>staging</strong>, so an
-unconfigured deployment cannot burn production rate limits. Going live is a
-deliberate settings change.</p>
-<p>Delegation is opt-in. A pending allocation never changes direct issuance.
-After first verification routing is sticky; broken proof fails closed without
-Route53/GoDaddy fallback. The v1 profile is exactly apex plus wildcard, with
-both digests published through the challenge-specific hub client and withdrawn
-from a durable cleanup intent in <code>finally</code>. Duplicate requests/jobs serialize,
-and a failed delegated renewal preserves still-valid material with bounded
-retry rather than converting it to permanently failed.</p>
-<h3 id="why-hosts-pull-instead-of-being-pushed-to">Why hosts pull instead of being pushed to<a class="headerlink" href="#why-hosts-pull-instead-of-being-pushed-to" title="Permanent link">&para;</a></h3>
-<p>On success dnsman broadcasts a <code>certificate_updated</code> job carrying only the
-certificate id, domain and expiry. Subscribed hosts fetch the material
-themselves and reload locally.</p>
-<p>The payoff: replacing a serving host is a <em>sync</em>, not a reissue — no new CA
-order, no rate-limit exposure, and hosts stay disposable.</p>
-<h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Key</th>
-<th>Default</th>
+<th style="text-align: right;">HTTP</th>
 <th>Meaning</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>DNSMAN_PURCHASE_ENABLED</code></td>
-<td><code>False</code></td>
-<td>Global kill switch for any real-money call</td>
+<td style="text-align: right;"><code>400</code></td>
+<td>Missing/invalid input, unknown allocation, immutable-ref conflict, retired challenge ref, or missing/mismatched/chained CNAME proof</td>
 </tr>
 <tr>
-<td><code>DNSMAN_MAX_DOMAIN_PRICE</code></td>
-<td><code>50.00</code></td>
-<td>Refuse quotes above this</td>
+<td style="text-align: right;"><code>403</code></td>
+<td>Not an ApiKey, missing protected permission, inactive key, or effectively inactive project</td>
 </tr>
 <tr>
-<td><code>DNSMAN_QUOTE_TTL_MINUTES</code></td>
-<td><code>15</code></td>
-<td>Quote/confirm-token lifetime</td>
+<td style="text-align: right;"><code>429</code></td>
+<td>Shared hub rate limit exceeded</td>
 </tr>
 <tr>
-<td><code>DNSMAN_SEARCH_BATCH_LIMIT</code></td>
-<td><code>10</code></td>
-<td>Max names per batch search, after dedupe</td>
-</tr>
-<tr>
-<td><code>ROUTE53_PRICE_CACHE_HOURS</code></td>
-<td><code>24</code></td>
-<td>Per-TLD price cache in the route53 helper; <code>&lt;= 0</code> disables</td>
-</tr>
-<tr>
-<td><code>DNSMAN_REGISTRANT_CONTACT</code></td>
-<td><code>{}</code></td>
-<td>ICANN contact; purchase refuses when incomplete. <strong>DB-backed and group-scopable</strong> — edit via <code>/api/dnsman/registrant</code>, not the conf file (<a href="Registrar/#the-registrant-contact">details</a>)</td>
-</tr>
-<tr>
-<td><code>DNSMAN_ALLOWED_RECORD_TYPES</code></td>
-<td>A, AAAA, CNAME, TXT, MX, SRV, CAA, NS</td>
-<td>Apex NS/SOA still refused</td>
-</tr>
-<tr>
-<td><code>DNSMAN_ACME_DIRECTORY_URL</code></td>
-<td>Let's Encrypt <strong>staging</strong></td>
-<td>Deliberately not production</td>
-</tr>
-<tr>
-<td><code>DNSMAN_ACME_CONTACT_EMAIL</code></td>
-<td><code>None</code></td>
-<td>ACME account contact</td>
-</tr>
-<tr>
-<td><code>DNSMAN_CERT_RENEW_DAYS</code></td>
-<td><code>30</code></td>
-<td>Renew when fewer days remain</td>
-</tr>
-<tr>
-<td><code>DNSMAN_CERT_RETRY_BASE_SECONDS</code></td>
-<td><code>3600</code></td>
-<td>Failed still-valid renewal retry base; clamped 60s–24h and exponentially bounded at 24h</td>
-</tr>
-<tr>
-<td><code>DNSMAN_CERT_ISSUING_STALE_SECONDS</code></td>
-<td><code>1800</code></td>
-<td>Requeue an abandoned issuing claim after this grace period; clamped 60s–24h; file-only</td>
-</tr>
-<tr>
-<td><code>DNSMAN_CERT_SYNC_CHANNEL</code></td>
-<td><code>"certs"</code></td>
-<td>Channel for the cert-updated broadcast</td>
-</tr>
-<tr>
-<td><code>DNSMAN_DNS_PROPAGATION_TIMEOUT</code></td>
-<td><code>300</code></td>
-<td>Seconds to wait for authoritative visibility</td>
-</tr>
-<tr>
-<td><code>DNSMAN_ACME_HUB_ZONE</code></td>
-<td>unset</td>
-<td>Enables the optional delegated DNS-01 hub; file-only</td>
-</tr>
-<tr>
-<td><code>DNSMAN_ACME_HUB_HOSTED_ZONE_ID</code></td>
-<td>unset</td>
-<td>Optional exact public Route53 zone id; file-only</td>
-</tr>
-<tr>
-<td><code>DNSMAN_ACME_HUB_TTL</code></td>
-<td><code>60</code></td>
-<td>Hub TXT TTL (bounded); file-only</td>
-</tr>
-<tr>
-<td><code>DNSMAN_ACME_HUB_LEASE_SECONDS</code></td>
-<td><code>900</code></td>
-<td>Hub challenge lease lifetime (bounded); file-only</td>
-</tr>
-<tr>
-<td><code>DNSMAN_ACME_HUB_PROPAGATION_TIMEOUT</code></td>
-<td><code>300</code></td>
-<td>Hub Route53/authority timeout (bounded); file-only</td>
-</tr>
-<tr>
-<td><code>DNSMAN_ACME_HUB_PROPAGATION_INTERVAL</code></td>
-<td><code>5</code></td>
-<td>Hub propagation polling interval (bounded); file-only</td>
-</tr>
-<tr>
-<td><code>DNSMAN_ACME_HUB_SWEEP_LIMIT</code></td>
-<td><code>100</code></td>
-<td>Max allocations reconciled per sweep; file-only</td>
-</tr>
-<tr>
-<td><code>DNSMAN_ACME_HUB_URL</code></td>
-<td>unset</td>
-<td>Downstream hub HTTPS origin; file-only</td>
-</tr>
-<tr>
-<td><code>DNSMAN_ACME_HUB_API_KEY</code></td>
-<td>unset</td>
-<td>Downstream protected project ApiKey; file-only</td>
+<td style="text-align: right;"><code>503</code></td>
+<td>Hub disabled/misconfigured, exact public zone unavailable, Route53 failure, or propagation/reconciliation timeout</td>
 </tr>
 </tbody>
 </table>
-<p><code>jobs.publish</code> routes to the channel it is given, so the broadcast always lands
-on this channel. <code>certs</code> (the default) is in <code>JOBS_CHANNELS</code>' default list and is
-consumed out of the box; if you set <code>JOBS_CHANNELS</code> explicitly — or override
-<code>DNSMAN_CERT_SYNC_CHANNEL</code> — make sure some engine consumes it, or the broadcast
-sits on a queue nobody reads (which raises a <code>jobs:unconsumed_channel</code> incident).</p>
-<h2 id="further-reading">Further reading<a class="headerlink" href="#further-reading" title="Permanent link">&para;</a></h2>
-<ul>
-<li><a href="Registrar/">Registrar.md</a> — purchase internals and the ops runbook</li>
-<li><a href="Providers/">Providers.md</a> — adapter interface and provider differences</li>
-<li><a href="Certificates/">Certificates.md</a> — ACME flow, custody, renewal, sync</li>
-<li><a href="AcmeFederation/">AcmeFederation.md</a> — optional protected downstream DNS-01 delegation hub</li>
-<li><a href="EmailSetupAudit/">EmailSetupAudit.md</a> — audit of the pre-existing email path</li>
-</ul>
+<p>Errors use the normal <code>{"status": false, "code": &lt;HTTP&gt;, "error": "..."}</code>
+envelope. They never echo submitted TXT values or infrastructure identifiers.</p>
+<h2 id="file-only-settings">File-only settings<a class="headerlink" href="#file-only-settings" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th style="text-align: right;">Default</th>
+<th>Bounds / meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DNSMAN_ACME_HUB_ZONE</code></td>
+<td style="text-align: right;">unset</td>
+<td>Exact public Route53 zone; unset disables the hub</td>
+</tr>
+<tr>
+<td><code>DNSMAN_ACME_HUB_HOSTED_ZONE_ID</code></td>
+<td style="text-align: right;">unset</td>
+<td>Optional exact zone id (recommended where duplicate names exist)</td>
+</tr>
+<tr>
+<td><code>DNSMAN_ACME_HUB_TTL</code></td>
+<td style="text-align: right;"><code>60</code></td>
+<td>TXT TTL, clamped to 30–86400 seconds</td>
+</tr>
+<tr>
+<td><code>DNSMAN_ACME_HUB_LEASE_SECONDS</code></td>
+<td style="text-align: right;"><code>900</code></td>
+<td>Lease lifetime, clamped to 60–86400 seconds</td>
+</tr>
+<tr>
+<td><code>DNSMAN_ACME_HUB_PROPAGATION_TIMEOUT</code></td>
+<td style="text-align: right;"><code>300</code></td>
+<td>Reconciliation timeout, clamped to 5–900 seconds</td>
+</tr>
+<tr>
+<td><code>DNSMAN_ACME_HUB_PROPAGATION_INTERVAL</code></td>
+<td style="text-align: right;"><code>5</code></td>
+<td>Poll interval, clamped to 1–30 seconds</td>
+</tr>
+<tr>
+<td><code>DNSMAN_ACME_HUB_SWEEP_LIMIT</code></td>
+<td style="text-align: right;"><code>100</code></td>
+<td>Allocations per sweep, clamped to 1–1000</td>
+</tr>
+</tbody>
+</table>
+<p>These settings intentionally use <code>settings.get_static</code>: no tenant or DB-backed
+setting can redirect an existing or future allocation.</p>
+<h2 id="downstream-challenge-client">Downstream challenge client<a class="headerlink" href="#downstream-challenge-client" title="Permanent link">&para;</a></h2>
+<p>A deployment consuming this hub uses
+<code>mojo.apps.dnsman.services.acme_hub_client</code>. This is a challenge-specific HTTP
+transport, not a <code>DnsProvider</code>: it is never registered with
+<code>services/dns.get_adapter()</code>, cannot list records, and cannot write a
+caller-selected name. The only operations are:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">allocation</span> <span class="o">=</span> <span class="n">acme_hub_client</span><span class="o">.</span><span class="n">allocate</span><span class="p">(</span><span class="n">domain</span><span class="p">,</span> <span class="n">client_ref</span><span class="p">)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">published</span> <span class="o">=</span> <span class="n">acme_hub_client</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="n">client_ref</span><span class="p">,</span> <span class="n">challenge_ref</span><span class="p">,</span> <span class="n">record_values</span><span class="p">)</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">withdrawn</span> <span class="o">=</span> <span class="n">acme_hub_client</span><span class="o">.</span><span class="n">withdraw</span><span class="p">(</span><span class="n">client_ref</span><span class="p">,</span> <span class="n">challenge_ref</span><span class="p">)</span>
+</code></pre></div>
+<p>Persist the returned normalized <code>domain</code>, exact <code>_acme-challenge</code> <code>source</code>, and
+opaque <code>target</code> with the immutable <code>client_ref</code>; the tenant publishes that one
+CNAME. Persist cleanup intent and the locally generated immutable
+<code>challenge_ref</code> before calling <code>publish()</code>. Always call the idempotent
+<code>withdraw()</code> for that reference after success, failure, or an ambiguous publish
+response. Delegated propagation probes the persisted <code>target</code>, not the tenant
+<code>source</code>.</p>
+<p>The downstream settings are also file-only and read at call time:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th style="text-align: right;">Default</th>
+<th>Bounds / meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DNSMAN_ACME_HUB_URL</code></td>
+<td style="text-align: right;">unset</td>
+<td>Hub HTTPS origin; plain HTTP is accepted only for <code>localhost</code>/loopback development</td>
+</tr>
+<tr>
+<td><code>DNSMAN_ACME_HUB_API_KEY</code></td>
+<td style="text-align: right;">unset</td>
+<td>Project ApiKey carrying protected <code>dnsman_acme_federation</code></td>
+</tr>
+<tr>
+<td><code>DNSMAN_ACME_HUB_CONNECT_TIMEOUT</code></td>
+<td style="text-align: right;"><code>5</code></td>
+<td>Connect timeout, 0.1–30 seconds</td>
+</tr>
+<tr>
+<td><code>DNSMAN_ACME_HUB_READ_TIMEOUT</code></td>
+<td style="text-align: right;"><code>30</code></td>
+<td>Read timeout, 0.1–120 seconds</td>
+</tr>
+<tr>
+<td><code>DNSMAN_ACME_HUB_RETRIES</code></td>
+<td style="text-align: right;"><code>1</code></td>
+<td>Identical idempotent retries, 0 or 1</td>
+</tr>
+</tbody>
+</table>
+<p>There is deliberately no downstream zone-name setting: allocation returns the
+full target. <code>is_available()</code> returns false only when both required settings
+are absent; partial or unsafe configuration raises
+<code>AcmeHubConfigurationError</code>. Calls never follow redirects, use normal TLS
+verification, bound response bodies, validate echoed references and DNS names,
+and map remote bodies to typed, bounded errors safe for certificate/job status.
+Only connect/read ambiguity and HTTP 502/503/504 are retried, at most once;
+400/401/403/409/429 and redirects are not. Missing configuration or any client
+failure is loud and never falls back to Route53, GoDaddy, or another challenge.</p>
+<p>Client failures expose only bounded metadata: <code>kind</code>, <code>retriable</code>, and (for
+HTTP responses) <code>http_status</code>. Configuration/request validation is not
+retriable; transport ambiguity is retriable; only 502/503/504 HTTP responses
+are marked retriable. Remote response bodies, configured URLs/API keys, and TXT
+values are never copied into exception text.</p>
+<h2 id="downstream-tenant-lifecycle">Downstream tenant lifecycle<a class="headerlink" href="#downstream-tenant-lifecycle" title="Permanent link">&para;</a></h2>
+<p><code>AcmeDelegation</code> is the consuming deployment's durable tenant-side tombstone.
+It commits a UUID <code>client_ref</code>, tenant/user snapshots and normalized name before
+the first <code>allocate()</code> call, then stores the returned source/target once and
+compares every later hub reply to them. Pending external names do not create or
+reserve a globally unique <code>Domain</code>; authoritative exact one-hop proof creates
+<code>Domain(provider="mojo")</code> atomically. That provider is certificate-only and is
+never registered with general DNS CRUD.</p>
+<p>The public lifecycle is <code>pending → verified ↔ broken</code>; <code>retired</code> tombstones are
+internal. Pending is inert. Once verified, routing is sticky: a changed,
+missing, chained or conflicting alias marks the delegation broken and issuance
+fails closed without falling back to the Domain's old Route53/GoDaddy adapter.
+Verification locks and rechecks the original tenant identity and its effective
+active state before creating a Domain, so a deleted/deactivated tenant cannot
+turn an external name into a house asset.</p>
+<p>Delegated v1 accepts exactly apex plus wildcard. Issuance re-proves the alias
+before creating a CA order, publishes both digests in one hub lease, probes the
+opaque target for the exact values, and records cleanup intent before publish.
+The same immutable reference is withdrawn in <code>finally</code>, including after an
+ambiguous timeout. Certificate workers claim a row atomically and Jobs uses an
+idempotency key, so duplicate requests/jobs consume one order. A failed renewal
+keeps still-valid KMS-held material active and advances <code>renew_after</code> with a
+bounded retry instead of permanently failing the serving certificate.</p>
+<p>The tenant REST payload is deliberately narrower than either tombstone model:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">9</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-06T12:00:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">&quot;modified&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-06T12:03:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="nt">&quot;domain_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;customer.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;_acme-challenge.customer.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="nt">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;4a0f0123456789abcdef0123456789ab.acme-hub.example.net&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">  </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;verified&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">  </span><span class="nt">&quot;verified_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-06T12:03:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span><span class="nt">&quot;last_error_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="p">}</span>
+</code></pre></div>
+<p>For an external pending name, <code>domain</code> and <code>verified_at</code> are null. Initiate and
+verify require <code>manage_dns</code> (or <code>security</code>); detail/list require <code>view_dns</code>,
+<code>manage_dns</code>, or <code>security</code>. A missing/retired detail is 404, cross-tenant
+access is 403, invalid request combinations and failed proof/name claims are
+400, and missing/invalid downstream hub configuration or allocation transport
+failure is 503. <code>last_error_code</code> is a bounded machine diagnostic such as
+<code>alias_lookup_failed</code>, <code>alias_mismatch</code>, <code>domain_claimed</code>, <code>group_inactive</code>,
+<code>configuration</code>, <code>transport</code>, <code>response</code>, <code>http</code>, or
+<code>hub_allocation_mismatch</code>; UI copy should be driven by the HTTP error and state,
+not by displaying that internal code verbatim.</p>
 
 
 
@@ -4345,10 +4181,10 @@ sits on a queue nobody reads (which raises a <code>jobs:unconsumed_channel</code
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.suggest", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

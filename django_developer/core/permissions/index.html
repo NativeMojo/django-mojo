@@ -4207,6 +4207,13 @@ Without this, a key self-claiming <code>manage_users</code> could read every ten
 <code>User</code> rows. A key's own <code>permissions</code> are additionally gated on assignment by
 <code>APIKEY_PERMS_PROTECTION</code> (see <a href="../../account/api_keys/">API Keys</a>). Net: an
 ApiKey can only ever reach <strong>group-owned</strong> data, confined to its own group.</p>
+<p>The ACME delegation hub is intentionally stricter than the generic federation
+escape hatch: its custom gate requires <code>request.api_key</code> itself, checks the
+underlying key's protected <code>dnsman_acme_federation</code> permission, rejects an
+effectively inactive key group, and pins ownership to that exact group. Do not
+replace it with <code>requires_global_perms(..., allow_api_keys=True)</code>: that generic
+decorator also admits eligible User sessions and override-mode keys authorize
+through their acting user, neither of which is the hub's identity contract.</p>
 <p><strong>A third path bypasses both gates above: no model security at all.</strong> Both
 protections just described only fire on an endpoint that actually reaches
 them — <code>requires_global_perms</code> is a decorator you must apply, and the

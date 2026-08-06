@@ -3744,6 +3744,78 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#acme-delegation-hub-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ACME delegation hub (optional)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ACME delegation hub (optional)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#post-apidnsmanacmedelegation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /api/dnsman/acme/delegation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-apidnsmanacmechallengepublish" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /api/dnsman/acme/challenge/publish
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-apidnsmanacmechallengewithdraw" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /api/dnsman/acme/challenge/withdraw
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#downstream-client-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Downstream client behavior
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tenant-delegation-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenant delegation lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#domains" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4200,6 +4272,139 @@ UI must gate on these, or it renders controls that 403.</strong></p>
   <code>manage_dns</code> despite being a read, because the payload <em>is</em> the contact PII.
   With no <code>?group=</code> it addresses the house contact and additionally requires a
   platform admin. See <a href="#the-registrant-contact">the registrant contact</a>.</p>
+<p>The <code>/acme/*</code> hub endpoints are a separate machine-only surface. They accept
+only an <code>Authorization: apikey …</code> credential whose underlying key carries the
+protected <code>dnsman_acme_federation</code> permission and whose project is active. JWT
+users, group tokens, anonymous requests, permissionless keys, and acting-user
+overrides whose underlying key lacks the permission all receive <code>403</code>.</p>
+<h2 id="acme-delegation-hub-optional">ACME delegation hub (optional)<a class="headerlink" href="#acme-delegation-hub-optional" title="Permanent link">&para;</a></h2>
+<p>The hub is absent by default and has no fallback behavior. A configured
+downstream uses a fresh immutable <code>client_ref</code> per onboarding:</p>
+<h3 id="post-apidnsmanacmedelegation"><code>POST /api/dnsman/acme/delegation</code><a class="headerlink" href="#post-apidnsmanacmedelegation" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;customer.example&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;client_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;site-install-2026-08&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;client_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;site-install-2026-08&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;customer.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;_acme-challenge.customer.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;4a0f0123456789abcdef0123456789ab.acme-hub.example.net&quot;</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p">}</span>
+</code></pre></div>
+<p>This is the exact <code>data</code> object inside the standard success envelope. The same
+project/ref/domain is idempotent; reusing the ref for another domain is refused.
+Publish the returned source as one CNAME to the returned target.</p>
+<h3 id="post-apidnsmanacmechallengepublish"><code>POST /api/dnsman/acme/challenge/publish</code><a class="headerlink" href="#post-apidnsmanacmechallengepublish" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;client_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;site-install-2026-08&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;challenge_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;order-123&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;values&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;digest-for-apex&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;digest-for-wildcard&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p><code>values</code> is the complete digest set for that challenge. The hub first verifies
+the stored source is exactly one CNAME hop to its stored target, then durably
+leases the set and replaces the target RRset with the union of all active
+leases. Success waits for the exact union to be authoritatively visible. A
+retry must use the same <code>challenge_ref</code> and values.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;client_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;site-install-2026-08&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;customer.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;_acme-challenge.customer.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;4a0f0123456789abcdef0123456789ab.acme-hub.example.net&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">&quot;challenge_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;order-123&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="nt">&quot;active_value_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>active_value_count</code> is the size of the deduplicated TXT union, not a lease
+count. Replaying a ref with different values, or republishing an expired or
+withdrawn ref, is refused.</p>
+<h3 id="post-apidnsmanacmechallengewithdraw"><code>POST /api/dnsman/acme/challenge/withdraw</code><a class="headerlink" href="#post-apidnsmanacmechallengewithdraw" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;client_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;site-install-2026-08&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;challenge_ref&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;order-123&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>Idempotently retires only that lease and preserves values from parallel
+challenges. Withdrawal deliberately succeeds after the tenant CNAME has been
+removed, so revocation cannot block cleanup.</p>
+<p>The response uses the same six-field challenge shape shown for publish, with
+the remaining <code>active_value_count</code>; an unknown/already-retired reference is a
+successful no-op. Hub responses never contain TXT digests, hosted-zone ids,
+AWS change ids, credentials, or unrelated allocations.</p>
+<p>References are 1–128 safe identifier characters. <code>values</code> accepts 1–20 entries
+(duplicates are deduplicated), each 1–1024 characters with no NUL/CR/LF. All
+three endpoints return 200 on success and share one sliding bucket: 120
+requests/minute per IP and 300 per project. A limit response is 429 with
+<code>Retry-After</code>.</p>
+<h3 id="downstream-client-behavior">Downstream client behavior<a class="headerlink" href="#downstream-client-behavior" title="Permanent link">&para;</a></h3>
+<p>The consuming deployment configures a file-only hub URL and protected ApiKey;
+there is no downstream hub-zone setting because allocation returns the full
+opaque target. Missing or invalid configuration makes delegation unavailable
+and is never treated as success. A configured client refuses redirects and
+malformed/cross-request replies, bounds connect/read timeouts, and retries the
+identical idempotent request at most once only for connection/read ambiguity or
+HTTP 502/503/504. It does not retry 400/401/403/409/429.</p>
+<p>Products must persist the allocation and publish the returned source→target
+CNAME before considering delegation verified. For each issuance, persist a
+locally generated immutable <code>challenge_ref</code> and cleanup intent before publish,
+probe the returned target for propagation, and always withdraw that same
+reference afterward. A verified or broken delegation never silently falls back
+to direct Route53/GoDaddy. Those direct providers and Maestro Sites HTTP-01 are
+separate flows and remain unchanged.</p>
+<h3 id="tenant-delegation-lifecycle">Tenant delegation lifecycle<a class="headerlink" href="#tenant-delegation-lifecycle" title="Permanent link">&para;</a></h3>
+<p>The consuming dnsman deployment wraps that machine transport in normal
+tenant-gated endpoints:</p>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Permission</th>
+<th>Request / behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST /api/dnsman/delegation/initiate</code></td>
+<td><code>manage_dns</code> or <code>security</code></td>
+<td>Either <code>{ "domain": 12 }</code> or <code>{ "group": 4, "name": "external.example" }</code>; returns the permanent CNAME source/target. An external name remains pending and does not reserve <code>Domain.name</code>.</td>
+</tr>
+<tr>
+<td><code>GET /api/dnsman/delegation?domain=12</code></td>
+<td><code>view_dns</code>, <code>manage_dns</code>, or <code>security</code></td>
+<td>Returns a list (maximum 100, newest first) for that authorized Domain.</td>
+</tr>
+<tr>
+<td><code>GET /api/dnsman/delegation/&lt;id&gt;</code></td>
+<td><code>view_dns</code>, <code>manage_dns</code>, or <code>security</code></td>
+<td>Returns one authorized non-retired delegation.</td>
+</tr>
+<tr>
+<td><code>POST /api/dnsman/delegation/verify</code></td>
+<td><code>manage_dns</code> or <code>security</code></td>
+<td><code>{ "delegation": 9 }</code>; proves the exact one-hop alias and creates an external name's certificate-only Domain only after success.</td>
+</tr>
+</tbody>
+</table>
+<p>Every tenant route returns this exact object (the list route returns an array of
+them):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">9</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-06T12:00:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">&quot;modified&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-06T12:03:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="nt">&quot;domain_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;external.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;_acme-challenge.external.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span><span class="nt">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;4a0f0123456789abcdef0123456789ab.acme-hub.example.net&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;verified&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">&quot;verified_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-06T12:03:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span><span class="nt">&quot;last_error_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>domain</code> and <code>verified_at</code> are null for an external pending name. Timestamps are
+ISO 8601 strings. <code>last_error_code</code> is a bounded diagnostic (for example
+<code>alias_lookup_failed</code>, <code>alias_mismatch</code>, <code>domain_claimed</code>, <code>group_inactive</code>,
+<code>configuration</code>, <code>transport</code>, <code>response</code>, <code>http</code>, or
+<code>hub_allocation_mismatch</code>); do not show it as end-user copy.</p>
+<p>Public states are <code>pending</code>, <code>verified</code>, and <code>broken</code>; retired tombstones are
+never serialized. Pending is inert. After first verification routing is sticky:
+a missing/changed/chained alias becomes broken and certificate issuance fails
+closed without silently using Route53/GoDaddy. Delegated v1 accepts exactly the
+apex-plus-wildcard profile. These endpoints use normal <code>view_dns</code>/<code>manage_dns</code>
+tenant isolation and never return the hub ApiKey, client reference, cleanup
+reference, TXT digest, PEM, or private key.</p>
 <h2 id="domains">Domains<a class="headerlink" href="#domains" title="Permanent link">&para;</a></h2>
 <h3 id="get-apidnsmandomain-get-apidnsmandomainpk"><code>GET /api/dnsman/domain</code> · <code>GET /api/dnsman/domain/&lt;pk&gt;</code><a class="headerlink" href="#get-apidnsmandomain-get-apidnsmandomainpk" title="Permanent link">&para;</a></h3>
 <p>List or fetch domains. Standard list params (<code>search</code>, <code>sort</code>, paging, <code>graph</code>).</p>
@@ -4221,14 +4426,14 @@ leaves the failure on the purchase record instead.</p>
 <p>Records are <strong>not mirrored</strong> in our database — these endpoints read and write
 the provider's zone live, so there is no drift to reconcile.</p>
 <h3 id="get-apidnsmandnsdomainpk"><code>GET /api/dnsman/dns?domain=&lt;pk&gt;</code><a class="headerlink" href="#get-apidnsmandnsdomainpk" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;route53&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;records&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;www.example.com&quot;</span><span class="p">,</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">                 </span><span class="nt">&quot;record_values&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;203.0.113.10&quot;</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;ttl&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;route53&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;records&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;www.example.com&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">                 </span><span class="nt">&quot;record_values&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;203.0.113.10&quot;</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;ttl&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 The value field is <code>record_values</code> (a list, always — even for a single value).</p>
 <h3 id="post-apidnsmandns"><code>POST /api/dnsman/dns</code><a class="headerlink" href="#post-apidnsmandns" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;TXT&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;_acme-challenge&quot;</span><span class="p">,</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&quot;record_values&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;abc&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;def&quot;</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;ttl&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;TXT&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;_acme-challenge&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;record_values&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;abc&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;def&quot;</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;ttl&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <code>name</code> may be relative (<code>www</code>), <code>@</code> for the apex, or a full FQDN — all three
 normalize to the same record. Provider quirks (TXT quoting, apex form) are
@@ -4252,7 +4457,7 @@ action. Route53 domains have the record removed outright.</p>
 </blockquote>
 <h2 id="credentials-bring-your-own-provider-account">Credentials (bring your own provider account)<a class="headerlink" href="#credentials-bring-your-own-provider-account" title="Permanent link">&para;</a></h2>
 <h3 id="post-apidnsmancredentiallink"><code>POST /api/dnsman/credential/link</code><a class="headerlink" href="#post-apidnsmancredentiallink" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;godaddy&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;api_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;api_secret&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Acme GoDaddy&quot;</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;godaddy&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;api_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;api_secret&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Acme GoDaddy&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 The credential is verified against the provider before anything is stored — a
 failed first link persists nothing. Pass <code>credential: &lt;pk&gt;</code> to rotate an
@@ -4263,7 +4468,7 @@ The secret is never returned by any endpoint, in any graph, ever.</p>
 account</strong>. Ownership is proven per-name at registration time, which means you
 can only ever confirm a domain you already knew to name.</p>
 <h3 id="post-apidnsmanregistrarregister-existing"><code>POST /api/dnsman/registrar/register-existing</code><a class="headerlink" href="#post-apidnsmanregistrarregister-existing" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;credential&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;credential&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 Claims a domain you already hold at the provider. The linked credential is the
 proof of control: we ask the provider whether that account actually holds this
@@ -4273,16 +4478,19 @@ specific domain and that it is active.</p>
 <p>Requires <code>view_dns</code>. Optional <code>?group=&lt;id&gt;</code>. Report what's currently turned on
 before attempting a gated action — a client should render its purchase and cert
 UI from this, not from probing <code>registrar/quote</code> and reading the refusal.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;purchase_enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;registrant_contact_configured&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;max_domain_price&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;50.00&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;currency&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;USD&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;quote_ttl_minutes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;allowed_record_types&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;A&quot;</span><span class="p">,</span><span class="s2">&quot;AAAA&quot;</span><span class="p">,</span><span class="s2">&quot;CAA&quot;</span><span class="p">,</span><span class="s2">&quot;CNAME&quot;</span><span class="p">,</span><span class="s2">&quot;MX&quot;</span><span class="p">,</span><span class="s2">&quot;NS&quot;</span><span class="p">,</span><span class="s2">&quot;SRV&quot;</span><span class="p">,</span><span class="s2">&quot;TXT&quot;</span><span class="p">],</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;search_batch_limit&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;suggestions_enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">&quot;providers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;route53&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;purchase&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w">  </span><span class="nt">&quot;requires_credential&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="p">},</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;godaddy&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;purchase&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;requires_credential&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="p">],</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="nt">&quot;acme&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;configured&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;staging&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">},</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span><span class="nt">&quot;cert_renew_days&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;purchase_enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;registrant_contact_configured&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;max_domain_price&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;50.00&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;currency&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;USD&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;quote_ttl_minutes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;allowed_record_types&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;A&quot;</span><span class="p">,</span><span class="s2">&quot;AAAA&quot;</span><span class="p">,</span><span class="s2">&quot;CAA&quot;</span><span class="p">,</span><span class="s2">&quot;CNAME&quot;</span><span class="p">,</span><span class="s2">&quot;MX&quot;</span><span class="p">,</span><span class="s2">&quot;NS&quot;</span><span class="p">,</span><span class="s2">&quot;SRV&quot;</span><span class="p">,</span><span class="s2">&quot;TXT&quot;</span><span class="p">],</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">&quot;search_batch_limit&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;suggestions_enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span><span class="nt">&quot;providers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;route53&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;purchase&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w">  </span><span class="nt">&quot;requires_credential&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;godaddy&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;purchase&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;requires_credential&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">  </span><span class="nt">&quot;acme&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;configured&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;staging&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">  </span><span class="nt">&quot;delegated_acme&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;available&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;record_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;CNAME&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">    </span><span class="nt">&quot;target_suffix&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;profile&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;apex_wildcard&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">    </span><span class="nt">&quot;requires_provider_credentials&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">  </span><span class="nt">&quot;cert_renew_days&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p><code>registrant_contact_configured</code> is a boolean — the registrant contact itself is
 PII and is never returned here. <strong>It is the one field that varies per group:</strong>
@@ -4298,7 +4506,13 @@ staging cert as "active" without surfacing that. <code>search_batch_limit</code>
 <code>DNSMAN_SEARCH_BATCH_LIMIT</code>, the cap enforced on batch <code>registrar/search</code>
 calls. <code>suggestions_enabled</code> is always <code>true</code> today — there is no kill switch
 for it; the flag exists purely so a client can feature-detect batch search
-and <code>registrar/suggest</code> against an older backend that predates them.</p>
+and <code>registrar/suggest</code> against an older backend that predates them.
+<code>delegated_acme.available</code> is false only when the downstream hub URL and key
+are both absent. <code>target_suffix</code> is null because the hub assigns an opaque full
+target during initiation; clients must use that returned target verbatim. A
+partial or unsafe URL/key configuration fails capability discovery instead of
+masquerading as <code>available: false</code>; that is a deployment error, not a disabled
+feature.</p>
 <h2 id="the-registrant-contact">The registrant contact<a class="headerlink" href="#the-registrant-contact" title="Permanent link">&para;</a></h2>
 <p>The ICANN contact domains get registered under. <strong>Per group, with a house
 fallback</strong>: a group with its own contact registers under it, a group without one
@@ -4327,13 +4541,13 @@ typo) is a <strong>400</strong> — <code>"...does not exist or is not active...
 fall-through to the house scope. That distinction matters: falling through
 would ask a tenant admin for platform-admin rights they never meant to invoke.</p>
 <p>Both verbs return the same body:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;scope&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;group&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;contact&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;FirstName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;LastName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;ContactType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;PERSON&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">               </span><span class="nt">&quot;AddressLine1&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;City&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;State&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">               </span><span class="nt">&quot;CountryCode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;ZipCode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">               </span><span class="nt">&quot;PhoneNumber&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+1.5035551212&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;Email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">},</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;database&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;inherited&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="nt">&quot;effective_configured&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;problems&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;scope&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;group&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;contact&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;FirstName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;LastName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;ContactType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;PERSON&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">               </span><span class="nt">&quot;AddressLine1&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;City&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;State&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">               </span><span class="nt">&quot;CountryCode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;US&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;ZipCode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">               </span><span class="nt">&quot;PhoneNumber&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+1.5035551212&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;Email&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;database&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;inherited&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span><span class="nt">&quot;effective_configured&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;problems&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p><code>contact</code>, <code>source</code> and <code>problems</code> describe <strong>this scope's own row only</strong> —
 never an inherited contact. A group with nothing of its own gets
@@ -4391,18 +4605,18 @@ to be discovered.</p>
 purchase path</strong>.</p>
 <h3 id="post-apidnsmanregistrarsearch"><code>POST /api/dnsman/registrar/search</code><a class="headerlink" href="#post-apidnsmanregistrarsearch" title="Permanent link">&para;</a></h3>
 <p>One name — the flat response, unchanged:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;AVAILABLE&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;available&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;price&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">12.00</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;currency&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;USD&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tld&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tld_supported&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;privacy_supported&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;AVAILABLE&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;available&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">&quot;price&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">12.00</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;currency&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;USD&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tld&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tld_supported&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="nt">&quot;privacy_supported&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div></p>
 <p>Batch — either shape (never mixed), answered as <code>{ "results": [...] }</code> with
 one row per name <strong>in request order</strong>, each row exactly the single-name
 object above:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;nativemojo&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tlds&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;dev&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;io&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;app&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;nativemojo&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;tlds&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;dev&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;io&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;app&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domains&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;nativemojo.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;nativemojo.dev&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domains&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;nativemojo.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;nativemojo.dev&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 - Send one shape or the other. Mixing them — <code>tlds</code> together with <code>domains</code>,
   or <code>domain</code> together with <code>domains</code> — is refused with <code>400</code> before
@@ -4422,7 +4636,7 @@ or a per-name failure inside a batch — <code>reason</code> says which) — ret
 not present it to a user as unavailable. <code>tld_supported: false</code> means the
 registrar does not sell that TLD at all.</p>
 <h3 id="post-apidnsmanregistrarsuggest"><code>POST /api/dnsman/registrar/suggest</code><a class="headerlink" href="#post-apidnsmanregistrarsuggest" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;nativemojo.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;only_available&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;nativemojo.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;only_available&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 Alternate-name ideas from the registrar, answered as <code>{ "results": [...] }</code>
 with rows in exactly the search shape — render one grid for both. <code>count</code>
@@ -4435,7 +4649,7 @@ being dropped. If the registrar call itself fails (throttle, missing IAM
 grant), the endpoint answers a clean <code>400</code> asking to retry — never provider
 internals. Requires <code>view_dns</code>, like search.</p>
 <h3 id="post-apidnsmanregistrarquote-step-1-of-2"><code>POST /api/dnsman/registrar/quote</code> → step 1 of 2<a class="headerlink" href="#post-apidnsmanregistrarquote-step-1-of-2" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;years&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;years&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 Returns the price and a single-use <code>confirm_token</code> with a short expiry. <strong>The
 raw token is shown exactly once and is never retrievable again</strong> — we store only
@@ -4445,7 +4659,7 @@ registrant contact is not configured, the TLD is unsupported, the name is
 already tracked, availability is not a definite yes, or the price exceeds the
 configured cap.</p>
 <h3 id="post-apidnsmanregistrarpurchase-step-2-of-2"><code>POST /api/dnsman/registrar/purchase</code> → step 2 of 2<a class="headerlink" href="#post-apidnsmanregistrarpurchase-step-2-of-2" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;purchase&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">31</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;confirm_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;purchase&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">31</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;confirm_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 Spends money. A quote can be redeemed exactly once — a second attempt gets a
 uniform <code>400</code> that deliberately does not say which check failed.</p>
@@ -4462,17 +4676,17 @@ operation id, and any error. Read-only. <code>confirm_token</code> is never retu
 dnsman tracks it — the answer to "what do we own that isn't in here?". Creates
 nothing, changes nothing, spends nothing.</p>
 <p>Optional <code>?untracked=1</code> returns only the rows dnsman does not already have.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;truncated&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domains&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;registered&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;hosted_zone&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span><span class="nt">&quot;hosted_zone_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Z1ABCDEF&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;record_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">14</span><span class="p">,</span>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">    </span><span class="nt">&quot;expires&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2027-03-01T00:00:00Z&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;auto_renew&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">    </span><span class="nt">&quot;tracked&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;adoptable&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="p">},</span>
-<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;legacy.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;registered&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;hosted_zone&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">    </span><span class="nt">&quot;hosted_zone_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;record_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
-<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">    </span><span class="nt">&quot;expires&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-11-02T00:00:00Z&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;auto_renew&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">    </span><span class="nt">&quot;tracked&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;adoptable&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">    </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;already tracked by this system&quot;</span><span class="w"> </span><span class="p">}</span>
-<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="p">]}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;truncated&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domains&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;registered&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;hosted_zone&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="w">    </span><span class="nt">&quot;hosted_zone_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Z1ABCDEF&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;record_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">14</span><span class="p">,</span>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="w">    </span><span class="nt">&quot;expires&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2027-03-01T00:00:00Z&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;auto_renew&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="w">    </span><span class="nt">&quot;tracked&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;adoptable&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;legacy.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;registered&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;hosted_zone&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="w">    </span><span class="nt">&quot;hosted_zone_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;record_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a><span class="w">    </span><span class="nt">&quot;expires&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-11-02T00:00:00Z&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;auto_renew&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a><span class="w">    </span><span class="nt">&quot;tracked&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;adoptable&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a><span class="w">    </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;already tracked by this system&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a><span class="p">]}</span>
 </code></pre></div>
 <p>Route53 registers domains and hosts DNS zones through two separate APIs and the
 sets do not match, so <code>registered</code> and <code>hosted_zone</code> are independent: a name can
@@ -4492,7 +4706,7 @@ be one, the other, or both.</p>
 <p>Superuser only. Brings an existing house-account hosted zone under management
 with no purchase and no money — the path by which DNS management is useful on
 day one, before anything has been bought.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;create_zone&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;create_zone&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p><code>group</code> is <strong>optional</strong>. Omit it and the domain is adopted <em>platform-scoped</em> —
 it belongs to no tenant, appears in no tenant's list, and is assigned later with
@@ -4503,7 +4717,7 @@ instead of quietly producing a house domain.</p>
 <p>Refused when the name's only hosted zone is private.</p>
 <h3 id="post-apidnsmanregistrarassign-group"><code>POST /api/dnsman/registrar/assign-group</code><a class="headerlink" href="#post-apidnsmanregistrarassign-group" title="Permanent link">&para;</a></h3>
 <p>Superuser only. Hands a platform-scoped domain to a group.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;group&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p><strong>Assign only.</strong> A domain that already belongs to a group is refused — moving a
 domain from one tenant to another is not supported. Build the UI as a one-time
@@ -4524,12 +4738,17 @@ here.</p>
 refused up front with a reason naming the TLD, rather than appearing to succeed.</p>
 <h2 id="certificates">Certificates<a class="headerlink" href="#certificates" title="Permanent link">&para;</a></h2>
 <p>Certificates are issued centrally over ACME DNS-01 and held here. Because
-DNS-01 only needs a TXT record, this works for <strong>both</strong> providers.</p>
+DNS-01 only needs a TXT record, this works through both direct providers or a
+verified delegated target.</p>
 <h3 id="post-apidnsmancertificaterequest"><code>POST /api/dnsman/certificate/request</code><a class="headerlink" href="#post-apidnsmancertificaterequest" title="Permanent link">&para;</a></h3>
-<p><div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;names&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;*.example.com&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;names&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;*.example.com&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 Defaults to the apex plus its wildcard. Issuance runs as a background job and
-takes minutes — this returns immediately with a <code>pending</code> certificate.</p>
+takes minutes — this returns immediately with a <code>pending</code> certificate.
+Concurrent identical requests/jobs are deduplicated. For delegated domains the
+only accepted names are exactly the apex plus wildcard. A failed delegated
+renewal leaves still-valid active material available and schedules a bounded
+retry; surface <code>last_error</code>, but do not replace a still-active serving cert.</p>
 <h3 id="get-apidnsmancertificate-get-apidnsmancertificatepk"><code>GET /api/dnsman/certificate</code> · <code>GET /api/dnsman/certificate/&lt;pk&gt;</code><a class="headerlink" href="#get-apidnsmancertificate-get-apidnsmancertificatepk" title="Permanent link">&para;</a></h3>
 <p>Status, SANs, issuer, serial, validity window, <code>renew_after</code>, and
 <code>days_remaining</code>. <strong>These responses carry no PEM and no key.</strong></p>
@@ -4538,8 +4757,8 @@ takes minutes — this returns immediately with a <code>pending</code> certifica
 <h3 id="get-apidnsmancertificatematerialpk"><code>GET /api/dnsman/certificate/material/&lt;pk&gt;</code><a class="headerlink" href="#get-apidnsmancertificatematerialpk" title="Permanent link">&para;</a></h3>
 <p>The only way to obtain key material. Requires <code>manage_dns</code>; every release is
 logged.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;common_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;sans&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;*.example.com&quot;</span><span class="p">],</span>
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span><span class="nt">&quot;not_after&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cert_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;chain_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;private_key_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;common_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;sans&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;*.example.com&quot;</span><span class="p">],</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="w">  </span><span class="nt">&quot;not_after&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;cert_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;chain_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;private_key_pem&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div>
 <p>A <code>503</code> here means the custody layer (KMS) is temporarily unavailable — <strong>not</strong>
 that the certificate has no key. Retry; do not reissue.</p>
@@ -4585,6 +4804,38 @@ disposable.</p>
 <tr>
 <td>Certificate material while KMS is down</td>
 <td><code>503</code> "temporarily unavailable"</td>
+</tr>
+<tr>
+<td>Hub endpoint called without an eligible protected ApiKey</td>
+<td><code>403</code></td>
+</tr>
+<tr>
+<td>Hub input/ref conflict, unknown allocation, retired challenge ref, or failed CNAME proof</td>
+<td><code>400</code></td>
+</tr>
+<tr>
+<td>Hub rate limit</td>
+<td><code>429</code> plus <code>Retry-After</code></td>
+</tr>
+<tr>
+<td>Hub disabled, wrong/unavailable public zone, provider failure, or propagation timeout</td>
+<td><code>503</code></td>
+</tr>
+<tr>
+<td>Tenant delegation missing/retired</td>
+<td><code>404</code></td>
+</tr>
+<tr>
+<td>Tenant delegation cross-tenant or missing read/write permission</td>
+<td><code>403</code></td>
+</tr>
+<tr>
+<td>Tenant initiate shape, alias proof, active-group, or domain-claim failure</td>
+<td><code>400</code></td>
+</tr>
+<tr>
+<td>Tenant downstream client configuration/allocation transport failure</td>
+<td><code>503</code></td>
 </tr>
 </tbody>
 </table>
