@@ -38,6 +38,16 @@ def _safe_slug(value):
     return (re.sub(r"[^a-z0-9-]+", "-", (value or "").lower()).strip("-")[:48] or "deployment")
 
 
+def _alarm_name(slug, kind, resource_id, signal):
+    """The single source of the owned alarm name format."""
+    return f"django-mojo/{slug}/{kind}/{resource_id}/{signal}"[:255]
+
+
+def _is_aurora_engine(engine):
+    """True for every AWS Aurora engine id. Aurora publishes FreeLocalStorage, not FreeStorageSpace."""
+    return str(engine or "").strip().lower().startswith("aurora")
+
+
 class AWSCheckRunner:
     def __init__(self, region=None, profile=None, timeout=3, apply=False, yes=False,
                  probe_s3=False, bucket_name=None, mailbox_email=None,
@@ -58,6 +68,7 @@ class AWSCheckRunner:
         self.results = []
         self.primary_identity = None
         self.monitoring_ready = False
+        self.aurora_instance_ids = []
         self.delivery_seen = False
         self._secrets = [value for value in (_setting("AWS_KEY"), _setting("AWS_SECRET")) if value]
 
@@ -602,33 +613,37 @@ class AWSCheckRunner:
 
     def _desired_alarms(self):
         resources = []
+        self.aurora_instance_ids = []
         try:
             for page in self._client("ec2").get_paginator("describe_instances").paginate():
                 for reservation in page.get("Reservations", []):
                     for row in reservation.get("Instances", []):
                         if row.get("State", {}).get("Name") == "running":
-                            resources.append(("ec2", row.get("InstanceId"), "AWS/EC2", "InstanceId"))
+                            resources.append(("ec2", row.get("InstanceId"), "AWS/EC2", "InstanceId", ""))
             for page in self._client("rds").get_paginator("describe_db_instances").paginate():
                 for row in page.get("DBInstances", []):
                     if row.get("DBInstanceStatus") == "available":
-                        resources.append(("rds", row.get("DBInstanceIdentifier"), "AWS/RDS", "DBInstanceIdentifier"))
+                        resources.append(("rds", row.get("DBInstanceIdentifier"), "AWS/RDS",
+                                          "DBInstanceIdentifier", row.get("Engine", "")))
             for page in self._client("elasticache").get_paginator("describe_cache_clusters").paginate():
                 for row in page.get("CacheClusters", []):
                     if row.get("CacheClusterStatus") == "available":
-                        resources.append(("elasticache", row.get("CacheClusterId"), "AWS/ElastiCache", "CacheClusterId"))
+                        resources.append(("elasticache", row.get("CacheClusterId"), "AWS/ElastiCache", "CacheClusterId", ""))
         except ClientError as exc:
             self._add("monitoring", "fail", "resources.discovery_denied", exc, {"aws_code": _error_code(exc)})
             return []
         desired, slug = [], self._deployment_slug()
-        for kind, resource_id, namespace, dimension in resources:
+        for kind, resource_id, namespace, dimension, engine in resources:
             profiles = [("cpu", "CPUUtilization", "Average", "GreaterThanOrEqualToThreshold", 90, 300, 3, 3)]
             if kind == "ec2":
                 profiles.insert(0, ("status", "StatusCheckFailed", "Maximum", "GreaterThanOrEqualToThreshold", 1, 60, 2, 2))
-            if kind == "rds":
+            if kind == "rds" and not _is_aurora_engine(engine):
                 profiles.append(("free-storage", "FreeStorageSpace", "Average", "LessThanOrEqualToThreshold", 10 * 1024 ** 3, 300, 3, 3))
+            elif kind == "rds":
+                self.aurora_instance_ids.append(resource_id)
             for signal, metric, statistic, comparison, threshold, period, evaluation, datapoints in profiles:
                 desired.append({
-                    "AlarmName": f"django-mojo/{slug}/{kind}/{resource_id}/{signal}"[:255],
+                    "AlarmName": _alarm_name(slug, kind, resource_id, signal),
                     "Namespace": namespace, "MetricName": metric,
                     "Dimensions": [{"Name": dimension, "Value": resource_id}],
                     "Statistic": statistic, "ComparisonOperator": comparison,
@@ -638,12 +653,63 @@ class AWSCheckRunner:
                 })
         return desired
 
+    def _stale_aurora_storage_alarms(self, cloudwatch, expected_tags, slug):
+        """Owned FreeStorageSpace alarms left on Aurora instances by earlier django-mojo versions."""
+        names = [_alarm_name(slug, "rds", resource_id, "free-storage")
+                 for resource_id in self.aurora_instance_ids]
+        if not names:
+            return []
+        stale = []
+        for start in range(0, len(names), 100):
+            chunk, token = names[start:start + 100], None
+            while True:
+                request = {"AlarmNames": chunk, "AlarmTypes": ["MetricAlarm"]}
+                if token:
+                    request["NextToken"] = token
+                response = cloudwatch.describe_alarms(**request)
+                for alarm in response.get("MetricAlarms", []):
+                    if alarm.get("MetricName") != "FreeStorageSpace" or alarm.get("Namespace") != "AWS/RDS":
+                        continue
+                    tags = cloudwatch.list_tags_for_resource(
+                        ResourceARN=alarm.get("AlarmArn"),
+                    ).get("Tags", [])
+                    tag_map = {row.get("Key"): row.get("Value") for row in tags}
+                    if all(tag_map.get(key) == value for key, value in expected_tags.items()):
+                        stale.append(alarm.get("AlarmName"))
+                token = response.get("NextToken")
+                if not token:
+                    break
+        return stale
+
+    def _report_aurora_storage(self, cloudwatch, expected_tags, slug):
+        """Aurora has no per-instance free-space metric, so the gap must never read as pass."""
+        if self.aurora_instance_ids:
+            self._add("monitoring", "warn", "alarms.aurora_storage_unmonitored",
+                      "Aurora instances have no storage alarm because Aurora publishes no FreeStorageSpace metric",
+                      {"instance_ids": list(self.aurora_instance_ids)},
+                      remediation=("Aurora storage is a shared auto-scaling cluster volume. Track local "
+                                   "storage with a FreeLocalStorage alarm sized to each instance class, "
+                                   "or watch the cluster volume in the RDS console until django-mojo "
+                                   "ships that profile."))
+        stale = self._stale_aurora_storage_alarms(cloudwatch, expected_tags, slug)
+        if stale:
+            self._add("monitoring", "warn", "alarms.stale_aurora_storage",
+                      "Owned FreeStorageSpace alarms on Aurora instances can never report and stay green",
+                      {"alarm_names": stale},
+                      remediation=("aws-check never deletes AWS resources. Remove them manually: "
+                                   f"aws cloudwatch delete-alarms --alarm-names {' '.join(stale)}"))
+
     def check_monitoring(self):
         if self.apply and not self._ensure_mutation_identity("monitoring"):
             return
         sns, cloudwatch = self._client("sns"), self._client("cloudwatch")
         slug = self._deployment_slug()
         expected_tags = {**OWNERSHIP_TAGS, "deployment": slug}
+        # Discovery runs above every early return below: an un-allowlisted or unconfirmed
+        # deployment is the normal mid-setup state, and the Aurora storage gap plus any
+        # already-created false alarm must still be reported there.
+        desired = self._desired_alarms()
+        self._report_aurora_storage(cloudwatch, expected_tags, slug)
         topic_name = f"django-mojo-{slug}-operations"[:256]
         topic_arn = next((row.get("TopicArn") for row in self._list_paginated(sns, "list_topics", "Topics")
                           if row.get("TopicArn", "").rsplit(":", 1)[-1] == topic_name), None)
@@ -686,7 +752,7 @@ class AWSCheckRunner:
         if not confirmed:
             return
         self.monitoring_ready = True
-        desired, created, drifted, conflicts, uncreated = self._desired_alarms(), 0, [], [], 0
+        created, drifted, conflicts, uncreated = 0, [], [], 0
         for alarm in desired:
             alarm.update({"AlarmActions": [topic_arn], "OKActions": [topic_arn]})
             existing = cloudwatch.describe_alarms(AlarmNames=[alarm["AlarmName"]]).get("MetricAlarms", [])

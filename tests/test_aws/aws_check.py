@@ -28,6 +28,59 @@ def _verified_sts():
     return sts
 
 
+def _discovery_clients(db_instances=None, instances=None, cache_clusters=None):
+    """Mock ec2/rds/elasticache paginators so _desired_alarms builds no real boto clients."""
+    ec2, rds, elasticache = mock.Mock(), mock.Mock(), mock.Mock()
+    ec2.get_paginator.return_value.paginate.return_value = [
+        {"Reservations": [{"Instances": instances or []}]},
+    ]
+    rds.get_paginator.return_value.paginate.return_value = [
+        {"DBInstances": db_instances or []},
+    ]
+    elasticache.get_paginator.return_value.paginate.return_value = [
+        {"CacheClusters": cache_clusters or []},
+    ]
+    return {"ec2": ec2, "rds": rds, "elasticache": elasticache}
+
+
+def _owned_operations_sns(topic, confirmed=True):
+    """An owned, discovered operations topic with an HTTPS receiver subscription."""
+    sns = mock.Mock()
+    sns.list_topics.return_value = {"Topics": [{"TopicArn": topic}]}
+    sns.list_tags_for_resource.return_value = {"Tags": [
+        {"Key": "managed-by", "Value": "django-mojo"},
+        {"Key": "purpose", "Value": "cloudwatch-incidents"},
+        {"Key": "deployment", "Value": "test"},
+    ]}
+    sns.list_subscriptions_by_topic.return_value = {"Subscriptions": [{
+        "Protocol": "https", "Endpoint": "https://api.example.com/api/aws/cloudwatch/sns/alarm",
+        "SubscriptionArn": "arn:aws:sns:subscription/confirmed" if confirmed else "PendingConfirmation",
+    }]}
+    return sns
+
+
+def _owned_alarm_tags():
+    return {"Tags": [
+        {"Key": "managed-by", "Value": "django-mojo"},
+        {"Key": "purpose", "Value": "cloudwatch-incidents"},
+        {"Key": "deployment", "Value": "test"},
+    ]}
+
+
+def _stale_alarm_cloudwatch(alarm):
+    """describe_alarms answers the stale-detection sweep with `alarm`, the desired loop with nothing."""
+    cloudwatch = mock.Mock()
+
+    def describe_alarms(**kwargs):
+        if kwargs.get("AlarmTypes"):
+            return {"MetricAlarms": [alarm]}
+        return {"MetricAlarms": []}
+
+    cloudwatch.describe_alarms.side_effect = describe_alarms
+    cloudwatch.list_tags_for_resource.return_value = _owned_alarm_tags()
+    return cloudwatch
+
+
 @th.django_unit_test()
 def test_identity_is_bounded_and_redacted(opts):
     from mojo.apps.aws.services import aws_check
@@ -58,7 +111,8 @@ def test_monitoring_stops_before_subscription_until_static_allowlist_matches(opt
     ]}
     with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
         report = aws_check.AWSCheckRunner(
-            clients={"sts": _verified_sts(), "sns": sns, "cloudwatch": mock.Mock()},
+            clients={"sts": _verified_sts(), "sns": sns, "cloudwatch": mock.Mock(),
+                     **_discovery_clients()},
             apply=True, yes=True,
         ).run(["monitoring"])
     codes = [item["code"] for item in report["items"]]
@@ -261,7 +315,7 @@ def test_monitoring_requires_deployment_ownership_and_detects_dimension_drift(op
     ]}
     with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
         report = aws_check.AWSCheckRunner(
-            clients={"sns": sns, "cloudwatch": mock.Mock()},
+            clients={"sns": sns, "cloudwatch": mock.Mock(), **_discovery_clients()},
         ).run(["monitoring"])
     assert report["overall"] == "fail", f"Cross-deployment topic must conflict, got {report}"
     assert "sns.topic_conflict" in [item["code"] for item in report["items"]]
@@ -383,6 +437,190 @@ def test_email_uses_selected_context_and_rejects_unowned_topic_collision(opts):
         assert False, "An unowned same-name SES topic must not be adopted"
     domain.save.assert_not_called()
     sns.create_topic.assert_not_called()
+
+
+@th.django_unit_test()
+def test_desired_alarms_skips_free_storage_space_on_aurora(opts):
+    from mojo.apps.aws.services import aws_check
+
+    clients = _discovery_clients(db_instances=[
+        {"DBInstanceIdentifier": "aurora-pg", "DBInstanceStatus": "available",
+         "Engine": "aurora-postgresql"},
+        {"DBInstanceIdentifier": "plain-pg", "DBInstanceStatus": "available",
+         "Engine": "postgres"},
+    ])
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    signals = {(alarm["Dimensions"][0]["Value"], alarm["MetricName"]) for alarm in desired}
+    assert ("aurora-pg", "FreeStorageSpace") not in signals, (
+        "Aurora never publishes FreeStorageSpace, so the alarm would sit permanently green; "
+        f"got {sorted(signals)}"
+    )
+    assert ("plain-pg", "FreeStorageSpace") in signals, (
+        "Non-Aurora RDS engines must keep their FreeStorageSpace alarm; "
+        f"got {sorted(signals)}"
+    )
+    assert ("aurora-pg", "CPUUtilization") in signals, (
+        f"Aurora instances must still get the CPU alarm; got {sorted(signals)}"
+    )
+
+
+@th.django_unit_test()
+def test_aurora_engine_matching_covers_every_variant(opts):
+    from mojo.apps.aws.services import aws_check
+
+    for engine in ("aurora", "aurora-mysql", "aurora-postgresql", "AURORA-MYSQL", " aurora-mysql "):
+        assert aws_check._is_aurora_engine(engine) is True, \
+            f"{engine!r} is an Aurora engine and must not get a FreeStorageSpace alarm"
+    for engine in ("postgres", "mysql", "mariadb", "oracle-ee", "sqlserver-ex",
+                   "custom-oracle-ee", "db2-ae", "", None):
+        assert aws_check._is_aurora_engine(engine) is False, \
+            f"{engine!r} is not Aurora and must keep its FreeStorageSpace alarm"
+
+
+@th.django_unit_test()
+def test_aurora_storage_gap_is_reported_not_silent(opts):
+    from mojo.apps.aws.services import aws_check
+
+    topic = "arn:aws:sns:us-east-1:123456789012:django-mojo-test-operations"
+    cloudwatch = mock.Mock()
+    cloudwatch.describe_alarms.return_value = {"MetricAlarms": []}
+    clients = {
+        "sns": _owned_operations_sns(topic), "cloudwatch": cloudwatch,
+        **_discovery_clients(db_instances=[{
+            "DBInstanceIdentifier": "aurora-only", "DBInstanceStatus": "available",
+            "Engine": "aurora-mysql",
+        }]),
+    }
+    values = _setting_values(AWS_CLOUDWATCH_ALARM_TOPIC_ARNS=[topic])
+    with mock.patch.object(aws_check, "_setting", side_effect=values):
+        report = aws_check.AWSCheckRunner(clients=clients).run(["monitoring"])
+    codes = [item["code"] for item in report["items"]]
+    gap = next((item for item in report["items"]
+                if item["code"] == "alarms.aurora_storage_unmonitored"), None)
+    assert gap is not None, \
+        f"An Aurora-only deployment must not report zero storage monitoring silently, got {codes}"
+    assert gap["status"] == "warn", f"The Aurora storage gap must be a warning, got {gap}"
+    assert "aurora-only" in gap["details"]["instance_ids"], \
+        f"The gap must name the unmonitored instance, got {gap}"
+
+
+@th.django_unit_test()
+def test_monitoring_reports_stale_aurora_free_storage_alarm(opts):
+    from mojo.apps.aws.services import aws_check
+
+    topic = "arn:aws:sns:us-east-1:123456789012:django-mojo-test-operations"
+    name = "django-mojo/test/rds/aurora-pg/free-storage"
+    cloudwatch = _stale_alarm_cloudwatch({
+        "AlarmName": name, "AlarmArn": "arn:aws:cloudwatch:alarm/stale",
+        "MetricName": "FreeStorageSpace", "Namespace": "AWS/RDS",
+    })
+    clients = {
+        "sns": _owned_operations_sns(topic), "cloudwatch": cloudwatch,
+        **_discovery_clients(db_instances=[{
+            "DBInstanceIdentifier": "aurora-pg", "DBInstanceStatus": "available",
+            "Engine": "aurora-postgresql",
+        }]),
+    }
+    values = _setting_values(AWS_CLOUDWATCH_ALARM_TOPIC_ARNS=[topic])
+    with mock.patch.object(aws_check, "_setting", side_effect=values):
+        report = aws_check.AWSCheckRunner(clients=clients).run(["monitoring"])
+    codes = [item["code"] for item in report["items"]]
+    stale = next((item for item in report["items"]
+                  if item["code"] == "alarms.stale_aurora_storage"), None)
+    assert stale is not None, \
+        f"A permanently-green Aurora FreeStorageSpace alarm must be reported, got {codes}"
+    assert stale["details"]["alarm_names"] == [name], \
+        f"The report must name the exact stale alarm, got {stale}"
+    assert "delete-alarms" in stale["remediation"], \
+        f"Remediation must give the manual delete command, got {stale['remediation']!r}"
+    cloudwatch.delete_alarms.assert_not_called()
+
+
+@th.django_unit_test()
+def test_stale_detection_makes_no_call_when_no_aurora_is_discovered(opts):
+    from mojo.apps.aws.services import aws_check
+
+    topic = "arn:aws:sns:us-east-1:123456789012:django-mojo-test-operations"
+    cloudwatch = mock.Mock()
+    cloudwatch.describe_alarms.return_value = {"MetricAlarms": []}
+    clients = {
+        "sns": _owned_operations_sns(topic), "cloudwatch": cloudwatch,
+        **_discovery_clients(db_instances=[{
+            "DBInstanceIdentifier": "plain-pg", "DBInstanceStatus": "available",
+            "Engine": "postgres",
+        }]),
+    }
+    values = _setting_values(AWS_CLOUDWATCH_ALARM_TOPIC_ARNS=[topic])
+    with mock.patch.object(aws_check, "_setting", side_effect=values):
+        report = aws_check.AWSCheckRunner(clients=clients).run(["monitoring"])
+    codes = [item["code"] for item in report["items"]]
+    assert "alarms.stale_aurora_storage" not in codes, \
+        f"No Aurora instance exists, so nothing can be stale, got {codes}"
+    assert "alarms.aurora_storage_unmonitored" not in codes, \
+        f"A non-Aurora fleet keeps its storage alarm and has no gap, got {codes}"
+    for call in cloudwatch.describe_alarms.call_args_list:
+        assert call.kwargs.get("AlarmNames"), (
+            "describe_alarms without AlarmNames returns every alarm in the account; "
+            f"got {call.kwargs}"
+        )
+        assert "AlarmTypes" not in call.kwargs, \
+            f"The stale sweep must not run when no Aurora was discovered, got {call.kwargs}"
+
+
+@th.django_unit_test()
+def test_stale_detection_ignores_a_hand_fixed_alarm(opts):
+    from mojo.apps.aws.services import aws_check
+
+    topic = "arn:aws:sns:us-east-1:123456789012:django-mojo-test-operations"
+    cloudwatch = _stale_alarm_cloudwatch({
+        "AlarmName": "django-mojo/test/rds/aurora-pg/free-storage",
+        "AlarmArn": "arn:aws:cloudwatch:alarm/hand-fixed",
+        "MetricName": "FreeLocalStorage", "Namespace": "AWS/RDS",
+    })
+    clients = {
+        "sns": _owned_operations_sns(topic), "cloudwatch": cloudwatch,
+        **_discovery_clients(db_instances=[{
+            "DBInstanceIdentifier": "aurora-pg", "DBInstanceStatus": "available",
+            "Engine": "aurora-postgresql",
+        }]),
+    }
+    values = _setting_values(AWS_CLOUDWATCH_ALARM_TOPIC_ARNS=[topic])
+    with mock.patch.object(aws_check, "_setting", side_effect=values):
+        report = aws_check.AWSCheckRunner(clients=clients).run(["monitoring"])
+    codes = [item["code"] for item in report["items"]]
+    assert "alarms.stale_aurora_storage" not in codes, (
+        "An owned alarm already hand-fixed to FreeLocalStorage is preserved, not reported "
+        f"for deletion, got {codes}"
+    )
+
+
+@th.django_unit_test()
+def test_stale_detection_runs_before_subscription_confirmation(opts):
+    from mojo.apps.aws.services import aws_check
+
+    topic = "arn:aws:sns:us-east-1:123456789012:django-mojo-test-operations"
+    name = "django-mojo/test/rds/aurora-pg/free-storage"
+    cloudwatch = _stale_alarm_cloudwatch({
+        "AlarmName": name, "AlarmArn": "arn:aws:cloudwatch:alarm/stale",
+        "MetricName": "FreeStorageSpace", "Namespace": "AWS/RDS",
+    })
+    clients = {
+        "sns": _owned_operations_sns(topic, confirmed=False), "cloudwatch": cloudwatch,
+        **_discovery_clients(db_instances=[{
+            "DBInstanceIdentifier": "aurora-pg", "DBInstanceStatus": "available",
+            "Engine": "aurora-postgresql",
+        }]),
+    }
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        report = aws_check.AWSCheckRunner(clients=clients).run(["monitoring"])
+    codes = [item["code"] for item in report["items"]]
+    assert "sns.topic_not_allowlisted" in codes, \
+        f"This fixture must exercise the un-allowlisted early return, got {codes}"
+    assert "alarms.stale_aurora_storage" in codes, \
+        f"An un-allowlisted deployment must still be told about the false alarm, got {codes}"
+    assert "alarms.aurora_storage_unmonitored" in codes, \
+        f"An un-allowlisted deployment must still be told about the storage gap, got {codes}"
 
 
 @th.django_unit_test()
