@@ -345,20 +345,23 @@ def test_fm_credential_graphs_never_expose_raw_values(opts):
     assert_true(opts.client.is_authenticated, "credential graph regression requires an authenticated REST caller")
 
     try:
-        create_resp = opts.client.post("/api/fileman/manager", {
-            "name": GRAPH_CANARY_MANAGER,
-            "backend_type": "file",
-            "backend_url": "file://",
-            "user": opts.user.id,
-            "is_active": True,
-            "is_default": False,
-            "is_public": False,
+        manager = FileManager.objects.create(
+            name=GRAPH_CANARY_MANAGER,
+            backend_type="file",
+            backend_url="file://",
+            user=opts.user,
+            is_active=True,
+            is_default=False,
+            is_public=False,
+        )
+        manager_id = manager.id
+
+        credential_resp = opts.client.post(f"/api/fileman/manager/{manager_id}", {
             "aws_region": "us-west-2",
             "aws_key": GRAPH_ACCESS_KEY,
             "aws_secret": GRAPH_SECRET_KEY,
         })
-        assert_eq(create_resp.status_code, 200, "authenticated REST create must accept write-only credentials")
-        manager_id = create_resp.response.data.id
+        assert_eq(credential_resp.status_code, 200, "authenticated generic REST save must accept write-only credentials")
         manager = FileManager.objects.get(pk=manager_id)
 
         assert_eq(manager.aws_key, GRAPH_ACCESS_KEY, "trusted backend code must retain raw access-key reads")
