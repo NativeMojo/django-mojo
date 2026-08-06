@@ -223,10 +223,38 @@ unknown certificate is indistinguishable from an unreferenced one.
 
 ## The privilege boundary — state it plainly
 
-The installer runs as the **app user** in the job runner. Two operations need
-more: `nginx -t` and `systemctl reload nginx`. Both go through one function
-(`installer._run`) with a **constant argv list** built from settings, never
-composed from row data, behind a narrow sudoers rule.
+The installer runs as the **app user** in the job runner. Everything goes
+through one function (`installer._run`) with a **constant argv list** built
+from file settings — never `settings.get`, which would resolve a DB-backed
+`Setting` row and make the argv row data.
+
+### The sudoers rule, and the one that would be a root escalation
+
+Exactly two commands need root, and **neither takes an argument**:
+
+```
+# /etc/sudoers.d/mojo-edge
+mojo ALL=(root) NOPASSWD: /usr/sbin/nginx -t
+mojo ALL=(root) NOPASSWD: /usr/bin/systemctl reload nginx
+```
+
+> **Do not add a rule for the staged check.** It is tempting to also permit
+> `nginx -t -c /opt/api/var/edge/generations/*/nginx.conf` — that is the
+> command the pre-filter runs, and the generation hash forces a wildcard. It
+> would be a root escalation, not a config check: **`nginx -t` processes
+> `load_module` while parsing and `dlopen()`s the named object as whatever user
+> it runs as.** The app user writes that config file, so one
+> `load_module /tmp/evil.so;` line in it is arbitrary root code execution — and
+> because the hash is in the path, the wildcard cannot be narrowed away.
+>
+> The staged check therefore runs **unprivileged**, which it can, because every
+> file it reads is app-owned and `-t` binds no ports. That is why
+> `render_nginx_harness` puts `pid`, `error_log` and every `*_temp_path` inside
+> the generation directory: an app user cannot write nginx's packaged prefix,
+> so the defaults would fail the check for permissions rather than for config.
+
+Absolute binary paths matter — a sudoers rule naming a bare `nginx` is
+satisfied by anything first on `PATH`.
 
 > The structured-model constraint at the top of this document defends against a
 > malicious **admin**. It does nothing about a compromised **API process**,
@@ -249,7 +277,8 @@ it exists, the installer can be unit-tested but cannot be exercised on a node.
 | `EDGE_TLS_CIPHERS` | modern suite | The TLS floor |
 | `EDGE_KEEP_GENERATIONS` | `5` | Retained generations (rollback depth) |
 | `EDGE_POOLS` | `["default"]` | Pools the convergence sweep covers |
-| `EDGE_NGINX_TEST_CMD` | `["sudo","-n","nginx","-t"]` | Constant argv |
+| `EDGE_NGINX_TEST_CMD` | `["sudo","-n","nginx","-t"]` | Root check, no arguments |
+| `EDGE_NGINX_STAGED_TEST_CMD` | `["nginx","-t","-c"]` | Staged check, **unprivileged** |
 | `EDGE_NGINX_RELOAD_CMD` | `["sudo","-n","systemctl","reload","nginx"]` | Constant argv |
 | `EDGE_COMMAND_TIMEOUT` | `60` | Seconds |
 

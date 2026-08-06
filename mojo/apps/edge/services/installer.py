@@ -84,26 +84,47 @@ def command_timeout():
 # the privileged boundary — the ONLY place this app shells out
 # ----------------------------------------------------------------------
 
-def _nginx_test_argv(config_path=None):
-    """`nginx -t`, optionally against a specific config.
+# Why there are TWO test commands, and why only one of them uses sudo.
+#
+# `nginx -t` processes `load_module` while parsing, and `dlopen()`s the named
+# object with the privileges it is running under. So ANY sudoers rule of the
+# shape `nginx -t -c <path the app user can write>` is a root escalation, not a
+# config check: the installer writes `generations/<gen>/nginx.conf`, and one
+# `load_module /tmp/evil.so;` line in it would run attacker code as root. A
+# wildcard is unavoidable in such a rule, because the generation hash is in the
+# path — so the rule cannot be narrowed into safety.
+#
+# The staged pre-filter does not need root at all: every file it reads (the
+# rendered conf.d, the staged certificates, the harness) is owned by the app
+# user, and `-t` binds no ports. So it runs unprivileged.
+#
+# The authoritative check reads /etc/nginx/nginx.conf, which is root-owned, so
+# it does need sudo — but it takes NO arguments, which leaves no injection
+# surface and lets the sudoers entry be an exact command with no wildcard.
+#
+# Keeping them as separate settings is deliberate: it means neither can grow an
+# argument later without someone editing this comment.
 
-    Built from a FILE setting and a fixed shape — never from row data.
-
-    `get_static`, not `get`, and that is the whole point. `settings.get`
-    resolves a DB-backed `Setting` row FIRST (mojo/helpers/settings/helper.py),
-    and `Setting` is REST-writable by any holder of a global `manage_settings`
-    or `groups` grant. That would make this argv row data: write
-    `EDGE_NGINX_TEST_CMD = ["/bin/sh","-c","..."]` globally, wait up to ten
-    minutes for the convergence broadcast, and the command runs as the app user
-    on EVERY node — the user that owns EDGE_ROOT and every private key in it.
-    Same precedent as `_return_real_error` in mojo/decorators/http.py: a
-    Setting row must not be able to reach a decision like this.
-    """
+def _nginx_staged_test_argv(config_path):
+    """Validate a staged generation. **Unprivileged** — see above."""
     argv = list(settings.get_static(
+        "EDGE_NGINX_STAGED_TEST_CMD", ["nginx", "-t", "-c"], kind="list"))
+    return argv + [str(config_path)]
+
+
+def _nginx_test_argv():
+    """Validate the REAL config. Root, and deliberately argument-free.
+
+    `get_static`, not `get`, and that is load-bearing. `settings.get` resolves
+    a DB-backed `Setting` row FIRST (mojo/helpers/settings/helper.py), and
+    `Setting` is REST-writable by any holder of a global `manage_settings` or
+    `groups` grant. That would make this argv row data: write
+    `EDGE_NGINX_TEST_CMD = ["/bin/sh","-c","..."]` globally, wait up to ten
+    minutes for the convergence broadcast, and the command runs on EVERY node.
+    Same precedent as `_return_real_error` in mojo/decorators/http.py.
+    """
+    return list(settings.get_static(
         "EDGE_NGINX_TEST_CMD", ["sudo", "-n", "nginx", "-t"], kind="list"))
-    if config_path:
-        argv = argv + ["-c", str(config_path)]
-    return argv
 
 
 def _nginx_reload_argv():
@@ -130,9 +151,15 @@ CONFLICT_MARKER = "conflicting server name"
 
 
 def _nginx_check(config_path=None):
-    """Run `nginx -t` and return (ok, combined output)."""
+    """Run `nginx -t` and return (ok, combined output).
+
+    A `config_path` selects the unprivileged staged check; without one this is
+    the root check against the real config.
+    """
+    argv = (_nginx_staged_test_argv(config_path) if config_path
+            else _nginx_test_argv())
     try:
-        result = _run(_nginx_test_argv(config_path))
+        result = _run(argv)
     except Exception as err:
         return False, f"could not run nginx -t: {err}"
     output = f"{result.stdout or ''}{result.stderr or ''}"
@@ -239,6 +266,9 @@ def stage_generation(vhosts, generation, webapps=None):
     gen_dir = render.generation_dir(generation)
     os.makedirs(os.path.join(gen_dir, "conf.d"), exist_ok=True)
     os.makedirs(os.path.join(gen_dir, "www"), exist_ok=True)
+    # The staged check runs unprivileged, so nginx needs writable scratch
+    # paths inside the generation — the harness names these.
+    os.makedirs(os.path.join(gen_dir, "tmp"), exist_ok=True)
 
     installable = []
     excluded = []

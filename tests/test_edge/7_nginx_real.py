@@ -75,35 +75,6 @@ def _self_signed(common_name):
     )
 
 
-def _harness(gen_dir, prefix):
-    """A test wrapper around the REAL generated conf.d files.
-
-    Deliberately not `render.render_nginx_harness`: that one assumes nginx runs
-    as root with its packaged prefix, and this has to run unprivileged in a
-    temp directory. The thing under test is the generated `conf.d/*.conf` —
-    which is byte-for-byte what a node installs.
-    """
-    return "\n".join([
-        f"pid {prefix}/nginx.pid;",
-        f"error_log {prefix}/error.log;",
-        "events { worker_connections 64; }",
-        "http {",
-        f"    access_log {prefix}/access.log;",
-        f"    client_body_temp_path {prefix}/client_body;",
-        f"    proxy_temp_path {prefix}/proxy;",
-        f"    fastcgi_temp_path {prefix}/fastcgi;",
-        f"    uwsgi_temp_path {prefix}/uwsgi;",
-        f"    scgi_temp_path {prefix}/scgi;",
-        "    map $http_upgrade $connection_upgrade {",
-        "        default upgrade;",
-        "        '' close;",
-        "    }",
-        f"    include {gen_dir}/conf.d/*.conf;",
-        "}",
-        "",
-    ])
-
-
 @th.django_unit_setup()
 def setup_nginx_real(opts):
     cleanup()
@@ -162,12 +133,17 @@ def test_real_nginx_accepts_every_kind(opts):
             for vhost in vhosts:
                 os.makedirs(render.www_dir(GENERATION, vhost.pk), exist_ok=True)
 
-            harness_path = os.path.join(root, "nginx.conf")
+            # The PRODUCTION harness, byte-for-byte what a node feeds nginx.
+            # It is unprivileged-safe by construction (all scratch paths live
+            # inside the generation), so there is no test-only wrapper here —
+            # a wrapper would have meant this never validated the real thing.
+            os.makedirs(os.path.join(gen_dir, "tmp"), exist_ok=True)
+            harness_path = os.path.join(gen_dir, "nginx.conf")
             with open(harness_path, "w") as handle:
-                handle.write(_harness(gen_dir, root))
+                handle.write(render.render_nginx_harness(GENERATION))
 
             result = subprocess.run(
-                [binary, "-t", "-c", harness_path, "-p", root],
+                [binary, "-t", "-c", harness_path],
                 capture_output=True, text=True, timeout=60)
 
         output = f"{result.stdout}{result.stderr}"

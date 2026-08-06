@@ -456,12 +456,26 @@ def test_commands_are_constant(opts):
 
     test_argv = installer._nginx_test_argv()
     reload_argv = installer._nginx_reload_argv()
+    staged_argv = installer._nginx_staged_test_argv("/tmp/gen/nginx.conf")
 
     assert "nginx" in " ".join(test_argv), f"unexpected test command: {test_argv}"
     assert "reload" in " ".join(reload_argv), \
         f"unexpected reload command: {reload_argv}"
 
-    for argv in (test_argv, reload_argv):
+    # The authoritative check takes NO arguments, so the sudoers entry that
+    # permits it can be an exact command with no wildcard.
+    assert test_argv[-1] == "-t", (
+        "the root nginx check grew an argument — the sudoers rule permitting "
+        f"it now needs a wildcard: {test_argv}")
+
+    # And the staged check, which DOES take an app-writable path, must never be
+    # privileged: `nginx -t` dlopen()s load_module targets as whatever user it
+    # runs as, so `sudo nginx -t -c <app-writable file>` is a root escalation.
+    assert "sudo" not in staged_argv, (
+        "the staged nginx check runs under sudo against a file the app user "
+        f"writes — that is root code execution via load_module: {staged_argv}")
+
+    for argv in (test_argv, reload_argv, staged_argv):
         for token in argv:
             assert opts.domain.name not in token, \
                 f"row data leaked into a privileged command: {argv}"
