@@ -72,3 +72,45 @@ hosted-zone ids, AWS change ids and credentials are never logged or returned.
 
 These settings intentionally use `settings.get_static`: no tenant or DB-backed
 setting can redirect an existing or future allocation.
+
+## Downstream challenge client
+
+A deployment consuming this hub uses
+`mojo.apps.dnsman.services.acme_hub_client`. This is a challenge-specific HTTP
+transport, not a `DnsProvider`: it is never registered with
+`services/dns.get_adapter()`, cannot list records, and cannot write a
+caller-selected name. The only operations are:
+
+```python
+allocation = acme_hub_client.allocate(domain, client_ref)
+published = acme_hub_client.publish(client_ref, challenge_ref, record_values)
+withdrawn = acme_hub_client.withdraw(client_ref, challenge_ref)
+```
+
+Persist the returned normalized `domain`, exact `_acme-challenge` `source`, and
+opaque `target` with the immutable `client_ref`; the tenant publishes that one
+CNAME. Persist cleanup intent and the locally generated immutable
+`challenge_ref` before calling `publish()`. Always call the idempotent
+`withdraw()` for that reference after success, failure, or an ambiguous publish
+response. Delegated propagation probes the persisted `target`, not the tenant
+`source`.
+
+The downstream settings are also file-only and read at call time:
+
+| Key | Default | Bounds / meaning |
+|---|---:|---|
+| `DNSMAN_ACME_HUB_URL` | unset | Hub HTTPS origin; plain HTTP is accepted only for `localhost`/loopback development |
+| `DNSMAN_ACME_HUB_API_KEY` | unset | Project ApiKey carrying protected `dnsman_acme_federation` |
+| `DNSMAN_ACME_HUB_CONNECT_TIMEOUT` | `5` | Connect timeout, 0.1–30 seconds |
+| `DNSMAN_ACME_HUB_READ_TIMEOUT` | `30` | Read timeout, 0.1–120 seconds |
+| `DNSMAN_ACME_HUB_RETRIES` | `1` | Identical idempotent retries, 0 or 1 |
+
+There is deliberately no downstream zone-name setting: allocation returns the
+full target. `is_available()` returns false only when both required settings
+are absent; partial or unsafe configuration raises
+`AcmeHubConfigurationError`. Calls never follow redirects, use normal TLS
+verification, bound response bodies, validate echoed references and DNS names,
+and map remote bodies to typed, bounded errors safe for certificate/job status.
+Only connect/read ambiguity and HTTP 502/503/504 are retried, at most once;
+400/401/403/409/429 and redirects are not. Missing configuration or any client
+failure is loud and never falls back to Route53, GoDaddy, or another challenge.

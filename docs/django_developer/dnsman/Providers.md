@@ -39,6 +39,13 @@ internal exact-target writer that tenants cannot reach through generic record
 CRUD. It does not add a `Domain.provider` value or change direct Route53,
 GoDaddy, or HTTP-01 behavior.
 
+The downstream `services/acme_hub_client.py` is equally separate. It exposes
+only target allocation plus challenge-lease publish/withdraw against fixed hub
+paths; it is not a `DnsProvider`, is not returned by `get_adapter()`, and cannot
+accept a caller-selected record name. Missing or failed hub configuration is a
+loud typed failure with no provider fallback. Direct Route53/GoDaddy issuance
+and Maestro Sites HTTP-01 therefore keep their existing dispatch paths.
+
 ## Provider differences
 
 | | Route53 | GoDaddy |

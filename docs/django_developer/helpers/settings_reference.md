@@ -297,6 +297,19 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 - `DNSMAN_ACME_HUB_PROPAGATION_TIMEOUT`
 - `DNSMAN_ACME_HUB_PROPAGATION_INTERVAL`
 - `DNSMAN_ACME_HUB_SWEEP_LIMIT`
+- `DNSMAN_ACME_HUB_URL` — downstream challenge client's HTTPS hub origin;
+  file-only, with plain HTTP allowed only for localhost/loopback development.
+- `DNSMAN_ACME_HUB_API_KEY` — downstream project's protected federation ApiKey;
+  file-only and never logged.
+- `DNSMAN_ACME_HUB_CONNECT_TIMEOUT` — downstream connect timeout (default `5`,
+  strict range 0.1–30 seconds).
+- `DNSMAN_ACME_HUB_READ_TIMEOUT` — downstream read timeout (default `30`,
+  strict range 0.1–120 seconds).
+- `DNSMAN_ACME_HUB_RETRIES` — identical idempotent downstream retries (default
+  `1`, accepted values `0` or `1`). The client retries only connect/read
+  ambiguity and HTTP 502/503/504; it never retries redirects or
+  400/401/403/409/429. There is no downstream zone-name setting. See
+  [ACME federation](../dnsman/AcmeFederation.md#downstream-challenge-client).
 - `DNSMAN_ALLOWED_RECORD_TYPES`
 - `DNSMAN_CERT_RENEW_DAYS`
 - `DNSMAN_CERT_SYNC_CHANNEL`

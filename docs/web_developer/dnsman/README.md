@@ -103,6 +103,24 @@ Responses may echo `client_ref`, `challenge_ref`, domain/source/target and
 active-value counts. They never contain TXT digests, hosted-zone ids, AWS
 change ids, credentials, or unrelated allocations.
 
+### Downstream client behavior
+
+The consuming deployment configures a file-only hub URL and protected ApiKey;
+there is no downstream hub-zone setting because allocation returns the full
+opaque target. Missing or invalid configuration makes delegation unavailable
+and is never treated as success. A configured client refuses redirects and
+malformed/cross-request replies, bounds connect/read timeouts, and retries the
+identical idempotent request at most once only for connection/read ambiguity or
+HTTP 502/503/504. It does not retry 400/401/403/409/429.
+
+Products must persist the allocation and publish the returned source→target
+CNAME before considering delegation verified. For each issuance, persist a
+locally generated immutable `challenge_ref` and cleanup intent before publish,
+probe the returned target for propagation, and always withdraw that same
+reference afterward. A verified or broken delegation never silently falls back
+to direct Route53/GoDaddy. Those direct providers and Maestro Sites HTTP-01 are
+separate flows and remain unchanged.
+
 ## Domains
 
 ### `GET /api/dnsman/domain` · `GET /api/dnsman/domain/<pk>`
