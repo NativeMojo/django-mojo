@@ -13,6 +13,7 @@ makes the failure visible in the jobs surface too.
 """
 
 from mojo import errors as me
+from mojo.apps import jobs
 from mojo.helpers import logit
 
 
@@ -109,10 +110,30 @@ def certificate_updated(job):
     identifiers — a consumer that serves this certificate reacts by pulling
     the material through the gated endpoint with its own credentials.
 
-    dnsman itself has nothing to install, so the framework handler only logs.
+    dnsman itself has nothing to install — it hands off to the edge app, which
+    owns the node-side generation lifecycle (vhosts, certificate material on
+    disk, `nginx -t`, reload). The handoff is a separate broadcast rather than
+    an inline call because installing is filesystem- and subprocess-bound and
+    belongs on the edge channel with its own retries and job visibility.
     """
     payload = job.payload or {}
     logit.info(
         f"dnsman: certificate {payload.get('certificate')} for "
         f"{payload.get('domain')} changed (not_after={payload.get('not_after')})")
+
+    # Best-effort, exactly like the broadcast that got us here: the certificate
+    # is already issued and stored, and a failure to schedule the install must
+    # not undo that. The edge convergence sweep picks it up regardless.
+    try:
+        from mojo.apps.edge.cronjobs import (
+            CONVERGE_JOB, EDGE_CHANNEL, converge_pools)
+
+        jobs.publish(
+            func=CONVERGE_JOB,
+            payload={"pools": converge_pools()},
+            channel=EDGE_CHANNEL,
+            broadcast=True)
+    except Exception as err:
+        logit.error(f"dnsman: could not schedule an edge install: {err}")
+
     return f"completed:certificate={payload.get('certificate')}"

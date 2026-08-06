@@ -35,6 +35,11 @@ DEFAULT_CHANNELS = [
     'certs',
     'webhooks',
     'webhook_fanout',
+    # "edge" carries the broadcast that makes a node converge its nginx
+    # generation. A deployment that sets JOBS_ALLOWED_CHANNELS must list it
+    # THERE too — this list is the CONSUME default, and enforcement reads the
+    # other one.
+    'edge',
 ]
 
 # Module-level settings for readability. JOB_CHANNELS is the box's CONSUME
