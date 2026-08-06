@@ -261,6 +261,37 @@ Same addressing. Omit `record_values` to remove the whole record set.
 
 ## Credentials (bring your own provider account)
 
+### `GET /api/dnsman/credential/group-choice`
+
+Minimal Group choices for a platform credential-assignment control. This is a
+global operator surface: it requires a global `manage_dns` or `security` grant,
+or a superuser. A tenant/member-only grant is insufficient, and ApiKeys and
+GroupScopedTokens are always refused even when they represent a privileged
+user.
+
+List mode accepts only `search`, `start`, and `size`. `search` is trimmed,
+case-insensitive, and limited to 100 characters. `start` defaults to 0 and is
+bounded at 100000; `size` defaults to 25 and is bounded at 50. Results sort by
+case-insensitive name and then id, with `count` describing all matches before
+paging:
+
+```json
+{ "status": true,
+  "data": [{ "id": 4, "name": "Acme" }],
+  "start": 0, "size": 25, "count": 1 }
+```
+
+Exact mode is `?id=<positive integer>` and cannot be mixed with list controls.
+An inactive or missing id returns the same successful empty shape with
+`start: 0`, `size: 1`, and `count: 0`. Duplicate parameters, bracket/dotted
+shapes, unknown keys, and generic list controls (`sort`, `graph`, etc.) are a
+bounded `400`.
+
+Do **not** send `group` on this route. It is reserved for the REST dispatcher,
+which may resolve and touch it before route authorization; the choice endpoint
+does not accept it as a filter. Portal adapters should send only the four
+route-owned parameters above. Each row contains exactly `id` and `name`.
+
 ### `POST /api/dnsman/credential/link`
 ```json
 { "provider": "godaddy", "api_key": "...", "api_secret": "...", "name": "Acme GoDaddy" }
