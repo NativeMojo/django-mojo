@@ -75,8 +75,11 @@ def test_assume_role_installs_refreshable_credentials(opts):
         f"The source identity must be the resolved session credentials, got "
         f"{fetcher_kwargs['source_credentials']!r}",
     )
+    # Compare with == , not `is`: a bound method object is built fresh on every
+    # attribute access, so `x.meth is x.meth` is False even when both name the
+    # same function on the same instance. Equality is the identity test here.
     assert_true(
-        fetcher_kwargs["client_creator"] is session._session.create_client,
+        fetcher_kwargs["client_creator"] == session._session.create_client,
         "The fetcher must create its STS client from the source botocore session",
     )
     assert_true(
