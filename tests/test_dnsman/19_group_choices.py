@@ -181,7 +181,7 @@ def test_member_probe_is_uniform(opts):
         f"{responses}")
 
 
-@th.django_unit_test("manage_dns does not grant the ordinary Group model list")
+@th.django_unit_test("manage_dns does not widen ordinary Group list visibility")
 def test_endpoint_does_not_widen_group_permissions(opts):
     from mojo.apps.account.models import Group
     from mojo.helpers.perms import DOMAIN_CATEGORIES
@@ -193,8 +193,15 @@ def test_endpoint_does_not_widen_group_permissions(opts):
         "the choice route must not mutate Group.RestMeta permissions"
 
     _login(opts, opts.manager_email, opts.manager_pw)
-    assert opts.client.get("/api/group").status_code in (401, 403), \
-        "manage_dns must not open the full Group model surface"
+    groups = opts.client.get("/api/group")
+    assert groups.status_code == 200, \
+        f"the existing caller-confined Group list should remain 200, got {groups.status_code}"
+    visible_ids = {row["id"] for row in groups.response.data}
+    unrelated_ids = {opts.alpha.pk, opts.alpha_lower.pk, opts.beta.pk,
+                     *opts.page_ids}
+    assert visible_ids.isdisjoint(unrelated_ids), (
+        "manage_dns must not widen the ordinary Group list to unrelated choice "
+        f"fixtures; visible overlap: {visible_ids.intersection(unrelated_ids)}")
     assert opts.client.get(PATH).status_code == 200, \
         "manage_dns should still open the minimal credential choice route"
 
