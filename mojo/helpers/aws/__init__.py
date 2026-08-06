@@ -6,7 +6,7 @@ A simple interface for working with AWS services.
 
 # Import service modules - these will be implemented
 from .s3 import S3Bucket, S3Item
-from .client import get_session
+from .client import get_session, get_assumed_session
 from .kms import KMSHelper
 
 # These will be implemented in future modules
@@ -19,6 +19,7 @@ from .cloudwatch import CloudWatchHelper
 __all__ = [
     # Base
     'get_session',
+    'get_assumed_session',
 
     # S3
     'S3Bucket',
