@@ -7,7 +7,7 @@ description: >-
   review/done via the maestro MCP.
 user-invocable: true
 argument-hint: <item-ids, e.g. "431" or "431 432" (omit to pick from the board)>
-maestro-skill-version: 15
+maestro-skill-version: 16
 ---
 
 # Maestro Build — Execute a Planned Item
@@ -21,18 +21,41 @@ throughout.
 ## One Item or Many
 
 **Takes any number of ids** — `/maestro-build 431`, `/maestro-build 431 432
-438`. Builds are **sequential, never concurrent**: in a repo whose suite targets
-a fixed port and a shared database, and whose work commits to one branch in one
-working tree, parallel builds collide on the port, corrupt the database and
-interleave commits. Sequential is correctness, not a limitation to route around.
+438`. **Sequential is the default.** In a repo whose suite targets a fixed port
+and a shared database, and whose work commits to one branch in one working tree,
+parallel builds collide on the port, corrupt the database and interleave
+commits.
 
-With several ids, run the flow below per item, in order, with these differences:
+**Build in parallel only when both hold**, and say which:
+
+1. **The repo isolates a checkout** — each worktree gets its own test database,
+   port and cache namespace. Verify it; do not assume. The repo's git/testing
+   rules say so explicitly when it does.
+2. **The items are independent on disk** — no shared files, no migrations to the
+   same app (two trees generate the same `000N_` and clash at merge), and
+   neither consumes what the other creates.
+
+Either one missing → sequential. Parallelism is a speed optimization; a merge
+conflict inside someone else's build is not.
+
+Parallel runs one worktree per item, each on its own branch, then merges every
+branch back **one at a time** and verifies once in the primary tree — each build
+proved itself in isolation, and the combined tree is what ships. Clean up every
+worktree and branch you created. Follow the repo's own worktree lifecycle where
+it documents one; it will know setup steps (dependency install, gitignored
+config) that a bare `git worktree add` skips.
+
+With several ids, run the flow below per item, with these differences:
 
 - **Confirm the whole roster once** — one wrong-id card per item, in one block,
   one ask — before the first claim, and call out two ids a digit apart.
-- **Order the items before starting.** A plan consuming a helper another plan
-  creates builds second; two plans touching the same table are ordered
-  explicitly, never interleaved. State the order and what forced it.
+- **Partition the items before starting.** Which build in parallel, which are
+  forced sequential and by what — a shared file, a migration to the same app, a
+  plan consuming a helper another plan creates. State the partition and the
+  reason for every sequential edge; a batch that all goes one lane should say
+  why that was the right call.
+- **Merge and clean up before verifying.** Every branch back into the primary
+  tree one at a time, every worktree and branch removed, then the closing run.
 - **Claim, snapshot, build and comment per item** exactly as below, then leave
   each at `building` — built, not verified.
 - **Verify once, at the end** (see "Verification Across Several Items"), and
@@ -76,7 +99,7 @@ re-fetch `get_work_packet(item)` and latest comments before the claim. If title,
 stage, description, owner, or contract materially changed, reconfirm. Sub-agents
 always start in fresh isolated context and never acquire or receive the token.
 
-Renew no later than 20 minutes after acquire/last renewal, around long commands
+Renew no later than 40 minutes after acquire/last renewal, around long commands
 and waits, and before consuming a sub-agent result. Keep waits short enough to
 heartbeat. Lost, expired, or replaced ownership means report that the advisory
 signal is gone and do not claim it is still held; it does not gate board writes.
@@ -373,4 +396,3 @@ queueing it.
 - Building several items concurrently in a repo with a shared test port,
   database or working tree, or flipping any of them past `building` before the
   run's single closing sweep is green
-

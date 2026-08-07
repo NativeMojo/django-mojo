@@ -1,0 +1,11 @@
+interface:
+  display_name: "Maestro Release Note"
+  short_description: "Draft a release note from the changes that actually shipped"
+  default_prompt: "Use $maestro-release-note to inspect the shipped changes and draft the next release note."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "maestro"
+      description: "Read and update the shared Maestro workspace and boards"
+      transport: "streamable_http"
+      url: "https://maestromojo.com/mcp"

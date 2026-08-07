@@ -16,6 +16,8 @@ start of a task, then apply the compatibility notes below.
    - Build a planned item: `$maestro-build`
    - Scope and build a batch behind one approval gate: `$maestro-auto`
    - Make a small, low-risk, single-session change: `$maestro-vibe`
+   - Draft the next release note from shipped diffs: `$maestro-release-note`
+   - Visually verify a deployed Maestro site: `$sites-verify`
 4. If Maestro is unavailable or unauthenticated, say so explicitly. Do not
    silently switch to the file-backed fallback workflow.
 5. Before building, read `docs/django_developer/README.md` and check
@@ -44,7 +46,8 @@ Per-checkout test isolation permits different worktrees to test concurrently.
 
 ## Skill Synchronization
 
-The upstream-managed Maestro sources are `.claude/skills/maestro-*/SKILL.md`.
+The upstream-managed dev skill pack lives under `.claude/skills/` and includes
+the `maestro-*` workflows plus `sites-verify`.
 ChatGPT and Codex discover generated counterparts in `.agents/skills/`.
 Never hand-edit the generated copies. After `get_dev_skills()` refreshes the
 Claude sources, run:

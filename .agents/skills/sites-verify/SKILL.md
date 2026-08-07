@@ -3,12 +3,11 @@ name: sites-verify
 description: >-
   Actually look at a maestro site you just deployed — real pixels from local
   headless Chrome, a real narrow viewport from the browser pane — and know
-  which cheap substitutes lie (DOM state, headless "mobile", a stale pane,
-  a blank cross-origin tile).
-user-invocable: true
-argument-hint: <site url or slug (omit to use the site you just deployed)>
-maestro-skill-version: 2
+  which cheap substitutes lie (DOM state, headless "mobile", a stale pane, a
+  blank cross-origin tile).
 ---
+
+<!-- Generated from .claude/skills/sites-verify/SKILL.md (maestro-skill-version: 2). Do not edit directly. -->
 
 # Sites Verify — Look At It Before You Say It Works
 

@@ -78,7 +78,7 @@ repeat the roster confirmation before continuing. Every post-acquire sub-agent
 starts in fresh/isolated context and receives the workspec, never the token or
 owning transcript.
 
-Renew with `renew_board_item_checkout` no later than 20 minutes after acquire
+Renew with `renew_board_item_checkout` no later than 40 minutes after acquire
 or the last renewal, immediately before and after long commands/waits, and
 before accepting a sub-agent result. Keep waits short enough to heartbeat. A
 `checkout_lost`, `checkout_expired`, or `checkout_replaced` means the advisory
@@ -383,4 +383,3 @@ which item to sync manually (`planning/.cache/<item-id>.md` →
   optimistic one spends it on nothing at all.
 - Keep repo dumps out of the workspec — reference file paths.
 - If the item is already `building` or has an owner, ask before re-scoping.
-

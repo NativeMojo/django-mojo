@@ -16,6 +16,8 @@ SKILL_NAMES = (
     "maestro-build",
     "maestro-auto",
     "maestro-vibe",
+    "maestro-release-note",
+    "sites-verify",
 )
 
 INTERFACES = {
@@ -43,6 +45,16 @@ INTERFACES = {
         "Maestro Vibe",
         "Ship a small change with lightweight tracking",
         "Use $maestro-vibe to implement and verify this small change, then record it on Maestro.",
+    ),
+    "maestro-release-note": (
+        "Maestro Release Note",
+        "Draft a release note from the changes that actually shipped",
+        "Use $maestro-release-note to inspect the shipped changes and draft the next release note.",
+    ),
+    "sites-verify": (
+        "Sites Verify",
+        "Visually verify a deployed Maestro site",
+        "Use $sites-verify to inspect the deployed site in real desktop and narrow-view renders.",
     ),
 }
 
@@ -102,7 +114,8 @@ def yaml_block(value):
 
 
 def adapt_body(body):
-    body = re.sub(r"`/maestro-(task|scope|build|auto|vibe)", r"`$maestro-\1", body)
+    body = re.sub(r"`/maestro-(task|scope|build|auto|vibe|release-note)", r"`$maestro-\1", body)
+    body = body.replace("`/sites-verify", "`$sites-verify")
     body = body.replace("`CLAUDE.md`", "`AGENTS.md`")
     body = body.replace("Opus, high effort", "frontier model, high reasoning")
     return body

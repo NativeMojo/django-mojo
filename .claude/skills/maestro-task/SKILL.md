@@ -209,4 +209,3 @@ in the spec where it arises, not invented meta syntax.
 - Keep repo dumps out of the workspec — reference file paths; the scoping and
   build sessions run inside the repo and can read them.
 - A work item is board-backed XOR file-backed — never create both.
-
