@@ -34,17 +34,36 @@ _FAKE_REDIS = {}
 _OWNER_KEY = "testenv:owner"
 
 
-class _FakeRedis:
-    """A dict-backed stand-in for one Redis database index."""
+class _FakePool:
+    """Just enough of a redis-py connection pool to read the database off."""
 
     def __init__(self, index):
+        self.connection_kwargs = {"db": index}
+
+
+class _FakeRedis:
+    """A dict-backed stand-in for one Redis database index.
+
+    `store` defaults to the shared `_FAKE_REDIS`, which stands in for "the
+    local server every probe talks to". Handing over a separate dict models a
+    DIFFERENT SERVER on the same index — the case where the runner's Redis is
+    somewhere other than the localhost a probe resolves to.
+
+    `connection_pool` mirrors redis-py closely enough that anything deriving
+    the live database index off a client (bin/testit.py's `_live_redis_index`,
+    testenv's `_client_db`) works against this.
+    """
+
+    def __init__(self, index, store=None):
         self.index = index
+        self.store = _FAKE_REDIS if store is None else store
+        self.connection_pool = _FakePool(index)
 
     def get(self, key):
-        return _FAKE_REDIS.get((self.index, key))
+        return self.store.get((self.index, key))
 
     def set(self, key, value):
-        _FAKE_REDIS[(self.index, key)] = value
+        self.store[(self.index, key)] = value
         return True
 
     def close(self):
@@ -400,6 +419,25 @@ def test_redis_limit_honors_the_env_var(opts):
             "an unset MOJO_TESTENV_REDIS_LIMIT changed the shipped default"
 
 
+@th.django_unit_test("an absurd MOJO_TESTENV_REDIS_LIMIT is clamped, not obeyed")
+def test_redis_limit_is_clamped(opts):
+    """`_pick_redis_index` opens a fresh client per candidate index, so an
+    accidental extra digit does not fail — it HANGS, spending hours connecting
+    to indexes no server has. Clamped rather than rejected, so the typo still
+    allocates instead of blocking every suite on the machine."""
+    from testit import testenv
+
+    assert testenv.REDIS_MAX_LIMIT >= testenv.REDIS_FALLBACK_LIMIT, \
+        (f"the clamp ({testenv.REDIS_MAX_LIMIT}) is below Redis's own shipped "
+         f"default ({testenv.REDIS_FALLBACK_LIMIT}) — it would cost real slots")
+
+    with mock.patch.dict(os.environ, {"MOJO_TESTENV_REDIS_LIMIT": "99999999"}):
+        assert testenv.redis_limit() == testenv.REDIS_MAX_LIMIT, \
+            (f"an absurd Redis ceiling was taken verbatim "
+             f"({testenv.redis_limit()}) — a cold allocation would hang for "
+             f"hours rather than error")
+
+
 @th.django_unit_test("a corrupt registry is rebuilt rather than wedging every suite")
 def test_corrupt_registry_recovers(opts):
     """The values are derived, so losing them costs a different slot next run —
@@ -547,6 +585,149 @@ def test_claim_refuses_index_zero(opts):
         shutil.rmtree(mine, ignore_errors=True)
 
 
+@th.django_unit_test("the flush guard reads the client it was handed, not a probe")
+def test_claim_uses_the_supplied_client(opts):
+    """The guard is only worth anything if it interrogates the server that
+    `flushdb()` is about to empty.
+
+    The probe resolves host and port from MOJO_TESTENV_REDIS_HOST/_PORT,
+    defaulting to 127.0.0.1:6379. The live client comes from REDIS_URL and can
+    point anywhere — maestro sets it. So a guard that builds its own probe
+    reads index N on the LOCAL server, finds it unstamped, and lets the run
+    flush index N on the REMOTE one regardless of who owns it.
+    """
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    owner = tempfile.mkdtemp(prefix="testenv-owner-")
+    mine = tempfile.mkdtemp(prefix="testenv-mine-")
+    probes = []
+    try:
+        # A separate store is a separate server: index 4 is owned there, and
+        # unstamped on the local one any probe would reach.
+        remote = {}
+        live = _FakeRedis(4, store=remote)
+        live.set(_OWNER_KEY, os.path.realpath(owner))
+
+        def _probe(index):
+            probes.append(index)
+            return _FakeRedis(index)
+
+        with mock.patch.object(testenv, "_redis_client", create=True,
+                               side_effect=_probe):
+            err = None
+            try:
+                testenv.claim_redis_index(4, mine, client=live)
+            except testenv.AllocationError as caught:
+                err = caught
+
+        assert not probes, \
+            (f"the guard built its own probe client for index(es) {probes} "
+             f"instead of using the live client it was handed — it would read "
+             f"the ownership stamp on one server while flushdb() empties "
+             f"another")
+        assert err is not None, \
+            ("the guard allowed a FLUSHDB on an index the supplied client "
+             "shows belongs to another live checkout")
+        assert os.path.realpath(owner) in str(err), \
+            f"the refusal does not name the checkout that owns it: {err}"
+    finally:
+        _restore(patches)
+        shutil.rmtree(owner, ignore_errors=True)
+        shutil.rmtree(mine, ignore_errors=True)
+
+
+@th.django_unit_test("MOJO_TESTENV_NO_REDIS cannot disarm the flush guard")
+def test_claim_with_a_supplied_client_ignores_no_redis_env(opts):
+    """The variable is documented for an image with no Redis at all.
+
+    That rationale cannot reach the flush path, which runs only when the runner
+    IS holding a client it is about to flush. Letting it through made
+    `export MOJO_TESTENV_NO_REDIS=1` a way to FLUSHDB another checkout's index
+    with no guard at all — and, second-order, to leave the index unstamped
+    afterwards so the next allocation hands it to a third tree.
+    """
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    owner = tempfile.mkdtemp(prefix="testenv-owner-")
+    mine = tempfile.mkdtemp(prefix="testenv-mine-")
+    try:
+        live = _FakeRedis(5)
+        live.set(_OWNER_KEY, os.path.realpath(owner))
+
+        err = None
+        with mock.patch.dict(os.environ, {"MOJO_TESTENV_NO_REDIS": "1"}):
+            try:
+                testenv.claim_redis_index(5, mine, client=live)
+            except testenv.AllocationError as caught:
+                err = caught
+
+        assert err is not None, \
+            ("MOJO_TESTENV_NO_REDIS switched the pre-FLUSHDB guard off — the "
+             "run would have wiped a live checkout's Redis index unguarded")
+    finally:
+        _restore(patches)
+        shutil.rmtree(owner, ignore_errors=True)
+        shutil.rmtree(mine, ignore_errors=True)
+
+
+@th.django_unit_test("a client whose database disagrees with the index is refused")
+def test_claim_rejects_a_client_whose_db_disagrees(opts):
+    """Checking one database while flushing another is the exact failure the
+    guard exists to prevent, so a caller that supplies both and has them
+    disagree is told, not quietly resolved in one direction."""
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    mine = tempfile.mkdtemp(prefix="testenv-mine-")
+    try:
+        err = None
+        try:
+            testenv.claim_redis_index(5, mine, client=_FakeRedis(3))
+        except testenv.AllocationError as caught:
+            err = caught
+
+        assert err is not None, \
+            ("a client on database 3 was accepted as the ownership check for "
+             "index 5 — the guard would clear index 5 by reading index 3")
+    finally:
+        _restore(patches)
+        shutil.rmtree(mine, ignore_errors=True)
+
+
+@th.django_unit_test("an owner stamp that will not resolve fails closed")
+def test_an_unusable_owner_stamp_fails_closed(opts):
+    """The stamp is arbitrary bytes written by another process.
+
+    Most hostile values resolve fine and then read as "not me" — `../../..`,
+    `~/`, empty, whitespace. A NUL byte does not: `realpath` raises ValueError,
+    which sailed past every caller (the runner catches only AllocationError)
+    and killed the run on a traceback instead of the message written for
+    exactly this situation.
+    """
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    mine = tempfile.mkdtemp(prefix="testenv-mine-")
+    try:
+        _FAKE_REDIS[(6, _OWNER_KEY)] = "/tmp/whatever\x00wrote-this"
+
+        err = None
+        try:
+            testenv.claim_redis_index(6, mine)
+        except testenv.AllocationError as caught:
+            err = caught
+
+        assert err is not None, \
+            ("a stamp that will not resolve to a path did not raise "
+             "AllocationError — the runner cannot report it, and an unknown "
+             "owner must never read as no owner")
+    finally:
+        _restore(patches)
+        shutil.rmtree(mine, ignore_errors=True)
+
+
 @th.django_unit_test("allocation fails closed when Redis cannot be reached")
 def test_allocation_fails_closed_when_redis_cannot_be_reached(opts):
     """Allocation writes a record a checkout uses for months. One unanswerable
@@ -609,6 +790,38 @@ def test_a_corrupt_registry_is_preserved(opts):
                  if name.startswith("testenv.json.corrupt-")]
         assert saved, \
             f"a corrupt registry was discarded with no copy kept: {os.listdir(tmpdir)}"
+        with open(os.path.join(tmpdir, saved[0])) as handle:
+            kept = handle.read()
+        assert kept == junk, \
+            f"the preserved copy is not what was on disk: {kept!r}"
+    finally:
+        _restore(patches)
+
+
+@th.django_unit_test("a corrupt registry is preserved once, not once per read")
+def test_a_corrupt_registry_is_preserved_once(opts):
+    """Read-only callers never rewrite the registry — `allocations()`, the
+    CLI's `list`, and the extra `allocations()` inside the `prune` CLI — so an
+    unfixed corrupt file is re-read on every single invocation. A timestamped
+    copy per read grows without bound in the user's home directory until
+    somebody happens to look."""
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    try:
+        testenv.allocate("/tmp/repo-a", "mojo_test")
+        junk = "{not json at all"
+        with open(testenv.REGISTRY_PATH, "w") as handle:
+            handle.write(junk)
+
+        for _ in range(3):
+            testenv.allocations()
+
+        saved = [name for name in os.listdir(tmpdir)
+                 if name.startswith("testenv.json.corrupt-")]
+        assert len(saved) == 1, \
+            (f"three read-only reads of ONE corrupt registry left {len(saved)} "
+             f"copies behind: {sorted(saved)}")
         with open(os.path.join(tmpdir, saved[0])) as handle:
             kept = handle.read()
         assert kept == junk, \

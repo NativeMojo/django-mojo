@@ -132,7 +132,11 @@ Redis index 0 for its lifetime. A number you can be told is not worth that.
 
 A junk or unset `MOJO_TESTENV_REDIS_LIMIT` means 16. A value below 1 floors at
 1, which leaves no allocatable index and fails closed on the next allocation —
-correct, if blunt.
+correct, if blunt. It is **clamped at 64** (`REDIS_MAX_LIMIT`) at the top end:
+allocation opens a connection per candidate index, so a mistyped `99999999`
+would not fail, it would sit there connecting for hours. Clamped rather than
+rejected, so the typo still allocates. If you genuinely run more than 64
+databases, raise the constant.
 
 ## Adopting testenv elsewhere
 
@@ -172,17 +176,27 @@ Allocation alone does not protect you. If your runner calls `FLUSHDB`, wrap it:
 ```python
 index = client.connection_pool.connection_kwargs.get("db", 0)
 
-testenv.claim_redis_index(index, REPO_ROOT)   # raises AllocationError -> exit 1
+testenv.claim_redis_index(index, REPO_ROOT, client=client)   # raises AllocationError -> exit 1
 client.flushdb()
-testenv.stamp_redis_owner(index, REPO_ROOT)   # the flush destroyed the stamp
+testenv.stamp_redis_owner(index, REPO_ROOT, client=client)   # the flush destroyed the stamp
 ```
 
-Four things that matter:
+Five things that matter:
 
+- **Pass the client you are about to flush.** `claim_redis_index`,
+  `stamp_redis_owner`, `redis_owner` and `redis_index_is_free` all take
+  `client=`, and with one supplied they read and write the stamp through it —
+  the exact server and database `flushdb()` is about to empty, no second
+  connection, and closing it stays your job. Without one they fall back to
+  building a probe against `MOJO_TESTENV_REDIS_HOST`/`_PORT` (localhost by
+  default), which is the wrong server whenever your Redis is elsewhere. The
+  index you pass must agree with the client's own `db`; a disagreement raises
+  `AllocationError` rather than picking one.
 - **Derive the index from the live client, not from settings.**
   `mojo.helpers.redis` gives `REDIS_URL` precedence over `REDIS_DB_INDEX`, so a
   guard reading settings can protect index N while `flushdb()` empties index M —
-  worse than no guard at all.
+  worse than no guard at all. The same argument applies to the host, which is
+  what `client=` above is for.
 - **Claim before, stamp after.** The flush destroys the stamp along with
   everything else.
 - **On a resume path (`--continue`), claim but do NOT stamp.** A `SET` with no
@@ -214,13 +228,29 @@ So each allocated index carries a stamp:
 
 The stamp is read and written with a bare `redis-py` client — never
 `mojo.helpers.redis`, for the same reason `redis_limit()` doesn't call it (see
-above). It connects to `127.0.0.1:6379` by default; if your Redis isn't there, set
-`MOJO_TESTENV_REDIS_HOST` and/or `MOJO_TESTENV_REDIS_PORT` (each falls back to
-its own default independently). These are read at call time, independent of
-any Django `REDIS_HOST`/`REDIS_PORT`/`REDIS_URL` setting — an adopter whose
-Redis lives elsewhere needs to set them, or the probe silently talks to the
-wrong (or no) server, which reads as `RedisUnreachable` rather than as a
-config mismatch.
+above).
+
+**Which server gets asked depends on the check**, and the difference is the
+point:
+
+- **The flush guard uses the runner's own live client**, handed to
+  `claim_redis_index(..., client=...)` / `stamp_redis_owner(..., client=...)`.
+  That client is the one about to be flushed, so the guard reads and re-stamps
+  the exact server and database `flushdb()` empties. Nothing about
+  `MOJO_TESTENV_REDIS_HOST`/`_PORT` enters into it.
+- **Allocation builds a probe**, because there is no live client yet — it runs
+  before the project exists, deriving the values the settings will go on to
+  hold. The probe connects to `127.0.0.1:6379` by default; if your Redis isn't
+  there, set `MOJO_TESTENV_REDIS_HOST` and/or `MOJO_TESTENV_REDIS_PORT` (each
+  falls back to its own default independently). These are read at call time and
+  are independent of any Django `REDIS_HOST`/`REDIS_PORT`/`REDIS_URL` setting.
+
+**The honest limitation:** an adopter whose test Redis is remote and who does
+not set those two variables gets a probe that asks the local machine, so
+**allocation-time protection does not apply to them** — the probe reads the
+wrong server, which surfaces as `RedisUnreachable` rather than as a config
+mismatch. They still get the flush-time guard, and that is the check standing
+between a wrong index and destroyed data.
 
 It is checked in two places, and they fail in **opposite directions on purpose**:
 
@@ -231,9 +261,10 @@ It is checked in two places, and they fail in **opposite directions on purpose**
   connection stops the search immediately; a timeout does not, because a timeout
   means Redis is up and busy — precisely when guessing "free" is destructive.
 - **The flush fails open.** `bin/testit.py` calls `claim_redis_index()` before
-  `FLUSHDB` and aborts the run if the index belongs to someone else, but allows
-  it when Redis cannot be reached — a flush that cannot connect cannot destroy
-  anything either.
+  `FLUSHDB` — passing the live client, so the question is asked of the server
+  being flushed — and aborts the run if the index belongs to someone else, but
+  allows it when Redis cannot be reached: a flush that cannot connect cannot
+  destroy anything either.
 
 A stamp naming a directory that **no longer exists** is stale: the checkout is
 gone, so its leftover data is nobody's and the index is takeable. Otherwise a
@@ -242,9 +273,24 @@ deleted worktree would poison a slot forever.
 Index 0 is never allocated, never stamped, and `claim_redis_index()` refuses it
 outright — it is the developer's own cache, and flushing it is never ours to do.
 
+A stamp that will not resolve to a path at all — one containing a NUL byte, say
+— is **unusable**, not "not mine": both checks refuse with `AllocationError`
+rather than treating an unknown owner as no owner. Every other hostile value
+(`../../..`, `~/`, empty, whitespace) resolves fine, reads as "not me", and
+falls through to the stale-directory check, which is the right answer for all
+of them.
+
 **The escape hatch** is `MOJO_TESTENV_NO_REDIS=1`, for an image with no Redis at
-all. It turns the ownership check off entirely and is the only supported way to
-allocate without it.
+all. It turns off the **allocation-time probe** — that is its entire scope, and
+it is the only supported way to allocate without the ownership check.
+
+It does **not** disable the pre-`FLUSHDB` guard, and cannot. That path runs only
+when the runner is holding a live client it is about to flush, so there is no
+probe there to switch off and nothing for "this image has no Redis" to excuse.
+Before this was fixed, `export MOJO_TESTENV_NO_REDIS=1` silently turned the
+flush guard into a no-op — and left the index unstamped afterwards, so the
+weakening outlived the process and the next allocation handed the index to a
+third tree.
 
 > **Anything that calls `FLUSHDB` outside the runner drops the stamp** until the
 > next run re-writes it. `MojoRedisCache.clear()` (`mojo/cache/redis.py`) is one

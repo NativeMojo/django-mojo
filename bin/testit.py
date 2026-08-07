@@ -60,6 +60,12 @@ def _live_redis_index(client):
     REDIS_URL precedence over REDIS_DB_INDEX, and adopting repos set REDIS_URL.
     A guard that protects index N while flushdb() empties index M is worse than
     no guard at all.
+
+    The same argument applies to the HOST, which is why the client itself is
+    handed to testenv below rather than only this number: testenv's own probe
+    resolves host and port from MOJO_TESTENV_REDIS_HOST/_PORT (localhost by
+    default), independently of REDIS_URL, so a number alone would have it guard
+    index N on one machine while the flush empties index N on another.
     """
     pool = getattr(client, "connection_pool", None)
     if pool is None:
@@ -76,6 +82,11 @@ if redis_client is not None:
     # Refuse to touch a Redis index another live checkout has stamped. Checked
     # on --continue too: that path skips the flush, but skipping the guard is
     # what would let it overwrite somebody else's stamp.
+    #
+    # The live client goes in with it. That is what makes the guard read the
+    # exact server+database flushdb() is about to empty, and it is also why
+    # MOJO_TESTENV_NO_REDIS cannot disarm the guard here: that variable turns
+    # off testenv's own probe, and with a client supplied there is no probe.
     testenv = _load_testenv()
     redis_index = _live_redis_index(redis_client)
     if redis_index is None:
@@ -85,7 +96,8 @@ if redis_client is not None:
               "the ownership guard is not active")
     else:
         try:
-            testenv.claim_redis_index(redis_index, str(REPO_ROOT))
+            testenv.claim_redis_index(
+                redis_index, str(REPO_ROOT), client=redis_client)
         except testenv.AllocationError as err:
             print(f"ERROR: {err}", file=sys.stderr)
             sys.exit(1)
@@ -111,7 +123,10 @@ else:
         # The flush destroyed the stamp along with everything else. Re-stamp,
         # but ONLY here: a SET on the --continue path would have no preceding
         # claim behind it and could quietly take over another checkout's index.
-        testenv.stamp_redis_owner(redis_index, str(REPO_ROOT))
+        # Same client again: stamping through a probe would write the claim
+        # onto a localhost index this checkout never uses.
+        testenv.stamp_redis_owner(
+            redis_index, str(REPO_ROOT), client=redis_client)
 
 from testit import runner
 

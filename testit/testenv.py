@@ -73,7 +73,29 @@ The two checks fail in opposite directions on purpose. **Allocation fails
 closed**: it writes a record a checkout then uses for months, so one flaky
 probe must never latch a wrong answer in. **The flush fails open**: if Redis
 cannot be reached, `flushdb()` cannot destroy anything either.
+
+## Which server gets asked, and by which check
+
+The two checks reach Redis differently, and the difference is the whole point.
+
+- **The flush guard uses the runner's own live client**, handed in as
+  `client=`. That client IS the one about to be flushed, so the guard reads the
+  ownership stamp off the exact server and database that `flushdb()` will
+  empty. Resolving host and port independently — from
+  `MOJO_TESTENV_REDIS_HOST`/`_PORT`, defaulting to localhost — would protect
+  index N on one machine while the flush empties index N on another, and a
+  guard that checks the wrong server is worse than no guard at all.
+- **Allocation builds a probe** against `MOJO_TESTENV_REDIS_HOST`/`_PORT`
+  (localhost by default), because there is no live client yet: it runs before
+  the project exists, deriving the values the settings will later hold, and
+  `create_testproject` writes localhost. The honest limitation: an adopter
+  whose test Redis is remote gets no allocation-time protection. They still get
+  the flush-time guard, which is the one that destroys data.
+
 `MOJO_TESTENV_NO_REDIS=1` is the documented opt-out for images with no Redis.
+It switches off the allocation-time **probe** and nothing else — it cannot
+disable the flush guard, which is not building a probe at all but reading a
+client the runner is demonstrably holding.
 
 The stamp is a backstop for when the registry is gone — not a replacement for
 its lock.
@@ -95,6 +117,12 @@ REGISTRY_VERSION = 1
 # See the module docstring for why these are not 0 and 5555.
 REDIS_FIRST_INDEX = 1
 REDIS_FALLBACK_LIMIT = 16
+# The ceiling MOJO_TESTENV_REDIS_LIMIT is clamped to. Redis's own `databases`
+# is configurable without an upper bound, but every index above this one costs
+# a fresh connection during a cold allocation — so a mistyped "99999999" would
+# sit there opening sockets for hours instead of failing. 64 is well past any
+# real fleet and still finishes in a blink.
+REDIS_MAX_LIMIT = 64
 PORT_BASE = 5600
 PORT_RANGE = 100
 
@@ -191,11 +219,34 @@ def _preserve_corrupt_registry(raw):
     directory entry aside would send the rebuild into the evidence file and
     leave no registry at all.
 
+    ONCE per distinct corrupt file, which is why the suffix is a digest of the
+    content rather than a timestamp. Read-only callers — `allocations()`, the
+    CLI's `list`, the extra `allocations()` inside `prune` — never rewrite the
+    registry, so an unfixed corrupt file is re-read on every single invocation.
+    A timestamped name grew a new copy each time, unbounded, forever; a
+    content-derived one collides with the copy already on disk and `O_EXCL`
+    turns that collision into "already preserved, nothing to do".
+
+    `O_EXCL | O_NOFOLLOW` rather than `open(..., "w")`: the exclusive create is
+    what makes "once" enforceable at the filesystem rather than by a racy
+    existence check, and refusing to follow a symlink comes along for free.
+
     Best effort throughout — losing the evidence must never break allocation.
     """
     try:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
-        with open(f"{REGISTRY_PATH}.corrupt-{stamp}", "w") as out:
+        digest = hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:12]
+        fd = os.open(f"{REGISTRY_PATH}.corrupt-{digest}",
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600)
+    except FileExistsError:
+        # These exact bytes are already preserved. Caught before OSError below,
+        # which it subclasses.
+        return
+    except OSError:
+        return
+
+    try:
+        with os.fdopen(fd, "w") as out:
             out.write(raw)
     except OSError:
         pass
@@ -285,6 +336,12 @@ def redis_limit():
     default — allocation must never be the thing that fails because an
     environment variable was mistyped.
 
+    Clamped to `REDIS_MAX_LIMIT` at the top for the same reason it is floored at
+    1 at the bottom: `_pick_redis_index` opens a fresh client per candidate
+    index, so an accidental extra digit does not error, it HANGS — hours of
+    connecting to indexes no server has. Clamped rather than rejected, so an
+    over-large value still allocates instead of blocking every suite.
+
     It does NOT ask the server, and that is deliberate. Reaching Redis from here
     meant importing `mojo.helpers.redis`, which resolves its URL from a Django
     setting and caches a process-global client BEFORE any network I/O. This
@@ -297,9 +354,10 @@ def redis_limit():
     match — raising redis.conf alone does nothing here.
     """
     try:
-        return max(1, int(os.environ.get("MOJO_TESTENV_REDIS_LIMIT", REDIS_FALLBACK_LIMIT)))
+        value = int(os.environ.get("MOJO_TESTENV_REDIS_LIMIT", REDIS_FALLBACK_LIMIT))
     except (TypeError, ValueError):
         return REDIS_FALLBACK_LIMIT
+    return max(1, min(REDIS_MAX_LIMIT, value))
 
 
 def port_is_free(port, host="127.0.0.1"):
@@ -321,16 +379,80 @@ def port_is_free(port, host="127.0.0.1"):
 
 
 def probing_disabled():
-    """Whether the ownership probe is switched off for this process.
+    """Whether the ownership PROBE is switched off for this process.
 
     The documented escape for an image with no Redis at all. It is opt-IN to
     danger, so it must be explicit — nothing infers it.
+
+    Scope matters: this governs the probe, which is a client this module builds
+    from the environment because no live one exists. It does NOT reach a caller
+    that hands in `client=` — see `_client_for`.
     """
     return bool(os.environ.get("MOJO_TESTENV_NO_REDIS"))
 
 
+def _client_db(client):
+    """Which database index a live client is pointed at, or None if unknowable.
+
+    Read off the client's own connection pool, the same way `bin/testit.py`
+    does immediately before its `FLUSHDB`. A cluster client has no single
+    database and answers None.
+    """
+    pool = getattr(client, "connection_pool", None)
+    if pool is None:
+        return None
+    return getattr(pool, "connection_kwargs", {}).get("db", 0)
+
+
+def _client_for(index, client):
+    """The client to use for one ownership read/write, and whether we own it.
+
+    Two paths, and the difference is the point:
+
+    - **A caller supplied one** (the runner, holding the very client it is
+      about to flush). Use it exactly as-is: same server, same database, no
+      environment lookup, no second connection. The caller closes it, not us —
+      hence the returned flag.
+
+      `probing_disabled()` deliberately does NOT apply here. There is no probe
+      to disable; `MOJO_TESTENV_NO_REDIS` exists for images with no Redis at
+      all, and a caller holding a live client has demonstrated otherwise. Left
+      applying here it silently disarmed the pre-FLUSHDB guard, which is the
+      one check standing between a misallocated index and another suite's data.
+
+    - **Nobody supplied one.** Build a probe from the environment, which is
+      where `probing_disabled()` and the localhost defaults belong.
+
+    A supplied client MUST agree with `index`. Disagreement is a programming
+    error, and the specific one this whole mechanism exists to prevent — a
+    guard reading index N while the flush empties index M — so it raises rather
+    than picking a side.
+    """
+    if client is None:
+        return _redis_client(index), True
+
+    live = _client_db(client)
+    if live is None:
+        raise AllocationError(
+            f"cannot tell which Redis database the supplied client is pointed "
+            f"at, so the ownership check for index {index} would be guessing "
+            f"about the wrong database. Do not call this with a client whose "
+            f"database is indeterminate (a cluster client, for one).")
+    try:
+        agrees = int(live) == int(index)
+    except (TypeError, ValueError):
+        agrees = False
+    if not agrees:
+        raise AllocationError(
+            f"the supplied Redis client is on database {live!r} but the "
+            f"ownership check was asked about index {index!r}. Checking one "
+            f"database while flushing another is worse than no check at all; "
+            f"derive the index from the client you are about to flush.")
+    return client, False
+
+
 def _redis_client(index):
-    """A bare redis-py client for one database index, or None if unavailable.
+    """A bare redis-py PROBE client for one database index, or None.
 
     Bare on purpose. `mojo.helpers.redis` resolves its URL from a Django
     setting and caches a process-global client before any network I/O, so
@@ -341,7 +463,17 @@ def _redis_client(index):
     A CLIENT-OWNED pool, never `redis.Redis(connection_pool=...)`: the explicit
     form sets `auto_close_connection_pool=False`, so `close()` leaves the
     socket open and a cold allocation leaks one per candidate index.
+
+    Host and port come from `MOJO_TESTENV_REDIS_HOST`/`_PORT`, defaulting to
+    localhost, and are unrelated to any Django `REDIS_URL`. That is fine for
+    allocation, which is deriving values the settings do not hold yet; it is
+    NOT fine for the flush guard, which must read the server it is about to
+    empty. Callers that hold a live client pass it in instead — see
+    `_client_for`, which routes past this function entirely.
     """
+    # Only the PROBE path reaches this, so MOJO_TESTENV_NO_REDIS switches off
+    # only the probe. A caller holding a live client never gets here, which is
+    # what keeps the pre-FLUSHDB guard armed regardless of the variable.
     if probing_disabled():
         return None
     try:
@@ -379,34 +511,69 @@ def _is_refusal(err):
     return "ConnectionError" in names
 
 
-def redis_owner(index):
+def redis_owner(index, client=None):
     """The checkout path stamped on a Redis index, or None when unstamped.
 
-    Raises `RedisUnreachable` when the question could not be asked at all.
+    Pass `client` to read the stamp off a client you already hold — that reads
+    the actual server and database that client is on, rather than whatever
+    `MOJO_TESTENV_REDIS_HOST`/`_PORT` happen to name. It must be on `index`,
+    and closing it stays the caller's job. Without one, a probe is built.
+
+    Raises `RedisUnreachable` when the question could not be asked at all, and
+    `AllocationError` when a supplied client disagrees with `index`.
     """
-    client = _redis_client(index)
-    if client is None:
+    conn, owned = _client_for(index, client)
+    if conn is None:
         raise RedisUnreachable(
             "no Redis client is available to check index "
             f"{index} for an owner", refused=True)
     try:
-        return client.get(REDIS_OWNER_KEY) or None
+        return conn.get(REDIS_OWNER_KEY) or None
     except Exception as err:
         raise RedisUnreachable(
             f"could not read the owner of Redis index {index}: {err}",
             refused=_is_refusal(err))
     finally:
-        try:
-            client.close()
-        except Exception:
-            pass
+        if owned:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _owner_realpath(owner):
+    """A stamp resolved to a path, or None when it will not resolve at all.
+
+    The stamp is arbitrary bytes written by another process, so it is untrusted
+    input. Most hostile values resolve perfectly well and then simply read as
+    "not me" — `../../..`, `~/`, empty, whitespace — and fall through to the
+    `isdir` check, which is the right answer for all of them. A NUL byte does
+    not: `realpath` raises `ValueError`, which escaped as an unhandled
+    traceback past every caller (the runner only catches `AllocationError`).
+    """
+    try:
+        return os.path.realpath(str(owner))
+    except (TypeError, ValueError):
+        return None
 
 
 def _same_checkout(owner, root):
-    return os.path.realpath(str(owner)) == os.path.realpath(str(root))
+    """Whether a stamp names `root`. Raises on a stamp that will not resolve.
+
+    Fails CLOSED: a stamp we cannot resolve is a stamp whose owner is unknown,
+    and "unknown owner" must never read as "not you, go ahead and flush it".
+    """
+    resolved = _owner_realpath(owner)
+    if resolved is None:
+        raise AllocationError(
+            f"the Redis ownership stamp {owner!r} cannot be resolved to a "
+            f"path, so there is no way to tell whose index this is. Refusing "
+            f"rather than guessing. Clear it once you know what wrote it: "
+            f"`redis-cli -n <index> DEL {REDIS_OWNER_KEY}`.")
+    return resolved == os.path.realpath(str(root))
 
 
-def redis_index_is_free(index, root):
+def redis_index_is_free(index, root, client=None):
     """Whether `root` may use a Redis index, as far as the stamp knows.
 
     False ONLY when the stamp names a different checkout that still exists on
@@ -416,9 +583,12 @@ def redis_index_is_free(index, root):
     nobody's, and holding the slot forever would leak the scarcest resource
     here.
 
-    Propagates `RedisUnreachable`; the caller decides which way to fail.
+    `client` is passed straight through to `redis_owner`.
+
+    Propagates `RedisUnreachable`; the caller decides which way to fail. Raises
+    `AllocationError` on a stamp that will not resolve to a path.
     """
-    owner = redis_owner(index)
+    owner = redis_owner(index, client=client)
     if not owner:
         return True
     if _same_checkout(owner, root):
@@ -426,13 +596,23 @@ def redis_index_is_free(index, root):
     return not os.path.isdir(owner)
 
 
-def claim_redis_index(index, root):
+def claim_redis_index(index, root, client=None):
     """Refuse the index unless `root` may destroy what is in it.
 
     Called immediately before a FLUSHDB. Fails OPEN when Redis cannot be
     reached — a flush that cannot connect cannot destroy anything either — and
     hard-refuses anything below `REDIS_FIRST_INDEX`, because index 0 is the
     developer's own cache and is never ours to empty.
+
+    **Pass the client you are about to flush.** The whole value of this check
+    is that it interrogates the same server and database `flushdb()` will
+    empty; without `client` it falls back to a probe against
+    `MOJO_TESTENV_REDIS_HOST`/`_PORT` (localhost by default), which answers
+    about a different machine entirely whenever your Redis is not there. It
+    must be on `index` — a disagreement raises rather than picking one.
+
+    Note that a supplied client also makes `MOJO_TESTENV_NO_REDIS` irrelevant
+    here: that variable turns off the probe, and there is no probe to turn off.
     """
     try:
         index = int(index)
@@ -448,7 +628,7 @@ def claim_redis_index(index, root):
             f"Run `bin/create_testproject` to get an allocated index.")
 
     try:
-        owner = redis_owner(index)
+        owner = redis_owner(index, client=client)
     except RedisUnreachable:
         # Fail open: nothing we cannot reach can be destroyed.
         return True
@@ -466,7 +646,7 @@ def claim_redis_index(index, root):
         f"`bin/create_testproject` to get an index of your own.")
 
 
-def stamp_redis_owner(index, root):
+def stamp_redis_owner(index, root, client=None):
     """Record `root` as the owner of a Redis index. Returns True when written.
 
     Best effort by design. Failing a whole test run because a stamp could not
@@ -475,6 +655,16 @@ def stamp_redis_owner(index, root):
 
     Refuses anything below `REDIS_FIRST_INDEX` for the same reason
     `claim_redis_index` does: index 0 is not ours to label.
+
+    **Pass the client you just flushed**, for the mirror image of the reason
+    `claim_redis_index` wants one: a probe stamps whatever server
+    `MOJO_TESTENV_REDIS_HOST`/`_PORT` names, so a runner whose Redis is
+    elsewhere writes a claim onto a local index it never uses — other checkouts
+    then skip that index at allocation on the strength of a stamp nobody owns.
+
+    A client that disagrees with `index` raises `AllocationError` — the one
+    thing here that is not best-effort, because it is a programming error and
+    not a runtime condition.
     """
     try:
         index = int(index)
@@ -483,19 +673,20 @@ def stamp_redis_owner(index, root):
     if index < REDIS_FIRST_INDEX:
         return False
 
-    client = _redis_client(index)
-    if client is None:
+    conn, owned = _client_for(index, client)
+    if conn is None:
         return False
     try:
-        client.set(REDIS_OWNER_KEY, os.path.realpath(str(root)))
+        conn.set(REDIS_OWNER_KEY, os.path.realpath(str(root)))
         return True
     except Exception:
         return False
     finally:
-        try:
-            client.close()
-        except Exception:
-            pass
+        if owned:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _pick_redis_index(taken, limit, root):
@@ -505,6 +696,17 @@ def _pick_redis_index(taken, limit, root):
     checkout then uses for months, so one flaky probe reading all fifteen
     candidates as free would latch a collision in permanently — the opposite
     trade-off from the flush guard, which fails open.
+
+    **This path uses the probe, and that is a real limitation, stated plainly.**
+    There is no live client to borrow here: `create_testproject` calls this
+    before any project exists, deriving the values the settings will go on to
+    hold, and it writes localhost — so asking `MOJO_TESTENV_REDIS_HOST`/`_PORT`
+    (localhost by default) is the correct question for this repo. An adopter
+    whose test Redis lives on another host and who does not set those variables
+    gets a probe that asks the wrong server, and therefore NO allocation-time
+    protection. What they still get is the flush-time guard, which reads the
+    runner's own live client — and that is the check that stands between a
+    wrong index and destroyed data.
     """
     if probing_disabled():
         for index in range(REDIS_FIRST_INDEX, limit):
