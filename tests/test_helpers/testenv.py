@@ -13,6 +13,7 @@ Every test runs against a temporary registry, so nothing touches the real
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -22,15 +23,53 @@ from unittest import mock
 from testit import helpers as th
 
 
+# The ownership stamps every test in this file reads and writes, keyed
+# (redis index, key). A dict, so nothing here can touch a real Redis database
+# or flake when one is not running.
+_FAKE_REDIS = {}
+
+# The literal key, spelled out rather than imported: these tests have to run
+# against code that does not define it yet, and the exact string is a
+# cross-repo contract (maestro's runner writes the same one).
+_OWNER_KEY = "testenv:owner"
+
+
+class _FakeRedis:
+    """A dict-backed stand-in for one Redis database index."""
+
+    def __init__(self, index):
+        self.index = index
+
+    def get(self, key):
+        return _FAKE_REDIS.get((self.index, key))
+
+    def set(self, key, value):
+        _FAKE_REDIS[(self.index, key)] = value
+        return True
+
+    def close(self):
+        pass
+
+
+def _stamp(index, path):
+    """Mark a Redis index as owned by a checkout, as the runner would."""
+    _FAKE_REDIS[(index, _OWNER_KEY)] = os.path.realpath(str(path))
+
+
 def _isolated_registry():
-    """Point the allocator at a throwaway registry."""
+    """Point the allocator at a throwaway registry and a fake Redis."""
     from testit import testenv
 
     tmpdir = tempfile.mkdtemp(prefix="testenv-")
+    _FAKE_REDIS.clear()
     patches = [
         mock.patch.object(testenv, "REGISTRY_DIR", tmpdir),
         mock.patch.object(testenv, "REGISTRY_PATH",
                           os.path.join(tmpdir, "testenv.json")),
+        # create=True so these run against code that has no probe yet — a
+        # regression has to FAIL while broken, not error at patch time.
+        mock.patch.object(testenv, "_redis_client", create=True,
+                          side_effect=lambda index: _FakeRedis(index)),
     ]
     for patch in patches:
         patch.start()
@@ -40,6 +79,7 @@ def _isolated_registry():
 def _restore(patches):
     for patch in reversed(patches):
         patch.stop()
+    _FAKE_REDIS.clear()
 
 
 @th.django_unit_test("a slug is stable for a path and differs between paths")
@@ -376,6 +416,240 @@ def test_corrupt_registry_recovers(opts):
         assert record["db_name"], "a corrupt registry blocked allocation"
     finally:
         _restore(patches)
+
+
+@th.django_unit_test("a reset registry never hands out a live checkout's index")
+def test_registry_reset_does_not_hand_out_a_live_index(opts):
+    """The headline case. The registry is one JSON file in a home directory and
+    every way it can be lost — deleted, truncated by a killed writer, rebuilt
+    after a bad parse — reads as "nothing is allocated". A port survives that
+    because the allocator BINDS before handing one out; a Redis index has to
+    ask the index itself who owns it."""
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    alive = tempfile.mkdtemp(prefix="testenv-alive-")
+    other = tempfile.mkdtemp(prefix="testenv-other-")
+    try:
+        first = testenv.allocate(alive, "mojo_test")
+        _stamp(first["redis_index"], alive)
+
+        # The registry is gone. The checkout using that index is not.
+        with open(testenv.REGISTRY_PATH, "w") as handle:
+            handle.write("")
+
+        second = testenv.allocate(other, "mojo_test")
+        assert second["redis_index"] != first["redis_index"], \
+            ("a reset registry handed a live checkout's Redis index to another "
+             "tree — the next flushdb() would wipe that suite mid-run")
+    finally:
+        _restore(patches)
+        shutil.rmtree(alive, ignore_errors=True)
+        shutil.rmtree(other, ignore_errors=True)
+
+
+@th.django_unit_test("a stale owner stamp is reclaimed, not honoured forever")
+def test_a_stale_owner_stamp_is_reclaimed(opts):
+    """A deleted worktree leaves its stamp behind. Honouring it would poison
+    the slot permanently, and Redis indexes are the scarce resource."""
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    dead = tempfile.mkdtemp(prefix="testenv-dead-")
+    live = tempfile.mkdtemp(prefix="testenv-live-")
+    try:
+        os.rmdir(dead)
+        _stamp(testenv.REDIS_FIRST_INDEX, dead)
+
+        record = testenv.allocate(live, "mojo_test")
+        assert record["redis_index"] == testenv.REDIS_FIRST_INDEX, \
+            ("a stamp naming a checkout that no longer exists blocked the "
+             f"index anyway: got {record['redis_index']}")
+    finally:
+        _restore(patches)
+        shutil.rmtree(live, ignore_errors=True)
+
+
+@th.django_unit_test("the flush guard refuses an index a live checkout owns")
+def test_claim_refuses_a_live_foreign_owner(opts):
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    owner = tempfile.mkdtemp(prefix="testenv-owner-")
+    mine = tempfile.mkdtemp(prefix="testenv-mine-")
+    try:
+        _stamp(3, owner)
+
+        err = None
+        try:
+            testenv.claim_redis_index(3, mine)
+        except testenv.AllocationError as caught:
+            err = caught
+
+        assert err is not None, \
+            "the guard allowed a FLUSHDB on another live checkout's index"
+        assert os.path.realpath(owner) in str(err), \
+            f"the refusal does not name the checkout that owns it: {err}"
+        assert "prune" in str(err), \
+            f"the refusal does not say how to fix it: {err}"
+    finally:
+        _restore(patches)
+        shutil.rmtree(owner, ignore_errors=True)
+        shutil.rmtree(mine, ignore_errors=True)
+
+
+@th.django_unit_test("the flush guard allows own, unowned and stale indexes")
+def test_claim_allows_own_unowned_and_stale(opts):
+    """The negative case above is only meaningful if the guard is not simply
+    refusing everything — that would block every run on the machine."""
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    mine = tempfile.mkdtemp(prefix="testenv-mine-")
+    dead = tempfile.mkdtemp(prefix="testenv-dead-")
+    try:
+        os.rmdir(dead)
+
+        assert testenv.claim_redis_index(1, mine), \
+            "an unstamped index was refused — no adopter that never stamps could run"
+
+        _stamp(2, mine)
+        assert testenv.claim_redis_index(2, mine), \
+            "this checkout was refused its own index"
+
+        _stamp(3, dead)
+        assert testenv.claim_redis_index(3, mine), \
+            "an index stamped by a deleted checkout stayed blocked forever"
+    finally:
+        _restore(patches)
+        shutil.rmtree(mine, ignore_errors=True)
+
+
+@th.django_unit_test("the flush guard never allows Redis index 0")
+def test_claim_refuses_index_zero(opts):
+    """Index 0 is the developer's own cache. testenv never allocates it, so
+    being pointed at it means something is misconfigured — and the action being
+    guarded is FLUSHDB."""
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    mine = tempfile.mkdtemp(prefix="testenv-mine-")
+    try:
+        err = None
+        try:
+            testenv.claim_redis_index(0, mine)
+        except testenv.AllocationError as caught:
+            err = caught
+        assert err is not None, \
+            "index 0 was claimable — a run would flush the developer's own cache"
+    finally:
+        _restore(patches)
+        shutil.rmtree(mine, ignore_errors=True)
+
+
+@th.django_unit_test("allocation fails closed when Redis cannot be reached")
+def test_allocation_fails_closed_when_redis_cannot_be_reached(opts):
+    """Allocation writes a record a checkout uses for months. One unanswerable
+    probe must not read as "all fifteen indexes are free"."""
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    try:
+        with mock.patch.object(testenv, "_redis_client", create=True,
+                               return_value=None):
+            err = None
+            try:
+                testenv.allocate("/tmp/repo-a", "mojo_test")
+            except testenv.AllocationError as caught:
+                err = caught
+
+        assert err is not None, \
+            "an unreachable Redis read as 'every index is free' and allocated one"
+        assert "MOJO_TESTENV_NO_REDIS" in str(err), \
+            f"the error does not document the one supported opt-out: {err}"
+    finally:
+        _restore(patches)
+
+
+@th.django_unit_test("MOJO_TESTENV_NO_REDIS allocates without the probe")
+def test_no_redis_env_var_allows_allocation(opts):
+    """The documented escape for a CI image with no Redis at all."""
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    try:
+        with mock.patch.dict(os.environ, {"MOJO_TESTENV_NO_REDIS": "1"}):
+            with mock.patch.object(testenv, "_redis_client", create=True,
+                                   return_value=None):
+                record = testenv.allocate("/tmp/repo-a", "mojo_test")
+
+        assert record["redis_index"], \
+            "MOJO_TESTENV_NO_REDIS did not turn the ownership probe off"
+    finally:
+        _restore(patches)
+
+
+@th.django_unit_test("a corrupt registry is kept, not silently overwritten")
+def test_a_corrupt_registry_is_preserved(opts):
+    """Rebuilding empty is right, but the rebuild is written straight back — so
+    one bad parse used to destroy every repo's record on the machine with
+    nothing left to look at."""
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    try:
+        testenv.allocate("/tmp/repo-a", "mojo_test")
+        junk = "{not json at all"
+        with open(testenv.REGISTRY_PATH, "w") as handle:
+            handle.write(junk)
+
+        testenv.allocate("/tmp/repo-b", "mojo_test")
+
+        saved = [name for name in os.listdir(tmpdir)
+                 if name.startswith("testenv.json.corrupt-")]
+        assert saved, \
+            f"a corrupt registry was discarded with no copy kept: {os.listdir(tmpdir)}"
+        with open(os.path.join(tmpdir, saved[0])) as handle:
+            kept = handle.read()
+        assert kept == junk, \
+            f"the preserved copy is not what was on disk: {kept!r}"
+    finally:
+        _restore(patches)
+
+
+@th.django_unit_test("prune reports which project each reclaimed slot was for")
+def test_prune_reports_the_project_each_slot_belonged_to(opts):
+    """prune is machine-global. Reclaiming another repo's slot is fine and
+    intended; doing it without saying so is not."""
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    try:
+        first = tempfile.mkdtemp(prefix="testenv-one-")
+        second = tempfile.mkdtemp(prefix="testenv-two-")
+        testenv.allocate(first, "mojo_test")
+        testenv.allocate(second, "mojo_maestro_test")
+        os.rmdir(first)
+        os.rmdir(second)
+
+        gone = testenv.prune()
+        names = sorted(record.get("base_name") for record in gone)
+        assert names == ["mojo_maestro_test", "mojo_test"], \
+            f"prune did not report the project each slot belonged to: {gone}"
+    finally:
+        _restore(patches)
+
+
+@th.django_unit_test("the ownership key is the one every mojo repo uses")
+def test_owner_key_is_the_shared_one(opts):
+    """Two repos with different key names are blind to each other's stamps,
+    which is the exact collision this mechanism exists to prevent. maestro's
+    runner writes this literal string."""
+    from testit import testenv
+
+    assert testenv.REDIS_OWNER_KEY == _OWNER_KEY, \
+        (f"the ownership key changed to {testenv.REDIS_OWNER_KEY!r} — every "
+         f"other repo on the machine still writes {_OWNER_KEY!r}")
 
 
 @th.django_unit_test("allocating with no base name is refused")

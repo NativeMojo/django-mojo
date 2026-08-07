@@ -64,12 +64,27 @@ It prints the orphaned name instead:
 
 ```
 pruned 1
-  /Users/you/Projects/django-mojo-feature
+  /Users/you/Projects/django-mojo-feature  (mojo_test)
 
 These databases are now orphaned. Drop them when you are sure the checkout is
 really gone:
   dropdb mojo_test_85e2ef50
 ```
+
+`prune` is **machine-global** — the registry holds every mojo repo on the
+machine, and a slot for any of them whose directory is gone gets reclaimed.
+That is intended; it is the only thing that keeps the 15 Redis indexes from
+leaking away. It names the project each reclaimed slot belonged to, and says so
+explicitly when it took one from a repo other than this one:
+
+```
+Note: slots for other projects were reclaimed (mojo_maestro_test).
+Their checkouts will get a different Redis index and port next run.
+```
+
+There is deliberately **no per-project filter**. Restricting `prune` to one repo
+would leave every other repo's dead slots held forever, which is exactly the
+leak above.
 
 > Invoke it by **file path**, not `python -m testit.testenv`. Importing the
 > package runs `testit/__init__.py` → `mojo.helpers.logit` → `paths`, which
@@ -150,9 +165,87 @@ Load it by file path (or `find_spec`), never `import testit.testenv` —
 importing the package runs `testit/__init__.py`, which needs a configured
 project.
 
+### Guarding your own flush
+
+Allocation alone does not protect you. If your runner calls `FLUSHDB`, wrap it:
+
+```python
+index = client.connection_pool.connection_kwargs.get("db", 0)
+
+testenv.claim_redis_index(index, REPO_ROOT)   # raises AllocationError -> exit 1
+client.flushdb()
+testenv.stamp_redis_owner(index, REPO_ROOT)   # the flush destroyed the stamp
+```
+
+Four things that matter:
+
+- **Derive the index from the live client, not from settings.**
+  `mojo.helpers.redis` gives `REDIS_URL` precedence over `REDIS_DB_INDEX`, so a
+  guard reading settings can protect index N while `flushdb()` empties index M —
+  worse than no guard at all.
+- **Claim before, stamp after.** The flush destroys the stamp along with
+  everything else.
+- **On a resume path (`--continue`), claim but do NOT stamp.** A `SET` with no
+  preceding flush has no claim behind it and would quietly take over another
+  checkout's index — making the resume path the one way to bypass the guard.
+- **The key name is shared across repos on purpose.** Two repos with different
+  key names are blind to each other's stamps, which is the collision the whole
+  mechanism exists to prevent. Use `testenv.REDIS_OWNER_KEY`.
+
+An adopter that allocates but never stamps gets today's behaviour: nothing owns
+its index, so nothing is protected and nothing is broken. Stamping is what buys
+the protection.
+
+## The Redis ownership stamp
+
+The registry is one JSON file in a home directory, and every way it can be lost
+— deleted, truncated by a killed writer, rebuilt after a bad parse — reads as
+"nothing is allocated". A port survives that, because `port_is_free` **binds**
+before handing one out. A Redis index had no such check, so a lost registry
+meant the next `flushdb()` silently emptied a live checkout's database mid-run.
+
+So each allocated index carries a stamp:
+
+| | |
+|---|---|
+| Key | `testenv:owner` (in that index) |
+| Value | the owning checkout's absolute realpath |
+| Written by | `bin/testit.py`, right after its `FLUSHDB` |
+
+It is checked in two places, and they fail in **opposite directions on purpose**:
+
+- **Allocation fails closed.** `allocate()` skips any candidate index a
+  *different, still-existing* checkout has stamped, and raises `AllocationError`
+  if it cannot read the stamps at all. The record it writes is used for months,
+  so one flaky probe must never latch a collision in permanently. A refused
+  connection stops the search immediately; a timeout does not, because a timeout
+  means Redis is up and busy — precisely when guessing "free" is destructive.
+- **The flush fails open.** `bin/testit.py` calls `claim_redis_index()` before
+  `FLUSHDB` and aborts the run if the index belongs to someone else, but allows
+  it when Redis cannot be reached — a flush that cannot connect cannot destroy
+  anything either.
+
+A stamp naming a directory that **no longer exists** is stale: the checkout is
+gone, so its leftover data is nobody's and the index is takeable. Otherwise a
+deleted worktree would poison a slot forever.
+
+Index 0 is never allocated, never stamped, and `claim_redis_index()` refuses it
+outright — it is the developer's own cache, and flushing it is never ours to do.
+
+**The escape hatch** is `MOJO_TESTENV_NO_REDIS=1`, for an image with no Redis at
+all. It turns the ownership check off entirely and is the only supported way to
+allocate without it.
+
+> **Anything that calls `FLUSHDB` outside the runner drops the stamp** until the
+> next run re-writes it. `MojoRedisCache.clear()` (`mojo/cache/redis.py`) is one
+> such call. It is unreachable in the generated testproject today — the
+> serializer cache backend defaults to `memory` — so it is documented rather
+> than defended against. If you point a Django cache at Redis and call
+> `cache.clear()`, expect the guard to be blind until the next `run_tests`.
+
 ## Fail-closed behaviour
 
-Two places refuse rather than guess, both because the failure mode is
+Three places refuse rather than guess, all because the failure mode is
 destroying another run:
 
 - **`create_testproject` aborts if allocation fails.** Falling back to a shared
@@ -162,6 +255,9 @@ destroying another run:
   `pg_stat_activity`. The name is derived per checkout so this should never
   fire; it exists because if derivation ever breaks, the consequence is another
   session's data, and that deserves a guard rather than trust.
+- **`run_tests` aborts rather than `FLUSHDB` an index another live checkout has
+  stamped** — see above. The fix is the allocation, not the guard: `prune`, then
+  `bin/create_testproject`.
 
 ## Running two worktrees
 
