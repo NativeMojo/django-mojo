@@ -69,6 +69,8 @@ public/private status from its shape.
 | `default` | All fields + url, renditions |
 | `list` | default + group, file_manager, user |
 | `upload` | id, filename, content_type, file_size, upload_url |
+| `reference` | exactly id, filename, content_type, category |
+| `lifecycle` | upload state and ownership ids; no tokens, URLs, paths, metadata, or renditions |
 | `detailed` | All + nested group/user/manager |
 
 ```
@@ -214,6 +216,10 @@ Revoked short URLs return a 404/gone at the redirect endpoint. The share is audi
 
 For non-S3 backends, the framework provides a token-based upload endpoint:
 
-**POST** `/api/fileman/upload/<upload_token>`
+**POST or PUT** `/api/fileman/upload/<upload_token>`
 
-Used when the File record returns `/api/fileman/upload/<token>` as the `upload_url`. Upload the file binary to this URL.
+Used when initiation returns `/api/fileman/upload/<token>` as the
+`upload_url`. Multipart POST accepts a `file` part. Raw PUT accepts the body
+directly and requires `Content-Length`, including an explicit zero. A valid
+transfer remains `uploading`; call `mark_as_completed` separately. The token
+remains retryable until completion and is revoked when completion succeeds.

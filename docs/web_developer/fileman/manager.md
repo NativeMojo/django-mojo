@@ -108,4 +108,15 @@ Use the `test_connection` action to verify a configuration after saving.
 
 ## Selecting a FileManager for uploads
 
-Clients do not need to manage FileManagers directly. To select a specific manager during an upload, pass `file_manager: <id>` in the initiate body. See [upload.md](upload.md).
+Clients do not need to manage FileManagers directly. To select a specific
+manager during an upload, pass `file_manager: <id>` in the initiate body. The
+server authorizes that exact manager before creating a File: user, group, and
+dual scopes must match; inactive/effectively-inactive scopes fail closed; and a
+system manager requires global `manage_files`/`files`. API keys and restricted
+group tokens cannot initiate. Explicit `group` and `use` selectors must agree
+with the selected manager even for a global file administrator.
+
+The safe `upload_policy` graph exposes only policy fields (`id`, `name`, `use`,
+active flag, maximum size, allowed extensions/MIME types, and direct-upload
+support). It never exposes backend locations, credentials, or settings. See
+[upload.md](upload.md) for the complete lifecycle and retry contract.

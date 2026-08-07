@@ -76,6 +76,10 @@ class StorageBackend(ABC):
         """
         pass
 
+    def get_content_type(self, file_path):
+        """Return authoritative stored content type when the backend provides it."""
+        return None
+
     @abstractmethod
     def get_url(self, file_path: str, expires_in: Optional[int] = None) -> str:
         """

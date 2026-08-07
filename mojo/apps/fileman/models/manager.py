@@ -1,6 +1,7 @@
 import os
 import hashlib
 import json
+import re
 from botocore.exceptions import ClientError
 from django.db import models
 from django.utils import timezone
@@ -56,6 +57,13 @@ class FileManager(MojoSecrets, MojoModel):
                 "fields": [
                     "id", "name", "use", "backend_type", "backend_url",
                     "is_active", "is_default", "is_public"
+                ]
+            },
+            "upload_policy": {
+                "fields": [
+                    "id", "name", "use", "is_active", "max_file_size",
+                    "allowed_extensions", "allowed_mime_types",
+                    "supports_direct_upload",
                 ]
             }
         }
@@ -420,29 +428,147 @@ class FileManager(MojoSecrets, MojoModel):
     def is_custom(self):
         return self.backend_type == self.CUSTOM
 
+    _UPLOAD_MIME_RE = re.compile(r"^[a-z0-9!#$&^_.+\-]+/[a-z0-9!#$&^_.+\-]+$")
+
+    @classmethod
+    def normalize_upload_filename(cls, filename):
+        """Return the safe client display name used for storage naming."""
+        if not isinstance(filename, str):
+            raise me.ValueException("filename must be a string")
+        # Browsers may submit either POSIX or Windows fake paths. Normalize both.
+        filename = filename.replace("\\", "/").rsplit("/", 1)[-1]
+        filename = "".join(ch for ch in filename if ord(ch) >= 32 and ch != "\x7f").strip()
+        if not filename or filename in (".", ".."):
+            raise me.ValueException("filename is required")
+        if len(filename) > 255:
+            raise me.ValueException("filename exceeds 255 characters")
+        return filename
+
+    @classmethod
+    def normalize_upload_size(cls, file_size):
+        if isinstance(file_size, bool) or not isinstance(file_size, int):
+            raise me.ValueException("file_size must be a nonnegative integer")
+        if file_size < 0:
+            raise me.ValueException("file_size must be a nonnegative integer")
+        return file_size
+
+    @classmethod
+    def normalize_upload_mime_type(cls, mime_type, allow_wildcard=False):
+        if not isinstance(mime_type, str):
+            raise me.ValueException("content_type must be a MIME type")
+        mime_type = mime_type.split(";", 1)[0].strip().lower()
+        if allow_wildcard and mime_type.endswith("/*"):
+            prefix = mime_type[:-2]
+            if prefix and cls._UPLOAD_MIME_RE.match(f"{prefix}/x"):
+                return mime_type
+        if not cls._UPLOAD_MIME_RE.match(mime_type):
+            raise me.ValueException("content_type must be a valid MIME type")
+        return mime_type
+
+    def normalized_allowed_extensions(self):
+        if not isinstance(self.allowed_extensions, list):
+            raise me.ValueException("File manager extension policy is invalid")
+        normalized = []
+        for value in self.allowed_extensions:
+            if not isinstance(value, str):
+                raise me.ValueException("File manager extension policy is invalid")
+            value = value.strip().lower().lstrip(".")
+            if not value or "/" in value or "\\" in value:
+                raise me.ValueException("File manager extension policy is invalid")
+            normalized.append(value)
+        return normalized
+
+    def normalized_allowed_mime_types(self):
+        if not isinstance(self.allowed_mime_types, list):
+            raise me.ValueException("File manager MIME policy is invalid")
+        return [self.normalize_upload_mime_type(value, allow_wildcard=True)
+                for value in self.allowed_mime_types]
+
     def can_upload_file(self, filename, file_size=None):
-        """Check if a file can be uploaded based on restrictions"""
+        """Check normalized filename and declared size against this manager."""
         if not self.is_active:
             return False, "File manager is not active"
-
-        # Check file size
-        if file_size and self.max_file_size > 0 and file_size > self.max_file_size:
+        try:
+            filename = self.normalize_upload_filename(filename)
+            if file_size is not None:
+                file_size = self.normalize_upload_size(file_size)
+            allowed_extensions = self.normalized_allowed_extensions()
+        except me.ValueException as exc:
+            return False, exc.reason
+        if file_size is not None and self.max_file_size > 0 and file_size > self.max_file_size:
             return False, f"File size exceeds maximum of {self.max_file_size} bytes"
-
-        # Check file extension
-        if self.allowed_extensions:
-            import os
+        if allowed_extensions:
             _, ext = os.path.splitext(filename.lower())
-            if ext and ext[1:] not in [e.lower() for e in self.allowed_extensions]:
+            if not ext:
+                return False, "A file extension is required"
+            if ext[1:] not in allowed_extensions:
                 return False, f"File extension {ext} is not allowed"
-
         return True, "File can be uploaded"
 
     def can_upload_mime_type(self, mime_type):
-        """Check if a MIME type is allowed"""
-        if not self.allowed_mime_types:
+        """Check exact and top-level wildcard MIME policy."""
+        try:
+            mime_type = self.normalize_upload_mime_type(mime_type)
+            allowed = self.normalized_allowed_mime_types()
+        except me.ValueException:
+            return False
+        if not allowed:
             return True
-        return mime_type.lower() in [mt.lower() for mt in self.allowed_mime_types]
+        major = mime_type.split("/", 1)[0] + "/*"
+        return mime_type in allowed or major in allowed
+
+    def authorize_for_upload(self, request):
+        """Fail closed unless the request may use this exact manager scope."""
+        from mojo.helpers.request import is_key_backed_session, is_request_user, restricted_identity
+
+        actor = getattr(request, "user", None)
+        if (actor is None or not is_request_user(request)
+                or is_key_backed_session(request) or restricted_identity(request) is not None):
+            raise me.PermissionDeniedException("A real user session is required for uploads")
+        if not self.is_active:
+            raise me.PermissionDeniedException("File manager is unavailable")
+        if self.group_id and not self.group.is_effectively_active():
+            raise me.PermissionDeniedException("File manager is unavailable")
+
+        supplied_group = "group" in request.DATA
+        supplied_use = "use" in request.DATA or "fileman_use" in request.DATA or "file_manager_use" in request.DATA
+        if supplied_group and (request.group is None or self.group_id != request.group.id):
+            raise me.PermissionDeniedException("File manager scope does not match the request")
+        requested_use = request.DATA.get(["use", "fileman_use", "file_manager_use"], "")
+        if supplied_use and self.use != requested_use:
+            raise me.PermissionDeniedException("File manager purpose does not match the request")
+
+        global_admin = actor.has_permission(["manage_files", "files"])
+        if global_admin:
+            return actor
+        if self.user_id is None and self.group_id is None:
+            raise me.PermissionDeniedException("Global file storage permission is required")
+        if self.user_id is not None and self.user_id != actor.id:
+            raise me.PermissionDeniedException("File manager is unavailable")
+        if self.group_id is not None:
+            if request.group is None or request.group.id != self.group_id:
+                raise me.PermissionDeniedException("File manager scope does not match the request")
+            if self.group.get_member_for_user(actor, check_parents=True) is None:
+                raise me.PermissionDeniedException("Active group membership is required")
+        return actor
+
+    @classmethod
+    def resolve_for_upload(cls, request):
+        """Resolve selectors and apply the upload authorization truth table."""
+        if "user" in request.DATA or "user_id" in request.DATA:
+            raise me.PermissionDeniedException("A user upload scope cannot be selected")
+        fm_id = request.DATA.get(["fileman", "filemanager", "file_manager", "manager", "file_manager_id"])
+        if fm_id:
+            try:
+                file_manager = cls.objects.select_related("user", "group").get(pk=int(fm_id))
+            except (TypeError, ValueError, cls.DoesNotExist):
+                raise me.PermissionDeniedException("File manager is unavailable")
+        else:
+            file_manager = cls.get_from_request(request)
+        if file_manager is None:
+            raise me.ValueException("No file manager found")
+        file_manager.authorize_for_upload(request)
+        return file_manager
 
     def on_rest_created(self):
         self._update_default()

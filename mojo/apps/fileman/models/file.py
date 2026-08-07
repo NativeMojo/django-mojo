@@ -267,6 +267,16 @@ class File(models.Model, MojoModel):
             "upload": {
                 "fields": ["id", "filename", "content_type", "file_size", "upload_url"],
             },
+            "reference": {
+                "fields": ["id", "filename", "content_type", "category"],
+            },
+            "lifecycle": {
+                "fields": [
+                    "id", "filename", "content_type", "file_size", "category",
+                    "upload_status", "created", "modified", "is_active",
+                ],
+                "extra": ["user_id", "group_id", "file_manager_id"],
+            },
             "detailed": {
                 "extra": ["url", "renditions"],
                 "graphs": {
@@ -499,25 +509,62 @@ class File(models.Model, MojoModel):
 
     def generate_storage_filename(self):
         """Generate a unique filename for storage"""
+        self.filename = FileManager.normalize_upload_filename(self.filename)
         name, ext = os.path.splitext(self.filename)
         # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
         self.storage_filename = f"{name}_{unique_id}{ext}"
         self.storage_file_path = os.path.join(self.file_manager.root_path, self.storage_filename)
 
-    def request_upload_url(self):
-        """Request a pre-signed URL for direct upload"""
-        if not self.file_manager.backend.supports_direct_upload():
+    def request_upload_target(self):
+        """Return a normalized upload target, rotating local bearer tokens."""
+        if self.upload_status not in (self.PENDING, self.UPLOADING):
+            return None
+        # Filesystem uploads always converge on File.upload_token. The backend's
+        # former metadata-token flow was disconnected from the live endpoint.
+        if self.file_manager.is_file_system or not self.file_manager.backend.supports_direct_upload():
             self.generate_upload_token(True)
             self.upload_url = f"/api/fileman/upload/{self.upload_token}"
+            return {
+                "upload_url": self.upload_url,
+                "method": "POST",
+                "fields": {},
+                "headers": {"Content-Type": self.content_type},
+            }
+        data = self.file_manager.backend.generate_upload_url(
+            self.storage_file_path, self.content_type, self.file_size)
+        if isinstance(data, str):
+            target = {"upload_url": data, "method": "PUT", "fields": {},
+                      "headers": {"Content-Type": self.content_type}}
         else:
-            data = self.file_manager.backend.generate_upload_url(self.storage_file_path, self.content_type, self.file_size)
-            self.debug("request_upload_url", data)
-            if "url" in data:
-                self.upload_url = data['url']
-            else:
-                self.upload_url = data
-        return self.upload_url
+            target = {
+                "upload_url": data.get("upload_url") or data.get("url"),
+                "method": data.get("method", "PUT"),
+                "fields": data.get("fields") or {},
+                "headers": data.get("headers") or {"Content-Type": self.content_type},
+            }
+        self.upload_url = target["upload_url"]
+        return target
+
+    def request_upload_url(self):
+        """Backward-compatible URL-only upload target accessor."""
+        target = self.request_upload_target()
+        return target.get("upload_url") if target else None
+
+    def lifecycle_dict(self):
+        """Capability-free authoritative upload state."""
+        return {
+            "id": self.id,
+            "filename": self.filename,
+            "content_type": self.content_type,
+            "file_size": self.file_size,
+            "category": self.category,
+            "upload_status": self.upload_status,
+            "is_active": self.is_active,
+            "user_id": self.user_id,
+            "group_id": self.group_id,
+            "file_manager_id": self.file_manager_id,
+        }
 
     def get_metadata(self, key, default=None):
         """Get a specific metadata value"""
@@ -607,6 +654,7 @@ class File(models.Model, MojoModel):
             self.mark_as_failed(commit=True)
         elif action == "mark_as_uploading":
             self.mark_as_uploading(commit=True)
+        return self.lifecycle_dict()
 
     def on_action_regenerate_renditions(self, value):
         """Enqueue a rendition regenerate job.
@@ -722,23 +770,73 @@ class File(models.Model, MojoModel):
             self.atomic_save()
 
     def mark_as_completed(self, file_size=None, checksum=None, commit=False):
-        """Mark file upload as completed"""
-        if file_size:
-            self.file_size = file_size
-        if checksum:
-            self.checksum = checksum
-        if self.file_manager.backend.exists(self.storage_file_path):
+        """Transition once to completed and publish renditions only for the winner."""
+        if not commit or self.pk is None:
+            if self.upload_status == self.COMPLETED:
+                return False
+            if self.upload_status in (self.FAILED, self.EXPIRED):
+                return False
+            if file_size is not None:
+                self.file_size = file_size
+            if checksum:
+                self.checksum = checksum
+            if not self.file_manager.backend.exists(self.storage_file_path):
+                self.upload_status = self.FAILED
+                return False
             self.upload_status = self.COMPLETED
-            if commit:
-                self.atomic_save()
-            # Rendition creation is offloaded to the async jobs engine.
-            # transaction.on_commit keeps the worker from racing the commit.
+            self.upload_token = ""
             self.publish_renditions()
-            return
-        else:
-            self.upload_status = self.FAILED
-        if commit:
-            self.atomic_save()
+            return True
+
+        with transaction.atomic():
+            current = type(self).objects.select_for_update().select_related("file_manager").get(pk=self.pk)
+            if current.upload_status == self.COMPLETED:
+                self.upload_status = current.upload_status
+                self.upload_token = current.upload_token
+                return False
+            if current.upload_status in (self.FAILED, self.EXPIRED):
+                self.upload_status = current.upload_status
+                return False
+            backend = current.file_manager.backend
+            if file_size is not None:
+                current.file_size = file_size
+            if checksum:
+                current.checksum = checksum
+            if not backend.exists(current.storage_file_path):
+                current.upload_status = self.FAILED
+                current.save(update_fields=["upload_status", "modified"])
+                self.upload_status = current.upload_status
+                return False
+            actual_size = backend.get_file_size(current.storage_file_path)
+            if current.file_size is not None and actual_size is not None and actual_size != current.file_size:
+                backend.delete(current.storage_file_path)
+                current.upload_status = self.FAILED
+                current.upload_token = ""
+                current.save(update_fields=["upload_status", "upload_token", "modified"])
+                self.upload_status = current.upload_status
+                self.upload_token = current.upload_token
+                return False
+            actual_type = backend.get_content_type(current.storage_file_path)
+            if actual_type and current.file_size != 0:
+                actual_type = FileManager.normalize_upload_mime_type(actual_type)
+                if (actual_type != current.content_type
+                        or not current.file_manager.can_upload_mime_type(actual_type)):
+                    backend.delete(current.storage_file_path)
+                    current.upload_status = self.FAILED
+                    current.upload_token = ""
+                    current.save(update_fields=["upload_status", "upload_token", "modified"])
+                    self.upload_status = current.upload_status
+                    self.upload_token = current.upload_token
+                    return False
+            current.upload_status = self.COMPLETED
+            current.upload_token = ""
+            current.save(update_fields=["upload_status", "upload_token", "file_size", "checksum", "modified"])
+            current.publish_renditions()
+            self.upload_status = current.upload_status
+            self.upload_token = current.upload_token
+            self.file_size = current.file_size
+            self.checksum = current.checksum
+            return True
 
     def mark_as_failed(self, error_message=None, commit=False):
         """Mark file upload as failed"""

@@ -40,6 +40,29 @@ fm = FileManager.get_from_request(request)
 fm = FileManager.get_for_user_group(user, group)
 ```
 
+Upload initiation must use `FileManager.resolve_for_upload(request)`, not a
+bare primary-key lookup. The resolver applies the upload authorization truth
+table before any `File` or upload capability is created:
+
+- uploads require an ordinary authenticated `User` session; API keys,
+  override-user API keys, and group-scoped tokens are rejected;
+- inactive managers and managers in an effectively inactive group are rejected;
+- a user-scoped manager requires the exact calling user;
+- a group-scoped manager requires the exact active request group and an active
+  direct or inherited membership;
+- a manager with both scopes requires both constraints; and
+- a system-scoped manager requires global `manage_files` or `files` authority.
+
+Global file administrators may use any active manager, but explicit `group`
+and `use` selectors must still agree with that manager. Client-supplied `user`
+selectors are never accepted. Authorization failures happen before storage
+targets are generated.
+
+`upload_policy` is the safe graph for upload configuration. It contains only
+`id`, `name`, `use`, `is_active`, `max_file_size`, `allowed_extensions`,
+`allowed_mime_types`, and `supports_direct_upload`; backend locations,
+credentials, and encrypted settings are deliberately absent.
+
 ## FileManager Settings
 
 Each `FileManager` stores backend-specific settings through the encrypted
@@ -233,22 +256,35 @@ The renderers download the original file to a temp path before processing. The l
 
 See `mojo/apps/fileman/backends/` — each backend inherits `BaseStorageBackend`.
 
-## Direct Upload Flow (S3)
+## Initiated Upload Flow
 
 ```python
-# 1. Create File record
-file = File(filename="report.pdf", file_size=102400, content_type="application/pdf")
-file.file_manager = FileManager.get_from_request(request)
-file.on_rest_pre_save({}, True)
-file.save()
+# The REST endpoint resolves and authorizes the manager, validates policy,
+# creates the File, and returns a normalized upload target.
+POST /api/fileman/upload/initiate
 
-# 2. Get presigned upload URL
-upload_url = file.request_upload_url()
-# Return upload_url to the client
-
-# 3. Client uploads directly to S3
-# 4. Client confirms: POST /api/fileman/file/<id> with action=mark_as_completed
+# The client transfers to the returned target, then confirms exactly once
+# (retries are safe):
+POST /api/fileman/file/<id>  {"action": "mark_as_completed"}
 ```
+
+Local and cloud transfers share this lifecycle. A successful transfer leaves
+the `File` in `uploading`; only `mark_as_completed` validates the stored object,
+sets `completed`, revokes the local upload token, and publishes rendition work.
+Completion is lock-protected and side-effect-idempotent.
+
+Initiation validates a normalized basename, a nonnegative integer size,
+extension policy, and exact/top-level-wildcard MIME policy. Local uploads are
+also bounded while streaming and checked against their actual byte count and
+detected content type. Validation failure removes any partial storage object
+and moves the row to `failed`.
+
+An optional idempotency key may contain 1–128 ASCII letters, digits, `.`, `_`,
+`:`, or `-`. The raw key is never stored: an internal `UploadInitiation` stores
+only a digest, fingerprint, actor, and `File`. Same actor/key/fingerprint
+replays the same file. Only `uploading` replays receive a refreshed target;
+`completed`, `failed`, and `expired` replays return lifecycle state without a
+writable capability. Omitting the key always creates a distinct file.
 
 ## Multiple FileManagers per Group
 

@@ -53,7 +53,15 @@ class MojoMiddleware:
         if _msid_is_new:
             request.msid = uuid.uuid4().hex
 
-        if settings.LOGIT_REQUEST_BODY:
+        # Raw local file uploads are intentionally consumed from Django's
+        # spooled stream in bounded chunks. Reading request.body here would
+        # create a second unbounded in-memory copy before the upload gate runs.
+        is_raw_file_upload = (
+            request.method == "PUT"
+            and "/fileman/upload/" in request.path
+            and not request.path.rstrip("/").endswith("/initiate")
+        )
+        if settings.LOGIT_REQUEST_BODY and not is_raw_file_upload:
             request._raw_body = str(request.body)
         else:
             request._raw_body = None

@@ -34,6 +34,20 @@ class File(models.Model, MojoModel):
 
 ## Upload Flow
 
+The public initiated-upload contract is `POST /api/fileman/upload/initiate`.
+It returns an explicit lifecycle projection plus a normalized transfer target;
+it never serializes `upload_token`, storage paths, metadata, backend settings,
+download URLs, or renditions. The shared `reference` graph remains exactly
+`id`, `filename`, `content_type`, and `category`.
+
+Transfer and completion are separate operations. Both a local multipart/raw
+transfer and a cloud-provider transfer leave the row `uploading`. The owner
+then invokes `mark_as_completed`; the method locks the row, verifies that the
+backend object exists with the declared size and content type, revokes the
+local token, and publishes rendition work once. A repeated completion returns
+the same completed lifecycle state without publishing again. `failed` and
+`expired` are terminal and cannot be revived.
+
 ### Option 1: Direct Upload (Multipart)
 
 POST a multipart form with the file. The framework handles storage automatically.
@@ -47,18 +61,16 @@ def on_upload(request):
     return instance.on_rest_get(request)
 ```
 
-### Option 2: Presigned URL (S3/Cloud)
+### Option 2: Initiated Upload (recommended)
 
-1. Create a File record to get a presigned upload URL
-2. Client uploads directly to storage
-3. Client confirms completion
+1. POST normalized filename, MIME type, size, and optional manager/group/use
+   selectors to `/api/fileman/upload/initiate`.
+2. Transfer using the returned method, fields, and headers.
+3. Explicitly confirm completion on `/api/fileman/file/<id>`.
 
 ```python
-file = File(filename="report.pdf", file_size=102400)
-file.file_manager = FileManager.get_from_request(request)
-file.save()
-url = file.request_upload_url()
-# Return url to client for direct upload
+# Server-side callers use the same target normalizer after authorization.
+target = file.request_upload_target()
 ```
 
 ### Option 3: Base64 Inline (in JSON payload)

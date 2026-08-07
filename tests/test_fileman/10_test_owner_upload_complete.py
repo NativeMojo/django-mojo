@@ -1,8 +1,9 @@
 """Regression tests for ITEM-033 — the uploading user (owner) can complete and
 FK-attach their own fileman File without manage_files/files perms.
 
-`POST /api/fileman/upload/initiate` is auth-only (`@md.requires_auth()`), so any
-group member can start an upload and the File is stamped `user=request.user`.
+`POST /api/fileman/upload/initiate` requires an explicitly authorized manager;
+these users share an active group-scoped manager and the File is stamped
+`user=request.user`.
 Before the fix, `File.RestMeta.{VIEW,SAVE}_PERMS` omitted the `"owner"` token, so:
 
   * the documented completion step (`POST /api/fileman/file/<id>`
@@ -47,6 +48,7 @@ def _initiate(opts, username):
         "content_type": "text/plain",
         "file_size": 4,
         "file_manager": opts.fm_id,
+        "group": opts.group_id,
     })
     assert_eq(resp.status_code, 200,
               f"initiate should be 200 for a plain member, got "
@@ -56,12 +58,14 @@ def _initiate(opts, username):
 
 @th.django_unit_setup()
 def setup_owner_upload(opts):
-    from mojo.apps.account.models import User
+    from mojo.apps.account.models import Group, GroupMember, User
     from mojo.apps.fileman.models import FileManager, File
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
 
     # Tests share a long-lived db — clear leftovers before creating.
+    GroupMember.objects.filter(group__name="fm_owner_up_group").delete()
+    Group.objects.filter(name="fm_owner_up_group").delete()
     User.objects.filter(username__in=[OWNER_USER, OTHER_USER]).delete()
     FileManager.objects.filter(name="fm_owner_up_fm").delete()
 
@@ -75,10 +79,13 @@ def setup_owner_upload(opts):
 
     opts.owner = _member(OWNER_USER)
     opts.other = _member(OTHER_USER)
+    group = Group(name="fm_owner_up_group")
+    group.save()
+    group.add_member(opts.owner)
+    group.add_member(opts.other)
+    opts.group_id = group.id
 
-    # temp dir for a local-backend FileManager (no user/group scope; both
-    # members reference it explicitly by id on initiate, so resolution needs
-    # no perms and File.group ends up None).
+    # temp dir for a local-backend FileManager shared by both active members.
     tmpdir = tempfile.mkdtemp(prefix="mojo_owner_up_")
     opts.tmpdir = tmpdir
 
@@ -87,6 +94,7 @@ def setup_owner_upload(opts):
         backend_type="file",
         backend_url="file://",
         is_active=True,
+        group=group,
     )
     fm.save()
     fm.set_setting("base_path", tmpdir)
@@ -237,11 +245,14 @@ def test_owner_list_scoped_to_owner(opts):
 @th.django_unit_setup()
 def cleanup_owner_upload(opts):
     import shutil
-    from mojo.apps.account.models import User
-    from mojo.apps.fileman.models import FileManager, File
+    from mojo.apps.account.models import Group, GroupMember, User
+    from mojo.apps.fileman.models import FileManager, File, UploadInitiation
 
+    UploadInitiation.objects.filter(file__user__in=[opts.owner, opts.other]).delete()
     File.objects.filter(user__in=[opts.owner, opts.other]).delete()
     FileManager.objects.filter(name="fm_owner_up_fm").delete()
+    GroupMember.objects.filter(group_id=opts.group_id).delete()
+    Group.objects.filter(pk=opts.group_id).delete()
     User.objects.filter(username__in=[OWNER_USER, OTHER_USER]).delete()
 
     if os.path.exists(opts.tmpdir):

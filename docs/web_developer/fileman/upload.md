@@ -6,10 +6,12 @@
 
 When a client uploads a file directly via multipart POST, the file must travel through the API server — which holds open a long-lived HTTP connection for the entire transfer duration. For large files or high concurrency, this exhausts server resources quickly and adds unnecessary latency.
 
-The Initiated Upload flow avoids this entirely:
+The Initiated Upload flow avoids proxying through the API where the backend
+supports provider-direct upload:
 
 - On **S3/cloud backends**, the client uploads directly to cloud storage via a presigned URL. The file never passes through the API server.
-- On **local/other backends**, a short-lived token URL is issued and the upload goes to a dedicated endpoint, keeping the main API unblocked.
+- On **local backends**, a short-lived bearer URL is issued and the API streams
+  it to storage with a strict byte bound.
 
 ---
 
@@ -29,7 +31,14 @@ Use this for all uploads. It works for any file size, keeps the API server free,
 }
 ```
 
-Optional params: `file_manager` (id), `group` (id), `metadata` (object).
+Optional selectors are `file_manager` (id), `group` (id), and `use` (string).
+Do not send `user` or `metadata`. The filename is reduced to a basename, size
+must be a nonnegative integer (booleans are invalid), and the manager's size,
+extension, and MIME policies are checked before a capability is created.
+
+`idempotency_key` is optional. It must be 1–128 ASCII letters, digits, `.`,
+`_`, `:`, or `-`. Use the same key only for the same filename, normalized MIME
+type, size, manager, group, and use. A changed fingerprint returns 409.
 
 **Response:**
 
@@ -41,14 +50,27 @@ Optional params: `file_manager` (id), `group` (id), `metadata` (object).
     "filename": "large-video.mp4",
     "content_type": "video/mp4",
     "file_size": 524288000,
-    "upload_url": "https://s3.amazonaws.com/bucket/file_xyz?X-Amz-Signature=..."
+    "category": "video",
+    "upload_status": "uploading",
+    "is_active": true,
+    "user_id": 19,
+    "group_id": 7,
+    "file_manager_id": 3,
+    "upload_url": "https://storage.example/upload-capability",
+    "method": "PUT",
+    "fields": {},
+    "headers": {"Content-Type": "video/mp4"}
   }
 }
 ```
 
-The `upload_url` returned depends on the storage backend:
+Treat the target as an opaque bearer capability and do not log it. Follow the
+returned `method`, `fields`, and `headers`; do not infer these from URL shape.
+The target depends on the storage backend:
 - **S3/cloud backends** — a presigned PUT URL. Upload directly to cloud storage; the file never passes through the API server.
-- **Local/other backends** — `/api/fileman/upload/<token>`. POST the file to that URL.
+- **Local backends** — `/api/fileman/upload/<token>`. Multipart POST and raw
+  PUT are supported. Raw PUT requires an explicit `Content-Length`, including
+  `0` for an empty file.
 
 ### Step 2a: Upload to Presigned URL (S3/cloud backends)
 
@@ -65,10 +87,14 @@ When `upload_url` starts with `/api/fileman/upload/`, POST the file directly:
 
 ```bash
 curl -X POST \
-  -H "Authorization: Bearer <token>" \
   -F "file=@large-video.mp4" \
   "https://api.example.com/api/fileman/upload/<token>"
 ```
+
+The URL itself is the upload credential; no login bearer is required by that
+endpoint. The body MIME type must match initiation. The server validates the
+actual byte count and detected MIME type while storing, removes partial output
+on failure, and leaves a successful transfer in `uploading` until Step 3.
 
 ### Step 3: Confirm Upload
 
@@ -80,7 +106,13 @@ curl -X POST \
 }
 ```
 
-The file's `upload_status` becomes `completed` immediately. Renditions (thumbnails, previews, etc.) are generated **asynchronously** in the background — the `renditions` map may be empty `{}` right after this call. Re-fetch the file after a short delay if you need renditions.
+The file's `upload_status` becomes `completed` immediately. Repeating this
+request is safe and does not publish rendition work twice. Renditions
+(thumbnails, previews, etc.) are generated **asynchronously** in the background
+— re-fetch after a short delay if you need them.
+
+The response is a capability-free lifecycle object. It omits upload tokens and
+targets, storage paths, metadata, download URLs, and renditions.
 
 **Who may call this:** the user who **initiated** the upload (files are stamped to the calling user on `upload/initiate`), or any user holding `manage_files` / `files` (or a superuser). A member who did not initiate the upload and lacks those permissions gets `403 group_member_permission_denied`. This means the same member who initiated an upload can always finalize it — no elevated permission required.
 
@@ -177,6 +209,20 @@ If multiple storage backends exist (e.g., a separate bucket for avatars vs. docu
 ```
 
 If omitted, the default FileManager for the user/group is resolved automatically.
+
+Explicit managers are not an authorization bypass. Ordinary user sessions may
+use only an exact user-scoped manager, an exact active group-scoped manager for
+which they have active direct/inherited membership, or a dual-scope manager
+where both constraints match. System-scoped managers require global
+`manage_files`/`files`. API keys and group-scoped tokens cannot initiate
+uploads. Inactive managers and effectively inactive groups fail closed.
+
+## Retry behavior
+
+With an idempotency key, retrying the same initiation while `uploading`
+returns the same file id and a refreshed target. Once the file is `completed`,
+`failed`, or `expired`, retry returns its lifecycle state without any writable
+target. Without a key, every initiation creates a new file.
 
 ---
 

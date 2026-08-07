@@ -41,15 +41,13 @@ class FileSystemStorageBackend(StorageBackend):
 
     def _get_full_path(self, file_path: str) -> str:
         """Get the full file system path for a file"""
-        # Normalize the path to prevent directory traversal
-        normalized_path = os.path.normpath(file_path.lstrip('/'))
-
-        # Ensure the path doesn't escape the base directory
-        full_path = os.path.join(self.base_path, normalized_path)
-        if not full_path.startswith(self.base_path):
+        base_path = Path(self.base_path).resolve()
+        full_path = (base_path / str(file_path).lstrip("/")).resolve()
+        try:
+            full_path.relative_to(base_path)
+        except ValueError:
             raise ValueError(f"Invalid file path: {file_path}")
-
-        return full_path
+        return str(full_path)
 
     def _ensure_directory(self, file_path: str):
         """Ensure the directory for a file path exists"""
@@ -134,6 +132,15 @@ class FileSystemStorageBackend(StorageBackend):
             if os.path.isfile(full_path):
                 return os.path.getsize(full_path)
             return None
+        except Exception:
+            return None
+
+    def get_content_type(self, file_path):
+        try:
+            import magic
+            full_path = self._get_full_path(file_path)
+            with open(full_path, "rb") as source:
+                return magic.from_buffer(source.read(8192), mime=True)
         except Exception:
             return None
 

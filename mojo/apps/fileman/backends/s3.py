@@ -228,6 +228,13 @@ class S3StorageBackend(StorageBackend):
         except ClientError:
             return None
 
+    def get_content_type(self, file_path):
+        try:
+            response = self.client.head_object(Bucket=self.bucket_name, Key=file_path)
+            return response.get("ContentType")
+        except ClientError:
+            return None
+
     def get_url(self, file_path: str, expires_in: Optional[int] = None) -> str:
         """Get a URL to access the file, either public or pre-signed based on expiration"""
         if expires_in is None:
