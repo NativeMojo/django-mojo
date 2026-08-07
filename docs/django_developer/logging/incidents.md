@@ -298,6 +298,32 @@ These are written unconditionally when a group is resolved. Audit records remain
 | `TicketNote` | A note or status change attached to a ticket |
 | `IPSet` | A bulk IP blocking set (country, datacenter, abuse list) managed via ipset |
 
+### Record media attachments
+
+`TicketNote.media` and `IncidentHistory.media` are singular, nullable references
+to `fileman.File`. REST callers may supply one existing File id, `null`, or a
+compatible inline File payload. Existing-id resolution and File VIEW permission
+use the shared File relation path; the incident models add one domain validator
+after that candidate has been resolved.
+
+An attachment is accepted only when the File is active and completed, its
+`FileManager` is active, and both the File and manager have exactly the same
+`group_id` as the parent `Ticket` or `Incident`. This also defines the groupless
+case: both attachment rows must be groupless, while normal File VIEW permission
+still decides whether the caller may use the File. All lifecycle and scope
+failures use the same 400 response and do not persist the record.
+
+Ticket notes derive `group_id` from their parent before their first save, even
+if the request supplies another group. This replaces the former post-save repair
+without changing note text, action-response, Maestro, or LLM processing order.
+Incident history keeps its supplied group as audit provenance; it is not rewritten
+from the parent. Deleting an attached File sets `IncidentHistory.media` to null so
+the history row and its provenance survive.
+
+Both record types serialize `media` with File's exact `reference` graph:
+`id`, `filename`, `content_type`, and `category`. Storage paths, tokens, URLs,
+manager details, ownership, metadata, and renditions are never included.
+
 ---
 
 ## Reporting Events

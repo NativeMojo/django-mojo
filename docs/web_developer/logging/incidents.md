@@ -343,9 +343,41 @@ Tickets with `metadata.llm_enabled=true` (legacy `llm_linked` also honored) are 
 ```json
 {
   "parent": 10,
-  "note": "Approved. Enable the rule."
+  "note": "Approved. Enable the rule.",
+  "media": 812
 }
 ```
+
+## Record media attachments
+
+Ticket notes and incident-history entries each accept one optional `media`
+File. Send a positive File id to attach an existing upload or `null` to clear
+the relation. The note remains text-bearing; `media` supplements it rather than
+replacing it. Ticket-note group scope is always derived from the parent ticket.
+Incident-history `group` remains the event's audit provenance and is not
+rewritten.
+
+The File must be visible to the caller, active, completed, and stored through
+an active manager. Both the File and manager must have exactly the parent
+ticket/incident's `group_id`. Invalid lifecycle or scope returns the same 400
+error without creating the record. Missing, deleted, and non-viewable existing
+ids remain indistinguishable as `403 File unavailable`.
+
+Successful responses expose only this capability-free projection:
+
+```json
+{
+  "media": {
+    "id": 812,
+    "filename": "evidence.png",
+    "content_type": "image/png",
+    "category": "image"
+  }
+}
+```
+
+Deleting the File later clears `media` but preserves the incident-history row,
+note, and group provenance.
 
 ## RuleSet Fields
 

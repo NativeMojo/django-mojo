@@ -40,6 +40,10 @@ it never serializes `upload_token`, storage paths, metadata, backend settings,
 download URLs, or renditions. The shared `reference` graph remains exactly
 `id`, `filename`, `content_type`, and `category`.
 
+Incident `TicketNote.media` and `IncidentHistory.media` use this graph after
+their record-specific lifecycle and exact-group validation. See
+[Incident record media attachments](../logging/incidents.md#record-media-attachments).
+
 Transfer and completion are separate operations. Both a local multipart/raw
 transfer and a cloud-provider transfer leave the row `uploading`. The owner
 then invokes `mark_as_completed`; the method locks the row, verifies that the

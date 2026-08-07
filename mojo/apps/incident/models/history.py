@@ -20,7 +20,7 @@ class IncidentHistory(models.Model, MojoModel):
                 ],
                 "graphs": {
                     "user": "basic",
-                    "media": "basic"
+                    "media": "reference"
                 }
             },
         }
@@ -38,8 +38,14 @@ class IncidentHistory(models.Model, MojoModel):
     priority = models.IntegerField(default=0)
 
     note = models.TextField(blank=True, null=True, default=None)
-    media = models.ForeignKey("fileman.File", related_name="+", null=True, default=None, on_delete=models.CASCADE)
+    media = models.ForeignKey("fileman.File", related_name="+", null=True, default=None, on_delete=models.SET_NULL)
     metadata = models.JSONField(default=dict, blank=True)
+
+    def validate_media_file(self, candidate, request):
+        from mojo.apps.incident.models import Incident
+        from mojo.apps.incident.services.media import validate_record_media
+
+        validate_record_media(self, candidate, request, Incident)
 
     def set_incident(self, value):
         self.parent = value

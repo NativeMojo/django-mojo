@@ -88,6 +88,10 @@ booleans, zero/negative ids, objects/lists, and malformed inline data return
 return `403 File unavailable`. Clear and replacement only change the relation —
 they never delete the old File.
 
+Incident ticket notes and history entries apply additional completed/active and
+exact parent-group checks, then serialize the attached File with `reference`.
+See [Record media attachments](../logging/incidents.md#record-media-attachments).
+
 ## List Files
 
 ```

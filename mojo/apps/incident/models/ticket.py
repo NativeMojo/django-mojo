@@ -124,7 +124,7 @@ class TicketNote(models.Model, MojoModel):
             "default": {
                 "graphs": {
                     "user": "basic",
-                    "media": "basic"
+                    "media": "reference"
                 }
             },
         }
@@ -138,12 +138,19 @@ class TicketNote(models.Model, MojoModel):
     media = models.ForeignKey("fileman.File", related_name="+", null=True, blank=True, default=None, on_delete=models.SET_NULL)
     metadata = models.JSONField(default=dict, blank=True)
 
-    def on_rest_saved(self, changed_fields, created):
-        if not hasattr(self, 'group') or not self.group:
-            if self.parent.group:
-                self.group = self.parent.group
-                self.save(update_fields=['group'])
+    def validate_media_file(self, candidate, request):
+        from mojo.apps.incident.services.media import validate_record_media
 
+        validate_record_media(self, candidate, request, Ticket)
+
+    def on_rest_pre_save(self, changed_fields, created):
+        from mojo import errors as me
+
+        if not self.parent_id:
+            raise me.ValueException("Ticket note parent is required")
+        self.group_id = self.parent.group_id
+
+    def on_rest_saved(self, changed_fields, created):
         if not created:
             return
 
