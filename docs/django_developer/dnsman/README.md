@@ -36,8 +36,10 @@ mojo/apps/dnsman/
     delegation.py  downstream tenant allocation, proof, tombstone + Domain binding
     email.py       provider-dispatched SES record application
   rest/          thin handlers — this is where permissions are enforced
-  cronjobs.py    thin dispatchers — poll registrations / ACME leases (5m), renew certs (6h)
-  asyncjobs.py   issue/renew certificate job handlers
+  cronjobs.py    thin dispatchers — poll registrations / ACME leases (5m),
+                 publish certificate-expiry metric (hourly), renew certs (6h)
+  asyncjobs.py   issue/renew certificate job handlers, publish the
+                 certificate-expiry CloudWatch metric
 ```
 
 The helpers are model-free and Django-free on purpose: `ses_domain.py` can call

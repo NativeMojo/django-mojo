@@ -158,6 +158,14 @@ load balancer are skipped — they publish nothing. Dimension values are ARN
 *suffixes* (`targetgroup/<name>/<id>`, `net/<name>/<id>`); a full ARN would be
 accepted and then never receive a datapoint.
 
+Target-group discovery has its own failure guard, separate from EC2/RDS/
+ElastiCache discovery: a deployment whose IAM policy predates
+`elasticloadbalancing:DescribeTargetGroups` reports `resources.elbv2_denied`
+(WARN) and simply has no load-balancer alarms desired — EC2, RDS and
+ElastiCache are still discovered and alarmed normally. Letting that denial
+reach the shared discovery guard instead would report `resources.discovery_denied`
+and desire *no* alarms for anything.
+
 `DatabaseConnections` ships a deliberately forgiving default. RDS derives
 `max_connections` from instance memory (roughly 112 on `db.t3.micro`, ~405 on
 `db.t3.medium`), so no single default is right everywhere. `500` errs high: it
@@ -242,16 +250,26 @@ The audit is read-only and reports:
 |---|---|---|
 | `dnsman.not_installed` | SKIP | dnsman is not in `INSTALLED_APPS`; nothing to audit. |
 | `acme.staging_directory` | WARN | `DNSMAN_ACME_DIRECTORY_URL` points at Let's Encrypt **staging**, which is the shipped default. Certificates issued there are untrusted by browsers. |
+| `acme.account_missing` | PENDING | No ACME account is registered for the configured directory yet; it registers itself on first issuance. |
 | `acme.account_registered` | PASS | A production ACME account exists for the configured directory. |
 | `delegation.available` / `delegation.direct_only` | PASS | Whether an ACME hub is configured. An absent hub is not a fault — direct Route53/GoDaddy issuance is fully supported. |
 | `delegation.broken` | WARN | Delegations in the `broken` state, which will not renew. |
+| `delegation.states` | PASS | No delegations are broken; details carry a count by state. |
+| `certificates.none` | PENDING | No certificates have been issued yet. |
 | `certificates.expired` | FAIL | One or more certificates are past `not_after`. |
 | `certificates.renewing` | WARN | Certificates inside `DNSMAN_CERT_RENEW_DAYS`. |
+| `certificates.healthy` | PASS | Every certificate is outside its renewal window. |
 
 The staging default is deliberate — an unconfigured deploy must not be able to
 burn production rate limits — so the section names it in words rather than
 printing a bare URL. Bootstrapping against staging while believing you are live
 is the likeliest way to misread this section.
+
+> **`--json` output changed sensitivity class.** `dns` is in the default section
+> set, so a plain `aws-check --json` now embeds tenant domain names and
+> certificate common names in a report that previously carried only AWS
+> infrastructure data. Treat the output accordingly, or select sections
+> explicitly when producing a report for somewhere less trusted.
 
 ### Bootstrapping a domain
 
@@ -260,8 +278,22 @@ python manage.py aws-check --apply --section dns --dns-domain example.com --dns-
 ```
 
 `--dns-group` takes a group id or an exact name and is required; an unnamed or
-ambiguous owner fails closed with `dns.group_required` before any mutation. The
-flow, each step confirmed separately:
+ambiguous owner fails closed with `dns.group_required` before any mutation.
+Three checks run before anything is written, none of which prompt:
+
+- the domain must normalize cleanly, or the run stops at `dns.domain_invalid`;
+- if a `Domain` already exists for that name under a **different** group, the
+  run stops at `dns.domain_not_owned` — `initiate()` only enforces ownership
+  when handed an existing `Domain`, so the bootstrap resolves and passes one
+  explicitly;
+- if the named group already has a **verified** delegation for the domain, the
+  bootstrap reports `delegation.already_verified` and jumps straight to
+  requesting a certificate, skipping allocation and CNAME proof entirely.
+  `prove_alias()` is not a free read-only lookup — on failure it can retire a
+  delegation that has previously verified — so a rerun must never re-prove one
+  that already works.
+
+Otherwise the flow proceeds, each step confirmed separately:
 
 1. Allocate the delegation and report `delegation.cname_required`, carrying
    `source_name` and `target_name` as structured fields so `--json` consumers get

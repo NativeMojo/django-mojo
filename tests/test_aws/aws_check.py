@@ -1118,7 +1118,8 @@ def test_dns_bootstrap_surfaces_cname_before_requesting(opts):
     runner = aws_check.AWSCheckRunner(
         apply=True, yes=True, dns_domain="example.com", dns_group="7")
     with mock.patch.object(runner, "_resolve_dns_group",
-                           return_value=SimpleNamespace(name="tenant", pk=7)), \
+                           return_value=SimpleNamespace(name="tenant", pk=7,
+                                                        get_uuid=lambda: "uuid-7")), \
             mock.patch.object(delegation, "initiate", return_value=row), \
             mock.patch.object(delegation, "prove_alias",
                               side_effect=RuntimeError("not propagated yet")), \
@@ -1153,7 +1154,8 @@ def test_dns_bootstrap_does_not_request_certificate_until_cname_proves(opts):
     runner = aws_check.AWSCheckRunner(
         apply=True, yes=True, dns_domain="example.com", dns_group="7")
     with mock.patch.object(runner, "_resolve_dns_group",
-                           return_value=SimpleNamespace(name="tenant", pk=7)), \
+                           return_value=SimpleNamespace(name="tenant", pk=7,
+                                                        get_uuid=lambda: "uuid-7")), \
             mock.patch.object(delegation, "initiate", return_value=row), \
             mock.patch.object(delegation, "prove_alias",
                               side_effect=RuntimeError("CNAME does not resolve")), \
@@ -1189,7 +1191,8 @@ def test_dns_errors_redact_the_hub_api_key(opts):
         runner = aws_check.AWSCheckRunner(
             apply=True, yes=True, dns_domain="example.com", dns_group="7")
         with mock.patch.object(runner, "_resolve_dns_group",
-                               return_value=SimpleNamespace(name="tenant", pk=7)), \
+                               return_value=SimpleNamespace(name="tenant", pk=7,
+                                                        get_uuid=lambda: "uuid-7")), \
                 mock.patch.object(delegation, "initiate",
                                   side_effect=RuntimeError(f"hub rejected key {secret}")):
             runner._bootstrap_dns_domain()
@@ -1201,3 +1204,114 @@ def test_dns_errors_redact_the_hub_api_key(opts):
     )
     assert "[REDACTED]" in serialized, \
         f"The key should be replaced by the redaction marker, got {serialized}"
+
+
+@th.django_unit_test()
+def test_elbv2_denial_does_not_disarm_every_other_alarm(opts):
+    """
+    elasticloadbalancing:DescribeTargetGroups is new in this version, so every
+    deployment that upgrades lacks it until IAM is updated. If that denial
+    escaped into the shared discovery guard it would return no alarms at all —
+    EC2, RDS and ElastiCache silently unarmed, and no drift or name-conflict
+    detection either.
+    """
+    from botocore.exceptions import ClientError
+
+    from mojo.apps.aws.services import aws_check
+
+    clients = _discovery_clients(
+        instances=[{"InstanceId": "i-a", "State": {"Name": "running"},
+                    "InstanceType": "m5.large"}],
+        db_instances=[{"DBInstanceIdentifier": "pg", "DBInstanceStatus": "available",
+                       "Engine": "postgres", "DBInstanceClass": "db.m5.large"}],
+    )
+    clients["elbv2"].get_paginator.return_value.paginate.side_effect = ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "no DescribeTargetGroups"}},
+        "DescribeTargetGroups")
+
+    runner = aws_check.AWSCheckRunner(clients=clients)
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        desired = runner._desired_alarms()
+
+    metrics = {alarm["MetricName"] for alarm in desired}
+    assert "StatusCheckFailed" in metrics and "CPUUtilization" in metrics, (
+        "an ELBv2 permission gap must not disarm the resources we CAN see; "
+        f"got {sorted(metrics)}"
+    )
+    assert not any(m in metrics for m in ("HealthyHostCount", "UnHealthyHostCount")), \
+        f"no target group was readable, so no LB alarm should be desired; got {sorted(metrics)}"
+    codes = [item["code"] for item in runner.results]
+    assert "resources.elbv2_denied" in codes, \
+        f"the permission gap must be reported, not silent; got {codes}"
+    assert "resources.discovery_denied" not in codes, (
+        "the shared discovery guard must not have fired — that is the path that "
+        f"returns zero alarms; got {codes}"
+    )
+
+
+@th.django_unit_test()
+def test_bootstrap_never_re_proves_a_verified_delegation(opts):
+    """
+    prove_alias is NOT a free read-only lookup.
+
+    delegation._proof_failure persists STATE_BROKEN for any row that has ever
+    verified, and certs._issue_locked then refuses every issuance AND renewal for
+    that domain with no self-heal. So a rerun against an already-working domain
+    during a transient resolver failure would take that domain's renewals down.
+    """
+    from mojo.apps.aws.services import aws_check
+    from mojo.apps.dnsman.models import AcmeDelegation, Domain
+    from mojo.apps.dnsman.services import certs, delegation
+
+    verified = SimpleNamespace(
+        domain_name="verified.example", source_name="_acme-challenge.verified.example",
+        target_name="abc.hub.example.net", state="verified", domain=None)
+    runner = aws_check.AWSCheckRunner(
+        apply=True, yes=True, dns_domain="verified.example", dns_group="7")
+
+    with mock.patch.object(runner, "_resolve_dns_group",
+                           return_value=SimpleNamespace(name="tenant", pk=7,
+                                                        get_uuid=lambda: "uuid-7")), \
+            mock.patch.object(Domain.objects, "filter") as domains, \
+            mock.patch.object(AcmeDelegation.objects, "filter") as rows, \
+            mock.patch.object(delegation, "initiate") as initiate, \
+            mock.patch.object(delegation, "prove_alias") as prove_alias, \
+            mock.patch.object(certs, "request_certificate") as request_certificate:
+        domains.return_value.first.return_value = None
+        rows.return_value.exclude.return_value.first.return_value = verified
+        runner._bootstrap_dns_domain()
+
+    prove_alias.assert_not_called()
+    initiate.assert_not_called()
+    codes = [item["code"] for item in runner.results]
+    assert "delegation.already_verified" in codes, \
+        f"an existing verified delegation should be reported and left alone, got {codes}"
+    request_certificate.assert_called_once()
+
+
+@th.django_unit_test()
+def test_bootstrap_refuses_a_domain_owned_by_another_group(opts):
+    """
+    initiate() only enforces domain ownership when it is GIVEN a domain, and the
+    bootstrap passes one. Without that, another tenant's name would get a
+    delegation row and a hub allocation before anything refused.
+    """
+    from mojo.apps.aws.services import aws_check
+    from mojo.apps.dnsman.models import Domain
+    from mojo.apps.dnsman.services import delegation
+
+    runner = aws_check.AWSCheckRunner(
+        apply=True, yes=True, dns_domain="taken.example", dns_group="7")
+    with mock.patch.object(runner, "_resolve_dns_group",
+                           return_value=SimpleNamespace(name="tenant", pk=7,
+                                                        get_uuid=lambda: "uuid-7")), \
+            mock.patch.object(Domain.objects, "filter") as domains, \
+            mock.patch.object(delegation, "initiate") as initiate:
+        domains.return_value.first.return_value = SimpleNamespace(
+            name="taken.example", group_id=99)
+        runner._bootstrap_dns_domain()
+
+    initiate.assert_not_called()
+    codes = [item["code"] for item in runner.results]
+    assert "dns.domain_not_owned" in codes, \
+        f"a domain owned by another group must fail closed before any write, got {codes}"

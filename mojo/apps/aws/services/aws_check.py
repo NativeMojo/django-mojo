@@ -722,7 +722,20 @@ class AWSCheckRunner:
                         namespace="AWS/ElastiCache", engine="", instance_type="",
                         dimensions=[{"Name": "CacheClusterId", "Value": row.get("CacheClusterId")}],
                     ))
-        resources.extend(self._discover_target_groups())
+        try:
+            resources.extend(self._discover_target_groups())
+        except ClientError as exc:
+            # Its OWN guard, deliberately. Letting this reach _desired_alarms'
+            # handler would return [] and take EC2, RDS and ElastiCache down with
+            # it — no alarms created, no drift or name-conflict detection — on
+            # every deployment whose IAM policy predates
+            # elasticloadbalancing:DescribeTargetGroups, which is every
+            # deployment that upgrades to this version.
+            self._add("monitoring", "warn", "resources.elbv2_denied", exc,
+                      {"aws_code": _error_code(exc)},
+                      remediation=("Grant elasticloadbalancing:DescribeTargetGroups to the "
+                                   "selected identity to alarm on load-balancer health. "
+                                   "Every other resource is still monitored."))
         return resources
 
     def _discover_target_groups(self):
@@ -1101,9 +1114,13 @@ class AWSCheckRunner:
                   "Delegated ACME is configured" if available
                   else "No ACME hub is configured; issuance uses the domain's own DNS provider",
                   {"delegated": available})
-        counts = {}
-        for row in AcmeDelegation.objects.all().order_by("id")[:500]:
-            counts[row.state] = counts.get(row.state, 0) + 1
+        from django.db.models import Count
+
+        # Aggregate rather than slicing rows: a truncated scan would under-report
+        # counts while the unbounded `broken` query below reported the real
+        # number, and the two would disagree on a large deployment.
+        counts = {row["state"]: row["total"] for row in
+                  AcmeDelegation.objects.values("state").annotate(total=Count("id"))}
         broken = list(AcmeDelegation.objects.filter(state=STATE_BROKEN)
                       .values_list("domain_name", "last_error_code")[:20])
         if broken:
@@ -1171,6 +1188,10 @@ class AWSCheckRunner:
         """
         from mojo.apps.dnsman.services import certs, delegation
 
+        from mojo.apps.dnsman.models import AcmeDelegation, Domain
+        from mojo.apps.dnsman.models.acme_delegation import STATE_RETIRED, STATE_VERIFIED
+        from mojo.apps.dnsman.services import naming
+
         group = self._resolve_dns_group()
         if group is None:
             self._add("dns", "fail", "dns.group_required",
@@ -1178,14 +1199,53 @@ class AWSCheckRunner:
                       {"domain": self.dns_domain, "requested_group": self.dns_group},
                       remediation="Rerun with --dns-group <group id or exact name>.")
             return
-        if not self._approve(f"Allocate an ACME delegation for {self.dns_domain} under group {group.name}?"):
+        try:
+            domain_name = naming.normalize_domain(self.dns_domain)
+        except Exception as exc:
+            self._add("dns", "fail", "dns.domain_invalid", exc, {"domain": self.dns_domain})
+            return
+
+        # Resolve the existing Domain up front and hand it to initiate(), which
+        # only enforces `domain.group_id != group.pk` when it is given one.
+        # Without this a name owned by another tenant gets a delegation row and a
+        # hub allocation before anything refuses.
+        existing_domain = Domain.objects.filter(name=domain_name).first()
+        if existing_domain is not None and existing_domain.group_id != group.pk:
+            self._add("dns", "fail", "dns.domain_not_owned",
+                      "That domain is registered to a different group",
+                      {"domain": domain_name, "requested_group": group.name},
+                      remediation="Bootstrap it under the group that owns it, or transfer it first.")
+            return
+
+        # A working delegation must not be re-proved. prove_alias() is NOT a free
+        # read-only lookup: on failure it persists STATE_BROKEN for any row that
+        # has ever verified (delegation._proof_failure), and certs._issue_locked
+        # then refuses every issuance AND renewal for that domain with no
+        # self-heal. A transient resolver hiccup during a rerun would otherwise
+        # take a healthy domain's renewals down.
+        current = AcmeDelegation.objects.filter(
+            tenant_uuid=group.get_uuid(), domain_name=domain_name,
+        ).exclude(state=STATE_RETIRED).first()
+        if current is not None and current.state == STATE_VERIFIED:
+            self._add("dns", "pass", "delegation.already_verified",
+                      "This domain already has a verified delegation; leaving it untouched",
+                      {"domain": domain_name, "source_name": current.source_name,
+                       "target_name": current.target_name})
+            self._request_dns_certificate(current)
+            return
+
+        if not self._approve(
+            f"Allocate an ACME delegation for {domain_name} under group {group.name}? "
+            f"Verifying it also creates a Domain record owned by that group."
+        ):
             self._add("dns", "warn", "delegation.not_allocated",
-                      "Delegation allocation was not approved", {"domain": self.dns_domain})
+                      "Delegation allocation was not approved", {"domain": domain_name})
             return
         try:
-            row = delegation.initiate(group, None, name=self.dns_domain)
+            row = delegation.initiate(group, None, domain=existing_domain,
+                                      name=None if existing_domain else domain_name)
         except Exception as exc:
-            self._add("dns", "fail", "delegation.allocate_failed", exc, {"domain": self.dns_domain})
+            self._add("dns", "fail", "delegation.allocate_failed", exc, {"domain": domain_name})
             return
         self._add("dns", "pending", "delegation.cname_required",
                   f"Publish this CNAME, then rerun: {row.source_name} -> {row.target_name}",
@@ -1214,6 +1274,12 @@ class AWSCheckRunner:
         self._add("dns", "pass", "delegation.verified",
                   "The delegation CNAME is authoritatively verified",
                   {"domain": row.domain_name}, changed=True)
+        self._request_dns_certificate(row)
+
+    def _request_dns_certificate(self, row):
+        """Queue issuance for a verified delegation."""
+        from mojo.apps.dnsman.services import certs
+
         if not self._approve(f"Request a certificate for {row.domain_name}?"):
             self._add("dns", "warn", "certificate.not_requested",
                       "Certificate issuance was not approved", {"domain": row.domain_name})

@@ -183,7 +183,10 @@ Three behaviours worth knowing:
 
 The job needs `cloudwatch:PutMetricData` on that namespace, granted to the
 identity the **job runners** use — not to the operator running `aws-check`.
-Without AWS credentials it is a no-op that logs and returns.
+Without credentials the job **fails loudly** (`NoCredentialsError` out of
+`put_metric_data`) and shows up in the jobs surface; it is not a silent no-op.
+That is deliberate — a publisher that quietly did nothing would leave the expiry
+alarm looking merely un-set-up.
 
 ## Staging is the default
 
