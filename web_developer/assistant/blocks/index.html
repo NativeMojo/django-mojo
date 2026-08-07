@@ -5524,12 +5524,12 @@
 <tr>
 <td><code>assistant_message</code></td>
 <td>User sends a chat message</td>
-<td><code>message</code>, optional <code>conversation_id</code></td>
+<td><code>message</code>, recommended <code>request_id</code>, optional <code>conversation_id</code></td>
 </tr>
 <tr>
 <td><code>assistant_action</code></td>
 <td>User clicks an action button</td>
-<td><code>conversation_id</code>, <code>action_id</code>, <code>value</code></td>
+<td><code>conversation_id</code>, <code>action_id</code>, <code>value</code>, recommended <code>request_id</code></td>
 </tr>
 </tbody>
 </table>
@@ -5546,35 +5546,38 @@
 <tr>
 <td><code>assistant_thinking</code></td>
 <td>Processing started</td>
-<td><code>conversation_id</code></td>
+<td><code>conversation_id</code>, <code>request_id</code></td>
 </tr>
 <tr>
 <td><code>assistant_tool_call</code></td>
 <td>Each tool called</td>
-<td><code>conversation_id</code>, <code>tool</code>, <code>input</code></td>
+<td><code>conversation_id</code>, <code>request_id</code>, <code>tool</code>, <code>input</code></td>
 </tr>
 <tr>
 <td><code>assistant_response</code></td>
 <td>Final response</td>
-<td><code>conversation_id</code>, <code>response</code>, <code>blocks</code>, <code>tool_calls_made</code></td>
+<td><code>conversation_id</code>, <code>request_id</code>, <code>response</code>, <code>blocks</code>, <code>tool_calls_made</code></td>
 </tr>
 <tr>
 <td><code>assistant_error</code></td>
 <td>Failure</td>
-<td><code>conversation_id</code>, <code>error</code></td>
+<td><code>conversation_id</code>, <code>request_id</code>, <code>error</code></td>
 </tr>
 <tr>
 <td><code>assistant_plan</code></td>
 <td>Plan created</td>
-<td><code>conversation_id</code>, <code>plan</code> (full plan object)</td>
+<td><code>conversation_id</code>, <code>request_id</code>, <code>plan</code> (full plan object)</td>
 </tr>
 <tr>
 <td><code>assistant_plan_update</code></td>
 <td>Step status changed</td>
-<td><code>conversation_id</code>, <code>plan_id</code>, <code>step_id</code>, <code>status</code>, <code>summary</code></td>
+<td><code>conversation_id</code>, <code>request_id</code>, <code>plan_id</code>, <code>step_id</code>, <code>status</code>, <code>summary</code></td>
 </tr>
 </tbody>
 </table>
+<p>Generate a fresh canonical UUID <code>request_id</code> for every action or message and
+ignore server events whose ID does not match the active turn. The field remains
+optional on requests for backward compatibility; it is echoed whenever present.</p>
 
 
 

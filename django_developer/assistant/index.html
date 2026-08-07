@@ -7259,10 +7259,10 @@ their existing URL contract and parser behavior.</p>
 <h2 id="websocket-interface">WebSocket Interface<a class="headerlink" href="#websocket-interface" title="Permanent link">&para;</a></h2>
 <p>The assistant also supports a WebSocket transport for real-time chat UIs. This uses the existing realtime system — no new WebSocket endpoint needed.</p>
 <h3 id="architecture_1">Architecture<a class="headerlink" href="#architecture_1" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>Client sends WS message {type: &quot;assistant_message&quot;, message: &quot;...&quot;, conversation_id: N}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>Client sends WS message {type: &quot;assistant_message&quot;, message: &quot;...&quot;, conversation_id: N, request_id: UUID}
 <a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>  → User.on_realtime_message() dispatches to assistant handler
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>  → Handler validates, stores message, returns {type: &quot;assistant_thinking&quot;} immediately
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>  → Background job runs run_assistant_ws() with on_event callback
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>  → Handler validates, stores message, returns {type: &quot;assistant_thinking&quot;, request_id: UUID} immediately
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>  → Background thread runs run_assistant_ws() with on_event callback
 <a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>  → Callback publishes WS events back to the user:
 <a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>      assistant_text       (intermediate prose from a turn that also calls tools)
 <a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>      assistant_tool_call  (per tool)
@@ -7271,16 +7271,24 @@ their existing URL contract and parser behavior.</p>
 <a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>      assistant_response   (final answer, terminal)
 <a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>      assistant_error      (on failure, terminal)
 </code></pre></div>
+<p><code>request_id</code> is optional for backward compatibility. When supplied, it must be
+a canonical UUID string. The handler echoes it unchanged on the immediate
+response and every background event for that turn, including errors, so clients
+can safely distinguish concurrent turns in the same conversation. A malformed
+ID is rejected before any conversation or message is stored.</p>
 <h3 id="key-files_3">Key Files<a class="headerlink" href="#key-files_3" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>mojo/apps/assistant/handler.py</code> — WS message handler + background job function</li>
+<li><code>mojo/apps/assistant/handler.py</code> — WS message handler + background thread function</li>
 <li><code>mojo/apps/assistant/services/agent.py</code> — <code>run_assistant_ws()</code> variant with event callbacks</li>
 <li><code>mojo/apps/account/models/user.py</code> — <code>on_realtime_message</code> dispatches <code>assistant_*</code> types</li>
 </ul>
 <h3 id="how-messages-are-routed">How Messages Are Routed<a class="headerlink" href="#how-messages-are-routed" title="Permanent link">&para;</a></h3>
 <p>The <code>User.on_realtime_message</code> method checks if the message type starts with <code>assistant_</code> and delegates to <code>handle_assistant_message()</code> — identical to how <code>chat_*</code> messages are routed to the chat handler.</p>
 <h3 id="background-processing">Background Processing<a class="headerlink" href="#background-processing" title="Permanent link">&para;</a></h3>
-<p>LLM calls are too slow to block the WebSocket handler. The handler publishes a job via <code>mojo.apps.jobs</code> and returns immediately. The job function (<code>execute_assistant_job</code>) runs the agent loop and uses <code>send_to_user()</code> from the realtime manager to push events back to the user's WebSocket connections.</p>
+<p>LLM calls are too slow to block the WebSocket handler. The handler starts a
+daemon thread and returns immediately. <code>_run_agent_thread()</code> runs the agent loop
+and uses <code>send_event_to_user()</code> from the realtime manager to push direct events
+back to the user's WebSocket connections.</p>
 <h3 id="assistant_response-event-payload"><code>assistant_response</code> Event Payload<a class="headerlink" href="#assistant_response-event-payload" title="Permanent link">&para;</a></h3>
 <p><code>run_assistant_ws()</code> returns a dict that becomes the WS event payload. As of v1.1.8 it always includes:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="p">{</span>
