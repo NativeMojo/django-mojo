@@ -289,7 +289,7 @@ The request runs with the user's full permissions. If `allowed_ips` was set, req
 ## Security Notes
 
 - Store all tokens securely — treat them like passwords
-- **API key tokens are recoverable, not write-once — but read-back is opt-in.** The raw token is stored encrypted on the record and returned only by `GET /api/group/apikey/<id>?graph=token`; plain list and detail reads omit it. Every opt-in read is audited server-side. Read access to a group's API keys is still equivalent to holding those keys — the opt-in narrows *where the secret travels*, not *who may ask for it*. Rotation does invalidate the *previous* token permanently.
+- **API key tokens are recoverable, not write-once — but read-back is opt-in.** The raw token is stored encrypted on the record and returned only by `GET /api/group/apikey/<id>?graph=token`; plain list and detail reads omit it. Every opt-in read is audited server-side. `manage_group` is intentionally a full-trust credential-management grant inside the tenant, so an API key carrying it may request the `token` graph and recover sibling keys' live tokens. The framework does not block that path: the opt-in narrows *where the secret travels*, not *who may ask for it*. Give ordinary integrations narrower permissions. If a management key is compromised, rotate or revoke every sibling it could have read; revoking only that key is not sufficient containment. Rotation does invalidate the previous token permanently.
 - **API Keys**: scoped to one group, explicit permissions, `sys.*` always denied
 - **User Auth Tokens**: carry full user permissions including `sys.*` — use with caution
 - Set short expiry periods for temporary integrations
