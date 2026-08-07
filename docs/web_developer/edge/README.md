@@ -8,6 +8,9 @@ Backend reference: [django_developer/edge](../../django_developer/edge/README.md
 Releasing site builds (register, promote, roll back):
 [releases.md](releases.md).
 
+Deploying API code to the fleet (webhook + manual trigger):
+[deploy.md](deploy.md).
+
 ## The shape to expect
 
 You never send nginx configuration. A vhost is a small set of choices, and the

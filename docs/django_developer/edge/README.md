@@ -16,6 +16,9 @@ REST reference for API consumers:
 Site releases (what is being *served*, as opposed to how):
 [webapps.md](webapps.md).
 
+Fleet code deploys (webhook trigger, canary node, locked migrations):
+[deploy.md](deploy.md).
+
 ## The constraint everything else follows from
 
 **A vhost is never a text field an admin types nginx directives into.**
