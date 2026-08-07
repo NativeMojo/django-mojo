@@ -1,29 +1,37 @@
 #!/usr/bin/env python
 """
-Publishing script for django-mojo package.
+Release script for django-mojo.
 
-This script handles version bumping, changelog updates, building, publishing to PyPI,
-and creating git commits and releases.
+Driven by an agent, never by hand. The division of labour is deliberate:
+
+    the agent   bumps the version in pyproject.toml, mojo/__init__.py and
+                uv.lock, and COMMITS that as the release commit
+    this script verifies, builds, pushes, publishes to PyPI and tags
+
+So this script never writes to the working tree and never commits. It refuses
+to run against a dirty tree, because a release whose source was not committed
+first is unreproducible — and a PyPI version number can never be reused.
+
+It also asks for no input. There are no release notes here: notes belong on the
+maestro board, and once maestro's project release notes ship (#1494) this script
+will push them from there. See post_release_notes().
+
+Nothing here imports from `mojo`. This script runs before the package is built
+and must work with no configured project — the same constraint testit/testenv.py
+carries, and for the same reason.
 """
 
-import os
 import argparse
-import logging
+import json
+import os
 import re
 import subprocess
 import sys
-from datetime import datetime
+import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import List, Optional
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-# Load .env if present
+# Load .env if present (UV_PUBLISH_TOKEN lives there).
 _env_file = Path(".env")
 if _env_file.exists():
     for _line in _env_file.read_text().splitlines():
@@ -32,406 +40,268 @@ if _env_file.exists():
             _key, _val = _line.split("=", 1)
             os.environ.setdefault(_key.strip(), _val.strip())
 
-# Constants
-CHANGELOG_FILE = Path("CHANGELOG.md")
 PYPROJECT_FILE = Path("pyproject.toml")
 INIT_FILE = Path("mojo/__init__.py")
+LOCK_FILE = Path("uv.lock")
+
+PACKAGE_NAME = "django-mojo"
+PYPI_JSON_URL = "https://pypi.org/pypi/{name}/{version}/json"
+
+# The files the agent is expected to have bumped and committed before calling us.
+VERSION_FILES = (PYPROJECT_FILE, INIT_FILE, LOCK_FILE)
 
 
 class PublishError(Exception):
-    """Custom exception for publishing errors."""
+    """A release precondition failed, or a command did."""
     pass
 
 
-def run_command(command: str, capture_output: bool = True) -> Optional[str]:
+def say(message):
+    """Progress output. Plain print, not logging — nothing here needs a logger,
+    and `mojo.helpers.logit` is unavailable to a script that cannot import mojo."""
+    print(f"==> {message}", flush=True)
+
+
+def run(argv, dry_run=False, capture=True):
+    """Run a command as an argv list — never a shell string.
+
+    argv means no quoting, so a version or a branch name can never be
+    reinterpreted by a shell. There is no shell=True anywhere in this file.
     """
-    Run a shell command with proper error handling.
+    printable = " ".join(argv)
+    if dry_run:
+        say(f"[dry-run] would run: {printable}")
+        return ""
 
-    Args:
-        command: The shell command to run
-        capture_output: Whether to capture and return stdout
-
-    Returns:
-        Command output if capture_output is True, None otherwise
-
-    Raises:
-        PublishError: If the command fails
-    """
-    logger.info(f"Running command: {command}")
-
+    say(f"running: {printable}")
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            text=True,
-            capture_output=capture_output,
-            timeout=300  # 5 minute timeout
-        )
-
-        if result.returncode != 0:
-            error_msg = f"Command failed: {command}"
-            if result.stderr:
-                error_msg += f"\nError: {result.stderr}"
-            raise PublishError(error_msg)
-
-        if capture_output:
-            return result.stdout.strip()
-        return None
-
+        result = subprocess.run(argv, text=True, capture_output=capture, timeout=300)
     except subprocess.TimeoutExpired:
-        raise PublishError(f"Command timed out: {command}")
-    except Exception as e:
-        raise PublishError(f"Failed to execute command '{command}': {str(e)}")
+        raise PublishError(f"command timed out: {printable}")
+    except FileNotFoundError:
+        raise PublishError(f"command not found: {argv[0]}")
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise PublishError(f"command failed: {printable}" + (f"\n{detail}" if detail else ""))
+
+    return (result.stdout or "").strip() if capture else ""
 
 
-def validate_uv_environment() -> None:
-    """Validate that uv is available, pyproject.toml exists, and PyPI token is set."""
-    if not os.environ.get("UV_PUBLISH_TOKEN"):
-        raise PublishError("UV_PUBLISH_TOKEN is not set. Add it to your .env file.")
+def git(*args, dry_run=False):
+    """Read-only git helpers must run even under --dry-run, or the rehearsal
+    reports on a state it never looked at. Callers pass dry_run only for the
+    commands that change something."""
+    return run(["git", *args], dry_run=dry_run)
 
-    try:
-        run_command("uv --version")
-    except PublishError:
-        raise PublishError("uv is not installed or not in PATH")
+
+def validate_environment(args):
+    """uv present, pyproject present, and a PyPI token when we intend to upload."""
+    run(["uv", "--version"])
 
     if not PYPROJECT_FILE.exists():
-        raise PublishError("pyproject.toml not found")
+        raise PublishError("pyproject.toml not found — run this from the repo root")
+
+    # Only an actual upload needs the token. Requiring it for --nopypi or
+    # --dry-run would block the two modes that exist to be run without one.
+    if not args.nopypi and not args.dry_run:
+        if not os.environ.get("UV_PUBLISH_TOKEN"):
+            raise PublishError("UV_PUBLISH_TOKEN is not set. Add it to your .env file.")
 
 
-def validate_files_exist() -> None:
-    """Validate that required files exist."""
-    required_files = [CHANGELOG_FILE, PYPROJECT_FILE, INIT_FILE]
-    missing_files = [f for f in required_files if not f.exists()]
+def require_clean_tree():
+    """Refuse to release from a tree with uncommitted changes.
 
-    if missing_files:
-        raise PublishError(f"Missing required files: {', '.join(str(f) for f in missing_files)}")
-
-
-def get_current_version() -> str:
+    Two reasons, both load-bearing. The release must be reproducible from the
+    commit it claims to be — PyPI versions are permanent and cannot be re-cut.
+    And this repo runs concurrent agent sessions that stage files at arbitrary
+    moments, so anything uncommitted here may not even be the release's work.
     """
-    Extract the current version from pyproject.toml.
+    dirty = git("status", "--porcelain")
+    if dirty:
+        paths = "\n  ".join(dirty.splitlines())
+        raise PublishError(
+            "the working tree has uncommitted changes; commit the release first:\n"
+            f"  {paths}")
 
-    Returns:
-        The current version string
 
-    Raises:
-        PublishError: If version cannot be found
+def get_current_version():
+    """The version from pyproject.toml's [project] table.
+
+    Anchored to the start of a line: an unanchored search would take the first
+    `version = "..."` anywhere in the file, including one in a [tool.*] table.
     """
-    if not PYPROJECT_FILE.exists():
-        raise PublishError(f"{PYPROJECT_FILE} not found")
+    content = PYPROJECT_FILE.read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
+    if not match:
+        raise PublishError("no version found in pyproject.toml")
+    return match.group(1)
 
+
+def require_version_consistency(version):
+    """All three version files must already agree.
+
+    The agent bumps three files by hand; bumping two of them is the obvious way
+    for that to go wrong, and it would otherwise be caught only by a user who
+    installed the wheel and read __version__.
+    """
+    init_text = INIT_FILE.read_text(encoding="utf-8")
+    init_match = re.search(r'^__version__\s*=\s*"([^"]+)"', init_text, re.MULTILINE)
+    if not init_match:
+        raise PublishError(f"no __version__ found in {INIT_FILE}")
+    if init_match.group(1) != version:
+        raise PublishError(
+            f"version mismatch: pyproject.toml says {version}, "
+            f"{INIT_FILE} says {init_match.group(1)}")
+
+    lock_text = LOCK_FILE.read_text(encoding="utf-8")
+    lock_match = re.search(
+        r'name = "' + re.escape(PACKAGE_NAME) + r'"\nversion = "([^"]+)"', lock_text)
+    if not lock_match:
+        raise PublishError(f"no {PACKAGE_NAME} entry found in {LOCK_FILE}")
+    if lock_match.group(1) != version:
+        raise PublishError(
+            f"version mismatch: pyproject.toml says {version}, "
+            f"{LOCK_FILE} says {lock_match.group(1)} — run `uv lock` and commit it")
+
+    # Catches lock drift the version line alone would not show (a changed
+    # dependency bound). Cheap, and it runs before anything irreversible.
+    run(["uv", "lock", "--check"])
+
+
+def require_unreleased(version):
+    """Refuse to re-cut a version that already exists as a tag or on PyPI."""
+    tag = f"v{version}"
+    existing = git("tag", "--list", tag)
+    if existing.strip():
+        raise PublishError(
+            f"tag {tag} already exists — bump the version before releasing again")
+
+    url = PYPI_JSON_URL.format(name=PACKAGE_NAME, version=version)
     try:
-        content = PYPROJECT_FILE.read_text(encoding='utf-8')
-        version_match = re.search(r'version\s*=\s*"([^"]+)"', content)
-
-        if not version_match:
-            raise PublishError("Version not found in pyproject.toml")
-
-        return version_match.group(1)
-    except Exception as e:
-        raise PublishError(f"Failed to read version from {PYPROJECT_FILE}: {str(e)}")
-
-
-def bump_version(level="patch"):
-    """Bump the version in pyproject.toml and return the new version string."""
-    logger.info(f"Bumping {level} version...")
-    current = get_current_version()
-    major, minor, patch = current.split(".")
-    if level == "major":
-        new_version = f"{int(major) + 1}.0.0"
-    elif level == "minor":
-        new_version = f"{major}.{int(minor) + 1}.0"
-    else:
-        new_version = f"{major}.{minor}.{int(patch) + 1}"
-    content = PYPROJECT_FILE.read_text(encoding='utf-8')
-    new_content = re.sub(r'^version\s*=\s*"[^"]+"', f'version = "{new_version}"', content, count=1, flags=re.MULTILINE)
-    PYPROJECT_FILE.write_text(new_content, encoding='utf-8')
-    logger.info(f"Version bumped: {current} -> {new_version}")
-    return new_version
+        with urllib.request.urlopen(url, timeout=15) as response:
+            if response.status == 200:
+                raise PublishError(
+                    f"{PACKAGE_NAME} {version} is already on PyPI — "
+                    "a version can never be re-published, so bump it")
+    except urllib.error.HTTPError as err:
+        if err.code != 404:
+            say(f"warning: could not check PyPI for {version} (HTTP {err.code})")
+    except urllib.error.URLError as err:
+        # Offline or PyPI unreachable. The upload itself will fail cleanly if
+        # the version exists, so this is a courtesy check, not a gate.
+        say(f"warning: could not reach PyPI to pre-check {version} ({err.reason})")
 
 
-def get_release_notes() -> List[str]:
+def current_branch():
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    if branch == "HEAD":
+        raise PublishError("HEAD is detached — check out a branch before releasing")
+    return branch
+
+
+def build(dry_run=False):
+    run(["rm", "-rf", "dist"], dry_run=dry_run, capture=False)
+    run(["uv", "build"], dry_run=dry_run, capture=False)
+
+
+def push_source(branch, dry_run=False):
+    """Push the release commit BEFORE uploading to PyPI.
+
+    Ordering is deliberate: everything reversible happens first. If the push
+    fails we have published nothing, and if the upload later fails the source is
+    already on the remote. The reverse order can leave a permanent PyPI version
+    whose commit exists only on one laptop.
+
+    An SSH push failure is fatal here on purpose — never fall back to another
+    credential path.
     """
-    Collect release notes from user input.
+    run(["git", "push", "origin", branch], dry_run=dry_run, capture=False)
 
-    Returns:
-        List of release note lines
+
+def publish_to_pypi(dry_run=False):
+    """The one irreversible step.
+
+    The token is read from the environment by uv rather than passed in argv,
+    where it would be visible in `ps` to any local user.
     """
-    logger.info("\n======\nPlease enter release notes (press Enter twice when done):")
-    notes = []
-    empty_lines = 0
-
-    try:
-        with open("/dev/tty") as tty:
-            while empty_lines < 2:
-                note = tty.readline().strip()
-                if not note:
-                    empty_lines += 1
-                else:
-                    notes.append(note)
-                    empty_lines = 0
-    except (KeyboardInterrupt, EOFError):
-        logger.info("\nRelease notes collection cancelled")
-        sys.exit(1)
-
-    return notes
+    run(["uv", "publish"], dry_run=dry_run, capture=False)
 
 
-def update_changelog(version: str, notes: List[str]) -> None:
+def tag_release(version, branch, dry_run=False):
+    tag = f"v{version}"
+    run(["git", "tag", "-a", tag, "-m", f"Release {tag}"], dry_run=dry_run, capture=False)
+    run(["git", "push", "origin", tag], dry_run=dry_run, capture=False)
+
+
+def post_release_notes(version, dry_run=False):
+    """Publish release notes for this version to maestro.
+
+    NOT IMPLEMENTED — the API does not exist yet. Maestro epic #1494 ("Release
+    notes for any project") is what supplies it: `ProjectRelease` (#1496), the
+    MCP write path (#1497) and the two-mode `maestro-release-note` skill (#1498)
+    are all still at stage `inbox`.
+
+    This is the single seam where that lands. When those ship, this function
+    posts the note for `version` and nothing else in the file changes — which is
+    why the release flow deliberately carries no notes of its own today rather
+    than growing a stopgap that would have to be unpicked.
     """
-    Update the changelog with new version notes.
-
-    Args:
-        version: The new version string
-        notes: List of release note lines
-    """
-    logger.info("Updating changelog...")
-
-    try:
-        if not CHANGELOG_FILE.exists():
-            # Create a basic changelog if it doesn't exist
-            CHANGELOG_FILE.write_text("# Changelog\n\n", encoding='utf-8')
-
-        lines = CHANGELOG_FILE.read_text(encoding='utf-8').splitlines()
-
-        # Prepare changelog entry
-        date_str = datetime.now().strftime("%B %d, %Y")
-        changelog_entry = [f"## v{version} - {date_str}", ""]
-        changelog_entry.extend(notes)
-        changelog_entry.extend(["", ""])
-
-        # Insert after the header (typically line 1)
-        insert_position = min(2, len(lines))
-        lines[insert_position:insert_position] = changelog_entry
-
-        CHANGELOG_FILE.write_text("\n".join(lines), encoding='utf-8')
-
-    except Exception as e:
-        raise PublishError(f"Failed to update changelog: {str(e)}")
+    say(f"release notes for {version}: skipped — pending maestro #1494")
 
 
-def update_init_version(version: str) -> None:
-    """
-    Update the __version__ in mojo/__init__.py.
-
-    Args:
-        version: The new version string
-    """
-    logger.info("Updating __init__.py version...")
-
-    try:
-        if not INIT_FILE.exists():
-            raise PublishError(f"{INIT_FILE} not found")
-
-        content = INIT_FILE.read_text(encoding='utf-8')
-        new_content = re.sub(
-            r'^__version__\s*=\s*".*"$',
-            f'__version__ = "{version}"',
-            content,
-            flags=re.MULTILINE
-        )
-
-        if content == new_content:
-            logger.warning("No __version__ line found or updated in __init__.py")
-
-        INIT_FILE.write_text(new_content, encoding='utf-8')
-
-    except Exception as e:
-        raise PublishError(f"Failed to update {INIT_FILE}: {str(e)}")
-
-
-def relock() -> None:
-    """
-    Re-resolve uv.lock so it agrees with the just-bumped pyproject.toml.
-
-    uv.lock holds an entry for this package itself (source = { editable = "." })
-    carrying its version, so a version bump leaves the lock one line stale.
-    Nothing here used to fix that, so the drift surfaced later as a dirty
-    uv.lock after somebody's unrelated `uv run` re-synced it — 11 of the
-    repo's `chore: uv.lock` commits are that being cleaned up by hand.
-
-    Locking here, before commit_changes() runs `git add .`, puts the lock in
-    the release commit where it belongs. `uv lock` without --upgrade only
-    changes what pyproject requires, so on a plain patch bump this is the one
-    version line and nothing else.
-    """
-    logger.info("Re-locking uv.lock against the new version...")
-    run_command("uv lock", capture_output=False)
-
-
-def build_and_publish() -> None:
-    """Build and publish the package to PyPI."""
-    logger.info("Cleaning dist/...")
-    run_command("rm -rf dist/", capture_output=False)
-
-    logger.info("Building package...")
-    run_command("uv build", capture_output=False)
-
-    logger.info("Publishing to PyPI...")
-    token = os.environ.get("UV_PUBLISH_TOKEN")
-    try:
-        result = subprocess.run(
-            ["uv", "publish", "--token", token],
-            text=True,
-            timeout=300,
-        )
-        if result.returncode != 0:
-            raise PublishError("uv publish failed")
-    except subprocess.TimeoutExpired:
-        raise PublishError("uv publish timed out")
-
-
-def commit_changes(version: str, notes: List[str]) -> None:
-    """
-    Commit changes to git.
-
-    Args:
-        version: The version string
-        notes: List of release note lines
-    """
-    logger.info("Committing changes...")
-
-    run_command("git add .", capture_output=False)
-
-    # Create single multi-line commit message
-    commit_lines = [f"Release v{version}"]
-    commit_lines.extend(note for note in notes if note.strip())
-
-    # Join all lines into single commit message with proper newlines
-    commit_message = "\n\n".join(commit_lines)
-
-    # Properly escape the commit message for shell execution
-    escaped_message = commit_message.replace('"', '\\"').replace('`', '\\`').replace('$', '\\$')
-
-    # Use single -m flag with the complete message
-    commit_command = f'git commit -m "{escaped_message}"'
-    run_command(commit_command, capture_output=False)
-
-    logger.info("Pushing to git...")
-    run_command("git push", capture_output=False)
-
-
-def create_git_tag(version: str) -> None:
-    """
-    Create and push git tag.
-
-    Args:
-        version: The version string
-    """
-    logger.info(f"Creating git tag v{version}...")
-    run_command(f"git tag v{version}", capture_output=False)
-    run_command("git push --tags", capture_output=False)
-
-
-def create_github_release(version: str, notes: List[str]) -> None:
-    """
-    Create GitHub release.
-
-    Args:
-        version: The version string
-        notes: List of release note lines
-    """
-    logger.info(f"Creating GitHub release v{version}...")
-
-    release_notes = "\n".join(note for note in notes if note.strip())
-
-    # Escape quotes in release notes for shell command
-    escaped_notes = release_notes.replace('"', '\\"')
-
-    gh_command = f'gh release create v{version} --title "v{version}" --notes "{escaped_notes}"'
-    run_command(gh_command, capture_output=False)
-
-
-def parse_arguments() -> argparse.Namespace:
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Publish django-mojo package")
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Release django-mojo. The version must already be bumped and "
+            "committed; this script verifies, builds, pushes, publishes and tags."))
     parser.add_argument(
-        "--nobump",
-        action="store_true",
-        help="Skip version bumping"
-    )
+        "--nopypi", action="store_true",
+        help="Skip the PyPI upload (still verifies, builds, pushes and tags)")
     parser.add_argument(
-        "--bump",
-        choices=["major", "minor", "patch"],
-        default="patch",
-        help="Version level to bump (default: patch)"
-    )
-    parser.add_argument(
-        "--nopypi",
-        action="store_true",
-        help="Skip PyPI publishing"
-    )
-    parser.add_argument(
-        "--release",
-        action="store_true",
-        help="Create GitHub release instead of just tagging"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be done without executing"
-    )
-
+        "--dry-run", action="store_true",
+        help="Run every check for real, but execute nothing that changes anything")
     return parser.parse_args()
 
 
-def main() -> None:
-    """Main publishing workflow."""
+def main():
     try:
         args = parse_arguments()
 
         if args.dry_run:
-            logger.info("DRY RUN MODE - No changes will be made")
-            return
+            say("DRY RUN — checks run for real, nothing is pushed or published")
 
-        # Validate environment
-        validate_uv_environment()
-        validate_files_exist()
+        # Everything below the build is ordered so the irreversible step (the
+        # PyPI upload) happens last and only after the source is on the remote.
+        validate_environment(args)
+        require_clean_tree()
 
-        # Version handling
-        if args.nobump:
-            version = get_current_version()
-            logger.info(f"Using current version: {version}")
+        version = get_current_version()
+        say(f"releasing version {version}")
+
+        require_version_consistency(version)
+        require_unreleased(version)
+
+        branch = current_branch()
+
+        build(dry_run=args.dry_run)
+        push_source(branch, dry_run=args.dry_run)
+
+        if args.nopypi:
+            say("skipping PyPI upload (--nopypi)")
         else:
-            version = bump_version(args.bump)
-            logger.info(f"Bumped to version: {version}")
+            publish_to_pypi(dry_run=args.dry_run)
 
-        # Get release notes
-        notes = get_release_notes()
+        tag_release(version, branch, dry_run=args.dry_run)
+        post_release_notes(version, dry_run=args.dry_run)
 
-        # Update files
-        update_changelog(version, notes)
-        update_init_version(version)
+        say(f"released {version}" if not args.dry_run else f"dry run complete for {version}")
 
-        # Keep uv.lock in step with pyproject.toml before anything commits.
-        # Unconditional: --nobump still benefits, and `uv lock` is a no-op when
-        # the lock is already current.
-        relock()
-
-        # Build and publish
-        if not args.nopypi:
-            build_and_publish()
-        else:
-            logger.info("Skipping PyPI publishing")
-
-        # Git operations
-        commit_changes(version, notes)
-
-        if args.release:
-            create_github_release(version, notes)
-        else:
-            create_git_tag(version)
-
-        logger.info(f"Successfully published version {version}")
-
-    except PublishError as e:
-        logger.error(f"Publishing failed: {e}")
+    except PublishError as err:
+        print(f"ERROR: {err}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
-        logger.info("\nPublishing cancelled by user")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        print("\ncancelled", file=sys.stderr)
         sys.exit(1)
 
 
