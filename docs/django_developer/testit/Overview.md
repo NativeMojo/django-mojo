@@ -5,6 +5,10 @@ It is intentionally lightweight so both humans and LLM agents can reason about a
 
 ---
 
+
+> Each checkout gets its own database, Redis index and dev-server
+> port, derived from its path — see [Isolation.md](Isolation.md).
+
 ## Core Ideas
 - Keep the filesystem predictable: numbered filenames (`1_test_models.py`, `3_test_flows.py`) control execution order because TestIt sorts alphabetically.
 - Prefer reusing state instead of recreating fixtures. Store shared objects on `opts` during setup and tear them down only when reuse is impossible.

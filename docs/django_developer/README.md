@@ -40,6 +40,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [assistant/](assistant/README.md) | LLM admin assistant — architecture, tools, extensibility, custom tool registration |
 | [github/](github/README.md) | GitHub App integration — GitHubInstall model, JWT/token service, webhook verification, OAuth login |
 | [testit/](testit/Overview.md) | Testing framework and patterns for django-mojo projects |
+| [testit/Isolation](testit/Isolation.md) | Per-checkout test isolation — how two worktrees run suites without colliding |
 
 ## Quick Start Pattern
 
