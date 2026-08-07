@@ -3911,10 +3911,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#direct-upload-flow-s3" class="md-nav__link">
+  <a href="#initiated-upload-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Direct Upload Flow (S3)
+        Initiated Upload Flow
       
     </span>
   </a>
@@ -4009,6 +4009,27 @@
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># For a specific user/group</span>
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">fm</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_for_user_group</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">group</span><span class="p">)</span>
 </code></pre></div>
+<p>Upload initiation must use <code>FileManager.resolve_for_upload(request)</code>, not a
+bare primary-key lookup. The resolver applies the upload authorization truth
+table before any <code>File</code> or upload capability is created:</p>
+<ul>
+<li>uploads require an ordinary authenticated <code>User</code> session; API keys,
+  override-user API keys, and group-scoped tokens are rejected;</li>
+<li>inactive managers and managers in an effectively inactive group are rejected;</li>
+<li>a user-scoped manager requires the exact calling user;</li>
+<li>a group-scoped manager requires the exact active request group and an active
+  direct or inherited membership;</li>
+<li>a manager with both scopes requires both constraints; and</li>
+<li>a system-scoped manager requires global <code>manage_files</code> or <code>files</code> authority.</li>
+</ul>
+<p>Global file administrators may use any active manager, but explicit <code>group</code>
+and <code>use</code> selectors must still agree with that manager. Client-supplied <code>user</code>
+selectors are never accepted. Authorization failures happen before storage
+targets are generated.</p>
+<p><code>upload_policy</code> is the safe graph for upload configuration. It contains only
+<code>id</code>, <code>name</code>, <code>use</code>, <code>is_active</code>, <code>max_file_size</code>, <code>allowed_extensions</code>,
+<code>allowed_mime_types</code>, and <code>supports_direct_upload</code>; backend locations,
+credentials, and encrypted settings are deliberately absent.</p>
 <h2 id="filemanager-settings">FileManager Settings<a class="headerlink" href="#filemanager-settings" title="Permanent link">&para;</a></h2>
 <p>Each <code>FileManager</code> stores backend-specific settings through the encrypted
 <code>MojoSecrets.mojo_secrets</code> text field. Use the model helpers rather than reading
@@ -4205,20 +4226,30 @@ metadata.</p>
 </code></pre></div>
 <p>The renderers download the original file to a temp path before processing. The local backend (<code>FileSystemStorageBackend</code>) and the S3 backend both implement this. If you write a custom backend, implement <code>download()</code> or rendition generation will fail for that backend's files.</p>
 <p>See <code>mojo/apps/fileman/backends/</code> — each backend inherits <code>BaseStorageBackend</code>.</p>
-<h2 id="direct-upload-flow-s3">Direct Upload Flow (S3)<a class="headerlink" href="#direct-upload-flow-s3" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># 1. Create File record</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">file</span> <span class="o">=</span> <span class="n">File</span><span class="p">(</span><span class="n">filename</span><span class="o">=</span><span class="s2">&quot;report.pdf&quot;</span><span class="p">,</span> <span class="n">file_size</span><span class="o">=</span><span class="mi">102400</span><span class="p">,</span> <span class="n">content_type</span><span class="o">=</span><span class="s2">&quot;application/pdf&quot;</span><span class="p">)</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">file</span><span class="o">.</span><span class="n">file_manager</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_from_request</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">file</span><span class="o">.</span><span class="n">on_rest_pre_save</span><span class="p">({},</span> <span class="kc">True</span><span class="p">)</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">file</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1"># 2. Get presigned upload URL</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">upload_url</span> <span class="o">=</span> <span class="n">file</span><span class="o">.</span><span class="n">request_upload_url</span><span class="p">()</span>
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># Return upload_url to the client</span>
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>
-<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="c1"># 3. Client uploads directly to S3</span>
-<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="c1"># 4. Client confirms: POST /api/fileman/file/&lt;id&gt; with action=mark_as_completed</span>
+<h2 id="initiated-upload-flow">Initiated Upload Flow<a class="headerlink" href="#initiated-upload-flow" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># The REST endpoint resolves and authorizes the manager, validates policy,</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1"># creates the File, and returns a normalized upload target.</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">POST</span> <span class="o">/</span><span class="n">api</span><span class="o">/</span><span class="n">fileman</span><span class="o">/</span><span class="n">upload</span><span class="o">/</span><span class="n">initiate</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># The client transfers to the returned target, then confirms exactly once</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># (retries are safe):</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">POST</span> <span class="o">/</span><span class="n">api</span><span class="o">/</span><span class="n">fileman</span><span class="o">/</span><span class="n">file</span><span class="o">/&lt;</span><span class="nb">id</span><span class="o">&gt;</span>  <span class="p">{</span><span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="s2">&quot;mark_as_completed&quot;</span><span class="p">}</span>
 </code></pre></div>
+<p>Local and cloud transfers share this lifecycle. A successful transfer leaves
+the <code>File</code> in <code>uploading</code>; only <code>mark_as_completed</code> validates the stored object,
+sets <code>completed</code>, revokes the local upload token, and publishes rendition work.
+Completion is lock-protected and side-effect-idempotent.</p>
+<p>Initiation validates a normalized basename, a nonnegative integer size,
+extension policy, and exact/top-level-wildcard MIME policy. Local uploads are
+also bounded while streaming and checked against their actual byte count and
+detected content type. Validation failure removes any partial storage object
+and moves the row to <code>failed</code>.</p>
+<p>An optional idempotency key may contain 1–128 ASCII letters, digits, <code>.</code>, <code>_</code>,
+<code>:</code>, or <code>-</code>. The raw key is never stored: an internal <code>UploadInitiation</code> stores
+only a digest, fingerprint, actor, and <code>File</code>. Same actor/key/fingerprint
+replays the same file. Only <code>uploading</code> replays receive a refreshed target;
+<code>completed</code>, <code>failed</code>, and <code>expired</code> replays return lifecycle state without a
+writable capability. Omitting the key always creates a distinct file.</p>
 <h2 id="multiple-filemanagers-per-group">Multiple FileManagers per Group<a class="headerlink" href="#multiple-filemanagers-per-group" title="Permanent link">&para;</a></h2>
 <p>A group can have multiple named FileManagers (e.g., <code>"avatars"</code>, <code>"documents"</code>). Specify by name:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">fm</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_for_user_group</span><span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">use</span><span class="o">=</span><span class="s2">&quot;avatars&quot;</span><span class="p">)</span>

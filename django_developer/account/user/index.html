@@ -1158,6 +1158,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Key Fields">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#avatar-relation-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Avatar relation contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4195,6 +4212,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Key Fields">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#avatar-relation-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Avatar relation contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4667,6 +4701,16 @@
 </tr>
 </tbody>
 </table>
+<h3 id="avatar-relation-contract">Avatar relation contract<a class="headerlink" href="#avatar-relation-contract" title="Permanent link">&para;</a></h3>
+<p><code>User.validate_avatar_file()</code> requires an active, completed, groupless File
+classified as an image (<code>category == "image"</code> and an <code>image/*</code> content type)
+with a real owner. This is classification validation, not deep image decoding.</p>
+<p>A user may attach only their own File. A superuser or global
+<code>users</code>/<code>manage_users</code> administrator editing another account may attach only a
+File uploaded by that administrator. Ownership is not transferred to the
+target user. Passing <code>null</code> clears the relation without deleting the detached
+File. <code>resolve_avatar_file_upload_scope()</code> forces inline avatars to personal
+scope (<code>group=None</code>) even when the request carries an ambient group.</p>
 <h2 id="restmeta-configuration">RestMeta Configuration<a class="headerlink" href="#restmeta-configuration" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">LOG_CHANGES</span> <span class="o">=</span> <span class="kc">True</span>

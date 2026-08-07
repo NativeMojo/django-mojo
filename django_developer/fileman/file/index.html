@@ -3789,10 +3789,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#option-2-presigned-url-s3cloud" class="md-nav__link">
+  <a href="#option-2-initiated-upload-recommended" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Option 2: Presigned URL (S3/Cloud)
+        Option 2: Initiated Upload (recommended)
       
     </span>
   </a>
@@ -4055,6 +4055,21 @@
 </tbody>
 </table>
 <h2 id="upload-flow">Upload Flow<a class="headerlink" href="#upload-flow" title="Permanent link">&para;</a></h2>
+<p>The public initiated-upload contract is <code>POST /api/fileman/upload/initiate</code>.
+It returns an explicit lifecycle projection plus a normalized transfer target;
+it never serializes <code>upload_token</code>, storage paths, metadata, backend settings,
+download URLs, or renditions. The shared <code>reference</code> graph remains exactly
+<code>id</code>, <code>filename</code>, <code>content_type</code>, and <code>category</code>.</p>
+<p>Incident <code>TicketNote.media</code> and <code>IncidentHistory.media</code> use this graph after
+their record-specific lifecycle and exact-group validation. See
+<a href="../../logging/incidents/#record-media-attachments">Incident record media attachments</a>.</p>
+<p>Transfer and completion are separate operations. Both a local multipart/raw
+transfer and a cloud-provider transfer leave the row <code>uploading</code>. The owner
+then invokes <code>mark_as_completed</code>; the method locks the row, verifies that the
+backend object exists with the declared size and content type, revokes the
+local token, and publishes rendition work once. A repeated completion returns
+the same completed lifecycle state without publishing again. <code>failed</code> and
+<code>expired</code> are terminal and cannot be revived.</p>
 <h3 id="option-1-direct-upload-multipart">Option 1: Direct Upload (Multipart)<a class="headerlink" href="#option-1-direct-upload-multipart" title="Permanent link">&para;</a></h3>
 <p>POST a multipart form with the file. The framework handles storage automatically.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># REST handler</span>
@@ -4064,17 +4079,15 @@
 <a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">instance</span> <span class="o">=</span> <span class="n">File</span><span class="o">.</span><span class="n">create_from_file</span><span class="p">(</span><span class="n">file</span><span class="p">,</span> <span class="n">file</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">request</span><span class="o">=</span><span class="n">request</span><span class="p">)</span>
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="k">return</span> <span class="n">instance</span><span class="o">.</span><span class="n">on_rest_get</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
 </code></pre></div>
-<h3 id="option-2-presigned-url-s3cloud">Option 2: Presigned URL (S3/Cloud)<a class="headerlink" href="#option-2-presigned-url-s3cloud" title="Permanent link">&para;</a></h3>
+<h3 id="option-2-initiated-upload-recommended">Option 2: Initiated Upload (recommended)<a class="headerlink" href="#option-2-initiated-upload-recommended" title="Permanent link">&para;</a></h3>
 <ol>
-<li>Create a File record to get a presigned upload URL</li>
-<li>Client uploads directly to storage</li>
-<li>Client confirms completion</li>
+<li>POST normalized filename, MIME type, size, and optional manager/group/use
+   selectors to <code>/api/fileman/upload/initiate</code>.</li>
+<li>Transfer using the returned method, fields, and headers.</li>
+<li>Explicitly confirm completion on <code>/api/fileman/file/&lt;id&gt;</code>.</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">file</span> <span class="o">=</span> <span class="n">File</span><span class="p">(</span><span class="n">filename</span><span class="o">=</span><span class="s2">&quot;report.pdf&quot;</span><span class="p">,</span> <span class="n">file_size</span><span class="o">=</span><span class="mi">102400</span><span class="p">)</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">file</span><span class="o">.</span><span class="n">file_manager</span> <span class="o">=</span> <span class="n">FileManager</span><span class="o">.</span><span class="n">get_from_request</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">file</span><span class="o">.</span><span class="n">save</span><span class="p">()</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">url</span> <span class="o">=</span> <span class="n">file</span><span class="o">.</span><span class="n">request_upload_url</span><span class="p">()</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Return url to client for direct upload</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Server-side callers use the same target normalizer after authorization.</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">target</span> <span class="o">=</span> <span class="n">file</span><span class="o">.</span><span class="n">request_upload_target</span><span class="p">()</span>
 </code></pre></div>
 <h3 id="option-3-base64-inline-in-json-payload">Option 3: Base64 Inline (in JSON payload)<a class="headerlink" href="#option-3-base64-inline-in-json-payload" title="Permanent link">&para;</a></h3>
 <p>When a related model has a <code>ForeignKey</code> to <code>File</code>, you can pass base64-encoded data inline:</p>
@@ -4148,7 +4161,26 @@ private manager produces a fresh presign behind its existing stable short URL.</
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">Product</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">Model</span><span class="p">,</span> <span class="n">MojoModel</span><span class="p">):</span>
 <a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="n">image</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="s2">&quot;fileman.File&quot;</span><span class="p">,</span> <span class="n">null</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">on_delete</span><span class="o">=</span><span class="n">models</span><span class="o">.</span><span class="n">SET_NULL</span><span class="p">)</span>
 </code></pre></div>
-<p>The framework will automatically handle inline base64 upload when <code>image</code> is passed as a data URL in a REST POST (this creates a <strong>new</strong> File the caller owns). Passing an <strong>integer file id</strong> instead attaches an <em>existing</em> File — and is gated: the caller must have <code>VIEW_PERMS</code> on that File (own it, hold <code>manage_files</code>/<code>files</code>, or have group access), or the FK is silently dropped with an <code>fk_attach_denied</code> incident. See <a href="../../rest/permissions/#fk-assignment-during-save">FK Assignment During Save</a>.</p>
+<p>File relations accept exactly three input forms:</p>
+<ul>
+<li><code>null</code> detaches a nullable relation without deleting the File;</li>
+<li>a positive JSON integer attaches an existing File after one lookup and a
+  <code>VIEW_PERMS</code> check; and</li>
+<li>a valid base64 or <code>data:&lt;mime&gt;;base64,...</code> string creates an inline File.</li>
+</ul>
+<p>Booleans, zero/negative ids, numeric strings, mappings/lists, and malformed
+base64 return 400. A missing or non-viewable positive id returns the same
+<code>403 File unavailable</code> response. Unlike generic FK denial, File denial is not
+a successful silent no-op.</p>
+<p>Parents can enforce field-specific policy with
+<code>validate_&lt;field_name&gt;_file(candidate, request)</code>. They can customize inline
+tenant scope with <code>resolve_&lt;field_name&gt;_file_upload_scope(request)</code>, returning
+<code>{"group": group_or_none}</code>. Inline ownership always comes from the stable real
+actor (<code>request.acting_user</code>, then an actual <code>account.User</code>); bare API keys and
+pseudo-users are never written to the File owner FK. With no real actor and no
+active group, inline creation fails closed. An inline File remains an
+independent reusable asset if later parent validation fails.</p>
+<p>See <a href="../../rest/permissions/#fk-assignment-during-save">FK Assignment During Save</a>.</p>
 <h2 id="restmeta">RestMeta<a class="headerlink" href="#restmeta" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">RestMeta</span><span class="p">:</span>
 <a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="n">CAN_CREATE</span> <span class="o">=</span> <span class="kc">True</span>

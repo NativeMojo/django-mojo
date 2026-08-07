@@ -4470,7 +4470,28 @@ different name, or when the tenant is reached through a related path:</p>
 <p>When a save payload assigns a ForeignKey field by primary key — e.g. <code>data={"group": 5}</code> — the framework looks up the target via <code>field.related_model.objects.get(pk=value)</code> and then runs <code>field.related_model.rest_check_permission(request, "VIEW_PERMS", related_instance)</code> before assigning. On denial the assignment is silently skipped (the parent save proceeds with the field unchanged) and a <code>fk_attach_denied</code> incident event is emitted directly by <code>on_rest_save_related_field</code> via <code>_report_fk_attach_denied</code>.</p>
 <p>The event carries these metadata fields: <code>field_name</code>, <code>related_model</code>, <code>related_id</code>, <code>branch</code>. It is not a 403 response — the request still returns 200 with the field left at its previous value.</p>
 <p>This prevents cross-model privilege escalation: a user with SAVE_PERMS on model A but no view access to model B cannot attach B records to A. The same gate has always applied when the value is a dict (which triggers a cascading save and additionally requires SAVE_PERMS on the target).</p>
-<p><strong>Models with a custom <code>on_rest_related_save</code></strong> (e.g. <code>fileman.File</code>) are gated the same way: when the assigned value is an <strong>integer pk</strong> (an "attach existing"), the VIEW_PERMS check runs on the target <em>before</em> <code>on_rest_related_save</code> is dispatched, honoring <code>NO_FK_VIEW_CHECK_FIELDS</code> on the parent. A <strong>string / base64 / data-URL</strong> value is an inline <em>create</em> (a new record the caller owns), so it skips the gate. Before DM-033 these models bypassed the check entirely — any authenticated caller could attach any File by id (cross-user/cross-tenant).</p>
+<p>Related models may opt into a candidate-returning protocol with
+<code>resolve_rest_related_candidate(parent, field_name, value, current, request)</code>.
+The framework records the change and assigns the returned instance. Models
+without that method keep the legacy four-argument <code>on_rest_related_save</code>
+dispatch unchanged.</p>
+<p><code>fileman.File</code> uses the candidate protocol for stricter semantics than generic
+FKs. Existing references must be a positive value whose exact type is <code>int</code>
+(not a bool or numeric string). The File is resolved once, checked against
+<code>VIEW_PERMS</code>, optionally passed to the parent's
+<code>validate_&lt;field_name&gt;_file(file, request)</code>, and only then assigned. A missing
+id and a non-viewable id both return <code>403 File unavailable</code>; the internal audit
+branch distinguishes them without creating a client-visible existence oracle.
+Inline base64/data URLs create a new independently owned File. Malformed or
+ambiguous values return a bounded 400 instead of silently leaving the old FK.</p>
+<p>Explicit <code>None</code> is handled before either custom protocol and detaches nullable
+relations. The detached record is not deleted. Generic, non-File scalar FKs
+retain numeric-string coercion, blank/whitespace/zero clearing, and silent
+denied-attach auditing.</p>
+<p>Every field resolution restores the request's original group in <code>finally</code>.
+Permission evaluation may temporarily bind <code>request.group</code> to a target row;
+that side effect cannot influence a later field, inline upload, validator, or
+the caller after an exception.</p>
 <p>Cases that do <strong>not</strong> require VIEW_PERMS on the target:</p>
 <table>
 <thead>
@@ -4493,7 +4514,7 @@ different name, or when the tenant is reached through a related path:</p>
 <td>Framework only gates models that opt in</td>
 </tr>
 <tr>
-<td>Inline create via <code>on_rest_related_save</code> (base64 / data-URL string)</td>
+<td>Inline create via a custom relation hook (base64 / data-URL string)</td>
 <td>New record the caller owns — a create, not an attach</td>
 </tr>
 <tr>

@@ -4597,6 +4597,12 @@
 <a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">&quot;phone_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;+15551234567&quot;</span>
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">}</span>
 </code></pre></div>
+<p><code>avatar</code> accepts a positive numeric File id, a valid inline base64/data URL, or
+<code>null</code>. Numeric strings and other ambiguous shapes return 400. An avatar File
+must be active, completed, groupless, image-classified, and owned by the actor
+who uploaded it. Admin-on-behalf updates use an admin-owned File and retain
+that ownership; they do not transfer the File to the target user. <code>null</code>
+detaches the relation without deleting the File.</p>
 <h3 id="protected-fields">Protected Fields<a class="headerlink" href="#protected-fields" title="Permanent link">&para;</a></h3>
 <p><code>users</code> and <code>manage_users</code> are treated as equivalent for User admin operations — anywhere "admin tier" is listed, either perm is sufficient (and superusers always qualify).</p>
 <table>

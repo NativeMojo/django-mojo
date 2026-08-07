@@ -3788,6 +3788,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#file-relation-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File relation inputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#list-files" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4037,6 +4048,14 @@ public/private status from its shape.</p>
 <td>id, filename, content_type, file_size, upload_url</td>
 </tr>
 <tr>
+<td><code>reference</code></td>
+<td>exactly id, filename, content_type, category</td>
+</tr>
+<tr>
+<td><code>lifecycle</code></td>
+<td>upload state and ownership ids; no tokens, URLs, paths, metadata, or renditions</td>
+</tr>
+<tr>
 <td><code>detailed</code></td>
 <td>All + nested group/user/manager</td>
 </tr>
@@ -4045,6 +4064,17 @@ public/private status from its shape.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>GET /api/fileman/file/123?graph=detailed
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>GET /api/fileman/file?graph=basic&amp;size=20
 </code></pre></div>
+<h2 id="file-relation-inputs">File relation inputs<a class="headerlink" href="#file-relation-inputs" title="Permanent link">&para;</a></h2>
+<p>For model fields backed by <code>ForeignKey(fileman.File)</code>, send a positive JSON
+integer to attach an existing File, <code>null</code> to clear a nullable relation, or a
+valid base64/data URL for compatibility inline creation. Numeric strings,
+booleans, zero/negative ids, objects/lists, and malformed inline data return
+400. Existing references require view access; missing and non-viewable ids both
+return <code>403 File unavailable</code>. Clear and replacement only change the relation —
+they never delete the old File.</p>
+<p>Incident ticket notes and history entries apply additional completed/active and
+exact parent-group checks, then serialize the attached File with <code>reference</code>.
+See <a href="../../logging/incidents/#record-media-attachments">Record media attachments</a>.</p>
 <h2 id="list-files">List Files<a class="headerlink" href="#list-files" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GET /api/fileman/file?upload_status=completed&amp;sort=-created
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>GET /api/fileman/file?group=7&amp;content_type=image/jpeg
@@ -4131,8 +4161,12 @@ public/private status from its shape.</p>
 <p>Revoked short URLs return a 404/gone at the redirect endpoint. The share is audit-preserved — the row is not deleted.</p>
 <h2 id="upload-token-direct-endpoint">Upload Token Direct Endpoint<a class="headerlink" href="#upload-token-direct-endpoint" title="Permanent link">&para;</a></h2>
 <p>For non-S3 backends, the framework provides a token-based upload endpoint:</p>
-<p><strong>POST</strong> <code>/api/fileman/upload/&lt;upload_token&gt;</code></p>
-<p>Used when the File record returns <code>/api/fileman/upload/&lt;token&gt;</code> as the <code>upload_url</code>. Upload the file binary to this URL.</p>
+<p><strong>POST or PUT</strong> <code>/api/fileman/upload/&lt;upload_token&gt;</code></p>
+<p>Used when initiation returns <code>/api/fileman/upload/&lt;token&gt;</code> as the
+<code>upload_url</code>. Multipart POST accepts a <code>file</code> part. Raw PUT accepts the body
+directly and requires <code>Content-Length</code>, including an explicit zero. A valid
+transfer remains <code>uploading</code>; call <code>mark_as_completed</code> separately. The token
+remains retryable until completion and is revoked when completion succeeds.</p>
 
 
 

@@ -1701,6 +1701,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Core Models">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#record-media-attachments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Record media attachments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4998,6 +5015,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Core Models">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#record-media-attachments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Record media attachments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6051,6 +6085,27 @@ pushed into the fleet-wide firewall.</p>
 </tr>
 </tbody>
 </table>
+<h3 id="record-media-attachments">Record media attachments<a class="headerlink" href="#record-media-attachments" title="Permanent link">&para;</a></h3>
+<p><code>TicketNote.media</code> and <code>IncidentHistory.media</code> are singular, nullable references
+to <code>fileman.File</code>. REST callers may supply one existing File id, <code>null</code>, or a
+compatible inline File payload. Existing-id resolution and File VIEW permission
+use the shared File relation path; the incident models add one domain validator
+after that candidate has been resolved.</p>
+<p>An attachment is accepted only when the File is active and completed, its
+<code>FileManager</code> is active, and both the File and manager have exactly the same
+<code>group_id</code> as the parent <code>Ticket</code> or <code>Incident</code>. This also defines the groupless
+case: both attachment rows must be groupless, while normal File VIEW permission
+still decides whether the caller may use the File. All lifecycle and scope
+failures use the same 400 response and do not persist the record.</p>
+<p>Ticket notes derive <code>group_id</code> from their parent before their first save, even
+if the request supplies another group. This replaces the former post-save repair
+without changing note text, action-response, Maestro, or LLM processing order.
+Incident history keeps its supplied group as audit provenance; it is not rewritten
+from the parent. Deleting an attached File sets <code>IncidentHistory.media</code> to null so
+the history row and its provenance survive.</p>
+<p>Both record types serialize <code>media</code> with File's exact <code>reference</code> graph:
+<code>id</code>, <code>filename</code>, <code>content_type</code>, and <code>category</code>. Storage paths, tokens, URLs,
+manager details, ownership, metadata, and renditions are never included.</p>
 <hr />
 <h2 id="reporting-events">Reporting Events<a class="headerlink" href="#reporting-events" title="Permanent link">&para;</a></h2>
 <h3 id="from-any-python-code">From any Python code<a class="headerlink" href="#from-any-python-code" title="Permanent link">&para;</a></h3>

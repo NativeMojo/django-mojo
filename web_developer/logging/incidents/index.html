@@ -3212,6 +3212,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#record-media-attachments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Record media attachments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#ruleset-fields" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4195,6 +4206,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#record-media-attachments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Record media attachments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#ruleset-fields" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4747,9 +4769,34 @@ hour per unit), so counts reflect distinct conditions, not raw volume.</p>
 <p><strong>POST</strong> <code>/api/incident/ticket/note</code></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span>
 <a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span><span class="nt">&quot;parent&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Approved. Enable the rule.&quot;</span>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="p">}</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span><span class="nt">&quot;note&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Approved. Enable the rule.&quot;</span><span class="p">,</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span><span class="nt">&quot;media&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">812</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="p">}</span>
 </code></pre></div>
+<h2 id="record-media-attachments">Record media attachments<a class="headerlink" href="#record-media-attachments" title="Permanent link">&para;</a></h2>
+<p>Ticket notes and incident-history entries each accept one optional <code>media</code>
+File. Send a positive File id to attach an existing upload or <code>null</code> to clear
+the relation. The note remains text-bearing; <code>media</code> supplements it rather than
+replacing it. Ticket-note group scope is always derived from the parent ticket.
+Incident-history <code>group</code> remains the event's audit provenance and is not
+rewritten.</p>
+<p>The File must be visible to the caller, active, completed, and stored through
+an active manager. Both the File and manager must have exactly the parent
+ticket/incident's <code>group_id</code>. Invalid lifecycle or scope returns the same 400
+error without creating the record. Missing, deleted, and non-viewable existing
+ids remain indistinguishable as <code>403 File unavailable</code>.</p>
+<p>Successful responses expose only this capability-free projection:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="p">{</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span><span class="nt">&quot;media&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">812</span><span class="p">,</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">    </span><span class="nt">&quot;filename&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;evidence.png&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">    </span><span class="nt">&quot;content_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;image/png&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">    </span><span class="nt">&quot;category&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;image&quot;</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="p">}</span>
+</code></pre></div>
+<p>Deleting the File later clears <code>media</code> but preserves the incident-history row,
+note, and group provenance.</p>
 <h2 id="ruleset-fields">RuleSet Fields<a class="headerlink" href="#ruleset-fields" title="Permanent link">&para;</a></h2>
 <p>Rule sets are read and written via <code>/api/incident/event/ruleset</code>, and their individual conditions via <code>/api/incident/event/ruleset/rule</code>. Reading needs <code>view_security</code> (or <code>security</code>); creating, updating and deleting need <strong><code>manage_security</code> (or <code>security</code>)</strong>.</p>
 <table>
@@ -4797,12 +4844,12 @@ hour per unit), so counts reflect distinct conditions, not raw volume.</p>
 <p><strong><code>bundle_minutes</code> must be at least <code>trigger_window</code>.</strong> The threshold counts events on a single incident. With <code>bundle_minutes: 0</code> each event lands on its own incident, so the count never climbs past 1 and a <code>trigger_count</code> silently <strong>disables</strong> the rule set instead of deferring it.</p>
 </blockquote>
 <p>A rule set whose <code>handler</code> contains <code>block://</code> and whose <code>trigger_count</code> is <code>null</code> firewalls the source IP on the <strong>first</strong> matching event. That is only appropriate when no legitimate user can produce the match — on a corporate NAT or CGNAT one address fronts many unrelated people. To retune a rule set that is already installed, POST just the fields you want to change:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>POST /api/incident/event/ruleset/12
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>{
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>  &quot;trigger_count&quot;: 25,
-<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>  &quot;trigger_window&quot;: 60,
-<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>  &quot;bundle_minutes&quot;: 60
-<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>POST /api/incident/event/ruleset/12
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>{
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>  &quot;trigger_count&quot;: 25,
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>  &quot;trigger_window&quot;: 60,
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>  &quot;bundle_minutes&quot;: 60
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>}
 </code></pre></div>
 <h3 id="bundle_by-values"><code>bundle_by</code> values<a class="headerlink" href="#bundle_by-values" title="Permanent link">&para;</a></h3>
 <table>
@@ -4887,17 +4934,17 @@ hour per unit), so counts reflect distinct conditions, not raw volume.</p>
 </tbody>
 </table>
 <p><strong>Example — block after 10 failed logins in 10 minutes, re-alert every 20 more:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>POST /api/incident/event/ruleset
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>{
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>  &quot;category&quot;: &quot;auth:failed&quot;,
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>  &quot;name&quot;: &quot;Brute Force Detection&quot;,
-<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>  &quot;bundle_by&quot;: 4,
-<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>  &quot;bundle_minutes&quot;: 10,
-<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>  &quot;handler&quot;: &quot;block://?ttl=3600,notify://perm@manage_security&quot;,
-<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>  &quot;trigger_count&quot;: 10,
-<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>  &quot;trigger_window&quot;: 10,
-<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>  &quot;retrigger_every&quot;: 20
-<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>}
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>POST /api/incident/event/ruleset
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>{
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>  &quot;category&quot;: &quot;auth:failed&quot;,
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>  &quot;name&quot;: &quot;Brute Force Detection&quot;,
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>  &quot;bundle_by&quot;: 4,
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>  &quot;bundle_minutes&quot;: 10,
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>  &quot;handler&quot;: &quot;block://?ttl=3600,notify://perm@manage_security&quot;,
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>  &quot;trigger_count&quot;: 10,
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>  &quot;trigger_window&quot;: 10,
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>  &quot;retrigger_every&quot;: 20
+<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>}
 </code></pre></div>
 <p>Incidents stay at <code>pending</code> until <code>trigger_count</code> is reached, then transition to <code>new</code> and the handler fires. With <code>retrigger_every=20</code>, the handler fires again at 30 events, 50, 70, and so on.</p>
 <h2 id="filtering">Filtering<a class="headerlink" href="#filtering" title="Permanent link">&para;</a></h2>

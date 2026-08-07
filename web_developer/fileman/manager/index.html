@@ -4036,7 +4036,17 @@ settings, not model columns — send them as ordinary fields.</p>
 <p><strong>System-scoped managers are superuser-only.</strong> A manager created with no <code>user</code> <strong>and</strong> no group (no <code>group</code> in the body and no active group on the request) is <em>system-scoped</em> and can become the system default. Creating one via REST returns <strong>403</strong> unless the caller is a superuser. Supply a <code>group</code> — or operate within a group context — to create a group-scoped manager as a regular user.</p>
 </blockquote>
 <h2 id="selecting-a-filemanager-for-uploads">Selecting a FileManager for uploads<a class="headerlink" href="#selecting-a-filemanager-for-uploads" title="Permanent link">&para;</a></h2>
-<p>Clients do not need to manage FileManagers directly. To select a specific manager during an upload, pass <code>file_manager: &lt;id&gt;</code> in the initiate body. See <a href="../upload/">upload.md</a>.</p>
+<p>Clients do not need to manage FileManagers directly. To select a specific
+manager during an upload, pass <code>file_manager: &lt;id&gt;</code> in the initiate body. The
+server authorizes that exact manager before creating a File: user, group, and
+dual scopes must match; inactive/effectively-inactive scopes fail closed; and a
+system manager requires global <code>manage_files</code>/<code>files</code>. API keys and restricted
+group tokens cannot initiate. Explicit <code>group</code> and <code>use</code> selectors must agree
+with the selected manager even for a global file administrator.</p>
+<p>The safe <code>upload_policy</code> graph exposes only policy fields (<code>id</code>, <code>name</code>, <code>use</code>,
+active flag, maximum size, allowed extensions/MIME types, and direct-upload
+support). It never exposes backend locations, credentials, or settings. See
+<a href="../upload/">upload.md</a> for the complete lifecycle and retry contract.</p>
 
 
 
