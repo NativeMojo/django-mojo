@@ -4127,6 +4127,10 @@
 <p>TestIt is the Django-MOJO test harness for API, unit, and integration coverage.<br />
 It is intentionally lightweight so both humans and LLM agents can reason about a suite, spot design issues early, and iterate fast.</p>
 <hr />
+<blockquote>
+<p>Each checkout gets its own database, Redis index and dev-server
+port, derived from its path — see <a href="../Isolation/">Isolation.md</a>.</p>
+</blockquote>
 <h2 id="core-ideas">Core Ideas<a class="headerlink" href="#core-ideas" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Keep the filesystem predictable: numbered filenames (<code>1_test_models.py</code>, <code>3_test_flows.py</code>) control execution order because TestIt sorts alphabetically.</li>

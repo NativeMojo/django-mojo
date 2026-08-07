@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/dnsman/Certificates/">
+        <link rel="canonical" href="https://NativeMojo.github.io/django-mojo/django_developer/testit/Isolation/">
       
       
       
@@ -23,7 +23,7 @@
     
     
       
-        <title>Certificates — ACME DNS-01, custody, renewal, sync - Django-MOJO</title>
+        <title>Test isolation — one checkout, one database, one Redis index, one port - Django-MOJO</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#certificates-acme-dns-01-custody-renewal-sync" class="md-skip">
+        <a href="#test-isolation-one-checkout-one-database-one-redis-index-one-port" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Certificates — ACME DNS-01, custody, renewal, sync
+              Test isolation — one checkout, one database, one Redis index, one port
             
           </span>
         </div>
@@ -3733,10 +3733,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#why-not-acm" class="md-nav__link">
+  <a href="#the-rule" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why not ACM
+        The rule
       
     </span>
   </a>
@@ -3744,10 +3744,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#why-an-in-repo-acme-client" class="md-nav__link">
+  <a href="#what-you-get" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why an in-repo ACME client
+        What you get
       
     </span>
   </a>
@@ -3755,60 +3755,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-issuance-flow" class="md-nav__link">
+  <a href="#inspecting-and-reclaiming" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The issuance flow
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="The issuance flow">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#the-wildcard-trap" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The wildcard trap
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#cleanup-is-in-a-finally" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Cleanup is in a finally
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#propagation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Propagation
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#custody" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custody
+        Inspecting and reclaiming
       
     </span>
   </a>
@@ -3816,10 +3766,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#renewal-and-sync" class="md-nav__link">
+  <a href="#two-deliberate-offsets" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Renewal and sync
+        Two deliberate offsets
       
     </span>
   </a>
@@ -3827,10 +3777,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#expiry-monitoring" class="md-nav__link">
+  <a href="#the-redis-ceiling" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Expiry monitoring
+        The Redis ceiling
       
     </span>
   </a>
@@ -3838,10 +3788,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#staging-is-the-default" class="md-nav__link">
+  <a href="#fail-closed-behaviour" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Staging is the default
+        Fail-closed behaviour
       
     </span>
   </a>
@@ -3849,10 +3799,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#fallback" class="md-nav__link">
+  <a href="#running-two-worktrees" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fallback
+        Running two worktrees
       
     </span>
   </a>
@@ -3879,172 +3829,135 @@
   
 
 
-<h1 id="certificates-acme-dns-01-custody-renewal-sync">Certificates — ACME DNS-01, custody, renewal, sync<a class="headerlink" href="#certificates-acme-dns-01-custody-renewal-sync" title="Permanent link">&para;</a></h1>
-<p><code>mojo/apps/dnsman/services/certs.py</code> + <code>mojo/helpers/acme/</code>.</p>
-<p>Certificates are issued centrally over <strong>ACME DNS-01</strong> and held here. DNS-01
-needs only a TXT record, so it works for every provider we can write a zone
-through, needs no webserver, and runs on a worker rather than on a serving box.</p>
-<h2 id="why-not-acm">Why not ACM<a class="headerlink" href="#why-not-acm" title="Permanent link">&para;</a></h2>
-<p>Free ACM certificates can only be attached to ACM-integrated front-ends (ALB,
-CloudFront) — they cannot be installed into nginx on our own instance. The
-exportable ACM tier can, but is priced per certificate at issuance <strong>and</strong> at
-each renewal on a 198-day validity, which is a recurring per-domain tax that
-does not survive contact with a few thousand customer domains.</p>
-<p>Let's Encrypt over ACME is $0 and DNS-01 works centrally because we hold, or
-hold credentials for, the zones.</p>
-<h2 id="why-an-in-repo-acme-client">Why an in-repo ACME client<a class="headerlink" href="#why-an-in-repo-acme-client" title="Permanent link">&para;</a></h2>
-<p><code>mojo/helpers/acme/</code> implements only the DNS-01 slice of RFC 8555, on libraries
-already present: <code>cryptography</code> for keys and CSRs, <code>requests</code> for transport, and
-PyJWT's low-level utils for base64url and DER→raw signature conversion.</p>
-<p>certbot's <code>acme</code> package is more battle-tested, but would add <code>josepy</code> and
-<code>pyOpenSSL</code> to a <strong>published framework</strong> most consumers will never use for
-certificates. The client sits behind <code>services/certs.py</code> and is swappable if it
-ever disappoints.</p>
-<p>Protocol details worth knowing, each pinned by a test:</p>
-<ul>
-<li>The flattened JWS is assembled by hand rather than via <code>PyJWS.encode</code>, which
-  injects a <code>typ</code> header field. RFC 8555 servers are strict about the protected
-  header — a test asserts <code>typ</code> is absent.</li>
-<li>The RFC 7638 thumbprint hashes required members only, lexicographically
-  ordered, no whitespace. Get it wrong and the CA computes a different key
-  authorization; the only symptom is every validation failing.</li>
-<li><code>badNonce</code> is retried once with the replacement nonce; <code>Retry-After</code> is honoured.</li>
-<li>POST-as-GET sends an <em>empty</em> payload, not <code>{}</code>.</li>
-<li><code>revokeCert</code> signs with <code>kid</code> when using the account key.</li>
-</ul>
-<h2 id="the-issuance-flow">The issuance flow<a class="headerlink" href="#the-issuance-flow" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>new order
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  group challenge digests BY RECORD NAME
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  upsert each _acme-challenge name once, with its full digest list
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  wait for authoritative propagation
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  answer each challenge
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>  poll until ready
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  finalize with a fresh P-256 CSR
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>  download the chain
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>  store cert + chain + key (KMS), set validity and renew_after
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>  broadcast &quot;certificate updated&quot;
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>finally:
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>  clear every challenge record we planted
+<h1 id="test-isolation-one-checkout-one-database-one-redis-index-one-port">Test isolation — one checkout, one database, one Redis index, one port<a class="headerlink" href="#test-isolation-one-checkout-one-database-one-redis-index-one-port" title="Permanent link">&para;</a></h1>
+<p>Every checkout gets its own test environment, derived from its path. Two
+worktrees of this repo can run their suites at the same time and never see each
+other.</p>
+<h2 id="the-rule">The rule<a class="headerlink" href="#the-rule" title="Permanent link">&para;</a></h2>
+<p><strong>Derive, never inherit.</strong></p>
+<p>Isolation across the mojo repos used to be hand-set: someone picked
+<code>mojo_maestro_test</code> / Redis index 15 / port 9109 once, and it worked because a
+human made the values different.</p>
+<p>A worktree defeats that completely. It is a <strong>copy</strong>, so it silently inherits
+its parent's database name, Redis index and port. Nobody chose anything, so
+nothing is distinct — and two suites then <code>TRUNCATE</code> every table and call
+<code>flushdb()</code> on each other mid-run. The symptom is not an error; it is the other
+run's data disappearing, which reads as flakiness.</p>
+<p>So no isolation value may live in a file a worktree would clone. They are
+derived from the checkout's absolute path and recorded <strong>outside</strong> any checkout,
+in <code>~/.mojo/testenv.json</code>.</p>
+<h2 id="what-you-get">What you get<a class="headerlink" href="#what-you-get" title="Permanent link">&para;</a></h2>
+<p><code>bin/create_testproject</code> prints it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>==&gt; Creating testproject in /Users/you/Projects/django-mojo/testproject
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    db=mojo_test_0f294679  redis=1  port=5600
 </code></pre></div>
-<p>For a verified tenant <code>AcmeDelegation</code>, the challenge-writer branch changes but
-the ACME/custody flow does not. The alias is authoritatively re-proved before
-<code>new order</code>; both apex/wildcard digests are published together through the
-challenge-specific hub client at the stored opaque target; propagation probes
-that target; and the durable cleanup reference is idempotently withdrawn in
-<code>finally</code>. Pending delegation is ignored. Verified/broken routing is sticky and
-never silently falls back to direct DNS.</p>
-<h3 id="the-wildcard-trap">The wildcard trap<a class="headerlink" href="#the-wildcard-trap" title="Permanent link">&para;</a></h3>
-<p><code>example.com</code> and <code>*.example.com</code> produce <strong>two separate authorizations that
-share one record name</strong> — <code>_acme-challenge.example.com</code> — and both digests must
-be live <strong>at the same time</strong>.</p>
-<p>Write them one at a time and the second write erases the first (on GoDaddy
-literally, since its PUT replaces the whole record set), so one authorization
-always fails. Challenges are therefore grouped by record name and each name is
-written once with the complete value list. All upserts happen before any
-propagation wait, so both digests are live before either is checked.</p>
-<h3 id="cleanup-is-in-a-finally">Cleanup is in a <code>finally</code><a class="headerlink" href="#cleanup-is-in-a-finally" title="Permanent link">&para;</a></h3>
-<p>On success <em>and</em> on failure. Otherwise orphaned <code>_acme-challenge</code> TXT records
-accumulate in customer zones, which is both untidy and confusing to anyone
-debugging their own DNS. Cleanup passes the exact digest list, so it touches only
-what this issuance planted.</p>
-<p>It calls <code>dns.clear_record</code>, <strong>not</strong> <code>dns.delete_record</code>. GoDaddy has no true
-delete and refuses to remove the last value of a record set, so a delete raised —
-and cleanup, running in a <code>finally</code>, logged and swallowed it, leaving the
-challenge TXT live and one digest richer after every renewal. <code>clear_record</code> lets
-the adapter pick the strongest retirement it has: a real delete on Route53, an
-inert placeholder overwrite on GoDaddy. See
-<a href="../Providers/#clear_record--for-callers-with-nowhere-to-put-that-refusal">Providers</a>.</p>
-<p>A cleanup failure still <strong>never</strong> fails an issuance that otherwise succeeded —
-that is the whole point of the <code>finally</code> and it is asserted by a test.</p>
-<h3 id="propagation">Propagation<a class="headerlink" href="#propagation" title="Permanent link">&para;</a></h3>
-<p><code>wait_for_txt</code> (<code>mojo/helpers/dns/probe.py</code>) resolves the zone's <strong>authoritative
-nameservers and queries them directly</strong> rather than trusting the local recursive
-resolver. A recursive answer can be a false negative (cached negative for a
-record we just wrote) or, worse, a false positive on a stale value — telling the
-CA to validate a record it will never see. Either mistake costs a failed
-issuance and burns rate limit.</p>
-<p>Route53 additionally gates on <code>ChangeInfo</code> reaching <code>INSYNC</code> first. GoDaddy has
-no equivalent, so the probe is the only signal there.</p>
-<h2 id="custody">Custody<a class="headerlink" href="#custody" title="Permanent link">&para;</a></h2>
-<p>The private key is KMS-envelope-encrypted via <code>KSMSecrets</code>. It appears in <strong>no
-graph</strong>, in <strong>no job payload</strong>, and leaves the database through exactly one
-gated, access-logged endpoint (<code>GET /api/dnsman/certificate/material/&lt;pk&gt;</code>),
-which requires <code>manage_dns</code> rather than <code>view_dns</code> — seeing that a certificate
-exists is not the same as being entitled to its key.</p>
-<p><code>KSMSecrets</code> returns an empty mapping when KMS decryption fails, so an empty key
-on an <em>active</em> certificate means the custody layer is unavailable, not that the
-certificate has no key. The endpoint reports that as <code>503</code>, because reporting it
-as "no key" would send a consumer off to reissue for no reason.</p>
-<h2 id="renewal-and-sync">Renewal and sync<a class="headerlink" href="#renewal-and-sync" title="Permanent link">&para;</a></h2>
-<p><code>renew_certificates</code> (every 6h) queues a job per certificate past <code>renew_after</code>
-(<code>not_after</code> − <code>DNSMAN_CERT_RENEW_DAYS</code>, default 30).</p>
-<p>Requests serialize on the Domain row and job publishes carry an internal
-idempotency key while retaining the existing <code>{certificate: pk}</code> payload.
-Execution atomically claims the Certificate before any CA call; a duplicate
-worker exits without creating an order. The claim is also protected by a
-per-certificate advisory lock held through the remote work. If a worker dies,
-the renewal scan requeues the abandoned <code>issuing</code> row after
-<code>DNSMAN_CERT_ISSUING_STALE_SECONDS</code> (default 30 minutes); a live lock prevents a
-slow worker from being reclaimed concurrently. Existing still-valid material
-remains available from the material endpoint while renewal is <code>issuing</code>.
-Initial issuance never has material to expose. When a delegated renewal fails and the
-existing KMS-held material is still valid, the row returns to <code>active</code>, its
-cert/chain/key remain untouched, <code>last_error</code>/<code>attempts</code> record the failure, and
-<code>renew_after</code> moves to a bounded exponential retry (base
-<code>DNSMAN_CERT_RETRY_BASE_SECONDS</code>, default one hour; hard maximum 24 hours).</p>
-<p>On every successful issue or renewal, dnsman broadcasts a <code>certificate_updated</code>
-job on <code>DNSMAN_CERT_SYNC_CHANNEL</code> carrying <strong>only</strong> the certificate id, domain
-and expiry. Subscribed hosts pull the material themselves and reload locally.</p>
-<p>dnsman never pushes into a serving box. There is no SSH, no shared filesystem,
-and no second auth surface — the job channel already exists.</p>
-<p>The payoff is operational: <strong>standing up a replacement host is a sync, not a
-reissue.</strong> No new CA order, no rate-limit exposure, and hosts stay disposable.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Derived value</th>
+<th>Written into</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Postgres database</td>
+<td><code>mojo_test_&lt;slug&gt;</code></td>
+<td><code>testproject/config/settings/local/db.py</code></td>
+</tr>
+<tr>
+<td>Redis DB index</td>
+<td><code>REDIS_DB_INDEX</code></td>
+<td>same file</td>
+</tr>
+<tr>
+<td>Dev server port</td>
+<td><code>port=</code></td>
+<td><code>testproject/config/dev_server.conf</code></td>
+</tr>
+<tr>
+<td>Django cache prefix</td>
+<td><code>mojot_&lt;slug&gt;</code></td>
+<td>same <code>db.py</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>&lt;slug&gt;</code> is <code>sha1(realpath(checkout))[:8]</code>. Stable across reboots and branch
+switches; different for every worktree. <code>realpath</code> matters — <code>/var</code> and
+<code>/private/var</code> are the same directory on macOS, and hashing both would hand one
+tree two slots.</p>
+<p><code>bin/asgi_local</code> already reads <code>dev_server.conf</code>, and testit reads it through
+<code>_read_dev_server_conf()</code>, so nothing else needs to know.</p>
+<h2 id="inspecting-and-reclaiming">Inspecting and reclaiming<a class="headerlink" href="#inspecting-and-reclaiming" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>testit/testenv.py<span class="w"> </span>list
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>testit/testenv.py<span class="w"> </span>prune<span class="w">            </span><span class="c1"># drop slots for deleted checkouts</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>testit/testenv.py<span class="w"> </span>release<span class="w"> </span>&lt;path&gt;<span class="w">   </span><span class="c1"># give one slot back</span>
+</code></pre></div>
+<p><strong>Prune after deleting a worktree.</strong> Redis indexes are the scarce resource and a
+removed checkout keeps holding one.</p>
+<p><code>prune</code> reclaims the slot but deliberately does <strong>not</strong> drop the Postgres
+database — removing one because a directory is currently missing would destroy
+data whenever a volume is unmounted or a checkout is moved rather than deleted.
+It prints the orphaned name instead:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>pruned 1
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  /Users/you/Projects/django-mojo-feature
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>These databases are now orphaned. Drop them when you are sure the checkout is
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>really gone:
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>  dropdb mojo_test_85e2ef50
+</code></pre></div>
 <blockquote>
-<p><code>jobs.publish</code> routes to the channel it is given — the broadcast always goes
-to the configured channel. <code>certs</code> (the default) ships in <code>JOBS_CHANNELS</code>'
-default list. If you set <code>JOBS_CHANNELS</code> explicitly, or override
-<code>DNSMAN_CERT_SYNC_CHANNEL</code>, make sure a runner consumes that channel; an
-unconsumed queue raises a <code>jobs:unconsumed_channel</code> incident.</p>
+<p>Invoke it by <strong>file path</strong>, not <code>python -m testit.testenv</code>. Importing the
+package runs <code>testit/__init__.py</code> → <code>mojo.helpers.logit</code> → <code>paths</code>, which
+needs a configured project — and <code>create_testproject</code> runs before the project
+exists. Downstream repos that need the path without importing the package can
+use <code>importlib.util.find_spec("testit").origin</code>, which locates it without
+executing it.</p>
 </blockquote>
-<h2 id="expiry-monitoring">Expiry monitoring<a class="headerlink" href="#expiry-monitoring" title="Permanent link">&para;</a></h2>
-<p><code>cronjobs.publish_certificate_expiry</code> runs hourly and publishes one number for
-the whole deployment: the fewest days remaining across every certificate, as the
-CloudWatch metric <code>DjangoMojo/Certificates</code> / <code>MinDaysToExpiry</code>, dimensioned by
-deployment slug. <code>aws-check</code>'s <code>monitoring</code> section creates the alarm that reads
-it, with <code>TreatMissingData=breaching</code> — so this job going quiet is itself the
-alarm. One signal catches every cause of a stalled renewal at once: publisher
-down, challenge misrouted, credentials wrong, delegation record deleted.</p>
-<p>Three behaviours worth knowing:</p>
+<h2 id="two-deliberate-offsets">Two deliberate offsets<a class="headerlink" href="#two-deliberate-offsets" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong><code>failed</code> certificates still count.</strong> <code>_record_issue_failure</code> moves a
-  certificate to <code>failed</code> once its material is no longer valid, so filtering on
-  <code>active</code> alone would drop a certificate at the moment it expires — the
-  published minimum would jump to the next-soonest and CloudWatch would report
-  the alarm <em>recovered</em> while TLS is actually broken. <code>revoked</code> rows and rows
-  with no <code>not_after</code> are excluded.</li>
-<li><strong>Expired certificates publish a negative number</strong>, not a clamped zero. <code>-3</code> is
-  more diagnostic than <code>0</code>, and the alarm catches both. The consequence is that a
-  permanently-dead certificate row pins the deployment-wide minimum and the alarm
-  never clears — <strong>revoke or delete the row</strong>; do not retune the threshold.</li>
-<li><strong>No certificates publishes nothing at all.</strong> A deployment with none should
-  read as un-set-up (the alarm sits in INSUFFICIENT_DATA), not as healthy.</li>
+<li><strong>Redis indexes start at 1.</strong> Index 0 is what any project that has <em>not</em>
+  adopted this gets from <code>REDIS_DB_INDEX</code>'s default, so leaving it unallocated
+  means an adopted checkout can never collide with an unadopted one.</li>
+<li><strong>Ports start at 5600.</strong> Clear of every hand-set port in the fleet today
+  (5555, 7575, 9009, 9109, 9999), so adoption is not a flag day.</li>
 </ul>
-<p>The job needs <code>cloudwatch:PutMetricData</code> on that namespace, granted to the
-identity the <strong>job runners</strong> use — not to the operator running <code>aws-check</code>.
-Without credentials the job <strong>fails loudly</strong> (<code>NoCredentialsError</code> out of
-<code>put_metric_data</code>) and shows up in the jobs surface; it is not a silent no-op.
-That is deliberate — a publisher that quietly did nothing would leave the expiry
-alarm looking merely un-set-up.</p>
-<h2 id="staging-is-the-default">Staging is the default<a class="headerlink" href="#staging-is-the-default" title="Permanent link">&para;</a></h2>
-<p><code>DNSMAN_ACME_DIRECTORY_URL</code> defaults to the Let's Encrypt <strong>staging</strong> directory.
-An unconfigured deployment that starts issuing therefore cannot consume
-production rate limits; going live is a deliberate change.</p>
-<p>Let's Encrypt caps new orders per account per window, so bulk issuance should
-run through the job queue with backoff rather than a burst loop.</p>
-<h2 id="fallback">Fallback<a class="headerlink" href="#fallback" title="Permanent link">&para;</a></h2>
-<p>HTTP-01 on the serving box remains the documented fallback for zones whose DNS
-we cannot write at all. It is not implemented here — DNS-01 covers every domain
-dnsman manages, by definition.</p>
+<p>Both only matter during the migration, and both cost nothing to keep.</p>
+<h2 id="the-redis-ceiling">The Redis ceiling<a class="headerlink" href="#the-redis-ceiling" title="Permanent link">&para;</a></h2>
+<p>Redis ships with <strong>16 databases</strong>, and index 0 is reserved above — so 15
+concurrent checkouts, across every mojo repo on the machine. The allocator asks
+the server (<code>CONFIG GET databases</code>) rather than assuming, and <strong>fails with an
+actionable error</strong> when it runs out rather than quietly reusing an index.</p>
+<p>To raise it, in your local <code>redis.conf</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>databases 64
+</code></pre></div>
+<h2 id="fail-closed-behaviour">Fail-closed behaviour<a class="headerlink" href="#fail-closed-behaviour" title="Permanent link">&para;</a></h2>
+<p>Two places refuse rather than guess, both because the failure mode is
+destroying another run:</p>
+<ul>
+<li><strong><code>create_testproject</code> aborts if allocation fails.</strong> Falling back to a shared
+  default name is exactly how one checkout <code>DROP</code>s the database another
+  checkout is mid-run against.</li>
+<li><strong>It refuses to drop a database with active connections</strong>, checked against
+  <code>pg_stat_activity</code>. The name is derived per checkout so this should never
+  fire; it exists because if derivation ever breaks, the consequence is another
+  session's data, and that deserves a guard rather than trust.</li>
+</ul>
+<h2 id="running-two-worktrees">Running two worktrees<a class="headerlink" href="#running-two-worktrees" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>git<span class="w"> </span>worktree<span class="w"> </span>add<span class="w"> </span>../django-mojo-feature<span class="w"> </span>-b<span class="w"> </span>feature
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nb">cd</span><span class="w"> </span>../django-mojo-feature
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>uv<span class="w"> </span>sync
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>./bin/create_testproject<span class="w">      </span><span class="c1"># allocates its own db / index / port</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>./bin/run_tests<span class="w"> </span>--agent<span class="w"> </span>-t<span class="w"> </span>test_edge
+</code></pre></div>
+<p>Each tree needs its own <code>.venv</code> and its own <code>testproject/</code> — both gitignored,
+both regenerated. That is the cost: a <code>uv sync</code> and a <code>create_testproject</code> per
+tree.</p>
+<p><strong>What worktrees do not isolate:</strong> migration numbering. django-mojo ships its
+own migrations, so two trees adding a model to the same app both generate
+<code>0002_*.py</code>. They do not clash on disk — they clash at merge, and Django needs
+a manual merge migration. Worth knowing before doing model work in two trees at
+once.</p>
 
 
 

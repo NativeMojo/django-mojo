@@ -3799,6 +3799,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#operator-entry-point" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator entry point
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#downstream-tenant-lifecycle" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4079,6 +4090,18 @@ HTTP responses) <code>http_status</code>. Configuration/request validation is no
 retriable; transport ambiguity is retriable; only 502/503/504 HTTP responses
 are marked retriable. Remote response bodies, configured URLs/API keys, and TXT
 values are never copied into exception text.</p>
+<h2 id="operator-entry-point">Operator entry point<a class="headerlink" href="#operator-entry-point" title="Permanent link">&para;</a></h2>
+<p>The REST contract above is the programmatic surface. For bootstrapping a domain
+by hand there is a CLI wrapper over the same services:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>python<span class="w"> </span>manage.py<span class="w"> </span>aws-check<span class="w"> </span>--apply<span class="w"> </span>--section<span class="w"> </span>dns<span class="w"> </span>--dns-domain<span class="w"> </span>customer.example<span class="w"> </span>--dns-group<span class="w"> </span><span class="m">7</span>
+</code></pre></div>
+<p>It allocates the delegation, prints the <code>_acme-challenge</code> CNAME to hand to the
+domain owner, <strong>verifies that CNAME resolves before requesting anything</strong>, and
+then queues issuance. The verification step is load-bearing: Let's Encrypt caps
+failed validations at 5 per account per hostname per hour, so issuing against an
+unpropagated record blocks retries for an hour during the exact activity —
+bootstrapping — where someone is iterating. See
+<a href="../../aws/aws_check/#the-dns-section">../aws/aws_check.md</a>.</p>
 <h2 id="downstream-tenant-lifecycle">Downstream tenant lifecycle<a class="headerlink" href="#downstream-tenant-lifecycle" title="Permanent link">&para;</a></h2>
 <p><code>AcmeDelegation</code> is the consuming deployment's durable tenant-side tombstone.
 It commits a UUID <code>client_ref</code>, tenant/user snapshots and normalized name before
@@ -4103,18 +4126,18 @@ idempotency key, so duplicate requests/jobs consume one order. A failed renewal
 keeps still-valid KMS-held material active and advances <code>renew_after</code> with a
 bounded retry instead of permanently failing the serving certificate.</p>
 <p>The tenant REST payload is deliberately narrower than either tombstone model:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">9</span><span class="p">,</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-06T12:00:00+00:00&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">&quot;modified&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-06T12:03:00+00:00&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="nt">&quot;domain_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;customer.example&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;_acme-challenge.customer.example&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="nt">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;4a0f0123456789abcdef0123456789ab.acme-hub.example.net&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">  </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;verified&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">  </span><span class="nt">&quot;verified_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-06T12:03:00+00:00&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span><span class="nt">&quot;last_error_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
-<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">9</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-06T12:00:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;modified&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-06T12:03:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span><span class="nt">&quot;domain_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;customer.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;_acme-challenge.customer.example&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="nt">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;4a0f0123456789abcdef0123456789ab.acme-hub.example.net&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;verified&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">  </span><span class="nt">&quot;verified_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-08-06T12:03:00+00:00&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">  </span><span class="nt">&quot;last_error_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="p">}</span>
 </code></pre></div>
 <p>For an external pending name, <code>domain</code> and <code>verified_at</code> are null. Initiate and
 verify require <code>manage_dns</code> (or <code>security</code>); detail/list require <code>view_dns</code>,

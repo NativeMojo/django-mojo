@@ -3945,8 +3945,10 @@ on top. What lives here is the part every product would otherwise rebuild.</p>
 <a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    delegation.py  downstream tenant allocation, proof, tombstone + Domain binding
 <a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    email.py       provider-dispatched SES record application
 <a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>  rest/          thin handlers — this is where permissions are enforced
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>  cronjobs.py    thin dispatchers — poll registrations / ACME leases (5m), renew certs (6h)
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>  asyncjobs.py   issue/renew certificate job handlers
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>  cronjobs.py    thin dispatchers — poll registrations / ACME leases (5m),
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>                 publish certificate-expiry metric (hourly), renew certs (6h)
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>  asyncjobs.py   issue/renew certificate job handlers, publish the
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>                 certificate-expiry CloudWatch metric
 </code></pre></div>
 <p>The helpers are model-free and Django-free on purpose: <code>ses_domain.py</code> can call
 <code>route53.py</code> without importing this app, and both are unit-testable with no

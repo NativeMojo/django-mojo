@@ -5720,6 +5720,26 @@
   the static <code>BASE_URL</code> hostname.</li>
 <li><code>AWS_CHECK_CRON_MAX_AGE</code> — <strong>file-only</strong>, default <code>180</code> seconds. Maximum age
   of a completed cron-dispatch heartbeat accepted by <code>aws-check</code>.</li>
+<li><code>AWS_CHECK_CPU_CREDIT_FLOOR</code> — <strong>file-only</strong>, int, default <code>20</code>.
+  <code>CPUCreditBalance</code> at or below this alarms. Created only on burstable
+  families (<code>t2</code>/<code>t3</code>/<code>t3a</code>/<code>t4g</code>, <code>db.t*</code>), which are the only ones that
+  publish the metric.</li>
+<li><code>AWS_CHECK_RDS_FREEABLE_MEMORY_FLOOR</code> — <strong>file-only</strong>, int bytes, default
+  <code>268435456</code> (256 MiB). RDS <code>FreeableMemory</code> at or below this alarms.</li>
+<li><code>AWS_CHECK_RDS_MAX_CONNECTIONS</code> — <strong>file-only</strong>, int, default <code>500</code>. RDS
+  <code>DatabaseConnections</code> at or above this alarms. <strong>The default is deliberately
+  forgiving.</strong> RDS derives <code>max_connections</code> from instance memory — roughly 112
+  on <code>db.t3.micro</code>, ~225 on <code>db.t3.small</code>, ~405 on <code>db.t3.medium</code> — so no single
+  default is correct everywhere. Erring high means it never fires spuriously,
+  which matters because a chronically-firing alarm gets muted and muting the
+  operations topic silences every other alarm with it. The cost: on a class whose
+  ceiling is below 500 the alarm cannot fire at all. Tune it to ~80% of your
+  instance class's <code>max_connections</code>.</li>
+<li><code>AWS_CHECK_CERT_EXPIRY_DAYS</code> — <strong>file-only</strong>, int, default <code>14</code>. The
+  deployment-wide certificate-expiry alarm fires when the soonest certificate is
+  this many days from expiring. That alarm uses <code>TreatMissingData=breaching</code>, so
+  a publisher that stops running alarms too; see
+  <a href="../../aws/aws_check/">../aws/aws_check.md</a>.</li>
 <li><code>AWS_VERSION_DRIFT_ENABLED</code> — <strong>file-only</strong> (<code>settings.get_static</code>), bool,
   default <code>False</code>. Arms the daily managed-service version drift scan
   (<code>mojo.apps.aws.cronjobs.check_version_drift</code>). Read inside the cron
