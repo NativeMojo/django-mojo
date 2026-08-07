@@ -172,10 +172,17 @@ def test_prune(opts):
         os.rmdir(dead)
 
         gone = testenv.prune()
-        assert os.path.realpath(dead) in gone, \
-            f"a deleted checkout was not pruned: {gone}"
+        paths = [record["path"] for record in gone]
+        assert os.path.realpath(dead) in paths, \
+            f"a deleted checkout was not pruned: {paths}"
         assert os.path.realpath(alive) in testenv.allocations(), \
             "prune removed a live checkout"
+
+        # The slot comes back but the Postgres database does not, so prune has
+        # to hand back enough to clean it up. Without the name, orphaned
+        # databases accumulate with nothing ever pointing at them.
+        assert all(record.get("db_name") for record in gone), \
+            f"prune did not report the orphaned database name: {gone}"
     finally:
         _restore(patches)
 

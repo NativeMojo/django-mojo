@@ -57,6 +57,20 @@ uv run python testit/testenv.py release <path>   # give one slot back
 **Prune after deleting a worktree.** Redis indexes are the scarce resource and a
 removed checkout keeps holding one.
 
+`prune` reclaims the slot but deliberately does **not** drop the Postgres
+database — removing one because a directory is currently missing would destroy
+data whenever a volume is unmounted or a checkout is moved rather than deleted.
+It prints the orphaned name instead:
+
+```
+pruned 1
+  /Users/you/Projects/django-mojo-feature
+
+These databases are now orphaned. Drop them when you are sure the checkout is
+really gone:
+  dropdb mojo_test_85e2ef50
+```
+
 > Invoke it by **file path**, not `python -m testit.testenv`. Importing the
 > package runs `testit/__init__.py` → `mojo.helpers.logit` → `paths`, which
 > needs a configured project — and `create_testproject` runs before the project

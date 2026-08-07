@@ -280,13 +280,24 @@ def prune():
     """Drop allocations whose checkout no longer exists on disk.
 
     Deleting a worktree leaves its slot held, and Redis indexes are the scarce
-    resource — 16 of them by default. Returns the paths reclaimed.
+    resource — 16 of them by default. Returns the reclaimed records, each
+    carrying the `path` it was allocated to.
+
+    **The Postgres database is deliberately NOT dropped.** Removing a database
+    because a directory is currently missing would destroy data whenever a
+    volume is unmounted or a checkout is moved rather than deleted. The caller
+    is told the name instead — see the CLI, which prints a ready-to-run
+    `dropdb`. Silence here is how orphaned databases accumulate forever.
     """
     with _locked_registry() as handle:
         data = _read(handle)
-        gone = [p for p in data["allocations"] if not os.path.isdir(p)]
-        for path in gone:
-            del data["allocations"][path]
+        gone = []
+        for path in list(data["allocations"]):
+            if os.path.isdir(path):
+                continue
+            record = dict(data["allocations"].pop(path))
+            record["path"] = path
+            gone.append(record)
         if gone:
             _write(handle, data)
         return gone
@@ -339,8 +350,15 @@ def _main(argv=None):
     if opts.command == "prune":
         gone = prune()
         print(f"pruned {len(gone)}")
-        for path in gone:
-            print(f"  {path}")
+        for record in gone:
+            print(f"  {record['path']}")
+        if gone:
+            # The slot is back; the database is not. Name it, because nothing
+            # else ever will and they accumulate silently otherwise.
+            print("\nThese databases are now orphaned. Drop them when you are "
+                  "sure the checkout is really gone:")
+            for record in gone:
+                print(f"  dropdb {record['db_name']}")
         return 0
 
     for path, record in sorted(allocations().items()):
