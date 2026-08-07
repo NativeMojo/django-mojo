@@ -6,8 +6,11 @@ LLM-powered admin assistant that lets administrators query and manage the system
 
 ```
 User sends message via REST
-  → run_assistant(user, message, conversation_id)
-    → Load/create Conversation, store user Message
+  → run_assistant(user, message, conversation_id, attachments=None)
+    → Run enabled/API-key preflight and owner-scoped conversation lookup
+    → Resolve the optional attachment batch before any writes
+    → Atomically create the optional Conversation and user Message
+    → Commit before tool discovery or the external LLM call
     → Build tool list (two-tier):
         New conversation  → core tools only
         Resumed with active_domains → core + those domain tools
@@ -102,6 +105,65 @@ The system prompt instructs the LLM on which tool to use for data operations:
 | Never | Return raw CSV inline — all CSV exports use `export_data` |
 
 `export_data` writes data directly to file storage and returns a download URL. The LLM presents this URL in a `file` structured block so the frontend can render a download card. The file is owned by the requesting user/group and expires after `FILEMAN_EXPORT_EXPIRES_DAYS` days.
+
+## REST user attachment references
+
+`POST /api/assistant` accepts an optional `attachments` array containing one
+to five unique, exact positive integer `fileman.File` ids. This is a REST-only,
+reference-only contract. The existing WebSocket message shape is unchanged,
+and upload bytes still travel through fileman.
+
+Validation runs inside `run_assistant()` after the enabled/provider-key
+preflight and owner-scoped conversation lookup, but before creating either a
+Conversation or Message. The service resolves the batch together and rejects
+it all-or-nothing unless every File:
+
+- is visible to the caller under File `VIEW_PERMS`, active, and completed;
+- uses an active `FileManager`;
+- has the same `group_id` as its manager and the conversation; and
+- for a grouped conversation, belongs to an effectively active group the
+  caller can currently access through membership or a global Group VIEW grant.
+
+A new REST conversation remains groupless for compatibility, so both its Files
+and their managers must also be groupless. Missing, unauthorized, inactive,
+incomplete, manager-inactive, and scope-mismatched ids return the same bounded
+400 error. No partial attachment or conversation state is written.
+
+The user Message stores exactly one role-sensitive block:
+
+```json
+{
+  "type": "attachment",
+  "files": [
+    {
+      "id": 812,
+      "filename": "evidence.pdf",
+      "content_type": "application/pdf",
+      "category": "document"
+    }
+  ]
+}
+```
+
+This reuses File's `reference` graph. The conversation prompt receives the same
+four-field snapshot as JSON after a fixed instruction that every field is
+untrusted metadata, never instructions or tool requests. File contents are not
+read or automatically ingested. URLs, transfer tokens, provider fields, raw
+bytes, storage paths, and arbitrary File metadata are neither stored in the
+Message block nor added to the prompt. This feature does not promise that the
+existing File tools are a safe dereference path; their authorization hardening
+is separate work.
+
+The snapshot records authorization-time metadata. It remains in conversation
+history and may enter the configured LLM provider's prompt cache; later File or
+group deactivation cannot retract a provider prefix already sent. Historical
+malformed user attachment blocks are projected to the safe shape or ignored.
+An LLM response still cannot author `type: "attachment"` because it is absent
+from `VALID_BLOCK_TYPES`.
+
+User `attachment` blocks are distinct from assistant-generated `type: "file"`
+blocks. Generated file blocks remain downloadable response capabilities with
+their existing URL contract and parser behavior.
 
 ## Enabling
 

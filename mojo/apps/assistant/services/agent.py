@@ -1,7 +1,7 @@
 """
 Core LLM agent for the admin assistant.
 
-Entry point: ``run_assistant(user, message, conversation_id=None)``
+Entry point: ``run_assistant(user, message, conversation_id=None, attachments=None)``
 
 Flow:
     1. Check LLM_ADMIN_ENABLED
@@ -1095,6 +1095,7 @@ def _summarize_tool_result(result):
 def _build_conversation_messages(conversation, max_history):
     """Load previous messages from the conversation into Claude message format."""
     from mojo.apps.assistant.models import Message
+    from mojo.apps.assistant.services.attachments import append_attachment_prompt
 
     messages = []
     recent = Message.objects.filter(
@@ -1106,7 +1107,10 @@ def _build_conversation_messages(conversation, max_history):
 
     for msg in recent:
         if msg.role == "user":
-            messages.append({"role": "user", "content": msg.content})
+            messages.append({
+                "role": "user",
+                "content": append_attachment_prompt(msg.content, msg.blocks),
+            })
         elif msg.role == "assistant":
             content = []
             if msg.content:
@@ -1123,7 +1127,9 @@ def _build_conversation_messages(conversation, max_history):
     return messages
 
 
-def run_assistant(user, message, conversation_id=None, on_event=None, request=None):
+def run_assistant(
+        user, message, conversation_id=None, on_event=None, request=None,
+        attachments=None, attachments_supplied=False):
     """
     Main entry point for the admin assistant.
 
@@ -1137,12 +1143,20 @@ def run_assistant(user, message, conversation_id=None, on_event=None, request=No
         request:         Optional originating Django request, used to pass
                          HTTP context (ip, user_agent, path, method) into
                          tool handlers that opt into ``request_meta``.
+        attachments:     Optional REST-only list of completed File ids.
+        attachments_supplied: Whether the REST body contained ``attachments``;
+                         distinguishes an omitted field from explicit null.
 
     Returns:
         dict with keys: response, conversation_id, tool_calls_made, error
     """
     from mojo.apps.assistant.models import Conversation, Message
     from mojo.apps.assistant import get_registry
+    from mojo.apps.assistant.services.attachments import (
+        INVALID_ATTACHMENTS, InvalidAttachments, attachment_block,
+        resolve_assistant_attachments,
+    )
+    from django.db import transaction
 
     # Check feature flag
     if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
@@ -1156,20 +1170,31 @@ def run_assistant(user, message, conversation_id=None, on_event=None, request=No
     conversation = None
     if conversation_id:
         try:
-            conversation = Conversation.objects.get(pk=conversation_id, user=user)
+            conversation = Conversation.objects.select_related("group").get(
+                pk=conversation_id, user=user)
         except Conversation.DoesNotExist:
             return {"error": "Conversation not found", "status_code": 404}
 
-    if not conversation:
-        title = message[:100] if message else "New conversation"
-        conversation = Conversation.objects.create(user=user, title=title)
+    references = None
+    if attachments_supplied or attachments is not None:
+        try:
+            references = resolve_assistant_attachments(
+                user, request, attachments, conversation)
+        except InvalidAttachments:
+            return {"error": INVALID_ATTACHMENTS, "status_code": 400}
 
-    # Store user message
-    Message.objects.create(
-        conversation=conversation,
-        role="user",
-        content=message,
-    )
+    # Keep the database transaction short. It commits the optional conversation
+    # and user message before tool discovery or the external LLM call begins.
+    with transaction.atomic():
+        if not conversation:
+            title = message[:100] if message else "New conversation"
+            conversation = Conversation.objects.create(user=user, title=title)
+        Message.objects.create(
+            conversation=conversation,
+            role="user",
+            content=message,
+            blocks=[attachment_block(references)] if references else None,
+        )
 
     # Build messages from history
     max_history = settings.get("LLM_ADMIN_MAX_HISTORY", 50, kind="int")

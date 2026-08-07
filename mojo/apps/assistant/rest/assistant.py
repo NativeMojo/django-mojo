@@ -28,8 +28,16 @@ def on_assistant_message(request):
 
     message = request.DATA.message
     conversation_id = request.DATA.get("conversation_id")
+    attachments_supplied = "attachments" in request.DATA
 
-    result = run_assistant(request.user, message, conversation_id=conversation_id, request=request)
+    result = run_assistant(
+        request.user,
+        message,
+        conversation_id=conversation_id,
+        request=request,
+        attachments=request.DATA.get("attachments"),
+        attachments_supplied=attachments_supplied,
+    )
 
     if "error" in result:
         status_code = result.get("status_code", 400)
@@ -134,5 +142,4 @@ def on_conversation(request, pk=None):
 @md.uses_model_security(Skill)
 def on_skill(request, pk=None):
     return Skill.on_rest_request(request, pk)
-
 

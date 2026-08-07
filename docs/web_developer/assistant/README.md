@@ -28,6 +28,12 @@ Send a message to the assistant and receive an LLM-generated response.
 |---|---|---|---|
 | `message` | string | Yes | Natural language query |
 | `conversation_id` | integer | No | Continue an existing conversation |
+| `attachments` | array of integers | No | 1–5 unique completed File ids; REST only |
+
+Omitting `attachments` preserves the existing text-only behavior. If the field
+is present it must be an actual JSON array containing one to five unique,
+positive integer ids. `null`, booleans, numeric strings, objects, duplicates,
+empty arrays, and arrays longer than five return HTTP 400.
 
 **Response** (success):
 
@@ -56,6 +62,68 @@ Send a message to the assistant and receive an LLM-generated response.
 ```
 
 The `blocks` array is only present when the LLM includes structured data. See [Structured Data Blocks](#structured-data-blocks) for details.
+
+#### User attachment contract
+
+Attachments are capability-free metadata references, not uploaded bytes. Upload
+and complete each File through fileman first, then send its id:
+
+```json
+{
+  "message": "Use these records as context for my question.",
+  "conversation_id": 42,
+  "attachments": [812, 813]
+}
+```
+
+The whole batch is accepted or rejected before any Conversation or Message is
+created. Every File must be visible to the caller, active, completed, and backed
+by an active manager. File, manager, and conversation `group_id` values must
+match exactly. A new REST conversation is groupless, so it accepts only
+groupless Files backed by groupless managers. A grouped conversation also
+requires an effectively active group the caller can currently access.
+
+Missing, unauthorized, inactive, incomplete, manager-inactive, and
+scope-mismatched ids all return the same response without identifying which id
+failed:
+
+```json
+{
+  "status": false,
+  "error": "Invalid assistant attachments",
+  "conversation_id": null
+}
+```
+
+Conversation detail returns the attachment only on the user Message, using this
+exact safe shape:
+
+```json
+{
+  "type": "attachment",
+  "files": [
+    {
+      "id": 812,
+      "filename": "evidence.pdf",
+      "content_type": "application/pdf",
+      "category": "document"
+    }
+  ]
+}
+```
+
+The server sends that JSON metadata snapshot to the configured LLM provider
+with a fixed instruction to treat every field as untrusted data. It does not
+automatically read or ingest file contents, and it sends no URL, token, storage
+path, provider field, arbitrary metadata, or raw bytes. Do not assume the
+existing Assistant File tools can safely dereference an attachment id. The
+snapshot remains in history and may be retained in the provider's prompt cache;
+later deactivation cannot retract a prefix already sent.
+
+This request field is REST-only; WebSocket request messages are unchanged.
+User `type: "attachment"` history blocks are also different from
+assistant-generated `type: "file"` response blocks: generated file blocks are
+download cards and retain their existing URL-bearing response schema.
 
 **Response** (feature disabled — HTTP 404):
 
@@ -277,7 +345,7 @@ Get a conversation. Use `?graph=detail` to include the full message history. Wit
 | `role` | `user`, `assistant`, `tool_use`, or `tool_result` |
 | `content` | Text content. For assistant messages, block fences are already stripped. |
 | `tool_calls` | Raw tool_use/tool_result data. `null` for non-tool messages. |
-| `blocks` | Pre-parsed structured data blocks (table/chart/stat/file/context/etc.). `null` when not present. Stored at write time — never re-parsed on read. |
+| `blocks` | Role-sensitive stored blocks. User messages may expose one safe `attachment` reference block; assistant messages expose generated table/chart/stat/file/context/etc. blocks. `null` when absent. |
 | `usage` | Summed token counts across the agent loop turns for this user-message exchange: `{cache_read_input_tokens, cache_creation_input_tokens, input_tokens, output_tokens}`. Present only on the final assistant message of each exchange; `null` otherwise. Useful for diagnostic displays — note `input_tokens` is the post-cache-breakpoint count, not total input. |
 | `created` | ISO timestamp |
 

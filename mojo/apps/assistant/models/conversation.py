@@ -67,9 +67,15 @@ class Message(models.Model, MojoModel):
         VIEW_PERMS = ["view_admin"]
         GRAPHS = {
             "default": {
-                "fields": ["id", "role", "content", "tool_calls", "blocks", "duration_ms", "usage", "created"],
+                "fields": ["id", "role", "content", "tool_calls", "duration_ms", "usage", "created"],
+                "extra": [("get_rest_blocks", "blocks")],
             },
         }
+
+    def get_rest_blocks(self):
+        from mojo.apps.assistant.services.attachments import rest_message_blocks
+
+        return rest_message_blocks(self.role, self.blocks)
 
     def __str__(self):
         return f"Message {self.pk} ({self.role})"
