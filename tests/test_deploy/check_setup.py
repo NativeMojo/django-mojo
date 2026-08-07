@@ -265,6 +265,45 @@ def test_safe_reports_throttling_as_blind(opts):
 # ---------------------------------------------------------------------------
 
 @th.django_unit_test()
+def test_an_empty_account_is_not_a_failure_by_default(opts):
+    """A dev account, a Lambda-only account, or one mid-setup legitimately has
+    no EC2. Failing those from framework code is how an audit tool teaches
+    everyone to ignore it."""
+    ec2 = mock.Mock()
+    ec2.describe_instances.return_value = {"Reservations": []}
+
+    code, report = _run(["--section", "ec2"], _FakeSession({"ec2": ec2}))
+
+    th.assert_eq(_statuses(report, "FAIL"), [],
+                 f"an account with no EC2 instances must not FAIL without "
+                 f"--topology; got {_statuses(report, 'FAIL')}")
+    th.assert_eq(code, 0,
+                 "an empty account must exit 0 by default — a non-zero gate "
+                 "here is a false alarm on every dev and Lambda-only account")
+    th.assert_true(_named(report, "no instances"),
+                   "the emptiness must still be reported, just not as a FAIL")
+
+
+@th.django_unit_test()
+def test_an_empty_account_does_fail_under_the_topology_opt_in(opts):
+    """The other half: someone who asked for the reference topology has said
+    they expect a web node and API nodes, so an empty account is a real gap."""
+    ec2 = mock.Mock()
+    ec2.describe_instances.return_value = {"Reservations": []}
+
+    code, report = _run(["--section", "ec2", "--topology", "reference"],
+                        _FakeSession({"ec2": ec2}))
+
+    th.assert_true(_named(report, "no instances"),
+                   f"--topology reference must FAIL an empty account; got "
+                   f"statuses {[f['status'] for f in report['findings']]}")
+    th.assert_eq(_named(report, "no instances")[0]["status"], "FAIL",
+                 "under the opt-in, an empty account is a topology violation")
+    th.assert_eq(code, 1,
+                 "a topology assertion that fails must gate")
+
+
+@th.django_unit_test()
 def test_topology_assertions_are_off_by_default(opts):
     ec2 = mock.Mock()
     ec2.describe_instances.return_value = {

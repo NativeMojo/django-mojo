@@ -331,7 +331,16 @@ def check_ec2(report, session, topology):
         instances.extend(reservation.get("Instances", []))
 
     if not instances:
-        report.fail("ec2", "no instances", "the account has no EC2 instances")
+        # "No EC2" is only a defect against the reference topology. A dev
+        # account, a Lambda-only account, or one mid-setup is legitimately
+        # empty, and failing those from framework code is how an audit tool
+        # teaches everyone to ignore it.
+        if topology:
+            report.fail("ec2", "no instances",
+                        "the reference topology expects a web node and at "
+                        "least one API node, and the account has neither")
+        else:
+            report.info("ec2", "no instances", "the account has no EC2 instances")
         return []
 
     running = [i for i in instances if i["State"]["Name"] == "running"]
