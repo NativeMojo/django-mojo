@@ -359,6 +359,39 @@ def test_multipart_and_partial_cleanup(opts):
                 "MIME mismatch must remove the partial storage object")
 
 
+@th.django_unit_test("upload contract: sniffed MIME may differ when both types satisfy policy")
+def test_sniffed_mime_policy_is_independent(opts):
+    from mojo.apps.fileman.models import File, FileManager
+
+    _login(opts, OWNER)
+    manager = FileManager.objects.get(pk=opts.owner_manager_id)
+    original_policy = manager.allowed_mime_types
+    manager.allowed_mime_types = ["text/*", "application/pdf"]
+    manager.save(update_fields=["allowed_mime_types", "modified"])
+    try:
+        payload = b"%PDF-1.4\n1 0 obj\n"
+        initiated = _initiate(
+            opts, filename="browser-declared.txt", file_size=len(payload),
+            idempotency_key="portal:multipart-sniffed-policy")
+        response = opts.client.post(
+            initiated.response.data.upload_url,
+            files={"file": ("browser-declared.txt", payload, "text/plain")},
+        )
+        assert_eq(response.status_code, 200,
+                  "an independently allowed sniffed MIME must not fail solely for differing from File.type")
+        completed = opts.client.post(
+            f"/api/fileman/file/{initiated.response.data.id}",
+            {"action": "mark_as_completed"},
+        )
+        assert_eq(completed.status_code, 200,
+                  f"completion must preserve independently policy-allowed MIME handling: {completed.response}")
+        assert_eq(File.objects.get(pk=initiated.response.data.id).upload_status, File.COMPLETED,
+                  "the policy-allowed payload must complete")
+    finally:
+        manager.allowed_mime_types = original_policy
+        manager.save(update_fields=["allowed_mime_types", "modified"])
+
+
 @th.django_unit_test("upload contract: raw PUT requires length and accepts declared zero bytes")
 def test_raw_put_length_and_zero(opts):
     _login(opts, OWNER)

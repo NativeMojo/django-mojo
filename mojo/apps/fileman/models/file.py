@@ -820,8 +820,11 @@ class File(models.Model, MojoModel):
             actual_type = backend.get_content_type(current.storage_file_path)
             if actual_type and current.file_size != 0:
                 actual_type = FileManager.normalize_upload_mime_type(actual_type)
-                if (actual_type != current.content_type
-                        or not current.file_manager.can_upload_mime_type(actual_type)):
+                # The declared type and the backend-observed type are each
+                # policy-gated independently.  They are not required to be
+                # identical: browser File.type follows the filename and the
+                # rendition pipeline deliberately sniffs mislabeled images.
+                if not current.file_manager.can_upload_mime_type(actual_type):
                     backend.delete(current.storage_file_path)
                     current.upload_status = self.FAILED
                     current.upload_token = ""

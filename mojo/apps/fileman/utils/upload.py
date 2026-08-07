@@ -121,8 +121,13 @@ def direct_upload(request, upload_token, file_data):
         if bounded.size:
             actual_type = file_obj.file_manager.normalize_upload_mime_type(
                 bounded.detected_content_type)
-            if (actual_type != file_obj.content_type
-                    or not file_obj.file_manager.can_upload_mime_type(actual_type)):
+            # Browsers derive File.type from the filename, so a valid payload
+            # can legitimately sniff differently (for example, a PNG named
+            # ``logo.svg``).  The declaration was already policy-checked at
+            # initiation and matched against the transfer header above; the
+            # sniffed type must independently satisfy the manager policy, but
+            # need not equal that browser-supplied declaration.
+            if not file_obj.file_manager.can_upload_mime_type(actual_type):
                 raise ValueError("Uploaded content type is not allowed")
         # Transfer and completion are deliberately separate. Keep the token and
         # UPLOADING state retryable until the documented completion action wins.
