@@ -130,4 +130,3 @@ escalate.
 - Creating live tracking items, workspecs, or `planning/` files — the born-done
   history item at close-out is the single exception, filed once, at the end,
   only for completed vibes.
-

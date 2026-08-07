@@ -3,13 +3,14 @@ name: maestro-auto
 description: >-
   Scope and build one or more maestro board items in one mostly-autonomous run:
   parallel sub-agent scoping, a cross-item coherence pass, ONE consolidated
-  approval gate, then sequential sub-agent builds verified by ONE closing test
-  run. Confirms the roster up front, then interrupts the user once for
-  approval instead of twice per item, and only for decisions that change the
-  shape of the work.
+  approval gate, then sub-agent builds — parallel across worktrees where the
+  repo isolates checkouts and the items are independent, sequential otherwise —
+  merged back and verified by ONE closing test run. Confirms the roster up
+  front, then interrupts the user once for approval instead of twice per item,
+  and only for decisions that change the shape of the work.
 user-invocable: true
 argument-hint: <item-ids, e.g. "431" or "431 432 438" (omit to pick from the board)>
-maestro-skill-version: 14
+maestro-skill-version: 15
 ---
 
 # Maestro Auto — Scope + Build, One Gate
@@ -94,7 +95,7 @@ bearer capabilities visible in the owning MCP transcript by design; never put
 them in domain data, logs, URLs, realtime, browser storage, messages, or
 sub-agent context.
 
-Renew by 20 minutes, immediately before and after long waits/commands, and
+Renew by 40 minutes, immediately before and after long waits/commands, and
 before accepting a sub-agent result. Keep waits short enough to heartbeat.
 Lost/expired/replaced ownership means report that the advisory signal is gone
 and do not pretend it remains held; it does not gate a claim or push. Check in
@@ -335,21 +336,35 @@ decision point, so complete and short:
 Roughly 20 lines for the whole batch, not per item. Then wait. Do not build until
 the user approves; on a partial approval, run that part and say what you dropped.
 
-## Phase 5 — Sequential Builds
+## Phase 5 — Builds
 
-**Build items one at a time, in the phase-3 order.** In a repo whose suite
+**Sequential is the default**, in the phase-3 order. In a repo whose suite
 targets a fixed port and a shared database, and whose work commits to one branch
 in one working tree, concurrent builds collide on the port, corrupt the database
-and interleave commits. Sequential is correctness, not a limitation to route
-around.
-Run builds concurrently only if you have verified the repo gives each agent an
-isolated checkout, test port **and** database — and say so.
+and interleave commits.
+
+**Build in parallel only when both hold**, and say which:
+
+1. **The repo isolates a checkout** — each worktree gets its own test database,
+   port and cache namespace. Verify it against the repo's own git/testing rules;
+   do not assume, and do not infer it from the presence of `git worktree`.
+2. **The items are independent on disk** — no shared files, no migrations to the
+   same app (two trees generate the same `000N_` and clash at merge), and
+   neither consumes what the other creates.
+
+Either one missing → sequential for those items. A batch commonly splits: three
+independent items in parallel, two more behind them in order. **State the
+partition and what forced every sequential edge** before starting.
+
+Cap concurrency at what the repo's isolation actually supports — checkout slots
+are usually a bounded machine-wide resource, and leaked ones count against it.
+Past ~3 at once, the merge is where you spend what you saved.
 
 **First, if the batch tier is `full`**, take the green baseline now: once, for the
 whole run, before the first claim. Below `full` there is no baseline (see
 "Verification").
 
-Then, for each item, in order:
+Then, for each item — concurrently within a parallel group, otherwise in order:
 
 1. **Claim it** yourself: `update_board_item(item, values={"stage":
    "building", "owner": [<the user's id from whoami()>]})`.
@@ -364,7 +379,10 @@ Then, for each item, in order:
    at a time with tests written alongside the change, commit per the repo's git
    conventions, update docs and changelog. Returns commits (hash + one line), the
    tests it wrote, deviations from the plan, anything left open. **It does not
-   touch the board and does not run the full suite** (see below).
+   touch the board and does not run the full suite** (see below). In a parallel
+   group, give each agent its own worktree and branch, set up the way the repo's
+   rules say — a bare `git worktree add` skips steps (dependency install,
+   gitignored config) that make tests work there.
 4. **Post the commit trail yourself**: `comment_on_item(item, ...)` with the
    commits and any deviation from the plan. Leave the item at `building` — built,
    not verified.
@@ -372,10 +390,20 @@ Then, for each item, in order:
    nothing staged from the next item. A build agent's report is a claim; the
    suite settles it, once, at the end.
 
+**After a parallel group, before anything else**: merge each branch back into the
+primary tree **one at a time**, resolving as you go, then remove every worktree
+and branch you created and reclaim any checkout slot the repo allocates. Only
+then continue. Nothing has tested the combined tree yet — that is what the
+closing run is for, and it cannot run until the branches are in.
+
 ## Verification — One Closing Run, Sized to the Batch
 
 The batch runs tests **twice at most**, often once — sized by the tiers phase 1
-returned and phase 3 amended. Runs never overlap in a repo that serializes tests.
+returned and phase 3 amended. The closing run happens in the **primary tree,
+after every branch has merged**: a green suite inside one worktree says that
+item works alone, which is not the claim being made. Runs never overlap in a
+repo that serializes tests; where worktrees isolate, a build agent may still run
+a focused target in its own tree without colliding.
 
 **The batch's tier is the highest tier any item in it carries.**
 
@@ -486,4 +514,3 @@ point at them.
   batch that has no `full` item in it
 - Skipping the challenge phase, the coherence pass, or the gate to "save time"
 - Leaving any item's stage stale when the run ends
-
