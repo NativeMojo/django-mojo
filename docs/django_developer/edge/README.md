@@ -293,11 +293,20 @@ allowing every name is the shadowing attack. Declare it.
 `tests/test_edge/` — validators, models and constraints, REST permissions,
 render injection, golden files, desired state, and the installer.
 
-`7_nginx_real.py` feeds the generated configuration to a **real** `nginx -t`
-under `--extra extended` (or `--full`). It **fails rather than skips** when
-nginx is absent: a renderer whose output nobody ever handed to nginx is one
-that will eventually emit invalid configuration. Install nginx on any host that
-runs the extended tier.
+**Nothing in the suite runs a real `nginx`, deliberately.** The test suite runs
+on developer laptops — macOS and Windows — and requiring an nginx install to get
+a green run is not a cost this repo imposes. The renderer's protection here is
+the checked-in golden files (`4_render_golden.py`) plus the injection and
+containment assertions (`3_render_injection.py`), which pin the exact bytes we
+emit.
+
+That leaves one thing genuinely uncovered: whether nginx *accepts* those bytes.
+A directive can be well-formed to us and meaningless to nginx, and no unit test
+can catch it. **That check belongs to a live environment** — a staging node
+running the real installer, where `nginx -t` runs against the real harness
+before any reload and a failed generation is kept out of service by design. If
+the renderer emits something invalid, the installer's own `nginx -t` gate is
+what stops it reaching production; validate there, not on a laptop.
 
 ## What this replaces
 
