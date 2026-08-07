@@ -293,20 +293,21 @@ allowing every name is the shadowing attack. Declare it.
 `tests/test_edge/` — validators, models and constraints, REST permissions,
 render injection, golden files, desired state, and the installer.
 
-**Nothing in the suite runs a real `nginx`, deliberately.** The test suite runs
-on developer laptops — macOS and Windows — and requiring an nginx install to get
-a green run is not a cost this repo imposes. The renderer's protection here is
-the checked-in golden files (`4_render_golden.py`) plus the injection and
-containment assertions (`3_render_injection.py`), which pin the exact bytes we
-emit.
+`7_nginx_real.py` feeds the generated configuration to a **real** `nginx -t`
+under `--extra extended` (or `--full`). It **skips** when nginx is absent.
 
-That leaves one thing genuinely uncovered: whether nginx *accepts* those bytes.
-A directive can be well-formed to us and meaningless to nginx, and no unit test
-can catch it. **That check belongs to a live environment** — a staging node
-running the real installer, where `nginx -t` runs against the real harness
-before any reload and a failed generation is kept out of service by design. If
-the renderer emits something invalid, the installer's own `nginx -t` gate is
-what stops it reaching production; validate there, not on a laptop.
+That skip is not optional. django-mojo's suite runs inside every project that
+uses the framework, so a test that fails on a missing binary turns all of them
+red on the next release — and nginx is not a dependency of this package. Any
+test here needing a binary we don't ship must skip, never fail.
+
+The renderer is still covered without it: the golden files
+(`4_render_golden.py`) pin the exact bytes emitted, and `3_render_injection.py`
+holds the injection and containment assertions. What only a real nginx can
+answer is whether it *accepts* those bytes — run the extended tier on a host
+with nginx, or rely on the installer's own `nginx -t` gate, which runs against
+the production harness before any reload and keeps a failed generation out of
+service.
 
 ## What this replaces
 
