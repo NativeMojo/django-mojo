@@ -828,8 +828,8 @@ For real-time chat UIs, the assistant supports a WebSocket interface alongside R
 
 | Message type | When to send | Key fields |
 |---|---|---|
-| `assistant_message` | User sends a chat message | `message` (string), `conversation_id` (int, optional) |
-| `assistant_action` | User clicks a button in an action block | `value` (string), `conversation_id` (int) |
+| `assistant_message` | User sends a chat message | `message` (string), `request_id` (canonical UUID, recommended), `conversation_id` (int, optional) |
+| `assistant_action` | User clicks a button in an action block | `value` (string), `request_id` (canonical UUID, recommended), `conversation_id` (int) |
 
 **`assistant_message`**:
 
@@ -837,6 +837,7 @@ For real-time chat UIs, the assistant supports a WebSocket interface alongside R
 ws.send(JSON.stringify({
     type: 'assistant_message',
     message: 'Show me failed jobs in the last hour',
+    request_id: crypto.randomUUID(),
     conversation_id: 42  // optional — omit to start a new conversation
 }));
 ```
@@ -847,11 +848,12 @@ ws.send(JSON.stringify({
 ws.send(JSON.stringify({
     type: 'assistant_action',
     value: 'confirm',         // the action's value field from the action block
+    request_id: crypto.randomUUID(),
     conversation_id: 42,
 }));
 ```
 
-The server converts `assistant_action` into a regular user message containing the chosen value and continues the conversation. No special server-side state is needed.
+The server converts `assistant_action` into a regular user message containing the chosen value and continues the conversation. No special server-side state is needed. `request_id` is optional for older clients, but new clients should send a fresh canonical UUID for every message or action. The server rejects malformed IDs before storing the message and echoes a valid ID on every event for that turn.
 
 ### Server-to-Client Events
 
@@ -859,13 +861,13 @@ The server publishes events to the user's WebSocket topic as the assistant proce
 
 | Event | When | Payload |
 |---|---|---|
-| `assistant_thinking` | Immediately after message received | `{conversation_id}` |
-| `assistant_text` | Intermediate prose from a turn that also calls tools (fires before the `assistant_tool_call` events for that same turn) | `{conversation_id, text, blocks}` |
-| `assistant_tool_call` | Each time a tool is called | `{conversation_id, tool, input}` |
-| `assistant_plan` | After the assistant creates a task plan | `{conversation_id, plan}` |
-| `assistant_plan_update` | After each plan step status changes | `{conversation_id, plan_id, step_id, status, summary}` |
-| `assistant_response` | Final LLM response (terminal event) | `{conversation_id, message_id, created, response, tool_calls_made, blocks}` |
-| `assistant_error` | On failure (terminal event) | `{conversation_id, error}` |
+| `assistant_thinking` | Immediately after message received | `{conversation_id, request_id}` |
+| `assistant_text` | Intermediate prose from a turn that also calls tools (fires before the `assistant_tool_call` events for that same turn) | `{conversation_id, request_id, text, blocks}` |
+| `assistant_tool_call` | Each time a tool is called | `{conversation_id, request_id, tool, input}` |
+| `assistant_plan` | After the assistant creates a task plan | `{conversation_id, request_id, plan}` |
+| `assistant_plan_update` | After each plan step status changes | `{conversation_id, request_id, plan_id, step_id, status, summary}` |
+| `assistant_response` | Final LLM response (terminal event) | `{conversation_id, request_id, message_id, created, response, tool_calls_made, blocks}` |
+| `assistant_error` | On failure (terminal event) | `{conversation_id, request_id, error}` |
 
 **`assistant_text` payload fields**:
 
@@ -926,12 +928,17 @@ Step statuses: `pending`, `in_progress`, `done`, `skipped`.
 ### Client Wiring Example
 
 ```javascript
-// Subscribe to assistant events
+// Correlate every callback to the turn that initiated it.
+const requestId = crypto.randomUUID();
+const isCurrentTurn = (data) => data.request_id === requestId;
+
 ws.on('assistant_thinking', (data) => {
+    if (!isCurrentTurn(data)) return;
     showThinkingIndicator(data.conversation_id);
 });
 
 ws.on('assistant_text', (data) => {
+    if (!isCurrentTurn(data)) return;
     // Intermediate prose from a turn that also calls tools.
     // Append a new assistant bubble; subsequent assistant_tool_call events
     // for this same turn will follow.
@@ -939,18 +946,22 @@ ws.on('assistant_text', (data) => {
 });
 
 ws.on('assistant_tool_call', (data) => {
+    if (!isCurrentTurn(data)) return;
     showToolCallStatus(data.tool, data.input);
 });
 
 ws.on('assistant_plan', (data) => {
+    if (!isCurrentTurn(data)) return;
     showPlanTracker(data.conversation_id, data.plan);
 });
 
 ws.on('assistant_plan_update', (data) => {
+    if (!isCurrentTurn(data)) return;
     updatePlanStep(data.plan_id, data.step_id, data.status, data.summary);
 });
 
 ws.on('assistant_response', (data) => {
+    if (!isCurrentTurn(data)) return;
     hideThinkingIndicator();
     appendAssistantMessage(data.conversation_id, data.response, {
         messageId: data.message_id,
@@ -962,6 +973,7 @@ ws.on('assistant_response', (data) => {
 });
 
 ws.on('assistant_error', (data) => {
+    if (!isCurrentTurn(data)) return;
     hideThinkingIndicator();
     showError(data.error);
 });
@@ -978,7 +990,7 @@ ws.on('assistant_error', (data) => {
    - `assistant_plan` / `assistant_plan_update` — when the LLM creates and progresses a task plan
 5. When done, `assistant_response` (or `assistant_error`) is published — this is the terminal event and is the signal to clear the thinking indicator and re-enable input
 
-All events arrive as `{"type": "assistant_*", ...}` directly on the WebSocket. There is no `{"type": "message", "data": ...}` wrapper.
+All events arrive as `{"type": "assistant_*", ...}` directly on the WebSocket. There is no `{"type": "message", "data": ...}` wrapper. When the request supplied `request_id`, only events with that exact ID belong to the turn; conversation ID alone is not sufficient when multiple turns can overlap.
 
 The REST endpoints (`GET /api/assistant/conversation`, etc.) continue to work for listing and retrieving conversation history.
 

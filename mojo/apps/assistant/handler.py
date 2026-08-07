@@ -22,8 +22,11 @@ Response types (server → client, via realtime publish):
 Reliability guarantees:
   - The user ALWAYS receives either assistant_response or assistant_error.
   - Every exception path publishes assistant_error back to the user.
+  - A valid client request_id is echoed on every event for that turn.
   - All stages are logged to assistant.log for debugging.
 """
+from uuid import UUID
+
 from mojo.helpers import logit
 
 logger = logit.get_logger("assistant", "assistant.log")
@@ -34,7 +37,30 @@ ASSISTANT_MESSAGE_TYPES = {
 }
 
 
-def _send_ws_event(user_id, event_type, conversation_id, data=None):
+def _request_id_from(data):
+    """Return a canonical UUID request_id, or None when it was omitted."""
+    request_id = data.get("request_id")
+    if request_id is None:
+        return None
+    if not isinstance(request_id, str):
+        raise ValueError("request_id must be a canonical UUID string")
+    try:
+        canonical = str(UUID(request_id))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise ValueError("request_id must be a canonical UUID string") from exc
+    if request_id != canonical:
+        raise ValueError("request_id must be a canonical UUID string")
+    return request_id
+
+
+def _response_with_request_id(response, request_id):
+    """Attach the validated request ID to a direct handler response."""
+    if request_id is not None:
+        response["request_id"] = request_id
+    return response
+
+
+def _send_ws_event(user_id, event_type, conversation_id, data=None, request_id=None):
     """
     Publish a WS event to the user. Never raises — logs failures instead.
     This is the single point through which all WS messages to the client flow.
@@ -46,12 +72,13 @@ def _send_ws_event(user_id, event_type, conversation_id, data=None):
     as the immediate handler return (assistant_thinking).
     """
     from mojo.apps.realtime.manager import send_event_to_user
-    event = {
+    event = dict(data or {})
+    event.update({
         "type": f"assistant_{event_type}",
         "conversation_id": conversation_id,
-    }
-    if data:
-        event.update(data)
+    })
+    if request_id is not None:
+        event["request_id"] = request_id
     try:
         send_event_to_user("user", user_id, event)
     except Exception:
@@ -63,24 +90,35 @@ def handle_assistant_message(user, data):
     """
     Main entry point called from User.on_realtime_message.
 
-    Validates the request, stores the user message, publishes a
-    background job, and returns an immediate ack.
+    Validates the request, stores the user message, starts a background
+    thread, and returns an immediate ack.
     """
+    try:
+        request_id = _request_id_from(data)
+    except ValueError as exc:
+        return {"type": "assistant_error", "error": str(exc)}
+
     message_type = data.get("type") or data.get("action")
 
     if message_type == "assistant_action":
         # Action block response — convert to a regular message with the chosen value
         action_value = (data.get("value") or "").strip()
         if not action_value:
-            return {"type": "assistant_error", "error": "Action value is required"}
+            return _response_with_request_id(
+                {"type": "assistant_error", "error": "Action value is required"},
+                request_id,
+            )
         if len(action_value) > 200:
-            return {"type": "assistant_error", "error": "Action value too long"}
+            return _response_with_request_id(
+                {"type": "assistant_error", "error": "Action value too long"},
+                request_id,
+            )
         data["message"] = action_value
         message_type = "assistant_message"
 
     if message_type == "assistant_message":
         try:
-            return _handle_message(user, data)
+            return _handle_message(user, data, request_id=request_id)
         except Exception:
             logger.exception("assistant handler crashed for user %s", user.pk)
             try:
@@ -96,12 +134,18 @@ def handle_assistant_message(user, data):
                 )
             except Exception:
                 pass
-            return {"type": "assistant_error", "error": "Failed to process message. Please try again."}
+            return _response_with_request_id(
+                {"type": "assistant_error", "error": "Failed to process message. Please try again."},
+                request_id,
+            )
 
-    return {"type": "assistant_error", "error": f"Unknown assistant message type: {message_type}"}
+    return _response_with_request_id(
+        {"type": "assistant_error", "error": f"Unknown assistant message type: {message_type}"},
+        request_id,
+    )
 
 
-def _handle_message(user, data):
+def _handle_message(user, data, request_id=None):
     """Handle a new assistant message — validate, enqueue, ack."""
     from mojo.helpers.settings import settings
     from mojo.apps.assistant.models import Conversation, Message
@@ -109,7 +153,10 @@ def _handle_message(user, data):
     # Check feature flag
     if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
         logger.info("assistant: feature disabled, user %s", user.pk)
-        return {"type": "assistant_error", "error": "Assistant is not enabled. Set LLM_ADMIN_ENABLED=True in settings."}
+        return _response_with_request_id(
+            {"type": "assistant_error", "error": "Assistant is not enabled. Set LLM_ADMIN_ENABLED=True in settings."},
+            request_id,
+        )
 
     # Check permission
     if not user.has_permission("view_admin"):
@@ -127,11 +174,17 @@ def _handle_message(user, data):
             )
         except Exception:
             pass
-        return {"type": "assistant_error", "error": "Permission denied. You need 'view_admin' permission."}
+        return _response_with_request_id(
+            {"type": "assistant_error", "error": "Permission denied. You need 'view_admin' permission."},
+            request_id,
+        )
 
     message = (data.get("message") or "").strip()
     if not message:
-        return {"type": "assistant_error", "error": "Message is required"}
+        return _response_with_request_id(
+            {"type": "assistant_error", "error": "Message is required"},
+            request_id,
+        )
 
     conversation_id = data.get("conversation_id")
 
@@ -142,7 +195,10 @@ def _handle_message(user, data):
             pk=conversation_id, user=user
         ).first()
         if not conversation:
-            return {"type": "assistant_error", "error": "Conversation not found"}
+            return _response_with_request_id(
+                {"type": "assistant_error", "error": "Conversation not found"},
+                request_id,
+            )
 
     if not conversation:
         title = message[:100]
@@ -173,11 +229,11 @@ def _handle_message(user, data):
     from mojo.helpers import llm
     if not llm.get_api_key():
         logger.error("assistant: no API key configured")
-        return {
+        return _response_with_request_id({
             "type": "assistant_error",
             "conversation_id": conversation.pk,
             "error": "LLM API key is not configured. Set LLM_ADMIN_API_KEY or LLM_HANDLER_API_KEY.",
-        }
+        }, request_id)
 
     # Run the agent in a background thread — no job engine dependency.
     # The handler returns assistant_thinking immediately, and the thread
@@ -185,24 +241,24 @@ def _handle_message(user, data):
     import threading
     thread = threading.Thread(
         target=_run_agent_thread,
-        args=(user.pk, conversation.pk, message),
+        args=(user.pk, conversation.pk, message, request_id),
         daemon=True,
     )
     thread.start()
     logger.info("assistant: thread started for user %s, conv %s",
                 user.pk, conversation.pk)
 
-    return {
+    return _response_with_request_id({
         "type": "assistant_thinking",
         "conversation_id": conversation.pk,
-    }
+    }, request_id)
 
 
 # ---------------------------------------------------------------------------
 # Background thread — runs the LLM agent and publishes WS events
 # ---------------------------------------------------------------------------
 
-def _run_agent_thread(user_id, conversation_id, message):
+def _run_agent_thread(user_id, conversation_id, message, request_id=None):
     """
     Run the assistant agent in a background thread.
 
@@ -228,17 +284,17 @@ def _run_agent_thread(user_id, conversation_id, message):
     except User.DoesNotExist:
         logger.error("assistant thread: user %s not found", user_id)
         _send_ws_event(user_id, "error", conversation_id,
-                       {"error": "Your user account was not found."})
+                       {"error": "Your user account was not found."}, request_id)
         return
     except Exception:
         logger.exception("assistant thread: failed to load user %s", user_id)
         _send_ws_event(user_id, "error", conversation_id,
-                       {"error": "Failed to load user account."})
+                       {"error": "Failed to load user account."}, request_id)
         return
 
     def on_event(event_type, data=None):
         """Publish WS events back to the user during processing."""
-        _send_ws_event(user_id, event_type, conversation_id, data)
+        _send_ws_event(user_id, event_type, conversation_id, data, request_id)
 
     # --- Run agent ---
     try:
