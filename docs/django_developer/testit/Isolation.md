@@ -91,15 +91,64 @@ Both only matter during the migration, and both cost nothing to keep.
 ## The Redis ceiling
 
 Redis ships with **16 databases**, and index 0 is reserved above — so 15
-concurrent checkouts, across every mojo repo on the machine. The allocator asks
-the server (`CONFIG GET databases`) rather than assuming, and **fails with an
-actionable error** when it runs out rather than quietly reusing an index.
+concurrent checkouts, across every mojo repo on the machine. The allocator
+**assumes** 16; it does not ask the server. When it runs out it **fails with an
+actionable error** rather than quietly reusing an index.
 
-To raise it, in your local `redis.conf`:
+To raise it you must change two things, and changing only the first does
+nothing:
 
 ```
+# 1. your local redis.conf
 databases 64
 ```
+
+```bash
+# 2. tell the allocator, e.g. in your shell profile
+export MOJO_TESTENV_REDIS_LIMIT=64
+```
+
+The allocator does not probe because probing meant importing
+`mojo.helpers.redis`, which resolves its URL from a Django setting and caches a
+process-global client before it ever touches the network. Called from
+`create_testproject` (no project yet) that import simply fails; called from a
+settings module that is still executing, it silently pins the whole process to
+Redis index 0 for its lifetime. A number you can be told is not worth that.
+
+A junk or unset `MOJO_TESTENV_REDIS_LIMIT` means 16. A value below 1 floors at
+1, which leaves no allocatable index and fails closed on the next allocation —
+correct, if blunt.
+
+## Adopting testenv elsewhere
+
+`testit/testenv.py` is deliberately standalone. **`allocate()` imports nothing
+from `mojo.*` and reads no Django setting**, so calling it from a test settings
+module — while that module is still executing, before Django is configured — is
+supported and is the intended use.
+
+```python
+# in your project's test settings, before anything reads DATABASES
+import importlib.util, sys
+
+spec = importlib.util.spec_from_file_location(
+    "mojo_testenv", importlib.util.find_spec("testit").origin.replace(
+        "__init__.py", "testenv.py"))
+testenv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(testenv)
+
+env = testenv.allocate(REPO_ROOT, "myproj_test")
+```
+
+If your caller already knows the Redis ceiling, hand it over directly and skip
+the environment variable entirely:
+
+```python
+env = testenv.allocate(REPO_ROOT, "myproj_test", limit=64)
+```
+
+Load it by file path (or `find_spec`), never `import testit.testenv` —
+importing the package runs `testit/__init__.py`, which needs a configured
+project.
 
 ## Fail-closed behaviour
 

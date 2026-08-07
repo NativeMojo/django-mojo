@@ -33,6 +33,24 @@ lowest free slot, is a readable JSON file, and makes stale entries reclaimable.
   (5555, 7575, 9009, 9109, 9999), so adoption is not a flag day.
 
 Both matter only during the migration, and both cost nothing to keep.
+
+## Why this module imports nothing from `mojo`
+
+`allocate()` runs in two places where `mojo` is not safely importable:
+
+- **Before the project exists.** `bin/create_testproject` invokes this file by
+  path precisely because there is no configured project yet — any `mojo` import
+  dies partway down its own chain, and a bare `except` around it just turns the
+  breakage into a wrong-but-quiet answer.
+- **From half-built settings modules.** An adopting repo calls `allocate()`
+  while its settings module is still executing. `mojo.helpers.redis` resolves
+  its URL from `REDIS_DB_INDEX` and caches a process-global client BEFORE any
+  network I/O, so importing it there pins the whole process to index 0 for its
+  lifetime — the exact cross-checkout collision this module exists to prevent.
+
+So the invariant is: **`allocate()` imports nothing from `mojo.*` and reads no
+Django setting.** Anything it cannot derive from the path or the registry is
+either passed in by the caller or read from the environment. Keep it that way.
 """
 
 import errno
@@ -159,21 +177,27 @@ class _locked_registry:
 # ----------------------------------------------------------------------
 
 def redis_limit():
-    """How many Redis databases this server has, asked rather than assumed.
+    """How many Redis databases this server has, assumed rather than asked.
 
-    Falls back to Redis's own default when the server cannot be reached — a
-    test environment with no Redis should still be able to allocate, and the
-    suite will fail later on something more informative than an allocation.
+    Returns `REDIS_FALLBACK_LIMIT` (Redis's own shipped default) unless
+    `MOJO_TESTENV_REDIS_LIMIT` says otherwise. A junk or missing value means the
+    default — allocation must never be the thing that fails because an
+    environment variable was mistyped.
+
+    It does NOT ask the server, and that is deliberate. Reaching Redis from here
+    meant importing `mojo.helpers.redis`, which resolves its URL from a Django
+    setting and caches a process-global client BEFORE any network I/O. This
+    module is loaded before the project exists (`bin/create_testproject`, by
+    file path) and from half-built settings modules in adopting repos, so that
+    import either explodes or silently pins the whole process's Redis client to
+    index 0 for its lifetime. Neither is worth a number we can be told.
+
+    If you raised `databases` in redis.conf, set `MOJO_TESTENV_REDIS_LIMIT` to
+    match — raising redis.conf alone does nothing here.
     """
     try:
-        from mojo.helpers.redis import get_connection
-
-        conn = get_connection()
-        if conn is None:
-            return REDIS_FALLBACK_LIMIT
-        value = conn.config_get("databases") or {}
-        return int(value.get("databases", REDIS_FALLBACK_LIMIT))
-    except Exception:
+        return max(1, int(os.environ.get("MOJO_TESTENV_REDIS_LIMIT", REDIS_FALLBACK_LIMIT)))
+    except (TypeError, ValueError):
         return REDIS_FALLBACK_LIMIT
 
 
@@ -200,9 +224,10 @@ def _pick_redis_index(taken, limit):
         if index not in taken:
             return index
     raise AllocationError(
-        f"No free Redis database index (server reports databases={limit}, "
-        f"indexes {REDIS_FIRST_INDEX}..{limit - 1} are all allocated). "
-        f"Raise `databases` in redis.conf, or reclaim slots with "
+        f"No free Redis database index (limit={limit}, indexes "
+        f"{REDIS_FIRST_INDEX}..{limit - 1} are all allocated). "
+        f"Raise `databases` in redis.conf AND set MOJO_TESTENV_REDIS_LIMIT to "
+        f"match, or reclaim slots with "
         f"`python -m testit.testenv release <path>`.")
 
 
@@ -221,12 +246,15 @@ def _pick_port(taken):
 # the public API
 # ----------------------------------------------------------------------
 
-def allocate(root, base_name):
+def allocate(root, base_name, limit=None):
     """Return this checkout's `{db_name, port, redis_index, slug}`.
 
     Idempotent: the same root gets the same values forever, so a re-run of
     `create_testproject` does not move a tree to a new database and orphan the
     old one.
+
+    `limit` is the Redis database ceiling. Left as None it comes from
+    `redis_limit()`, resolved at call time.
     """
     root = os.path.realpath(str(root))
     if not base_name:
@@ -245,11 +273,17 @@ def allocate(root, base_name):
         taken_indexes = {a.get("redis_index") for a in allocations.values()}
         taken_ports = {a.get("port") for a in allocations.values()}
 
+        # Resolved HERE, not as a `limit=redis_limit()` default argument — a
+        # default is evaluated once at def time, which would permanently defeat
+        # every `redis_limit` patch (the suite's, and maestro's shim). Leave it.
+        if limit is None:
+            limit = redis_limit()
+
         record = {
             "slug": slug(root),
             "base_name": base_name,
             "db_name": f"{base_name}_{slug(root)}",
-            "redis_index": _pick_redis_index(taken_indexes, redis_limit()),
+            "redis_index": _pick_redis_index(taken_indexes, limit),
             "port": _pick_port(taken_ports),
             "created": _now(),
             "last_used": _now(),

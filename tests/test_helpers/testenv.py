@@ -11,8 +11,11 @@ Every test runs against a temporary registry, so nothing touches the real
 ~/.mojo/testenv.json.
 """
 
+import json
 import os
 import socket
+import subprocess
+import sys
 import tempfile
 from unittest import mock
 
@@ -263,6 +266,98 @@ def test_exhausted_redis_fails_closed(opts):
             f"the exhaustion error does not say how to fix it: {err}"
     finally:
         _restore(patches)
+
+
+@th.django_unit_test("allocate() imports nothing from mojo")
+def test_allocate_imports_nothing_from_mojo(opts):
+    """The invariant that makes this module callable from a settings module.
+
+    `allocate()` runs before the project exists (`create_testproject`, by file
+    path) and from half-built settings modules in adopting repos. Anything it
+    imports out of `mojo` either explodes there or — worse — resolves a Django
+    setting and caches a process-global Redis client pinned to index 0.
+
+    A SUBPROCESS, because that is the only way to see the import graph of a
+    fresh interpreter, and because it is how production actually invokes this.
+    """
+    from testit import testenv
+
+    testit_dir = os.path.dirname(os.path.abspath(testenv.__file__))
+    tmpdir = tempfile.mkdtemp(prefix="testenv-subproc-")
+    registry = os.path.join(tmpdir, "testenv.json")
+    root = tempfile.mkdtemp(prefix="testenv-root-")
+
+    script = (
+        "import json, sys\n"
+        f"sys.path.insert(0, {testit_dir!r})\n"
+        "import testenv\n"
+        f"testenv.REGISTRY_DIR = {tmpdir!r}\n"
+        f"testenv.REGISTRY_PATH = {registry!r}\n"
+        f"record = testenv.allocate({root!r}, 'probe')\n"
+        "leaked = sorted(m for m in sys.modules if m.startswith('mojo'))\n"
+        "assert not leaked, 'allocate() imported mojo modules: %s' % (leaked,)\n"
+        "print(json.dumps(record))\n"
+    )
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True, timeout=120)
+
+    assert proc.returncode == 0, \
+        f"the allocation subprocess failed (rc={proc.returncode}): {proc.stderr}"
+    assert not proc.stderr.strip(), \
+        f"the allocation subprocess wrote to stderr: {proc.stderr}"
+
+    payload = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert payload.get("redis_index"), \
+        f"the subprocess did not allocate a redis index: {payload}"
+
+
+@th.django_unit_test("allocate() accepts an explicit Redis ceiling")
+def test_allocate_accepts_an_explicit_limit(opts):
+    """A caller that already knows the ceiling can hand it over, so adopting
+    repos need neither the environment variable nor a probe."""
+    from testit import testenv
+
+    patches, tmpdir = _isolated_registry()
+    try:
+        # limit=4 -> indexes 1..3 usable, so exactly three checkouts fit.
+        for index in range(3):
+            record = testenv.allocate(f"/tmp/repo-{index}", "mojo_test", limit=4)
+            assert record["redis_index"] in (1, 2, 3), \
+                f"an explicit limit=4 handed out index {record['redis_index']}"
+
+        err = None
+        try:
+            testenv.allocate("/tmp/repo-overflow", "mojo_test", limit=4)
+        except testenv.AllocationError as caught:
+            err = caught
+
+        assert err is not None, \
+            "an explicit limit was ignored — a fourth checkout got an index anyway"
+    finally:
+        _restore(patches)
+
+
+@th.django_unit_test("the Redis ceiling comes from MOJO_TESTENV_REDIS_LIMIT")
+def test_redis_limit_honors_the_env_var(opts):
+    """Raising `databases` in redis.conf does nothing on its own now — the
+    allocator has to be told, because asking the server is what dragged Django
+    and a process-global Redis client into a settings module."""
+    from testit import testenv
+
+    with mock.patch.dict(os.environ, {"MOJO_TESTENV_REDIS_LIMIT": "24"}):
+        assert testenv.redis_limit() == 24, \
+            "MOJO_TESTENV_REDIS_LIMIT was ignored — a raised redis.conf is unreachable"
+
+    with mock.patch.dict(os.environ, {"MOJO_TESTENV_REDIS_LIMIT": "sixty-four"}):
+        assert testenv.redis_limit() == testenv.REDIS_FALLBACK_LIMIT, \
+            "a junk MOJO_TESTENV_REDIS_LIMIT did not fall back to the default"
+
+    with mock.patch.dict(os.environ):
+        os.environ.pop("MOJO_TESTENV_REDIS_LIMIT", None)
+        assert testenv.redis_limit() == testenv.REDIS_FALLBACK_LIMIT, \
+            "an unset MOJO_TESTENV_REDIS_LIMIT changed the shipped default"
 
 
 @th.django_unit_test("a corrupt registry is rebuilt rather than wedging every suite")
