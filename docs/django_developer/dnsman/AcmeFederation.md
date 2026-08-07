@@ -210,6 +210,23 @@ retriable; transport ambiguity is retriable; only 502/503/504 HTTP responses
 are marked retriable. Remote response bodies, configured URLs/API keys, and TXT
 values are never copied into exception text.
 
+## Operator entry point
+
+The REST contract above is the programmatic surface. For bootstrapping a domain
+by hand there is a CLI wrapper over the same services:
+
+```bash
+python manage.py aws-check --apply --section dns --dns-domain customer.example --dns-group 7
+```
+
+It allocates the delegation, prints the `_acme-challenge` CNAME to hand to the
+domain owner, **verifies that CNAME resolves before requesting anything**, and
+then queues issuance. The verification step is load-bearing: Let's Encrypt caps
+failed validations at 5 per account per hostname per hour, so issuing against an
+unpropagated record blocks retries for an hour during the exact activity —
+bootstrapping — where someone is iterating. See
+[../aws/aws_check.md](../aws/aws_check.md#the-dns-section).
+
 ## Downstream tenant lifecycle
 
 `AcmeDelegation` is the consuming deployment's durable tenant-side tombstone.

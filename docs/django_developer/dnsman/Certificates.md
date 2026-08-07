@@ -156,6 +156,35 @@ reissue.** No new CA order, no rate-limit exposure, and hosts stay disposable.
 > `DNSMAN_CERT_SYNC_CHANNEL`, make sure a runner consumes that channel; an
 > unconsumed queue raises a `jobs:unconsumed_channel` incident.
 
+## Expiry monitoring
+
+`cronjobs.publish_certificate_expiry` runs hourly and publishes one number for
+the whole deployment: the fewest days remaining across every certificate, as the
+CloudWatch metric `DjangoMojo/Certificates` / `MinDaysToExpiry`, dimensioned by
+deployment slug. `aws-check`'s `monitoring` section creates the alarm that reads
+it, with `TreatMissingData=breaching` — so this job going quiet is itself the
+alarm. One signal catches every cause of a stalled renewal at once: publisher
+down, challenge misrouted, credentials wrong, delegation record deleted.
+
+Three behaviours worth knowing:
+
+- **`failed` certificates still count.** `_record_issue_failure` moves a
+  certificate to `failed` once its material is no longer valid, so filtering on
+  `active` alone would drop a certificate at the moment it expires — the
+  published minimum would jump to the next-soonest and CloudWatch would report
+  the alarm *recovered* while TLS is actually broken. `revoked` rows and rows
+  with no `not_after` are excluded.
+- **Expired certificates publish a negative number**, not a clamped zero. `-3` is
+  more diagnostic than `0`, and the alarm catches both. The consequence is that a
+  permanently-dead certificate row pins the deployment-wide minimum and the alarm
+  never clears — **revoke or delete the row**; do not retune the threshold.
+- **No certificates publishes nothing at all.** A deployment with none should
+  read as un-set-up (the alarm sits in INSUFFICIENT_DATA), not as healthy.
+
+The job needs `cloudwatch:PutMetricData` on that namespace, granted to the
+identity the **job runners** use — not to the operator running `aws-check`.
+Without AWS credentials it is a no-op that logs and returns.
+
 ## Staging is the default
 
 `DNSMAN_ACME_DIRECTORY_URL` defaults to the Let's Encrypt **staging** directory.

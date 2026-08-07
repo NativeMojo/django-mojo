@@ -1048,3 +1048,156 @@ def test_network_failure_and_fresh_cron_have_stable_classification(opts):
     codes = [item["code"] for item in report["items"]]
     assert "cron.heartbeat_fresh" in codes, f"Fresh heartbeat should pass, got {codes}"
     assert "jobs.health" in codes, f"Jobs health should be reported, got {codes}"
+
+
+@th.django_unit_test()
+def test_dns_section_skips_when_dnsman_is_not_installed(opts):
+    """A deployment that does not use dnsman must not have aws-check start failing."""
+    from mojo.apps.aws.services import aws_check
+
+    with mock.patch("django.apps.apps.is_installed", return_value=False):
+        report = aws_check.AWSCheckRunner().run(["dns"])
+
+    assert report["overall"] == "pass", f"An absent optional app is not a failure, got {report}"
+    assert [item["code"] for item in report["items"]] == ["dnsman.not_installed"], \
+        f"The section should skip with one item, got {report['items']}"
+    assert report["items"][0]["status"] == "skip", \
+        f"Absent dnsman is a skip, not a warn, got {report['items'][0]}"
+
+
+@th.django_unit_test()
+def test_dns_audit_flags_staging_directory(opts):
+    """
+    Staging is the shipped default, so this is the common case, not the edge one.
+
+    An operator bootstrapping against staging and believing they are live is the
+    likeliest way to misread this section, so the word has to appear.
+    """
+    from mojo.apps.aws.services import aws_check
+    from mojo.apps.dnsman.services import certs
+
+    staging = "https://acme-staging-v02.api.letsencrypt.org/directory"
+    runner = aws_check.AWSCheckRunner()
+    with mock.patch.object(certs, "directory_url", return_value=staging):
+        runner._check_dns_acme_account()
+
+    item = next(i for i in runner.results if i["code"] == "acme.staging_directory")
+    assert item["status"] == "warn", f"Staging must warn, never pass, got {item}"
+    assert "STAGING" in item["message"] or "staging" in item["message"], (
+        "The message must say staging in words — a bare URL is what gets misread; "
+        f"got {item['message']!r}"
+    )
+    assert item["details"]["staging"] is True, f"--json consumers need the flag, got {item}"
+
+
+@th.django_unit_test()
+def test_dns_bootstrap_requires_group(opts):
+    from mojo.apps.aws.services import aws_check
+    from mojo.apps.dnsman.services import delegation
+
+    runner = aws_check.AWSCheckRunner(
+        apply=True, yes=True, dns_domain="example.com", dns_group="")
+    with mock.patch.object(delegation, "initiate") as initiate:
+        runner._bootstrap_dns_domain()
+
+    initiate.assert_not_called()
+    codes = [item["code"] for item in runner.results]
+    assert "dns.group_required" in codes, \
+        f"An unnamed owner must fail closed before any mutation, got {codes}"
+
+
+@th.django_unit_test()
+def test_dns_bootstrap_surfaces_cname_before_requesting(opts):
+    """The CNAME is the output the operator hands to the domain owner."""
+    from mojo.apps.aws.services import aws_check
+    from mojo.apps.dnsman.services import certs, delegation
+
+    row = SimpleNamespace(
+        domain_name="example.com", source_name="_acme-challenge.example.com",
+        target_name="abc123.hub.example.net", state="pending", domain=None)
+    runner = aws_check.AWSCheckRunner(
+        apply=True, yes=True, dns_domain="example.com", dns_group="7")
+    with mock.patch.object(runner, "_resolve_dns_group",
+                           return_value=SimpleNamespace(name="tenant", pk=7)), \
+            mock.patch.object(delegation, "initiate", return_value=row), \
+            mock.patch.object(delegation, "prove_alias",
+                              side_effect=RuntimeError("not propagated yet")), \
+            mock.patch.object(certs, "request_certificate") as request_certificate:
+        runner._bootstrap_dns_domain()
+
+    cname = next(i for i in runner.results if i["code"] == "delegation.cname_required")
+    assert cname["details"]["source_name"] == "_acme-challenge.example.com", (
+        "--json consumers need the CNAME as structured fields, not only prose; "
+        f"got {cname['details']}"
+    )
+    assert cname["details"]["target_name"] == "abc123.hub.example.net", \
+        f"The CNAME target must be surfaced, got {cname['details']}"
+    request_certificate.assert_not_called()
+
+
+@th.django_unit_test()
+def test_dns_bootstrap_does_not_request_certificate_until_cname_proves(opts):
+    """
+    The Let's Encrypt rate-limit guard.
+
+    Failed validations are capped at 5 per account per hostname per hour, so
+    firing at an unpropagated record burns the budget and blocks retries for an
+    hour — during a bootstrap, which is exactly when someone is iterating.
+    """
+    from mojo.apps.aws.services import aws_check
+    from mojo.apps.dnsman.services import certs, delegation
+
+    row = SimpleNamespace(
+        domain_name="example.com", source_name="_acme-challenge.example.com",
+        target_name="abc123.hub.example.net", state="pending", domain=None)
+    runner = aws_check.AWSCheckRunner(
+        apply=True, yes=True, dns_domain="example.com", dns_group="7")
+    with mock.patch.object(runner, "_resolve_dns_group",
+                           return_value=SimpleNamespace(name="tenant", pk=7)), \
+            mock.patch.object(delegation, "initiate", return_value=row), \
+            mock.patch.object(delegation, "prove_alias",
+                              side_effect=RuntimeError("CNAME does not resolve")), \
+            mock.patch.object(delegation, "verify") as verify, \
+            mock.patch.object(certs, "request_certificate") as request_certificate:
+        runner._bootstrap_dns_domain()
+
+    request_certificate.assert_not_called()
+    verify.assert_not_called()
+    codes = [item["code"] for item in runner.results]
+    assert "delegation.cname_unverified" in codes, \
+        f"An unresolved CNAME must be reported as pending, got {codes}"
+    unverified = next(i for i in runner.results if i["code"] == "delegation.cname_unverified")
+    assert unverified["status"] == "pending", (
+        "An unpropagated CNAME is a wait, not a failure — the operator reruns; "
+        f"got {unverified['status']}"
+    )
+    assert "budget" in unverified["remediation"], \
+        f"The remediation should say no validation budget was spent, got {unverified['remediation']!r}"
+
+
+@th.django_unit_test()
+def test_dns_errors_redact_the_hub_api_key(opts):
+    """#1423 requires the hub key never be logged; _add() is a path to stdout and --json."""
+    import json as _json
+
+    from mojo.apps.aws.services import aws_check
+    from mojo.apps.dnsman.services import delegation
+
+    secret = "hub-key-super-secret-value"
+    values = _setting_values(DNSMAN_ACME_HUB_API_KEY=secret)
+    with mock.patch.object(aws_check, "_setting", side_effect=values):
+        runner = aws_check.AWSCheckRunner(
+            apply=True, yes=True, dns_domain="example.com", dns_group="7")
+        with mock.patch.object(runner, "_resolve_dns_group",
+                               return_value=SimpleNamespace(name="tenant", pk=7)), \
+                mock.patch.object(delegation, "initiate",
+                                  side_effect=RuntimeError(f"hub rejected key {secret}")):
+            runner._bootstrap_dns_domain()
+
+    serialized = _json.dumps(runner.results)
+    assert secret not in serialized, (
+        "The ACME hub API key reached the report in the clear — it would print to "
+        "stdout and into --json output"
+    )
+    assert "[REDACTED]" in serialized, \
+        f"The key should be replaced by the redaction marker, got {serialized}"

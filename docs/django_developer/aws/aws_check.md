@@ -70,6 +70,7 @@ remediation/changed items:
 | `s3` | one system-default S3 FileManager, bucket/region/IAM, Public Access Block, CORS and optional sentinel |
 | `email` | SES identity/DKIM/sandbox/topics/receiving audit, outbound Mailbox and shipped templates |
 | `monitoring` | owned SNS topic, exact static allowlist, HTTPS subscription, owned alarms and receiver receipt |
+| `dns` | dnsman ACME directory/account, delegation states, certificate expiry; under `--apply`, bootstraps one domain |
 | `rules` | opt-in create-only CloudWatch and version-drift incident policies |
 | `versions` | **opt-in** managed-service major version drift (RDS/Aurora, ElastiCache) — never part of a default run, and never reports FAIL |
 
@@ -128,13 +129,64 @@ The command uses the signed receiver already exposed at
 5. Run the documented disposable-alarm ALARM→OK test. The durable transition receipt proves delivery.
 6. Apply the default RuleSet only after delivery is verified.
 
-Default alarms are EC2 `StatusCheckFailed` Maximum >= 1 for 2 of 2 one-minute
-periods; EC2/RDS/ElastiCache `CPUUtilization` Average >= 90% for 3 of 3
-five-minute periods; and, on **non-Aurora RDS engines only**, `FreeStorageSpace`
-Average <= 10 GiB for 3 of 3 five-minute periods. They use stable names,
-ownership tags, `TreatMissingData=notBreaching`, and ALARM/OK actions.
-Connection counts and CWAgent memory/disk are not guessed because portable
-thresholds/dimensions do not exist.
+Discovery covers EC2, RDS, ElastiCache and **ELBv2 target groups**. Every alarm
+uses stable names, ownership tags and ALARM/OK actions on the single owned topic.
+
+| Resource | Signal | Condition | Missing data |
+|---|---|---|---|
+| EC2 | `StatusCheckFailed` | Maximum >= 1, 2 of 2 one-minute periods | notBreaching |
+| EC2/RDS/ElastiCache | `CPUUtilization` | Average >= 90%, 3 of 3 five-minute periods | notBreaching |
+| RDS (non-Aurora only) | `FreeStorageSpace` | Average <= 10 GiB, 3 of 3 | notBreaching |
+| EC2/RDS (burstable only) | `CPUCreditBalance` | Average <= `AWS_CHECK_CPU_CREDIT_FLOOR` (20), 3 of 3 | notBreaching |
+| ElastiCache | `Evictions` | Sum > 0, 3 of 3 | notBreaching |
+| RDS | `FreeableMemory` | Average <= `AWS_CHECK_RDS_FREEABLE_MEMORY_FLOOR` (256 MiB), 3 of 3 | notBreaching |
+| RDS | `DatabaseConnections` | Maximum >= `AWS_CHECK_RDS_MAX_CONNECTIONS` (500), 3 of 3 | notBreaching |
+| ELBv2 target group | `UnHealthyHostCount` | Maximum >= 1, 2 of 2 one-minute periods | notBreaching |
+| ELBv2 target group | `HealthyHostCount` | Minimum < 1, 2 of 2 one-minute periods | **breaching** |
+| deployment-wide | `MinDaysToExpiry` | Minimum <= `AWS_CHECK_CERT_EXPIRY_DAYS` (14), 3 of 3 hourly | **breaching** |
+
+`CPUCreditBalance` is created only on burstable families (`t2`/`t3`/`t3a`/`t4g`,
+and `db.t*`), because only they publish it — elsewhere the alarm would never
+receive a datapoint and read as permanently green.
+
+**Target groups get two alarms, not one.** `UnHealthyHostCount` counts unhealthy
+*registered* targets, so a group whose targets have all been deregistered
+reports `0` and looks healthy. `HealthyHostCount < 1` is the only signal that
+sees the total outage, and it treats missing data as breaching because a load
+balancer that stops reporting is itself the outage. Target groups attached to no
+load balancer are skipped — they publish nothing. Dimension values are ARN
+*suffixes* (`targetgroup/<name>/<id>`, `net/<name>/<id>`); a full ARN would be
+accepted and then never receive a datapoint.
+
+`DatabaseConnections` ships a deliberately forgiving default. RDS derives
+`max_connections` from instance memory (roughly 112 on `db.t3.micro`, ~405 on
+`db.t3.medium`), so no single default is right everywhere. `500` errs high: it
+will not fire spuriously, and a chronically-firing alarm gets muted — which
+silences the entire operations topic and every other alarm on it. The cost is
+that on an instance class whose ceiling is below 500 it cannot fire at all; tune
+it to ~80% of the class's `max_connections`.
+
+### Certificate expiry
+
+The one alarm that catches every cause of a stalled renewal at once — publisher
+down, challenge misrouted, credentials wrong, delegation record deleted. Two
+halves:
+
+- a dnsman cron (`publish_certificate_expiry`, hourly) publishing the fewest days
+  remaining across every certificate as `DjangoMojo/Certificates/MinDaysToExpiry`,
+  dimensioned by deployment;
+- the alarm, with **`TreatMissingData = "breaching"`** — deliberately opposite to
+  every other profile, because a dead publisher must alarm or the monitoring
+  fails silently in exactly the scenario it exists to catch.
+
+`aws-check` will not create the alarm until the metric actually exists. A
+breaching alarm created before its publisher has ever run goes straight to ALARM
+and pages during bootstrap, which teaches operators to ignore the topic.
+
+| Code | Status | Meaning |
+|---|---|---|
+| `alarms.cert_metric_unpublished` | PENDING | The metric has never been published. Run the dnsman cron, then rerun. |
+| `alarms.cert_metric_unknown` | PENDING | `cloudwatch:ListMetrics` was denied, so whether the metric exists is unknown. The rest of the section still runs. |
 
 Aurora (`aurora`, `aurora-mysql`, `aurora-postgresql`, and any future `aurora-*`
 engine) publishes **no per-instance free-space metric** — its storage is a shared
@@ -177,6 +229,61 @@ that gate exists because CloudWatch alarms need a confirmed SNS receiver,
 whereas version-drift events are generated in-process. See
 [version_drift.md](version_drift.md).
 
+## The `dns` section
+
+Audits dnsman's ACME state, and under `--apply` bootstraps one domain end to end.
+It lives here rather than in a separate `dnsman_bootstrap` command so it inherits
+the audit/apply split, per-action confirmation, `--json`, the exit-code contract
+and secret redaction — one tool to learn instead of two.
+
+The audit is read-only and reports:
+
+| Code | Status | Meaning |
+|---|---|---|
+| `dnsman.not_installed` | SKIP | dnsman is not in `INSTALLED_APPS`; nothing to audit. |
+| `acme.staging_directory` | WARN | `DNSMAN_ACME_DIRECTORY_URL` points at Let's Encrypt **staging**, which is the shipped default. Certificates issued there are untrusted by browsers. |
+| `acme.account_registered` | PASS | A production ACME account exists for the configured directory. |
+| `delegation.available` / `delegation.direct_only` | PASS | Whether an ACME hub is configured. An absent hub is not a fault — direct Route53/GoDaddy issuance is fully supported. |
+| `delegation.broken` | WARN | Delegations in the `broken` state, which will not renew. |
+| `certificates.expired` | FAIL | One or more certificates are past `not_after`. |
+| `certificates.renewing` | WARN | Certificates inside `DNSMAN_CERT_RENEW_DAYS`. |
+
+The staging default is deliberate — an unconfigured deploy must not be able to
+burn production rate limits — so the section names it in words rather than
+printing a bare URL. Bootstrapping against staging while believing you are live
+is the likeliest way to misread this section.
+
+### Bootstrapping a domain
+
+```bash
+python manage.py aws-check --apply --section dns --dns-domain example.com --dns-group 7
+```
+
+`--dns-group` takes a group id or an exact name and is required; an unnamed or
+ambiguous owner fails closed with `dns.group_required` before any mutation. The
+flow, each step confirmed separately:
+
+1. Allocate the delegation and report `delegation.cname_required`, carrying
+   `source_name` and `target_name` as structured fields so `--json` consumers get
+   the CNAME, not just prose. **This is the output you hand to the domain owner.**
+2. Verify the `_acme-challenge` CNAME authoritatively resolves. If it does not,
+   stop at `delegation.cname_unverified` and request nothing.
+3. Bind or create the `Domain`, then queue issuance.
+
+Step 2 is not a formality. Let's Encrypt rate-limits **failed** validations at 5
+per account per hostname per hour, so firing at an unpropagated record burns the
+budget and blocks retries for an hour — during a bootstrap, which is exactly when
+someone is iterating. The DNS lookup is free; the rate limit costs an hour.
+
+Issuance itself runs on the job runner, so the last step reports `PENDING`
+(`certificate.requested`) and never `PASS` — the command cannot observe the
+outcome, only that the work was queued. Rerun the section to see the result.
+
+Unlike every other `--apply` path, this one does **not** require verified AWS
+credentials: it writes dnsman rows and talks to the ACME hub over HTTPS, so
+gating it on AWS identity would refuse the bootstrap on a correctly-configured
+box that simply has no AWS keys.
+
 ## Least-privilege IAM actions
 
 Grant only actions for the selected sections and scope resource ARNs wherever
@@ -190,13 +297,28 @@ AWS supports it:
 | S3 probe | `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` on `__django_mojo_aws_check__/*` |
 | SES/email audit | `ses:GetAccount`, `ses:GetIdentityVerificationAttributes`, `ses:GetIdentityDkimAttributes`, `ses:GetIdentityNotificationAttributes`, `ses:DescribeReceiptRuleSet`, `sns:GetTopicAttributes`, `sns:ListSubscriptionsByTopic`, `s3:ListBucket` for optional inbound storage |
 | SES/email create-missing | `ses:VerifyDomainIdentity`, `ses:VerifyDomainDkim`, `ses:SetIdentityNotificationTopic`, `sns:ListTopics`, `sns:ListTagsForResource`, `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe` |
-| Monitoring audit | `sns:ListTopics`, `sns:ListTagsForResource`, `sns:ListSubscriptionsByTopic`, `cloudwatch:DescribeAlarms`, `cloudwatch:ListTagsForResource`, `ec2:DescribeInstances`, `rds:DescribeDBInstances`, `elasticache:DescribeCacheClusters` |
+| Monitoring audit | `sns:ListTopics`, `sns:ListTagsForResource`, `sns:ListSubscriptionsByTopic`, `cloudwatch:DescribeAlarms`, `cloudwatch:ListTagsForResource`, `cloudwatch:ListMetrics`, `ec2:DescribeInstances`, `rds:DescribeDBInstances`, `elasticache:DescribeCacheClusters`, `elasticloadbalancing:DescribeTargetGroups` |
 | Monitoring apply | `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe`, `cloudwatch:PutMetricAlarm`, `cloudwatch:TagResource` |
 | Versions audit (opt-in) | `rds:DescribeDBClusters`, `rds:DescribeDBInstances`, `rds:DescribeDBEngineVersions`, `rds:DescribeDBMajorEngineVersions`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeCacheEngineVersions` |
 
 Cron, rule, mailbox and template checks use Django database/Redis access rather
-than IAM. The command never deletes AWS resources, edits deployment files,
-changes DNS, requests SES production access, or sends email.
+than IAM. The `dns` section talks to dnsman and the ACME hub, not to AWS, so it
+needs no IAM actions of its own. The command never deletes AWS resources, edits
+deployment files, changes DNS, requests SES production access, or sends email.
+
+### A different identity: the job runner
+
+One action in this feature does **not** belong to the operator running
+`aws-check`:
+
+| Identity | Required AWS actions |
+|---|---|
+| dnsman job runner (certificate-expiry publisher) | `cloudwatch:PutMetricData` on namespace `DjangoMojo/Certificates` |
+
+Without it the hourly publisher fails with AccessDenied, the metric never
+appears, and the expiry alarm sits permanently at
+`alarms.cert_metric_unpublished` — which reads like "not set up yet" rather than
+"broken". Grant it to whatever identity the job runners use, not to the operator.
 
 ## Not the same as `python -m mojo.deploy.check_setup`
 
@@ -219,6 +341,14 @@ Where they overlap, `check_setup` is deliberately reduced to the delta:
   missing. `check_setup` therefore checks only what this command does not:
   subscriptions stuck at `PendingConfirmation`, alarms sitting in
   `INSUFFICIENT_DATA`, and whether application log groups exist and expire.
+- **Load balancer.** Both look at ELBv2 now, at different things. `check_setup`
+  audits *posture* — AZ coverage, deletion protection, access logs, and current
+  target health — and never creates anything. `aws-check` owns the *alarms* on
+  target groups, because every alarm has to reach the one owned SNS topic and its
+  single allowlist entry; a second creator would mean a second delivery path,
+  which is exactly what the two-phase design prevents. Read `check_setup` for "is
+  this load balancer built correctly", `aws-check` for "will I be told when it
+  breaks".
 - **S3.** This command inspects the public-access block on the one bucket
   FileManager is configured with. `check_setup` sweeps *every* bucket in the
   account and additionally reports versioning, default encryption and public

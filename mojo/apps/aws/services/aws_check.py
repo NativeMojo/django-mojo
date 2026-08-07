@@ -20,7 +20,7 @@ from mojo.helpers.settings import settings
 
 logger = logit.get_logger("aws_check", "aws.log")
 STATUSES = ("pass", "warn", "fail", "pending", "skip")
-SECTIONS = ("prerequisites", "identity", "cron", "s3", "email", "monitoring", "rules")
+SECTIONS = ("prerequisites", "identity", "cron", "s3", "email", "monitoring", "dns", "rules")
 # `versions` is opt-in: it is selectable with --section but never part of a
 # default run, and it can only ever report pass/warn/pending — never fail.
 ALL_SECTIONS = SECTIONS + ("versions",)
@@ -121,7 +121,8 @@ def _profile(signal, metric, statistic, comparison, threshold,
 class AWSCheckRunner:
     def __init__(self, region=None, profile=None, timeout=3, apply=False, yes=False,
                  probe_s3=False, bucket_name=None, mailbox_email=None,
-                 adopt_bucket=False, confirm=None, clients=None, session=None, now=None):
+                 adopt_bucket=False, confirm=None, clients=None, session=None, now=None,
+                 dns_domain=None, dns_group=None):
         self.region = region or _setting("AWS_REGION", "us-east-1")
         self.profile = profile
         self.timeout = max(1, min(int(timeout or 3), 30))
@@ -140,7 +141,15 @@ class AWSCheckRunner:
         self.monitoring_ready = False
         self.aurora_instance_ids = []
         self.delivery_seen = False
-        self._secrets = [value for value in (_setting("AWS_KEY"), _setting("AWS_SECRET")) if value]
+        self.dns_domain = dns_domain
+        self.dns_group = dns_group
+        # DNSMAN_ACME_HUB_API_KEY belongs here too: the dns section surfaces hub
+        # client errors through _add(), and #1423 requires that key never be
+        # logged. Without it a hub failure reaches stdout and --json in the clear.
+        self._secrets = [value for value in (
+            _setting("AWS_KEY"), _setting("AWS_SECRET"),
+            _setting("DNSMAN_ACME_HUB_API_KEY"),
+        ) if value]
 
     def _redact(self, value):
         text = str(value)
@@ -1026,6 +1035,201 @@ class AWSCheckRunner:
         else:
             self._add("monitoring", "warn", "receiver.delivery_unverified", "No alarm transition receipt exists yet",
                       remediation="Use the documented AWS set-alarm-state ALARM then OK test on a disposable owned alarm.")
+
+    def check_dns(self):
+        """
+        Audit dnsman's ACME state, and under --apply bootstrap one domain.
+
+        This lives in aws-check rather than a separate dnsman_bootstrap command
+        so an operator learns one tool: it inherits the audit/apply split,
+        per-action confirmation, --json, the exit-code contract and secret
+        redaction for free.
+        """
+        from django.apps import apps as django_apps
+
+        if not django_apps.is_installed("mojo.apps.dnsman"):
+            self._add("dns", "skip", "dnsman.not_installed",
+                      "dnsman is not installed, so there is no DNS or ACME state to audit")
+            return
+        self._check_dns_acme_account()
+        self._check_dns_delegations()
+        self._check_dns_certificates()
+        if self.apply and self.dns_domain:
+            self._bootstrap_dns_domain()
+        elif self.apply:
+            self._add("dns", "warn", "dns.no_bootstrap_requested",
+                      "No domain was named, so nothing was bootstrapped",
+                      remediation="Rerun with --apply --dns-domain example.com --dns-group <id-or-name>.")
+
+    def _check_dns_acme_account(self):
+        from mojo.apps.dnsman.models import AcmeAccount
+        from mojo.apps.dnsman.services import certs
+
+        url = certs.directory_url()
+        account = AcmeAccount.objects.filter(directory_url=url).first()
+        # The default is Let's Encrypt STAGING, deliberately, so an unconfigured
+        # deploy cannot burn production rate limits. Bootstrapping against
+        # staging while believing you are live is the likeliest way to misread
+        # this section, so name it rather than printing a bare URL.
+        staging = "staging" in url
+        details = {"directory_url": url, "staging": staging,
+                   "account_status": account.status if account else None}
+        if staging:
+            self._add("dns", "warn", "acme.staging_directory",
+                      "ACME is pointed at Let's Encrypt STAGING; certificates issued "
+                      "here are not trusted by browsers", details,
+                      remediation="Set DNSMAN_ACME_DIRECTORY_URL to the production directory when ready.")
+        elif account is None:
+            self._add("dns", "pending", "acme.account_missing",
+                      "No ACME account is registered for this directory yet", details,
+                      remediation="The account registers itself on first issuance; request a certificate.")
+        else:
+            self._add("dns", "pass", "acme.account_registered",
+                      "A production ACME account is registered", details)
+
+    def _check_dns_delegations(self):
+        from mojo.apps.dnsman.models import AcmeDelegation
+        from mojo.apps.dnsman.models.acme_delegation import STATE_BROKEN
+        from mojo.apps.dnsman.services import delegation
+
+        available = delegation.is_available()
+        # An unconfigured hub is not a fault: direct Route53/GoDaddy issuance is
+        # a fully supported path and #1423 is explicit that an absent hub only
+        # means delegation is unavailable.
+        self._add("dns", "pass",
+                  "delegation.available" if available else "delegation.direct_only",
+                  "Delegated ACME is configured" if available
+                  else "No ACME hub is configured; issuance uses the domain's own DNS provider",
+                  {"delegated": available})
+        counts = {}
+        for row in AcmeDelegation.objects.all().order_by("id")[:500]:
+            counts[row.state] = counts.get(row.state, 0) + 1
+        broken = list(AcmeDelegation.objects.filter(state=STATE_BROKEN)
+                      .values_list("domain_name", "last_error_code")[:20])
+        if broken:
+            self._add("dns", "warn", "delegation.broken",
+                      "Delegations are broken and will not renew",
+                      {"counts": counts,
+                       "broken": [{"domain": name, "error": code} for name, code in broken]},
+                      remediation="Re-verify the _acme-challenge CNAME for each domain listed.")
+        elif counts:
+            self._add("dns", "pass", "delegation.states", "ACME delegations audited", {"counts": counts})
+
+    def _check_dns_certificates(self):
+        from mojo.apps.dnsman.models import Certificate
+        from mojo.apps.dnsman.services import certs
+
+        renew_days = certs.renew_days()
+        rows = list(Certificate.objects.filter(not_after__isnull=False)
+                    .order_by("not_after")[:100])
+        total = Certificate.objects.filter(not_after__isnull=False).count()
+        if not rows:
+            self._add("dns", "pending", "certificates.none",
+                      "No issued certificates exist yet", {"total": 0})
+            return
+        expired = [{"common_name": row.common_name, "days_remaining": row.days_remaining}
+                   for row in rows if (row.days_remaining or 0) <= 0]
+        renewing = [{"common_name": row.common_name, "days_remaining": row.days_remaining}
+                    for row in rows if 0 < (row.days_remaining or 0) <= renew_days]
+        details = {"total": total, "shown": len(rows), "renew_days": renew_days,
+                   "soonest": rows[0].days_remaining}
+        if expired:
+            self._add("dns", "fail", "certificates.expired",
+                      "Certificates have expired", dict(details, expired=expired),
+                      remediation=("Fix the renewal cause, then revoke or delete any row that is "
+                                   "permanently dead — an expired row keeps the expiry alarm firing."))
+        if renewing:
+            self._add("dns", "warn", "certificates.renewing",
+                      "Certificates are inside the renewal window",
+                      dict(details, renewing=renewing))
+        if not expired and not renewing:
+            self._add("dns", "pass", "certificates.healthy",
+                      "Every certificate is outside its renewal window", details)
+
+    def _resolve_dns_group(self):
+        from mojo.apps.account.models import Group
+
+        value = str(self.dns_group or "").strip()
+        if not value:
+            return None
+        group = Group.objects.filter(pk=value).first() if value.isdigit() else None
+        if group is None:
+            matches = list(Group.objects.filter(name__iexact=value).order_by("id")[:2])
+            if len(matches) > 1:
+                return None
+            group = matches[0] if matches else None
+        return group
+
+    def _bootstrap_dns_domain(self):
+        """
+        Allocate a delegation, surface the CNAME, and request a certificate.
+
+        Deliberately does NOT call _ensure_mutation_identity: every other apply
+        path does, but those mutate AWS. This one writes dnsman rows and talks to
+        the ACME hub over HTTPS, so gating it on verified AWS credentials would
+        refuse the bootstrap on a correctly-configured box that has no AWS keys.
+        """
+        from mojo.apps.dnsman.services import certs, delegation
+
+        group = self._resolve_dns_group()
+        if group is None:
+            self._add("dns", "fail", "dns.group_required",
+                      "A single active group must be named to own the delegation",
+                      {"domain": self.dns_domain, "requested_group": self.dns_group},
+                      remediation="Rerun with --dns-group <group id or exact name>.")
+            return
+        if not self._approve(f"Allocate an ACME delegation for {self.dns_domain} under group {group.name}?"):
+            self._add("dns", "warn", "delegation.not_allocated",
+                      "Delegation allocation was not approved", {"domain": self.dns_domain})
+            return
+        try:
+            row = delegation.initiate(group, None, name=self.dns_domain)
+        except Exception as exc:
+            self._add("dns", "fail", "delegation.allocate_failed", exc, {"domain": self.dns_domain})
+            return
+        self._add("dns", "pending", "delegation.cname_required",
+                  f"Publish this CNAME, then rerun: {row.source_name} -> {row.target_name}",
+                  {"domain": row.domain_name, "source_name": row.source_name,
+                   "target_name": row.target_name, "state": row.state},
+                  remediation="The domain owner adds the CNAME above at their DNS provider.")
+        try:
+            delegation.prove_alias(row)
+        except Exception as exc:
+            # Stop here on purpose. Let's Encrypt rate-limits failed validations
+            # at 5 per account per hostname per hour, so firing at an
+            # unpropagated record burns the budget and blocks retries for an
+            # hour — during a bootstrap, when someone is iterating. The lookup
+            # is free; the rate limit costs an hour.
+            self._add("dns", "pending", "delegation.cname_unverified", exc,
+                      {"domain": row.domain_name, "source_name": row.source_name,
+                       "target_name": row.target_name},
+                      remediation=("Wait for the CNAME to propagate and rerun. No certificate was "
+                                   "requested, so no Let's Encrypt validation budget was consumed."))
+            return
+        try:
+            row = delegation.verify(row)
+        except Exception as exc:
+            self._add("dns", "fail", "delegation.verify_failed", exc, {"domain": row.domain_name})
+            return
+        self._add("dns", "pass", "delegation.verified",
+                  "The delegation CNAME is authoritatively verified",
+                  {"domain": row.domain_name}, changed=True)
+        if not self._approve(f"Request a certificate for {row.domain_name}?"):
+            self._add("dns", "warn", "certificate.not_requested",
+                      "Certificate issuance was not approved", {"domain": row.domain_name})
+            return
+        try:
+            certificate = certs.request_certificate(row.domain)
+        except Exception as exc:
+            self._add("dns", "fail", "certificate.request_failed", exc, {"domain": row.domain_name})
+            return
+        # Never `pass`: issuance runs on the job runner, so this command cannot
+        # observe the outcome — only that the work was queued.
+        self._add("dns", "pending", "certificate.requested",
+                  "Certificate issuance is queued",
+                  {"domain": row.domain_name, "certificate_id": certificate.pk,
+                   "status": certificate.status}, changed=True,
+                  remediation="Rerun --section dns once the job runner has processed it.")
 
     def check_rules(self):
         from mojo.apps.aws.services.cloudwatch_alarms import SCOPE

@@ -18,22 +18,27 @@ from testit import helpers as th
 
 DOMAIN_NAME = "cert-metric.example"
 
+# Far enough in the past that no certificate any other test creates can be lower,
+# so assertions on the deployment-wide minimum stay exact without this module
+# having to own the whole table.
+SENTINEL_DAYS = -9000
+
 
 def _reset():
     """
-    Clear EVERY certificate, not just this domain's.
+    Clear only THIS domain's certificates.
 
-    The metric is deliberately deployment-wide — one number across every
-    certificate the deployment is responsible for — so a fixture scoped to one
-    domain would leave rows from earlier dnsman tests pinning the minimum and
-    these assertions would measure those instead. `test_dnsman` is a single
-    module and its files run sequentially in one worker (modules are testit's
-    parallel unit), and no other module creates certificates, so this cannot
-    race another test.
+    The metric is deployment-wide, so it would be tempting to clear the whole
+    table — but `edge.Vhost.certificate` is a PROTECTED foreign key, so deleting
+    another module's certificates raises, and test modules run in parallel
+    anyway. Instead every fixture below uses absurdly-past expiry dates
+    (`SENTINEL_DAYS`), which are guaranteed to dominate the global minimum no
+    matter what other rows exist. That keeps the real ORM query — including the
+    status filter this module exists to pin — under test.
     """
     from mojo.apps.dnsman.models import Certificate, Domain
 
-    Certificate.objects.all().delete()
+    Certificate.objects.filter(domain__name=DOMAIN_NAME).delete()
     Domain.objects.filter(name=DOMAIN_NAME).delete()
     return Domain.objects.create(
         name=DOMAIN_NAME, provider="route53", status="active",
@@ -79,14 +84,14 @@ def _publish():
 @th.django_unit_test("the published value is the soonest expiry across all certificates")
 def test_publisher_emits_minimum_days_remaining(opts):
     domain = _reset()
-    _certificate(domain, "a.cert-metric.example", days=60)
-    _certificate(domain, "b.cert-metric.example", days=9)
-    _certificate(domain, "c.cert-metric.example", days=45)
+    _certificate(domain, "a.cert-metric.example", days=SENTINEL_DAYS + 20)
+    _certificate(domain, "b.cert-metric.example", days=SENTINEL_DAYS)
+    _certificate(domain, "c.cert-metric.example", days=SENTINEL_DAYS + 10)
 
     calls, result = _publish()
 
     assert len(calls) == 1, f"exactly one datapoint should be published, got {calls}"
-    assert calls[0]["value"] == 9, (
+    assert calls[0]["value"] == SENTINEL_DAYS, (
         "the alarm watches the WORST certificate, so the published value must be "
         f"the minimum days remaining; got {calls[0]['value']}"
     )
@@ -94,7 +99,8 @@ def test_publisher_emits_minimum_days_remaining(opts):
         f"unexpected metric name {calls[0]['metric_name']}"
     assert calls[0]["namespace"] == "DjangoMojo/Certificates", \
         f"unexpected namespace {calls[0]['namespace']}"
-    assert "days=9" in result, f"the job should report what it published, got {result}"
+    assert f"days={SENTINEL_DAYS}" in result, \
+        f"the job should report what it published, got {result}"
 
 
 @th.django_unit_test("an expired certificate that failed renewal still counts")
@@ -109,24 +115,35 @@ def test_publisher_counts_expired_failed_certificates(opts):
     alarm recovered while TLS is actually broken.
     """
     domain = _reset()
-    _certificate(domain, "healthy.cert-metric.example", days=60, status="active")
-    _certificate(domain, "dead.cert-metric.example", days=-3, status="failed")
+    _certificate(domain, "healthy.cert-metric.example",
+                 days=SENTINEL_DAYS + 500, status="active")
+    _certificate(domain, "dead.cert-metric.example", days=SENTINEL_DAYS, status="failed")
 
     calls, _ = _publish()
 
     assert len(calls) == 1, f"exactly one datapoint should be published, got {calls}"
-    assert calls[0]["value"] == -3, (
+    assert calls[0]["value"] == SENTINEL_DAYS, (
         "an expired certificate whose renewal failed must keep pinning the metric; "
-        "publishing 60 here would send an OK notification at the moment TLS broke, "
-        f"got {calls[0]['value']}"
+        f"publishing {SENTINEL_DAYS + 500} here would send an OK notification at the "
+        f"moment TLS broke, got {calls[0]['value']}"
     )
 
 
-@th.django_unit_test("no certificates publishes nothing rather than a healthy sentinel")
+@th.django_unit_test("an empty result publishes nothing rather than a healthy sentinel")
 def test_publisher_skips_when_no_certificates(opts):
-    _reset()
+    """
+    Driven through the aggregate rather than an empty table.
 
-    calls, result = _publish()
+    Emptying the Certificate table is not available: `edge.Vhost.certificate` is
+    a PROTECTED foreign key, and other modules hold rows. Patching the aggregate
+    exercises the same branch — what the job does when nothing matches.
+    """
+    from mojo.apps.dnsman.models import Certificate
+
+    _reset()
+    with mock.patch.object(Certificate.objects, "filter") as scoped:
+        scoped.return_value.aggregate.return_value = {"soonest": None}
+        calls, result = _publish()
 
     assert calls == [], (
         "a deployment with no certificates must look un-set-up (the alarm sits in "
@@ -138,15 +155,16 @@ def test_publisher_skips_when_no_certificates(opts):
 @th.django_unit_test("pending, issuing and revoked certificates are excluded")
 def test_publisher_excludes_null_not_after_and_revoked(opts):
     domain = _reset()
-    _certificate(domain, "live.cert-metric.example", days=30, status="active")
+    _certificate(domain, "live.cert-metric.example",
+                 days=SENTINEL_DAYS + 500, status="active")
     _certificate(domain, "pending.cert-metric.example", days=None, status="pending")
     _certificate(domain, "issuing.cert-metric.example", days=None, status="issuing")
-    _certificate(domain, "revoked.cert-metric.example", days=-90, status="revoked")
+    _certificate(domain, "revoked.cert-metric.example", days=SENTINEL_DAYS, status="revoked")
 
     calls, _ = _publish()
 
     assert len(calls) == 1, f"exactly one datapoint should be published, got {calls}"
-    assert calls[0]["value"] == 30, (
+    assert calls[0]["value"] == SENTINEL_DAYS + 500, (
         "a revoked certificate is deliberately retired and must not pin the metric, "
         "and pending/issuing rows have no not_after to contribute; "
         f"got {calls[0]['value']}"
@@ -163,7 +181,7 @@ def test_publisher_and_alarm_agree_on_dimension(opts):
     from mojo.apps.aws.services import aws_check
 
     domain = _reset()
-    _certificate(domain, "dim.cert-metric.example", days=20)
+    _certificate(domain, "dim.cert-metric.example", days=SENTINEL_DAYS)
 
     calls, _ = _publish()
     published = calls[0]["dimensions"]

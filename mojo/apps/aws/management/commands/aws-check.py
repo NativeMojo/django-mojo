@@ -22,6 +22,8 @@ class Command(BaseCommand):
         parser.add_argument("--bucket-name", help="Globally unique bucket name for create-missing apply")
         parser.add_argument("--mailbox-email", help="Mailbox address for create-missing apply")
         parser.add_argument("--adopt-bucket", action="store_true", help="Explicitly adopt an exact owned bucket after interrupted tagging")
+        parser.add_argument("--dns-domain", help="Domain to bootstrap ACME delegation for (requires --dns-group)")
+        parser.add_argument("--dns-group", help="Group id or exact name that will own the delegation")
 
     def _confirm(self, message):
         self.stdout.write(f"\n{message}")
@@ -44,6 +46,7 @@ class Command(BaseCommand):
             apply=apply, yes=options["yes"], probe_s3=options["probe_s3"],
             bucket_name=options["bucket_name"], mailbox_email=options["mailbox_email"],
             adopt_bucket=options["adopt_bucket"], confirm=self._confirm if interactive else None,
+            dns_domain=options["dns_domain"], dns_group=options["dns_group"],
         )
         report = runner.run(options["section"])
         if options["json"]:

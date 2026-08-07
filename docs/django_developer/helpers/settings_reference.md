@@ -226,6 +226,26 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   the static `BASE_URL` hostname.
 - `AWS_CHECK_CRON_MAX_AGE` — **file-only**, default `180` seconds. Maximum age
   of a completed cron-dispatch heartbeat accepted by `aws-check`.
+- `AWS_CHECK_CPU_CREDIT_FLOOR` — **file-only**, int, default `20`.
+  `CPUCreditBalance` at or below this alarms. Created only on burstable
+  families (`t2`/`t3`/`t3a`/`t4g`, `db.t*`), which are the only ones that
+  publish the metric.
+- `AWS_CHECK_RDS_FREEABLE_MEMORY_FLOOR` — **file-only**, int bytes, default
+  `268435456` (256 MiB). RDS `FreeableMemory` at or below this alarms.
+- `AWS_CHECK_RDS_MAX_CONNECTIONS` — **file-only**, int, default `500`. RDS
+  `DatabaseConnections` at or above this alarms. **The default is deliberately
+  forgiving.** RDS derives `max_connections` from instance memory — roughly 112
+  on `db.t3.micro`, ~225 on `db.t3.small`, ~405 on `db.t3.medium` — so no single
+  default is correct everywhere. Erring high means it never fires spuriously,
+  which matters because a chronically-firing alarm gets muted and muting the
+  operations topic silences every other alarm with it. The cost: on a class whose
+  ceiling is below 500 the alarm cannot fire at all. Tune it to ~80% of your
+  instance class's `max_connections`.
+- `AWS_CHECK_CERT_EXPIRY_DAYS` — **file-only**, int, default `14`. The
+  deployment-wide certificate-expiry alarm fires when the soonest certificate is
+  this many days from expiring. That alarm uses `TreatMissingData=breaching`, so
+  a publisher that stops running alarms too; see
+  [../aws/aws_check.md](../aws/aws_check.md).
 - `AWS_VERSION_DRIFT_ENABLED` — **file-only** (`settings.get_static`), bool,
   default `False`. Arms the daily managed-service version drift scan
   (`mojo.apps.aws.cronjobs.check_version_drift`). Read inside the cron
