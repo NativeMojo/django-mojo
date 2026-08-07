@@ -31,23 +31,28 @@ def on_deploy_webhook(request):
     event = request.META.get("HTTP_X_GITHUB_EVENT", "")
     if event != "push":
         # GitHub sends `ping` on webhook creation, and other events when the
-        # hook is configured broadly. Only a push can deploy.
-        return dict(status=True, ignored=True,
-                    reason=f"event {event or 'unknown'} is not a push")
+        # hook is configured broadly. Only a push can deploy. JsonResponse
+        # directly (not a plain dict) so every reply from this receiver has
+        # the same top-level shape.
+        return JsonResponse(dict(
+            status=True, ignored=True,
+            reason=f"event {event or 'unknown'} is not a push"))
 
     ref = request.DATA.get("ref", "") or ""
     branch = deploy.deploy_branch()
     if ref != f"refs/heads/{branch}":
         logger.info(f"deploy webhook: ignoring push to {ref or 'unknown ref'}")
-        return dict(status=True, ignored=True,
-                    reason=f"not the deploy branch ({branch})")
+        return JsonResponse(dict(
+            status=True, ignored=True,
+            reason=f"not the deploy branch ({branch})"))
 
     sha = (request.DATA.get("after", "") or "").strip().lower()
     if request.DATA.get("deleted") or not deploy.is_valid_sha(sha):
         # Branch deletions push the all-zero SHA; anything else non-hex is a
         # payload this receiver does not deploy from.
         logger.info(f"deploy webhook: ignoring push with unusable sha {sha!r}")
-        return dict(status=True, ignored=True, reason="no deployable commit")
+        return JsonResponse(dict(
+            status=True, ignored=True, reason="no deployable commit"))
 
     pusher = request.DATA.get("pusher") or {}
     actor = f"github:{pusher.get('name') or 'unknown'}"
