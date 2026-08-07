@@ -1004,16 +1004,20 @@ function sendActionResponse(conversationId, actionId, value) {
 
 | Type | When | Required Fields |
 |---|---|---|
-| `assistant_message` | User sends a chat message | `message`, optional `conversation_id` |
-| `assistant_action` | User clicks an action button | `conversation_id`, `action_id`, `value` |
+| `assistant_message` | User sends a chat message | `message`, recommended `request_id`, optional `conversation_id` |
+| `assistant_action` | User clicks an action button | `conversation_id`, `action_id`, `value`, recommended `request_id` |
 
 ### Server → Client
 
 | Type | When | Key Fields |
 |---|---|---|
-| `assistant_thinking` | Processing started | `conversation_id` |
-| `assistant_tool_call` | Each tool called | `conversation_id`, `tool`, `input` |
-| `assistant_response` | Final response | `conversation_id`, `response`, `blocks`, `tool_calls_made` |
-| `assistant_error` | Failure | `conversation_id`, `error` |
-| `assistant_plan` | Plan created | `conversation_id`, `plan` (full plan object) |
-| `assistant_plan_update` | Step status changed | `conversation_id`, `plan_id`, `step_id`, `status`, `summary` |
+| `assistant_thinking` | Processing started | `conversation_id`, `request_id` |
+| `assistant_tool_call` | Each tool called | `conversation_id`, `request_id`, `tool`, `input` |
+| `assistant_response` | Final response | `conversation_id`, `request_id`, `response`, `blocks`, `tool_calls_made` |
+| `assistant_error` | Failure | `conversation_id`, `request_id`, `error` |
+| `assistant_plan` | Plan created | `conversation_id`, `request_id`, `plan` (full plan object) |
+| `assistant_plan_update` | Step status changed | `conversation_id`, `request_id`, `plan_id`, `step_id`, `status`, `summary` |
+
+Generate a fresh canonical UUID `request_id` for every action or message and
+ignore server events whose ID does not match the active turn. The field remains
+optional on requests for backward compatibility; it is echoed whenever present.

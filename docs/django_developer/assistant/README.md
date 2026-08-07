@@ -1014,10 +1014,10 @@ The assistant also supports a WebSocket transport for real-time chat UIs. This u
 ### Architecture
 
 ```
-Client sends WS message {type: "assistant_message", message: "...", conversation_id: N}
+Client sends WS message {type: "assistant_message", message: "...", conversation_id: N, request_id: UUID}
   → User.on_realtime_message() dispatches to assistant handler
-  → Handler validates, stores message, returns {type: "assistant_thinking"} immediately
-  → Background job runs run_assistant_ws() with on_event callback
+  → Handler validates, stores message, returns {type: "assistant_thinking", request_id: UUID} immediately
+  → Background thread runs run_assistant_ws() with on_event callback
   → Callback publishes WS events back to the user:
       assistant_text       (intermediate prose from a turn that also calls tools)
       assistant_tool_call  (per tool)
@@ -1027,9 +1027,15 @@ Client sends WS message {type: "assistant_message", message: "...", conversation
       assistant_error      (on failure, terminal)
 ```
 
+`request_id` is optional for backward compatibility. When supplied, it must be
+a canonical UUID string. The handler echoes it unchanged on the immediate
+response and every background event for that turn, including errors, so clients
+can safely distinguish concurrent turns in the same conversation. A malformed
+ID is rejected before any conversation or message is stored.
+
 ### Key Files
 
-- `mojo/apps/assistant/handler.py` — WS message handler + background job function
+- `mojo/apps/assistant/handler.py` — WS message handler + background thread function
 - `mojo/apps/assistant/services/agent.py` — `run_assistant_ws()` variant with event callbacks
 - `mojo/apps/account/models/user.py` — `on_realtime_message` dispatches `assistant_*` types
 
@@ -1039,7 +1045,10 @@ The `User.on_realtime_message` method checks if the message type starts with `as
 
 ### Background Processing
 
-LLM calls are too slow to block the WebSocket handler. The handler publishes a job via `mojo.apps.jobs` and returns immediately. The job function (`execute_assistant_job`) runs the agent loop and uses `send_to_user()` from the realtime manager to push events back to the user's WebSocket connections.
+LLM calls are too slow to block the WebSocket handler. The handler starts a
+daemon thread and returns immediately. `_run_agent_thread()` runs the agent loop
+and uses `send_event_to_user()` from the realtime manager to push direct events
+back to the user's WebSocket connections.
 
 ### `assistant_response` Event Payload
 
