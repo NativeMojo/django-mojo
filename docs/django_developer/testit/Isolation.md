@@ -212,6 +212,16 @@ So each allocated index carries a stamp:
 | Value | the owning checkout's absolute realpath |
 | Written by | `bin/testit.py`, right after its `FLUSHDB` |
 
+The stamp is read and written with a bare `redis-py` client — never
+`mojo.helpers.redis`, for the same reason `redis_limit()` doesn't call it (see
+above). It connects to `127.0.0.1:6379` by default; if your Redis isn't there, set
+`MOJO_TESTENV_REDIS_HOST` and/or `MOJO_TESTENV_REDIS_PORT` (each falls back to
+its own default independently). These are read at call time, independent of
+any Django `REDIS_HOST`/`REDIS_PORT`/`REDIS_URL` setting — an adopter whose
+Redis lives elsewhere needs to set them, or the probe silently talks to the
+wrong (or no) server, which reads as `RedisUnreachable` rather than as a
+config mismatch.
+
 It is checked in two places, and they fail in **opposite directions on purpose**:
 
 - **Allocation fails closed.** `allocate()` skips any candidate index a
