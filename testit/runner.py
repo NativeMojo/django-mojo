@@ -439,9 +439,10 @@ def setup_parser(argv=None):
     parser.add_argument("--full", action="store_true",
                         help="Include every opt-in tier (same as --extra slow,extended)")
     parser.add_argument("--maestro", action="store_true",
-                        help="Report this run to maestro (needs MAESTRO_URL and MAESTRO_API_KEY)")
+                        help="Warn if this run cannot be reported to maestro "
+                             "(reporting is automatic when maestro is installed)")
     parser.add_argument("--no-maestro", dest="no_maestro", action="store_true",
-                        help="Never report this run, even when a maestro config block is present")
+                        help="Do not report this run to maestro")
 
     config_args, _ = config_parser.parse_known_args(argv)
     config_data = {}

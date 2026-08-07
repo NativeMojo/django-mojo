@@ -16,11 +16,21 @@ _ENV_KEYS = (
 
 
 class _Env:
-    """Set/clear MAESTRO_* and CI vars, restoring every one on exit."""
+    """Set/clear MAESTRO_* and CI vars, restoring every one on exit.
 
-    def __init__(self, **values):
+    **Also neutralises discovery by default.** The reporter reads the
+    developer's own `~/.claude.json` and the repo's `.claude/maestro.json`, so
+    on a machine that actually has maestro installed — every machine this suite
+    normally runs on — an un-stubbed gate test would silently be handed a real
+    url, key and project and stop testing what it says it tests. Pass
+    `discover=True` for the tests that are specifically about discovery.
+    """
+
+    def __init__(self, discover=False, **values):
         self.values = values
+        self.discover = discover
         self.saved = {}
+        self.patches = []
 
     def __enter__(self):
         for key in _ENV_KEYS:
@@ -29,9 +39,21 @@ class _Env:
         for key, value in self.values.items():
             if value is not None:
                 os.environ[key] = str(value)
+
+        if not self.discover:
+            from unittest import mock
+            from testit import maestro
+            self.patches = [
+                mock.patch.object(maestro, "_mcp_credentials", return_value=(None, None, None)),
+                mock.patch.object(maestro, "_repo_config", return_value={}),
+            ]
+            for patch in self.patches:
+                patch.start()
         return self
 
     def __exit__(self, *exc):
+        for patch in reversed(self.patches):
+            patch.stop()
         for key, value in self.saved.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -75,36 +97,35 @@ def _report(**kwargs):
 # ---------------------------------------------------------------------------
 # The enable gate
 # ---------------------------------------------------------------------------
-@th.unit_test("maestro reporter: environment variables alone never enable it")
-def test_env_alone_does_not_enable(opts):
-    """The one that matters most: django-mojo is a public framework, and
-    bin/run_tests sources .env with `set -a`, so a developer may well already
-    have MAESTRO_API_KEY exported for the MCP server. Inheriting it must never
-    start reporting test results."""
+@th.unit_test("maestro reporter: a resolvable url and key are enough to enable it")
+def test_url_and_key_enable(opts):
+    """Reporting is on whenever both halves of the credential resolve — no
+    second opt-in. Requiring one was the thing that kept this feature dark from
+    the day it shipped: every repo had the credential installed and none of them
+    had the flag."""
     from testit import maestro
 
     with _Env(MAESTRO_URL="https://m.example.com", MAESTRO_API_KEY="k",
               MAESTRO_PROJECT="12"):
         settings = maestro.setup(_opts())
 
-    assert settings is None, (
-        "a fully populated environment with no explicit --maestro and no config "
-        f"block must leave the reporter off, got {settings!r}"
-    )
+    assert settings is not None, "a resolvable url and key must enable the reporter"
+    assert settings.project == 12, f"project should parse to an int, got {settings.project!r}"
 
 
-@th.unit_test("maestro reporter: --maestro and a config block each enable it")
-def test_enable_paths(opts):
+@th.unit_test("maestro reporter: half a credential never enables it")
+def test_half_credential_stays_off(opts):
+    """Whichever half is missing, the answer is off and silent — a machine with
+    no maestro is the common case, not a misconfiguration to complain about."""
     from testit import maestro
 
-    with _Env(MAESTRO_URL="https://m.example.com", MAESTRO_API_KEY="k", MAESTRO_PROJECT="12"):
-        by_flag = maestro.setup(_opts(maestro=True))
-        by_config = maestro.setup(_opts(config_data={"maestro": {"suite": "api"}}))
+    with _Env(MAESTRO_URL="https://m.example.com"):
+        no_key = maestro.setup(_opts())
+    with _Env(MAESTRO_API_KEY="k"):
+        no_url = maestro.setup(_opts())
 
-    assert by_flag is not None, "--maestro plus url and key should enable the reporter"
-    assert by_flag.project == 12, f"project should parse to an int, got {by_flag.project!r}"
-    assert by_config is not None, "a maestro config block plus url and key should enable it"
-    assert by_config.suite == "api", f"suite should come from the config block, got {by_config.suite!r}"
+    assert no_key is None, f"a url with no key must leave the reporter off, got {no_key!r}"
+    assert no_url is None, f"a key with no url must leave the reporter off, got {no_url!r}"
 
 
 @th.unit_test("maestro reporter: url and key alone enable it, with no project")
@@ -123,16 +144,19 @@ def test_enables_without_project(opts):
     )
 
 
-@th.unit_test("maestro reporter: an empty or false config block means off")
-def test_empty_block_is_off(opts):
+@th.unit_test("maestro reporter: 'maestro: false' is the permanent opt-out")
+def test_false_block_is_off(opts):
+    """`false` is the only way a config file turns reporting off, and it has to
+    beat a perfectly good credential. An empty block is NOT off — it means
+    "defaults", since with discovery there is nothing left to spell out."""
     from testit import maestro
 
     with _Env(MAESTRO_URL="https://m.example.com", MAESTRO_API_KEY="k"):
-        empty = maestro.setup(_opts(config_data={"maestro": {}}))
         disabled = maestro.setup(_opts(config_data={"maestro": False}))
+        empty = maestro.setup(_opts(config_data={"maestro": {}}))
 
-    assert empty is None, f'"maestro": {{}} must read as off, got {empty!r}'
     assert disabled is None, f'"maestro": false must read as off, got {disabled!r}'
+    assert empty is not None, '"maestro": {} means defaults, not off'
 
 
 @th.unit_test("maestro reporter: --no-maestro overrides every enable path")
@@ -161,19 +185,28 @@ def test_env_overrides_config(opts):
         f"MAESTRO_SUITE should win over the config block, got {settings.suite!r}")
 
 
-@th.unit_test("maestro reporter: a missing key is silent by config, warned by flag")
-def test_missing_key(opts):
-    """CI has the key and a laptop does not — that is the steady state for a
-    project with a config block, and it must not nag on every local run. Asking
-    for it explicitly is different: say why nothing happened."""
+@th.unit_test("maestro reporter: no credential is silent, unless --maestro asked")
+def test_missing_credential_is_silent(opts):
+    """Most machines running this suite have no maestro at all. Nagging every
+    one of them on every run is how a warning becomes noise nobody reads. Asking
+    for it explicitly is different: then say why nothing happened."""
+    import io
+    from contextlib import redirect_stdout
     from testit import maestro
 
-    with _Env(MAESTRO_URL="https://m.example.com"):
-        by_config = maestro.setup(_opts(config_data={"maestro": {"url": "https://m.example.com"}}))
-        by_flag = maestro.setup(_opts(maestro=True))
+    quiet = io.StringIO()
+    with _Env(MAESTRO_URL="https://m.example.com"), redirect_stdout(quiet):
+        silent = maestro.setup(_opts())
 
-    assert by_config is None, "a config-block enable with no key must not report"
-    assert by_flag is None, "--maestro with no key must not report"
+    loud = io.StringIO()
+    with _Env(MAESTRO_URL="https://m.example.com"), redirect_stdout(loud):
+        asked = maestro.setup(_opts(maestro=True))
+
+    assert silent is None and asked is None, "no key means no reporting either way"
+    assert quiet.getvalue() == "", (
+        f"an ordinary run with no maestro must print nothing, got {quiet.getvalue()!r}")
+    assert "api key" in loud.getvalue(), (
+        f"--maestro with no key must say what is missing, got {loud.getvalue()!r}")
 
 
 @th.unit_test("maestro reporter: a bearer key never crosses a network in cleartext")
@@ -223,6 +256,331 @@ def test_setup_never_raises(opts):
         settings = maestro.setup(_Hostile())
 
     assert settings is None, "an opts object that raises must degrade to 'off', not propagate"
+
+
+# ---------------------------------------------------------------------------
+# Zero-setup discovery
+#
+# Every test here builds its own fake home and repo. None of them may read the
+# developer's real ~/.claude.json — a test that passes only on a machine with
+# maestro installed is worse than no test.
+# ---------------------------------------------------------------------------
+def _fake_home(tmpdir, servers):
+    """Write an MCP config and return its path."""
+    import json
+    path = os.path.join(tmpdir, "claude.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({"mcpServers": servers}, handle)
+    return path
+
+
+@th.unit_test("maestro discovery: a connector url carries its own key")
+def test_discovery_connector_url(opts):
+    """`<server>/mcp/k/<key>` IS the credential — the key is in the path, and
+    the api base is what is left after removing it."""
+    import tempfile
+    from unittest import mock
+    from testit import maestro
+
+    tmpdir = tempfile.mkdtemp(prefix="maestro-disc-")
+    path = _fake_home(tmpdir, {
+        "maestro": {"type": "http", "url": "https://m.example.com/mcp/k/sekret"}})
+
+    with mock.patch.object(maestro, "MCP_CONFIG_PATHS", (path,)):
+        url, key, _scheme = maestro._mcp_credentials()
+
+    assert url == "https://m.example.com", f"connector url did not reduce to its base, got {url!r}"
+    assert key == "sekret", f"the inline key was not recovered, got {key!r}"
+
+
+@th.unit_test("maestro discovery: an auth header supplies the key, with or without a scheme")
+def test_discovery_auth_header(opts):
+    import tempfile
+    from unittest import mock
+    from testit import maestro
+
+    tmpdir = tempfile.mkdtemp(prefix="maestro-disc-")
+    cases = {
+        "Bearer sekret": "sekret",     # what an MCP install actually writes
+        "sekret": "sekret",            # a bare key is still a key
+    }
+    for header, expected in cases.items():
+        path = _fake_home(tmpdir, {"maestro": {
+            "type": "http", "url": "https://m.example.com/mcp",
+            "headers": {"Authorization": header}}})
+        with mock.patch.object(maestro, "MCP_CONFIG_PATHS", (path,)):
+            url, key, _scheme = maestro._mcp_credentials()
+
+        assert url == "https://m.example.com", (
+            f"the /mcp suffix should be stripped, got {url!r}")
+        assert key == expected, f"{header!r} should yield {expected!r}, got {key!r}"
+
+
+@th.unit_test("maestro discovery: a stdio server's env block supplies the key")
+def test_discovery_stdio_env(opts):
+    import tempfile
+    from unittest import mock
+    from testit import maestro
+
+    tmpdir = tempfile.mkdtemp(prefix="maestro-disc-")
+    path = _fake_home(tmpdir, {"maestro": {
+        "url": "https://m.example.com/mcp", "env": {"MAESTRO_API_KEY": "sekret"}}})
+
+    with mock.patch.object(maestro, "MCP_CONFIG_PATHS", (path,)):
+        url, key, _scheme = maestro._mcp_credentials()
+
+    assert (url, key) == ("https://m.example.com", "sekret"), \
+        f"the stdio env carrier was not read, got {(url, key)!r}"
+
+
+@th.unit_test("maestro discovery: a half-configured server never shadows a complete one")
+def test_discovery_skips_incomplete(opts):
+    """A url with no key is not a usable install. Returning it would stop the
+    search and leave the reporter off on a machine that IS configured."""
+    import tempfile
+    from unittest import mock
+    from testit import maestro
+
+    tmpdir = tempfile.mkdtemp(prefix="maestro-disc-")
+    path = _fake_home(tmpdir, {
+        "maestro-broken": {"url": "https://broken.example.com/mcp"},
+        "maestro": {"url": "https://good.example.com/mcp",
+                    "headers": {"Authorization": "Bearer sekret"}},
+    })
+
+    with mock.patch.object(maestro, "MCP_CONFIG_PATHS", (path,)):
+        url, key, _scheme = maestro._mcp_credentials()
+
+    assert (url, key) == ("https://good.example.com", "sekret"), \
+        f"an incomplete entry shadowed a complete one, got {(url, key)!r}"
+
+
+@th.unit_test("maestro discovery: a project-scoped MCP server is found too")
+def test_discovery_project_scoped(opts):
+    """Claude Code files a server under `projects.<dir>.mcpServers` when it was
+    added without --scope user, which is the CLI default."""
+    import json
+    import tempfile
+    from unittest import mock
+    from testit import maestro
+
+    tmpdir = tempfile.mkdtemp(prefix="maestro-disc-")
+    path = os.path.join(tmpdir, "claude.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({"projects": {"/some/repo": {"mcpServers": {"maestro": {
+            "url": "https://m.example.com/mcp",
+            "headers": {"Authorization": "Bearer sekret"}}}}}}, handle)
+
+    with mock.patch.object(maestro, "MCP_CONFIG_PATHS", (path,)):
+        url, key, _scheme = maestro._mcp_credentials()
+
+    assert (url, key) == ("https://m.example.com", "sekret"), \
+        f"a project-scoped server was not found, got {(url, key)!r}"
+
+
+@th.unit_test("maestro discovery: a missing or corrupt config is silently no-credential")
+def test_discovery_degrades(opts):
+    """The overwhelmingly common case is a machine with no maestro. It must not
+    warn, and it must not raise."""
+    import tempfile
+    from unittest import mock
+    from testit import maestro
+
+    tmpdir = tempfile.mkdtemp(prefix="maestro-disc-")
+    corrupt = os.path.join(tmpdir, "corrupt.json")
+    with open(corrupt, "w", encoding="utf-8") as handle:
+        handle.write("{not json at all")
+
+    for paths_tuple in ((os.path.join(tmpdir, "absent.json"),), (corrupt,)):
+        with mock.patch.object(maestro, "MCP_CONFIG_PATHS", paths_tuple):
+            assert maestro._mcp_credentials() == (None, None, None), \
+                f"{paths_tuple} should yield no credential"
+
+
+@th.unit_test("maestro discovery: the project id comes from .claude/maestro.json")
+def test_discovery_repo_project(opts):
+    """Walked up from the working directory, because a testit run's cwd may be
+    the repo or the generated testproject inside it."""
+    import json
+    import tempfile
+    from testit import maestro
+
+    root = tempfile.mkdtemp(prefix="maestro-repo-")
+    os.makedirs(os.path.join(root, ".claude"))
+    with open(os.path.join(root, ".claude", "maestro.json"), "w", encoding="utf-8") as handle:
+        json.dump({"workspace": 17, "board": 11, "project": 12}, handle)
+
+    nested = os.path.join(root, "testproject", "config")
+    os.makedirs(nested)
+
+    assert maestro._repo_config(root).get("project") == 12, \
+        "the repo's own .claude/maestro.json was not read"
+    assert maestro._repo_config(nested).get("project") == 12, \
+        "the search did not walk up out of testproject/"
+
+    # The negative case has to blank BOTH bases. `_repo_config` falls back to
+    # paths.PROJECT_ROOT after the start directory, and under this suite that
+    # resolves to django-mojo's own testproject — whose repo really does have a
+    # .claude/maestro.json, so an un-patched check finds project 12 and passes
+    # for entirely the wrong reason.
+    from unittest import mock
+    empty = tempfile.mkdtemp(prefix="maestro-empty-")
+    with mock.patch.object(maestro.paths, "PROJECT_ROOT", empty):
+        assert maestro._repo_config(empty).get("project") is None, \
+            "a directory with no maestro.json above it must yield no project"
+
+
+@th.unit_test("maestro discovery: explicit configuration always beats what was found")
+def test_explicit_beats_discovery(opts):
+    """CI has to be able to point a run somewhere other than the developer's own
+    MCP install."""
+    from unittest import mock
+    from testit import maestro
+
+    with _Env(MAESTRO_URL="https://env.example.com", MAESTRO_API_KEY="env-key",
+              MAESTRO_PROJECT="99", discover=True), \
+            mock.patch.object(maestro, "_mcp_credentials",
+                              return_value=("https://found.example.com", "found-key", None)), \
+            mock.patch.object(maestro, "_repo_config", return_value={"project": 12}):
+        settings = maestro.setup(_opts())
+
+    assert settings.url == "https://env.example.com", \
+        f"MAESTRO_URL should beat the discovered url, got {settings.url!r}"
+    assert settings.key == "env-key", "MAESTRO_API_KEY should beat the discovered key"
+    assert settings.project == 99, \
+        f"MAESTRO_PROJECT should beat the repo config, got {settings.project!r}"
+
+
+@th.unit_test("maestro discovery: a key is never read from the committed config block")
+def test_key_never_from_config_block(opts):
+    """`.claude/maestro.json` and any testit config file are committed. A key
+    read from one would be a key in git, so that carrier does not exist."""
+    from testit import maestro
+
+    with _Env():
+        settings = maestro.setup(_opts(config_data={
+            "maestro": {"url": "https://m.example.com", "key": "committed-secret"}}))
+
+    assert settings is None, (
+        "a key in a config block must not enable reporting — it would legitimise "
+        f"committing credentials, got {settings!r}")
+
+
+@th.unit_test("maestro discovery: discovery alone is a complete setup")
+def test_discovery_is_sufficient(opts):
+    """The whole point: nothing in the environment, nothing in a config file,
+    and the reporter still comes up with all three values."""
+    from unittest import mock
+    from testit import maestro
+
+    with _Env(discover=True), \
+            mock.patch.object(maestro, "_mcp_credentials",
+                              return_value=("https://m.example.com", "found-key", None)), \
+            mock.patch.object(maestro, "_repo_config", return_value={"project": 12}):
+        settings = maestro.setup(_opts())
+
+    assert settings is not None, "discovery alone must enable the reporter"
+    assert settings.url == "https://m.example.com", f"got {settings.url!r}"
+    assert settings.key == "found-key", "the discovered key was not used"
+    assert settings.project == 12, f"the discovered project was not used, got {settings.project!r}"
+
+
+@th.unit_test("maestro auth: a JWT credential authenticates as Bearer, not apikey")
+def test_auth_scheme_by_shape(opts):
+    """mojo routes on the scheme — `apikey` goes to ApiKey.validate_token and
+    `Bearer` to User.validate_jwt — so the wrong one is a flat 401. maestro
+    issues its long-lived `user_api_key` AS a JWT, which is the trap: the thing
+    everyone calls "the api key" does not authenticate under `apikey`.
+
+    This is not hypothetical. The first working discovery still failed to push,
+    with HTTP 401 'Invalid API key', for exactly this reason.
+    """
+    from testit import maestro
+
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJ1aWQiOjF9.c2ln"
+    assert maestro.auth_scheme(jwt) == "Bearer", \
+        "a JWT must authenticate as Bearer"
+    assert maestro.auth_scheme("plain-opaque-token") == "apikey", \
+        "an opaque token must authenticate as apikey"
+    assert maestro.auth_scheme(jwt, "apikey") == "apikey", \
+        "a scheme declared by the carrier must win over the shape guess"
+    assert maestro.auth_scheme("a.b") == "apikey" and maestro.auth_scheme("a.b.c") == "apikey", \
+        "dots alone are not a JWT — the base64url header prefix is required too"
+
+
+@th.unit_test("maestro auth: the discovered scheme reaches the Authorization header")
+def test_discovered_scheme_is_sent(opts):
+    """End to end: what the MCP config declares is what the push sends."""
+    import requests
+    from unittest import mock
+    from testit import maestro
+
+    captured = {}
+
+    def _fake_post(url, **kwargs):
+        captured.update(kwargs)
+
+        class _Resp:
+            status_code = 200
+            text = "{}"
+
+            @staticmethod
+            def json():
+                return {}
+        return _Resp()
+
+    with _Env(discover=True), \
+            mock.patch.object(maestro, "_mcp_credentials",
+                              return_value=("https://m.example.com", "found-key", "Bearer")), \
+            mock.patch.object(maestro, "_repo_config", return_value={}):
+        settings = maestro.setup(_opts())
+
+    assert settings.scheme == "Bearer", f"the declared scheme was lost, got {settings.scheme!r}"
+
+    with mock.patch.object(requests, "post", side_effect=_fake_post):
+        maestro.push(settings, {"total": 1, "status": "passed"})
+
+    assert captured["headers"]["Authorization"] == "Bearer found-key", (
+        f"the discovered scheme must be used verbatim, got "
+        f"{captured['headers']['Authorization'].split()[0]!r}")
+
+
+@th.unit_test("maestro auth: an env-supplied key never inherits the MCP entry's scheme")
+def test_env_key_does_not_inherit_scheme(opts):
+    """A key set in the environment is a different credential than the one in
+    the MCP config. Letting the config's `Bearer` travel with it would send an
+    opaque ApiKey under the JWT scheme and 401."""
+    from testit import maestro
+
+    with _Env(MAESTRO_URL="https://m.example.com", MAESTRO_API_KEY="opaque-key",
+              discover=True), \
+            __import__("unittest").mock.patch.object(
+                maestro, "_mcp_credentials",
+                return_value=("https://other.example.com", "jwt-key", "Bearer")), \
+            __import__("unittest").mock.patch.object(
+                maestro, "_repo_config", return_value={}):
+        settings = maestro.setup(_opts())
+
+    assert settings.key == "opaque-key", "the env key must win"
+    assert settings.scheme == "apikey", (
+        f"an opaque env key must not inherit the MCP entry's Bearer, got {settings.scheme!r}")
+
+
+@th.unit_test("maestro reporter: a --full run reports under its own suite")
+def test_full_run_gets_own_suite(opts):
+    """A --full run answers a different question than a default one. Sharing a
+    suite would let the next default run report green over a red extended
+    module — the failure would vanish from the board without being fixed."""
+    from testit import maestro
+
+    with _Env(MAESTRO_URL="https://m.example.com", MAESTRO_API_KEY="k"):
+        default = maestro.setup(_opts())
+        full = maestro.setup(_opts(full=True))
+        named = maestro.setup(_opts(full=True, config_data={"maestro": {"suite": "mine"}}))
+
+    assert default.suite is None, f"a default run should not name a suite, got {default.suite!r}"
+    assert full.suite == "full", f"a --full run should report as 'full', got {full.suite!r}"
+    assert named.suite == "mine", "an explicit suite must still win over --full"
 
 
 # ---------------------------------------------------------------------------

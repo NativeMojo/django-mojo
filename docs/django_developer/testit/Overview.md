@@ -156,35 +156,47 @@ LLM agents should always use `--agent` and read the JSON report instead of parsi
 
 A run can report itself to a [maestro](https://maestromojo.com) server, so a teammate or an agent can ask whether a project is passing without access to the machine that ran the tests. The wire format is maestro's published **Test Run Spec v1** (`docs/web_developer/maestro/TestRuns.md` in the maestro repo) — runner-neutral, and documented there rather than restated here.
 
-**It is off unless you turn it on, and environment variables alone never turn it on.** Two enable paths:
+**There is nothing to configure.** If this machine can already reach maestro, runs report themselves:
 
 ```bash
-./bin/run_tests --agent --maestro           # explicit, for CI
+./bin/run_tests --agent          # reports, if maestro is installed
 ```
 
-```json
-{ "maestro": { "url": "https://maestro.example.com", "suite": "api" } }
-```
+All three values it needs are already on the machine, so it reads them rather than asking for them again:
 
-…passed with `--config`. A run reports only when an enable path is present **and** a url and key both resolve. `--no-maestro` suppresses it even when configured.
+| Value | Discovered from |
+|---|---|
+| Server URL | the `maestro` MCP server in `~/.claude.json` (`https://host/mcp` → `https://host`) |
+| API key | that same server's `Authorization` header, `/mcp/k/<key>` connector url, or `env.MAESTRO_API_KEY` |
+| Project id | `.claude/maestro.json` in the repo, walking up from the working directory |
 
-The env-vars-never-enable rule is deliberate: `bin/run_tests` sources the repo's `.env` with `set -a`, and `MAESTRO_API_KEY` is the same name maestro's MCP server uses — so a developer may already have it exported, and inheriting it must not start sending test results anywhere.
+A machine with no maestro installed finds nothing, **says nothing** and reports nothing — which is what keeps a public framework from phoning home. Pass `--maestro` to make a run that found nothing say why instead of staying quiet.
+
+**The Authorization scheme is part of the credential.** mojo's auth middleware routes on it — `apikey` to `ApiKey.validate_token`, `Bearer` to `User.validate_jwt` — so the wrong scheme is a flat 401, not a fallback. maestro issues its long-lived `user_api_key` **as a JWT**, so the thing everyone calls "the api key" authenticates as `Bearer`. The reporter uses the scheme the MCP config declares, and otherwise infers it from the token's shape (a JWT → `Bearer`, anything else → `apikey`). An environment-supplied `MAESTRO_API_KEY` never inherits the MCP entry's scheme, because it is a different credential.
+
+**Turning it off:** `--no-maestro` for one run, or `"maestro": false` in a config file permanently.
+
+> This replaced an opt-in gate that required `--maestro` or a config block *and* a hand-set `MAESTRO_API_KEY`. The feature shipped dark: every repo had the credential installed and none had the flag, so no project ever reported a single run. Discovery is also **strictly safer** than the `MAESTRO_API_KEY` environment variable it replaces — `bin/run_tests` sources `.env` with `set -a`, so an ambient key could pair with an unrelated `MAESTRO_URL` and post to a host that never issued it. A discovered url and key come from the same record, so the key can only travel to the server it was installed for.
+
+Every discovered value can be overridden, so CI can point a run somewhere else:
 
 | Setting | Environment | Config key | Default |
 |---|---|---|---|
-| Server URL | `MAESTRO_URL` | `maestro.url` | *(none — no default endpoint exists)* |
-| API key | `MAESTRO_API_KEY` | **environment only** | *(none)* |
-| Project id | `MAESTRO_PROJECT` | `maestro.project` | *(omitted — a project-scoped key carries it)* |
-| Suite name | `MAESTRO_SUITE` | `maestro.suite` | server-side `"default"` |
+| Server URL | `MAESTRO_URL` | `maestro.url` | *discovered* |
+| API key | `MAESTRO_API_KEY` | **never from config** | *discovered* |
+| Project id | `MAESTRO_PROJECT` | `maestro.project` | *discovered* |
+| Suite name | `MAESTRO_SUITE` | `maestro.suite` | `"full"` for `--full`, else server-side `"default"` |
 | Your version | `MAESTRO_VERSION` | `maestro.version` | *(omitted)* |
 | Timeout (s) | `MAESTRO_TIMEOUT` | `maestro.timeout` | `5.0` |
 | Send failure detail | — | `maestro.diagnostics` | `true` |
 
-The **key is read from the environment only** — never from the config file, so a repo never carries one. `MAESTRO_VERSION` is *your project's* version of the code under test (semver, build or deploy tag), which is not the same thing as the commit or as testit's own version; the spec marks it SHOULD-report.
+The **key is never read from a config file** — those are committed, and a key in one would be a key in git. Environment or discovery only. `MAESTRO_VERSION` is *your project's* version of the code under test (semver, build or deploy tag), which is not the same thing as the commit or as testit's own version; the spec marks it SHOULD-report.
 
 **A push never changes the exit code.** Every failure — offline, outage, bad key, timeout, even a bug in the reporter itself — degrades to one warning line; the exit code stays a function of the tests alone. One honest limit: the timeout bounds each socket operation, not wall clock, so a wedged DNS resolver can still exceed it.
 
-**Partial runs are not reported.** maestro treats the latest push per suite as the project's status, so a run that is not the suite's verdict would overwrite a real result with a fragment. Refused: `-t` and `--ignore` runs, and any run cut short by `-s` or the abort key. `--extra`/`--full` runs *are* reported — they are complete runs of a wider tier, so give a nightly `--full` stream its own `suite` name rather than letting its larger totals alternate with the default tier's.
+**Partial runs are not reported.** maestro treats the latest push per suite as the project's status, so a run that is not the suite's verdict would overwrite a real result with a fragment. Refused: `-t` and `--ignore` runs, and any run cut short by `-s` or the abort key. In practice this means the iteration loop — run one module, fix, run it again — never touches the board; only a whole-suite run does.
+
+`--extra`/`--full` runs *are* reported: they are complete runs of a wider tier. A `--full` run reports as **suite `full`** automatically, so its larger totals never alternate with the default tier's — without that, a default run passing after a red `--full` would report green over an extended-module failure and the failure would vanish from the board without being fixed.
 
 **What leaves the machine.** The payload is the contract and nothing more: counters, per-suite stats, and — unless `maestro.diagnostics` is `false` — the first 50 failures with their **assertion messages and tracebacks**. Read that literally: `th.assert_eq` interpolates the actual and expected values into its message, so a failing assertion about a token, password or customer record sends that value to the configured server. Set `"diagnostics": false` to report green/red and counts only. The server error-log tail (`server_log_tail`) and test source (`test_source`) are never sent at any setting.
 
@@ -259,7 +271,7 @@ Supported keys:
 ```
 
 - `tests` and `ignore` accept strings or lists.
-- `maestro` is a nested object rather than a flat default, and its presence is one of the two ways to enable reporting — see [Maestro Reporting](#maestro-reporting) for the keys. An empty object or `false` reads as "off".
+- `maestro` is a nested object rather than a flat default; it overrides what discovery found — see [Maestro Reporting](#maestro-reporting) for the keys. An empty object means "defaults"; `false` is the permanent opt-out.
 - `show_errors` is equivalent to `-e`.
 - `extra` accepts either a comma-separated string or a JSON list; at runtime it is exposed as `opts.extra_list` (and `opts.extra` remains a comma-joined string for legacy helpers).
 - Supply fewer flags in automation scripts; let interactive runs override what is needed.
