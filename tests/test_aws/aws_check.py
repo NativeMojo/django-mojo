@@ -28,9 +28,10 @@ def _verified_sts():
     return sts
 
 
-def _discovery_clients(db_instances=None, instances=None, cache_clusters=None):
-    """Mock ec2/rds/elasticache paginators so _desired_alarms builds no real boto clients."""
-    ec2, rds, elasticache = mock.Mock(), mock.Mock(), mock.Mock()
+def _discovery_clients(db_instances=None, instances=None, cache_clusters=None,
+                       target_groups=None):
+    """Mock ec2/rds/elasticache/elbv2 paginators so _desired_alarms builds no real boto clients."""
+    ec2, rds, elasticache, elbv2 = (mock.Mock(), mock.Mock(), mock.Mock(), mock.Mock())
     ec2.get_paginator.return_value.paginate.return_value = [
         {"Reservations": [{"Instances": instances or []}]},
     ]
@@ -40,7 +41,23 @@ def _discovery_clients(db_instances=None, instances=None, cache_clusters=None):
     elasticache.get_paginator.return_value.paginate.return_value = [
         {"CacheClusters": cache_clusters or []},
     ]
-    return {"ec2": ec2, "rds": rds, "elasticache": elasticache}
+    elbv2.get_paginator.return_value.paginate.return_value = [
+        {"TargetGroups": target_groups or []},
+    ]
+    return {"ec2": ec2, "rds": rds, "elasticache": elasticache, "elbv2": elbv2}
+
+
+def _target_group(name="api", kind="net", attached=True, tg_id="0123456789abcdef",
+                  lb_id="fedcba9876543210"):
+    """One describe_target_groups row, with the real ARN shapes CloudWatch keys on."""
+    region_account = "us-east-1:123456789012"
+    return {
+        "TargetGroupName": name,
+        "TargetGroupArn": (f"arn:aws:elasticloadbalancing:{region_account}:"
+                           f"targetgroup/{name}/{tg_id}"),
+        "LoadBalancerArns": ([f"arn:aws:elasticloadbalancing:{region_account}:"
+                              f"loadbalancer/{kind}/{name}-lb/{lb_id}"] if attached else []),
+    }
 
 
 def _owned_operations_sns(topic, confirmed=True):
@@ -67,9 +84,22 @@ def _owned_alarm_tags():
     ]}
 
 
+def _cloudwatch(metrics=None, **attrs):
+    """
+    A cloudwatch stub whose list_metrics answers explicitly.
+
+    Without this, a bare Mock returns a Mock from list_metrics(...).get("Metrics")
+    — which is truthy — so every test would silently acquire the deployment-wide
+    certificate alarm and assert against a profile it never meant to build.
+    """
+    cloudwatch = mock.Mock(**attrs)
+    cloudwatch.list_metrics.return_value = {"Metrics": metrics or []}
+    return cloudwatch
+
+
 def _stale_alarm_cloudwatch(alarm):
     """describe_alarms answers the stale-detection sweep with `alarm`, the desired loop with nothing."""
-    cloudwatch = mock.Mock()
+    cloudwatch = _cloudwatch()
 
     def describe_alarms(**kwargs):
         if kwargs.get("AlarmTypes"):
@@ -111,7 +141,7 @@ def test_monitoring_stops_before_subscription_until_static_allowlist_matches(opt
     ]}
     with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
         report = aws_check.AWSCheckRunner(
-            clients={"sts": _verified_sts(), "sns": sns, "cloudwatch": mock.Mock(),
+            clients={"sts": _verified_sts(), "sns": sns, "cloudwatch": _cloudwatch(),
                      **_discovery_clients()},
             apply=True, yes=True,
         ).run(["monitoring"])
@@ -315,7 +345,7 @@ def test_monitoring_requires_deployment_ownership_and_detects_dimension_drift(op
     ]}
     with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
         report = aws_check.AWSCheckRunner(
-            clients={"sns": sns, "cloudwatch": mock.Mock(), **_discovery_clients()},
+            clients={"sns": sns, "cloudwatch": _cloudwatch(), **_discovery_clients()},
         ).run(["monitoring"])
     assert report["overall"] == "fail", f"Cross-deployment topic must conflict, got {report}"
     assert "sns.topic_conflict" in [item["code"] for item in report["items"]]
@@ -325,7 +355,7 @@ def test_monitoring_requires_deployment_ownership_and_detects_dimension_drift(op
         "Protocol": "https", "Endpoint": "https://api.example.com/api/aws/cloudwatch/sns/alarm",
         "SubscriptionArn": "arn:aws:sns:subscription/confirmed",
     }]}
-    cloudwatch = mock.Mock()
+    cloudwatch = _cloudwatch()
     desired = {
         "AlarmName": "django-mojo/test/ec2/i-expected/cpu",
         "Namespace": "AWS/EC2", "MetricName": "CPUUtilization",
@@ -440,6 +470,260 @@ def test_email_uses_selected_context_and_rejects_unowned_topic_collision(opts):
 
 
 @th.django_unit_test()
+def test_desired_alarms_unchanged_for_existing_resources(opts):
+    """
+    The alarm dicts emitted for EC2/RDS/ElastiCache must stay byte-identical.
+
+    check_monitoring compares every desired alarm field-by-field against what is
+    already in CloudWatch and reports `alarms.drifted` on any difference. A
+    refactor that changes an emitted field would make every deployment report
+    drift on alarms that are in fact correct, so this pins the exact output.
+    """
+    from mojo.apps.aws.services import aws_check
+
+    clients = _discovery_clients(
+        instances=[{"InstanceId": "i-abc", "State": {"Name": "running"},
+                    "InstanceType": "m5.large"}],
+        db_instances=[{"DBInstanceIdentifier": "plain-pg", "DBInstanceStatus": "available",
+                       "Engine": "postgres", "DBInstanceClass": "db.m5.large"}],
+        cache_clusters=[{"CacheClusterId": "cache-1", "CacheClusterStatus": "available"}],
+    )
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+
+    by_name = {alarm["AlarmName"]: alarm for alarm in desired}
+    expected = {
+        "django-mojo/test/ec2/i-abc/status": {
+            "AlarmName": "django-mojo/test/ec2/i-abc/status",
+            "Namespace": "AWS/EC2", "MetricName": "StatusCheckFailed",
+            "Dimensions": [{"Name": "InstanceId", "Value": "i-abc"}],
+            "Statistic": "Maximum", "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+            "Threshold": 1, "Period": 60, "EvaluationPeriods": 2,
+            "DatapointsToAlarm": 2, "TreatMissingData": "notBreaching",
+        },
+        "django-mojo/test/ec2/i-abc/cpu": {
+            "AlarmName": "django-mojo/test/ec2/i-abc/cpu",
+            "Namespace": "AWS/EC2", "MetricName": "CPUUtilization",
+            "Dimensions": [{"Name": "InstanceId", "Value": "i-abc"}],
+            "Statistic": "Average", "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+            "Threshold": 90, "Period": 300, "EvaluationPeriods": 3,
+            "DatapointsToAlarm": 3, "TreatMissingData": "notBreaching",
+        },
+        "django-mojo/test/rds/plain-pg/cpu": {
+            "AlarmName": "django-mojo/test/rds/plain-pg/cpu",
+            "Namespace": "AWS/RDS", "MetricName": "CPUUtilization",
+            "Dimensions": [{"Name": "DBInstanceIdentifier", "Value": "plain-pg"}],
+            "Statistic": "Average", "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+            "Threshold": 90, "Period": 300, "EvaluationPeriods": 3,
+            "DatapointsToAlarm": 3, "TreatMissingData": "notBreaching",
+        },
+        "django-mojo/test/rds/plain-pg/free-storage": {
+            "AlarmName": "django-mojo/test/rds/plain-pg/free-storage",
+            "Namespace": "AWS/RDS", "MetricName": "FreeStorageSpace",
+            "Dimensions": [{"Name": "DBInstanceIdentifier", "Value": "plain-pg"}],
+            "Statistic": "Average", "ComparisonOperator": "LessThanOrEqualToThreshold",
+            "Threshold": 10 * 1024 ** 3, "Period": 300, "EvaluationPeriods": 3,
+            "DatapointsToAlarm": 3, "TreatMissingData": "notBreaching",
+        },
+        "django-mojo/test/elasticache/cache-1/cpu": {
+            "AlarmName": "django-mojo/test/elasticache/cache-1/cpu",
+            "Namespace": "AWS/ElastiCache", "MetricName": "CPUUtilization",
+            "Dimensions": [{"Name": "CacheClusterId", "Value": "cache-1"}],
+            "Statistic": "Average", "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+            "Threshold": 90, "Period": 300, "EvaluationPeriods": 3,
+            "DatapointsToAlarm": 3, "TreatMissingData": "notBreaching",
+        },
+    }
+    for name, alarm in expected.items():
+        assert name in by_name, \
+            f"The {name} alarm disappeared from the profile; got {sorted(by_name)}"
+        assert dict(by_name[name]) == alarm, (
+            f"The {name} alarm dict changed shape, which makes every existing "
+            f"deployment report drift.\nexpected {alarm}\ngot      {dict(by_name[name])}"
+        )
+
+
+@th.django_unit_test()
+def test_target_group_alarm_uses_arn_suffix_dimensions(opts):
+    """
+    CloudWatch keys ELBv2 metrics on the ARN *suffix*, never the full ARN.
+
+    A full ARN is accepted by put_metric_alarm and then never receives a
+    datapoint, so the alarm sits green forever — the failure this asserts away.
+    """
+    from mojo.apps.aws.services import aws_check
+
+    clients = _discovery_clients(target_groups=[
+        _target_group(name="api", kind="net"),
+        _target_group(name="web", kind="app", tg_id="aaaa1111", lb_id="bbbb2222"),
+    ])
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+
+    by_name = {alarm["AlarmName"]: alarm for alarm in desired}
+    net = by_name.get("django-mojo/test/elbv2/targetgroup~api~0123456789abcdef/healthy-hosts")
+    assert net is not None, (
+        "The target-group alarm name must carry the ~-escaped suffix; "
+        f"got {sorted(by_name)}"
+    )
+    assert net["Dimensions"] == [
+        {"Name": "TargetGroup", "Value": "targetgroup/api/0123456789abcdef"},
+        {"Name": "LoadBalancer", "Value": "net/api-lb/fedcba9876543210"},
+    ], f"Network LB dimensions must be bare ARN suffixes, got {net['Dimensions']}"
+    assert net["Namespace"] == "AWS/NetworkELB", \
+        f"A net/ load balancer publishes to AWS/NetworkELB, got {net['Namespace']}"
+
+    web = by_name["django-mojo/test/elbv2/targetgroup~web~aaaa1111/healthy-hosts"]
+    assert web["Dimensions"][1] == {"Name": "LoadBalancer", "Value": "app/web-lb/bbbb2222"}, \
+        f"Application LB suffix must start at app/, got {web['Dimensions']}"
+    assert web["Namespace"] == "AWS/ApplicationELB", \
+        f"An app/ load balancer publishes to AWS/ApplicationELB, got {web['Namespace']}"
+
+
+@th.django_unit_test()
+def test_target_group_without_load_balancer_is_skipped(opts):
+    from mojo.apps.aws.services import aws_check
+
+    clients = _discovery_clients(target_groups=[_target_group(name="orphan", attached=False)])
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    assert desired == [], (
+        "An unattached target group publishes no metrics, so alarming on it would "
+        f"sit in INSUFFICIENT_DATA forever; got {desired}"
+    )
+
+
+@th.django_unit_test()
+def test_empty_target_group_is_caught_by_healthy_host_alarm(opts):
+    """
+    The outage UnHealthyHostCount cannot see.
+
+    With every target deregistered the group reports 0 unhealthy hosts, which
+    under notBreaching reads as permanently healthy. HealthyHostCount < 1 with
+    breaching is the only signal that fires.
+    """
+    from mojo.apps.aws.services import aws_check
+
+    clients = _discovery_clients(target_groups=[_target_group()])
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+
+    by_metric = {alarm["MetricName"]: alarm for alarm in desired}
+    healthy = by_metric.get("HealthyHostCount")
+    assert healthy is not None, \
+        f"Every target group needs a HealthyHostCount alarm, got {sorted(by_metric)}"
+    assert healthy["ComparisonOperator"] == "LessThanThreshold" and healthy["Threshold"] == 1, (
+        "The tier is gone when fewer than one host is healthy; "
+        f"got {healthy['ComparisonOperator']} {healthy['Threshold']}"
+    )
+    assert healthy["Statistic"] == "Minimum", \
+        f"A Minimum statistic catches the worst datapoint in the window, got {healthy['Statistic']}"
+    assert healthy["TreatMissingData"] == "breaching", (
+        "A load balancer that stops reporting HealthyHostCount is the outage, so "
+        f"missing data must breach; got {healthy['TreatMissingData']}"
+    )
+
+    unhealthy = by_metric["UnHealthyHostCount"]
+    assert unhealthy["TreatMissingData"] == "notBreaching", (
+        "UnHealthyHostCount is the partial-degradation signal and must not page on "
+        f"quiet; got {unhealthy['TreatMissingData']}"
+    )
+
+
+@th.django_unit_test()
+def test_credit_balance_alarm_only_on_burstable(opts):
+    """
+    Only burstable families publish CPUCreditBalance.
+
+    An alarm on a non-burstable instance would never receive a datapoint and,
+    under notBreaching, would read as permanently green.
+    """
+    from mojo.apps.aws.services import aws_check
+
+    clients = _discovery_clients(
+        instances=[
+            {"InstanceId": "i-burst", "State": {"Name": "running"}, "InstanceType": "t3.medium"},
+            {"InstanceId": "i-fixed", "State": {"Name": "running"}, "InstanceType": "m5.large"},
+        ],
+        db_instances=[
+            {"DBInstanceIdentifier": "db-burst", "DBInstanceStatus": "available",
+             "Engine": "postgres", "DBInstanceClass": "db.t4g.medium"},
+            {"DBInstanceIdentifier": "db-fixed", "DBInstanceStatus": "available",
+             "Engine": "postgres", "DBInstanceClass": "db.m5.large"},
+        ],
+    )
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+
+    credited = {alarm["Dimensions"][0]["Value"] for alarm in desired
+                if alarm["MetricName"] == "CPUCreditBalance"}
+    assert credited == {"i-burst", "db-burst"}, (
+        "Exactly the burstable EC2 and RDS resources earn a CPUCreditBalance alarm; "
+        f"got {sorted(credited)}"
+    )
+    alarm = next(a for a in desired if a["MetricName"] == "CPUCreditBalance")
+    assert alarm["ComparisonOperator"] == "LessThanOrEqualToThreshold", (
+        "Credits are exhausted on the way DOWN; a GreaterThan comparison would "
+        f"never fire; got {alarm['ComparisonOperator']}"
+    )
+    assert alarm["Threshold"] == 20, f"Default credit floor should be 20, got {alarm['Threshold']}"
+
+
+@th.django_unit_test()
+def test_evictions_alarm_is_greater_than_zero(opts):
+    from mojo.apps.aws.services import aws_check
+
+    clients = _discovery_clients(cache_clusters=[
+        {"CacheClusterId": "cache-1", "CacheClusterStatus": "available"},
+    ])
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+
+    evictions = next((a for a in desired if a["MetricName"] == "Evictions"), None)
+    assert evictions is not None, \
+        f"ElastiCache clusters need an eviction alarm, got {[a['MetricName'] for a in desired]}"
+    assert evictions["Threshold"] == 0 and evictions["ComparisonOperator"] == "GreaterThanThreshold", (
+        "ANY sustained eviction means the working set no longer fits — this is not a "
+        f"high-water mark; got {evictions['ComparisonOperator']} {evictions['Threshold']}"
+    )
+    assert evictions["Statistic"] == "Sum", \
+        f"Evictions are counted over the period, not averaged, got {evictions['Statistic']}"
+
+
+@th.django_unit_test()
+def test_connection_alarm_uses_forgiving_default_and_honours_override(opts):
+    """
+    The DatabaseConnections default is deliberately high.
+
+    A default tuned to the smallest instance class would fire constantly on a
+    healthy medium, and a chronically-firing alarm gets muted — which silences
+    the whole operations topic, defeating every other alarm in the profile.
+    """
+    from mojo.apps.aws.services import aws_check
+
+    clients = _discovery_clients(db_instances=[
+        {"DBInstanceIdentifier": "pg", "DBInstanceStatus": "available",
+         "Engine": "postgres", "DBInstanceClass": "db.t3.medium"},
+    ])
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    connections = next(a for a in desired if a["MetricName"] == "DatabaseConnections")
+    assert connections["Threshold"] == 500, \
+        f"The shipped default must be forgiving (500), got {connections['Threshold']}"
+    assert connections["ComparisonOperator"] == "GreaterThanOrEqualToThreshold", \
+        f"Connection exhaustion is an upward breach, got {connections['ComparisonOperator']}"
+
+    values = _setting_values(AWS_CHECK_RDS_MAX_CONNECTIONS=90)
+    with mock.patch.object(aws_check, "_setting", side_effect=values):
+        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    connections = next(a for a in desired if a["MetricName"] == "DatabaseConnections")
+    assert connections["Threshold"] == 90, (
+        "An operator on a small instance class must be able to lower the ceiling; "
+        f"got {connections['Threshold']}"
+    )
+
+
+@th.django_unit_test()
 def test_desired_alarms_skips_free_storage_space_on_aurora(opts):
     from mojo.apps.aws.services import aws_check
 
@@ -483,7 +767,7 @@ def test_aurora_storage_gap_is_reported_not_silent(opts):
     from mojo.apps.aws.services import aws_check
 
     topic = "arn:aws:sns:us-east-1:123456789012:django-mojo-test-operations"
-    cloudwatch = mock.Mock()
+    cloudwatch = _cloudwatch()
     cloudwatch.describe_alarms.return_value = {"MetricAlarms": []}
     clients = {
         "sns": _owned_operations_sns(topic), "cloudwatch": cloudwatch,
@@ -542,7 +826,7 @@ def test_stale_detection_makes_no_call_when_no_aurora_is_discovered(opts):
     from mojo.apps.aws.services import aws_check
 
     topic = "arn:aws:sns:us-east-1:123456789012:django-mojo-test-operations"
-    cloudwatch = mock.Mock()
+    cloudwatch = _cloudwatch()
     cloudwatch.describe_alarms.return_value = {"MetricAlarms": []}
     clients = {
         "sns": _owned_operations_sns(topic), "cloudwatch": cloudwatch,

@@ -11,6 +11,7 @@ from botocore.exceptions import (
 )
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from objict import objict
 
 from mojo.helpers import logit
 from mojo.helpers.aws.client import get_client, get_session
@@ -24,6 +25,12 @@ SECTIONS = ("prerequisites", "identity", "cron", "s3", "email", "monitoring", "r
 # default run, and it can only ever report pass/warn/pending — never fail.
 ALL_SECTIONS = SECTIONS + ("versions",)
 OWNERSHIP_TAGS = {"managed-by": "django-mojo", "purpose": "cloudwatch-incidents"}
+
+# The custom certificate-expiry metric. The publisher (dnsman) and the alarm
+# (here) must agree on all three of namespace, name and the deployment
+# dimension, or the alarm watches a metric nobody writes.
+CERT_METRIC_NAMESPACE = "DjangoMojo/Certificates"
+CERT_METRIC_NAME = "MinDaysToExpiry"
 
 
 def _setting(name, default=None, kind=None):
@@ -49,6 +56,66 @@ def _alarm_name(slug, kind, resource_id, signal):
 def _is_aurora_engine(engine):
     """True for every AWS Aurora engine id. Aurora publishes FreeLocalStorage, not FreeStorageSpace."""
     return str(engine or "").strip().lower().startswith("aurora")
+
+
+# Burstable families throttle instead of failing when credits run out, and only
+# they publish CPUCreditBalance. Alarming on a non-burstable instance would
+# create an alarm whose metric never reports, which reads as permanently green.
+BURSTABLE_EC2_PREFIXES = ("t2.", "t3.", "t3a.", "t4g.")
+
+
+def _is_burstable_ec2(instance_type):
+    return str(instance_type or "").strip().lower().startswith(BURSTABLE_EC2_PREFIXES)
+
+
+def _is_burstable_rds(db_class):
+    return str(db_class or "").strip().lower().startswith("db.t")
+
+
+def _arn_suffix(arn, *prefixes):
+    """
+    The ELBv2 dimension value CloudWatch expects — the ARN *suffix*, not the ARN.
+
+    A target group is `targetgroup/<name>/<id>` and a load balancer is
+    `net/<name>/<id>` (or `app/...`). Passing the full ARN creates an alarm
+    successfully that then never receives a datapoint, so it sits green forever.
+    """
+    text = str(arn or "")
+    for prefix in prefixes:
+        index = text.find(f"{prefix}/")
+        if index != -1:
+            return text[index:]
+    return ""
+
+
+def deployment_slug():
+    """
+    The deployment's stable identity, used as an owning tag, an alarm-name
+    segment, and the dimension of the certificate-expiry metric.
+
+    Module-level and public on purpose: the metric publisher lives in another app
+    and MUST derive the same value from the same code. Two copies that drift
+    produce an alarm watching a metric nobody publishes — green forever.
+    """
+    configured = _setting("AWS_MONITORING_NAME", "") or ""
+    host = urlparse(_setting("BASE_URL", "") or "").hostname or "deployment"
+    return _safe_slug(configured or host)
+
+
+def _profile(signal, metric, statistic, comparison, threshold,
+             period=300, evaluation=3, datapoints=3, treat_missing="notBreaching"):
+    """
+    One alarm profile.
+
+    `treat_missing` defaults to notBreaching — the right answer for a metric that
+    is simply quiet. Signals where the ABSENCE of data is itself the failure pass
+    "breaching" explicitly.
+    """
+    return objict(
+        signal=signal, metric=metric, statistic=statistic, comparison=comparison,
+        threshold=threshold, period=period, evaluation=evaluation,
+        datapoints=datapoints, treat_missing=treat_missing,
+    )
 
 
 class AWSCheckRunner:
@@ -251,9 +318,7 @@ class AWSCheckRunner:
             raise
 
     def _deployment_slug(self):
-        configured = _setting("AWS_MONITORING_NAME", "") or ""
-        host = urlparse(_setting("BASE_URL", "") or "").hostname or "deployment"
-        return _safe_slug(configured or host)
+        return deployment_slug()
 
     def _create_bucket(self, bucket):
         from mojo.apps.fileman.models import FileManager
@@ -617,47 +682,204 @@ class AWSCheckRunner:
             if not token:
                 return rows
 
-    def _desired_alarms(self):
+    def _discover_resources(self):
+        """Every alarmable resource, as objict rows. Raises ClientError to the caller."""
         resources = []
+        for page in self._client("ec2").get_paginator("describe_instances").paginate():
+            for reservation in page.get("Reservations", []):
+                for row in reservation.get("Instances", []):
+                    if row.get("State", {}).get("Name") == "running":
+                        resources.append(objict(
+                            kind="ec2", resource_id=row.get("InstanceId"),
+                            namespace="AWS/EC2", engine="",
+                            instance_type=row.get("InstanceType", ""),
+                            dimensions=[{"Name": "InstanceId", "Value": row.get("InstanceId")}],
+                        ))
+        for page in self._client("rds").get_paginator("describe_db_instances").paginate():
+            for row in page.get("DBInstances", []):
+                if row.get("DBInstanceStatus") == "available":
+                    resources.append(objict(
+                        kind="rds", resource_id=row.get("DBInstanceIdentifier"),
+                        namespace="AWS/RDS", engine=row.get("Engine", ""),
+                        instance_type=row.get("DBInstanceClass", ""),
+                        dimensions=[{"Name": "DBInstanceIdentifier",
+                                     "Value": row.get("DBInstanceIdentifier")}],
+                    ))
+        for page in self._client("elasticache").get_paginator("describe_cache_clusters").paginate():
+            for row in page.get("CacheClusters", []):
+                if row.get("CacheClusterStatus") == "available":
+                    resources.append(objict(
+                        kind="elasticache", resource_id=row.get("CacheClusterId"),
+                        namespace="AWS/ElastiCache", engine="", instance_type="",
+                        dimensions=[{"Name": "CacheClusterId", "Value": row.get("CacheClusterId")}],
+                    ))
+        resources.extend(self._discover_target_groups())
+        return resources
+
+    def _discover_target_groups(self):
+        """
+        ELBv2 target groups, which carry the health of the whole serving tier.
+
+        `mojo.deploy.check_setup` also inspects load balancers, but it never
+        creates anything — the alarm inventory is owned here so that every alarm
+        reaches the single owned SNS topic and its one allowlist entry.
+        """
+        rows = []
+        for page in self._client("elbv2").get_paginator("describe_target_groups").paginate():
+            for row in page.get("TargetGroups", []):
+                balancers = row.get("LoadBalancerArns") or []
+                if not balancers:
+                    # An unattached target group publishes no metrics at all, so
+                    # an alarm on it would sit in INSUFFICIENT_DATA forever.
+                    continue
+                group_suffix = _arn_suffix(row.get("TargetGroupArn"), "targetgroup")
+                # A target group shared by two load balancers is alarmed on the
+                # first; the metric is per (TargetGroup, LoadBalancer) pair.
+                balancer_suffix = _arn_suffix(balancers[0], "app", "net")
+                if not group_suffix or not balancer_suffix:
+                    continue
+                namespace = ("AWS/ApplicationELB" if balancer_suffix.startswith("app/")
+                             else "AWS/NetworkELB")
+                rows.append(objict(
+                    kind="elbv2",
+                    # `/` would add path segments to the alarm name and stop it
+                    # round-tripping through describe_alarms(AlarmNames=[...]).
+                    resource_id=group_suffix.replace("/", "~"),
+                    namespace=namespace, engine="", instance_type="",
+                    dimensions=[
+                        {"Name": "TargetGroup", "Value": group_suffix},
+                        {"Name": "LoadBalancer", "Value": balancer_suffix},
+                    ],
+                ))
+        return rows
+
+    def _resource_profiles(self, resource):
+        """The alarm profiles a single discovered resource earns."""
+        if resource.kind == "elbv2":
+            return [
+                _profile("unhealthy-hosts", "UnHealthyHostCount", "Maximum",
+                         "GreaterThanOrEqualToThreshold", 1, period=60,
+                         evaluation=2, datapoints=2),
+                # UnHealthyHostCount counts unhealthy REGISTERED targets, so a
+                # target group whose targets were all deregistered reports 0 and
+                # reads as healthy. HealthyHostCount is the only signal that sees
+                # the total outage, and missing data means the balancer stopped
+                # reporting — which is the outage too.
+                _profile("healthy-hosts", "HealthyHostCount", "Minimum",
+                         "LessThanThreshold", 1, period=60, evaluation=2,
+                         datapoints=2, treat_missing="breaching"),
+            ]
+
+        profiles = [_profile("cpu", "CPUUtilization", "Average",
+                             "GreaterThanOrEqualToThreshold", 90)]
+        if resource.kind == "ec2":
+            profiles.insert(0, _profile("status", "StatusCheckFailed", "Maximum",
+                                        "GreaterThanOrEqualToThreshold", 1,
+                                        period=60, evaluation=2, datapoints=2))
+        if resource.kind == "rds" and not _is_aurora_engine(resource.engine):
+            profiles.append(_profile("free-storage", "FreeStorageSpace", "Average",
+                                     "LessThanOrEqualToThreshold", 10 * 1024 ** 3))
+        elif resource.kind == "rds":
+            self.aurora_instance_ids.append(resource.resource_id)
+
+        burstable = (
+            (resource.kind == "ec2" and _is_burstable_ec2(resource.instance_type))
+            or (resource.kind == "rds" and _is_burstable_rds(resource.instance_type))
+        )
+        if burstable:
+            profiles.append(_profile(
+                "cpu-credits", "CPUCreditBalance", "Average", "LessThanOrEqualToThreshold",
+                int(_setting("AWS_CHECK_CPU_CREDIT_FLOOR", 20) or 20)))
+        if resource.kind == "elasticache":
+            # Not a high-water mark: ANY sustained eviction means the working set
+            # no longer fits and entries are being discarded. Deliberately not a
+            # setting — a non-zero threshold would silence the signal itself.
+            profiles.append(_profile("evictions", "Evictions", "Sum",
+                                     "GreaterThanThreshold", 0))
+        if resource.kind == "rds":
+            profiles.append(_profile(
+                "freeable-memory", "FreeableMemory", "Average", "LessThanOrEqualToThreshold",
+                int(_setting("AWS_CHECK_RDS_FREEABLE_MEMORY_FLOOR", 256 * 1024 ** 2)
+                    or 256 * 1024 ** 2)))
+            # Deliberately forgiving: RDS derives max_connections from instance
+            # memory (~112 on db.t3.micro, ~405 on db.t3.medium), so no single
+            # default is right everywhere. Erring high means it never fires
+            # spuriously — a chronically-firing alarm gets muted, and muting this
+            # topic silences every other alarm with it. Operators on a small class
+            # lower it; see the settings reference.
+            profiles.append(_profile(
+                "connections", "DatabaseConnections", "Maximum",
+                "GreaterThanOrEqualToThreshold",
+                int(_setting("AWS_CHECK_RDS_MAX_CONNECTIONS", 500) or 500)))
+        return profiles
+
+    def _desired_alarms(self):
         self.aurora_instance_ids = []
         try:
-            for page in self._client("ec2").get_paginator("describe_instances").paginate():
-                for reservation in page.get("Reservations", []):
-                    for row in reservation.get("Instances", []):
-                        if row.get("State", {}).get("Name") == "running":
-                            resources.append(("ec2", row.get("InstanceId"), "AWS/EC2", "InstanceId", ""))
-            for page in self._client("rds").get_paginator("describe_db_instances").paginate():
-                for row in page.get("DBInstances", []):
-                    if row.get("DBInstanceStatus") == "available":
-                        resources.append(("rds", row.get("DBInstanceIdentifier"), "AWS/RDS",
-                                          "DBInstanceIdentifier", row.get("Engine", "")))
-            for page in self._client("elasticache").get_paginator("describe_cache_clusters").paginate():
-                for row in page.get("CacheClusters", []):
-                    if row.get("CacheClusterStatus") == "available":
-                        resources.append(("elasticache", row.get("CacheClusterId"), "AWS/ElastiCache", "CacheClusterId", ""))
+            resources = self._discover_resources()
         except ClientError as exc:
             self._add("monitoring", "fail", "resources.discovery_denied", exc, {"aws_code": _error_code(exc)})
             return []
         desired, slug = [], self._deployment_slug()
-        for kind, resource_id, namespace, dimension, engine in resources:
-            profiles = [("cpu", "CPUUtilization", "Average", "GreaterThanOrEqualToThreshold", 90, 300, 3, 3)]
-            if kind == "ec2":
-                profiles.insert(0, ("status", "StatusCheckFailed", "Maximum", "GreaterThanOrEqualToThreshold", 1, 60, 2, 2))
-            if kind == "rds" and not _is_aurora_engine(engine):
-                profiles.append(("free-storage", "FreeStorageSpace", "Average", "LessThanOrEqualToThreshold", 10 * 1024 ** 3, 300, 3, 3))
-            elif kind == "rds":
-                self.aurora_instance_ids.append(resource_id)
-            for signal, metric, statistic, comparison, threshold, period, evaluation, datapoints in profiles:
+        for resource in resources:
+            for profile in self._resource_profiles(resource):
                 desired.append({
-                    "AlarmName": _alarm_name(slug, kind, resource_id, signal),
-                    "Namespace": namespace, "MetricName": metric,
-                    "Dimensions": [{"Name": dimension, "Value": resource_id}],
-                    "Statistic": statistic, "ComparisonOperator": comparison,
-                    "Threshold": threshold, "Period": period,
-                    "EvaluationPeriods": evaluation, "DatapointsToAlarm": datapoints,
-                    "TreatMissingData": "notBreaching",
+                    "AlarmName": _alarm_name(slug, resource.kind, resource.resource_id, profile.signal),
+                    "Namespace": resource.namespace, "MetricName": profile.metric,
+                    "Dimensions": [dict(row) for row in resource.dimensions],
+                    "Statistic": profile.statistic, "ComparisonOperator": profile.comparison,
+                    "Threshold": profile.threshold, "Period": profile.period,
+                    "EvaluationPeriods": profile.evaluation, "DatapointsToAlarm": profile.datapoints,
+                    "TreatMissingData": profile.treat_missing,
                 })
         return desired
+
+    def _desired_deployment_alarms(self, cloudwatch):
+        """
+        Deployment-wide alarms, which belong to no discovered resource.
+
+        Today that is the certificate-expiry alarm: one signal that catches every
+        cause of a stalled renewal at once — publisher down, challenge misrouted,
+        credentials wrong, delegation record deleted.
+        """
+        slug = self._deployment_slug()
+        dimensions = [{"Name": "Deployment", "Value": slug}]
+        try:
+            published = cloudwatch.list_metrics(
+                Namespace=CERT_METRIC_NAMESPACE, MetricName=CERT_METRIC_NAME,
+                Dimensions=dimensions,
+            ).get("Metrics") or []
+        except ClientError as exc:
+            # Must not escape: this runs outside _discover_resources' guard, and
+            # run()'s per-section handler would abort the ENTIRE monitoring
+            # section — no SNS audit, no alarm inventory — on a deployment whose
+            # IAM policy predates cloudwatch:ListMetrics.
+            self._add("monitoring", "pending", "alarms.cert_metric_unknown", exc,
+                      {"aws_code": _error_code(exc)},
+                      remediation="Grant cloudwatch:ListMetrics to the selected identity, then rerun.")
+            return []
+        if not published:
+            self._add("monitoring", "pending", "alarms.cert_metric_unpublished",
+                      "No certificate-expiry metric has been published yet",
+                      {"namespace": CERT_METRIC_NAMESPACE, "deployment": slug},
+                      remediation=("Run the dnsman cron that publishes it "
+                                   "(mojo.apps.dnsman.cronjobs.publish_certificate_expiry), "
+                                   "then rerun. The alarm is deliberately not created first: "
+                                   "it treats missing data as breaching and would page immediately."))
+            return []
+        return [{
+            "AlarmName": _alarm_name(slug, "certificates", slug, "expiry"),
+            "Namespace": CERT_METRIC_NAMESPACE, "MetricName": CERT_METRIC_NAME,
+            "Dimensions": dimensions,
+            "Statistic": "Minimum", "ComparisonOperator": "LessThanOrEqualToThreshold",
+            "Threshold": int(_setting("AWS_CHECK_CERT_EXPIRY_DAYS", 14) or 14),
+            "Period": 3600, "EvaluationPeriods": 3, "DatapointsToAlarm": 3,
+            # The point of the alarm, and deliberately opposite to every other
+            # profile. A dead publisher must alarm, otherwise the monitoring
+            # fails silently in exactly the scenario it exists to catch. Not a
+            # setting: flipping this to notBreaching deletes the control.
+            "TreatMissingData": "breaching",
+        }]
 
     def _stale_aurora_storage_alarms(self, cloudwatch, expected_tags, slug):
         """Owned FreeStorageSpace alarms left on Aurora instances by earlier django-mojo versions."""
@@ -714,7 +936,7 @@ class AWSCheckRunner:
         # Discovery runs above every early return below: an un-allowlisted or unconfirmed
         # deployment is the normal mid-setup state, and the Aurora storage gap plus any
         # already-created false alarm must still be reported there.
-        desired = self._desired_alarms()
+        desired = self._desired_alarms() + self._desired_deployment_alarms(cloudwatch)
         self._report_aurora_storage(cloudwatch, expected_tags, slug)
         topic_name = f"django-mojo-{slug}-operations"[:256]
         topic_arn = next((row.get("TopicArn") for row in self._list_paginated(sns, "list_topics", "Topics")
