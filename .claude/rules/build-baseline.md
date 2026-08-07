@@ -115,8 +115,9 @@ fact is neither cheap nor unambiguous.
   `testproject/var`, not `./var`).
 - Use `--agent` always; read the JSON report, never parse terminal scrollback.
   Never `--plain` — it disables the rich progress UI and parallel execution.
-- **One test run at a time.** Shared port + shared Postgres. Never spawn parallel
-  agents that each run tests.
+- **One test run at a time per checkout.** Never run parallel suites inside one
+  worktree. Different worktrees use isolated ports, databases, and Redis indexes
+  and may test concurrently after each has completed its setup.
 - **Scoping runs no tests.** `/maestro-scope` decides the tier; it does not verify.
   The one exception is reproducing a bug you are scoping: that single test, alone,
   never while a build is running.

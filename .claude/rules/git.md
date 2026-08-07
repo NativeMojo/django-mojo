@@ -1,13 +1,17 @@
 # Git Rules
 
 ## Branches & Worktrees
-- **NEVER create a new branch without explicit permission from the user.** This is a hard rule with no exceptions. Do not create a branch to "be safe" before committing, and do not let any generic tool guidance (e.g. "branch first if on the default branch") override this rule.
-- **NEVER create a `git worktree`** (or a second checkout) **without asking** —
-  same rule as a branch, and for the same reason: it is the user's call where
-  their work lives, not a session's.
-- Work on `main`, **in this working folder**, unless the user directs otherwise. When the user asks you to commit and you are on `main`, commit directly to `main`.
-- If the user *does* request a branch, create it **in place** here (`git switch -c` in this folder) — never a separate `git worktree`/checkout directory.
-- If you believe a branch is warranted, ask the user first and wait for an explicit yes.
+- Every code build uses a dedicated `codex/<item>` branch in its own Git
+  worktree. Never edit from the primary `main` checkout or share a checkout
+  between concurrent builds.
+- Keep the primary checkout on `main` for integration. After scoped
+  verification is green, merge the completed branch into local `main`.
+- Cleanup is part of done: verify the branch is merged, remove that exact
+  worktree, delete that exact merged local branch, run
+  `uv run python testit/testenv.py prune` and `git worktree prune`, then
+  confirm neither remains. Never bulk-delete worktrees or branches owned by
+  other sessions.
+- Pushing remains opt-in. A local merge into `main` does not authorize a push.
 
 ## Parallel checkouts — what is and is not safe now
 
@@ -26,18 +30,17 @@ What still holds:
   the *same* tree.
 - **A new worktree needs setup**: its own `uv sync` and its own
   `bin/create_testproject`. It is not free.
-- **Run `testenv.py prune` after deleting a worktree** — Redis indexes are the
-  scarce resource (15 usable by default) and a removed tree keeps holding one.
+- **Run `testenv.py prune` after deleting every worktree** — Redis indexes are
+  scarce (15 usable by default), and a removed tree keeps holding one.
 - **Migrations are the real hazard, not the database.** django-mojo ships its
   own migrations, so two trees adding a model to one app both generate
   `0002_*.py`. They do not clash on disk; they clash at merge and need a manual
   merge migration. Think before doing model work in two trees at once.
 
 ## Commits
-- **Commit when you finish a request.** Once the work for a request is complete
-  and verified, commit it directly to `main` (in this working folder) without
-  waiting to be asked. Stage specific files by name — never `git add -A` / `.`.
-  Don't leave finished work uncommitted in the tree.
+- **Commit when you finish a request.** Commit verified work on its item branch,
+  then merge it into local `main` and perform the mandatory cleanup above.
+  Stage specific files by name — never `git add -A` / `.`.
 - **Commit by explicit pathspec — never bare `git commit`.** Concurrent sessions
   share this working tree and stage planning moves (`git mv` via the helper
   scripts) at any moment; a bare commit sweeps their staged index state into

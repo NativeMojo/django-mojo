@@ -38,8 +38,9 @@ Claude co-author trailer for work authored by ChatGPT or Codex. Use
 `Co-Authored-By: OpenAI Codex <noreply@openai.com>` instead.
 
 When a Maestro workflow calls for the post-build roles, use the briefs in
-`.claude/agents/` as the role instructions. Only one agent or orchestrator may
-run the test suite because this repo shares a test port and PostgreSQL database.
+`.claude/agents/` as the role instructions. Each code build uses its own
+branch and worktree; only one agent or orchestrator runs tests per checkout.
+Per-checkout test isolation permits different worktrees to test concurrently.
 
 ## Skill Synchronization
 

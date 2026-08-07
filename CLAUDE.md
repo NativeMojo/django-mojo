@@ -64,7 +64,9 @@ filing, scoping or building. Three things it says that bite if you miss them:
 - **Match stage options by value, per board.** Both boards label a stage
   "Accepted", but Inbox backs it with `scoped` and Security with `accepted`.
   A cross-board move of an item at `scoped` silently lands it at `inbox`.
-- **WIP = 1 per project is summed across both boards**, not per board.
+- **Parallel builds require isolated worktrees.** Every code item gets its own
+  branch/worktree; verified work merges into local `main`, then its worktree
+  and merged branch are removed and pruned.
 
 An item's bug/feature/chore *kind* is still carried by its workspec, not by
 which board it sits on. Security is routed as a cross-cutting concern — a
@@ -85,9 +87,9 @@ distinct from MoSCoW `Won't`, which means never); priority is MoSCoW
 `.claude/skills/maestro-*` skills (task/scope/build) read and write items
 there — see each `SKILL.md` for the exact protocol, plus the workspace's
 shared `nativemojo-board-conventions` rule doc (project stamping, repo match
-on claim, WIP = 1 per project) and the repo-specific
+on claim, isolated-worktree lifecycle) and the repo-specific
 `django-mojo-build-conventions` rule doc (both fetched via
-`get_workspace_context`): one django-mojo item `building` at a time, the
+`get_workspace_context`): one test run per checkout, the
 post-build agent trio (test-runner, docs-updater, security-review), and
 optional build routing.
 
