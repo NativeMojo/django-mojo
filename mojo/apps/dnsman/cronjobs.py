@@ -15,6 +15,7 @@ from mojo.helpers import logit
 
 POLL_JOB = "mojo.apps.dnsman.asyncjobs.poll_domain_operations"
 ACME_HUB_SWEEP_JOB = "mojo.apps.dnsman.asyncjobs.sweep_acme_hub_leases"
+CERT_EXPIRY_METRIC_JOB = "mojo.apps.dnsman.asyncjobs.publish_certificate_expiry_metric"
 
 
 # The cron field values MUST be strings. `minutes=5` raises a TypeError inside
@@ -37,6 +38,19 @@ def poll_domain_operations():
 def sweep_acme_hub_leases():
     """Queue durable ACME lease expiry/reconciliation work."""
     return jobs.publish(func=ACME_HUB_SWEEP_JOB, payload={})
+
+
+@schedule(minutes="0", hours="*")
+def publish_certificate_expiry():
+    """
+    Queue the deployment-wide certificate-expiry metric publish.
+
+    Hourly, deliberately. The alarm that reads this metric treats missing data
+    as breaching, so the evaluation window has to be comfortably longer than the
+    publish interval — it is sized at three hourly periods, meaning three
+    consecutive misses page rather than one.
+    """
+    return jobs.publish(func=CERT_EXPIRY_METRIC_JOB, payload={})
 
 
 @schedule(minutes="0", hours="*/6")

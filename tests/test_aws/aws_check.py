@@ -724,6 +724,120 @@ def test_connection_alarm_uses_forgiving_default_and_honours_override(opts):
 
 
 @th.django_unit_test()
+def test_cert_alarm_treats_missing_data_as_breaching(opts):
+    """
+    Metric absence IS the signal for certificate expiry.
+
+    Every other resource alarm uses notBreaching, because a quiet metric is
+    normal. Here a dead publisher must alarm, or the monitoring fails silently
+    in exactly the scenario it exists to catch.
+    """
+    from mojo.apps.aws.services import aws_check
+
+    cloudwatch = _cloudwatch(metrics=[{"MetricName": "MinDaysToExpiry"}])
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        alarms = aws_check.AWSCheckRunner()._desired_deployment_alarms(cloudwatch)
+        resource_alarms = aws_check.AWSCheckRunner(
+            clients=_discovery_clients(
+                instances=[{"InstanceId": "i-a", "State": {"Name": "running"},
+                            "InstanceType": "t3.small"}],
+                cache_clusters=[{"CacheClusterId": "c-1", "CacheClusterStatus": "available"}],
+            ),
+        )._desired_alarms()
+
+    assert len(alarms) == 1, f"exactly one deployment-wide alarm, got {alarms}"
+    assert alarms[0]["TreatMissingData"] == "breaching", (
+        "a publisher that stops running must page; notBreaching here would delete "
+        f"the control entirely, got {alarms[0]['TreatMissingData']}"
+    )
+    leaked = [a["AlarmName"] for a in resource_alarms
+              if a["TreatMissingData"] == "breaching" and "healthy-hosts" not in a["AlarmName"]]
+    assert leaked == [], (
+        "breaching is reserved for signals whose absence is the failure — the "
+        f"certificate metric and HealthyHostCount; it leaked to {leaked}"
+    )
+
+
+@th.django_unit_test()
+def test_cert_alarm_threshold_direction(opts):
+    """Inverted, this alarm never fires and every other assertion still passes."""
+    from mojo.apps.aws.services import aws_check
+
+    cloudwatch = _cloudwatch(metrics=[{"MetricName": "MinDaysToExpiry"}])
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        alarm = aws_check.AWSCheckRunner()._desired_deployment_alarms(cloudwatch)[0]
+
+    assert alarm["ComparisonOperator"] == "LessThanOrEqualToThreshold", (
+        "days-remaining breaches on the way DOWN; a GreaterThan comparison would "
+        f"never fire, got {alarm['ComparisonOperator']}"
+    )
+    assert alarm["Statistic"] == "Minimum", \
+        f"the worst certificate in the window is the signal, got {alarm['Statistic']}"
+    assert alarm["Threshold"] == 14, f"default expiry threshold should be 14 days, got {alarm}"
+    assert alarm["Period"] == 3600 and alarm["EvaluationPeriods"] == 3, (
+        "the window must span three hourly publishes so one missed cron run does "
+        f"not page, got period={alarm['Period']} evaluations={alarm['EvaluationPeriods']}"
+    )
+
+
+@th.django_unit_test()
+def test_cert_alarm_not_created_until_metric_is_published(opts):
+    from mojo.apps.aws.services import aws_check
+
+    cloudwatch = _cloudwatch(metrics=[])
+    runner = aws_check.AWSCheckRunner()
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
+        alarms = runner._desired_deployment_alarms(cloudwatch)
+
+    assert alarms == [], (
+        "a breaching alarm created before its publisher has ever run goes straight "
+        f"to ALARM and pages during bootstrap; got {alarms}"
+    )
+    codes = [item["code"] for item in runner.results]
+    assert "alarms.cert_metric_unpublished" in codes, \
+        f"the missing publisher must be reported, not silent; got {codes}"
+
+
+@th.django_unit_test()
+def test_list_metrics_denied_does_not_abort_monitoring(opts):
+    """
+    cloudwatch:ListMetrics is not in the documented least-privilege grant, so on
+    every deployment that upgrades without adding it this call would raise. It
+    must degrade to one pending item, never take the whole section down with it.
+    """
+    from botocore.exceptions import ClientError
+
+    from mojo.apps.aws.services import aws_check
+
+    topic = "arn:aws:sns:us-east-1:123456789012:django-mojo-test-operations"
+    cloudwatch = _cloudwatch()
+    cloudwatch.describe_alarms.return_value = {"MetricAlarms": []}
+    cloudwatch.list_metrics.side_effect = ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "no ListMetrics"}}, "ListMetrics")
+    clients = {
+        "sns": _owned_operations_sns(topic), "cloudwatch": cloudwatch,
+        **_discovery_clients(instances=[
+            {"InstanceId": "i-a", "State": {"Name": "running"}, "InstanceType": "m5.large"},
+        ]),
+    }
+    values = _setting_values(AWS_CLOUDWATCH_ALARM_TOPIC_ARNS=[topic])
+    with mock.patch.object(aws_check, "_setting", side_effect=values):
+        report = aws_check.AWSCheckRunner(clients=clients).run(["monitoring"])
+
+    codes = [item["code"] for item in report["items"]]
+    assert "monitoring.denied" not in codes, (
+        "one optional lookup must not abort the section — that would take the SNS "
+        f"audit and the whole alarm inventory down with it; got {codes}"
+    )
+    assert "alarms.cert_metric_unknown" in codes, \
+        f"the denied lookup must be reported as pending, got {codes}"
+    assert "sns.topic_owned" in codes and "alarms.profile" in codes, (
+        "the rest of the monitoring section must still have run; "
+        f"got {codes}"
+    )
+
+
+@th.django_unit_test()
 def test_desired_alarms_skips_free_storage_space_on_aurora(opts):
     from mojo.apps.aws.services import aws_check
 

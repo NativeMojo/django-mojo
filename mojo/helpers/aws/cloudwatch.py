@@ -597,6 +597,41 @@ class CloudWatchHelper:
 
 
 # ------------------------------------------------------------------
+# Writing custom metrics
+# ------------------------------------------------------------------
+
+def put_metric_data(namespace, metric_name, value, dimensions=None, unit="None",
+                    access_key=None, secret_key=None, region=None,
+                    session=None, client=None, timeout=3):
+    """
+    Publish a single custom metric datapoint.
+
+    The only write path in this module — everything else here reads. `client`
+    is an injection seam so callers and tests can pass a stub instead of
+    reaching AWS, matching the `clients=` seam on AWSCheckRunner.
+
+    `dimensions` is a list of ``{"Name":..., "Value":...}``; CloudWatch treats
+    the dimension set as part of the metric's identity, so a publisher and an
+    alarm must agree on it exactly.
+    """
+    if client is None:
+        client = get_client(
+            "cloudwatch",
+            session=session or get_session(
+                access_key or settings.AWS_KEY,
+                secret_key or settings.AWS_SECRET,
+                region or getattr(settings, "AWS_REGION", "us-east-1"),
+            ),
+            region=region or getattr(settings, "AWS_REGION", "us-east-1"),
+            timeout=timeout,
+        )
+    datum = {"MetricName": metric_name, "Value": float(value), "Unit": unit}
+    if dimensions:
+        datum["Dimensions"] = list(dimensions)
+    return client.put_metric_data(Namespace=namespace, MetricData=[datum])
+
+
+# ------------------------------------------------------------------
 # Internal helpers
 # ------------------------------------------------------------------
 

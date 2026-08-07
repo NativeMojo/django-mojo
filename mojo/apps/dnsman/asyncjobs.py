@@ -101,6 +101,52 @@ def sweep_acme_hub_leases(job):
             f"reconciled={result.reconciled},errors={result.errors}")
 
 
+def publish_certificate_expiry_metric(job):
+    """
+    Publish the soonest certificate expiry as a CloudWatch custom metric.
+
+    One number for the whole deployment, because one alarm on it catches every
+    cause of a stalled renewal at once — publisher down, challenge misrouted,
+    credentials wrong, delegation record deleted. The alarm (created by
+    `aws-check`) treats missing data as breaching, so this job going quiet is
+    itself the signal.
+
+    `status` deliberately includes FAILED. `certs._record_issue_failure` moves a
+    certificate to FAILED once its material is no longer valid, so an
+    ACTIVE-only filter would drop a certificate at the exact moment it expires —
+    the published minimum would jump to the next-soonest certificate and
+    CloudWatch would report the alarm RECOVERED while TLS is broken.
+    """
+    from django.db.models import Min
+
+    from mojo.apps.aws.services.aws_check import (
+        CERT_METRIC_NAME, CERT_METRIC_NAMESPACE, deployment_slug)
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE, STATUS_FAILED
+    from mojo.helpers import dates
+    from mojo.helpers.aws import cloudwatch
+
+    soonest = Certificate.objects.filter(
+        status__in=(STATUS_ACTIVE, STATUS_FAILED),
+        not_after__isnull=False,
+    ).aggregate(soonest=Min("not_after"))["soonest"]
+    if soonest is None:
+        # Publish nothing rather than a sentinel: a deployment with no
+        # certificates should show as un-set-up, not as healthy.
+        logit.info("dnsman: no certificates to report an expiry metric for")
+        return "completed:published=0"
+
+    # Not clamped at zero — an expired certificate reading -3 is more
+    # diagnostic than 0, and the alarm threshold catches both.
+    days = (soonest - dates.utcnow()).days
+    slug = deployment_slug()
+    cloudwatch.put_metric_data(
+        CERT_METRIC_NAMESPACE, CERT_METRIC_NAME, days,
+        dimensions=[{"Name": "Deployment", "Value": slug}], unit="Count")
+    logit.info(f"dnsman: published {CERT_METRIC_NAME}={days} for {slug}")
+    return f"completed:days={days}"
+
+
 def certificate_updated(job):
     """
     Broadcast handler for the certificate sync channel.
