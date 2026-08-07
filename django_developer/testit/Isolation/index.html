@@ -3788,6 +3788,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#adopting-testenv-elsewhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adopting testenv elsewhere
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Adopting testenv elsewhere">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#guarding-your-own-flush" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guarding your own flush
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-redis-ownership-stamp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Redis ownership stamp
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#fail-closed-behaviour" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3900,12 +3939,23 @@ database — removing one because a directory is currently missing would destroy
 data whenever a volume is unmounted or a checkout is moved rather than deleted.
 It prints the orphaned name instead:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>pruned 1
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  /Users/you/Projects/django-mojo-feature
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  /Users/you/Projects/django-mojo-feature  (mojo_test)
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
 <a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>These databases are now orphaned. Drop them when you are sure the checkout is
 <a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>really gone:
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>  dropdb mojo_test_85e2ef50
 </code></pre></div>
+<p><code>prune</code> is <strong>machine-global</strong> — the registry holds every mojo repo on the
+machine, and a slot for any of them whose directory is gone gets reclaimed.
+That is intended; it is the only thing that keeps the 15 Redis indexes from
+leaking away. It names the project each reclaimed slot belonged to, and says so
+explicitly when it took one from a repo other than this one:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Note: slots for other projects were reclaimed (mojo_maestro_test).
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>Their checkouts will get a different Redis index and port next run.
+</code></pre></div>
+<p>There is deliberately <strong>no per-project filter</strong>. Restricting <code>prune</code> to one repo
+would leave every other repo's dead slots held forever, which is exactly the
+leak above.</p>
 <blockquote>
 <p>Invoke it by <strong>file path</strong>, not <code>python -m testit.testenv</code>. Importing the
 package runs <code>testit/__init__.py</code> → <code>mojo.helpers.logit</code> → <code>paths</code>, which
@@ -3925,14 +3975,187 @@ executing it.</p>
 <p>Both only matter during the migration, and both cost nothing to keep.</p>
 <h2 id="the-redis-ceiling">The Redis ceiling<a class="headerlink" href="#the-redis-ceiling" title="Permanent link">&para;</a></h2>
 <p>Redis ships with <strong>16 databases</strong>, and index 0 is reserved above — so 15
-concurrent checkouts, across every mojo repo on the machine. The allocator asks
-the server (<code>CONFIG GET databases</code>) rather than assuming, and <strong>fails with an
-actionable error</strong> when it runs out rather than quietly reusing an index.</p>
-<p>To raise it, in your local <code>redis.conf</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>databases 64
+concurrent checkouts, across every mojo repo on the machine. The allocator
+<strong>assumes</strong> 16; it does not ask the server. When it runs out it <strong>fails with an
+actionable error</strong> rather than quietly reusing an index.</p>
+<p>To raise it you must change two things, and changing only the first does
+nothing:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a># 1. your local redis.conf
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>databases 64
 </code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># 2. tell the allocator, e.g. in your shell profile</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MOJO_TESTENV_REDIS_LIMIT</span><span class="o">=</span><span class="m">64</span>
+</code></pre></div>
+<p>The allocator does not probe because probing meant importing
+<code>mojo.helpers.redis</code>, which resolves its URL from a Django setting and caches a
+process-global client before it ever touches the network. Called from
+<code>create_testproject</code> (no project yet) that import simply fails; called from a
+settings module that is still executing, it silently pins the whole process to
+Redis index 0 for its lifetime. A number you can be told is not worth that.</p>
+<p>A junk or unset <code>MOJO_TESTENV_REDIS_LIMIT</code> means 16. A value below 1 floors at
+1, which leaves no allocatable index and fails closed on the next allocation —
+correct, if blunt. It is <strong>clamped at 64</strong> (<code>REDIS_MAX_LIMIT</code>) at the top end:
+allocation opens a connection per candidate index, so a mistyped <code>99999999</code>
+would not fail, it would sit there connecting for hours. Clamped rather than
+rejected, so the typo still allocates. If you genuinely run more than 64
+databases, raise the constant.</p>
+<h2 id="adopting-testenv-elsewhere">Adopting testenv elsewhere<a class="headerlink" href="#adopting-testenv-elsewhere" title="Permanent link">&para;</a></h2>
+<p><code>testit/testenv.py</code> is deliberately standalone. <strong><code>allocate()</code> imports nothing
+from <code>mojo.*</code> and reads no Django setting</strong>, so calling it from a test settings
+module — while that module is still executing, before Django is configured — is
+supported and is the intended use.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># in your project&#39;s test settings, before anything reads DATABASES</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">importlib.util</span><span class="o">,</span><span class="w"> </span><span class="nn">sys</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">spec</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">spec_from_file_location</span><span class="p">(</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="s2">&quot;mojo_testenv&quot;</span><span class="p">,</span> <span class="n">importlib</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">find_spec</span><span class="p">(</span><span class="s2">&quot;testit&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">origin</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>        <span class="s2">&quot;__init__.py&quot;</span><span class="p">,</span> <span class="s2">&quot;testenv.py&quot;</span><span class="p">))</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">testenv</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">module_from_spec</span><span class="p">(</span><span class="n">spec</span><span class="p">)</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">spec</span><span class="o">.</span><span class="n">loader</span><span class="o">.</span><span class="n">exec_module</span><span class="p">(</span><span class="n">testenv</span><span class="p">)</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="n">env</span> <span class="o">=</span> <span class="n">testenv</span><span class="o">.</span><span class="n">allocate</span><span class="p">(</span><span class="n">REPO_ROOT</span><span class="p">,</span> <span class="s2">&quot;myproj_test&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>If your caller already knows the Redis ceiling, hand it over directly and skip
+the environment variable entirely:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">env</span> <span class="o">=</span> <span class="n">testenv</span><span class="o">.</span><span class="n">allocate</span><span class="p">(</span><span class="n">REPO_ROOT</span><span class="p">,</span> <span class="s2">&quot;myproj_test&quot;</span><span class="p">,</span> <span class="n">limit</span><span class="o">=</span><span class="mi">64</span><span class="p">)</span>
+</code></pre></div>
+<p>Load it by file path (or <code>find_spec</code>), never <code>import testit.testenv</code> —
+importing the package runs <code>testit/__init__.py</code>, which needs a configured
+project.</p>
+<h3 id="guarding-your-own-flush">Guarding your own flush<a class="headerlink" href="#guarding-your-own-flush" title="Permanent link">&para;</a></h3>
+<p>Allocation alone does not protect you. If your runner calls <code>FLUSHDB</code>, wrap it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">index</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">connection_pool</span><span class="o">.</span><span class="n">connection_kwargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;db&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">testenv</span><span class="o">.</span><span class="n">claim_redis_index</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">REPO_ROOT</span><span class="p">,</span> <span class="n">client</span><span class="o">=</span><span class="n">client</span><span class="p">)</span>   <span class="c1"># raises AllocationError -&gt; exit 1</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">client</span><span class="o">.</span><span class="n">flushdb</span><span class="p">()</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="n">testenv</span><span class="o">.</span><span class="n">stamp_redis_owner</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">REPO_ROOT</span><span class="p">,</span> <span class="n">client</span><span class="o">=</span><span class="n">client</span><span class="p">)</span>   <span class="c1"># the flush destroyed the stamp</span>
+</code></pre></div>
+<p>Five things that matter:</p>
+<ul>
+<li><strong>Pass the client you are about to flush.</strong> <code>claim_redis_index</code>,
+  <code>stamp_redis_owner</code>, <code>redis_owner</code> and <code>redis_index_is_free</code> all take
+  <code>client=</code>, and with one supplied they read and write the stamp through it —
+  the exact server and database <code>flushdb()</code> is about to empty, no second
+  connection, and closing it stays your job. Without one they fall back to
+  building a probe against <code>MOJO_TESTENV_REDIS_HOST</code>/<code>_PORT</code> (localhost by
+  default), which is the wrong server whenever your Redis is elsewhere. The
+  index you pass must agree with the client's own <code>db</code>; a disagreement raises
+  <code>AllocationError</code> rather than picking one.</li>
+<li><strong>Derive the index from the live client, not from settings.</strong>
+  <code>mojo.helpers.redis</code> gives <code>REDIS_URL</code> precedence over <code>REDIS_DB_INDEX</code>, so a
+  guard reading settings can protect index N while <code>flushdb()</code> empties index M —
+  worse than no guard at all. The same argument applies to the host, which is
+  what <code>client=</code> above is for.</li>
+<li><strong>Claim before, stamp after.</strong> The flush destroys the stamp along with
+  everything else.</li>
+<li><strong>On a resume path (<code>--continue</code>), claim but do NOT stamp.</strong> A <code>SET</code> with no
+  preceding flush has no claim behind it and would quietly take over another
+  checkout's index — making the resume path the one way to bypass the guard.</li>
+<li><strong>The key name is shared across repos on purpose.</strong> Two repos with different
+  key names are blind to each other's stamps, which is the collision the whole
+  mechanism exists to prevent. Use <code>testenv.REDIS_OWNER_KEY</code>.</li>
+</ul>
+<p>An adopter that allocates but never stamps gets today's behaviour: nothing owns
+its index, so nothing is protected and nothing is broken. Stamping is what buys
+the protection.</p>
+<h2 id="the-redis-ownership-stamp">The Redis ownership stamp<a class="headerlink" href="#the-redis-ownership-stamp" title="Permanent link">&para;</a></h2>
+<p>The registry is one JSON file in a home directory, and every way it can be lost
+— deleted, truncated by a killed writer, rebuilt after a bad parse — reads as
+"nothing is allocated". A port survives that, because <code>port_is_free</code> <strong>binds</strong>
+before handing one out. A Redis index had no such check, so a lost registry
+meant the next <code>flushdb()</code> silently emptied a live checkout's database mid-run.</p>
+<p>So each allocated index carries a stamp:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Key</td>
+<td><code>testenv:owner</code> (in that index)</td>
+</tr>
+<tr>
+<td>Value</td>
+<td>the owning checkout's absolute realpath</td>
+</tr>
+<tr>
+<td>Written by</td>
+<td><code>bin/testit.py</code>, right after its <code>FLUSHDB</code></td>
+</tr>
+</tbody>
+</table>
+<p>The stamp is read and written with a bare <code>redis-py</code> client — never
+<code>mojo.helpers.redis</code>, for the same reason <code>redis_limit()</code> doesn't call it (see
+above).</p>
+<p><strong>Which server gets asked depends on the check</strong>, and the difference is the
+point:</p>
+<ul>
+<li><strong>The flush guard uses the runner's own live client</strong>, handed to
+  <code>claim_redis_index(..., client=...)</code> / <code>stamp_redis_owner(..., client=...)</code>.
+  That client is the one about to be flushed, so the guard reads and re-stamps
+  the exact server and database <code>flushdb()</code> empties. Nothing about
+  <code>MOJO_TESTENV_REDIS_HOST</code>/<code>_PORT</code> enters into it.</li>
+<li><strong>Allocation builds a probe</strong>, because there is no live client yet — it runs
+  before the project exists, deriving the values the settings will go on to
+  hold. The probe connects to <code>127.0.0.1:6379</code> by default; if your Redis isn't
+  there, set <code>MOJO_TESTENV_REDIS_HOST</code> and/or <code>MOJO_TESTENV_REDIS_PORT</code> (each
+  falls back to its own default independently). These are read at call time and
+  are independent of any Django <code>REDIS_HOST</code>/<code>REDIS_PORT</code>/<code>REDIS_URL</code> setting.</li>
+</ul>
+<p><strong>The honest limitation:</strong> an adopter whose test Redis is remote and who does
+not set those two variables gets a probe that asks the local machine, so
+<strong>allocation-time protection does not apply to them</strong> — the probe reads the
+wrong server, which surfaces as <code>RedisUnreachable</code> rather than as a config
+mismatch. They still get the flush-time guard, and that is the check standing
+between a wrong index and destroyed data.</p>
+<p>It is checked in two places, and they fail in <strong>opposite directions on purpose</strong>:</p>
+<ul>
+<li><strong>Allocation fails closed.</strong> <code>allocate()</code> skips any candidate index a
+  <em>different, still-existing</em> checkout has stamped, and raises <code>AllocationError</code>
+  if it cannot read the stamps at all. The record it writes is used for months,
+  so one flaky probe must never latch a collision in permanently. A refused
+  connection stops the search immediately; a timeout does not, because a timeout
+  means Redis is up and busy — precisely when guessing "free" is destructive.</li>
+<li><strong>The flush fails open.</strong> <code>bin/testit.py</code> calls <code>claim_redis_index()</code> before
+  <code>FLUSHDB</code> — passing the live client, so the question is asked of the server
+  being flushed — and aborts the run if the index belongs to someone else, but
+  allows it when Redis cannot be reached: a flush that cannot connect cannot
+  destroy anything either.</li>
+</ul>
+<p>A stamp naming a directory that <strong>no longer exists</strong> is stale: the checkout is
+gone, so its leftover data is nobody's and the index is takeable. Otherwise a
+deleted worktree would poison a slot forever.</p>
+<p>Index 0 is never allocated, never stamped, and <code>claim_redis_index()</code> refuses it
+outright — it is the developer's own cache, and flushing it is never ours to do.</p>
+<p>A stamp that will not resolve to a path at all — one containing a NUL byte, say
+— is <strong>unusable</strong>, not "not mine": both checks refuse with <code>AllocationError</code>
+rather than treating an unknown owner as no owner. Every other hostile value
+(<code>../../..</code>, <code>~/</code>, empty, whitespace) resolves fine, reads as "not me", and
+falls through to the stale-directory check, which is the right answer for all
+of them.</p>
+<p><strong>The escape hatch</strong> is <code>MOJO_TESTENV_NO_REDIS=1</code>, for an image with no Redis at
+all. It turns off the <strong>allocation-time probe</strong> — that is its entire scope, and
+it is the only supported way to allocate without the ownership check.</p>
+<p>It does <strong>not</strong> disable the pre-<code>FLUSHDB</code> guard, and cannot. That path runs only
+when the runner is holding a live client it is about to flush, so there is no
+probe there to switch off and nothing for "this image has no Redis" to excuse.
+Before this was fixed, <code>export MOJO_TESTENV_NO_REDIS=1</code> silently turned the
+flush guard into a no-op — and left the index unstamped afterwards, so the
+weakening outlived the process and the next allocation handed the index to a
+third tree.</p>
+<blockquote>
+<p><strong>Anything that calls <code>FLUSHDB</code> outside the runner drops the stamp</strong> until the
+next run re-writes it. <code>MojoRedisCache.clear()</code> (<code>mojo/cache/redis.py</code>) is one
+such call. It is unreachable in the generated testproject today — the
+serializer cache backend defaults to <code>memory</code> — so it is documented rather
+than defended against. If you point a Django cache at Redis and call
+<code>cache.clear()</code>, expect the guard to be blind until the next <code>run_tests</code>.</p>
+</blockquote>
 <h2 id="fail-closed-behaviour">Fail-closed behaviour<a class="headerlink" href="#fail-closed-behaviour" title="Permanent link">&para;</a></h2>
-<p>Two places refuse rather than guess, both because the failure mode is
+<p>Three places refuse rather than guess, all because the failure mode is
 destroying another run:</p>
 <ul>
 <li><strong><code>create_testproject</code> aborts if allocation fails.</strong> Falling back to a shared
@@ -3942,13 +4165,16 @@ destroying another run:</p>
   <code>pg_stat_activity</code>. The name is derived per checkout so this should never
   fire; it exists because if derivation ever breaks, the consequence is another
   session's data, and that deserves a guard rather than trust.</li>
+<li><strong><code>run_tests</code> aborts rather than <code>FLUSHDB</code> an index another live checkout has
+  stamped</strong> — see above. The fix is the allocation, not the guard: <code>prune</code>, then
+  <code>bin/create_testproject</code>.</li>
 </ul>
 <h2 id="running-two-worktrees">Running two worktrees<a class="headerlink" href="#running-two-worktrees" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>git<span class="w"> </span>worktree<span class="w"> </span>add<span class="w"> </span>../django-mojo-feature<span class="w"> </span>-b<span class="w"> </span>feature
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nb">cd</span><span class="w"> </span>../django-mojo-feature
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>uv<span class="w"> </span>sync
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>./bin/create_testproject<span class="w">      </span><span class="c1"># allocates its own db / index / port</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>./bin/run_tests<span class="w"> </span>--agent<span class="w"> </span>-t<span class="w"> </span>test_edge
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>git<span class="w"> </span>worktree<span class="w"> </span>add<span class="w"> </span>../django-mojo-feature<span class="w"> </span>-b<span class="w"> </span>feature
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nb">cd</span><span class="w"> </span>../django-mojo-feature
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>uv<span class="w"> </span>sync
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>./bin/create_testproject<span class="w">      </span><span class="c1"># allocates its own db / index / port</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>./bin/run_tests<span class="w"> </span>--agent<span class="w"> </span>-t<span class="w"> </span>test_edge
 </code></pre></div>
 <p>Each tree needs its own <code>.venv</code> and its own <code>testproject/</code> — both gitignored,
 both regenerated. That is the cost: a <code>uv sync</code> and a <code>create_testproject</code> per
