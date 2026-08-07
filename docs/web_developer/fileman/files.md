@@ -78,6 +78,16 @@ GET /api/fileman/file/123?graph=detailed
 GET /api/fileman/file?graph=basic&size=20
 ```
 
+## File relation inputs
+
+For model fields backed by `ForeignKey(fileman.File)`, send a positive JSON
+integer to attach an existing File, `null` to clear a nullable relation, or a
+valid base64/data URL for compatibility inline creation. Numeric strings,
+booleans, zero/negative ids, objects/lists, and malformed inline data return
+400. Existing references require view access; missing and non-viewable ids both
+return `403 File unavailable`. Clear and replacement only change the relation —
+they never delete the old File.
+
 ## List Files
 
 ```

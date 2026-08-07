@@ -91,7 +91,8 @@ def _resolve_stamp_actor(request):
         if (user is not None and getattr(user, "is_authenticated", False)
                 and is_request_user(request)):
             actor = user
-    if not isinstance(actor, dm.Model):
+    if (not isinstance(actor, dm.Model)
+            or getattr(getattr(actor, "_meta", None), "label_lower", None) != "account.user"):
         return None
     return actor
 
@@ -1777,8 +1778,15 @@ class MojoModel:
                 post_save_data[key] = value
                 continue
             actions_only = False
-            self.on_rest_save_field(key, value, request)
-        request.group = _caller_group
+            # Related-model permission evaluation may bind request.group to the
+            # candidate's tenant (including None). Restore after EVERY field,
+            # including exception paths, so one relation cannot influence a
+            # later relation, inline upload, validator, or the caller after a
+            # failed save.
+            try:
+                self.on_rest_save_field(key, value, request)
+            finally:
+                request.group = _caller_group
 
         created = self.pk is None
         if not actions_only or created:
@@ -1995,6 +2003,23 @@ class MojoModel:
             pass
 
     def on_rest_save_related_field(self, field, field_value, request):
+        # Explicit null always means detach. This must precede custom-related
+        # dispatch: File's legacy hook accepts only strings/integers and used
+        # to turn `avatar: null` into a successful no-op.
+        if field_value is None:
+            old_value = getattr(self, field.name, None)
+            self._set_field_change(field.name, old_value, None)
+            setattr(self, field.name, None)
+            return
+        candidate_resolver = getattr(
+            field.related_model, "resolve_rest_related_candidate", None)
+        if callable(candidate_resolver):
+            current_instance = getattr(self, field.name)
+            candidate = candidate_resolver(
+                self, field.name, field_value, current_instance, request)
+            self._set_field_change(field.name, current_instance, candidate)
+            setattr(self, field.name, candidate)
+            return
         if isinstance(field_value, dict):
             # we want to check if we have an existing field and if so we will update it after security
             related_instance = getattr(self, field.name)
@@ -2075,10 +2100,6 @@ class MojoModel:
             old_value = getattr(self, field.name, None)
             self._set_field_change(field.name, old_value, related_instance)
             setattr(self, field.name, related_instance)
-        elif field_value is None:
-            old_value = getattr(self, field.name, None)
-            self._set_field_change(field.name, old_value, None)
-            setattr(self, field.name, None)
 
     def on_rest_update_jsonfield(self, field_name, field_value, request=None):
         """Update a JSONField via merge or replace.

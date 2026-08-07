@@ -11,6 +11,7 @@ from datetime import datetime
 import os
 from mojo.apps.fileman import utils
 from mojo.apps.fileman.models import FileManager
+from mojo import errors as me
 from mojo.helpers import logit
 
 logger = logit.get_logger("fileman", "fileman.log")
@@ -921,6 +922,103 @@ class File(models.Model, MojoModel):
         instance.on_rest_save_file(name, file)
 
         return instance
+
+    @classmethod
+    def _inline_rest_file(cls, related_instance, related_field_name, field_value, request):
+        """Create one inline File with an explicit real actor and parent scope."""
+        from mojo.models.rest import _resolve_stamp_actor
+
+        value = field_value.strip()
+        if not value or value.lstrip("+-").isdigit():
+            raise me.ValueException("File relation requires a positive integer id, null, or inline base64 data")
+
+        mime_type = None
+        b64_data = value
+        if value.startswith("data:"):
+            if "," not in value:
+                raise me.ValueException("Invalid inline file data")
+            header, b64_data = value.split(",", 1)
+            header_parts = header[5:].split(";")
+            if len(header_parts) < 2 or header_parts[-1].lower() != "base64":
+                raise me.ValueException("Invalid inline file data")
+            mime_type = FileManager.normalize_upload_mime_type(header_parts[0])
+
+        missing_padding = len(b64_data) % 4
+        if missing_padding:
+            b64_data += "=" * (4 - missing_padding)
+        try:
+            file_bytes = base64.b64decode(b64_data, validate=True)
+        except (TypeError, ValueError, base64.binascii.Error):
+            raise me.ValueException("Invalid inline file data")
+        if not file_bytes:
+            raise me.ValueException("Invalid inline file data")
+        if mime_type is None:
+            mime_type = FileManager.normalize_upload_mime_type(
+                magic.from_buffer(file_bytes, mime=True))
+
+        actor = _resolve_stamp_actor(request)
+        group = getattr(request, "group", None)
+        scope_resolver = getattr(
+            related_instance, f"resolve_{related_field_name}_file_upload_scope", None)
+        if callable(scope_resolver):
+            scope = scope_resolver(request)
+            if not isinstance(scope, dict) or set(scope) - {"group"}:
+                raise me.ValueException("Invalid inline File upload scope")
+            group = scope.get("group")
+        if group is not None:
+            if (getattr(getattr(group, "_meta", None), "label_lower", None) != "account.group"
+                    or not group.is_effectively_active()):
+                raise me.PermissionDeniedException("File upload scope unavailable")
+        if actor is None and group is None:
+            raise me.PermissionDeniedException("File upload scope unavailable")
+
+        file_manager = FileManager.get_for_user_group(user=actor, group=group)
+        if file_manager is None:
+            raise me.ValueException("File storage unavailable")
+        ext = mimetypes.guess_extension(mime_type) or ""
+        file_obj = io.BytesIO(file_bytes)
+        file_obj.name = f"{related_field_name}{ext}"
+        file_obj.content_type = mime_type
+        file_obj.size = len(file_bytes)
+        return cls.create_from_file(
+            file_obj, file_obj.name, user=actor, group=group,
+            file_manager=file_manager)
+
+    @classmethod
+    def resolve_rest_related_candidate(
+            cls, related_instance, related_field_name, field_value,
+            current_instance, request):
+        """Resolve one strict File relation candidate without assigning it."""
+        if type(field_value) is int and field_value > 0:
+            try:
+                candidate = cls.objects.get(pk=field_value)
+            except cls.DoesNotExist:
+                raise me.PermissionDeniedException(
+                    "File unavailable", branch="file_relation_missing",
+                    model_name="File", event_type="fk_attach_denied")
+
+            original_group = getattr(request, "group", None)
+            try:
+                allowed = cls.rest_check_permission(
+                    request, "VIEW_PERMS", candidate)
+            finally:
+                request.group = original_group
+            if not allowed:
+                raise me.PermissionDeniedException(
+                    "File unavailable", branch="file_relation_not_viewable",
+                    model_name="File", event_type="fk_attach_denied")
+        elif isinstance(field_value, str):
+            candidate = cls._inline_rest_file(
+                related_instance, related_field_name, field_value, request)
+        else:
+            raise me.ValueException(
+                "File relation requires a positive integer id, null, or inline base64 data")
+
+        validator = getattr(
+            related_instance, f"validate_{related_field_name}_file", None)
+        if callable(validator):
+            validator(candidate, request)
+        return candidate
 
     @classmethod
     def on_rest_related_save(cls, related_instance, related_field_name, field_value, current_instance=None):

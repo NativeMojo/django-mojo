@@ -180,7 +180,28 @@ class Product(models.Model, MojoModel):
     image = models.ForeignKey("fileman.File", null=True, on_delete=models.SET_NULL)
 ```
 
-The framework will automatically handle inline base64 upload when `image` is passed as a data URL in a REST POST (this creates a **new** File the caller owns). Passing an **integer file id** instead attaches an *existing* File — and is gated: the caller must have `VIEW_PERMS` on that File (own it, hold `manage_files`/`files`, or have group access), or the FK is silently dropped with an `fk_attach_denied` incident. See [FK Assignment During Save](../rest/permissions.md#fk-assignment-during-save).
+File relations accept exactly three input forms:
+
+- `null` detaches a nullable relation without deleting the File;
+- a positive JSON integer attaches an existing File after one lookup and a
+  `VIEW_PERMS` check; and
+- a valid base64 or `data:<mime>;base64,...` string creates an inline File.
+
+Booleans, zero/negative ids, numeric strings, mappings/lists, and malformed
+base64 return 400. A missing or non-viewable positive id returns the same
+`403 File unavailable` response. Unlike generic FK denial, File denial is not
+a successful silent no-op.
+
+Parents can enforce field-specific policy with
+`validate_<field_name>_file(candidate, request)`. They can customize inline
+tenant scope with `resolve_<field_name>_file_upload_scope(request)`, returning
+`{"group": group_or_none}`. Inline ownership always comes from the stable real
+actor (`request.acting_user`, then an actual `account.User`); bare API keys and
+pseudo-users are never written to the File owner FK. With no real actor and no
+active group, inline creation fails closed. An inline File remains an
+independent reusable asset if later parent validation fails.
+
+See [FK Assignment During Save](../rest/permissions.md#fk-assignment-during-save).
 
 ## RestMeta
 

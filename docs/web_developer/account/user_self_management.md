@@ -157,6 +157,17 @@ POST /api/user/me
 { "avatar": <file_id> }
 ```
 
+The id must be a positive JSON integer, not a numeric string. The File must be
+active, completed, groupless, owned by the user making the upload, and
+classified as an image by both `category` and `content_type`. Invalid avatar
+classification returns 400. A missing id and a File the caller cannot view both
+return the same `403 File unavailable` response.
+
+When an administrator replaces another user's avatar, the administrator must
+use a File they uploaded. The File remains owned by the administrator; attaching
+it does not transfer ownership to the target account. A target-owned or third
+party File is rejected even for an administrator.
+
 ---
 
 ### Option B — Inline base64 (small images only)
@@ -172,7 +183,10 @@ POST /api/user/me
 ```
 
 This passes through the API server, so keep it to avatars only — not
-documents or large images.
+documents or large images. The created File is owned by the real acting user
+and is always personal (`group=null`), even when the request has an active group.
+If another field makes the profile save fail later, that File remains available
+as an independently owned asset for retry.
 
 ---
 
@@ -182,6 +196,8 @@ documents or large images.
 POST /api/user/me
 { "avatar": null }
 ```
+
+Clearing or replacing the relation never deletes the old File.
 
 ---
 

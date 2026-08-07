@@ -257,6 +257,33 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         born = self.dob
         return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
 
+    def resolve_avatar_file_upload_scope(self, request):
+        """User avatars are personal assets even inside an ambient group."""
+        return {"group": None}
+
+    def validate_avatar_file(self, file, request):
+        """Enforce avatar lifecycle, image classification, scope, and uploader ownership."""
+        from mojo.models.rest import _resolve_stamp_actor
+
+        if (not file.is_active or file.upload_status != file.COMPLETED
+                or file.category != "image"
+                or not file.content_type.startswith("image/")
+                or file.group_id is not None or file.user_id is None):
+            raise merrors.ValueException(
+                "Avatar requires an active, completed, groupless image File with an owner")
+
+        actor = _resolve_stamp_actor(request)
+        if actor is None:
+            raise merrors.PermissionDeniedException("Avatar uploader unavailable")
+        if self.pk == actor.pk:
+            if file.user_id != self.pk:
+                raise merrors.PermissionDeniedException("Avatar File must be owned by its uploader")
+            return
+        if not (actor.is_superuser or actor.has_permission(["users", "manage_users"])):
+            raise merrors.PermissionDeniedException("Avatar update requires user administration")
+        if file.user_id != actor.pk:
+            raise merrors.PermissionDeniedException("Avatar File must be owned by its uploader")
+
     @property
     def has_passkey(self):
         return self.passkeys.filter(is_enabled=True).count() > 0

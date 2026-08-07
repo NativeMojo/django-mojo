@@ -88,6 +88,13 @@ Users can update their own record (owner permission). Admins with `manage_users`
 }
 ```
 
+`avatar` accepts a positive numeric File id, a valid inline base64/data URL, or
+`null`. Numeric strings and other ambiguous shapes return 400. An avatar File
+must be active, completed, groupless, image-classified, and owned by the actor
+who uploaded it. Admin-on-behalf updates use an admin-owned File and retain
+that ownership; they do not transfer the File to the target user. `null`
+detaches the relation without deleting the File.
+
 ### Protected Fields
 
 `users` and `manage_users` are treated as equivalent for User admin operations — anywhere "admin tier" is listed, either perm is sufficient (and superusers always qualify).
@@ -394,4 +401,3 @@ reactivation — the user must log in again to get a working token.
 ```
 
 Use this to manually unlock a user after a failed-login lockout.
-

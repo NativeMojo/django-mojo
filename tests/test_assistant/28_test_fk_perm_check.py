@@ -161,6 +161,40 @@ def test_dict_path_unchanged(opts):
     skill.delete()
 
 
+@th.django_unit_test()
+def test_legacy_custom_related_hook_keeps_four_argument_abi(opts):
+    """Models without the candidate resolver still receive the legacy four args."""
+    from mojo.apps.account.models import Group
+    from mojo.apps.assistant.models import Skill
+
+    calls = []
+
+    def legacy_hook(cls, parent, field_name, value, current):
+        calls.append((parent, field_name, value, current))
+        setattr(parent, field_name, opts.group)
+
+    sentinel = object()
+    original = Group.__dict__.get("on_rest_related_save", sentinel)
+    Group.on_rest_related_save = classmethod(legacy_hook)
+    try:
+        skill = Skill(tier="user", name="fkperm_legacy_hook")
+        request = _build_synthetic_request(opts.priv)
+        field = skill._meta.get_field("group")
+        skill.on_rest_save_related_field(field, "legacy-value", request)
+        assert len(calls) == 1, f"legacy hook must be called exactly once, got {calls!r}"
+        parent, field_name, value, current = calls[0]
+        assert parent is skill, "legacy hook first argument must remain the parent instance"
+        assert field_name == "group", f"legacy hook field must be group, got {field_name!r}"
+        assert value == "legacy-value", f"legacy hook value changed: {value!r}"
+        assert current is None, f"legacy hook current instance must remain None, got {current!r}"
+        assert skill.group_id == opts.group.id, "legacy hook must retain assignment control"
+    finally:
+        if original is sentinel:
+            delattr(Group, "on_rest_related_save")
+        else:
+            setattr(Group, "on_rest_related_save", original)
+
+
 # ---------------------------------------------------------------------------
 # Incident reporting on denial
 # ---------------------------------------------------------------------------

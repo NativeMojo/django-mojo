@@ -32,6 +32,19 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 | `last_activity` | DateTimeField | Last seen timestamp |
 | `auth_key` | TextField | Per-user JWT signing key |
 
+### Avatar relation contract
+
+`User.validate_avatar_file()` requires an active, completed, groupless File
+classified as an image (`category == "image"` and an `image/*` content type)
+with a real owner. This is classification validation, not deep image decoding.
+
+A user may attach only their own File. A superuser or global
+`users`/`manage_users` administrator editing another account may attach only a
+File uploaded by that administrator. Ownership is not transferred to the
+target user. Passing `null` clears the relation without deleting the detached
+File. `resolve_avatar_file_upload_scope()` forces inline avatars to personal
+scope (`group=None`) even when the request carries an ambient group.
+
 ## RestMeta Configuration
 
 ```python
