@@ -200,6 +200,41 @@ def test_disabled_vhost_excluded(opts):
         Vhost.objects.filter(pk=opts.vhost.pk).update(is_enabled=True)
 
 
+@th.django_unit_test("the payload carries the kind knobs and sorted routes")
+def test_payload_carries_knobs_and_routes(opts):
+    from mojo.apps.edge.services import render
+    from tests.test_edge._helpers import make_route, make_upstream
+
+    domain = make_domain(group=opts.group)
+    certificate = make_certificate(domain)
+    upstream = make_upstream(host="127.0.0.1", port=8400)
+    vhost = make_vhost(domain, certificate, label="mix", kind="site_api",
+                       body_size_mb=100, serve_static=True)
+    make_route(vhost, "/zapi", upstream)
+    make_route(vhost, "/api", upstream)
+    vhost.quiet_paths = ["/api/health"]
+    vhost.save()
+
+    row = render.vhost_payload(vhost)
+    assert row["body_size_mb"] == 100, "body_size_mb is not in the payload"
+    assert row["serve_static"] is True, "serve_static is not in the payload"
+    assert row["quiet_paths"] == ["/api/health"], \
+        f"quiet_paths wrong in the payload: {row['quiet_paths']}"
+    prefixes = [r["path_prefix"] for r in row["routes"]]
+    assert prefixes == ["/api", "/zapi"], \
+        f"routes must be sorted by prefix, got {prefixes}"
+    assert row["routes"][0]["upstream"]["id"] == upstream.pk, \
+        "a route's payload does not identify its upstream"
+
+    without_routes = render.desired_state([vhost])["generation"]
+    make_route(vhost, "/more", upstream)
+    vhost = type(vhost).objects.select_related("domain", "certificate").get(
+        pk=vhost.pk)
+    with_routes = render.desired_state([vhost])["generation"]
+    assert without_routes != with_routes, \
+        "adding a route did not move the generation id — nodes would not converge"
+
+
 @th.django_unit_test("node material is refused for a certificate nothing serves")
 def test_material_requires_a_referencing_vhost(opts):
     """Tighter than the endpoint it works around: authorization is not enough,

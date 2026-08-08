@@ -67,6 +67,14 @@ class VhostRoute(models.Model, MojoModel):
             },
         }
 
+    @classmethod
+    def on_rest_list_filter(cls, request, queryset):
+        """Keep house serving inventory out of non-superuser lists —
+        mirrors Vhost.on_rest_list_filter."""
+        if getattr(request.user, "is_superuser", False) is not True:
+            queryset = queryset.exclude(vhost__domain__group__isnull=True)
+        return super().on_rest_list_filter(request, queryset)
+
     def __str__(self):
         return f"{self.vhost_id}:{self.path_prefix} -> {self.upstream_id}"
 

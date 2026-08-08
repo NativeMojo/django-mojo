@@ -130,29 +130,20 @@ def test_redirect_pairing(opts):
         "edge_vhost_kind_fields is not enforcing")
 
 
-@th.django_unit_test("site_api and redirect cannot be ENABLED before their templates ship")
-def test_new_kinds_gated_until_stage_two(opts):
-    """TRANSITIONAL (Stage 1) — Stage 2 deletes this refusal and this test.
-
-    A disabled row of either kind IS storable, so staging work can begin
-    before the builders land.
-    """
-    from mojo.apps.edge.models import Vhost
-
-    err = raises(
-        Vhost.objects.create, domain=opts.domain, certificate=opts.certificate,
-        label="gapi", kind="site_api")
-    assert err is not None, "an enabled site_api vhost slipped past the gate"
-
-    err = raises(
-        Vhost.objects.create, domain=opts.domain, certificate=opts.certificate,
-        label="gredir", kind="redirect", redirect_to="www.example.com")
-    assert err is not None, "an enabled redirect vhost slipped past the gate"
-
-    disabled = make_vhost(
-        opts.domain, opts.certificate, label="gpark", kind="site_api",
-        is_enabled=False)
-    assert disabled.pk, "a disabled site_api vhost must be storable"
+@th.django_unit_test("every kind can be enabled once its fields pair correctly")
+def test_all_kinds_enable(opts):
+    cases = [
+        ("enapi", dict(kind="api", upstream=opts.upstream)),
+        ("ensite", dict(kind="site")),
+        ("enspa", dict(kind="site", spa=True)),
+        ("enboth", dict(kind="site_api")),
+        ("enredir", dict(kind="redirect", redirect_to="www.example.com")),
+    ]
+    for label, kwargs in cases:
+        err = raises(make_vhost, opts.domain, opts.certificate,
+                     label=label, **kwargs)
+        assert err is None, \
+            f"an enabled {kwargs['kind']} vhost was refused: {err}"
 
 
 @th.django_unit_test("routes attach only to site_api vhosts and stay in-tenant")

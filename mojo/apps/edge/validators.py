@@ -624,13 +624,6 @@ def validate_vhost(vhost):
     # disabled row is inert — it renders nothing — and refusing to store one
     # would make a vhost impossible to park while its certificate is reissued.
     if vhost.is_enabled:
-        if vhost.kind in (KIND_SITE_API, KIND_REDIRECT):
-            # TRANSITIONAL (this item's Stage 1): these kinds have no
-            # renderer builder yet, and an enabled row with no builder would
-            # freeze the pool's convergence at render time. Stage 2 ships the
-            # builders and deletes this refusal.
-            raise me.ValueException(
-                f"a {vhost.kind} vhost cannot be enabled yet")
         if vhost.claims_reserved:
             # The set must still be DECLARED — a deployment that cannot name
             # itself cannot supervise a claim on its own names either. Only

@@ -19,7 +19,7 @@ from testit import helpers as th
 from tests.test_edge._helpers import (
     declare_pools,
     cleanup, declare_reserved_names, make_certificate, make_domain, make_group,
-    make_upstream, make_vhost,
+    make_route, make_upstream, make_vhost,
 )
 
 
@@ -61,17 +61,26 @@ def setup_golden(opts):
         name="up-golden-unix", kind="unix", socket_path="/run/mojo/golden.sock")
 
 
-def _render(opts, **kwargs):
+def _render(opts, routes=None, **kwargs):
     """Render one vhost with FIXED ids so paths are reproducible.
 
     Both the vhost pk and the certificate id are autoincrement and land in the
     rendered paths, so both are swapped for constants after the row is built.
     Everything else — the TLS floor, the header block, the location shape — is
     genuinely rendered, which is what the golden file is protecting.
+
+    `routes` ([(prefix, upstream), ...]) are created against the REAL pk and
+    prefetched before the swap, so the renderer's `routes.all()` serves them
+    from cache rather than querying for the fixed pk.
     """
+    from django.db.models import prefetch_related_objects
+
     from mojo.apps.edge.services import render
 
     vhost = make_vhost(opts.domain, opts.certificate, **kwargs)
+    for prefix, upstream in routes or []:
+        make_route(vhost, prefix, upstream)
+    prefetch_related_objects([vhost], "routes__upstream")
     vhost.pk = 4242
     vhost.certificate_id = 99
     return render.render_vhost(vhost, GENERATION)
@@ -97,6 +106,29 @@ def test_golden_api_http(opts):
 def test_golden_api_unix(opts):
     _compare("api_unix.conf", _render(
         opts, label="sock", kind="api", upstream=opts.unix_upstream))
+
+
+@th.django_unit_test("golden: api vhost with every knob turned")
+def test_golden_api_knobs(opts):
+    _compare("api_knobs.conf", _render(
+        opts, label="knobs", kind="api", upstream=opts.http_upstream,
+        body_size_mb=200, quiet_paths=["/healthz", "/api/status"],
+        serve_static=True))
+
+
+@th.django_unit_test("golden: site_api vhost with routes and a quiet path")
+def test_golden_site_api(opts):
+    _compare("site_api.conf", _render(
+        opts, label="mixed", kind="site_api", is_enabled=False,
+        routes=[("/api", opts.http_upstream), ("/ws", opts.unix_upstream)],
+        quiet_paths=[]))
+
+
+@th.django_unit_test("golden: redirect vhost")
+def test_golden_redirect(opts):
+    _compare("redirect.conf", _render(
+        opts, label="old", kind="redirect",
+        redirect_to="www.edge-golden.example.com"))
 
 
 @th.django_unit_test("golden: apex and wildcard names")
