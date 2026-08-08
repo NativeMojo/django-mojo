@@ -338,6 +338,97 @@ def test_blocklist_global_grants(opts):
         f"the blocklist served an anonymous caller (status {resp.status_code})"
 
 
+@th.django_unit_test("claim_reserved refuses everyone but a real, interactive superuser")
+def test_claim_reserved_gates(opts):
+    """The three refusals the gate exists for: anonymous, a global
+    manage_dns holder, and — the subtle one — a KEY-BACKED session whose
+    override user IS a superuser. A bearer token in a config file must never
+    be able to suspend the reserved-name defence."""
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.edge.models import Vhost
+
+    path = "/api/edge/vhost/claim_reserved"
+    payload = dict(vhost=opts.house_vhost.pk)
+
+    opts.client.logout()
+    resp = opts.client.post(path, json=payload)
+    assert resp.status_code in (401, 403), \
+        f"claim_reserved answered an anonymous caller (status {resp.status_code})"
+
+    login(opts, opts.manager_email, opts.manager_pw)
+    resp = opts.client.post(path, json=payload)
+    assert resp.status_code in (401, 403), (
+        "a global manage_dns holder set the reserved-name override "
+        f"(status {resp.status_code})")
+
+    # A key whose override user IS a superuser: request.user really is the
+    # superuser, and the gate must still refuse the session. The sanctioned
+    # path refuses to BUILD this state (create_for_group raises on a
+    # superuser link), so the test constructs it the way drift would — the
+    # member gets promoted AFTER the key exists.
+    from mojo.apps.account.models import GroupMember, User
+
+    key_user, _, _ = make_user()
+    GroupMember.objects.get_or_create(user=key_user, group=opts.group)
+    key, token = ApiKey.create_for_group(
+        opts.group, "edge_claim_key", permissions={"manage_dns": True},
+        user=key_user, override_user=True)
+    User.objects.filter(pk=key_user.pk).update(is_superuser=True)
+    opts.client.logout()
+    opts.client.session.headers["Authorization"] = f"apikey {token}"
+    try:
+        resp = opts.client.post(path, json=payload)
+        assert resp.status_code in (401, 403), (
+            "a KEY-BACKED superuser session set the reserved-name override "
+            f"(status {resp.status_code})")
+    finally:
+        opts.client.session.headers.pop("Authorization", None)
+
+    fresh = Vhost.objects.get(pk=opts.house_vhost.pk)
+    assert fresh.claims_reserved is False, \
+        "a refused caller still flipped claims_reserved"
+
+
+@th.django_unit_test("a platform admin claims and releases; plain REST writes cannot")
+def test_claim_reserved_admin_flow(opts):
+    from mojo.apps.edge.models import Vhost
+
+    # NO_SAVE_FIELDS: a plain field write must not move the flag, even for
+    # the admin who could use the action instead.
+    login(opts, opts.admin_email, opts.admin_pw)
+    resp = opts.client.post(f"/api/edge/vhost/{opts.house_vhost.pk}", json=dict(
+        claims_reserved=True))
+    fresh = Vhost.objects.get(pk=opts.house_vhost.pk)
+    assert fresh.claims_reserved is False, (
+        "claims_reserved moved through a plain REST field write "
+        f"(status {resp.status_code}) — NO_SAVE_FIELDS is not holding")
+
+    resp = opts.client.post("/api/edge/vhost/claim_reserved", json=dict(
+        vhost=opts.house_vhost.pk))
+    assert resp.status_code == 200, (
+        f"a platform admin could not claim: {resp.status_code} {resp.body}")
+    fresh = Vhost.objects.get(pk=opts.house_vhost.pk)
+    assert fresh.claims_reserved is True, "the claim did not land"
+
+    resp = opts.client.post("/api/edge/vhost/claim_reserved", json=dict(
+        vhost=opts.house_vhost.pk, release=True))
+    assert resp.status_code == 200, (
+        f"a platform admin could not release: {resp.status_code} {resp.body}")
+    fresh = Vhost.objects.get(pk=opts.house_vhost.pk)
+    assert fresh.claims_reserved is False, "the release did not land"
+
+    # A TENANT vhost stays unclaimable even for the platform admin — the
+    # model check, reached through the action.
+    resp = opts.client.post("/api/edge/vhost/claim_reserved", json=dict(
+        vhost=opts.vhost.pk))
+    assert resp.status_code not in (200, 201), (
+        "claim_reserved set the override on a TENANT vhost "
+        f"(status {resp.status_code})")
+    fresh = Vhost.objects.get(pk=opts.vhost.pk)
+    assert fresh.claims_reserved is False, \
+        "the tenant vhost carries the override despite the refusal"
+
+
 @th.django_unit_test("a vhost cannot be moved between domains over REST")
 def test_domain_is_immutable(opts):
     """Re-pointing `domain` would move the row between TENANTS."""
