@@ -166,6 +166,7 @@ RELEASE_BUCKET = "edge-test-releases"
 TEST_POOLS = [
     "default", "staging", "nginxreal", "reltest",
     "itesthappy", "itestexclude", "itesthouse",
+    "itestgraph", "itestretired", "itesthouseup",
 ]
 
 

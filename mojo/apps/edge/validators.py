@@ -53,6 +53,14 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 QUIET_PATH_RE = re.compile(r"^/[A-Za-z0-9._/\-]{0,127}\Z")
 ROUTE_PREFIX_RE = QUIET_PATH_RE
 
+# The TLS floor values. Settings, not row data — but `settings.get` resolves a
+# DB-backed Setting row first, and these land verbatim inside `ssl_protocols`
+# / `ssl_ciphers` directives, so the renderer re-asserts them like everything
+# else. The charset covers every real protocol and OpenSSL cipher-string
+# token (`TLSv1.3`, `ECDHE-...`, `:`, `!aNULL`, `+`, `_`) and cannot carry
+# `;`, `{`, `}`, `#`, quotes, or a control character.
+TLS_VALUE_RE = re.compile(r"^[A-Za-z0-9 .:+!_-]{1,1024}\Z")
+
 
 def www_base():
     # get_static throughout this pair of helpers: these define the containment

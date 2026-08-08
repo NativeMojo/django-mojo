@@ -421,6 +421,135 @@ def test_stale_config_still_serves(opts):
         _exit(patches, root)
 
 
+@th.django_unit_test("a generation stages the full include graph")
+def test_include_graph_staged(opts):
+    """http.d base + upstreams land beside conf.d, no vhost file carries an
+    `upstream {` block or a literal target, and the log directory the base's
+    access_log points at exists before the staged nginx -t would open it."""
+    from mojo.apps.edge.services import installer, render
+    from mojo.apps.dnsman.models import Certificate
+
+    root = _root(opts)
+    patches = _with_root(root)
+    _enter(patches)
+    try:
+        graph_domain = make_domain(group=opts.group)
+        graph_cert = make_certificate(graph_domain)
+        upstream = make_upstream(host="127.0.0.1", port=9911)
+        make_vhost(graph_domain, graph_cert, label="api", kind="api",
+                   upstream=upstream, pool=_pool("graph"))
+        Certificate.objects.filter(pk=graph_cert.pk).update(
+            cert_pem="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+
+        with mock.patch.object(installer, "_run", Recorder()):
+            result = installer.install(pool=_pool("graph"))
+        assert result.changed, "the graph install did not converge"
+
+        current = os.path.realpath(render.current_link())
+        base_path = os.path.join(current, "http.d", "00_base.conf")
+        ups_path = os.path.join(current, "http.d", "10_upstreams.conf")
+        assert os.path.exists(base_path), "http.d/00_base.conf was not staged"
+        assert os.path.exists(ups_path), \
+            "http.d/10_upstreams.conf was not staged"
+
+        base = open(base_path).read()
+        assert "map $http_upgrade $connection_upgrade {" in base, \
+            "the upgrade map is missing from the base"
+        assert "access_log " in base and "$loggable" in base, \
+            "the base carries no health-filtered access log"
+
+        ups = open(ups_path).read()
+        assert f"upstream edge_up_{upstream.pk} {{" in ups, \
+            "the referenced upstream has no named block"
+        assert "127.0.0.1:9911" in ups, \
+            "the upstream block does not carry the literal target"
+
+        conf_d = os.path.join(current, "conf.d")
+        for name in os.listdir(conf_d):
+            text = open(os.path.join(conf_d, name)).read()
+            assert "upstream " not in text, \
+                f"{name} defines an upstream block — targets belong in http.d"
+            assert "9911" not in text, \
+                f"{name} carries a literal upstream target"
+
+        assert os.path.isdir(render.log_dir()), \
+            "EDGE_LOG_DIR was not created — the staged nginx -t would fail " \
+            "opening the access log"
+    finally:
+        _exit(patches, root)
+
+
+@th.django_unit_test("a tenant vhost proxying a RETIRED upstream is excluded, not fatal")
+def test_retired_upstream_excludes(opts):
+    """The retire contract: the vhost stops being served (excluded, with an
+    incident) rather than the fleet freezing or traffic being repointed."""
+    from mojo.apps.edge.models import Upstream
+    from mojo.apps.edge.services import installer
+    from mojo.apps.dnsman.models import Certificate
+
+    root = _root(opts)
+    patches = _with_root(root)
+    _enter(patches)
+    try:
+        retired = make_upstream(host="127.0.0.1", port=9921)
+        bad_domain = make_domain(group=opts.group)
+        bad_cert = make_certificate(bad_domain)
+        bad_vhost = make_vhost(bad_domain, bad_cert, label="dead", kind="api",
+                               upstream=retired, pool=_pool("retired"))
+
+        good_domain = make_domain(group=opts.group)
+        good_cert = make_certificate(good_domain)
+        good_vhost = make_vhost(good_domain, good_cert, label="ok",
+                                pool=_pool("retired"))
+
+        Certificate.objects.filter(pk__in=[bad_cert.pk, good_cert.pk]).update(
+            cert_pem="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+        Upstream.objects.filter(pk=retired.pk).update(is_enabled=False)
+
+        with mock.patch.object(installer, "_run", Recorder()):
+            result = installer.install(pool=_pool("retired"))
+
+        assert result.changed, "the install did not converge"
+        assert bad_vhost.pk in result.excluded, \
+            "the vhost proxying a retired upstream was not excluded"
+        assert good_vhost.pk not in result.excluded, \
+            "a healthy vhost was excluded alongside the retired one"
+    finally:
+        _exit(patches, root)
+
+
+@th.django_unit_test("a HOUSE vhost proxying a RETIRED upstream aborts the install")
+def test_retired_upstream_house_aborts(opts):
+    from mojo.apps.edge.models import Upstream
+    from mojo.apps.edge.services import installer, render
+    from mojo.apps.dnsman.models import Certificate
+
+    root = _root(opts)
+    patches = _with_root(root)
+    _enter(patches)
+    try:
+        retired = make_upstream(host="127.0.0.1", port=9931)
+        house_domain = make_domain(group=None)
+        house_cert = make_certificate(house_domain)
+        make_vhost(house_domain, house_cert, label="api", kind="api",
+                   upstream=retired, pool=_pool("houseup"))
+        Certificate.objects.filter(pk=house_cert.pk).update(
+            cert_pem="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+        Upstream.objects.filter(pk=retired.pk).update(is_enabled=False)
+
+        recorder = Recorder()
+        with mock.patch.object(installer, "_run", recorder):
+            err = raises(installer.install, pool=_pool("houseup"))
+
+        assert err is not None, \
+            "a house vhost proxying a retired upstream installed anyway"
+        assert not os.path.islink(render.current_link()), \
+            "current was swapped despite the house abort"
+        assert not recorder.reloaded, "nginx was reloaded after a house abort"
+    finally:
+        _exit(patches, root)
+
+
 @th.django_unit_test("old generations are pruned but the live one never is")
 def test_prune_keeps_current(opts):
     from mojo.apps.edge.services import installer, render

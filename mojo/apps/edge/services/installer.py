@@ -254,6 +254,41 @@ def _write_material(generation, certificate):
     return True
 
 
+def _disabled_upstreams(vhost):
+    """The disabled upstreams this vhost would proxy to, direct or via route."""
+    rows = []
+    if vhost.upstream_id and not vhost.upstream.is_enabled:
+        rows.append(vhost.upstream)
+    for route in vhost.routes.all():
+        if not route.upstream.is_enabled:
+            rows.append(route.upstream)
+    return rows
+
+
+def _exclude_or_abort(vhost, message, excluded):
+    """The one fork for a vhost that cannot be staged.
+
+    House vhost -> abort the install (the platform's own serving path;
+    converging without it is not a partial success). Tenant vhost -> exclude
+    it and report an incident, so one tenant's broken row cannot freeze the
+    fleet.
+    """
+    from mojo.apps.incident import reporter
+
+    if vhost.domain.group_id is None:
+        raise InstallError(f"{message} — it serves a platform vhost")
+    logit.error(message)
+    try:
+        reporter.report_event(
+            message, title="Vhost excluded from an edge generation",
+            category="edge_install", level=6)
+    except Exception:
+        # An incident-reporting failure must not decide whether a fleet
+        # converges. The exclusion is already in installed.json.
+        logit.exception("edge: failed to report a vhost exclusion")
+    excluded.append(vhost.pk)
+
+
 def stage_generation(vhosts, generation, webapps=None):
     """Build `generations/<generation>/` completely. Returns excluded vhost ids.
 
@@ -261,42 +296,44 @@ def stage_generation(vhosts, generation, webapps=None):
     platform's own serving path, and converging without it is not a partial
     success.
     """
-    from mojo.apps.incident import reporter
-
     gen_dir = render.generation_dir(generation)
     os.makedirs(os.path.join(gen_dir, "conf.d"), exist_ok=True)
+    os.makedirs(os.path.join(gen_dir, "http.d"), exist_ok=True)
     os.makedirs(os.path.join(gen_dir, "www"), exist_ok=True)
     # The staged check runs unprivileged, so nginx needs writable scratch
     # paths inside the generation — the harness names these.
     os.makedirs(os.path.join(gen_dir, "tmp"), exist_ok=True)
+    # The base's access_log (and the stage-4 watch log) point here, and
+    # `nginx -t` opens log files while validating — the directory has to
+    # exist before the staged check runs.
+    os.makedirs(render.log_dir(), exist_ok=True)
 
     installable = []
     excluded = []
     for vhost in vhosts:
+        disabled = _disabled_upstreams(vhost)
+        if disabled:
+            names = ", ".join(sorted(row.name for row in disabled))
+            _exclude_or_abort(
+                vhost,
+                f"edge: {vhost.server_name} proxies to retired upstream(s) "
+                f"{names}", excluded)
+            continue
+
         if _write_material(generation, vhost.certificate):
             installable.append(vhost)
             continue
 
-        is_house = vhost.domain.group_id is None
-        message = (
+        _exclude_or_abort(
+            vhost,
             f"edge: certificate {vhost.certificate_id} for "
-            f"{vhost.server_name} has no readable material (KMS?)")
-        if is_house:
-            raise InstallError(f"{message} — it serves a platform vhost")
-        logit.error(message)
-        try:
-            reporter.report_event(
-                message, title="Vhost excluded from an edge generation",
-                category="edge_install", level=6)
-        except Exception:
-            # An incident-reporting failure must not decide whether a fleet
-            # converges. The exclusion is already in installed.json.
-            logit.exception("edge: failed to report a vhost exclusion")
-        excluded.append(vhost.pk)
+            f"{vhost.server_name} has no readable material (KMS?)", excluded)
 
     files = render.render_generation(installable, generation)
     for name, text in files.items():
-        with open(os.path.join(gen_dir, "conf.d", name), "w") as handle:
+        path = os.path.join(gen_dir, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as handle:
             handle.write(text)
 
     with open(os.path.join(gen_dir, "nginx.conf"), "w") as handle:

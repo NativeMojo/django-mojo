@@ -61,28 +61,53 @@ def setup_golden(opts):
         name="up-golden-unix", kind="unix", socket_path="/run/mojo/golden.sock")
 
 
+def _pin_upstream_ids(vhost):
+    """Upstream pks are autoincrement and land in the `edge_up_<pk>` names,
+    so they get pinned like the vhost pk does: distinct upstreams in
+    creation (pk) order become 71, 72, ...
+
+    Only safe on FRESH instances — `_render` refetches before calling this,
+    so the shared fixtures in `opts` are never mutated.
+    """
+    rows = {}
+    if vhost.upstream_id:
+        rows.setdefault(vhost.upstream.pk, []).append(vhost.upstream)
+    for route in vhost.routes.all():
+        rows.setdefault(route.upstream.pk, []).append(route.upstream)
+    for index, original in enumerate(sorted(rows), start=71):
+        for row in rows[original]:
+            row.pk = index
+
+
 def _render(opts, routes=None, **kwargs):
     """Render one vhost with FIXED ids so paths are reproducible.
 
-    Both the vhost pk and the certificate id are autoincrement and land in the
-    rendered paths, so both are swapped for constants after the row is built.
-    Everything else — the TLS floor, the header block, the location shape — is
-    genuinely rendered, which is what the golden file is protecting.
+    The vhost pk, the certificate id and every referenced upstream pk are
+    autoincrement and land in the rendered text (paths and `edge_up_<pk>`
+    names), so all are swapped for constants after the row is built.
+    Everything else — the TLS floor, the header block, the location shape —
+    is genuinely rendered, which is what the golden file is protecting.
 
-    `routes` ([(prefix, upstream), ...]) are created against the REAL pk and
-    prefetched before the swap, so the renderer's `routes.all()` serves them
-    from cache rather than querying for the fixed pk.
+    `routes` ([(prefix, upstream), ...]) are created against the REAL pk;
+    the vhost is then REFETCHED (so pinning ids cannot corrupt the shared
+    fixtures) and its routes prefetched, so the renderer's `routes.all()`
+    serves the cache rather than querying for the fixed pk.
     """
     from django.db.models import prefetch_related_objects
 
+    from mojo.apps.edge.models import Vhost
     from mojo.apps.edge.services import render
 
     vhost = make_vhost(opts.domain, opts.certificate, **kwargs)
     for prefix, upstream in routes or []:
         make_route(vhost, prefix, upstream)
+    vhost = (Vhost.objects
+             .select_related("domain", "certificate", "upstream")
+             .get(pk=vhost.pk))
     prefetch_related_objects([vhost], "routes__upstream")
     vhost.pk = 4242
     vhost.certificate_id = 99
+    _pin_upstream_ids(vhost)
     return render.render_vhost(vhost, GENERATION)
 
 
@@ -142,3 +167,32 @@ def test_golden_harness(opts):
     from mojo.apps.edge.services import render
 
     _compare("harness.conf", render.render_nginx_harness(GENERATION))
+
+
+@th.django_unit_test("golden: the rendered http base")
+def test_golden_http_base(opts):
+    from mojo.apps.edge.services import render
+
+    _compare("http_base.conf", render.render_http_base())
+
+
+@th.django_unit_test("golden: the http base with the default-server catch-alls")
+def test_golden_http_base_default(opts):
+    from mojo.apps.edge.services import render
+
+    knobs = render.http_knobs()
+    knobs["default_server"] = True
+    _compare("http_base_default.conf", render.render_http_base(knobs))
+
+
+@th.django_unit_test("golden: the upstreams file")
+def test_golden_upstreams(opts):
+    """Named blocks with pinned pks — the only file carrying literal
+    targets; every vhost file references these names."""
+    from mojo.apps.edge.models import Upstream
+    from mojo.apps.edge.services import render
+
+    http = Upstream.objects.get(pk=opts.http_upstream.pk)
+    unix = Upstream.objects.get(pk=opts.unix_upstream.pk)
+    http.pk, unix.pk = 71, 72
+    _compare("upstreams.conf", render.render_upstreams([http, unix]))

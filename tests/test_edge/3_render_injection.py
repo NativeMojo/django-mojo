@@ -158,14 +158,18 @@ def test_api_never_serves_files(opts):
                        kind="api", upstream=opts.upstream)
     text = render.render_vhost(vhost, opts.generation)
 
-    assert "proxy_pass http://127.0.0.1:8000;" in text, \
+    assert f"proxy_pass http://edge_up_{opts.upstream.pk};" in text, \
         f"the proxy destination is wrong:\n{text}"
     assert "\n    root " not in text, "an api vhost emitted a filesystem root"
+    assert "127.0.0.1" not in text, (
+        "a literal upstream target leaked into a vhost file — targets live "
+        "only in http.d/10_upstreams.conf")
 
 
 @th.django_unit_test("a unix upstream renders nginx's socket syntax")
 def test_unix_upstream_syntax(opts):
-    """`http://unix:/path:/` — the trailing `:/` is not optional."""
+    """Inside an `upstream {}` block the socket is `server unix:/path;` —
+    no trailing `:/`, which only the inline proxy_pass form needed."""
     from mojo.apps.edge.services import render
 
     sock = make_upstream(kind="unix", socket_path="/run/mojo/app.sock")
@@ -173,8 +177,14 @@ def test_unix_upstream_syntax(opts):
                        kind="api", upstream=sock)
     text = render.render_vhost(vhost, opts.generation)
 
-    assert "proxy_pass http://unix:/run/mojo/app.sock:/;" in text, \
-        f"unix socket proxy_pass is malformed:\n{text}"
+    assert f"proxy_pass http://edge_up_{sock.pk};" in text, \
+        f"unix-backed api vhost does not reference its named upstream:\n{text}"
+
+    blocks = render.render_upstreams([sock])
+    assert f"upstream edge_up_{sock.pk} {{" in blocks, \
+        f"no named block for the unix upstream:\n{blocks}"
+    assert "server unix:/run/mojo/app.sock;" in blocks, \
+        f"unix socket server line is malformed:\n{blocks}"
 
 
 @th.django_unit_test("every rendered vhost carries the TLS floor")
@@ -281,9 +291,9 @@ def test_site_api_shapes(opts):
 
     assert "location /api {" in text, "the /api route has no location"
     assert "location /api/ws {" in text, "the /api/ws route has no location"
-    assert "proxy_pass http://127.0.0.1:8100;" in text, \
+    assert f"proxy_pass http://edge_up_{api_up.pk};" in text, \
         "the /api route does not reach its upstream"
-    assert "proxy_pass http://127.0.0.1:8200;" in text, \
+    assert f"proxy_pass http://edge_up_{ws_up.pk};" in text, \
         "the /api/ws route does not reach its upstream"
     assert "root " in text, "the site half of site_api is missing"
 
@@ -291,7 +301,7 @@ def test_site_api_shapes(opts):
     # /api/ws, not /api.
     quiet_at = text.index("location = /api/ws/ping {")
     quiet_block = text[quiet_at:text.index("}", quiet_at)]
-    assert "proxy_pass http://127.0.0.1:8200;" in quiet_block, (
+    assert f"proxy_pass http://edge_up_{ws_up.pk};" in quiet_block, (
         "the quiet path proxied to the wrong route — longest-prefix "
         f"association broke:\n{quiet_block}")
 

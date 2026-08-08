@@ -88,6 +88,48 @@ def proxy_read_timeout():
     return _bounded_int("EDGE_PROXY_READ_TIMEOUT", 3600, 60, 86400)
 
 
+def keepalive_timeout():
+    return _bounded_int("EDGE_HTTP_KEEPALIVE_TIMEOUT", 65, 5, 300)
+
+
+def mime_types_path():
+    return settings.get_static("EDGE_MIME_TYPES", "/etc/nginx/mime.types")
+
+
+def log_dir():
+    # App-owned: the base's access_log (and stage 4's watch log) live here,
+    # NOT under /var/log/nginx — the whole include graph must stay writable
+    # by the app user so the staged, unprivileged `nginx -t` can open it.
+    return settings.get_static("EDGE_LOG_DIR", f"{edge_root()}/log")
+
+
+def default_server_enabled():
+    # get_static and default OFF: flipping this changes which server answers
+    # every unmatched name on the node — a cutover step (see the migration
+    # order in docs), not a tuning knob a DB row may toggle.
+    return bool(settings.get_static("EDGE_HTTP_DEFAULT_SERVER", False))
+
+
+def http_knobs():
+    """Every resolved http-level knob, as one dict.
+
+    This is BOTH what `render_http_base` renders from and what
+    `desired_state` embeds under its `http` key — which is what makes a TLS
+    or logging change move the generation hash. Before this, changing
+    EDGE_TLS_PROTOCOLS never converged: the values were substituted at render
+    time but absent from the hashed payload.
+    """
+    return dict(
+        mime_types=mime_types_path(),
+        log_dir=log_dir(),
+        keepalive_timeout=keepalive_timeout(),
+        proxy_read_timeout=proxy_read_timeout(),
+        default_server=default_server_enabled(),
+        tls_protocols=tls_protocols(),
+        tls_ciphers=tls_ciphers(),
+    )
+
+
 # ----------------------------------------------------------------------
 # paths
 # ----------------------------------------------------------------------
@@ -150,15 +192,20 @@ def _safe_upstream_target(upstream):
 def _tls_block(generation, certificate_id):
     """The TLS floor. Emitted unconditionally, fed by settings only.
 
-    No model field reaches this — there is no field that could. That is the
-    whole reason `Vhost` has no free-form options.
+    No model field reaches this — there is no field that could. The values
+    still pass `_safe`: `settings.get` resolves a DB-backed Setting row
+    first, and a Setting is REST-writable by holders of global
+    manage_settings, so "it's a setting" is not "it's not operator input".
+    This was the file's one unasserted substitution; it no longer is.
     """
     certs = cert_dir(generation, certificate_id)
+    protocols = _safe(tls_protocols(), validators.TLS_VALUE_RE, "TLS protocols")
+    ciphers = _safe(tls_ciphers(), validators.TLS_VALUE_RE, "TLS ciphers")
     return "\n".join([
         f"    ssl_certificate     {certs}/fullchain.pem;",
         f"    ssl_certificate_key {certs}/privkey.pem;",
-        f"    ssl_protocols {tls_protocols()};",
-        f"    ssl_ciphers {tls_ciphers()};",
+        f"    ssl_protocols {protocols};",
+        f"    ssl_ciphers {ciphers};",
         "    ssl_prefer_server_ciphers off;",
         "    ssl_session_timeout 1d;",
         "    ssl_session_cache shared:EdgeSSL:10m;",
@@ -233,14 +280,15 @@ def _port80_block(server_name):
 
 
 def _proxy_destination(upstream):
-    """The proxy_pass target for a validated upstream."""
-    target = _safe_upstream_target(upstream)
-    # nginx names a unix socket as `http://unix:/path/to.sock:/` — the trailing
-    # `:/` is the URI part and is NOT optional; without it nginx refuses the
-    # directive at parse time.
-    if target.startswith("unix:"):
-        return f"http://{target}:/"
-    return f"http://{target}"
+    """The proxy_pass target: a NAMED upstream block, never an inline address.
+
+    The name is derived from the row's pk — an integer — but the target is
+    still re-asserted here: a row that cannot validate must not converge just
+    because only its name is substituted. The block itself is rendered once
+    in http.d/10_upstreams.conf by `render_upstreams`.
+    """
+    _safe_upstream_target(upstream)
+    return f"http://edge_up_{int(upstream.pk)}"
 
 
 def _proxy_location_body(upstream, indent="        "):
@@ -482,14 +530,119 @@ def render_vhost(vhost, generation):
     return builder(vhost, generation, server_name) + "\n" + _port80_block(server_name)
 
 
+def render_http_base(knobs=None):
+    """`http.d/00_base.conf` — everything the server blocks lean on.
+
+    Rendered per generation from `http_knobs()`, so the maps every proxied
+    location references (`$connection_upgrade`), the log plumbing, and the
+    hardening knobs converge with the vhosts instead of living in a
+    hand-managed file. `default_type` and `types_hash_max_size` deliberately
+    do NOT render here: they live in the provision-time bootstrap (see
+    docs/django_developer/edge/templates.md), and a second copy at the same
+    http level would be a duplicate-directive [emerg].
+    """
+    knobs = knobs or http_knobs()
+    parts = [
+        "# edge http base — rendered per generation, never hand-edited",
+        f"include {knobs['mime_types']};",
+        "",
+        "log_format main '$remote_addr - - [$time_local] '",
+        "                '\"$request_method $scheme://$host$request_uri "
+        "$server_protocol\" '",
+        "                '$status $body_bytes_sent \"$http_referer\" '",
+        "                '\"$http_user_agent\" $request_time $server_port';",
+        "",
+        "map $http_user_agent $loggable {",
+        "    ~*ELB-HealthChecker 0;",
+        "    default 1;",
+        "}",
+        "",
+        f"access_log {knobs['log_dir']}/access.log main if=$loggable;",
+        "",
+        "map $http_upgrade $connection_upgrade {",
+        "    default upgrade;",
+        "    '' close;",
+        "}",
+        "",
+        "sendfile on;",
+        f"keepalive_timeout {int(knobs['keepalive_timeout'])};",
+        "server_tokens off;",
+        "gzip on;",
+        "gzip_vary on;",
+        "gzip_comp_level 5;",
+        "gzip_min_length 256;",
+        "gzip_proxied any;",
+        "gzip_types text/plain text/css application/json "
+        "application/javascript text/xml application/xml image/svg+xml;",
+    ]
+    if knobs["default_server"]:
+        parts.extend([
+            "",
+            "# Catch-alls for names no vhost claims. 443 rejects the TLS",
+            "# handshake outright (no certificate needed, no name leaked);",
+            "# 80 drops the connection. Flag-gated by EDGE_HTTP_DEFAULT_SERVER",
+            "# so a migrating deployment can keep its file-managed default",
+            "# server until the cutover step.",
+            "server {",
+            "    listen 443 ssl default_server;",
+            "    listen [::]:443 ssl default_server;",
+            "    ssl_reject_handshake on;",
+            "}",
+            "",
+            "server {",
+            "    listen 80 default_server;",
+            "    listen [::]:80 default_server;",
+            "    return 444;",
+            "}",
+        ])
+    parts.append("")
+    return "\n".join(parts)
+
+
+def referenced_upstreams(vhosts):
+    """Every upstream the given vhosts reach, directly or via routes.
+
+    De-duplicated by pk and sorted, so the rendered upstreams file is
+    deterministic for a given desired state.
+    """
+    seen = {}
+    for vhost in vhosts:
+        if vhost.upstream_id:
+            seen[vhost.upstream_id] = vhost.upstream
+        for route in vhost.routes.all():
+            seen[route.upstream_id] = route.upstream
+    return [seen[key] for key in sorted(seen)]
+
+
+def render_upstreams(upstreams):
+    """`http.d/10_upstreams.conf` — one named block per referenced upstream.
+
+    Vhost files reference these by name (`edge_up_<pk>`); the literal
+    host:port / socket path appears here and nowhere else in the generation.
+    """
+    parts = ["# edge upstreams — named blocks; vhost files reference these only"]
+    for upstream in sorted(upstreams, key=lambda row: row.pk):
+        target = _safe_upstream_target(upstream)
+        parts.extend([
+            "",
+            f"upstream edge_up_{int(upstream.pk)} {{",
+            f"    server {target};",
+            "}",
+        ])
+    parts.append("")
+    return "\n".join(parts)
+
+
 def render_nginx_harness(generation):
     """A minimal wrapper used ONLY by the staging `nginx -t` pre-filter.
 
-    This is an approximation of the real config and is documented as such: a
-    `map`, `upstream` or `limit_req_zone` defined in the deployment's own
-    nginx.conf is absent here, so a generated file that references one passes
-    or fails differently. The authoritative check is `nginx -t` against the
-    REAL config after the swap — see services/installer.py.
+    This approximates the real bootstrap and is documented as such — but
+    since the generation now carries its own http base (maps, log format,
+    upstreams), the approximation is close: the harness contributes only the
+    main context, the scratch paths, and the two directives the bootstrap
+    owns (`default_type`, `types_hash_max_size`). The authoritative check is
+    `nginx -t` against the REAL config after the swap — see
+    services/installer.py.
     """
     gen = generation_dir(generation)
     return "\n".join([
@@ -504,16 +657,14 @@ def render_nginx_harness(generation):
         f"error_log {gen}/error.log;",
         "events { worker_connections 64; }",
         "http {",
-        f"    access_log {gen}/access.log;",
+        "    default_type application/octet-stream;",
+        "    types_hash_max_size 4096;",
         f"    client_body_temp_path {gen}/tmp/client_body;",
         f"    proxy_temp_path {gen}/tmp/proxy;",
         f"    fastcgi_temp_path {gen}/tmp/fastcgi;",
         f"    uwsgi_temp_path {gen}/tmp/uwsgi;",
         f"    scgi_temp_path {gen}/tmp/scgi;",
-        "    map $http_upgrade $connection_upgrade {",
-        "        default upgrade;",
-        "        '' close;",
-        "    }",
+        f"    include {gen}/http.d/*.conf;",
         f"    include {gen}/conf.d/*.conf;",
         "}",
         "",
@@ -557,15 +708,18 @@ def vhost_payload(vhost):
 
 
 def _upstream_payload(upstream):
-    # `id` is in here because the rendered text will name the upstream by pk
-    # (upstream blocks, item 1590 stage 3) — two upstreams with an identical
-    # target must still move the hash when a vhost switches between them.
+    # `id` is in here because the rendered text names the upstream by pk
+    # (`edge_up_<pk>`) — two upstreams with an identical target must still
+    # move the hash when a vhost switches between them. `is_enabled` is here
+    # because the installer's disabled-upstream fork depends on it: a retire
+    # must move the hash so nodes converge onto the exclusion.
     return dict(
         id=upstream.pk,
         kind=upstream.kind,
         host=upstream.host,
         port=upstream.port,
         socket_path=upstream.socket_path,
+        is_enabled=upstream.is_enabled,
     )
 
 
@@ -584,22 +738,32 @@ def generation_id(payload):
 
 
 def desired_state(vhosts, webapps=None):
-    """The payload a node polls for, and the thing the hash covers."""
+    """The payload a node polls for, and the thing the hash covers.
+
+    The `http` key is the resolved knob set (TLS values included) — its
+    presence here is what makes a settings change converge: the hash moves,
+    nodes reinstall.
+    """
     rows = sorted((vhost_payload(v) for v in vhosts), key=lambda r: r["id"])
-    payload = dict(vhosts=rows, webapps=webapps or [])
+    payload = dict(vhosts=rows, webapps=webapps or [], http=http_knobs())
     payload["generation"] = generation_id(payload)
     return payload
 
 
 def render_generation(vhosts, generation):
-    """Every enabled vhost, rendered into `{filename: text}`.
+    """Every enabled vhost plus the generation's http base and upstreams,
+    rendered into `{relative_path: text}`.
 
     The caller supplies `generation` because the id must be computed from the
     desired-state payload BEFORE rendering — the file contents reference the
     generation directory by absolute path, which is what lets `nginx -t`
     validate the new certificates rather than the currently-installed ones.
     """
-    files = {}
+    files = {
+        "http.d/00_base.conf": render_http_base(),
+        "http.d/10_upstreams.conf": render_upstreams(
+            referenced_upstreams(vhosts)),
+    }
     for vhost in vhosts:
-        files[f"{int(vhost.pk)}.conf"] = render_vhost(vhost, generation)
+        files[f"conf.d/{int(vhost.pk)}.conf"] = render_vhost(vhost, generation)
     return files
