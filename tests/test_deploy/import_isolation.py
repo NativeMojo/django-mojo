@@ -38,8 +38,9 @@ def _run(args):
 
 
 @th.django_unit_test()
-def test_both_modules_import_without_django_settings(opts):
-    done = _run(["-c", "import mojo.deploy.config_sync, mojo.deploy.check_setup"])
+def test_all_modules_import_without_django_settings(opts):
+    done = _run(["-c", "import mojo.deploy.config_sync, mojo.deploy.check_setup, "
+                       "mojo.deploy.certbot_sync, mojo.deploy.check_node"])
 
     th.assert_eq(done.returncode, 0,
                  f"mojo/deploy must import with no settings configured.\n"
@@ -86,7 +87,8 @@ def test_mojo_helpers_logit_is_never_left_imported(opts):
     bootstrap node — this catches it at test time rather than at 3am on a fleet
     reboot."""
     done = _run(["-c", (
-        "import sys, mojo.deploy.config_sync, mojo.deploy.check_setup; "
+        "import sys, mojo.deploy.config_sync, mojo.deploy.check_setup, "
+        "mojo.deploy.certbot_sync, mojo.deploy.check_node; "
         "print('logit' if 'mojo.helpers.logit' in sys.modules else 'clean')")])
 
     th.assert_eq(done.returncode, 0,
@@ -95,3 +97,21 @@ def test_mojo_helpers_logit_is_never_left_imported(opts):
                  "mojo.helpers.logit must not survive importing mojo/deploy "
                  "with no settings configured — mojo.helpers.* is off-limits "
                  "inside that package (see mojo/deploy/__init__.py)")
+
+
+@th.django_unit_test()
+def test_locate_works_settings_free_under_dash_m(opts):
+    """Exactly the invocation shape the project shims use, on a node where no
+    settings exist yet — `python3 -m mojo.deploy locate update.sh` must print
+    the packaged path and nothing else."""
+    done = _run(["-m", "mojo.deploy", "locate", "update.sh"])
+
+    th.assert_eq(done.returncode, 0,
+                 f"`python3 -m mojo.deploy locate update.sh` must exit 0 with "
+                 f"no settings configured.\nstderr: {done.stderr}")
+    path = done.stdout.strip()
+    th.assert_true(os.path.isfile(path),
+                   f"locate must print an existing packaged path, got {path!r}")
+    th.assert_eq(done.stderr.strip(), "",
+                 f"locate must be silent on stderr when it succeeds — the "
+                 f"shim's error handling keys off it: {done.stderr!r}")
