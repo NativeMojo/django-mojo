@@ -135,6 +135,13 @@ class Vhost(models.Model, MojoModel):
             },
         }
 
+    @classmethod
+    def on_rest_list_filter(cls, request, queryset):
+        """Keep house serving inventory out of non-superuser lists."""
+        if getattr(request.user, "is_superuser", False) is not True:
+            queryset = queryset.exclude(domain__group__isnull=True)
+        return super().on_rest_list_filter(request, queryset)
+
     def __str__(self):
         return f"{self.server_name} [{self.kind}]"
 

@@ -16,7 +16,7 @@ from testit import helpers as th
 from tests.test_edge._helpers import (
     declare_pools,
     cleanup, declare_reserved_names, login, make_certificate, make_domain,
-    make_group, make_upstream, make_user, make_vhost,
+    make_group, make_group_member, make_upstream, make_user, make_vhost,
 )
 
 
@@ -28,6 +28,9 @@ def setup_rest_permissions(opts):
 
     opts.group = make_group("edgerest")
     opts.other_group = make_group("edgeother")
+
+    _, opts.tenant_email, opts.tenant_pw, _ = make_group_member(
+        ["manage_dns"], group=opts.group)
 
     opts.nobody, opts.nobody_email, opts.nobody_pw = make_user()
     opts.viewer, opts.viewer_email, opts.viewer_pw = make_user(["view_dns"])
@@ -49,6 +52,10 @@ def setup_rest_permissions(opts):
     opts.other_vhost = make_vhost(opts.other_domain, opts.other_cert, label="www")
 
     opts.upstream = make_upstream(host="127.0.0.1", port=8000)
+    opts.tenant_upstream = make_upstream(
+        group=opts.group, host="127.0.0.1", port=8002)
+    opts.other_upstream = make_upstream(
+        group=opts.other_group, host="127.0.0.1", port=8003)
 
 
 @th.django_unit_test("anonymous callers are refused on every edge surface")
@@ -142,6 +149,23 @@ def test_upstream_destination_is_immutable(opts):
         f"holding (status {resp.status_code}, host now {opts.upstream.host})")
 
 
+@th.django_unit_test("a tenant's upstream list includes shared rows, never another tenant")
+def test_upstream_list_scoped_with_shared(opts):
+    login(opts, opts.tenant_email, opts.tenant_pw)
+    resp = opts.client.get(f"/api/edge/upstream?group={opts.group.pk}")
+    assert resp.status_code == 200, (
+        "a tenant admin could not list tenant and shared upstreams "
+        f"(status {resp.status_code})")
+
+    ids = {row.get("id") for row in (resp.json.get("data") or [])}
+    assert opts.tenant_upstream.pk in ids, \
+        "the tenant's own upstream was missing from its scoped list"
+    assert opts.upstream.pk in ids, \
+        "the shared house upstream was missing from the tenant's scoped list"
+    assert opts.other_upstream.pk not in ids, \
+        "another tenant's upstream appeared in the tenant's scoped list"
+
+
 @th.django_unit_test("a global manage_dns grant does not reach a HOUSE vhost")
 def test_house_vhost_guard(opts):
     """Vhost scopes through domain__group; a house domain resolves that to None
@@ -160,6 +184,36 @@ def test_house_vhost_admin_allowed(opts):
     resp = opts.client.get(f"/api/edge/vhost/{opts.house_vhost.pk}")
     assert resp.status_code == 200, \
         f"a platform admin could not read a house vhost: {resp.status_code} {resp.body}"
+
+
+@th.django_unit_test("global dns managers cannot list house vhosts")
+def test_house_vhost_hidden_from_global_manager_list(opts):
+    login(opts, opts.manager_email, opts.manager_pw)
+    resp = opts.client.get("/api/edge/vhost?size=20")
+    assert resp.status_code == 200, (
+        "a global manage_dns holder could not list tenant vhosts "
+        f"(status {resp.status_code})")
+
+    ids = {row.get("id") for row in (resp.json.get("data") or [])}
+    assert opts.vhost.pk in ids, \
+        "a tenant vhost was missing from the global manager's list"
+    assert opts.other_vhost.pk in ids, \
+        "an unrelated tenant vhost was missing from the global manager's list"
+    assert opts.house_vhost.pk not in ids, \
+        "a house vhost appeared in a non-superuser global manager's list"
+
+
+@th.django_unit_test("literal superusers retain house vhost inventory")
+def test_house_vhost_visible_to_superuser_list(opts):
+    login(opts, opts.admin_email, opts.admin_pw)
+    resp = opts.client.get("/api/edge/vhost?size=20")
+    assert resp.status_code == 200, (
+        "a platform superuser could not list vhosts "
+        f"(status {resp.status_code})")
+
+    ids = {row.get("id") for row in (resp.json.get("data") or [])}
+    assert opts.house_vhost.pk in ids, \
+        "the house vhost was missing from a literal superuser's list"
 
 
 @th.django_unit_test("an unauthenticated caller cannot tell a house vhost from a tenant one")

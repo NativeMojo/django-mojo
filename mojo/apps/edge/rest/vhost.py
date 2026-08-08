@@ -18,8 +18,10 @@ def _guard_house_vhost(request, vhost, what):
     and for the same reason: the platform's own serving configuration must not
     be reachable by a tenant-level grant.
 
-    The LIST path is unaffected (`domain__group=<group>` cannot match a null),
-    so this guards the per-instance paths.
+    The LIST path has its own queryset guard on `Vhost`: non-superusers never
+    receive house rows, including callers with global `manage_dns`. This
+    function guards the per-instance paths and preserves their no-oracle
+    ordering.
     """
     if vhost.domain.group_id is None:
         require_platform_admin(request, what)

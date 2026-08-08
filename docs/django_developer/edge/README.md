@@ -76,6 +76,8 @@ declare one, not an address filter. Link-local (`169.254.0.0/16` — every
 cloud's metadata service) is refused for everybody, platform admins included.
 
 A group-less `Upstream` is a house row offered to every tenant.
+An active-group REST list therefore returns that group's upstreams plus these
+shared house rows; it never includes another tenant's upstreams.
 
 ### `Vhost` — one server block
 
@@ -109,11 +111,14 @@ shell write is exactly as safe as a REST one.
 A vhost whose `domain.group_id` is null is platform property. `Vhost` scopes
 through `GROUP_FIELD = "domain__group"`, and for a house domain that resolves
 to `None` — at which point the permission check falls through to the caller's
-**global** permissions, so any global `manage_dns` holder would pass. The guard
-in `rest/vhost.py` is load-bearing, and it runs **after** the model check on
-purpose: leading with it would answer 403 for a house vhost and 401 for a
-tenant one, classifying the platform's inventory for a caller who can read
-neither. Same shape and same reasoning as dnsman's house-certificate guard.
+**global** permissions, so any global `manage_dns` holder would pass. The
+detail guard in `rest/vhost.py` is load-bearing, and it runs **after** the model
+check on purpose: leading with it would answer 403 for a house vhost and 401
+for a tenant one, classifying the platform's inventory for a caller who can
+read neither. Same shape and same reasoning as dnsman's house-certificate
+guard. The list path separately excludes house vhosts for every non-superuser,
+including a caller with global `manage_dns`; literal platform superusers retain
+the complete house inventory.
 
 ## The generation lifecycle
 

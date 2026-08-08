@@ -112,6 +112,19 @@ class Upstream(models.Model, MojoModel):
             },
         }
 
+    @classmethod
+    def on_rest_list_filter(cls, request, queryset):
+        """Offer shared upstreams alongside the active tenant's rows.
+
+        The framework applies ``GROUP_FIELD`` before this hook, so a request
+        carrying an active group arrives with only that group's rows. House
+        upstreams are deliberately shared; add them back here, then keep the
+        standard search and request-filter pipeline intact.
+        """
+        if request.group is not None:
+            queryset = queryset | cls.objects.filter(group__isnull=True)
+        return super().on_rest_list_filter(request, queryset)
+
     def __str__(self):
         return f"{self.name} ({self.target})"
 
