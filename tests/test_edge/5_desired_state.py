@@ -200,6 +200,100 @@ def test_disabled_vhost_excluded(opts):
         Vhost.objects.filter(pk=opts.vhost.pk).update(is_enabled=True)
 
 
+@th.django_unit_test("the payload carries the kind knobs and sorted routes")
+def test_payload_carries_knobs_and_routes(opts):
+    from mojo.apps.edge.services import render
+    from tests.test_edge._helpers import make_route, make_upstream
+
+    domain = make_domain(group=opts.group)
+    certificate = make_certificate(domain)
+    upstream = make_upstream(host="127.0.0.1", port=8400)
+    vhost = make_vhost(domain, certificate, label="mix", kind="site_api",
+                       body_size_mb=100, serve_static=True)
+    make_route(vhost, "/zapi", upstream)
+    make_route(vhost, "/api", upstream)
+    vhost.quiet_paths = ["/api/health"]
+    vhost.save()
+
+    row = render.vhost_payload(vhost)
+    assert row["body_size_mb"] == 100, "body_size_mb is not in the payload"
+    assert row["serve_static"] is True, "serve_static is not in the payload"
+    assert row["quiet_paths"] == ["/api/health"], \
+        f"quiet_paths wrong in the payload: {row['quiet_paths']}"
+    prefixes = [r["path_prefix"] for r in row["routes"]]
+    assert prefixes == ["/api", "/zapi"], \
+        f"routes must be sorted by prefix, got {prefixes}"
+    assert row["routes"][0]["upstream"]["id"] == upstream.pk, \
+        "a route's payload does not identify its upstream"
+
+    without_routes = render.desired_state([vhost])["generation"]
+    make_route(vhost, "/more", upstream)
+    vhost = type(vhost).objects.select_related("domain", "certificate").get(
+        pk=vhost.pk)
+    with_routes = render.desired_state([vhost])["generation"]
+    assert without_routes != with_routes, \
+        "adding a route did not move the generation id — nodes would not converge"
+
+
+@th.django_unit_test("the payload carries the http knobs, and a TLS change converges")
+def test_http_knobs_converge(opts):
+    """The latent gap this item folds in: EDGE_TLS_PROTOCOLS/CIPHERS were
+    substituted at render time but absent from the hashed payload, so a TLS
+    policy change never moved the generation and never reached a node."""
+    from mojo.apps.account.models.setting import Setting
+    from mojo.apps.edge.services import render
+
+    payload = render.desired_state([opts.vhost])
+    http = payload.get("http") or {}
+    assert http.get("tls_protocols") == render.tls_protocols(), \
+        "the payload's http key does not carry the TLS protocols"
+    assert http.get("tls_ciphers") == render.tls_ciphers(), \
+        "the payload's http key does not carry the TLS ciphers"
+    assert http.get("log_dir"), "the payload's http key does not carry log_dir"
+
+    rows = payload.get("security")
+    assert isinstance(rows, list), \
+        "the payload carries no security (blocklist) key"
+    modes = {row["mode"] for row in rows}
+    assert "off" not in modes, "an off blocklist row joined the payload"
+    assert {"id", "kind", "value", "mode"} <= set(rows[0].keys()) if rows \
+        else True, f"blocklist payload rows are misshapen: {rows[:1]}"
+
+    before = payload["generation"]
+    Setting.set("EDGE_TLS_PROTOCOLS", "TLSv1.3", group=None)
+    try:
+        after = render.desired_state([opts.vhost])["generation"]
+        assert after != before, (
+            "changing EDGE_TLS_PROTOCOLS did not move the generation id — "
+            "a TLS policy change would never converge")
+    finally:
+        Setting.remove("EDGE_TLS_PROTOCOLS", group=None)
+
+
+@th.django_unit_test("retiring an upstream moves the generation id")
+def test_retire_converges(opts):
+    """`is_enabled` is in the upstream payload precisely so the installer's
+    exclusion fork is REACHED — a retire that does not move the hash never
+    reinstalls anything."""
+    from mojo.apps.edge.models import Upstream
+    from mojo.apps.edge.services import render
+    from tests.test_edge._helpers import make_upstream
+
+    upstream = make_upstream(host="127.0.0.1", port=8500)
+    domain = make_domain(group=opts.group)
+    certificate = make_certificate(domain)
+    vhost = make_vhost(domain, certificate, label="ret", kind="api",
+                       upstream=upstream)
+
+    before = render.desired_state([vhost])["generation"]
+    Upstream.objects.filter(pk=upstream.pk).update(is_enabled=False)
+    vhost = type(vhost).objects.select_related(
+        "domain", "certificate", "upstream").get(pk=vhost.pk)
+    after = render.desired_state([vhost])["generation"]
+    assert after != before, \
+        "retiring an upstream did not move the generation id"
+
+
 @th.django_unit_test("node material is refused for a certificate nothing serves")
 def test_material_requires_a_referencing_vhost(opts):
     """Tighter than the endpoint it works around: authorization is not enough,

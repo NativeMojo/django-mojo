@@ -45,6 +45,7 @@ def enabled_vhosts(pool):
     return list(
         Vhost.objects.filter(is_enabled=True, pool=pool)
         .select_related("domain", "certificate", "upstream")
+        .prefetch_related("routes__upstream")
         .order_by("pk"))
 
 

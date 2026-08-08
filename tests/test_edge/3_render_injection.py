@@ -16,7 +16,7 @@ from testit import helpers as th
 from tests.test_edge._helpers import (
     declare_pools,
     cleanup, declare_reserved_names, make_certificate, make_domain, make_group,
-    make_upstream, make_vhost, raises,
+    make_route, make_upstream, make_vhost, raises,
 )
 
 
@@ -61,7 +61,7 @@ def test_canonical_injection_case(opts):
 
     err = raises(
         Vhost.objects.create, domain=hostile, certificate=certificate,
-        label="", kind="static")
+        label="", kind="site")
     assert err is not None, (
         "a vhost was created on a domain carrying nginx syntax — "
         "that name would reach a config file")
@@ -94,83 +94,220 @@ def test_render_boundary_rejects_hostile_name(opts):
     Domain.objects.filter(pk=opts.domain.pk).update(name="edge-render-example.com")
 
 
-@th.django_unit_test("a rendered vhost emits exactly one server block")
-def test_exactly_one_server_block(opts):
+@th.django_unit_test("a rendered vhost emits exactly two server blocks (443 + 80)")
+def test_exactly_two_server_blocks(opts):
+    """The injection pin. One 443 block carrying the kind's contract, one
+    port-80 ACME/redirect shell — a third block anywhere means a value
+    escaped its whitelist."""
     from mojo.apps.edge.services import render
 
-    vhost = make_vhost(opts.domain, opts.certificate, label="one")
-    text = render.render_vhost(vhost, opts.generation)
+    cases = [
+        ("two1", dict(kind="site")),
+        ("two2", dict(kind="site", spa=True)),
+        ("two3", dict(kind="api", upstream=opts.upstream,
+                      quiet_paths=["/health"], serve_static=True)),
+        ("two4", dict(kind="site_api")),
+        ("two5", dict(kind="redirect", redirect_to="www.example.com")),
+    ]
+    for label, kwargs in cases:
+        vhost = make_vhost(opts.domain, opts.certificate, label=label, **kwargs)
+        text = render.render_vhost(vhost, opts.generation)
+        assert text.count("server {") == 2, (
+            f"{kwargs['kind']}: expected exactly two server blocks, "
+            f"found {text.count('server {')}")
+        assert "/etc" not in text, "the rendered config referenced /etc"
+        assert "listen 80;" in text, \
+            f"{kwargs['kind']}: the port-80 block is missing"
+        assert "location /.well-known/acme-challenge/ {" in text, \
+            f"{kwargs['kind']}: the ACME webroot location is missing"
+        assert "return 301 https://$host$request_uri;" in text, \
+            f"{kwargs['kind']}: the port-80 redirect is missing"
+        assert f"client_max_body_size {vhost.body_size_mb}m;" in text, \
+            f"{kwargs['kind']}: client_max_body_size is not rendered"
 
-    assert text.count("server {") == 1, \
-        f"expected exactly one server block, found {text.count('server {')}"
-    assert "/etc" not in text, "the rendered config referenced /etc"
 
-
-@th.django_unit_test("a static vhost never emits proxy_pass")
-def test_static_never_proxies(opts):
+@th.django_unit_test("a site vhost never emits proxy_pass")
+def test_site_never_proxies(opts):
     from mojo.apps.edge.services import render
 
-    vhost = make_vhost(opts.domain, opts.certificate, label="stat", kind="static")
+    vhost = make_vhost(opts.domain, opts.certificate, label="stat", kind="site")
     text = render.render_vhost(vhost, opts.generation)
 
     assert "proxy_pass" not in text, \
-        "a static vhost emitted proxy_pass"
-    assert "root " in text, "a static vhost emitted no root"
+        "a site vhost emitted proxy_pass"
+    assert "root " in text, "a site vhost emitted no root"
 
 
-@th.django_unit_test("an spa vhost falls back to index.html and never proxies")
+@th.django_unit_test("an spa-flagged site falls back to index.html and never proxies")
 def test_spa_shape(opts):
     from mojo.apps.edge.services import render
 
-    vhost = make_vhost(opts.domain, opts.certificate, label="spa", kind="spa")
+    vhost = make_vhost(opts.domain, opts.certificate, label="spa", kind="site", spa=True)
     text = render.render_vhost(vhost, opts.generation)
 
-    assert "proxy_pass" not in text, "an spa vhost emitted proxy_pass"
+    assert "proxy_pass" not in text, "an spa site emitted proxy_pass"
     assert "try_files $uri $uri/ /index.html;" in text, \
-        "an spa vhost has no history fallback"
+        "an spa site has no history fallback"
 
 
-@th.django_unit_test("a proxy vhost never emits a filesystem root")
-def test_proxy_never_serves_files(opts):
+@th.django_unit_test("an api vhost never emits a filesystem root")
+def test_api_never_serves_files(opts):
     from mojo.apps.edge.services import render
 
     vhost = make_vhost(opts.domain, opts.certificate, label="prox",
-                       kind="proxy", upstream=opts.upstream)
+                       kind="api", upstream=opts.upstream)
     text = render.render_vhost(vhost, opts.generation)
 
-    assert "proxy_pass http://127.0.0.1:8000;" in text, \
+    assert f"proxy_pass http://edge_up_{opts.upstream.pk};" in text, \
         f"the proxy destination is wrong:\n{text}"
-    assert "\n    root " not in text, "a proxy vhost emitted a filesystem root"
+    assert "\n    root " not in text, "an api vhost emitted a filesystem root"
+    assert "127.0.0.1" not in text, (
+        "a literal upstream target leaked into a vhost file — targets live "
+        "only in http.d/10_upstreams.conf")
 
 
 @th.django_unit_test("a unix upstream renders nginx's socket syntax")
 def test_unix_upstream_syntax(opts):
-    """`http://unix:/path:/` — the trailing `:/` is not optional."""
+    """Inside an `upstream {}` block the socket is `server unix:/path;` —
+    no trailing `:/`, which only the inline proxy_pass form needed."""
     from mojo.apps.edge.services import render
 
     sock = make_upstream(kind="unix", socket_path="/run/mojo/app.sock")
     vhost = make_vhost(opts.domain, opts.certificate, label="sock",
-                       kind="proxy", upstream=sock)
+                       kind="api", upstream=sock)
     text = render.render_vhost(vhost, opts.generation)
 
-    assert "proxy_pass http://unix:/run/mojo/app.sock:/;" in text, \
-        f"unix socket proxy_pass is malformed:\n{text}"
+    assert f"proxy_pass http://edge_up_{sock.pk};" in text, \
+        f"unix-backed api vhost does not reference its named upstream:\n{text}"
+
+    blocks = render.render_upstreams([sock])
+    assert f"upstream edge_up_{sock.pk} {{" in blocks, \
+        f"no named block for the unix upstream:\n{blocks}"
+    assert "server unix:/run/mojo/app.sock;" in blocks, \
+        f"unix socket server line is malformed:\n{blocks}"
 
 
 @th.django_unit_test("every rendered vhost carries the TLS floor")
 def test_tls_floor_present(opts):
     from mojo.apps.edge.services import render
 
-    for kind, upstream in (("static", None), ("spa", None),
-                           ("proxy", opts.upstream)):
-        vhost = make_vhost(opts.domain, opts.certificate, label=f"tls{kind}",
-                           kind=kind, upstream=upstream)
+    for kind, extra in (
+            ("site", {}),
+            ("api", dict(upstream=opts.upstream)),
+            ("site_api", {}),
+            ("redirect", dict(redirect_to="www.example.com"))):
+        label = f"tls{kind.replace('_', '')}"
+        vhost = make_vhost(opts.domain, opts.certificate, label=label,
+                           kind=kind, **extra)
         text = render.render_vhost(vhost, opts.generation)
         assert f"ssl_protocols {render.tls_protocols()};" in text, \
             f"{kind} vhost is missing the TLS protocol floor"
         assert "ssl_ciphers " in text, f"{kind} vhost is missing the cipher floor"
         assert "ssl_prefer_server_ciphers off;" in text, \
             f"{kind} vhost is missing the cipher-preference setting"
+
+
+@th.django_unit_test("a redirect vhost emits neither root nor proxy_pass")
+def test_redirect_emits_only_the_redirect(opts):
+    from mojo.apps.edge.services import render
+
+    vhost = make_vhost(opts.domain, opts.certificate, label="redir",
+                       kind="redirect", redirect_to="www.example.com")
+    text = render.render_vhost(vhost, opts.generation)
+
+    assert "proxy_pass" not in text, "a redirect vhost emitted proxy_pass"
+    assert "\n    root " not in text, "a redirect vhost emitted a filesystem root"
+    assert "return 301 https://www.example.com$request_uri;" in text, \
+        f"the redirect target is wrong:\n{text}"
+
+
+@th.django_unit_test("a site vhost never proxies even when route rows exist via bypass")
+def test_site_refuses_routes(opts):
+    """Kind isolation as a property of code shape: `proxy_pass` is not in the
+    site builder's scope, so even routes smuggled past the validators by a
+    queryset write cannot make a site block proxy."""
+    from mojo.apps.edge.models import Vhost, VhostRoute
+    from mojo.apps.edge.services import render
+
+    vhost = make_vhost(opts.domain, opts.certificate, label="siteroutes",
+                       kind="site_api", is_enabled=False)
+    make_route(vhost, "/api", opts.upstream)
+    # A queryset update bypasses save() and the routes-forbidden check.
+    Vhost.objects.filter(pk=vhost.pk).update(kind="site")
+    poisoned = (Vhost.objects.select_related("domain", "certificate")
+                .prefetch_related("routes__upstream").get(pk=vhost.pk))
+
+    text = render.render_vhost(poisoned, opts.generation)
+    assert "proxy_pass" not in text, (
+        "a site vhost with bypass-written routes emitted proxy_pass — "
+        "kind isolation broke")
+    VhostRoute.objects.filter(vhost_id=vhost.pk).delete()
+
+
+@th.django_unit_test("api knobs render: quiet paths, static alias, upgrade headers")
+def test_api_knob_shapes(opts):
+    from mojo.apps.edge.services import render
+
+    vhost = make_vhost(
+        opts.domain, opts.certificate, label="knobs", kind="api",
+        upstream=opts.upstream, body_size_mb=200,
+        quiet_paths=["/healthz", "/api/status"], serve_static=True)
+    text = render.render_vhost(vhost, opts.generation)
+
+    assert "client_max_body_size 200m;" in text, \
+        "body_size_mb did not reach client_max_body_size"
+    for path in ("/healthz", "/api/status"):
+        assert f"location = {path} {{" in text, \
+            f"quiet path {path} has no exact-match location"
+    # Each quiet location REPLACES the inherited access log with the watch
+    # log only — quiet for the main log, never blind for the security watch.
+    assert text.count("edge_watch.log edge_watch if=$edge_watch;") == 2, \
+        "each quiet path must swap the main access log for the watch log"
+    assert "access_log off" not in text, \
+        "a quiet path silenced the security watch with `access_log off`"
+    assert "location /static/ {" in text, "serve_static rendered no alias"
+    assert "alias " in text, "the static location is not an alias"
+    # Every proxied location carries the upgrade pair (three here: two quiet
+    # paths plus the whole-host location).
+    assert text.count("proxy_set_header Upgrade $http_upgrade;") == 3, \
+        "a proxied location is missing the websocket upgrade header"
+    assert text.count("proxy_set_header Connection $connection_upgrade;") == 3, \
+        "a proxied location is missing the Connection upgrade header"
+
+
+@th.django_unit_test("site_api renders one location per route, quiet paths on the longest prefix")
+def test_site_api_shapes(opts):
+    from mojo.apps.edge.services import render
+
+    api_up = make_upstream(host="127.0.0.1", port=8100)
+    ws_up = make_upstream(host="127.0.0.1", port=8200)
+    vhost = make_vhost(opts.domain, opts.certificate, label="siteapi",
+                       kind="site_api", is_enabled=False)
+    make_route(vhost, "/api", api_up)
+    make_route(vhost, "/api/ws", ws_up)
+    vhost.quiet_paths = ["/api/ws/ping"]
+    vhost.is_enabled = True
+    vhost.save()
+    vhost = (type(vhost).objects.select_related("domain", "certificate")
+             .prefetch_related("routes__upstream").get(pk=vhost.pk))
+
+    text = render.render_vhost(vhost, opts.generation)
+
+    assert "location /api {" in text, "the /api route has no location"
+    assert "location /api/ws {" in text, "the /api/ws route has no location"
+    assert f"proxy_pass http://edge_up_{api_up.pk};" in text, \
+        "the /api route does not reach its upstream"
+    assert f"proxy_pass http://edge_up_{ws_up.pk};" in text, \
+        "the /api/ws route does not reach its upstream"
+    assert "root " in text, "the site half of site_api is missing"
+
+    # The quiet path must proxy to the LONGEST covering prefix's upstream —
+    # /api/ws, not /api.
+    quiet_at = text.index("location = /api/ws/ping {")
+    quiet_block = text[quiet_at:text.index("}", quiet_at)]
+    assert f"proxy_pass http://edge_up_{ws_up.pk};" in quiet_block, (
+        "the quiet path proxied to the wrong route — longest-prefix "
+        f"association broke:\n{quiet_block}")
 
 
 @th.django_unit_test("no model field can weaken or remove the TLS floor")
@@ -189,8 +326,14 @@ def test_tls_floor_is_not_reachable(opts):
     # `domain` is writable but settable ONCE — NO_SAVE_FIELDS is enforced on
     # create too, so pinning it there would make a vhost un-creatable over
     # REST; `Vhost.on_rest_pre_save` freezes it after create instead.
+    #
+    # `claims_reserved` is deliberately ABSENT: it suspends the reserved-name
+    # defence and moves only through the platform-gated claim_reserved action.
+    # Every knob listed here is whitelist-validated before it renders — see
+    # validators.validate_vhost — and none can reach the TLS block.
     assert writable == {"domain", "label", "kind", "upstream", "certificate",
-                        "pool", "is_enabled"}, (
+                        "pool", "is_enabled", "spa", "body_size_mb",
+                        "quiet_paths", "serve_static", "redirect_to"}, (
         "Vhost's writable field set changed — confirm no new field can reach "
         f"the TLS block or the rendered paths. Now: {sorted(writable)}")
 
@@ -236,7 +379,7 @@ def test_generation_id_moves(opts):
     same = render.desired_state([vhost])["generation"]
     assert first == same, "the generation id is not stable for identical input"
 
-    vhost.kind = "spa"
+    vhost.spa = True
     vhost.save()
     moved = render.desired_state([vhost])["generation"]
     assert moved != first, \

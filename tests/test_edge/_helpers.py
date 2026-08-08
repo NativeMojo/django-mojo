@@ -138,15 +138,24 @@ def make_upstream(name=None, group=None, kind="http", host="127.0.0.1",
         socket_path=socket_path)
 
 
-def make_vhost(domain, certificate=None, label="", kind="static",
-               upstream=None, pool="default", is_enabled=True):
+def make_vhost(domain, certificate=None, label="", kind="site",
+               upstream=None, pool="default", is_enabled=True, **extra):
+    """`extra` passes the per-kind knobs straight through: spa, body_size_mb,
+    quiet_paths, serve_static, redirect_to, claims_reserved."""
     from mojo.apps.edge.models import Vhost
 
     if certificate is None:
         certificate = make_certificate(domain)
     return Vhost.objects.create(
         domain=domain, certificate=certificate, label=label, kind=kind,
-        upstream=upstream, pool=pool, is_enabled=is_enabled)
+        upstream=upstream, pool=pool, is_enabled=is_enabled, **extra)
+
+
+def make_route(vhost, path_prefix, upstream):
+    from mojo.apps.edge.models import VhostRoute
+
+    return VhostRoute.objects.create(
+        vhost=vhost, path_prefix=path_prefix, upstream=upstream)
 
 
 RELEASE_BUCKET = "edge-test-releases"
@@ -157,6 +166,7 @@ RELEASE_BUCKET = "edge-test-releases"
 TEST_POOLS = [
     "default", "staging", "nginxreal", "reltest",
     "itesthappy", "itestexclude", "itesthouse",
+    "itestgraph", "itestretired", "itesthouseup",
 ]
 
 
@@ -222,7 +232,13 @@ def cleanup():
     precisely so this can be unconditional.
     """
     from mojo.apps.dnsman.models import Certificate, Domain
-    from mojo.apps.edge.models import Upstream, Vhost, WebApp, WebAppRelease
+    from mojo.apps.edge.models import (
+        BlocklistEntry, Upstream, Vhost, VhostRoute, WebApp, WebAppRelease,
+    )
+
+    # Test-created blocklist rows only — the migration's seed rows are real
+    # content other tests assert on.
+    BlocklistEntry.objects.filter(note__startswith="bltest").delete()
 
     # WebApp -> current_release is SET_NULL and WebAppRelease -> webapp is
     # CASCADE, so the pointer has to be cleared before the rows go, or the
@@ -230,10 +246,36 @@ def cleanup():
     WebApp.objects.filter(slug__startswith="app").update(current_release=None)
     WebAppRelease.objects.filter(webapp__group__name__startswith="edge").delete()
     WebApp.objects.filter(group__name__startswith="edge").delete()
+    # Routes PROTECT their upstream, so they go before any Upstream does —
+    # deleting the vhosts would cascade them anyway, but being explicit keeps
+    # the ordering requirement visible.
+    VhostRoute.objects.filter(vhost__domain__name__startswith="edge-").delete()
     Vhost.objects.filter(domain__name__startswith="edge-").delete()
     Upstream.objects.filter(name__startswith="up-").delete()
     Certificate.objects.filter(domain__name__startswith="edge-").delete()
     Domain.objects.filter(name__startswith="edge-").delete()
+
+
+def ensure_blocklist_seed():
+    """(Re)apply migration 0004's blocklist seed, and return its note marker.
+
+    The test workflow flushes tables between runs but keeps the migration
+    records, so RunPython-seeded reference data vanishes while the migration
+    reports applied. Re-running the migration's OWN function keeps the tests
+    asserting the real seed logic rather than a copy of it. (importlib,
+    because a module named `0004_...` cannot be a plain import.)
+    """
+    import importlib
+
+    from django.apps import apps as django_apps
+
+    from mojo.apps.edge.models import BlocklistEntry
+
+    module = importlib.import_module(
+        "mojo.apps.edge.migrations.0004_blocklist_seed")
+    BlocklistEntry.objects.filter(note=module.SEED_NOTE).delete()
+    module.seed_blocklist(django_apps, None)
+    return module.SEED_NOTE
 
 
 def raises(func, *args, **kwargs):

@@ -77,11 +77,15 @@ def on_upstream_declare(request):
 def on_upstream_retire(request):
     """Retire an upstream. Platform administrators only, same reasoning.
 
-    Deliberately not a delete: `Vhost.upstream` is `on_delete=PROTECT`, and a
-    retired row keeps the historical answer to "what was this vhost pointing
-    at?" Retiring only clears `is_enabled`; the renderer refuses a disabled
-    upstream, so the vhost stops being served rather than being silently
-    repointed.
+    Deliberately not a delete: `Vhost.upstream` and `VhostRoute.upstream` are
+    `on_delete=PROTECT`, and a retired row keeps the historical answer to
+    "what was this vhost pointing at?" Retiring only clears `is_enabled`; the
+    INSTALLER then takes the same fork as unreadable certificate material —
+    a tenant vhost reaching this upstream (directly or via a route) is
+    excluded from the generation with an incident, a house vhost aborts the
+    install. The vhost stops being served rather than being silently
+    repointed, and the fleet converges onto that exclusion because
+    `is_enabled` is part of the hashed desired-state payload.
     """
     require_platform_admin(request, "Retiring an edge upstream")
     upstream = Upstream.get_instance_or_404(request.DATA.get("upstream"))

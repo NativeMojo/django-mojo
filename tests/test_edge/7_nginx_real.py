@@ -26,8 +26,8 @@ from testit import helpers as th
 
 from tests.test_edge._helpers import (
     declare_pools,
-    cleanup, declare_reserved_names, make_certificate, make_domain, make_group,
-    make_upstream, make_vhost,
+    cleanup, declare_reserved_names, ensure_blocklist_seed, make_certificate,
+    make_domain, make_group, make_route, make_upstream, make_vhost,
 )
 
 
@@ -76,6 +76,9 @@ def _self_signed(common_name):
 @th.django_unit_setup()
 def setup_nginx_real(opts):
     cleanup()
+    # Seed the blocklist so the real nginx parses the FULL rendered maps —
+    # all 260+ imported patterns, not empty scaffolding.
+    ensure_blocklist_seed()
     declare_reserved_names()
     declare_pools()
     opts.group = make_group("edgenginx")
@@ -83,6 +86,8 @@ def setup_nginx_real(opts):
     opts.certificate = make_certificate(opts.domain)
     opts.upstream = make_upstream(
         name="up-nginx-real", host="127.0.0.1", port=8000)
+    opts.unix_upstream = make_upstream(
+        name="up-nginx-unix", kind="unix", socket_path="/run/mojo/nginx.sock")
 
 
 @th.requires_extra("extended")
@@ -98,21 +103,51 @@ def test_real_nginx_accepts_every_kind(opts):
 
     root = tempfile.mkdtemp(prefix="edge-nginx-")
     try:
+        # The default mime.types path is the deployment's (/etc/nginx/...),
+        # which this host may not have (Homebrew keeps it elsewhere) — write
+        # a real one into the generation so the include mechanism is
+        # genuinely exercised. default_server=True so the flag-gated
+        # catch-alls (ssl_reject_handshake) parse under a real nginx too.
+        mime_path = os.path.join(root, "mime.types")
+        with open(mime_path, "w") as handle:
+            handle.write("types {\n"
+                         "    text/html html;\n"
+                         "    text/css css;\n"
+                         "    application/javascript js;\n"
+                         "}\n")
         with mock.patch("mojo.apps.edge.services.render.edge_root",
-                        return_value=root):
+                        return_value=root), \
+                mock.patch("mojo.apps.edge.services.render.mime_types_path",
+                           return_value=mime_path), \
+                mock.patch(
+                    "mojo.apps.edge.services.render.default_server_enabled",
+                    return_value=True):
             gen_dir = render.generation_dir(GENERATION)
-            conf_d = os.path.join(gen_dir, "conf.d")
-            os.makedirs(conf_d)
+            os.makedirs(gen_dir)
 
-            # One vhost of every kind — the three builders, all in one config.
+            # One vhost of every kind and every knob — the FULL include
+            # graph (http base + upstreams + conf.d), exactly what a node
+            # stages, fed to a real nginx.
+            site_api = make_vhost(opts.domain, opts.certificate, label="mix",
+                                  kind="site_api", pool="nginxreal")
+            make_route(site_api, "/api", opts.upstream)
+            make_route(site_api, "/ws", opts.unix_upstream)
+            site_api.quiet_paths = ["/api/health"]
+            site_api.save()
             vhosts = [
                 make_vhost(opts.domain, opts.certificate, label="www",
-                           kind="static", pool="nginxreal"),
+                           kind="site", pool="nginxreal"),
                 make_vhost(opts.domain, opts.certificate, label="app",
-                           kind="spa", pool="nginxreal"),
+                           kind="site", spa=True, pool="nginxreal"),
                 make_vhost(opts.domain, opts.certificate, label="api",
-                           kind="proxy", upstream=opts.upstream,
+                           kind="api", upstream=opts.upstream,
+                           quiet_paths=["/healthz"], serve_static=True,
                            pool="nginxreal"),
+                make_vhost(opts.domain, opts.certificate, label="old",
+                           kind="redirect",
+                           redirect_to=f"www.{opts.domain.name}",
+                           pool="nginxreal"),
+                site_api,
             ]
 
             cert_pem, key_pem = _self_signed(opts.domain.name)
@@ -123,8 +158,15 @@ def test_real_nginx_accepts_every_kind(opts):
             with open(os.path.join(cert_dir, "privkey.pem"), "w") as handle:
                 handle.write(key_pem)
 
+            # The base's access_log lives under EDGE_LOG_DIR, and nginx -t
+            # opens log files while validating — stage_generation creates
+            # this on a node; this test writes files itself, so it does too.
+            os.makedirs(render.log_dir(), exist_ok=True)
+
             for name, text in render.render_generation(vhosts, GENERATION).items():
-                with open(os.path.join(conf_d, name), "w") as handle:
+                path = os.path.join(gen_dir, name)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w") as handle:
                     handle.write(text)
             for vhost in vhosts:
                 os.makedirs(render.www_dir(GENERATION, vhost.pk), exist_ok=True)

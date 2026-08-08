@@ -90,7 +90,7 @@ def test_viewer_cannot_write(opts):
 
     resp = opts.client.post("/api/edge/vhost", json=dict(
         domain=opts.domain.pk, certificate=opts.certificate.pk,
-        label="viewerwrite", kind="static"))
+        label="viewerwrite", kind="site"))
     assert resp.status_code in (401, 403), \
         f"view_dns created a vhost (status {resp.status_code})"
 
@@ -269,6 +269,164 @@ def test_vhost_list_scoped(opts):
         "another tenant's vhost appeared in a scoped list"
     assert opts.house_vhost.pk not in ids, \
         "a house vhost appeared in a tenant's list"
+
+
+@th.django_unit_test("the blocklist is fleet-scoped: member grants plus ?group= open nothing")
+def test_blocklist_member_grant_refused(opts):
+    """BlocklistEntry is deliberately group-less, so permissions resolve on
+    GLOBAL grants only. A tenant group admin can hand themselves any key in
+    their own GroupMember.permissions — naming their group must still buy
+    nothing on a fleet-wide security control."""
+    from tests.test_edge._helpers import make_group_member
+
+    user, email, password, group = make_group_member(
+        ["manage_security", "view_security"])
+
+    login(opts, email, password)
+    resp = opts.client.get(f"/api/edge/blocklist?group={group.pk}")
+    assert resp.status_code in (401, 403), (
+        "a member-scoped security grant read the fleet blocklist "
+        f"(status {resp.status_code})")
+
+    resp = opts.client.post(f"/api/edge/blocklist?group={group.pk}", json=dict(
+        kind="ua", value="memberbot", mode="enforce"))
+    assert resp.status_code not in (200, 201), (
+        "a member-scoped security grant WROTE a fleet-wide block rule "
+        f"(status {resp.status_code})")
+
+    from mojo.apps.edge.models import BlocklistEntry
+    assert not BlocklistEntry.objects.filter(value="memberbot").exists(), \
+        "the member-written blocklist row landed despite the refusal"
+
+
+@th.django_unit_test("global security grants manage the blocklist; view is read-only")
+def test_blocklist_global_grants(opts):
+    from mojo.apps.edge.models import BlocklistEntry
+
+    BlocklistEntry.objects.filter(value__in=["restbot", "viewerbot"]).delete()
+    viewer, viewer_email, viewer_pw = make_user(["view_security"])
+    manager, manager_email, manager_pw = make_user(["manage_security"])
+
+    login(opts, viewer_email, viewer_pw)
+    resp = opts.client.get("/api/edge/blocklist")
+    assert resp.status_code == 200, \
+        f"view_security could not read the blocklist: {resp.status_code}"
+    resp = opts.client.post("/api/edge/blocklist", json=dict(
+        kind="ua", value="viewerbot", mode="log"))
+    assert resp.status_code not in (200, 201), (
+        f"view_security WROTE a blocklist row (status {resp.status_code})")
+
+    login(opts, manager_email, manager_pw)
+    resp = opts.client.post("/api/edge/blocklist", json=dict(
+        kind="ua", value="restbot", mode="log", note="bltest rest"))
+    assert resp.status_code == 200, (
+        f"a global manage_security holder could not add a blocklist row: "
+        f"{resp.status_code} {resp.body}")
+    row = BlocklistEntry.objects.filter(value="restbot").first()
+    assert row is not None and row.mode == "log", \
+        "the blocklist row did not land as written"
+
+    resp = opts.client.post("/api/edge/blocklist", json=dict(
+        kind="ua", value='rest" 1; } server {', mode="log"))
+    assert resp.status_code not in (200, 201), (
+        "a hostile pattern was accepted over REST "
+        f"(status {resp.status_code})")
+
+    opts.client.logout()
+    resp = opts.client.get("/api/edge/blocklist")
+    assert resp.status_code in (401, 403), \
+        f"the blocklist served an anonymous caller (status {resp.status_code})"
+
+
+@th.django_unit_test("claim_reserved refuses everyone but a real, interactive superuser")
+def test_claim_reserved_gates(opts):
+    """The three refusals the gate exists for: anonymous, a global
+    manage_dns holder, and — the subtle one — a KEY-BACKED session whose
+    override user IS a superuser. A bearer token in a config file must never
+    be able to suspend the reserved-name defence."""
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.edge.models import Vhost
+
+    path = "/api/edge/vhost/claim_reserved"
+    payload = dict(vhost=opts.house_vhost.pk)
+
+    opts.client.logout()
+    resp = opts.client.post(path, json=payload)
+    assert resp.status_code in (401, 403), \
+        f"claim_reserved answered an anonymous caller (status {resp.status_code})"
+
+    login(opts, opts.manager_email, opts.manager_pw)
+    resp = opts.client.post(path, json=payload)
+    assert resp.status_code in (401, 403), (
+        "a global manage_dns holder set the reserved-name override "
+        f"(status {resp.status_code})")
+
+    # A key whose override user IS a superuser: request.user really is the
+    # superuser, and the gate must still refuse the session. The sanctioned
+    # path refuses to BUILD this state (create_for_group raises on a
+    # superuser link), so the test constructs it the way drift would — the
+    # member gets promoted AFTER the key exists.
+    from mojo.apps.account.models import GroupMember, User
+
+    key_user, _, _ = make_user()
+    GroupMember.objects.get_or_create(user=key_user, group=opts.group)
+    key, token = ApiKey.create_for_group(
+        opts.group, "edge_claim_key", permissions={"manage_dns": True},
+        user=key_user, override_user=True)
+    User.objects.filter(pk=key_user.pk).update(is_superuser=True)
+    opts.client.logout()
+    opts.client.session.headers["Authorization"] = f"apikey {token}"
+    try:
+        resp = opts.client.post(path, json=payload)
+        assert resp.status_code in (401, 403), (
+            "a KEY-BACKED superuser session set the reserved-name override "
+            f"(status {resp.status_code})")
+    finally:
+        opts.client.session.headers.pop("Authorization", None)
+
+    fresh = Vhost.objects.get(pk=opts.house_vhost.pk)
+    assert fresh.claims_reserved is False, \
+        "a refused caller still flipped claims_reserved"
+
+
+@th.django_unit_test("a platform admin claims and releases; plain REST writes cannot")
+def test_claim_reserved_admin_flow(opts):
+    from mojo.apps.edge.models import Vhost
+
+    # NO_SAVE_FIELDS: a plain field write must not move the flag, even for
+    # the admin who could use the action instead.
+    login(opts, opts.admin_email, opts.admin_pw)
+    resp = opts.client.post(f"/api/edge/vhost/{opts.house_vhost.pk}", json=dict(
+        claims_reserved=True))
+    fresh = Vhost.objects.get(pk=opts.house_vhost.pk)
+    assert fresh.claims_reserved is False, (
+        "claims_reserved moved through a plain REST field write "
+        f"(status {resp.status_code}) — NO_SAVE_FIELDS is not holding")
+
+    resp = opts.client.post("/api/edge/vhost/claim_reserved", json=dict(
+        vhost=opts.house_vhost.pk))
+    assert resp.status_code == 200, (
+        f"a platform admin could not claim: {resp.status_code} {resp.body}")
+    fresh = Vhost.objects.get(pk=opts.house_vhost.pk)
+    assert fresh.claims_reserved is True, "the claim did not land"
+
+    resp = opts.client.post("/api/edge/vhost/claim_reserved", json=dict(
+        vhost=opts.house_vhost.pk, release=True))
+    assert resp.status_code == 200, (
+        f"a platform admin could not release: {resp.status_code} {resp.body}")
+    fresh = Vhost.objects.get(pk=opts.house_vhost.pk)
+    assert fresh.claims_reserved is False, "the release did not land"
+
+    # A TENANT vhost stays unclaimable even for the platform admin — the
+    # model check, reached through the action.
+    resp = opts.client.post("/api/edge/vhost/claim_reserved", json=dict(
+        vhost=opts.vhost.pk))
+    assert resp.status_code not in (200, 201), (
+        "claim_reserved set the override on a TENANT vhost "
+        f"(status {resp.status_code})")
+    fresh = Vhost.objects.get(pk=opts.vhost.pk)
+    assert fresh.claims_reserved is False, \
+        "the tenant vhost carries the override despite the refusal"
 
 
 @th.django_unit_test("a vhost cannot be moved between domains over REST")

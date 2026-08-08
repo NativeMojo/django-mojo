@@ -161,9 +161,12 @@ release, outside the atomic swap — so a failed `nginx -t` abandoned the config
 change but left the content already moved, and the node served a new bundle
 under old config.
 
-Releases are downloaded only if absent, so a rollback is a symlink flip rather
-than a re-download. A release that is not on disk fails the install rather than
-producing a live vhost pointing at nothing.
+**Nothing in this app downloads release files.** Getting the bytes from S3
+onto a node is node-side tooling (skeleton work), outside this codebase. The
+installer's contract is strict either way: a release that is not on disk
+**fails the install** rather than producing a live vhost pointing at
+nothing — and a rollback to a release still on disk is a pure symlink flip,
+no re-download involved.
 
 ## A site served elsewhere
 

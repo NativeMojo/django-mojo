@@ -14,18 +14,21 @@ careful:
    write that skips `Model.save()` still cannot put a `;` into a file.
 
 3. **Kind isolation is a property of the code shape, not of an `if`.** The
-   literal `proxy_pass` appears only inside `_render_proxy`; `root ` appears
-   only inside the file-serving builders. There is no branch that could leak
-   one into the other, because the strings are not in scope.
+   literal `proxy_pass` appears only inside `_proxy_location_body`, which only
+   the proxying builders call; `root ` appears only inside the file-serving
+   builders. There is no branch that could leak one into the other, because
+   the strings are not in scope.
 
-**No port-80 block is emitted.** Certificates come from DNS-01, so nothing here
-needs an HTTP challenge path, and a redirect belongs in the deployment's base
-config as one catch-all server. Emitting a second block per vhost would also
-make "exactly one `server {` per vhost" — the assertion that pins the injection
-case — stop meaning anything.
+**Every vhost renders exactly TWO server blocks**: the 443 block that carries
+the kind's contract, and a per-name port-80 block (ACME webroot location plus
+a 301 to https). This supersedes the earlier "no port-80 block" stance — the
+fleet now terminates HTTP per vhost rather than in a hand-managed catch-all,
+and HTTP-01 issuance needs the challenge path served per name. The injection
+pin moves with it: the assertion is now *exactly two* `server {` per vhost.
 """
 
 import hashlib
+import ipaddress
 import json
 
 from mojo import errors as me
@@ -33,7 +36,9 @@ from mojo.helpers.settings import settings
 
 from mojo.apps.edge import validators
 from mojo.apps.edge.models.upstream import KIND_UNIX
-from mojo.apps.edge.models.vhost import KIND_PROXY, KIND_SPA, KIND_STATIC
+from mojo.apps.edge.models.vhost import (
+    KIND_API, KIND_REDIRECT, KIND_SITE, KIND_SITE_API,
+)
 
 
 def edge_root():
@@ -53,6 +58,93 @@ def tls_ciphers():
         "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:"
         "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
         "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305")
+
+
+def acme_webroot():
+    # get_static: this is a filesystem path the port-80 blocks serve from,
+    # and a DB row must not be able to repoint it. Same rule as EDGE_ROOT.
+    return settings.get_static("EDGE_ACME_WEBROOT", "/var/www/certbot")
+
+
+def django_static_root():
+    return settings.get_static(
+        "EDGE_DJANGO_STATIC_ROOT", "/opt/api/django/static")
+
+
+def _bounded_int(name, default, low, high):
+    """A DB-settable integer knob, clamped rather than trusted.
+
+    A bad `Setting` row must degrade to the default, never freeze fleet
+    convergence with a render-time raise — these knobs are tuning, not
+    structure.
+    """
+    try:
+        value = int(settings.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return min(max(value, low), high)
+
+
+def proxy_read_timeout():
+    return _bounded_int("EDGE_PROXY_READ_TIMEOUT", 3600, 60, 86400)
+
+
+def keepalive_timeout():
+    return _bounded_int("EDGE_HTTP_KEEPALIVE_TIMEOUT", 65, 5, 300)
+
+
+def mime_types_path():
+    return settings.get_static("EDGE_MIME_TYPES", "/etc/nginx/mime.types")
+
+
+def log_dir():
+    # App-owned: the base's access_log (and stage 4's watch log) live here,
+    # NOT under /var/log/nginx — the whole include graph must stay writable
+    # by the app user so the staged, unprivileged `nginx -t` can open it.
+    return settings.get_static("EDGE_LOG_DIR", f"{edge_root()}/log")
+
+
+def default_server_enabled():
+    # get_static and default OFF: flipping this changes which server answers
+    # every unmatched name on the node — a cutover step (see the migration
+    # order in docs), not a tuning knob a DB row may toggle.
+    return bool(settings.get_static("EDGE_HTTP_DEFAULT_SERVER", False))
+
+
+def http_knobs():
+    """Every resolved http-level knob, as one dict.
+
+    This is BOTH what `render_http_base` renders from and what
+    `desired_state` embeds under its `http` key — which is what makes a TLS
+    or logging change move the generation hash. Before this, changing
+    EDGE_TLS_PROTOCOLS never converged: the values were substituted at render
+    time but absent from the hashed payload.
+    """
+    return dict(
+        mime_types=mime_types_path(),
+        log_dir=log_dir(),
+        keepalive_timeout=keepalive_timeout(),
+        proxy_read_timeout=proxy_read_timeout(),
+        default_server=default_server_enabled(),
+        tls_protocols=tls_protocols(),
+        tls_ciphers=tls_ciphers(),
+    )
+
+
+def blocklist_payload():
+    """Every blocklist row that RENDERS, as hashable dicts.
+
+    `off` rows are absent on purpose — they render nowhere, so flipping a
+    row to `off` must move the generation hash by dropping it from here,
+    and flipping it back must bring it back.
+    """
+    from mojo.apps.edge.models import BlocklistEntry
+
+    return [
+        dict(id=row.pk, kind=row.kind, value=row.value, mode=row.mode)
+        for row in BlocklistEntry.objects.exclude(mode="off")
+        .order_by("kind", "value")
+    ]
 
 
 # ----------------------------------------------------------------------
@@ -117,15 +209,20 @@ def _safe_upstream_target(upstream):
 def _tls_block(generation, certificate_id):
     """The TLS floor. Emitted unconditionally, fed by settings only.
 
-    No model field reaches this — there is no field that could. That is the
-    whole reason `Vhost` has no free-form options.
+    No model field reaches this — there is no field that could. The values
+    still pass `_safe`: `settings.get` resolves a DB-backed Setting row
+    first, and a Setting is REST-writable by holders of global
+    manage_settings, so "it's a setting" is not "it's not operator input".
+    This was the file's one unasserted substitution; it no longer is.
     """
     certs = cert_dir(generation, certificate_id)
+    protocols = _safe(tls_protocols(), validators.TLS_VALUE_RE, "TLS protocols")
+    ciphers = _safe(tls_ciphers(), validators.TLS_VALUE_RE, "TLS ciphers")
     return "\n".join([
         f"    ssl_certificate     {certs}/fullchain.pem;",
         f"    ssl_certificate_key {certs}/privkey.pem;",
-        f"    ssl_protocols {tls_protocols()};",
-        f"    ssl_ciphers {tls_ciphers()};",
+        f"    ssl_protocols {protocols};",
+        f"    ssl_ciphers {ciphers};",
         "    ssl_prefer_server_ciphers off;",
         "    ssl_session_timeout 1d;",
         "    ssl_session_cache shared:EdgeSSL:10m;",
@@ -134,19 +231,27 @@ def _tls_block(generation, certificate_id):
     ])
 
 
-def _header_block():
-    """Security headers, from the base config, identical for every vhost.
+def _header_block(indent="    "):
+    """Security headers, identical for every vhost.
 
     `headers` is deliberately NOT a model field in v1 — every structured field
     is another renderer input to test, and there is no requirement yet that
     these differ per site.
+
+    `indent` exists because nginx's `add_header` inheritance is
+    replace-not-merge: a location that declares ANY `add_header` of its own
+    (the no-cache posture on proxied locations, the immutable caching on
+    assets) silently drops every inherited header — so those locations
+    re-emit this block inside themselves.
     """
     return "\n".join([
-        "    add_header X-Content-Type-Options nosniff always;",
-        "    add_header X-Frame-Options SAMEORIGIN always;",
-        "    add_header Referrer-Policy strict-origin-when-cross-origin always;",
-        "    add_header Strict-Transport-Security "
+        f"{indent}add_header X-Content-Type-Options nosniff always;",
+        f"{indent}add_header X-Frame-Options DENY always;",
+        f"{indent}add_header Referrer-Policy strict-origin-when-cross-origin always;",
+        f"{indent}add_header Strict-Transport-Security "
         "\"max-age=31536000; includeSubDomains\" always;",
+        f"{indent}add_header Permissions-Policy "
+        "\"camera=(), microphone=(), geolocation=()\" always;",
     ])
 
 
@@ -160,58 +265,276 @@ def _open(server_name):
     ])
 
 
-def _render_static(vhost, generation, server_name):
-    """Static files. `proxy_pass` is not in this function's scope."""
-    root = www_dir(generation, vhost.pk)
+def _safe_body_size(vhost):
+    """client_max_body_size, re-asserted at substitution like every value."""
+    validators.validate_body_size_mb(vhost.body_size_mb)
+    return f"    client_max_body_size {int(vhost.body_size_mb)}m;"
+
+
+def _blocklist_guards():
+    """The per-server blocklist guards. Structural — rendered in every 443
+    block whether rows exist or not; with no rows the maps default to 0 and
+    the guards never fire."""
     return "\n".join([
-        _open(server_name),
+        "    if ($edge_block_ip) { return 444; }",
+        "    if ($edge_block_ua) { return 444; }",
+    ])
+
+
+def _port80_block(server_name):
+    """The per-name HTTP block: ACME webroot, then a 301 to https.
+
+    Emitted for EVERY kind — HTTP-01 issuance needs the challenge path served
+    on the exact name being validated, and everything else on port 80 is a
+    redirect, never content.
+    """
+    return "\n".join([
+        "server {",
+        "    listen 80;",
+        "    listen [::]:80;",
+        f"    server_name {server_name};",
         "",
-        _tls_block(generation, vhost.certificate_id),
-        "",
-        _header_block(),
-        "",
-        f"    root {root};",
-        "    index index.html;",
+        "    location /.well-known/acme-challenge/ {",
+        f"        root {acme_webroot()};",
+        "    }",
         "",
         "    location / {",
-        "        try_files $uri $uri/ =404;",
+        "        return 301 https://$host$request_uri;",
         "    }",
         "}",
         "",
     ])
 
 
-def _render_spa(vhost, generation, server_name):
-    """Single-page app: same as static, with a history fallback."""
-    root = www_dir(generation, vhost.pk)
+def _proxy_destination(upstream):
+    """The proxy_pass target: a NAMED upstream block, never an inline address.
+
+    The name is derived from the row's pk — an integer — but the target is
+    still re-asserted here: a row that cannot validate must not converge just
+    because only its name is substituted. The block itself is rendered once
+    in http.d/10_upstreams.conf by `render_upstreams`.
+    """
+    _safe_upstream_target(upstream)
+    return f"http://edge_up_{int(upstream.pk)}"
+
+
+def _proxy_location_body(upstream, indent="        "):
+    """The one canonical proxied-location body (asgi.inc parity).
+
+    The literal `proxy_pass` lives here and nowhere else. WebSocket upgrade
+    headers ride on every proxied location — the `$connection_upgrade` map is
+    defined once in the rendered http base. The no-cache posture declares
+    `add_header`, which is why the security headers are re-emitted first.
+    """
+    destination = _proxy_destination(upstream)
     return "\n".join([
+        f"{indent}proxy_pass {destination};",
+        f"{indent}proxy_http_version 1.1;",
+        f"{indent}proxy_set_header Host $host;",
+        f"{indent}proxy_set_header X-Real-IP $remote_addr;",
+        f"{indent}proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+        f"{indent}proxy_set_header X-Forwarded-Proto $scheme;",
+        f"{indent}proxy_set_header Upgrade $http_upgrade;",
+        f"{indent}proxy_set_header Connection $connection_upgrade;",
+        f"{indent}proxy_connect_timeout 10s;",
+        f"{indent}proxy_send_timeout 120s;",
+        f"{indent}proxy_read_timeout {proxy_read_timeout()}s;",
+        f"{indent}proxy_buffering off;",
+        f"{indent}proxy_redirect off;",
+        f"{indent}proxy_no_cache 1;",
+        f"{indent}proxy_cache_bypass $http_pragma $http_authorization;",
+        _header_block(indent),
+        f"{indent}add_header Cache-Control "
+        "\"no-store, no-cache, must-revalidate, max-age=0\" always;",
+        f"{indent}add_header Pragma \"no-cache\" always;",
+        f"{indent}add_header Expires \"0\" always;",
+    ])
+
+
+def _quiet_location(path, upstream):
+    """An exact-match location keeping a health check out of the MAIN log.
+
+    Any `access_log` directive in a location REPLACES the inherited set, so
+    declaring only the watch log here switches the main access log off for
+    this path while keeping the security watch on — a quiet path must never
+    be a blind spot for a watched client. The path is re-asserted at
+    substitution, same as every other value.
+    """
+    validators.validate_quiet_path(path)
+    return "\n".join([
+        f"    location = {path} {{",
+        f"        access_log {log_dir()}/edge_watch.log edge_watch "
+        "if=$edge_watch;",
+        "        log_not_found off;",
+        _proxy_location_body(upstream),
+        "    }",
+    ])
+
+
+# Hashed build assets — safe to cache forever because their names change when
+# their bytes do. This location declares add_header, so it re-emits the
+# security header block (nginx add_header inheritance is replace-not-merge).
+_ASSET_EXTENSIONS = (
+    r"css|js|mjs|map|ico|svg|gif|png|jpe?g|webp|avif|woff2?|ttf|otf|eot")
+
+
+def _asset_cache_location():
+    return "\n".join([
+        f"    location ~* \\.({_ASSET_EXTENSIONS})$ {{",
+        _header_block("        "),
+        "        add_header Cache-Control "
+        "\"public, max-age=31536000, immutable\" always;",
+        "        try_files $uri =404;",
+        "    }",
+    ])
+
+
+def _render_api(vhost, generation, server_name):
+    """Whole-host reverse proxy. No filesystem `root` is in this scope —
+    the optional /static/ alias serves the FLEET's Django static root, a
+    get_static path no row can point anywhere else."""
+    parts = [
         _open(server_name),
         "",
         _tls_block(generation, vhost.certificate_id),
         "",
         _header_block(),
         "",
-        f"    root {root};",
-        "    index index.html;",
+        _safe_body_size(vhost),
         "",
+        _blocklist_guards(),
+        "",
+    ]
+    for path in sorted(vhost.quiet_paths or []):
+        parts.append(_quiet_location(path, vhost.upstream))
+        parts.append("")
+    if vhost.serve_static:
+        parts.extend([
+            "    location /static/ {",
+            f"        alias {django_static_root()}/;",
+            "    }",
+            "",
+        ])
+    parts.extend([
         "    location / {",
-        "        try_files $uri $uri/ /index.html;",
+        _proxy_location_body(vhost.upstream),
         "    }",
         "}",
         "",
     ])
+    return "\n".join(parts)
 
 
-def _render_proxy(vhost, generation, server_name):
-    """Reverse proxy. No filesystem `root` is in this function's scope."""
-    target = _safe_upstream_target(vhost.upstream)
-    # nginx names a unix socket as `http://unix:/path/to.sock:/` — the trailing
-    # `:/` is the URI part and is NOT optional; without it nginx refuses the
-    # directive at parse time.
-    if target.startswith("unix:"):
-        destination = f"http://{target}:/"
+def _site_body(vhost, generation):
+    """The file-serving half shared by site and site_api."""
+    root = www_dir(generation, vhost.pk)
+    if vhost.spa:
+        fallback = "        try_files $uri $uri/ /index.html;"
     else:
-        destination = f"http://{target}"
+        fallback = "        try_files $uri $uri/ =404;"
+    parts = [
+        f"    root {root};",
+        "    index index.html;",
+        "",
+    ]
+    if not vhost.spa:
+        parts.extend([
+            "    error_page 404 /404.html;",
+            "",
+        ])
+    parts.extend([
+        _asset_cache_location(),
+        "",
+        "    location / {",
+        fallback,
+        "    }",
+    ])
+    return parts
+
+
+def _render_site(vhost, generation, server_name):
+    """Static site / SPA. `proxy_pass` is not in this function's scope."""
+    parts = [
+        _open(server_name),
+        "",
+        _tls_block(generation, vhost.certificate_id),
+        "",
+        _header_block(),
+        "",
+        _safe_body_size(vhost),
+        "",
+        _blocklist_guards(),
+        "",
+    ]
+    parts.extend(_site_body(vhost, generation))
+    parts.extend(["}", ""])
+    return "\n".join(parts)
+
+
+def _sorted_routes(vhost):
+    return sorted(vhost.routes.all(), key=lambda r: r.path_prefix)
+
+
+def _render_site_api(vhost, generation, server_name):
+    """A site plus proxied path prefixes, one location per VhostRoute.
+
+    Quiet paths attach to their LONGEST covering route prefix — they only
+    mean something on a proxied endpoint here, and the vhost validator
+    enforces coverage at save time. A quiet path orphaned later (its route
+    deleted) is SKIPPED rather than raised on: rendering must not freeze the
+    pool over a row that merely logs more than intended.
+    """
+    routes = _sorted_routes(vhost)
+    parts = [
+        _open(server_name),
+        "",
+        _tls_block(generation, vhost.certificate_id),
+        "",
+        _header_block(),
+        "",
+        _safe_body_size(vhost),
+        "",
+        _blocklist_guards(),
+        "",
+    ]
+    for path in sorted(vhost.quiet_paths or []):
+        covering = None
+        for route in routes:
+            validators.validate_route_prefix(route.path_prefix)
+            if path.startswith(route.path_prefix):
+                if covering is None or len(route.path_prefix) > len(
+                        covering.path_prefix):
+                    covering = route
+        if covering is None:
+            continue
+        parts.append(_quiet_location(path, covering.upstream))
+        parts.append("")
+    if vhost.serve_static:
+        parts.extend([
+            "    location /static/ {",
+            f"        alias {django_static_root()}/;",
+            "    }",
+            "",
+        ])
+    for route in routes:
+        prefix = validators.validate_route_prefix(route.path_prefix)
+        parts.extend([
+            f"    location {prefix} {{",
+            _proxy_location_body(route.upstream),
+            "    }",
+            "",
+        ])
+    parts.extend(_site_body(vhost, generation))
+    parts.extend(["}", ""])
+    return "\n".join(parts)
+
+
+def _render_redirect(vhost, generation, server_name):
+    """A host-to-host permanent redirect. Neither `root` nor `proxy_pass`
+    is in this function's scope — the target is a validated FQDN, re-asserted
+    at substitution."""
+    target = validators.validate_redirect_target(vhost.redirect_to)
+    _safe_server_name(target)
     return "\n".join([
         _open(server_name),
         "",
@@ -219,45 +542,259 @@ def _render_proxy(vhost, generation, server_name):
         "",
         _header_block(),
         "",
-        "    location / {",
-        f"        proxy_pass {destination};",
-        "        proxy_http_version 1.1;",
-        "        proxy_set_header Host $host;",
-        "        proxy_set_header X-Real-IP $remote_addr;",
-        "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
-        "        proxy_set_header X-Forwarded-Proto $scheme;",
-        "        proxy_set_header Upgrade $http_upgrade;",
-        "        proxy_set_header Connection $connection_upgrade;",
-        "    }",
+        _safe_body_size(vhost),
+        "",
+        _blocklist_guards(),
+        "",
+        f"    return 301 https://{target}$request_uri;",
         "}",
         "",
     ])
 
 
 _BUILDERS = {
-    KIND_STATIC: _render_static,
-    KIND_SPA: _render_spa,
-    KIND_PROXY: _render_proxy,
+    KIND_SITE: _render_site,
+    KIND_API: _render_api,
+    KIND_SITE_API: _render_site_api,
+    KIND_REDIRECT: _render_redirect,
 }
 
 
 def render_vhost(vhost, generation):
-    """One vhost, one `server` block."""
+    """One vhost, exactly TWO `server` blocks: its 443 contract and its
+    port-80 ACME/redirect shell."""
     server_name = _safe_server_name(vhost.server_name)
     builder = _BUILDERS.get(vhost.kind)
     if builder is None:
         raise me.ValueException(f"edge renderer has no builder for {vhost.kind!r}")
-    return builder(vhost, generation, server_name)
+    return builder(vhost, generation, server_name) + "\n" + _port80_block(server_name)
+
+
+def _safe_blocklist_ip(value):
+    """Re-assert an ip row at substitution: it must BE a network, and it is
+    rendered from the normalized parse, never the stored string."""
+    try:
+        return str(ipaddress.ip_network(value, strict=False))
+    except (TypeError, ValueError):
+        raise me.ValueException(
+            f"edge renderer refused an unsafe blocklist network: {value!r}")
+
+
+def _safe_blocklist_ua(value):
+    """Re-assert a ua row at substitution — the whitelist plus the
+    trailing-backslash rule that keeps `"~*<value>"` unescapable."""
+    _safe(value, validators.UA_PATTERN_RE, "blocklist pattern")
+    if (len(value) - len(value.rstrip("\\"))) % 2 == 1:
+        raise me.ValueException(
+            f"edge renderer refused an unsafe blocklist pattern: {value!r}")
+    return value
+
+
+def _dedupe_rows(rows):
+    """Render-time dedupe by (already normalized) value.
+
+    The unique constraint makes duplicates unreachable through save(), but a
+    bypass write could still smuggle two spellings of one network into a
+    `geo` block — and a duplicate `geo` entry is an nginx [emerg] that would
+    freeze fleet convergence. First occurrence wins, deterministically.
+    """
+    seen = set()
+    out = []
+    for row in rows:
+        if row["value"] in seen:
+            continue
+        seen.add(row["value"])
+        out.append(row)
+    return out
+
+
+def _blocklist_section(knobs, security):
+    """The four blocklist maps, the watch combiner, and the watch log.
+
+    ALLOW ROWS RENDER FIRST in every map they join: nginx `map` regexes
+    match in order of appearance, so an early `0` beats any later pattern
+    that would also match (Lynx's UA contains `libwww-FM`; the allow row is
+    what keeps the unanchored `libwww` token off it). In `geo` blocks order
+    is cosmetic — most-specific network wins — but the allow-first rule is
+    kept for one readable convention.
+
+    Values carry the ROW ID, so a watch-log line names the exact rule that
+    matched it.
+    """
+    ip_rows = _dedupe_rows([r for r in security if r["kind"] == "ip"])
+    ua_rows = _dedupe_rows([r for r in security if r["kind"] == "ua"])
+
+    def geo_block(variable, active_mode):
+        lines = [f"geo ${variable} {{", "    default 0;"]
+        for row in ip_rows:
+            if row["mode"] == "allow":
+                lines.append(f"    {_safe_blocklist_ip(row['value'])} 0;")
+        for row in ip_rows:
+            if row["mode"] == active_mode:
+                lines.append(
+                    f"    {_safe_blocklist_ip(row['value'])} {int(row['id'])};")
+        lines.append("}")
+        return lines
+
+    def ua_map(variable, active_mode):
+        lines = [f"map $http_user_agent ${variable} {{", "    default 0;"]
+        for row in ua_rows:
+            if row["mode"] == "allow":
+                lines.append(f"    \"~*{_safe_blocklist_ua(row['value'])}\" 0;")
+        for row in ua_rows:
+            if row["mode"] == active_mode:
+                lines.append(
+                    f"    \"~*{_safe_blocklist_ua(row['value'])}\" "
+                    f"{int(row['id'])};")
+        lines.append("}")
+        return lines
+
+    parts = []
+    parts.extend(geo_block("edge_block_ip", "enforce"))
+    parts.append("")
+    parts.extend(geo_block("edge_watch_ip", "log"))
+    parts.append("")
+    parts.extend(ua_map("edge_block_ua", "enforce"))
+    parts.append("")
+    parts.extend(ua_map("edge_watch_ua", "log"))
+    parts.extend([
+        "",
+        "map \"$edge_watch_ip:$edge_watch_ua\" $edge_watch {",
+        "    default 1;",
+        "    \"0:0\" 0;",
+        "}",
+        "",
+        "log_format edge_watch '$remote_addr - [$time_local] '",
+        "                      '\"$request_method "
+        "$scheme://$host$request_uri\" '",
+        "                      '$status ip=$edge_watch_ip "
+        "ua=$edge_watch_ua '",
+        "                      '\"$http_user_agent\"';",
+        "",
+        f"access_log {knobs['log_dir']}/edge_watch.log edge_watch "
+        "if=$edge_watch;",
+    ])
+    return parts
+
+
+def render_http_base(knobs=None, security=None):
+    """`http.d/00_base.conf` — everything the server blocks lean on.
+
+    Rendered per generation from `http_knobs()` and the blocklist rows, so
+    the maps every server block references (`$connection_upgrade`, the
+    blocklist guards), the log plumbing, and the hardening knobs converge
+    with the vhosts instead of living in a hand-managed file. `default_type`
+    and `types_hash_max_size` deliberately do NOT render here: they live in
+    the provision-time bootstrap (see
+    docs/django_developer/edge/templates.md), and a second copy at the same
+    http level would be a duplicate-directive [emerg].
+    """
+    knobs = knobs or http_knobs()
+    if security is None:
+        security = blocklist_payload()
+    parts = [
+        "# edge http base — rendered per generation, never hand-edited",
+        f"include {knobs['mime_types']};",
+        "",
+        "log_format main '$remote_addr - - [$time_local] '",
+        "                '\"$request_method $scheme://$host$request_uri "
+        "$server_protocol\" '",
+        "                '$status $body_bytes_sent \"$http_referer\" '",
+        "                '\"$http_user_agent\" $request_time $server_port';",
+        "",
+        "map $http_user_agent $loggable {",
+        "    ~*ELB-HealthChecker 0;",
+        "    default 1;",
+        "}",
+        "",
+        f"access_log {knobs['log_dir']}/access.log main if=$loggable;",
+        "",
+        "map $http_upgrade $connection_upgrade {",
+        "    default upgrade;",
+        "    '' close;",
+        "}",
+        "",
+        "sendfile on;",
+        f"keepalive_timeout {int(knobs['keepalive_timeout'])};",
+        "server_tokens off;",
+        "gzip on;",
+        "gzip_vary on;",
+        "gzip_comp_level 5;",
+        "gzip_min_length 256;",
+        "gzip_proxied any;",
+        "gzip_types text/plain text/css application/json "
+        "application/javascript text/xml application/xml image/svg+xml;",
+        "",
+    ]
+    parts.extend(_blocklist_section(knobs, security))
+    if knobs["default_server"]:
+        parts.extend([
+            "",
+            "# Catch-alls for names no vhost claims. 443 rejects the TLS",
+            "# handshake outright (no certificate needed, no name leaked);",
+            "# 80 drops the connection. Flag-gated by EDGE_HTTP_DEFAULT_SERVER",
+            "# so a migrating deployment can keep its file-managed default",
+            "# server until the cutover step.",
+            "server {",
+            "    listen 443 ssl default_server;",
+            "    listen [::]:443 ssl default_server;",
+            "    ssl_reject_handshake on;",
+            "}",
+            "",
+            "server {",
+            "    listen 80 default_server;",
+            "    listen [::]:80 default_server;",
+            "    return 444;",
+            "}",
+        ])
+    parts.append("")
+    return "\n".join(parts)
+
+
+def referenced_upstreams(vhosts):
+    """Every upstream the given vhosts reach, directly or via routes.
+
+    De-duplicated by pk and sorted, so the rendered upstreams file is
+    deterministic for a given desired state.
+    """
+    seen = {}
+    for vhost in vhosts:
+        if vhost.upstream_id:
+            seen[vhost.upstream_id] = vhost.upstream
+        for route in vhost.routes.all():
+            seen[route.upstream_id] = route.upstream
+    return [seen[key] for key in sorted(seen)]
+
+
+def render_upstreams(upstreams):
+    """`http.d/10_upstreams.conf` — one named block per referenced upstream.
+
+    Vhost files reference these by name (`edge_up_<pk>`); the literal
+    host:port / socket path appears here and nowhere else in the generation.
+    """
+    parts = ["# edge upstreams — named blocks; vhost files reference these only"]
+    for upstream in sorted(upstreams, key=lambda row: row.pk):
+        target = _safe_upstream_target(upstream)
+        parts.extend([
+            "",
+            f"upstream edge_up_{int(upstream.pk)} {{",
+            f"    server {target};",
+            "}",
+        ])
+    parts.append("")
+    return "\n".join(parts)
 
 
 def render_nginx_harness(generation):
     """A minimal wrapper used ONLY by the staging `nginx -t` pre-filter.
 
-    This is an approximation of the real config and is documented as such: a
-    `map`, `upstream` or `limit_req_zone` defined in the deployment's own
-    nginx.conf is absent here, so a generated file that references one passes
-    or fails differently. The authoritative check is `nginx -t` against the
-    REAL config after the swap — see services/installer.py.
+    This approximates the real bootstrap and is documented as such — but
+    since the generation now carries its own http base (maps, log format,
+    upstreams), the approximation is close: the harness contributes only the
+    main context, the scratch paths, and the two directives the bootstrap
+    owns (`default_type`, `types_hash_max_size`). The authoritative check is
+    `nginx -t` against the REAL config after the swap — see
+    services/installer.py.
     """
     gen = generation_dir(generation)
     return "\n".join([
@@ -272,16 +809,14 @@ def render_nginx_harness(generation):
         f"error_log {gen}/error.log;",
         "events { worker_connections 64; }",
         "http {",
-        f"    access_log {gen}/access.log;",
+        "    default_type application/octet-stream;",
+        "    types_hash_max_size 4096;",
         f"    client_body_temp_path {gen}/tmp/client_body;",
         f"    proxy_temp_path {gen}/tmp/proxy;",
         f"    fastcgi_temp_path {gen}/tmp/fastcgi;",
         f"    uwsgi_temp_path {gen}/tmp/uwsgi;",
         f"    scgi_temp_path {gen}/tmp/scgi;",
-        "    map $http_upgrade $connection_upgrade {",
-        "        default upgrade;",
-        "        '' close;",
-        "    }",
+        f"    include {gen}/http.d/*.conf;",
         f"    include {gen}/conf.d/*.conf;",
         "}",
         "",
@@ -301,19 +836,42 @@ def vhost_payload(vhost):
     """
     upstream = None
     if vhost.upstream_id:
-        upstream = dict(
-            kind=vhost.upstream.kind,
-            host=vhost.upstream.host,
-            port=vhost.upstream.port,
-            socket_path=vhost.upstream.socket_path,
-        )
+        upstream = _upstream_payload(vhost.upstream)
+    routes = [
+        dict(id=route.pk,
+             path_prefix=route.path_prefix,
+             upstream=_upstream_payload(route.upstream))
+        for route in _sorted_routes(vhost)
+    ]
     return dict(
         id=vhost.pk,
         server_name=vhost.server_name,
         kind=vhost.kind,
         pool=vhost.pool,
+        spa=vhost.spa,
+        body_size_mb=vhost.body_size_mb,
+        quiet_paths=sorted(vhost.quiet_paths or []),
+        serve_static=vhost.serve_static,
+        redirect_to=vhost.redirect_to,
         certificate=vhost.certificate_id,
         upstream=upstream,
+        routes=routes,
+    )
+
+
+def _upstream_payload(upstream):
+    # `id` is in here because the rendered text names the upstream by pk
+    # (`edge_up_<pk>`) — two upstreams with an identical target must still
+    # move the hash when a vhost switches between them. `is_enabled` is here
+    # because the installer's disabled-upstream fork depends on it: a retire
+    # must move the hash so nodes converge onto the exclusion.
+    return dict(
+        id=upstream.pk,
+        kind=upstream.kind,
+        host=upstream.host,
+        port=upstream.port,
+        socket_path=upstream.socket_path,
+        is_enabled=upstream.is_enabled,
     )
 
 
@@ -332,22 +890,33 @@ def generation_id(payload):
 
 
 def desired_state(vhosts, webapps=None):
-    """The payload a node polls for, and the thing the hash covers."""
+    """The payload a node polls for, and the thing the hash covers.
+
+    The `http` key is the resolved knob set (TLS values included) — its
+    presence here is what makes a settings change converge: the hash moves,
+    nodes reinstall.
+    """
     rows = sorted((vhost_payload(v) for v in vhosts), key=lambda r: r["id"])
-    payload = dict(vhosts=rows, webapps=webapps or [])
+    payload = dict(vhosts=rows, webapps=webapps or [], http=http_knobs(),
+                   security=blocklist_payload())
     payload["generation"] = generation_id(payload)
     return payload
 
 
 def render_generation(vhosts, generation):
-    """Every enabled vhost, rendered into `{filename: text}`.
+    """Every enabled vhost plus the generation's http base and upstreams,
+    rendered into `{relative_path: text}`.
 
     The caller supplies `generation` because the id must be computed from the
     desired-state payload BEFORE rendering — the file contents reference the
     generation directory by absolute path, which is what lets `nginx -t`
     validate the new certificates rather than the currently-installed ones.
     """
-    files = {}
+    files = {
+        "http.d/00_base.conf": render_http_base(),
+        "http.d/10_upstreams.conf": render_upstreams(
+            referenced_upstreams(vhosts)),
+    }
     for vhost in vhosts:
-        files[f"{int(vhost.pk)}.conf"] = render_vhost(vhost, generation)
+        files[f"conf.d/{int(vhost.pk)}.conf"] = render_vhost(vhost, generation)
     return files

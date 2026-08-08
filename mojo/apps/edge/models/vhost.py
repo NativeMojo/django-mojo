@@ -4,24 +4,27 @@ from django.db.models import Q
 from mojo.models import MojoModel
 
 
-KIND_STATIC = "static"
-KIND_SPA = "spa"
-KIND_PROXY = "proxy"
+KIND_API = "api"
+KIND_SITE = "site"
+KIND_SITE_API = "site_api"
+KIND_REDIRECT = "redirect"
 
 KINDS = [
-    (KIND_STATIC, "Static files"),
-    (KIND_SPA, "Single-page app (history fallback)"),
-    (KIND_PROXY, "Reverse proxy to a declared upstream"),
+    (KIND_API, "Whole-host reverse proxy to a declared upstream"),
+    (KIND_SITE, "Static site / single-page app"),
+    (KIND_SITE_API, "Static site with proxied path prefixes"),
+    (KIND_REDIRECT, "Permanent redirect to another host"),
 ]
 
 
 class Vhost(models.Model, MojoModel):
     """
-    One nginx `server` block, as structured data.
+    One nginx server block pair (443 + 80), as structured data.
 
     Nothing here is nginx syntax. `server_name` is derived from the `Domain`
     FK, the web root is derived from this row's own primary key, and a proxy
-    destination is a foreign key to a platform-declared `Upstream`. There is no
+    destination is a foreign key to a platform-declared `Upstream` — directly
+    for `api`, per path prefix through `VhostRoute` for `site_api`. There is no
     field an admin can put a `;` into, which is the whole point — see
     `mojo/apps/edge/validators.py`.
 
@@ -46,15 +49,16 @@ class Vhost(models.Model, MojoModel):
         help_text="'' serves the apex, '*' the wildcard, else one DNS label.")
 
     kind = models.CharField(
-        max_length=16, choices=KINDS, default=KIND_STATIC,
-        help_text="static | spa | proxy")
+        max_length=16, choices=KINDS, default=KIND_SITE,
+        help_text="api | site | site_api | redirect")
 
     upstream = models.ForeignKey(
         "edge.Upstream",
         related_name="vhosts",
         null=True, blank=True, default=None,
         on_delete=models.PROTECT,
-        help_text="Required for kind=proxy, forbidden otherwise.")
+        help_text="Required for kind=api, forbidden otherwise "
+                  "(site_api proxies per-route, never whole-host).")
 
     certificate = models.ForeignKey(
         "dnsman.Certificate",
@@ -65,6 +69,37 @@ class Vhost(models.Model, MojoModel):
     pool = models.CharField(
         max_length=32, default="default", db_index=True,
         help_text="Which fleet pool serves this vhost. Nodes poll by pool.")
+
+    spa = models.BooleanField(
+        default=False,
+        help_text="site/site_api only: history-fallback to index.html "
+                  "instead of a 404.")
+
+    body_size_mb = models.IntegerField(
+        default=50,
+        help_text="client_max_body_size, in megabytes (1-4096). Always "
+                  "rendered — nginx's 1m default is never silently in play.")
+
+    quiet_paths = models.JSONField(
+        default=list, blank=True,
+        help_text="api/site_api only: exact request paths kept out of the "
+                  "main access log (health checks). Each is whitelist-checked.")
+
+    serve_static = models.BooleanField(
+        default=False,
+        help_text="api/site_api only: serve the fleet's Django static root "
+                  "at /static/ instead of proxying it.")
+
+    redirect_to = models.CharField(
+        max_length=253, null=True, blank=True, default=None,
+        help_text="redirect only: target HOST (FQDN, validated as a server "
+                  "name — never a free URL).")
+
+    claims_reserved = models.BooleanField(
+        default=False,
+        help_text="Platform-only override letting a HOUSE vhost claim a name "
+                  "on the reserved list. Set via POST edge/vhost/claim_reserved, "
+                  "never writable over plain REST.")
 
     is_enabled = models.BooleanField(default=True, db_index=True)
 
@@ -80,12 +115,19 @@ class Vhost(models.Model, MojoModel):
                 fields=["domain", "label"],
                 condition=Q(is_enabled=True),
                 name="edge_vhost_unique_enabled_server_name"),
+            # The kind decides which destination fields a row may carry, and
+            # the DB enforces it so a bulk write cannot produce a hybrid row
+            # the renderer has no branch for.
             models.CheckConstraint(
                 condition=(
-                    Q(kind=KIND_PROXY, upstream__isnull=False)
-                    | (~Q(kind=KIND_PROXY) & Q(upstream__isnull=True))
+                    Q(kind=KIND_API, upstream__isnull=False,
+                      redirect_to__isnull=True)
+                    | Q(kind__in=(KIND_SITE, KIND_SITE_API),
+                        upstream__isnull=True, redirect_to__isnull=True)
+                    | Q(kind=KIND_REDIRECT, upstream__isnull=True,
+                        redirect_to__isnull=False)
                 ),
-                name="edge_vhost_kind_upstream"),
+                name="edge_vhost_kind_fields"),
         ]
         indexes = [
             models.Index(fields=["pool", "is_enabled"]),
@@ -110,7 +152,11 @@ class Vhost(models.Model, MojoModel):
         # CREATE path too (mojo/models/rest.py), so pinning it would make a
         # vhost impossible to create over REST at all. Immutability after
         # create is enforced in on_rest_pre_save below instead.
-        NO_SAVE_FIELDS = ["id", "pk", "created", "uuid"]
+        #
+        # `claims_reserved` IS here: it suspends the reserved-name defence for
+        # a row, so it moves only through the platform-gated claim_reserved
+        # action, never a plain field write.
+        NO_SAVE_FIELDS = ["id", "pk", "created", "uuid", "claims_reserved"]
         GRAPHS = {
             "basic": {
                 "fields": ["id", "kind", "is_enabled"],
@@ -119,7 +165,9 @@ class Vhost(models.Model, MojoModel):
             "default": {
                 "fields": [
                     "id", "created", "modified", "label", "kind",
-                    "pool", "is_enabled",
+                    "pool", "spa", "body_size_mb", "quiet_paths",
+                    "serve_static", "redirect_to", "claims_reserved",
+                    "is_enabled",
                 ],
                 "extra": ["server_name"],
                 "graphs": {

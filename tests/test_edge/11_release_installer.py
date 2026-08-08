@@ -62,7 +62,7 @@ def setup_release_installer(opts):
     opts.domain = make_domain(group=opts.group)
     opts.certificate = make_certificate(opts.domain)
     opts.vhost = make_vhost(opts.domain, opts.certificate, label="www",
-                            kind="static", pool=POOL)
+                            kind="site", pool=POOL)
     opts.webapp = make_webapp(opts.group, slug="relsite", vhost=opts.vhost)
 
 

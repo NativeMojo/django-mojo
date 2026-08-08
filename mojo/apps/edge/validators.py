@@ -44,6 +44,33 @@ UPSTREAM_HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?\Z")
 # Upstream / vhost names used as filename components.
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 
+# A request-path a vhost may quiet or route. Leading slash, then a charset
+# with no `;`, `{`, `}`, `#`, `$`, quote, backslash, space, CR or LF — the
+# same "cannot carry a metacharacter at all" rule as every other whitelist
+# here. `..` segments and `//` runs are refused separately below: the charset
+# admits `.` and `/` individually, and spelling the traversal check out keeps
+# it reviewable.
+QUIET_PATH_RE = re.compile(r"^/[A-Za-z0-9._/\-]{0,127}\Z")
+ROUTE_PREFIX_RE = QUIET_PATH_RE
+
+# The TLS floor values. Settings, not row data — but `settings.get` resolves a
+# DB-backed Setting row first, and these land verbatim inside `ssl_protocols`
+# / `ssl_ciphers` directives, so the renderer re-asserts them like everything
+# else. The charset covers every real protocol and OpenSSL cipher-string
+# token (`TLSv1.3`, `ECDHE-...`, `:`, `!aNULL`, `+`, `_`) and cannot carry
+# `;`, `{`, `}`, `#`, quotes, or a control character.
+TLS_VALUE_RE = re.compile(r"^[A-Za-z0-9 .:+!_-]{1,1024}\Z")
+
+# A user-agent blocklist pattern. Rendered ONLY inside double quotes as
+# `"~*<value>" <id>;` in a map block, so the whitelist must make breaking out
+# of that quoted string unspellable: no `"`, no backtick, no `{`/`}`/`;`, no
+# whitespace, no control characters, no newline — while still permitting the
+# regex metacharacters real bot patterns use (`( ) [ ] | ? ^ . * + -`, `/`,
+# `_`, and backslash for escapes like `\.`). `$` is deliberately absent:
+# nginx expands `$name` inside quoted strings in enough contexts that an
+# end-anchor is not worth the ambiguity — anchor with `^` or match a literal.
+UA_PATTERN_RE = re.compile(r"^[A-Za-z0-9()\[\]|?^.*+\\/_-]{1,256}\Z")
+
 
 def www_base():
     # get_static throughout this pair of helpers: these define the containment
@@ -447,25 +474,214 @@ def validate_manifest(manifest):
     return cleaned
 
 
+def validate_body_size_mb(value):
+    """client_max_body_size, in megabytes. Always rendered, so always checked."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise me.ValueException("body_size_mb must be an integer")
+    if not 1 <= value <= 4096:
+        raise me.ValueException("body_size_mb must be between 1 and 4096")
+    return value
+
+
+def _validate_request_path(path, what):
+    if not isinstance(path, str) or not QUIET_PATH_RE.match(path):
+        raise me.ValueException(
+            f"{what} must start with '/' and use only letters, digits, "
+            f"'.', '_', '-' and '/' (max 128 characters)")
+    if "//" in path:
+        raise me.ValueException(f"{what} may not contain '//'")
+    if any(part == ".." for part in path.split("/")):
+        raise me.ValueException(f"{what} may not contain a '..' segment")
+    return path
+
+
+def validate_quiet_path(path):
+    """A request path whose hits stay out of the main access log."""
+    return _validate_request_path(path, "a quiet path")
+
+
+def validate_route_prefix(prefix):
+    """A site_api proxied prefix. `/` alone is refused — a whole-host proxy
+    is what kind=api is for, and allowing it here would make the two kinds'
+    guarantees indistinguishable."""
+    _validate_request_path(prefix, "a route prefix")
+    if prefix == "/":
+        raise me.ValueException(
+            "a route prefix cannot be '/' — use kind=api for a whole-host "
+            "proxy")
+    return prefix
+
+
+def validate_redirect_target(target):
+    """A redirect destination is a HOST, never a free URL.
+
+    Delegates to the server-name whitelist: same charset, same label rules,
+    so it cannot smuggle a scheme, a path, a port or a metacharacter.
+    """
+    if not isinstance(target, str) or not target:
+        raise me.ValueException("a redirect vhost requires redirect_to")
+    if target.startswith("*."):
+        raise me.ValueException("a redirect target cannot be a wildcard")
+    return validate_server_name(target)
+
+
+def validate_route(route):
+    """Whole-row validation for a VhostRoute. Called from save()."""
+    from mojo.apps.edge.models.vhost import KIND_SITE_API
+
+    validate_route_prefix(route.path_prefix or "")
+
+    if not route.vhost_id:
+        raise me.ValueException("a route requires a vhost")
+    if route.vhost.kind != KIND_SITE_API:
+        raise me.ValueException(
+            f"routes belong to site_api vhosts, not {route.vhost.kind}")
+    if not route.upstream_id:
+        raise me.ValueException("a route requires an upstream")
+
+    # The upstream must be a house row or belong to THIS vhost's tenant.
+    # Mirrors the WebApp.vhost cross-tenant check: `upstream` is
+    # caller-writable, and without this an admin of two tenants could proxy
+    # group A's prefix into group B's upstream.
+    if route.upstream.group_id not in (None, route.vhost.domain.group_id):
+        raise me.ValueException(
+            "the upstream must be a shared one or belong to this vhost's "
+            "group")
+    return route
+
+
+def validate_blocklist_entry(entry):
+    """Whole-row validation for a BlocklistEntry. Called from save() AND
+    called explicitly by the seed migration (historical models drop save()).
+
+    `ip` values are STORED normalized (`ipaddress.ip_network(strict=False)`),
+    which is what makes the unique constraint and the render-time dedupe
+    mean something — `10.0.0.1/8` and `10.0.0.0/8` are the same network, and
+    two spellings of one network rendered into a `geo` block is an nginx
+    [emerg] that would freeze fleet convergence.
+    """
+    from mojo.apps.edge.models.blocklist import KINDS, MODES
+
+    if entry.kind not in dict(KINDS):
+        raise me.ValueException(f"unknown blocklist kind {entry.kind!r}")
+    if entry.mode not in dict(MODES):
+        raise me.ValueException(f"unknown blocklist mode {entry.mode!r}")
+
+    value = entry.value
+    if not isinstance(value, str) or not value:
+        raise me.ValueException("a blocklist entry requires a value")
+
+    if entry.kind == "ip":
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            raise me.ValueException(
+                f"{value!r} is not an IP address or CIDR network")
+        entry.value = str(network)
+        return entry
+
+    # kind == "ua": a regex fragment, rendered only as `"~*<value>" <id>;`.
+    if not UA_PATTERN_RE.match(value):
+        raise me.ValueException(
+            "a user-agent pattern may use letters, digits and the regex "
+            "characters ()[]|?^.*+-/_\\ only (max 256 characters, no "
+            "spaces, quotes or braces)")
+    # A trailing ODD run of backslashes would escape the closing quote of
+    # the rendered `"~*<value>"` string — the exact break-out the charset
+    # exists to prevent.
+    trailing = len(value) - len(value.rstrip("\\"))
+    if trailing % 2 == 1:
+        raise me.ValueException(
+            "a user-agent pattern cannot end with an unescaped backslash")
+    try:
+        re.compile(value)
+    except re.error as err:
+        raise me.ValueException(
+            f"user-agent pattern does not compile: {err}")
+    return entry
+
+
 def validate_vhost(vhost):
     """Whole-row validation for a Vhost. Called from save()."""
-    from mojo.apps.edge.models.vhost import KIND_PROXY, KIND_SPA, KIND_STATIC
+    from mojo.apps.edge.models.vhost import (
+        KIND_API, KIND_REDIRECT, KIND_SITE, KIND_SITE_API,
+    )
 
     validate_label(vhost.label or "")
     validate_pool(vhost.pool)
+    validate_body_size_mb(vhost.body_size_mb)
 
-    if vhost.kind not in (KIND_STATIC, KIND_SPA, KIND_PROXY):
+    if vhost.kind not in (KIND_API, KIND_SITE, KIND_SITE_API, KIND_REDIRECT):
         raise me.ValueException(f"unknown vhost kind {vhost.kind!r}")
 
-    if vhost.kind == KIND_PROXY:
+    # --- the kind matrix: which knobs each product shape may carry ---
+
+    if vhost.kind == KIND_API:
         if not vhost.upstream_id:
-            raise me.ValueException("a proxy vhost requires an upstream")
+            raise me.ValueException("an api vhost requires an upstream")
     elif vhost.upstream_id:
         raise me.ValueException(
-            f"a {vhost.kind} vhost serves files and has no upstream")
+            f"a {vhost.kind} vhost has no whole-host upstream "
+            f"(site_api proxies per-route)")
+
+    if vhost.kind == KIND_REDIRECT:
+        validate_redirect_target(vhost.redirect_to)
+    elif vhost.redirect_to:
+        raise me.ValueException(
+            f"a {vhost.kind} vhost has no redirect target")
+
+    if vhost.spa and vhost.kind not in (KIND_SITE, KIND_SITE_API):
+        raise me.ValueException(
+            f"spa applies to site and site_api vhosts, not {vhost.kind}")
+
+    if vhost.serve_static and vhost.kind not in (KIND_API, KIND_SITE_API):
+        raise me.ValueException(
+            f"serve_static applies to api and site_api vhosts, not "
+            f"{vhost.kind}")
+
+    quiet_paths = vhost.quiet_paths or []
+    if not isinstance(quiet_paths, list):
+        raise me.ValueException("quiet_paths must be a list of paths")
+    if quiet_paths and vhost.kind not in (KIND_API, KIND_SITE_API):
+        raise me.ValueException(
+            f"quiet_paths applies to api and site_api vhosts, not "
+            f"{vhost.kind}")
+    for path in quiet_paths:
+        validate_quiet_path(path)
+    if len(set(quiet_paths)) != len(quiet_paths):
+        raise me.ValueException("quiet_paths contains a duplicate")
+
+    if vhost.kind == KIND_SITE_API:
+        # A quiet path only means something on a PROXIED endpoint here — the
+        # site half logs normally. Requiring coverage catches the typo where
+        # a quiet path silences nothing at all.
+        prefixes = []
+        if vhost.pk:
+            prefixes = list(
+                vhost.routes.values_list("path_prefix", flat=True))
+        for path in quiet_paths:
+            if not any(path.startswith(prefix) for prefix in prefixes):
+                declared = ", ".join(sorted(prefixes)) or "none declared"
+                raise me.ValueException(
+                    f"quiet path {path} is not under any route prefix "
+                    f"({declared})")
+    elif vhost.pk:
+        # Routes belong to site_api rows only; a kind change must not leave
+        # orphaned prefixes behind that a change back would silently revive.
+        if vhost.routes.exists():
+            raise me.ValueException(
+                f"a {vhost.kind} vhost cannot carry routes — delete them "
+                f"before changing kind")
 
     if not vhost.domain_id:
         raise me.ValueException("a vhost requires a domain")
+
+    # The house-only reserved-name override. Refused outright on a tenant
+    # domain — this flag suspends the shadowing defence for one row, and only
+    # the platform may do that, only for its own names.
+    if vhost.claims_reserved and vhost.domain.group_id is not None:
+        raise me.ValueException(
+            "claims_reserved applies to house-domain vhosts only")
 
     server_name = server_name_for(vhost.domain.name, vhost.label or "")
     # Checked unconditionally, enabled or not: an unvalidatable name is a
@@ -477,7 +693,16 @@ def validate_vhost(vhost):
     # disabled row is inert — it renders nothing — and refusing to store one
     # would make a vhost impossible to park while its certificate is reissued.
     if vhost.is_enabled:
-        validate_not_reserved(server_name)
+        if vhost.claims_reserved:
+            # The set must still be DECLARED — a deployment that cannot name
+            # itself cannot supervise a claim on its own names either. Only
+            # the membership check is skipped, for exactly this row.
+            if reserved_server_names() is None:
+                raise me.ValueException(
+                    "This deployment has not declared its own hostnames "
+                    "(EDGE_RESERVED_SERVER_NAMES); refusing to enable a vhost")
+        else:
+            validate_not_reserved(server_name)
         validate_certificate_covers(
             vhost.certificate, vhost.domain_id, server_name)
     return vhost

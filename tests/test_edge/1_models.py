@@ -16,7 +16,7 @@ from testit import helpers as th
 from tests.test_edge._helpers import (
     declare_pools,
     API_HOSTNAME, cleanup, declare_reserved_names, make_certificate,
-    make_domain, make_group, make_upstream, make_vhost, raises,
+    make_domain, make_group, make_route, make_upstream, make_vhost, raises,
 )
 
 
@@ -47,13 +47,13 @@ def test_kind_upstream_pairing(opts):
 
     err = raises(
         Vhost.objects.create, domain=opts.domain, certificate=opts.certificate,
-        label="noups", kind="proxy", upstream=None)
-    assert err is not None, "a proxy vhost was created with no upstream"
+        label="noups", kind="api", upstream=None)
+    assert err is not None, "an api vhost was created with no upstream"
 
     err = raises(
         Vhost.objects.create, domain=opts.domain, certificate=opts.certificate,
-        label="badstatic", kind="static", upstream=opts.upstream)
-    assert err is not None, "a static vhost was allowed to carry an upstream"
+        label="badsite", kind="site", upstream=opts.upstream)
+    assert err is not None, "a site vhost was allowed to carry an upstream"
 
 
 @th.django_unit_test("the kind/upstream pairing survives a save() bypass")
@@ -64,7 +64,7 @@ def test_kind_upstream_db_constraint(opts):
     from mojo.apps.edge.models import Vhost
 
     vhost = make_vhost(opts.domain, opts.certificate, label="dbpair",
-                       kind="proxy", upstream=opts.upstream)
+                       kind="api", upstream=opts.upstream)
     err = None
     try:
         with transaction.atomic():
@@ -72,7 +72,146 @@ def test_kind_upstream_db_constraint(opts):
     except IntegrityError as caught:
         err = caught
     assert err is not None, \
-        "the DB allowed a proxy vhost with no upstream — the CheckConstraint is not enforcing"
+        "the DB allowed an api vhost with no upstream — the CheckConstraint is not enforcing"
+
+
+@th.django_unit_test("the kind matrix refuses knobs on kinds they do not apply to")
+def test_kind_matrix(opts):
+    from mojo.apps.edge.models import Vhost
+
+    cases = [
+        # (label, kwargs, why)
+        ("mxspa", dict(kind="api", upstream=opts.upstream, spa=True),
+         "spa applies to site/site_api only"),
+        ("mxstat", dict(kind="site", serve_static=True),
+         "serve_static applies to api/site_api only"),
+        ("mxquiet", dict(kind="site", quiet_paths=["/health"]),
+         "quiet_paths applies to api/site_api only"),
+        ("mxredir", dict(kind="site", redirect_to="www.example.com"),
+         "a site vhost has no redirect target"),
+        ("mxbody", dict(kind="site", body_size_mb=0),
+         "body_size_mb below 1"),
+        ("mxbody2", dict(kind="site", body_size_mb=5000),
+         "body_size_mb above 4096"),
+        ("mxdupq", dict(kind="api", upstream=opts.upstream,
+                        quiet_paths=["/health", "/health"]),
+         "duplicate quiet paths"),
+        ("mxkind", dict(kind="proxy", upstream=opts.upstream),
+         "the old kind names are gone"),
+    ]
+    for label, kwargs, why in cases:
+        err = raises(
+            Vhost.objects.create, domain=opts.domain,
+            certificate=opts.certificate, label=label, **kwargs)
+        assert err is not None, f"the kind matrix let this through: {why}"
+
+
+@th.django_unit_test("a redirect vhost requires a target and the DB enforces the pairing")
+def test_redirect_pairing(opts):
+    from django.db import IntegrityError, transaction
+
+    from mojo.apps.edge.models import Vhost
+
+    err = raises(
+        Vhost.objects.create, domain=opts.domain, certificate=opts.certificate,
+        label="redirnone", kind="redirect", redirect_to=None)
+    assert err is not None, "a redirect vhost was created with no target"
+
+    # The DB constraint holds when save() is bypassed entirely.
+    vhost = make_vhost(opts.domain, opts.certificate, label="redirdb")
+    err = None
+    try:
+        with transaction.atomic():
+            Vhost.objects.filter(pk=vhost.pk).update(kind="redirect")
+    except IntegrityError as caught:
+        err = caught
+    assert err is not None, (
+        "the DB allowed a redirect vhost with no target — "
+        "edge_vhost_kind_fields is not enforcing")
+
+
+@th.django_unit_test("every kind can be enabled once its fields pair correctly")
+def test_all_kinds_enable(opts):
+    cases = [
+        ("enapi", dict(kind="api", upstream=opts.upstream)),
+        ("ensite", dict(kind="site")),
+        ("enspa", dict(kind="site", spa=True)),
+        ("enboth", dict(kind="site_api")),
+        ("enredir", dict(kind="redirect", redirect_to="www.example.com")),
+    ]
+    for label, kwargs in cases:
+        err = raises(make_vhost, opts.domain, opts.certificate,
+                     label=label, **kwargs)
+        assert err is None, \
+            f"an enabled {kwargs['kind']} vhost was refused: {err}"
+
+
+@th.django_unit_test("routes attach only to site_api vhosts and stay in-tenant")
+def test_route_rules(opts):
+    from mojo.apps.edge.models import VhostRoute
+
+    site_api = make_vhost(
+        opts.domain, opts.certificate, label="rapi", kind="site_api",
+        is_enabled=False)
+    plain = make_vhost(opts.domain, opts.certificate, label="rsite")
+
+    err = raises(
+        VhostRoute.objects.create, vhost=plain, path_prefix="/api",
+        upstream=opts.upstream)
+    assert err is not None, "a route attached to a plain site vhost"
+
+    route = VhostRoute.objects.create(
+        vhost=site_api, path_prefix="/api", upstream=opts.upstream)
+    assert route.pk, "a legitimate route failed to save"
+
+    err = raises(
+        VhostRoute.objects.create, vhost=site_api, path_prefix="/api",
+        upstream=opts.upstream)
+    assert err is not None, \
+        "two routes claimed the same prefix on one vhost"
+
+    other_group = make_group("edgeroute")
+    foreign = make_upstream(group=other_group)
+    err = raises(
+        VhostRoute.objects.create, vhost=site_api, path_prefix="/other",
+        upstream=foreign)
+    assert err is not None, (
+        "a route proxied into ANOTHER tenant's upstream — that is the "
+        "cross-tenant read the FK check exists to stop")
+
+    # A kind change cannot strand the routes.
+    site_api.kind = "site"
+    err = raises(site_api.save)
+    assert err is not None, \
+        "a vhost changed kind while still carrying routes"
+
+
+@th.django_unit_test("site_api quiet paths must sit under a declared route prefix")
+def test_site_api_quiet_path_coverage(opts):
+    from mojo.apps.edge.models import Vhost
+
+    vhost = make_vhost(
+        opts.domain, opts.certificate, label="qcov", kind="site_api",
+        is_enabled=False)
+    make_route(vhost, "/api", opts.upstream)
+
+    vhost.quiet_paths = ["/api/health"]
+    err = raises(vhost.save)
+    assert err is None, \
+        f"a quiet path under a declared prefix was refused: {err}"
+
+    vhost.quiet_paths = ["/uncovered/health"]
+    err = raises(vhost.save)
+    assert err is not None, \
+        "a quiet path outside every route prefix was accepted — it silences nothing"
+    assert "/api" in str(err), \
+        f"the refusal must name the declared prefix set, got: {err}"
+
+    # An api vhost's quiet paths are whole-host; no coverage rule applies.
+    api = make_vhost(
+        opts.domain, opts.certificate, label="qapi", kind="api",
+        upstream=opts.upstream, quiet_paths=["/anything"])
+    assert api.pk, "an api vhost with quiet paths failed to save"
 
 
 @th.django_unit_test("two enabled vhosts cannot claim the same server name")
@@ -82,7 +221,7 @@ def test_enabled_name_uniqueness(opts):
     make_vhost(opts.domain, opts.certificate, label="dup")
     err = raises(
         Vhost.objects.create, domain=opts.domain, certificate=opts.certificate,
-        label="dup", kind="static")
+        label="dup", kind="site")
     assert err is not None, \
         "two enabled vhosts claimed the same name — nginx would silently drop one"
 
@@ -95,7 +234,7 @@ def test_disabled_may_shadow(opts):
     make_vhost(opts.domain, opts.certificate, label="staged")
     err = raises(
         Vhost.objects.create, domain=opts.domain, certificate=opts.certificate,
-        label="staged", kind="static", is_enabled=False)
+        label="staged", kind="site", is_enabled=False)
     assert err is None, \
         f"a disabled duplicate was refused, so a replacement cannot be staged: {err}"
 
@@ -114,7 +253,7 @@ def test_vhost_cannot_shadow_api(opts):
     certificate = make_certificate(hostile)
     err = raises(
         Vhost.objects.create, domain=hostile, certificate=certificate,
-        label="", kind="static")
+        label="", kind="site")
     assert err is not None, \
         "a tenant vhost claimed the API's own hostname"
 
@@ -128,7 +267,7 @@ def test_certificate_must_match_domain(opts):
 
     err = raises(
         Vhost.objects.create, domain=opts.domain, certificate=other_cert,
-        label="wrongcert", kind="static")
+        label="wrongcert", kind="site")
     assert err is not None, \
         "a vhost attached a certificate belonging to a different domain"
 
@@ -142,13 +281,13 @@ def test_certificate_must_cover_name(opts):
         opts.domain, common_name=opts.domain.name, sans=[opts.domain.name])
     err = raises(
         Vhost.objects.create, domain=opts.domain, certificate=narrow,
-        label="deep", kind="static")
+        label="deep", kind="site")
     assert err is not None, \
         "a vhost was enabled with a certificate that does not cover its name"
 
     err = raises(
         Vhost.objects.create, domain=opts.domain, certificate=narrow,
-        label="", kind="static")
+        label="", kind="site")
     assert err is None, \
         f"the apex vhost should be covered by an apex certificate: {err}"
 
@@ -162,7 +301,7 @@ def test_disabled_vhost_skips_coverage(opts):
     other_cert = make_certificate(other_domain)
     err = raises(
         Vhost.objects.create, domain=opts.domain, certificate=other_cert,
-        label="parked", kind="static", is_enabled=False)
+        label="parked", kind="site", is_enabled=False)
     assert err is None, \
         f"a disabled vhost was blocked by an enable-time check: {err}"
 

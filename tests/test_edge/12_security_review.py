@@ -90,7 +90,7 @@ def test_house_domain_create_is_guarded(opts):
     login(opts, opts.manager_email, opts.manager_pw)
     resp = opts.client.post("/api/edge/vhost", json=dict(
         domain=opts.house_domain.pk, certificate=opts.house_cert.pk,
-        label="phish", kind="spa"))
+        label="phish", kind="site"))
     assert resp.status_code in (401, 403), (
         "a global manage_dns holder created a vhost on a HOUSE domain "
         f"(status {resp.status_code})")
@@ -107,7 +107,7 @@ def test_house_domain_create_allowed_for_admin(opts):
     login(opts, opts.admin_email, opts.admin_pw)
     resp = opts.client.post("/api/edge/vhost", json=dict(
         domain=opts.house_domain.pk, certificate=opts.house_cert.pk,
-        label="admin1", kind="static"))
+        label="admin1", kind="site"))
     assert resp.status_code == 200, \
         f"a platform admin could not create a house vhost: {resp.status_code} {resp.body}"
 
@@ -168,7 +168,7 @@ def test_pool_must_be_declared(opts):
 
     err = raises(
         Vhost.objects.create, domain=opts.domain, certificate=opts.certificate,
-        label="poolhop", kind="static", pool="someone-elses-pool")
+        label="poolhop", kind="site", pool="someone-elses-pool")
     assert err is not None, \
         "a vhost was created in a pool this deployment never declared"
 
