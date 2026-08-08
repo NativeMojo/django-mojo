@@ -251,6 +251,14 @@ def test_http_knobs_converge(opts):
         "the payload's http key does not carry the TLS ciphers"
     assert http.get("log_dir"), "the payload's http key does not carry log_dir"
 
+    rows = payload.get("security")
+    assert isinstance(rows, list), \
+        "the payload carries no security (blocklist) key"
+    modes = {row["mode"] for row in rows}
+    assert "off" not in modes, "an off blocklist row joined the payload"
+    assert {"id", "kind", "value", "mode"} <= set(rows[0].keys()) if rows \
+        else True, f"blocklist payload rows are misshapen: {rows[:1]}"
+
     before = payload["generation"]
     Setting.set("EDGE_TLS_PROTOCOLS", "TLSv1.3", group=None)
     try:

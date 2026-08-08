@@ -28,6 +28,7 @@ pin moves with it: the assertion is now *exactly two* `server {` per vhost.
 """
 
 import hashlib
+import ipaddress
 import json
 
 from mojo import errors as me
@@ -128,6 +129,22 @@ def http_knobs():
         tls_protocols=tls_protocols(),
         tls_ciphers=tls_ciphers(),
     )
+
+
+def blocklist_payload():
+    """Every blocklist row that RENDERS, as hashable dicts.
+
+    `off` rows are absent on purpose — they render nowhere, so flipping a
+    row to `off` must move the generation hash by dropping it from here,
+    and flipping it back must bring it back.
+    """
+    from mojo.apps.edge.models import BlocklistEntry
+
+    return [
+        dict(id=row.pk, kind=row.kind, value=row.value, mode=row.mode)
+        for row in BlocklistEntry.objects.exclude(mode="off")
+        .order_by("kind", "value")
+    ]
 
 
 # ----------------------------------------------------------------------
@@ -254,6 +271,16 @@ def _safe_body_size(vhost):
     return f"    client_max_body_size {int(vhost.body_size_mb)}m;"
 
 
+def _blocklist_guards():
+    """The per-server blocklist guards. Structural — rendered in every 443
+    block whether rows exist or not; with no rows the maps default to 0 and
+    the guards never fire."""
+    return "\n".join([
+        "    if ($edge_block_ip) { return 444; }",
+        "    if ($edge_block_ua) { return 444; }",
+    ])
+
+
 def _port80_block(server_name):
     """The per-name HTTP block: ACME webroot, then a 301 to https.
 
@@ -325,14 +352,19 @@ def _proxy_location_body(upstream, indent="        "):
 
 
 def _quiet_location(path, upstream):
-    """An exact-match location keeping a health check out of the main log.
+    """An exact-match location keeping a health check out of the MAIN log.
 
-    The path is re-asserted at substitution, same as every other value.
+    Any `access_log` directive in a location REPLACES the inherited set, so
+    declaring only the watch log here switches the main access log off for
+    this path while keeping the security watch on — a quiet path must never
+    be a blind spot for a watched client. The path is re-asserted at
+    substitution, same as every other value.
     """
     validators.validate_quiet_path(path)
     return "\n".join([
         f"    location = {path} {{",
-        "        access_log off;",
+        f"        access_log {log_dir()}/edge_watch.log edge_watch "
+        "if=$edge_watch;",
         "        log_not_found off;",
         _proxy_location_body(upstream),
         "    }",
@@ -369,6 +401,8 @@ def _render_api(vhost, generation, server_name):
         _header_block(),
         "",
         _safe_body_size(vhost),
+        "",
+        _blocklist_guards(),
         "",
     ]
     for path in sorted(vhost.quiet_paths or []):
@@ -429,6 +463,8 @@ def _render_site(vhost, generation, server_name):
         "",
         _safe_body_size(vhost),
         "",
+        _blocklist_guards(),
+        "",
     ]
     parts.extend(_site_body(vhost, generation))
     parts.extend(["}", ""])
@@ -457,6 +493,8 @@ def _render_site_api(vhost, generation, server_name):
         _header_block(),
         "",
         _safe_body_size(vhost),
+        "",
+        _blocklist_guards(),
         "",
     ]
     for path in sorted(vhost.quiet_paths or []):
@@ -506,6 +544,8 @@ def _render_redirect(vhost, generation, server_name):
         "",
         _safe_body_size(vhost),
         "",
+        _blocklist_guards(),
+        "",
         f"    return 301 https://{target}$request_uri;",
         "}",
         "",
@@ -530,18 +570,128 @@ def render_vhost(vhost, generation):
     return builder(vhost, generation, server_name) + "\n" + _port80_block(server_name)
 
 
-def render_http_base(knobs=None):
+def _safe_blocklist_ip(value):
+    """Re-assert an ip row at substitution: it must BE a network, and it is
+    rendered from the normalized parse, never the stored string."""
+    try:
+        return str(ipaddress.ip_network(value, strict=False))
+    except (TypeError, ValueError):
+        raise me.ValueException(
+            f"edge renderer refused an unsafe blocklist network: {value!r}")
+
+
+def _safe_blocklist_ua(value):
+    """Re-assert a ua row at substitution — the whitelist plus the
+    trailing-backslash rule that keeps `"~*<value>"` unescapable."""
+    _safe(value, validators.UA_PATTERN_RE, "blocklist pattern")
+    if (len(value) - len(value.rstrip("\\"))) % 2 == 1:
+        raise me.ValueException(
+            f"edge renderer refused an unsafe blocklist pattern: {value!r}")
+    return value
+
+
+def _dedupe_rows(rows):
+    """Render-time dedupe by (already normalized) value.
+
+    The unique constraint makes duplicates unreachable through save(), but a
+    bypass write could still smuggle two spellings of one network into a
+    `geo` block — and a duplicate `geo` entry is an nginx [emerg] that would
+    freeze fleet convergence. First occurrence wins, deterministically.
+    """
+    seen = set()
+    out = []
+    for row in rows:
+        if row["value"] in seen:
+            continue
+        seen.add(row["value"])
+        out.append(row)
+    return out
+
+
+def _blocklist_section(knobs, security):
+    """The four blocklist maps, the watch combiner, and the watch log.
+
+    ALLOW ROWS RENDER FIRST in every map they join: nginx `map` regexes
+    match in order of appearance, so an early `0` beats any later pattern
+    that would also match (Lynx's UA contains `libwww-FM`; the allow row is
+    what keeps the unanchored `libwww` token off it). In `geo` blocks order
+    is cosmetic — most-specific network wins — but the allow-first rule is
+    kept for one readable convention.
+
+    Values carry the ROW ID, so a watch-log line names the exact rule that
+    matched it.
+    """
+    ip_rows = _dedupe_rows([r for r in security if r["kind"] == "ip"])
+    ua_rows = _dedupe_rows([r for r in security if r["kind"] == "ua"])
+
+    def geo_block(variable, active_mode):
+        lines = [f"geo ${variable} {{", "    default 0;"]
+        for row in ip_rows:
+            if row["mode"] == "allow":
+                lines.append(f"    {_safe_blocklist_ip(row['value'])} 0;")
+        for row in ip_rows:
+            if row["mode"] == active_mode:
+                lines.append(
+                    f"    {_safe_blocklist_ip(row['value'])} {int(row['id'])};")
+        lines.append("}")
+        return lines
+
+    def ua_map(variable, active_mode):
+        lines = [f"map $http_user_agent ${variable} {{", "    default 0;"]
+        for row in ua_rows:
+            if row["mode"] == "allow":
+                lines.append(f"    \"~*{_safe_blocklist_ua(row['value'])}\" 0;")
+        for row in ua_rows:
+            if row["mode"] == active_mode:
+                lines.append(
+                    f"    \"~*{_safe_blocklist_ua(row['value'])}\" "
+                    f"{int(row['id'])};")
+        lines.append("}")
+        return lines
+
+    parts = []
+    parts.extend(geo_block("edge_block_ip", "enforce"))
+    parts.append("")
+    parts.extend(geo_block("edge_watch_ip", "log"))
+    parts.append("")
+    parts.extend(ua_map("edge_block_ua", "enforce"))
+    parts.append("")
+    parts.extend(ua_map("edge_watch_ua", "log"))
+    parts.extend([
+        "",
+        "map \"$edge_watch_ip:$edge_watch_ua\" $edge_watch {",
+        "    default 1;",
+        "    \"0:0\" 0;",
+        "}",
+        "",
+        "log_format edge_watch '$remote_addr - [$time_local] '",
+        "                      '\"$request_method "
+        "$scheme://$host$request_uri\" '",
+        "                      '$status ip=$edge_watch_ip "
+        "ua=$edge_watch_ua '",
+        "                      '\"$http_user_agent\"';",
+        "",
+        f"access_log {knobs['log_dir']}/edge_watch.log edge_watch "
+        "if=$edge_watch;",
+    ])
+    return parts
+
+
+def render_http_base(knobs=None, security=None):
     """`http.d/00_base.conf` — everything the server blocks lean on.
 
-    Rendered per generation from `http_knobs()`, so the maps every proxied
-    location references (`$connection_upgrade`), the log plumbing, and the
-    hardening knobs converge with the vhosts instead of living in a
-    hand-managed file. `default_type` and `types_hash_max_size` deliberately
-    do NOT render here: they live in the provision-time bootstrap (see
+    Rendered per generation from `http_knobs()` and the blocklist rows, so
+    the maps every server block references (`$connection_upgrade`, the
+    blocklist guards), the log plumbing, and the hardening knobs converge
+    with the vhosts instead of living in a hand-managed file. `default_type`
+    and `types_hash_max_size` deliberately do NOT render here: they live in
+    the provision-time bootstrap (see
     docs/django_developer/edge/templates.md), and a second copy at the same
     http level would be a duplicate-directive [emerg].
     """
     knobs = knobs or http_knobs()
+    if security is None:
+        security = blocklist_payload()
     parts = [
         "# edge http base — rendered per generation, never hand-edited",
         f"include {knobs['mime_types']};",
@@ -574,7 +724,9 @@ def render_http_base(knobs=None):
         "gzip_proxied any;",
         "gzip_types text/plain text/css application/json "
         "application/javascript text/xml application/xml image/svg+xml;",
+        "",
     ]
+    parts.extend(_blocklist_section(knobs, security))
     if knobs["default_server"]:
         parts.extend([
             "",
@@ -745,7 +897,8 @@ def desired_state(vhosts, webapps=None):
     nodes reinstall.
     """
     rows = sorted((vhost_payload(v) for v in vhosts), key=lambda r: r["id"])
-    payload = dict(vhosts=rows, webapps=webapps or [], http=http_knobs())
+    payload = dict(vhosts=rows, webapps=webapps or [], http=http_knobs(),
+                   security=blocklist_payload())
     payload["generation"] = generation_id(payload)
     return payload
 

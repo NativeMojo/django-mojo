@@ -26,8 +26,8 @@ from testit import helpers as th
 
 from tests.test_edge._helpers import (
     declare_pools,
-    cleanup, declare_reserved_names, make_certificate, make_domain, make_group,
-    make_route, make_upstream, make_vhost,
+    cleanup, declare_reserved_names, ensure_blocklist_seed, make_certificate,
+    make_domain, make_group, make_route, make_upstream, make_vhost,
 )
 
 
@@ -76,6 +76,9 @@ def _self_signed(common_name):
 @th.django_unit_setup()
 def setup_nginx_real(opts):
     cleanup()
+    # Seed the blocklist so the real nginx parses the FULL rendered maps —
+    # all 260+ imported patterns, not empty scaffolding.
+    ensure_blocklist_seed()
     declare_reserved_names()
     declare_pools()
     opts.group = make_group("edgenginx")

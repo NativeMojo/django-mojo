@@ -233,8 +233,12 @@ def cleanup():
     """
     from mojo.apps.dnsman.models import Certificate, Domain
     from mojo.apps.edge.models import (
-        Upstream, Vhost, VhostRoute, WebApp, WebAppRelease,
+        BlocklistEntry, Upstream, Vhost, VhostRoute, WebApp, WebAppRelease,
     )
+
+    # Test-created blocklist rows only — the migration's seed rows are real
+    # content other tests assert on.
+    BlocklistEntry.objects.filter(note__startswith="bltest").delete()
 
     # WebApp -> current_release is SET_NULL and WebAppRelease -> webapp is
     # CASCADE, so the pointer has to be cleared before the rows go, or the
@@ -250,6 +254,28 @@ def cleanup():
     Upstream.objects.filter(name__startswith="up-").delete()
     Certificate.objects.filter(domain__name__startswith="edge-").delete()
     Domain.objects.filter(name__startswith="edge-").delete()
+
+
+def ensure_blocklist_seed():
+    """(Re)apply migration 0004's blocklist seed, and return its note marker.
+
+    The test workflow flushes tables between runs but keeps the migration
+    records, so RunPython-seeded reference data vanishes while the migration
+    reports applied. Re-running the migration's OWN function keeps the tests
+    asserting the real seed logic rather than a copy of it. (importlib,
+    because a module named `0004_...` cannot be a plain import.)
+    """
+    import importlib
+
+    from django.apps import apps as django_apps
+
+    from mojo.apps.edge.models import BlocklistEntry
+
+    module = importlib.import_module(
+        "mojo.apps.edge.migrations.0004_blocklist_seed")
+    BlocklistEntry.objects.filter(note=module.SEED_NOTE).delete()
+    module.seed_blocklist(django_apps, None)
+    return module.SEED_NOTE
 
 
 def raises(func, *args, **kwargs):

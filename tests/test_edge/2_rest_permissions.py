@@ -271,6 +271,73 @@ def test_vhost_list_scoped(opts):
         "a house vhost appeared in a tenant's list"
 
 
+@th.django_unit_test("the blocklist is fleet-scoped: member grants plus ?group= open nothing")
+def test_blocklist_member_grant_refused(opts):
+    """BlocklistEntry is deliberately group-less, so permissions resolve on
+    GLOBAL grants only. A tenant group admin can hand themselves any key in
+    their own GroupMember.permissions — naming their group must still buy
+    nothing on a fleet-wide security control."""
+    from tests.test_edge._helpers import make_group_member
+
+    user, email, password, group = make_group_member(
+        ["manage_security", "view_security"])
+
+    login(opts, email, password)
+    resp = opts.client.get(f"/api/edge/blocklist?group={group.pk}")
+    assert resp.status_code in (401, 403), (
+        "a member-scoped security grant read the fleet blocklist "
+        f"(status {resp.status_code})")
+
+    resp = opts.client.post(f"/api/edge/blocklist?group={group.pk}", json=dict(
+        kind="ua", value="memberbot", mode="enforce"))
+    assert resp.status_code not in (200, 201), (
+        "a member-scoped security grant WROTE a fleet-wide block rule "
+        f"(status {resp.status_code})")
+
+    from mojo.apps.edge.models import BlocklistEntry
+    assert not BlocklistEntry.objects.filter(value="memberbot").exists(), \
+        "the member-written blocklist row landed despite the refusal"
+
+
+@th.django_unit_test("global security grants manage the blocklist; view is read-only")
+def test_blocklist_global_grants(opts):
+    from mojo.apps.edge.models import BlocklistEntry
+
+    BlocklistEntry.objects.filter(value__in=["restbot", "viewerbot"]).delete()
+    viewer, viewer_email, viewer_pw = make_user(["view_security"])
+    manager, manager_email, manager_pw = make_user(["manage_security"])
+
+    login(opts, viewer_email, viewer_pw)
+    resp = opts.client.get("/api/edge/blocklist")
+    assert resp.status_code == 200, \
+        f"view_security could not read the blocklist: {resp.status_code}"
+    resp = opts.client.post("/api/edge/blocklist", json=dict(
+        kind="ua", value="viewerbot", mode="log"))
+    assert resp.status_code not in (200, 201), (
+        f"view_security WROTE a blocklist row (status {resp.status_code})")
+
+    login(opts, manager_email, manager_pw)
+    resp = opts.client.post("/api/edge/blocklist", json=dict(
+        kind="ua", value="restbot", mode="log", note="bltest rest"))
+    assert resp.status_code == 200, (
+        f"a global manage_security holder could not add a blocklist row: "
+        f"{resp.status_code} {resp.body}")
+    row = BlocklistEntry.objects.filter(value="restbot").first()
+    assert row is not None and row.mode == "log", \
+        "the blocklist row did not land as written"
+
+    resp = opts.client.post("/api/edge/blocklist", json=dict(
+        kind="ua", value='rest" 1; } server {', mode="log"))
+    assert resp.status_code not in (200, 201), (
+        "a hostile pattern was accepted over REST "
+        f"(status {resp.status_code})")
+
+    opts.client.logout()
+    resp = opts.client.get("/api/edge/blocklist")
+    assert resp.status_code in (401, 403), \
+        f"the blocklist served an anonymous caller (status {resp.status_code})"
+
+
 @th.django_unit_test("a vhost cannot be moved between domains over REST")
 def test_domain_is_immutable(opts):
     """Re-pointing `domain` would move the row between TENANTS."""

@@ -61,6 +61,16 @@ ROUTE_PREFIX_RE = QUIET_PATH_RE
 # `;`, `{`, `}`, `#`, quotes, or a control character.
 TLS_VALUE_RE = re.compile(r"^[A-Za-z0-9 .:+!_-]{1,1024}\Z")
 
+# A user-agent blocklist pattern. Rendered ONLY inside double quotes as
+# `"~*<value>" <id>;` in a map block, so the whitelist must make breaking out
+# of that quoted string unspellable: no `"`, no backtick, no `{`/`}`/`;`, no
+# whitespace, no control characters, no newline — while still permitting the
+# regex metacharacters real bot patterns use (`( ) [ ] | ? ^ . * + -`, `/`,
+# `_`, and backslash for escapes like `\.`). `$` is deliberately absent:
+# nginx expands `$name` inside quoted strings in enough contexts that an
+# end-anchor is not worth the ambiguity — anchor with `^` or match a literal.
+UA_PATTERN_RE = re.compile(r"^[A-Za-z0-9()\[\]|?^.*+\\/_-]{1,256}\Z")
+
 
 def www_base():
     # get_static throughout this pair of helpers: these define the containment
@@ -538,6 +548,57 @@ def validate_route(route):
             "the upstream must be a shared one or belong to this vhost's "
             "group")
     return route
+
+
+def validate_blocklist_entry(entry):
+    """Whole-row validation for a BlocklistEntry. Called from save() AND
+    called explicitly by the seed migration (historical models drop save()).
+
+    `ip` values are STORED normalized (`ipaddress.ip_network(strict=False)`),
+    which is what makes the unique constraint and the render-time dedupe
+    mean something — `10.0.0.1/8` and `10.0.0.0/8` are the same network, and
+    two spellings of one network rendered into a `geo` block is an nginx
+    [emerg] that would freeze fleet convergence.
+    """
+    from mojo.apps.edge.models.blocklist import KINDS, MODES
+
+    if entry.kind not in dict(KINDS):
+        raise me.ValueException(f"unknown blocklist kind {entry.kind!r}")
+    if entry.mode not in dict(MODES):
+        raise me.ValueException(f"unknown blocklist mode {entry.mode!r}")
+
+    value = entry.value
+    if not isinstance(value, str) or not value:
+        raise me.ValueException("a blocklist entry requires a value")
+
+    if entry.kind == "ip":
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            raise me.ValueException(
+                f"{value!r} is not an IP address or CIDR network")
+        entry.value = str(network)
+        return entry
+
+    # kind == "ua": a regex fragment, rendered only as `"~*<value>" <id>;`.
+    if not UA_PATTERN_RE.match(value):
+        raise me.ValueException(
+            "a user-agent pattern may use letters, digits and the regex "
+            "characters ()[]|?^.*+-/_\\ only (max 256 characters, no "
+            "spaces, quotes or braces)")
+    # A trailing ODD run of backslashes would escape the closing quote of
+    # the rendered `"~*<value>"` string — the exact break-out the charset
+    # exists to prevent.
+    trailing = len(value) - len(value.rstrip("\\"))
+    if trailing % 2 == 1:
+        raise me.ValueException(
+            "a user-agent pattern cannot end with an unescaped backslash")
+    try:
+        re.compile(value)
+    except re.error as err:
+        raise me.ValueException(
+            f"user-agent pattern does not compile: {err}")
+    return entry
 
 
 def validate_vhost(vhost):

@@ -171,9 +171,12 @@ def test_golden_harness(opts):
 
 @th.django_unit_test("golden: the rendered http base")
 def test_golden_http_base(opts):
+    """security=[] — no rows, so the STRUCTURAL shape is pinned: the maps
+    and watch plumbing render (empty) even on a deployment with no
+    blocklist, because every server block's guards reference them."""
     from mojo.apps.edge.services import render
 
-    _compare("http_base.conf", render.render_http_base())
+    _compare("http_base.conf", render.render_http_base(security=[]))
 
 
 @th.django_unit_test("golden: the http base with the default-server catch-alls")
@@ -182,7 +185,29 @@ def test_golden_http_base_default(opts):
 
     knobs = render.http_knobs()
     knobs["default_server"] = True
-    _compare("http_base_default.conf", render.render_http_base(knobs))
+    _compare("http_base_default.conf",
+             render.render_http_base(knobs, security=[]))
+
+
+@th.django_unit_test("golden: the http base with blocklist rows of every mode")
+def test_golden_http_base_blocklists(opts):
+    """Fixed synthetic rows with pinned ids — allow-first ordering, both
+    geo blocks, both ua maps, and the off row's absence, all as bytes."""
+    from mojo.apps.edge.services import render
+
+    rows = [
+        dict(id=81, kind="ua", value="^Lynx", mode="allow"),
+        dict(id=82, kind="ua", value="badbot", mode="enforce"),
+        dict(id=83, kind="ua", value="watchbot", mode="log"),
+        dict(id=84, kind="ua", value="offbot", mode="off"),
+        dict(id=85, kind="ip", value="192.0.2.1/32", mode="allow"),
+        dict(id=86, kind="ip", value="203.0.113.0/24", mode="enforce"),
+        dict(id=87, kind="ip", value="198.51.100.7/32", mode="log"),
+    ]
+    # `off` rows never reach the render input in production
+    # (blocklist_payload excludes them); mirror that here.
+    rows = [row for row in rows if row["mode"] != "off"]
+    _compare("http_base_blocklists.conf", render.render_http_base(security=rows))
 
 
 @th.django_unit_test("golden: the upstreams file")

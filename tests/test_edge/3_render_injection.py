@@ -259,8 +259,12 @@ def test_api_knob_shapes(opts):
     for path in ("/healthz", "/api/status"):
         assert f"location = {path} {{" in text, \
             f"quiet path {path} has no exact-match location"
-    assert text.count("access_log off;") == 2, \
-        "each quiet path must switch its own access log off"
+    # Each quiet location REPLACES the inherited access log with the watch
+    # log only — quiet for the main log, never blind for the security watch.
+    assert text.count("edge_watch.log edge_watch if=$edge_watch;") == 2, \
+        "each quiet path must swap the main access log for the watch log"
+    assert "access_log off" not in text, \
+        "a quiet path silenced the security watch with `access_log off`"
     assert "location /static/ {" in text, "serve_static rendered no alias"
     assert "alias " in text, "the static location is not an alias"
     # Every proxied location carries the upgrade pair (three here: two quiet
