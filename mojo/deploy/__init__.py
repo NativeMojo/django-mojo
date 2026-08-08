@@ -5,6 +5,11 @@ is the thing that puts `django.conf` on disk, so it cannot read it — and is
 invoked with `python3 -m mojo.deploy.<module>` rather than through
 `manage.py`.
 
+    config_sync   pull this node's django.conf from S3 and install it at 0600
+    check_setup   read-only audit of an AWS account
+    jobman        start/stop/status for the foreground job engine + scheduler
+    node_setup    converge var/ ownership, systemd units, and the jobs cron
+
 THE CONTRACT FOR THIS PACKAGE:
 
     - No Django. Nothing here may import `django.conf.settings` or anything
