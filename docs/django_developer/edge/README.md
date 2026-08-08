@@ -13,6 +13,10 @@ does exactly that.
 REST reference for API consumers:
 [web_developer/edge](../../web_developer/edge/README.md).
 
+The rendered contracts — the four vhost kinds, the http base, the include
+graph, blocklists, and the migration off a hand-managed nginx.conf:
+[templates.md](templates.md).
+
 Site releases (what is being *served*, as opposed to how):
 [webapps.md](webapps.md).
 
@@ -46,14 +50,19 @@ field eventually routes around validation.
 mojo/apps/edge/
   models/
     upstream.py     Upstream — the allowlist of places traffic may go
-    vhost.py        Vhost — one server block, as structured data
+    vhost.py        Vhost — one server-block pair, as structured data
+    route.py        VhostRoute — a site_api proxied prefix -> upstream FK
+    blocklist.py    BlocklistEntry — fleet blocklist rows (log-first)
   validators.py     Every value that can reach a file passes through here
   services/
-    render.py       Vhost rows -> nginx text; the generation id
+    render.py       Rows -> nginx text (vhosts, http base, upstreams);
+                    the generation id
     installer.py    Node-side: stage, validate, swap, reload, revert
   rest/
-    upstream.py     Read + the platform-admin `declare` action
-    vhost.py        CRUD, with the house-vhost guard
+    upstream.py     Read + the platform-admin `declare`/`retire` actions
+    vhost.py        CRUD, the house-vhost guard, `claim_reserved`
+    route.py        CRUD for site_api prefixes, same house guards
+    blocklist.py    CRUD for the fleet blocklist (global security perms)
     node.py         desired_state + material — machine endpoints
   asyncjobs.py      install_generation (broadcast), converge (cron)
   cronjobs.py       The 10-minute convergence sweep
@@ -79,7 +88,17 @@ A group-less `Upstream` is a house row offered to every tenant.
 An active-group REST list therefore returns that group's upstreams plus these
 shared house rows; it never includes another tenant's upstreams.
 
-### `Vhost` — one server block
+### `Vhost` — one server-block pair
+
+`kind` is one of the four product shapes — **`api`** (whole-host proxy to
+the `upstream` FK), **`site`** (static/SPA via the `spa` flag),
+**`site_api`** (site plus `VhostRoute` proxied prefixes), **`redirect`**
+(host-to-host 301 to a validated FQDN). Each renders exactly TWO server
+blocks: the 443 contract and a per-name port-80 block (ACME webroot + 301) —
+the original "no port-80 block" stance is superseded. Per-kind knobs
+(`body_size_mb`, `quiet_paths`, `serve_static`, `redirect_to`) are
+whitelist-validated like everything else; the full contracts live in
+[templates.md](templates.md).
 
 `server_name` is **derived**: `label + "." + domain.name`, or the apex when
 `label` is empty. The web root is **derived from the row's own pk**.
@@ -130,16 +149,22 @@ text — the text embeds the generation directory).
 EDGE_ROOT (default /opt/api/var/edge)
   generations/<generation>/
       nginx.conf                     harness, pre-filter `nginx -t` only
-      conf.d/<vhost-id>.conf
+      http.d/00_base.conf            rendered http context (maps, logs, knobs)
+      http.d/10_upstreams.conf       upstream edge_up_<pk> blocks
+      conf.d/<vhost-id>.conf         two server blocks per vhost
       certs/<cert-id>/{fullchain.pem,privkey.pem}   0600, app-user owned
       www/<vhost-id>/                the web root (a release symlink later)
   current -> generations/<generation>
+  log/                               access.log + edge_watch.log (EDGE_LOG_DIR)
   installed.json                     {generation, excluded[]}
 ```
 
-`/etc/nginx/conf.d/mojo.conf` is a one-line
-`include /opt/api/var/edge/current/conf.d/*.conf;`, written once at
-provisioning time and never by this code.
+`/etc/nginx/nginx.conf` on a node is a ~12-line provision-time **bootstrap**
+(main context + `events` + an `http {}` that includes
+`current/http.d/*.conf` then `current/conf.d/*.conf`), written once by
+skeleton provisioning and never by this code — the exact text, the day-0
+behaviour, and the silently-serves-nothing failure mode of a bootstrap
+missing the includes are in [templates.md](templates.md).
 
 Rendered configs name certificates by **absolute generation path**, not through
 `current`. That is what lets `nginx -t` validate the *new* material rather than
@@ -288,14 +313,25 @@ it exists, the installer can be unit-tested but cannot be exercised on a node.
 | `EDGE_WWW_BASE` | `/opt/www` | Where installed releases live |
 | `EDGE_SOCKET_BASE` | `/run/mojo` | Unix upstream sockets must resolve under this |
 | `EDGE_RESERVED_SERVER_NAMES` | — | Names no vhost may claim. **See below.** |
-| `EDGE_TLS_PROTOCOLS` | `TLSv1.2 TLSv1.3` | The TLS floor |
-| `EDGE_TLS_CIPHERS` | modern suite | The TLS floor |
+| `EDGE_TLS_PROTOCOLS` | `TLSv1.2 TLSv1.3` | The TLS floor (whitelist re-asserted at render) |
+| `EDGE_TLS_CIPHERS` | modern suite | The TLS floor (same re-assertion) |
+| `EDGE_ACME_WEBROOT` | `/var/www/certbot` | Port-80 ACME challenge root (static) |
+| `EDGE_LOG_DIR` | `<EDGE_ROOT>/log` | Main access log + edge watch log (static, app-owned) |
+| `EDGE_MIME_TYPES` | `/etc/nginx/mime.types` | The mime include in the rendered base (static) |
+| `EDGE_DJANGO_STATIC_ROOT` | `/opt/api/django/static` | The `serve_static` alias target (static) |
+| `EDGE_PROXY_READ_TIMEOUT` | `3600` | Proxied locations; clamped 60–86400 |
+| `EDGE_HTTP_KEEPALIVE_TIMEOUT` | `65` | http base; clamped 5–300 |
+| `EDGE_HTTP_DEFAULT_SERVER` | `False` | Flag-gates the rendered catch-alls (static; a cutover step, see templates.md) |
 | `EDGE_KEEP_GENERATIONS` | `5` | Retained generations (rollback depth) |
 | `EDGE_POOLS` | `["default"]` | Pools the convergence sweep covers |
 | `EDGE_NGINX_TEST_CMD` | `["sudo","-n","nginx","-t"]` | Root check, no arguments |
 | `EDGE_NGINX_STAGED_TEST_CMD` | `["nginx","-t","-c"]` | Staged check, **unprivileged** |
 | `EDGE_NGINX_RELOAD_CMD` | `["sudo","-n","systemctl","reload","nginx"]` | Constant argv |
 | `EDGE_COMMAND_TIMEOUT` | `60` | Seconds |
+
+("static" = read with `settings.get_static`: a file-only setting a DB row
+cannot move. The clamped knobs are DB-settable tuning; their resolved values
+join the desired-state payload so changes converge.)
 
 **`EDGE_RESERVED_SERVER_NAMES` fails closed.** The reserved set is Django's
 `ALLOWED_HOSTS` (concrete entries only) plus this setting. If `ALLOWED_HOSTS`
