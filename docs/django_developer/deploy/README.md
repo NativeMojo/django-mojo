@@ -1,18 +1,27 @@
 # Node deployment tooling (`mojo.deploy`)
 
-Two standalone programs that ship inside the django-mojo wheel and run on the
-node itself, outside Django:
+The node half of the django-mojo deploy plane, shipped inside the wheel and
+run on the node itself, outside Django:
 
-| Module | What it does |
+| Tool | What it does |
 |---|---|
 | `mojo.deploy.config_sync` | Pulls this node's `django.conf` from S3 and installs it atomically at 0600 |
 | `mojo.deploy.check_setup` | Read-only audit of an AWS account for security and durability gaps |
+| `mojo.deploy.certbot_sync` | Shares one Let's Encrypt lineage across a fleet via S3 — primary renews and pushes, replicas pull |
+| `mojo.deploy.check_node` | Read-only audit of ONE node against the on-node deploy contract |
+| `python3 -m mojo.deploy locate <name>` | Prints the absolute packaged path of `update.sh` / `post_deploy.sh` for the project shims |
+| `python3 -m mojo.deploy render --dest …` | Materializes the packaged cron/systemd templates into `${PROJ_PATH}/var/deploy` |
+| `mojo/deploy/scripts/update.sh` | The fleet update entry (deploy / manual modes) — packaged bash, run through a project shim |
+| `mojo/deploy/scripts/post_deploy.sh` | Post-checkout convergence: deps → framework → migrate → render → nginx/systemd/cron → restart + probe |
 
-Both are invoked with `python3 -m`:
+Everything is invoked with `python3 -m` (the bash scripts through their shims):
 
 ```bash
 python3 -m mojo.deploy.config_sync --dry-run
 python3 -m mojo.deploy.check_setup --section s3,iam
+python3 -m mojo.deploy.certbot_sync --renew
+python3 -m mojo.deploy.check_node --require-shims
+python3 -m mojo.deploy locate update.sh
 ```
 
 ## Why these live here and not in each project
@@ -278,15 +287,242 @@ sections are deliberately reduced to what `aws-check` does *not* cover.
 
 ## Known cleanup
 
-`check_s3` still reports a missing `AWS_CERT_BUCKET`. That finding belongs to
-the retired `certbot_sync.py` lineage-sharing flow and should be removed with
-it.
+`check_s3` still reports a missing `AWS_CERT_BUCKET`. That finding predates
+`certbot_sync` moving into this package and should be reconciled with it.
+
+---
+
+# `certbot_sync`
+
+The fleet certificate plane: ONE node renews (decided by hostname against
+`PRIMARY_BALANCER_HOST`), pushes the full lineage (fullchain + privkey +
+chain + cert, always together) to `AWS_CERT_BUCKET`; every replica pulls when
+S3 is newer, verifies the downloaded key matches the downloaded cert BEFORE
+installing, stages next to `/etc/letsencrypt` (never `/tmp` — tmpfs makes
+`os.replace` raise EXDEV), and reloads nginx behind an `nginx -t` gate.
+
+Config comes from `${PROJ_PATH}/var/django.conf` (`--config` overrides; the
+default derives from the `PROJ_PATH` env var, `/opt/api` absent). With
+`AWS_CERT_BUCKET` / `LOAD_BALANCER_DOMAIN` unset it logs one line and exits
+0, so the cron installs unconditionally and stays dormant on a single-node
+box. `--renew` is the daily certbot run, role-aware: unconfigured boxes renew
+themselves, replicas skip (certbot against a synced lineage corrupts it), the
+primary renews then pushes in the same run. Full semantics are the module
+docstring — the packaged copy is the canonical descendant of the skeleton's
+`aws/certbot_sync.py` (#1599) and the semantics were ported verbatim.
+
+The packaged cron templates (`1_certbot`, `4_certbot_sync`) invoke it as
+`python3 -m mojo.deploy.certbot_sync --config @PROJ_PATH@/var/django.conf` —
+`--config` explicit because cron's environment carries no `PROJ_PATH`.
+
+---
+
+# The node scripts: `update.sh` and `post_deploy.sh`
+
+Both ship as packaged bash under `mojo/deploy/scripts/` and are executed
+through a three-line **shim** each project keeps at `aws/update.sh` /
+`aws/post_deploy.sh`. The shim is the project's only copy; the body lives in
+the framework and moves with every `pip install`, so a fix reaches every
+project on its next deploy instead of dying in a template nobody re-clones.
+
+`update.sh` is the fleet update entry (see `docs/django_developer/edge/deploy.md`
+for the orchestrator contract): deploy mode checks out the named sha,
+installs the pinned framework, reports `deploy_status`, and on a canary
+failure reports **before** rolling back; `--manual` is the hands-on path;
+bare invocation is refused. `post_deploy.sh` is the convergence pass update.sh
+sudo-runs: project deps first, framework last, `migrate_locked` only under
+`--migrate`, collectstatic, **render** (below), nginx top-level + `sec.d` +
+`conf.d` (`.example` excluded, copied count logged), `node_retired.conf`
+processing, `nginx -t` gate + reload, systemd + cron install from
+`var/deploy/`, the structural stale-cron sweep, `var/logs` ownership, restart,
+and a `PROBE_URL` health gate. It fails loudly at every step — a deploy that
+half-worked and said nothing is worse than one that stops.
+
+Mid-run self-replacement is designed in: the `pip install` inside post_deploy
+swaps both packaged files for new inodes, but the executing bash keeps its fd
+on the old copy, so the in-flight run completes on the code it started with
+and the NEXT run resolves the new copy through `locate`.
+
+## The shim contract
+
+`aws/post_deploy.sh` in a project is exactly this (the canonical shim — the
+comment line is where project deltas go):
+
+```bash
+#!/bin/bash
+# project deltas, e.g.: export SANITY_URL="http://127.0.0.1:8080/api/version"
+target="$(python3 -m mojo.deploy locate post_deploy.sh)" \
+    || target="${PROJ_PATH:-/opt/api}/var/deploy/post_deploy.sh"
+[ -f "$target" ] || { echo "FATAL: django-mojo is not installed and no snapshot exists — cannot run post_deploy (provisioning installs the framework first)" >&2; exit 1; }
+exec bash "$target" "$@"
+```
+
+`aws/update.sh` is the same shape **without** the `var/deploy` fallback —
+locate-or-FATAL. Python entry points that a project wants to keep at their
+historical paths (`aws/certbot_sync.py`, `aws/check_node.py`) shim as:
+
+```python
+#!/usr/bin/env python3
+import sys
+try:
+    from mojo.deploy.certbot_sync import main
+except ImportError as err:
+    print(f"FATAL: django-mojo is not installed — {err}", file=sys.stderr)
+    sys.exit(1)
+sys.exit(main(sys.argv[1:]))
+```
+
+Three properties are load-bearing:
+
+- **Fail loud, mutate nothing.** With the framework missing, every shim
+  prints one FATAL line and exits 1 *before* any flock, git or /etc mutation.
+- **The snapshot fallback is post_deploy's alone.** Every successful
+  post_deploy run snapshots its executing copy to
+  `${PROJ_PATH}/var/deploy/post_deploy.sh`. That is the rollback self-heal:
+  a canary rollback may pip-install a framework so old that `locate` cannot
+  resolve, and the rollback still needs a post_deploy to converge with. No
+  other entry point gets the fallback — a stale `update.sh` re-entering the
+  fleet plane is a hazard, a stale post_deploy converging a rollback is the
+  point.
+- **Bootstrap ordering.** Provisioning installs django-mojo before the first
+  shim run — the FATAL above is the guard, not a path to work around.
+
+## Project inputs (exported in the shim)
+
+| Variable | Consumed by | Default | Meaning |
+|---|---|---|---|
+| `PROJ_PATH` | both scripts, locate fallback, certbot_sync | `/opt/api` | The deployed tree |
+| `SANITY_URL` | `update.sh` | `http://127.0.0.1/api/version` | Passed as `--url` to **every** `sanity_check` (canary and rollback) |
+| `PROBE_URL` | `post_deploy.sh` | `http://127.0.0.1/api/version` | The post-restart curl gate. Point it at a vhost that proxies straight to the asgi socket — a port-80 server that 301s everything false-passes `curl -f` |
+| `APP_USER` | `post_deploy.sh` → `@APP_USER@` | `ec2-user` | Owns the tree, runs the job engines |
+| `WEB_USER` | `post_deploy.sh` → `@WEB_USER@` | `www` | Runs the asgi app behind nginx |
+| `ASGI_WORKERS` | `post_deploy.sh` → `@WORKERS@` | `4` | uvicorn worker count in `mojo-asgi.service` |
+| `NGINX_ETC` / `SYSTEMD_ETC` / `CRON_ETC` | `post_deploy.sh` | `/etc/nginx` / `/etc/systemd/system` / `/etc/cron.d` | Test seams — prod defaults, overridden only by harnesses |
+| `CERTBOT_SYNC_LOCK` | `certbot_sync` | `/var/run/certbot_sync.lock` | Lock path override, exists for harnesses |
+
+---
+
+# Templates, `render`, and `var/deploy`
+
+The framework ships the node's cron and systemd contract as templates:
+
+```
+mojo/deploy/templates/cron.d/    1_certbot  2_mojo_cron  3_mojo_jobs  4_certbot_sync
+mojo/deploy/templates/systemd/   mojo-asgi.service  config-sync.service  config-sync.timer
+```
+
+`python3 -m mojo.deploy render --dest ${PROJ_PATH}/var/deploy --project-path P
+--app-user U --web-user W --workers N` substitutes `@PROJ_PATH@`,
+`@APP_USER@`, `@WEB_USER@`, `@WORKERS@` (plain string replacement, no
+engine), writes the results 0644 into `<dest>/{cron.d,systemd}`, then overlays
+the project's own `aws/cron.d/` and `aws/nginx/systemd/` files verbatim. It
+dies loudly on an unwritable dest or any placeholder left unsubstituted, and
+post_deploy dies if the rendered set comes back empty — /etc is never
+converged against an unknown contract.
+
+`var/deploy/` is the single source of truth for what the last deploy shipped:
+post_deploy installs `/etc` copies FROM it, and check_node byte-compares
+`/etc` AGAINST it. The template names deliberately match the historical
+provisioning heredocs (`1_certbot`, `2_mojo_cron`, …), so on a node that
+predates the package the first converge overwrites the plain copies with the
+gated ones instead of installing duplicates alongside them.
+
+Every cron template keeps a `@PROJ_PATH@` reference on its job line (the log
+redirect does this naturally), which is what lets post_deploy's structural
+sweep recognize installed copies as project-owned.
+
+## Collision policy — fixes propagate by default
+
+A project file in `aws/cron.d/` or `aws/nginx/systemd/` whose **name**
+collides with a framework template is **inert**: render logs a loud warning,
+skips it, and the framework copy wins. To keep a deliberate fork, declare the
+name in `${PROJ_PATH}/aws/node_overrides.conf` (one name per line, `#`
+comments) — then the project copy replaces the framework render.
+check_node reports an undeclared collision WARN (FAIL under
+`--require-shims`). Non-colliding names copy through untouched — extras are
+always the project's to add.
+
+## `node_retired.conf` — declaring what to remove
+
+`${PROJ_PATH}/aws/node_retired.conf` (optional) lists names the project once
+shipped and has since retired, one per line: `cron.d/<name>` or
+`conf.d/<name>`, `#` comments. post_deploy removes each with an explicit
+logged `rm`; check_node FAILs a declared cron name still installed and WARNs
+a declared vhost. This is the explicit-list complement of the structural
+sweep, for the two cases discovery cannot cover: cron files that never
+mention `PROJ_PATH`, and nginx `conf.d` (where a mentions-the-project rule
+would delete live node-managed vhosts). It lives *outside* `aws/cron.d/` so
+the convergence glob can never copy the list itself into `/etc`.
+
+---
+
+# `check_node`
+
+The complement of `check_setup`: audits one node, never calls an AWS API,
+mutates nothing. Sections: `repo`, `framework`, `cron`, `systemd`, `nginx`,
+`certs`, `config_plane`, `shims`, `legacy`, `var_ownership`, `jobs`. Exit 1
+iff anything FAILed.
+
+```bash
+python3 -m mojo.deploy.check_node                      # on the node
+python3 -m mojo.deploy.check_node --ssh api1           # from anywhere
+python3 -m mojo.deploy.check_node --json --require-shims
+python3 -m mojo.deploy.check_node --probe-url http://127.0.0.1:8080/api/version
+```
+
+What moved when it left mverify: the cron/systemd contract source is
+`${PROJ_PATH}/var/deploy/{cron.d,systemd}` (absent → INFO with a
+"run post_deploy" hint, never FAIL); the probe URL and the `ec2-user`/`www`
+identities are `--probe-url` / `--app-user` / `--web-user`; the hardcoded
+retired-name lists are read from `aws/node_retired.conf`; `--repo-path`
+(nginx contract tree) defaults to `--project-path`.
+
+The **shims** section is new: each of `aws/update.sh`, `aws/post_deploy.sh`,
+`aws/certbot_sync.py`, `aws/check_node.py` under `${PROJ_PATH}` grades PASS
+when it references `mojo.deploy`, WARN when it exists without the reference
+(a fork cut off from framework fixes — FAIL under `--require-shims`), INFO
+when absent. Undeclared template-name collisions grade the same way. Locally
+(not over `--ssh`) it also renders the installed package's templates in
+memory and diffs them against `var/deploy/` — a difference is INFO:
+"framework templates moved since the last deploy — run post_deploy". The
+last-deploy compare against `/etc` stays the primary audit; the freshness
+diff only says the *next* deploy will change things.
+
+`var/django.conf` and `var/bootstrap.conf` are never read — stat + key-NAME
+presence grep only. Do not widen that.
+
+---
+
+# Downstream adoption
+
+Order matters only in that the framework release carrying this package must
+be installed before the shims land:
+
+1. **django-mojo-skeleton** — replace `aws/update.sh`, `aws/post_deploy.sh`,
+   `aws/certbot_sync.py` with shims (skeleton defaults need no exports);
+   delete the provisioning cron/systemd heredocs in favor of
+   `render` + post_deploy convergence.
+2. **mverify_api** — shim with
+   `export SANITY_URL="http://127.0.0.1:8080/api/version"` and
+   `export PROBE_URL="http://127.0.0.1:8080/api/version"` (its port-80 vhost
+   301s everything); move `api.mojoverify.com.conf`, `setup.conf` and the
+   legacy cron names (`2certbot` et al) into `aws/node_retired.conf`; delete
+   its forked `check_node.py`/`certbot_sync.py` bodies.
+3. **maestro api** — pins released django-mojo; adopts the same shims on its
+   next framework bump.
+
+A project's first converged deploy after adopting: the shim locates the
+packaged post_deploy, render fills `var/deploy/`, the gated cron templates
+overwrite the provisioning-era copies by name, and
+`python3 -m mojo.deploy.check_node --require-shims` goes green.
 
 ---
 
 ## What stays in `django-mojo-skeleton`
 
-`ec2_bootstrap.sh`, `ec2_deploy.sh` and `post_deploy.sh` stay. They are the
-per-project deployment shape — which repo, which branch, which nginx config,
-which systemd units — not framework behaviour, and a project is expected to
-edit them. Only code that must be identical everywhere moves into the package.
+`ec2_bootstrap.sh`, `ec2_deploy.sh` and the nginx vhost files stay. They are
+the per-project deployment shape — which repo, which domains, which vhosts —
+not framework behaviour, and a project is expected to edit them.
+`update.sh`, `post_deploy.sh`, `certbot_sync.py` and `check_node.py` are the
+opposite case: they must be identical everywhere, so their bodies live here
+and projects keep only the shims.
