@@ -77,32 +77,32 @@ def _render(opts, **kwargs):
     return render.render_vhost(vhost, GENERATION)
 
 
-@th.django_unit_test("golden: static vhost")
-def test_golden_static(opts):
-    _compare("static.conf", _render(opts, label="www", kind="static"))
+@th.django_unit_test("golden: site vhost")
+def test_golden_site(opts):
+    _compare("site.conf", _render(opts, label="www", kind="site"))
 
 
-@th.django_unit_test("golden: spa vhost")
-def test_golden_spa(opts):
-    _compare("spa.conf", _render(opts, label="app", kind="spa"))
+@th.django_unit_test("golden: spa-flagged site vhost")
+def test_golden_site_spa(opts):
+    _compare("site_spa.conf", _render(opts, label="app", kind="site", spa=True))
 
 
-@th.django_unit_test("golden: proxy vhost over http")
-def test_golden_proxy_http(opts):
-    _compare("proxy_http.conf", _render(
-        opts, label="api", kind="proxy", upstream=opts.http_upstream))
+@th.django_unit_test("golden: api vhost over http")
+def test_golden_api_http(opts):
+    _compare("api.conf", _render(
+        opts, label="api", kind="api", upstream=opts.http_upstream))
 
 
-@th.django_unit_test("golden: proxy vhost over a unix socket")
-def test_golden_proxy_unix(opts):
-    _compare("proxy_unix.conf", _render(
-        opts, label="sock", kind="proxy", upstream=opts.unix_upstream))
+@th.django_unit_test("golden: api vhost over a unix socket")
+def test_golden_api_unix(opts):
+    _compare("api_unix.conf", _render(
+        opts, label="sock", kind="api", upstream=opts.unix_upstream))
 
 
 @th.django_unit_test("golden: apex and wildcard names")
 def test_golden_apex_and_wildcard(opts):
-    _compare("apex.conf", _render(opts, label="", kind="static"))
-    _compare("wildcard.conf", _render(opts, label="*", kind="static"))
+    _compare("apex.conf", _render(opts, label="", kind="site"))
+    _compare("wildcard.conf", _render(opts, label="*", kind="site"))
 
 
 @th.django_unit_test("golden: the staging nginx harness")

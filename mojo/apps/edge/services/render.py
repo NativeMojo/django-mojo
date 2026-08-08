@@ -33,7 +33,9 @@ from mojo.helpers.settings import settings
 
 from mojo.apps.edge import validators
 from mojo.apps.edge.models.upstream import KIND_UNIX
-from mojo.apps.edge.models.vhost import KIND_PROXY, KIND_SPA, KIND_STATIC
+from mojo.apps.edge.models.vhost import (
+    KIND_API, KIND_REDIRECT, KIND_SITE, KIND_SITE_API,
+)
 
 
 def edge_root():
@@ -160,9 +162,13 @@ def _open(server_name):
     ])
 
 
-def _render_static(vhost, generation, server_name):
-    """Static files. `proxy_pass` is not in this function's scope."""
+def _render_site(vhost, generation, server_name):
+    """Static site / SPA. `proxy_pass` is not in this function's scope."""
     root = www_dir(generation, vhost.pk)
+    if vhost.spa:
+        fallback = "        try_files $uri $uri/ /index.html;"
+    else:
+        fallback = "        try_files $uri $uri/ =404;"
     return "\n".join([
         _open(server_name),
         "",
@@ -174,36 +180,15 @@ def _render_static(vhost, generation, server_name):
         "    index index.html;",
         "",
         "    location / {",
-        "        try_files $uri $uri/ =404;",
+        fallback,
         "    }",
         "}",
         "",
     ])
 
 
-def _render_spa(vhost, generation, server_name):
-    """Single-page app: same as static, with a history fallback."""
-    root = www_dir(generation, vhost.pk)
-    return "\n".join([
-        _open(server_name),
-        "",
-        _tls_block(generation, vhost.certificate_id),
-        "",
-        _header_block(),
-        "",
-        f"    root {root};",
-        "    index index.html;",
-        "",
-        "    location / {",
-        "        try_files $uri $uri/ /index.html;",
-        "    }",
-        "}",
-        "",
-    ])
-
-
-def _render_proxy(vhost, generation, server_name):
-    """Reverse proxy. No filesystem `root` is in this function's scope."""
+def _render_api(vhost, generation, server_name):
+    """Whole-host reverse proxy. No filesystem `root` is in this scope."""
     target = _safe_upstream_target(vhost.upstream)
     # nginx names a unix socket as `http://unix:/path/to.sock:/` — the trailing
     # `:/` is the URI part and is NOT optional; without it nginx refuses the
@@ -234,10 +219,23 @@ def _render_proxy(vhost, generation, server_name):
     ])
 
 
+def _render_unbuilt(vhost, generation, server_name):
+    """TRANSITIONAL (Stage 1): site_api and redirect have no template yet.
+
+    `validate_vhost` refuses to ENABLE these kinds, so a row can only reach
+    here through a validator-bypassing write — refusing loudly beats emitting
+    a server block whose contract does not exist yet. Stage 2 replaces this
+    with the real builders.
+    """
+    raise me.ValueException(
+        f"edge renderer has no builder for {vhost.kind!r} yet")
+
+
 _BUILDERS = {
-    KIND_STATIC: _render_static,
-    KIND_SPA: _render_spa,
-    KIND_PROXY: _render_proxy,
+    KIND_SITE: _render_site,
+    KIND_API: _render_api,
+    KIND_SITE_API: _render_unbuilt,
+    KIND_REDIRECT: _render_unbuilt,
 }
 
 
@@ -312,6 +310,7 @@ def vhost_payload(vhost):
         server_name=vhost.server_name,
         kind=vhost.kind,
         pool=vhost.pool,
+        spa=vhost.spa,
         certificate=vhost.certificate_id,
         upstream=upstream,
     )

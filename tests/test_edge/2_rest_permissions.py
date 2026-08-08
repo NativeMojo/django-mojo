@@ -90,7 +90,7 @@ def test_viewer_cannot_write(opts):
 
     resp = opts.client.post("/api/edge/vhost", json=dict(
         domain=opts.domain.pk, certificate=opts.certificate.pk,
-        label="viewerwrite", kind="static"))
+        label="viewerwrite", kind="site"))
     assert resp.status_code in (401, 403), \
         f"view_dns created a vhost (status {resp.status_code})"
 

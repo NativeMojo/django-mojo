@@ -245,7 +245,7 @@ def test_real_config_failure_reverts(opts):
 
         # Change the desired state so a second install is attempted, and make
         # the REAL config test (the second -t call) fail.
-        opts.vhost.kind = "spa"
+        opts.vhost.spa = True
         opts.vhost.save()
 
         state = {"tests": 0}
@@ -404,7 +404,8 @@ def test_stale_config_still_serves(opts):
         good = os.path.realpath(render.current_link())
         conf_count = len(os.listdir(os.path.join(good, "conf.d")))
 
-        opts.vhost.kind = "proxy"
+        opts.vhost.kind = "api"
+        opts.vhost.spa = False   # an earlier test flipped it; api forbids it
         opts.vhost.upstream = make_upstream(host="127.0.0.1", port=9999)
         opts.vhost.save()
 

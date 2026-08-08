@@ -240,6 +240,101 @@ def test_upstream_port(opts):
         "8000 must be a valid port"
 
 
+@th.django_unit_test("body_size_mb is bounded and typed")
+def test_body_size_mb(opts):
+    from mojo.apps.edge import validators
+
+    for candidate in [0, -1, 4097, "50", None, True, 5.5]:
+        err = raises(validators.validate_body_size_mb, candidate)
+        assert err is not None, \
+            f"validate_body_size_mb accepted {candidate!r}"
+    for candidate in [1, 50, 4096]:
+        err = raises(validators.validate_body_size_mb, candidate)
+        assert err is None, \
+            f"validate_body_size_mb rejected the legitimate {candidate!r}: {err}"
+
+
+@th.django_unit_test("quiet paths reject nginx metacharacters and traversal")
+def test_quiet_path_rejects_injection(opts):
+    from mojo.apps.edge import validators
+
+    hostile = [
+        "health",                       # no leading slash
+        "/health;",
+        "/health{",
+        "/health}",
+        "/health#x",
+        "/health$host",
+        '/health"',
+        "/health'",
+        "/health x",
+        "/health\n",
+        "/health\\n",                   # charset refuses backslash outright
+        "/health\x00",
+        "/../etc/passwd",
+        "/a/../b",
+        "//double",
+        "/a//b",
+        "/" + "a" * 128,                # longer than the 128-char field
+        "",
+        None,
+    ]
+    for candidate in hostile:
+        err = raises(validators.validate_quiet_path, candidate)
+        assert err is not None, \
+            f"validate_quiet_path accepted {candidate!r} — that value can reach nginx"
+
+    for candidate in ["/", "/health", "/api/v1/health-check", "/ping.txt",
+                      "/deep/path/ok/"]:
+        err = raises(validators.validate_quiet_path, candidate)
+        assert err is None, \
+            f"validate_quiet_path rejected the legitimate {candidate!r}: {err}"
+
+
+@th.django_unit_test("route prefixes follow the same whitelist and refuse bare '/'")
+def test_route_prefix_shape(opts):
+    from mojo.apps.edge import validators
+
+    err = raises(validators.validate_route_prefix, "/")
+    assert err is not None, \
+        "a bare '/' route prefix was accepted — that is kind=api in disguise"
+
+    for candidate in ["/api;", "/api\n", "api", "/a/../b", "//api", None]:
+        err = raises(validators.validate_route_prefix, candidate)
+        assert err is not None, \
+            f"validate_route_prefix accepted {candidate!r}"
+
+    for candidate in ["/api", "/api/", "/api/v2", "/ws"]:
+        err = raises(validators.validate_route_prefix, candidate)
+        assert err is None, \
+            f"validate_route_prefix rejected the legitimate {candidate!r}: {err}"
+
+
+@th.django_unit_test("a redirect target is a host, never a URL, wildcard or free text")
+def test_redirect_target_shape(opts):
+    from mojo.apps.edge import validators
+
+    hostile = [
+        "https://example.com",
+        "example.com/path",
+        "example.com;",
+        "example.com\n",
+        "example.com; } server { root /etc; #",
+        "*.example.com",
+        "localhost",                    # single label — not an FQDN
+        "",
+        None,
+    ]
+    for candidate in hostile:
+        err = raises(validators.validate_redirect_target, candidate)
+        assert err is not None, \
+            f"validate_redirect_target accepted {candidate!r}"
+
+    err = raises(validators.validate_redirect_target, "www.example.com")
+    assert err is None, \
+        f"validate_redirect_target rejected a legitimate host: {err}"
+
+
 @th.django_unit_test("wildcard certificate coverage follows the one-label TLS rule")
 def test_certificate_coverage(opts):
     from mojo.apps.edge import validators

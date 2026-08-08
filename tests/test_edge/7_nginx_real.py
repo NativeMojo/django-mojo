@@ -107,11 +107,11 @@ def test_real_nginx_accepts_every_kind(opts):
             # One vhost of every kind — the three builders, all in one config.
             vhosts = [
                 make_vhost(opts.domain, opts.certificate, label="www",
-                           kind="static", pool="nginxreal"),
+                           kind="site", pool="nginxreal"),
                 make_vhost(opts.domain, opts.certificate, label="app",
-                           kind="spa", pool="nginxreal"),
+                           kind="site", spa=True, pool="nginxreal"),
                 make_vhost(opts.domain, opts.certificate, label="api",
-                           kind="proxy", upstream=opts.upstream,
+                           kind="api", upstream=opts.upstream,
                            pool="nginxreal"),
             ]
 

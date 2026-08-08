@@ -61,7 +61,7 @@ def test_canonical_injection_case(opts):
 
     err = raises(
         Vhost.objects.create, domain=hostile, certificate=certificate,
-        label="", kind="static")
+        label="", kind="site")
     assert err is not None, (
         "a vhost was created on a domain carrying nginx syntax — "
         "that name would reach a config file")
@@ -106,41 +106,41 @@ def test_exactly_one_server_block(opts):
     assert "/etc" not in text, "the rendered config referenced /etc"
 
 
-@th.django_unit_test("a static vhost never emits proxy_pass")
-def test_static_never_proxies(opts):
+@th.django_unit_test("a site vhost never emits proxy_pass")
+def test_site_never_proxies(opts):
     from mojo.apps.edge.services import render
 
-    vhost = make_vhost(opts.domain, opts.certificate, label="stat", kind="static")
+    vhost = make_vhost(opts.domain, opts.certificate, label="stat", kind="site")
     text = render.render_vhost(vhost, opts.generation)
 
     assert "proxy_pass" not in text, \
-        "a static vhost emitted proxy_pass"
-    assert "root " in text, "a static vhost emitted no root"
+        "a site vhost emitted proxy_pass"
+    assert "root " in text, "a site vhost emitted no root"
 
 
-@th.django_unit_test("an spa vhost falls back to index.html and never proxies")
+@th.django_unit_test("an spa-flagged site falls back to index.html and never proxies")
 def test_spa_shape(opts):
     from mojo.apps.edge.services import render
 
-    vhost = make_vhost(opts.domain, opts.certificate, label="spa", kind="spa")
+    vhost = make_vhost(opts.domain, opts.certificate, label="spa", kind="site", spa=True)
     text = render.render_vhost(vhost, opts.generation)
 
-    assert "proxy_pass" not in text, "an spa vhost emitted proxy_pass"
+    assert "proxy_pass" not in text, "an spa site emitted proxy_pass"
     assert "try_files $uri $uri/ /index.html;" in text, \
-        "an spa vhost has no history fallback"
+        "an spa site has no history fallback"
 
 
-@th.django_unit_test("a proxy vhost never emits a filesystem root")
-def test_proxy_never_serves_files(opts):
+@th.django_unit_test("an api vhost never emits a filesystem root")
+def test_api_never_serves_files(opts):
     from mojo.apps.edge.services import render
 
     vhost = make_vhost(opts.domain, opts.certificate, label="prox",
-                       kind="proxy", upstream=opts.upstream)
+                       kind="api", upstream=opts.upstream)
     text = render.render_vhost(vhost, opts.generation)
 
     assert "proxy_pass http://127.0.0.1:8000;" in text, \
         f"the proxy destination is wrong:\n{text}"
-    assert "\n    root " not in text, "a proxy vhost emitted a filesystem root"
+    assert "\n    root " not in text, "an api vhost emitted a filesystem root"
 
 
 @th.django_unit_test("a unix upstream renders nginx's socket syntax")
@@ -150,7 +150,7 @@ def test_unix_upstream_syntax(opts):
 
     sock = make_upstream(kind="unix", socket_path="/run/mojo/app.sock")
     vhost = make_vhost(opts.domain, opts.certificate, label="sock",
-                       kind="proxy", upstream=sock)
+                       kind="api", upstream=sock)
     text = render.render_vhost(vhost, opts.generation)
 
     assert "proxy_pass http://unix:/run/mojo/app.sock:/;" in text, \
@@ -161,8 +161,7 @@ def test_unix_upstream_syntax(opts):
 def test_tls_floor_present(opts):
     from mojo.apps.edge.services import render
 
-    for kind, upstream in (("static", None), ("spa", None),
-                           ("proxy", opts.upstream)):
+    for kind, upstream in (("site", None), ("api", opts.upstream)):
         vhost = make_vhost(opts.domain, opts.certificate, label=f"tls{kind}",
                            kind=kind, upstream=upstream)
         text = render.render_vhost(vhost, opts.generation)
@@ -189,8 +188,14 @@ def test_tls_floor_is_not_reachable(opts):
     # `domain` is writable but settable ONCE — NO_SAVE_FIELDS is enforced on
     # create too, so pinning it there would make a vhost un-creatable over
     # REST; `Vhost.on_rest_pre_save` freezes it after create instead.
+    #
+    # `claims_reserved` is deliberately ABSENT: it suspends the reserved-name
+    # defence and moves only through the platform-gated claim_reserved action.
+    # Every knob listed here is whitelist-validated before it renders — see
+    # validators.validate_vhost — and none can reach the TLS block.
     assert writable == {"domain", "label", "kind", "upstream", "certificate",
-                        "pool", "is_enabled"}, (
+                        "pool", "is_enabled", "spa", "body_size_mb",
+                        "quiet_paths", "serve_static", "redirect_to"}, (
         "Vhost's writable field set changed — confirm no new field can reach "
         f"the TLS block or the rendered paths. Now: {sorted(writable)}")
 
@@ -236,7 +241,7 @@ def test_generation_id_moves(opts):
     same = render.desired_state([vhost])["generation"]
     assert first == same, "the generation id is not stable for identical input"
 
-    vhost.kind = "spa"
+    vhost.spa = True
     vhost.save()
     moved = render.desired_state([vhost])["generation"]
     assert moved != first, \

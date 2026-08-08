@@ -332,7 +332,7 @@ def stage_web_roots(generation, vhosts, webapps):
     by_vhost = {row["vhost"]: row for row in webapps}
 
     for vhost in vhosts:
-        if vhost.kind not in ("static", "spa"):
+        if vhost.kind not in ("site", "site_api"):
             continue
 
         link = render.www_dir(generation, vhost.pk)
