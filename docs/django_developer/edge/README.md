@@ -195,6 +195,13 @@ second convergence mechanism.
 The sweep is what makes convergence a property rather than a hope: every
 broadcast is best-effort, and nothing maintains a node inventory.
 
+`EDGE_CONVERGE_ENABLED = False` (settings-file-only, read with `get_static`)
+switches the sweep off for deployments that install this app **only** for the
+fleet-deploy plane ([deploy.md](deploy.md)) and manage nginx some other way —
+without it they would broadcast convergence onto an `edge` channel none of
+their runners consume, every 10 minutes, forever. Default True; existing edge
+deployments are unaffected.
+
 ## Machine endpoints and the permission that gates them
 
 `GET /api/edge/desired_state` and `GET /api/edge/material/<pk>` are gated with

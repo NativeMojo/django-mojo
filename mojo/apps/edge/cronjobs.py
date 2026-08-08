@@ -25,11 +25,27 @@ def converge_pools():
     return settings.get("EDGE_POOLS", ["default"], kind="list") or ["default"]
 
 
+def converge_enabled():
+    """Whether this deployment runs the vhost-convergence sweep at all.
+
+    `get_static` (settings-file-only) on purpose: this is deploy-time posture,
+    and a DB-writable `Setting` row must not be able to switch fleet
+    convergence off. Default True — existing edge deployments see no change.
+    Deployments that install this app ONLY for the fleet-deploy plane (the
+    django-mojo-skeleton pattern: `deploy_node`, `migrate_locked`,
+    `deploy_status`, the webhook) set it False so the sweep never publishes
+    onto an `edge` channel none of their runners consume.
+    """
+    return bool(settings.get_static("EDGE_CONVERGE_ENABLED", True))
+
+
 # The cron field values MUST be strings. `minutes=10` raises a TypeError inside
 # the matcher and the job then silently never runs — see mojo/helpers/cron.py.
 @schedule(minutes="*/10")
 def converge_edge():
     """Queue a convergence sweep on every runner in the fleet."""
+    if not converge_enabled():
+        return "disabled"
     return jobs.publish(
         func=CONVERGE_JOB,
         payload={"pools": converge_pools()},

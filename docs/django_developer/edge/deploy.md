@@ -160,8 +160,10 @@ the contract above:
 - `update.sh` takes `--sha` and checks out **that commit**, not
   `git reset --hard origin/main`; holds an `flock` so overlapping invocations
   on one box are impossible; short-circuits when already on the target SHA;
-  calls `deploy_status set` at its terminals; on a `--migrate` failure,
-  resets to the previous commit and restarts before reporting `failed`.
+  calls `deploy_status set` at its terminals. On a `--migrate` failure it
+  reports `failed` **first** and only then rolls back — the rollback may
+  reinstall a framework version that predates `deploy_status`, so the report
+  must happen while the reporting tool is guaranteed to exist.
 - `post_deploy.sh` runs `manage.py migrate_locked --noinput` instead of the
   `var/allow_migrate` gate (which becomes deletable), and installs
   `pip install django-mojo==<the --framework value>` instead of `--upgrade`.
