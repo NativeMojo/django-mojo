@@ -1,0 +1,13 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Daily renewal attempt (certbot no-ops until inside the renewal window).
+# Role-aware via `python3 -m mojo.deploy.certbot_sync --renew`: an
+# unconfigured box renews itself (single-node behavior); on a configured
+# fleet only PRIMARY_BALANCER_HOST renews — replicas pull the lineage from
+# S3 instead, and running certbot against a synced lineage would corrupt it.
+# A fresh certificate is pushed to the fleet bucket in the same run. The
+# nginx reload post-hook rides inside --renew. --config is explicit because
+# cron's environment carries no PROJ_PATH. PATH must include /usr/local/bin:
+# certbot lives in its own venv (/opt/certbot) symlinked there, isolated
+# from the app's pins.
+30 8 * * * root python3 -m mojo.deploy.certbot_sync --renew --config @PROJ_PATH@/var/django.conf >> @PROJ_PATH@/var/logs/certbot_sync.log 2>&1

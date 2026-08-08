@@ -1,0 +1,47 @@
+[Unit]
+Description=Uvicorn ASGI for Django (@PROJ_PATH@) via Unix socket
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=@WEB_USER@
+Group=@WEB_USER@
+PermissionsStartOnly=true
+
+WorkingDirectory=@PROJ_PATH@/bin
+
+Environment="DJANGO_SETTINGS_MODULE=settings"
+Environment="PYTHONUNBUFFERED=1"
+Environment="FORWARDED_ALLOW_IPS=*"
+Environment="LOG_LEVEL=info"
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+
+ExecStartPre=/usr/bin/install -d -m 0775 -o @WEB_USER@ -g @WEB_USER@ @PROJ_PATH@/var
+ExecStartPre=/usr/bin/install -d -m 0775 -o @WEB_USER@ -g @WEB_USER@ @PROJ_PATH@/var/logs
+ExecStartPre=/usr/bin/install -d -m 0775 -o @WEB_USER@ -g @WEB_USER@ @PROJ_PATH@/var/pids
+ExecStartPre=/usr/sbin/restorecon -Rv @PROJ_PATH@/var
+
+ExecStartPre=/usr/bin/rm -f @PROJ_PATH@/var/asgi.sock
+
+UMask=007
+
+ExecStart=/usr/bin/env uvicorn \
+  _asgi:application \
+  --app-dir @PROJ_PATH@/bin \
+  --uds @PROJ_PATH@/var/asgi.sock \
+  --workers @WORKERS@ \
+  --proxy-headers \
+  --forwarded-allow-ips=${FORWARDED_ALLOW_IPS} \
+  --timeout-keep-alive 75 \
+  --no-access-log \
+  --log-level ${LOG_LEVEL}
+
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=10s
+Restart=always
+RestartSec=1s
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

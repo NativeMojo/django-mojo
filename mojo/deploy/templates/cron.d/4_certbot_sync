@@ -1,0 +1,9 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Certificate distribution tick. The primary pushes its lineage to the fleet
+# bucket when it changes; replicas pull it and reload nginx. Dormant (exit 0,
+# one debug line) until AWS_CERT_BUCKET, LOAD_BALANCER_DOMAIN and
+# PRIMARY_BALANCER_HOST exist in var/django.conf. --config is explicit
+# because cron's environment carries no PROJ_PATH. Runs as root: it reads
+# privkey.pem (0600) and reloads nginx.
+*/5 * * * * root python3 -m mojo.deploy.certbot_sync --config @PROJ_PATH@/var/django.conf >> @PROJ_PATH@/var/logs/certbot_sync.log 2>&1

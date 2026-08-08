@@ -152,6 +152,10 @@ The node's script is invoked as:
 with both values pattern-validated before they enter the argv (no shell, no
 interpolation — same seam discipline as the installer).
 
+> The node-side half (`update.sh`, `post_deploy.sh`) ships inside the package
+> under `mojo/deploy/scripts/`, executed through each project's `aws/` shims —
+> `EDGE_DEPLOY_SCRIPT` keeps naming the project shim path (see `../deploy/README.md`).
+
 ## Required skeleton changes (separate item — this app alone does not deploy)
 
 The django-mojo side is complete but inert until the skeleton's scripts speak
