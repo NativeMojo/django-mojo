@@ -9,6 +9,8 @@ run on the node itself, outside Django:
 | `mojo.deploy.check_setup` | Read-only audit of an AWS account for security and durability gaps |
 | `mojo.deploy.certbot_sync` | Shares one Let's Encrypt lineage across a fleet via S3 — primary renews and pushes, replicas pull |
 | `mojo.deploy.check_node` | Read-only audit of ONE node against the on-node deploy contract |
+| `mojo.deploy.jobman` | Starts, stops and reports the node's **foreground** job engine and scheduler |
+| `mojo.deploy.node_setup` | Converges `var/` ownership, systemd units, and the jobs cron |
 | `python3 -m mojo.deploy locate <name>` | Prints the absolute packaged path of `update.sh` / `post_deploy.sh` for the project shims |
 | `python3 -m mojo.deploy render --dest …` | Materializes the packaged cron/systemd templates into `${PROJ_PATH}/var/deploy` |
 | `mojo/deploy/scripts/update.sh` | The fleet update entry (deploy / manual modes) — packaged bash, run through a project shim |
@@ -21,6 +23,8 @@ python3 -m mojo.deploy.config_sync --dry-run
 python3 -m mojo.deploy.check_setup --section s3,iam
 python3 -m mojo.deploy.certbot_sync --renew
 python3 -m mojo.deploy.check_node --require-shims
+python3 -m mojo.deploy.jobman status
+python3 -m mojo.deploy.node_setup --dry-run
 python3 -m mojo.deploy locate update.sh
 ```
 
@@ -518,6 +522,184 @@ overwrite the provisioning-era copies by name, and
 
 ---
 
+# `jobman`
+
+Controls the **foreground** job engine and scheduler on one node.
+
+```bash
+python3 -m mojo.deploy.jobman status                  # both components
+python3 -m mojo.deploy.jobman start engine
+python3 -m mojo.deploy.jobman stop --root /opt/api
+```
+
+## Two process planes, and why they stay separate
+
+| | `mojo.deploy.jobman` | `python -m mojo.apps.jobs.cli` |
+|---|---|---|
+| Mode | foreground | daemon |
+| Pidfiles | `<root>/var/pids/job_engine.pid` | `/tmp/job-engine-<runner_id>.pid` |
+| Started by | the every-minute `3_mojo_jobs` cron | an operator |
+| Needs | nothing configured | Redis **and** Postgres, on every command |
+
+Nothing was migrated, and nothing should be. `jobman stop` will not touch a
+daemon-mode engine and the jobs CLI will not see anything jobman started.
+
+Two things make the jobs CLI unable to host this even if the planes were the
+same. `mojo/apps/jobs/cli.py` runs `validate_environment()` on every command
+path *including `status`* — it pings Redis, opens a database cursor and counts
+rows, and a node-status tool has to answer on a box where nothing is configured
+yet. And importing anything under `mojo.apps.jobs` with no
+`DJANGO_SETTINGS_MODULE` raises `AttributeError` from the `mojo.helpers.logit`
+chain, so the package cannot even be loaded here.
+
+## The status contract
+
+mverify's `check_node.py` runs `jobman status 2>&1` and matches lines with
+`startswith("Engine running")` / `"Scheduler running"`. Four properties follow,
+and all four are asserted by `tests/test_deploy/jobman.py`:
+
+- **stdout only, stderr empty.** The consumer merges the two streams, so a stray
+  warning would land in the middle of what it parses.
+- **the status line comes first**, then any detection line.
+- **a bare run prints both components**, Engine first.
+- **the exit code is always 0.** `check_node.py` reads a non-zero rc as "jobman
+  unavailable" and stops looking at the output.
+
+| Line | Meaning |
+|---|---|
+| `Engine running (PID 1234)` | the pidfile's PID is alive |
+| `Engine not running (stale PID file: /opt/api/var/pids/job_engine.pid)` | a pidfile exists, its PID does not |
+| `Engine not running` | no pidfile, nothing matching |
+| `Engine extra instances detected: 2000 3000` | strictly MORE than the one instance jobman manages |
+| `Engine unmanaged instances detected: 2000` | a jobs process runs, but no live pidfile tracks it |
+
+"extra" means *strictly more*. On a healthy node the pidfile's own PID always
+turns up in the pgrep result, so it is subtracted before deciding which line
+prints — without that, every healthy node reports the engine as a duplicate of
+itself.
+
+## Pidfiles, logs, and the pgrep pattern
+
+| Thing | Path |
+|---|---|
+| pidfile | `<root>/var/pids/job_<component>.pid` |
+| log | `<root>/var/logs/job_<component>.log` |
+| runner | `<root>/bin/jobs.py` (override with `--runner`) |
+
+The root resolves `--root` → `$MOJO_PROJECT_ROOT` → the working directory, and
+is made absolute — the stale-pidfile line prints it, and a relative path there
+means something different to every reader. `var/logs` and `var/pids` are created
+at startup.
+
+Process matching shells out to `pgrep -f` / `ps -p` rather than re-deriving the
+scan in Python, so the deployed matching semantics carry over unchanged. The
+pattern is the runner's path **relative to the root**:
+
+```
+bin/jobs\.py engine foreground
+```
+
+which matches a relative spawn and an absolute one alike, so old and new
+processes co-match during a rollout. Only the path is `re.escape`'d — escaping
+the whole string would escape the spaces too. A `--runner` resolving *outside*
+the root is refused (exit 1): the `../`-shaped pattern it would produce can
+never match a command line, so `status` would report not-running forever while
+the cron spawned a fresh duplicate every minute.
+
+**Every PID is a string.** A pidfile holding junk goes straight to `ps -p` and
+reports not-running; nothing calls `int()` on a pidfile.
+
+## The project-side shim
+
+`django-mojo-skeleton/bin/jobman` becomes a wrapper, so `./bin/jobman status`
+keeps working and every project picks up fixes through pip:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+export DJANGO_SETTINGS_MODULE=settings
+export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+exec python3 -m mojo.deploy.jobman --root "$ROOT" "$@"
+```
+
+Output is byte-identical to the script it replaces with **one deliberate
+exception**: a missing or non-executable runner is one stderr line and exit 1
+here, where bash printed a success line and returned 0 — so a cron reported a
+healthy start every minute while nothing ran.
+
+---
+
+# `node_setup`
+
+The reusable, non-cert third of a project's `ec2_deploy.sh`: three idempotent
+actions, safe to re-run on every deploy.
+
+```bash
+sudo python3 -m mojo.deploy.node_setup --root /opt/api
+python3 -m mojo.deploy.node_setup --dry-run          # plan only, no root
+```
+
+| Action | What it does |
+|---|---|
+| var dirs | create `var/{logs,pids,keys}`, chown `--owner`, `2775` on directories **including `var/` itself**, `0664` on files |
+| systemd | copy `*.service` **and** `*.timer` whose bytes differ, `daemon-reload` only when something changed, then `enable --now` the **timers** |
+| cron | write `/etc/cron.d/3_mojo_jobs` (0644), whose user field is `--cron-user` |
+
+Nothing is written when nothing differs, and a converged node says so:
+
+```
+node_setup: nothing to change
+```
+
+`--dry-run` prefixes every planned line with `would ` and changes nothing; it is
+the way to inspect a node without touching it, and it works as any user. A real
+run **requires root** — it writes under `/etc` — and refuses with one line
+otherwise.
+
+## `--owner` is not `--cron-user`
+
+| Flag | Default | Governs |
+|---|---|---|
+| `--owner` | `ec2-user:www` | ownership of `var/` **only** |
+| `--cron-user` | `ec2-user` | the account the job engine runs as |
+
+They are separate flags on purpose. Overloading one onto both means an
+ownership fix — `--owner deploy:www` — silently changes which account runs the
+engine on every node in the fleet. An owner that does not resolve on this box is
+a warning, not a refusal: a wrong group is recoverable, a node with no
+`var/pids` is not.
+
+## Timers are enabled; services are not
+
+`mojo-asgi` cannot start before `var/django.conf` exists, so it waits for the
+operator. The sync timers are the opposite — they are what *fetches*
+`django.conf`, and each no-ops harmlessly on an unconfigured box, so a fresh
+node that never enabled them would look fully installed and never converge.
+Copying only `*.service` is why `config-sync.timer` sat in every repo and was
+never installed on any box.
+
+Units are read from `--units-dir` (default `<root>/aws/nginx/systemd`). A
+project with no such directory is a normal shape: quiet skip, exit 0.
+
+## It writes no cert cron, ever
+
+`node_setup` installs `3_mojo_jobs` and nothing else, and it removes no cron
+file it did not write.
+
+The `4_certbot_sync` pull tick and the gated `1_certbot` renew are a
+**safety unit**. The pull is what creates a synced certificate lineage (regular
+files, not certbot's symlinks into `archive/`), and an ungated `certbot renew`
+against one corrupts it — so the hazard and its gate have to be installed by
+the same run, or a node ends up with a puller and no gate. That pair now ships
+as the packaged cron templates above, rendered and installed together by one
+post_deploy convergence — never by `node_setup`.
+`tests/test_deploy/node_setup.py` asserts no node_setup plan ever mentions
+certbot.
+
+---
+
 ## What stays in `django-mojo-skeleton`
 
 `ec2_bootstrap.sh`, `ec2_deploy.sh` and the nginx vhost files stay. They are
@@ -526,3 +708,10 @@ not framework behaviour, and a project is expected to edit them.
 `update.sh`, `post_deploy.sh`, `certbot_sync.py` and `check_node.py` are the
 opposite case: they must be identical everywhere, so their bodies live here
 and projects keep only the shims.
+
+What `ec2_deploy.sh` keeps owning: the snakeoil placeholder cert, nginx config
+installation, project-specific pip extras, and the operator instructions it
+prints at the end. Its var-dirs, systemd and jobs-cron blocks are what
+`node_setup` replaces, and its cert-cron heredocs are superseded by the
+packaged `1_certbot`/`4_certbot_sync` templates the first post_deploy converge
+installs by the same names.

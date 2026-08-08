@@ -11,6 +11,8 @@ The modules:
     check_setup    read-only AWS account audit (topology, security, durability)
     certbot_sync   share a Let's Encrypt lineage across a fleet via S3
     check_node     read-only audit of ONE node against the deploy contract
+    jobman         start/stop/status for the foreground job engine + scheduler
+    node_setup     converge var/ ownership, systemd units, and the jobs cron
 
 Plus the package entry `python3 -m mojo.deploy` (see `__main__.py`):
 
