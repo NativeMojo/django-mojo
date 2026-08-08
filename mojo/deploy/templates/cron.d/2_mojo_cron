@@ -1,0 +1,3 @@
+SHELL=/bin/bash
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+* * * * * @WEB_USER@ @PROJ_PATH@/bin/cron.py --run 2>/dev/null

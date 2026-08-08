@@ -1,0 +1,1170 @@
+#!/usr/bin/env python3
+"""Audit one django-mojo node against the on-node deploy-plane contract.
+
+Read-only. Every probe is a stat/test/cmp/grep/systemctl-query/GET — nothing
+here mutates the node, so it is safe to run against production mid-deploy, and
+safe to hand to an AI session as the "is this node converged?" oracle.
+
+This is the complement of mojo.deploy.check_setup: that tool audits the AWS
+account topology through boto3 and never touches a node; this one audits the
+node itself — git state, installed cron/systemd/nginx files versus the
+rendered contract in var/deploy/, certificates, config-plane wiring, shim
+adoption, legacy leftovers — and never calls an AWS API.
+
+    python3 -m mojo.deploy.check_node                     # on the node
+    python3 -m mojo.deploy.check_node --ssh api1          # from anywhere, over ssh
+    python3 -m mojo.deploy.check_node --json              # machine-readable, for CI
+    python3 -m mojo.deploy.check_node --section cron,jobs # one area at a time
+    python3 -m mojo.deploy.check_node --require-shims     # forked scripts FAIL
+
+The cron and systemd contracts are the RENDERED copies under
+`${PROJ_PATH}/var/deploy/{cron.d,systemd}` — what the last post_deploy run
+materialized from the installed framework's templates plus the project's
+overlays. Absent, they are INFO ("run post_deploy"), never FAIL: a node that
+has not rendered yet is behind, not broken. The nginx contract stays
+project-owned (`aws/nginx/` in the repo tree named by --repo-path).
+
+Over --ssh every probe is wrapped in `ssh <host> ...` (BatchMode, so it never
+prompts), and --repo-path is a REMOTE path defaulting to --project-path. The
+template-freshness check (installed package vs var/deploy) runs only locally —
+over ssh the local package version says nothing about the remote node's.
+
+CONF FILES ARE NEVER READ. var/django.conf and var/bootstrap.conf hold every
+downstream secret a fleet has. This audit stats them (exists/owner/mode) and
+greps for the PRESENCE of fixed key NAMES — output is only the key name, never
+a value. Nothing here cats, prints, or copies conf contents, and nothing ever
+should. (aws/node_retired.conf and aws/node_overrides.conf are read in full —
+they are name lists, not secrets.)
+
+A finding is one of:
+
+    PASS   matches the contract
+    WARN   works, but is a known way to lose an afternoon later
+    FAIL   convergence, correctness, or security drift that should be fixed
+    INFO   context, no judgement
+
+Exit code is 1 if anything FAILed, else 0 (2 for usage errors) — so this can
+gate a deploy. Over ssh each probe is its own connection; enable ssh
+multiplexing (ControlMaster) in ~/.ssh/config if the round-trips add up.
+"""
+
+import argparse
+import datetime
+import json
+import os
+import shlex
+import subprocess
+import sys
+
+PASS = "PASS"
+WARN = "WARN"
+FAIL = "FAIL"
+INFO = "INFO"
+
+# Ordered so the report reads top-down: the tree, what runs on it, what
+# schedules and serves it, then the trailing edges (certs, config, shims,
+# leftovers).
+SECTIONS = (
+    "repo", "framework", "cron", "systemd", "nginx",
+    "certs", "config_plane", "shims", "legacy", "var_ownership", "jobs",
+)
+
+# The project files the shim contract defines. Each is expected to be a thin
+# shim delegating to mojo.deploy; a full copy is a fork that stops receiving
+# framework fixes.
+SHIM_FILES = (
+    "aws/update.sh", "aws/post_deploy.sh",
+    "aws/certbot_sync.py", "aws/check_node.py",
+)
+
+# Fixed key names whose PRESENCE (never value) is probed in var/django.conf.
+WEBHOOK_KEY = "GITHUB_WEBHOOK_SECRET"
+CERT_SYNC_KEYS = ("AWS_CERT_BUCKET", "LOAD_BALANCER_DOMAIN", "PRIMARY_BALANCER_HOST")
+
+VERBOSE = False
+
+q = shlex.quote
+
+
+class Report:
+    """Collects findings and prints them grouped by section."""
+
+    def __init__(self):
+        self.findings = []
+
+    def add(self, section, status, name, detail, fix=None):
+        self.findings.append({
+            "section": section,
+            "status": status,
+            "name": name,
+            "detail": detail,
+            "fix": fix,
+        })
+
+    def passed(self, section, name, detail):
+        self.add(section, PASS, name, detail)
+
+    def warn(self, section, name, detail, fix=None):
+        self.add(section, WARN, name, detail, fix)
+
+    def fail(self, section, name, detail, fix=None):
+        self.add(section, FAIL, name, detail, fix)
+
+    def info(self, section, name, detail):
+        self.add(section, INFO, name, detail)
+
+    def counts(self):
+        totals = {PASS: 0, WARN: 0, FAIL: 0, INFO: 0}
+        for row in self.findings:
+            totals[row["status"]] += 1
+        return totals
+
+    def render(self):
+        marks = {PASS: "  ok  ", WARN: " WARN ", FAIL: " FAIL ", INFO: " info "}
+        current = None
+        for row in self.findings:
+            if row["section"] != current:
+                current = row["section"]
+                print()
+                print(f"── {current.upper()} " + "─" * (66 - len(current)))
+            print(f"[{marks[row['status']]}] {row['name']}")
+            print(f"          {row['detail']}")
+            if row["fix"]:
+                print(f"          fix: {row['fix']}")
+        totals = self.counts()
+        print()
+        print("─" * 72)
+        print(f"  {totals[PASS]} pass · {totals[WARN]} warn · "
+              f"{totals[FAIL]} fail · {totals[INFO]} info")
+
+
+# ---------------------------------------------------------------------------
+# probe plumbing — one run() shared by local and ssh mode
+# ---------------------------------------------------------------------------
+
+def build_runner(ssh_host):
+    """Return run(cmd) -> (rc, stdout, stderr). cmd is a shell string, executed
+    locally via /bin/sh or remotely via `ssh <host> <cmd>` (BatchMode, so a
+    node needing a password fails fast instead of hanging the audit)."""
+
+    def run(cmd, timeout=30):
+        if ssh_host:
+            argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
+                    ssh_host, cmd]
+        else:
+            argv = ["/bin/sh", "-c", cmd]
+        try:
+            done = subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return 124, "", f"timed out after {timeout}s"
+        except OSError as err:
+            return 127, "", str(err)
+        return done.returncode, done.stdout.strip(), done.stderr.strip()
+
+    return run
+
+
+def exists(run, path, flag="-f"):
+    return run(f"test {flag} {q(path)}")[0] == 0
+
+
+def stat_of(run, path, sudo=""):
+    """(user, group, octal-mode) or None. -L so lineage symlinks report the
+    target's mode, not the link's."""
+    rc, out, _ = run(f"{sudo}stat -Lc '%U %G %a' {q(path)} 2>/dev/null")
+    parts = out.split()
+    if rc != 0 or len(parts) != 3:
+        return None
+    return parts
+
+
+def list_names(run, path, sudo=""):
+    rc, out, _ = run(f"{sudo}ls -1 {q(path)} 2>/dev/null")
+    if rc != 0:
+        return None
+    return [n for n in out.splitlines() if n.strip()]
+
+
+def compare(run, src, dst):
+    """Byte-compare a contract file against its installed copy, in one probe.
+    SAME / DIFF / NODST (not installed) / NOSRC (contract file missing)."""
+    rc, out, _ = run(
+        f"if [ ! -f {q(src)} ]; then echo NOSRC; "
+        f"elif [ ! -f {q(dst)} ]; then echo NODST; "
+        f"elif cmp -s {q(src)} {q(dst)}; then echo SAME; else echo DIFF; fi")
+    return out if out in ("NOSRC", "NODST", "SAME", "DIFF") else "ERROR"
+
+
+def compare_set(report, section, run, src_dir, dst_dir, names, fix):
+    """The convergence pattern shared by cron and systemd: every file the
+    rendered contract ships must be installed byte-identical."""
+    for name in sorted(names):
+        state = compare(run, f"{src_dir}/{name}", f"{dst_dir}/{name}")
+        if state == "SAME":
+            report.passed(section, name, f"installed byte-identical in {dst_dir}")
+        elif state == "NODST":
+            report.fail(section, f"{name} not installed",
+                        f"the rendered contract ships {src_dir}/{name} but "
+                        f"{dst_dir} does not have it — convergence has not run",
+                        fix)
+        elif state == "DIFF":
+            report.fail(section, f"{name} drifted",
+                        f"{dst_dir}/{name} differs from the rendered copy — a "
+                        "hand-edit on the node, or a deploy that never "
+                        "converged", fix)
+        elif state == "NOSRC":
+            report.info(section, f"{name}: contract file missing",
+                        f"{src_dir}/{name} disappeared mid-audit")
+        else:
+            report.info(section, f"{name}: compare failed",
+                        "could not run cmp on this pair")
+
+
+def days_until(enddate_line):
+    """days from now until an `openssl x509 -enddate` line, or None."""
+    raw = enddate_line.split("=", 1)[-1].strip()
+    for zone in (" GMT", " UTC"):
+        raw = raw.replace(zone, "")
+    raw = " ".join(raw.split())
+    try:
+        when = datetime.datetime.strptime(raw, "%b %d %H:%M:%S %Y")
+    except ValueError:
+        return None
+    when = when.replace(tzinfo=datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return (when - now).days
+
+
+def read_name_list(run, path):
+    """Parse a `#`-commented name-list file (node_retired.conf,
+    node_overrides.conf) through the runner, so it works over ssh too.
+    Missing file = empty list, by design — both files are optional."""
+    rc, out, _ = run(f"cat {q(path)} 2>/dev/null")
+    names = []
+    if rc != 0:
+        return names
+    for line in out.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            names.append(line)
+    return names
+
+
+def read_retired(run, proj):
+    """(retired cron names, retired conf.d names) declared in
+    ${PROJ_PATH}/aws/node_retired.conf — the explicit-list complement of
+    post_deploy's structural sweep, for files that never mention PROJ_PATH."""
+    retired_cron, retired_confd = [], []
+    for line in read_name_list(run, f"{proj}/aws/node_retired.conf"):
+        if line.startswith("cron.d/"):
+            retired_cron.append(line[len("cron.d/"):])
+        elif line.startswith("conf.d/"):
+            retired_confd.append(line[len("conf.d/"):])
+    return retired_cron, retired_confd
+
+
+# ---------------------------------------------------------------------------
+# repo
+# ---------------------------------------------------------------------------
+
+def check_repo(report, run, proj, app_user):
+    rc, out, err = run(f"git -C {q(proj)} rev-parse --is-inside-work-tree")
+    if rc != 0 or out != "true":
+        report.fail("repo", f"{proj} is not a git repo",
+                    (err or out or "git failed").splitlines()[0],
+                    "the deploy plane is git + post_deploy.sh — a node "
+                    "without the repo cannot converge at all")
+    else:
+        st = stat_of(run, proj)
+        if st is None:
+            report.info("repo", "ownership", f"could not stat {proj}")
+        elif st[0] != app_user:
+            report.fail("repo", f"{proj} owned by {st[0]}",
+                        f"the deploy engine runs git as {app_user}; a tree it "
+                        "does not own breaks every fetch/reset",
+                        f"chown -R {app_user} {proj} (var/ stays "
+                        f"{app_user}:<web user>)")
+        else:
+            report.passed("repo", "ownership", f"{proj} owned by {app_user}")
+
+        rc, head, _ = run(f"git -C {q(proj)} rev-parse HEAD")
+        if rc != 0 or not head:
+            report.info("repo", "HEAD", "could not resolve HEAD")
+        else:
+            report.info("repo", "HEAD", head[:12])
+            rc, out, _ = run(
+                f"git -C {q(proj)} ls-remote origin refs/heads/main",
+                timeout=20)
+            if rc == 0 and out:
+                remote_sha, source = out.split()[0], "origin, live"
+            else:
+                # Network failure is context, not a node problem.
+                report.info("repo", "origin unreachable",
+                            "comparing against the last-fetched origin/main")
+                rc, out, _ = run(f"git -C {q(proj)} rev-parse origin/main")
+                remote_sha = out if rc == 0 and out else None
+                source = "origin/main, last fetch"
+            if remote_sha is None:
+                report.info("repo", "origin/main", "no ref to compare against")
+            elif remote_sha == head:
+                report.passed("repo", "HEAD matches origin/main",
+                              f"{head[:12]} ({source})")
+            else:
+                report.warn(
+                    "repo", "HEAD differs from origin/main",
+                    f"HEAD {head[:12]} vs main {remote_sha[:12]} ({source})",
+                    "aws/update.sh --manual to converge — unless a pinned "
+                    "fleet deploy is deliberately holding this sha")
+
+        rc, out, _ = run(f"git -C {q(proj)} status --porcelain")
+        if rc != 0:
+            report.info("repo", "working tree", "git status failed")
+        elif not out:
+            report.passed("repo", "working tree", "clean")
+        else:
+            report.warn("repo", "working tree dirty",
+                        f"{len(out.splitlines())} uncommitted path(s) — a "
+                        "converged node never has local edits",
+                        "commit upstream and redeploy, or git reset --hard "
+                        "(the next deploy would anyway)")
+
+    lock = f"{proj}/var/update.lock"
+    if not exists(run, lock):
+        report.info("repo", "var/update.lock",
+                    "absent — no update has run on this box (or var/ was cleared)")
+    else:
+        rc, _, err = run(f"flock -n {q(lock)} true")
+        if rc == 0:
+            report.passed("repo", "update lock", "var/update.lock is free")
+        elif rc == 127 or "not found" in err:
+            report.info("repo", "update lock", "flock unavailable — cannot probe")
+        else:
+            report.warn("repo", "update in flight",
+                        "var/update.lock is held — update.sh is running on "
+                        "this box right now",
+                        "wait it out; deploy mode queues up to 600s on this lock")
+
+    if exists(run, f"{proj}/var/previous_sha") and \
+            exists(run, f"{proj}/var/previous_framework"):
+        detail = "var/previous_sha + var/previous_framework present"
+        if VERBOSE:
+            rc, out, _ = run(f"cat {q(proj)}/var/previous_sha")
+            if rc == 0 and out:
+                detail += f" (rollback target {out[:12]})"
+        report.info("repo", "rollback state recorded", detail)
+    else:
+        report.info("repo", "no rollback state",
+                    "var/previous_sha absent — no pinned deploy has run yet")
+
+
+# ---------------------------------------------------------------------------
+# framework
+# ---------------------------------------------------------------------------
+
+def check_framework(report, run, proj):
+    rc, out, _ = run("python3 -m pip show django-mojo 2>/dev/null")
+    if rc == 0:
+        version = next((l.split(":", 1)[1].strip() for l in out.splitlines()
+                        if l.startswith("Version:")), "?")
+        report.info("framework", "django-mojo", f"version {version}")
+    else:
+        report.fail("framework", "django-mojo not installed",
+                    "pip does not know the framework — nothing on this box "
+                    "can serve",
+                    "aws/update.sh --manual installs latest and converges")
+
+    rc, out, err = run("python3 --version 2>&1")
+    report.info("framework", "python", out or err or "python3 not found")
+
+    rc, _, _ = run("python3 -m pip show django-nativemojo 2>/dev/null")
+    if rc == 0:
+        report.fail(
+            "framework", "django-nativemojo installed",
+            "the retired package is present alongside django-mojo — the two "
+            "overlap files, so whichever installed last silently owns the "
+            "mojo/ tree",
+            "pip uninstall django-nativemojo, then reinstall django-mojo "
+            "(aws/update.sh --manual) to repair any clobbered files")
+    else:
+        report.passed("framework", "django-nativemojo",
+                      "retired package not installed")
+
+    rc, out, err = run(
+        f"cd {q(proj)} && python3 bin/manage.py migrate --check --noinput 2>&1",
+        timeout=90)
+    combined = out or err
+    if rc == 0:
+        report.passed("framework", "migrations", "no unapplied migrations")
+    elif "Traceback" in combined:
+        # The command crashed rather than reporting state — usually conf or DB
+        # reachability from this user. That is context, not a schema verdict.
+        last = next((l for l in reversed(combined.splitlines()) if l.strip()), "")
+        error_class = last.split(":", 1)[0].strip()
+        report.info("framework", "migrate --check could not run",
+                    f"{error_class} — likely conf/DB not reachable from the "
+                    "invoking user; not a migration verdict")
+    else:
+        report.fail("framework", "unapplied migrations",
+                    "migrate --check exited non-zero — the schema is behind "
+                    "the code on this box",
+                    "deploy with --migrate (the canary), or on the node: "
+                    "python3 bin/manage.py migrate_locked --noinput")
+
+
+# ---------------------------------------------------------------------------
+# cron
+# ---------------------------------------------------------------------------
+
+def check_cron(report, run, proj):
+    src_dir = f"{proj}/var/deploy/cron.d"
+    names = list_names(run, src_dir)
+    if names is None:
+        # Absent contract is INFO, never FAIL: a node that has not rendered
+        # yet is behind, not broken — and grading every installed cron stale
+        # against an empty set would be noise, so the sweep is skipped too.
+        report.info("cron", "no rendered contract",
+                    f"{src_dir} is absent — post_deploy has not rendered on "
+                    "this framework version yet; run `sudo bash "
+                    "aws/post_deploy.sh` to render and converge")
+        return
+    compare_set(report, "cron", run, src_dir, "/etc/cron.d", names,
+                "sudo bash aws/post_deploy.sh (any deploy) converges cron.d")
+
+    # Stale sweep, same rule as post_deploy.sh: a /etc/cron.d file that
+    # mentions the project path is ours; if the rendered set no longer ships
+    # that name, one surviving means post_deploy has not run since it was
+    # retired.
+    rc, out, _ = run(f"grep -lF -- {q(proj)} /etc/cron.d/* 2>/dev/null")
+    if rc > 1 and not out:
+        report.info("cron", "stale sweep skipped", "could not scan /etc/cron.d")
+        return
+    shipped = set(names)
+    stale = [os.path.basename(p) for p in out.splitlines()
+             if p.strip() and os.path.basename(p) not in shipped]
+    for name in sorted(stale):
+        report.fail(
+            "cron", f"stale project cron: {name}",
+            f"/etc/cron.d/{name} mentions {proj} but the rendered contract "
+            "does not ship that name — post_deploy's retirement sweep has not "
+            "run since it was retired, so it is still firing alongside its "
+            "replacement",
+            f"sudo bash aws/post_deploy.sh retires it (or sudo rm /etc/cron.d/{name})")
+    if not stale:
+        report.passed("cron", "no stale project crons",
+                      "every /etc/cron.d file naming the project path is one "
+                      "the rendered contract ships")
+
+
+# ---------------------------------------------------------------------------
+# systemd
+# ---------------------------------------------------------------------------
+
+def check_systemd(report, run, proj):
+    src_dir = f"{proj}/var/deploy/systemd"
+    units = [u for u in (list_names(run, src_dir) or [])
+             if u.endswith((".service", ".timer"))]
+    if not units:
+        report.info("systemd", "no rendered contract",
+                    f"no units under {src_dir} — post_deploy has not rendered "
+                    "on this framework version yet; run `sudo bash "
+                    "aws/post_deploy.sh` to render and converge")
+    else:
+        compare_set(report, "systemd", run, src_dir, "/etc/systemd/system",
+                    units,
+                    "sudo bash aws/post_deploy.sh installs units and "
+                    "daemon-reloads")
+
+    rc, out, err = run("systemctl is-active mojo-asgi.service 2>&1")
+    state = out or err
+    if rc == 127 or "not found" in state:
+        report.info("systemd", "systemctl unavailable",
+                    "not a systemd host — service state not audited")
+        return
+    if state == "active":
+        report.passed("systemd", "mojo-asgi", "active")
+    else:
+        report.fail("systemd", f"mojo-asgi is {state or 'unknown'}",
+                    "the app service is not running — nothing answers behind "
+                    "nginx",
+                    "journalctl -u mojo-asgi -n 50, then "
+                    "sudo systemctl restart mojo-asgi")
+
+    # A timer that is shipped but disabled does nothing while looking
+    # installed — exactly how config-sync.timer sat unused for months.
+    for timer in sorted(u for u in units if u.endswith(".timer")):
+        for verb, want in (("is-enabled", "enabled"), ("is-active", "active")):
+            rc, out, err = run(f"systemctl {verb} {q(timer)} 2>&1")
+            state = out or err
+            if state == want:
+                report.passed("systemd", f"{timer} {want}",
+                              "shipped timer is wired up")
+            else:
+                report.fail("systemd", f"{timer} not {want} ({state or '?'})",
+                            "the rendered contract ships this timer; "
+                            "present-but-idle means its job silently never runs",
+                            f"sudo systemctl enable --now {timer}")
+
+
+# ---------------------------------------------------------------------------
+# nginx
+# ---------------------------------------------------------------------------
+
+def check_nginx(report, run, repo, sudo, probe_url, retired_confd):
+    # Repo-owned nginx files: the three top-level files, plus every conf.d
+    # vhost the repo ships (post_deploy converges exactly that set; other
+    # public vhosts on a node — single-node domains — stay node-managed and
+    # are deliberately not audited here). Deriving the conf.d list from the
+    # repo also surfaces the shipped-but-never-installed class of bug.
+    pairs = [
+        ("nginx.conf", "/etc/nginx/nginx.conf"),
+        ("asgi.inc", "/etc/nginx/asgi.inc"),
+        ("django.inc", "/etc/nginx/django.inc"),
+    ]
+    shipped_confd = [n for n in (list_names(run, f"{repo}/aws/nginx/conf.d") or [])
+                     if n.endswith(".conf") and ".example" not in n]
+    if not shipped_confd:
+        report.info("nginx", "conf.d contract missing",
+                    f"cannot list {repo}/aws/nginx/conf.d")
+    for name in sorted(shipped_confd):
+        pairs.append((f"conf.d/{name}", f"/etc/nginx/conf.d/{name}"))
+    for rel, dst in pairs:
+        state = compare(run, f"{repo}/aws/nginx/{rel}", dst)
+        if state == "SAME":
+            report.passed("nginx", rel, f"{dst} matches the repo")
+        elif state in ("NODST", "DIFF"):
+            why = "is not installed" if state == "NODST" else "drifted from the repo copy"
+            report.fail("nginx", f"{rel} {why}",
+                        f"{dst} — this file is repo-owned and converged on "
+                        "every deploy; the node copy must be byte-identical",
+                        "sudo bash aws/post_deploy.sh reinstalls it (never "
+                        "hand-edit these on nodes)")
+        else:
+            report.info("nginx", f"{rel}: compare failed",
+                        f"could not compare against {dst}")
+
+    rc, out, err = run(f"{sudo}nginx -t 2>&1")
+    combined = out or err
+    if rc == 127 or "not found" in combined:
+        report.info("nginx", "nginx unavailable", "nginx binary not on PATH")
+    elif rc == 0:
+        report.passed("nginx", "nginx -t", "configuration test passed")
+    elif "ermission denied" in combined and not sudo:
+        report.info("nginx", "nginx -t needs root",
+                    "cannot read the TLS keys as this user — rerun as root "
+                    "(or a passwordless-sudo user) to audit the config test")
+    else:
+        last = combined.splitlines()[-1] if combined else "no output"
+        report.fail("nginx", "nginx -t failed", last,
+                    "fix before the next deploy — post_deploy aborts on a "
+                    "failed test (nginx keeps serving the old config meanwhile)")
+
+    rc, out, err = run(
+        f"curl -fsS --max-time 3 {q(probe_url)} 2>&1",
+        timeout=10)
+    if rc != 0:
+        first = (out or err or "no output").splitlines()[0]
+        report.fail("nginx", "probe URL not answering",
+                    f"GET {probe_url} failed ({first})",
+                    "check mojo-asgi and whichever vhost serves the probe — "
+                    "the deploy plane's health gates (post_deploy.sh, "
+                    "sanity_check) use this exact URL")
+    elif '"status": true' in out or '"status":true' in out:
+        report.passed("nginx", "probe URL",
+                      f"GET {probe_url} → 200, envelope status true")
+    else:
+        report.fail("nginx", "probe answered without status true",
+                    f"body starts: {out[:120]}",
+                    "the app answered but not with the version envelope — "
+                    "check what is bound to the asgi socket")
+
+    # Duplicate default_server / upstream across conf.d is the classic symptom
+    # of a retired vhost surviving next to its successor. /dev/null keeps grep
+    # printing filename prefixes even when only one conf file exists.
+    rc, out, _ = run("grep -E 'default_server|^[[:space:]]*upstream[[:space:]]' "
+                     "/etc/nginx/conf.d/*.conf /dev/null 2>/dev/null")
+    declared = {}
+    for line in out.splitlines():
+        path, _, content = line.partition(":")
+        tokens = content.strip().split()
+        if not tokens or tokens[0].startswith("#"):
+            continue
+        if tokens[0] == "upstream" and len(tokens) > 1:
+            key = f"upstream '{tokens[1].rstrip('{')}'"
+        elif "listen" in tokens and "default_server" in content:
+            key = f"default_server on :{tokens[tokens.index('listen') + 1].rstrip(';')}"
+        else:
+            continue
+        declared.setdefault(key, []).append(os.path.basename(path))
+    dups = {k: f for k, f in declared.items() if len(f) > 1}
+    for key, files in sorted(dups.items()):
+        report.fail("nginx", f"duplicate {key}",
+                    f"declared in {', '.join(sorted(set(files)))} — nginx -t "
+                    "refuses duplicates, blocking every future deploy's reload",
+                    "remove the retired duplicate vhost (see the retired-name "
+                    "warnings below)")
+    if not dups:
+        report.passed("nginx", "conf.d uniqueness",
+                      "no duplicate default_server or upstream declarations")
+
+    for name in retired_confd:
+        if exists(run, f"/etc/nginx/conf.d/{name}"):
+            report.warn(
+                "nginx", f"retired conf.d file present: {name}",
+                "a vhost name aws/node_retired.conf has retired is still "
+                "installed — post_deploy removes these on every deploy, so "
+                "one surviving means no deploy has converged since the "
+                "retirement landed; alongside its successor it is the "
+                "duplicate default_server/upstream break above",
+                "sudo bash aws/post_deploy.sh retires it (or sudo rm "
+                f"/etc/nginx/conf.d/{name} && sudo nginx -t && "
+                "sudo systemctl reload nginx)")
+
+
+# ---------------------------------------------------------------------------
+# certs
+# ---------------------------------------------------------------------------
+
+def check_certs(report, run, sudo):
+    names = list_names(run, "/etc/letsencrypt/live", sudo)
+    if not names:
+        report.info("certs", "no lineages",
+                    "/etc/letsencrypt/live is absent, empty, or unreadable "
+                    "without root — a snakeoil-only node, or rerun as root")
+        return
+    names = [n for n in names if n != "README"]
+    report.info("certs", "lineages", ", ".join(sorted(names)) or "none")
+
+    for lineage in sorted(names):
+        base = f"/etc/letsencrypt/live/{lineage}"
+        priv = stat_of(run, f"{base}/privkey.pem", sudo)
+        rc, _, _ = run(f"{sudo}test -f {q(base)}/fullchain.pem")
+        if rc != 0 or priv is None:
+            missing = []
+            if rc != 0:
+                missing.append("fullchain.pem")
+            if priv is None:
+                missing.append("privkey.pem")
+            report.warn("certs", f"{lineage}: incomplete lineage",
+                        f"missing {', '.join(missing)} — nginx cannot serve "
+                        "this pair",
+                        "primary: certbot renew rebuilds it; replica: "
+                        "certbot_sync pulls the full set")
+        elif priv[2] != "600":
+            report.warn("certs", f"{lineage}: privkey mode {priv[2]}",
+                        "the private key should be 0600 — anything wider "
+                        "shares the TLS identity with every local reader",
+                        f"chmod 600 {base}/privkey.pem")
+        else:
+            report.passed("certs", f"{lineage}: material",
+                          "fullchain + privkey present, key mode 600")
+
+        rc, out, err = run(
+            f"{sudo}openssl x509 -enddate -noout -in {q(base)}/fullchain.pem 2>&1")
+        if rc != 0:
+            report.info("certs", f"{lineage}: expiry unreadable",
+                        (out or err or "openssl failed").splitlines()[0])
+        else:
+            days = days_until(out)
+            if VERBOSE:
+                report.info("certs", f"{lineage}: {out.strip()}", "raw enddate")
+            if days is None:
+                report.info("certs", f"{lineage}: expiry", out.strip())
+            elif days < 14:
+                report.fail("certs", f"{lineage}: expires in {days}d",
+                            "inside certbot's own renewal window and still "
+                            "not renewed — renewal is broken on this fleet",
+                            "on the primary: python3 -m "
+                            "mojo.deploy.certbot_sync --renew (the 1_certbot "
+                            "cron's job — check it is firing and "
+                            "PRIMARY_BALANCER_HOST names that node); replicas "
+                            "then pull via the 4_certbot_sync tick")
+            elif days < 30:
+                report.warn("certs", f"{lineage}: expires in {days}d",
+                            "approaching the renewal window — confirm the "
+                            "1_certbot cron (certbot_sync --renew) is firing "
+                            "on the primary before this becomes urgent")
+            else:
+                report.passed("certs", f"{lineage}: expiry",
+                              f"{days} days remaining")
+
+        rc, _, _ = run(f"{sudo}test -f /etc/letsencrypt/renewal/{q(lineage)}.conf")
+        if rc == 0:
+            report.info("certs", f"{lineage}: renewal conf present",
+                        "certbot renews this lineage locally (primary behavior)")
+        else:
+            report.info("certs", f"{lineage}: replica lineage",
+                        "no renewal conf — certbot_sync-managed, follows the "
+                        "primary via S3")
+
+
+# ---------------------------------------------------------------------------
+# config plane
+# ---------------------------------------------------------------------------
+
+def check_config_plane(report, run, proj, app_user, web_user):
+    bootstrap = f"{proj}/var/bootstrap.conf"
+    if not exists(run, bootstrap):
+        report.warn(
+            "config_plane", "var/bootstrap.conf absent",
+            "node is not on the S3 config plane — config-sync has nothing "
+            "to pull, so django.conf is managed by hand on this box",
+            "write var/bootstrap.conf (AWS_REGION, AWS_CONFIG_BUCKET, "
+            f"AWS_CONFIG_PREFIX, CONFIG_SYNC_OWNER={app_user}:{web_user}); "
+            "config-sync.timer does the rest")
+    else:
+        st = stat_of(run, bootstrap)
+        if st is None:
+            report.info("config_plane", "bootstrap.conf", "present, cannot stat")
+        elif st[2] != "600":
+            report.warn("config_plane", f"bootstrap.conf mode {st[2]}",
+                        "it holds the one bootstrap credential — 0600 only",
+                        f"chmod 600 {bootstrap}")
+        else:
+            report.passed("config_plane", "bootstrap.conf",
+                          "present, mode 600 — node is on the S3 config plane")
+
+    conf = f"{proj}/var/django.conf"
+    st = stat_of(run, conf)
+    if st is None:
+        report.fail("config_plane", "var/django.conf missing",
+                    "the app cannot start without it",
+                    "config-sync pulls it once bootstrap.conf is in place; "
+                    "otherwise the operator places it by hand")
+        return
+    user, group, mode = st
+    if user != app_user or group != web_user:
+        report.fail("config_plane", f"django.conf owner {user}:{group}",
+                    f"must be {app_user}:{web_user} — the web app and the "
+                    f"{app_user} job engines both read it",
+                    f"chown {app_user}:{web_user} {conf}")
+    else:
+        report.passed("config_plane", "django.conf owner",
+                      f"{app_user}:{web_user}")
+    if mode != "640":
+        report.warn("config_plane", f"django.conf mode {mode}",
+                    "the contract is 0640 — 0600 strands whichever of the "
+                    f"web app / {app_user} engines is not the owner, wider "
+                    "leaks secrets to every local user",
+                    f"chmod 640 {conf}")
+    else:
+        report.passed("config_plane", "django.conf mode", "640")
+
+    # Presence of fixed key NAMES only. The anchored grep -o prints the
+    # matched key name and nothing else — no value ever reaches this audit's
+    # output. Never widen this into reading conf contents.
+    pattern = "|".join((WEBHOOK_KEY,) + CERT_SYNC_KEYS)
+    rc, out, _ = run(
+        f"grep -oE '^({pattern})' {q(conf)} 2>/dev/null | sort -u")
+    if rc > 1:
+        report.info("config_plane", "key presence unknown",
+                    "could not grep django.conf key names as this user")
+        return
+    present = set(out.splitlines())
+    if WEBHOOK_KEY in present:
+        report.passed("config_plane", f"{WEBHOOK_KEY} present",
+                      "key name found (value never read)")
+    else:
+        report.warn("config_plane", f"{WEBHOOK_KEY} absent",
+                    "the GitHub deploy webhook will 403 every delivery — "
+                    "pushes to the deploy branch stop reaching this fleet",
+                    "operator adds the key to the published conf (this audit "
+                    "never reads or writes conf values)")
+    missing = [k for k in CERT_SYNC_KEYS if k not in present]
+    if not missing:
+        report.passed("config_plane", "cert sync keys present",
+                      ", ".join(CERT_SYNC_KEYS) + " (values never read)")
+    else:
+        report.info("config_plane", "cert sync unconfigured",
+                    f"missing {', '.join(missing)} — certbot_sync no-ops; "
+                    "fine on a single-node box, a gap on a fleet")
+
+
+# ---------------------------------------------------------------------------
+# shims
+# ---------------------------------------------------------------------------
+
+def check_shims(report, run, proj, require_shims):
+    """The shim contract: each project aws/ entry point is a thin shim
+    delegating to mojo.deploy. Present-with-reference is adoption; present
+    WITHOUT a reference is a fork that silently stops receiving framework
+    fixes — WARN normally, FAIL under --require-shims. Absent is INFO: not
+    every project ships every entry point."""
+    grade = report.fail if require_shims else report.warn
+    for rel in SHIM_FILES:
+        path = f"{proj}/{rel}"
+        if not exists(run, path):
+            report.info("shims", f"{rel} absent",
+                        "no project copy — either this entry point is invoked "
+                        "as `python3 -m mojo.deploy.<module>` directly, or "
+                        "the project has not adopted it")
+            continue
+        rc, _, _ = run(f"grep -qF -- mojo.deploy {q(path)}")
+        if rc == 0:
+            report.passed("shims", rel,
+                          "delegates to the packaged mojo.deploy tooling")
+        else:
+            grade("shims", f"{rel} is a fork",
+                  f"{path} exists but never references mojo.deploy — a full "
+                  "copy pinned to whatever state it was forked at, cut off "
+                  "from framework fixes",
+                  "replace it with the shim from django-mojo "
+                  "docs/django_developer/deploy/README.md (project deltas "
+                  "become exported variables in the shim)")
+
+
+def check_collisions(report, run, proj, require_shims):
+    """Template-name collisions between the project's aws/ overlays and the
+    framework's shipped templates. Undeclared, the framework copy wins at
+    render time — which is loud there and reported here, because the author
+    of the project file almost certainly expected it to be installed.
+
+    Framework template names come from the LOCAL package; over --ssh that is
+    an approximation (the remote may run a different django-mojo), which is
+    why this stays advisory rather than byte-comparing anything."""
+    try:
+        from mojo.deploy.__main__ import TEMPLATE_SETS, list_files, template_dir
+    except Exception as err:
+        report.info("shims", "collision audit skipped",
+                    f"cannot load mojo.deploy templates: {err}")
+        return
+    declared = set(read_name_list(run, f"{proj}/aws/node_overrides.conf"))
+    grade = report.fail if require_shims else report.warn
+    for subdir, overlay_rel in TEMPLATE_SETS:
+        framework = set(list_files(template_dir(subdir)))
+        project = set(list_names(run, f"{proj}/{overlay_rel}") or [])
+        for name in sorted(framework & project):
+            if name in declared:
+                report.passed("shims", f"declared override: {overlay_rel}/{name}",
+                              "project copy replaces the framework template "
+                              "by declaration in aws/node_overrides.conf")
+            else:
+                grade("shims", f"undeclared collision: {overlay_rel}/{name}",
+                      "the project ships a file whose name collides with a "
+                      "framework template and is not declared in "
+                      "aws/node_overrides.conf — render ignores the project "
+                      "copy (framework wins), which is probably not what its "
+                      "author expects",
+                      "declare the name in aws/node_overrides.conf to keep "
+                      "the project copy, or delete the project file to accept "
+                      "the framework template")
+
+
+def check_template_freshness(report, proj, app_user, web_user, workers):
+    """LOCAL MODE ONLY: render the installed package's templates in memory and
+    diff against var/deploy/. A difference means the framework's templates
+    moved since the last deploy rendered them — INFO, because the last-deploy
+    contract in var/deploy is still the truth for what /etc should hold; this
+    is the nudge to re-run post_deploy. Declared-override names are skipped:
+    their var/deploy copy is legitimately the project's, not the framework's."""
+    deploy_dir = os.path.join(proj, "var", "deploy")
+    if not os.path.isdir(deploy_dir):
+        # The cron/systemd sections already reported the absent contract.
+        return
+    try:
+        from mojo.deploy.__main__ import (build_context, list_files,
+                                          substitute, template_dir,
+                                          TEMPLATE_SETS)
+    except Exception as err:
+        report.info("shims", "template freshness skipped",
+                    f"cannot load mojo.deploy templates: {err}")
+        return
+    declared = set()
+    try:
+        with open(os.path.join(proj, "aws", "node_overrides.conf")) as handle:
+            for line in handle:
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    declared.add(line)
+    except OSError:
+        pass
+    context = build_context(proj, app_user, web_user, workers)
+    moved = []
+    for subdir, _ in TEMPLATE_SETS:
+        for name in list_files(template_dir(subdir)):
+            if name in declared:
+                continue
+            with open(os.path.join(template_dir(subdir), name)) as handle:
+                expected = substitute(handle.read(), context)
+            try:
+                with open(os.path.join(deploy_dir, subdir, name)) as handle:
+                    current = handle.read()
+            except OSError:
+                moved.append(f"{subdir}/{name}")
+                continue
+            if current != expected:
+                moved.append(f"{subdir}/{name}")
+    if moved:
+        report.info("shims", "framework templates moved since the last deploy",
+                    ", ".join(moved) + " differ from what the installed "
+                    "framework renders — run `sudo bash aws/post_deploy.sh` "
+                    "to re-render and converge")
+    else:
+        report.passed("shims", "framework templates current",
+                      "var/deploy matches what the installed framework renders")
+
+
+# ---------------------------------------------------------------------------
+# legacy
+# ---------------------------------------------------------------------------
+
+def check_legacy(report, run, proj, repo, retired_cron):
+    if exists(run, f"{proj}/var/allow_migrate"):
+        report.fail(
+            "legacy", "var/allow_migrate present",
+            "the retired per-box migrate flag races migrate_locked's "
+            "advisory lock — with it, two nodes can decide to migrate at once",
+            f"rm {proj}/var/allow_migrate — migrations run only via the "
+            "deploy plane's --migrate canary now")
+    else:
+        report.passed("legacy", "var/allow_migrate", "not present")
+
+    node_has = exists(run, f"{proj}/update_prod.sh")
+    repo_ships = exists(run, f"{repo}/update_prod.sh")
+    if node_has and not repo_ships:
+        report.warn("legacy", "update_prod.sh still at project root",
+                    "the retired legacy entry path survives on the node "
+                    "although the repo no longer ships it",
+                    "remove it — aws/update.sh --manual is the hands-on "
+                    "path now (a deploy's git clean would also drop it)")
+    elif node_has:
+        report.info("legacy", "update_prod.sh present",
+                    "still shipped by the repo (its retirement commit has "
+                    "not landed) — the legacy webhook path may still invoke it")
+    else:
+        report.passed("legacy", "update_prod.sh", "no legacy entry script")
+
+    if not retired_cron:
+        report.info("legacy", "no declared retired crons",
+                    "aws/node_retired.conf declares no cron.d names — the "
+                    "structural sweep is the only cron retirement on this "
+                    "project")
+        return
+    installed = set(list_names(run, "/etc/cron.d") or [])
+    found = [n for n in retired_cron if n in installed]
+    for name in found:
+        report.fail(
+            "legacy", f"retired cron /etc/cron.d/{name}",
+            "aws/node_retired.conf retires this name and post_deploy removes "
+            "it on every deploy — it surviving means no deploy has converged "
+            "since the retirement landed, so it is still firing alongside "
+            "its replacement",
+            f"sudo rm /etc/cron.d/{name} (or run sudo bash aws/post_deploy.sh)")
+    if not found:
+        report.passed("legacy", "retired cron names",
+                      "none of the names declared in aws/node_retired.conf "
+                      "are installed")
+
+
+# ---------------------------------------------------------------------------
+# var ownership
+# ---------------------------------------------------------------------------
+
+def check_var_ownership(report, run, proj, app_user, web_user):
+    # Sample the load-bearing directories rather than recursing the tree —
+    # the tree is large and post_deploy re-normalizes var/logs anyway.
+    for rel in ("var", "var/logs", "var/pids"):
+        path = f"{proj}/{rel}"
+        st = stat_of(run, path)
+        if st is None:
+            report.warn("var_ownership", f"{rel}/ missing or unreadable",
+                        f"{path} should exist on any provisioned node",
+                        "provisioning established these; mkdir + chown "
+                        f"{app_user}:{web_user} + chmod 2775 to repair")
+            continue
+        user, group, mode = st
+        problems = []
+        if user != app_user or group != web_user:
+            problems.append(f"owner {user}:{group}")
+        if mode != "2775":
+            problems.append(f"mode {mode}")
+        if problems:
+            report.warn(
+                "var_ownership", f"{rel}/: {', '.join(problems)}",
+                f"contract is {app_user}:{web_user} setgid 2775 "
+                "(provisioning). Note mojo-asgi's ExecStartPre re-installs "
+                f"these dirs as {web_user}:{web_user} 0775 on every start, "
+                "which fights the contract — expect this warning on any node "
+                "whose app has restarted",
+                f"chown {app_user}:{web_user} {path} && chmod 2775 {path}")
+        else:
+            report.passed("var_ownership", f"{rel}/",
+                          f"{app_user}:{web_user}, setgid 2775")
+
+    rc, out, _ = run(f"find {q(proj)}/var/logs -type f -user root 2>/dev/null")
+    if rc != 0 and not out:
+        if VERBOSE:
+            report.info("var_ownership", "root-owned scan skipped",
+                        "could not run find over var/logs")
+        return
+    rooted = [line for line in out.splitlines() if line.strip()]
+    if rooted:
+        shown = ", ".join(os.path.basename(p) for p in rooted[:5])
+        more = f" (+{len(rooted) - 5} more)" if len(rooted) > 5 else ""
+        report.fail(
+            "var_ownership", f"{len(rooted)} root-owned file(s) in var/logs",
+            f"{shown}{more} — a root-owned log blocks the web app and the "
+            f"{app_user} engines from appending, which surfaces as silent "
+            "logging loss or startup crashes",
+            f"sudo chown -R {app_user}:{web_user} {proj}/var/logs "
+            "(post_deploy normalizes this on every deploy)")
+    else:
+        report.passed("var_ownership", "var/logs files",
+                      "no root-owned files")
+
+
+# ---------------------------------------------------------------------------
+# jobs
+# ---------------------------------------------------------------------------
+
+def check_jobs(report, run, proj):
+    rc, out, err = run(f"cd {q(proj)} && ./bin/jobman status 2>&1", timeout=30)
+    if not out:
+        report.info("jobs", "jobman unavailable",
+                    (err or "bin/jobman produced no output").splitlines()[0])
+        return
+    lines = out.splitlines()
+    # "extra instances detected: <pid>" is a known cosmetic false positive —
+    # jobman counts its own matching pid — and is deliberately ignored here.
+    extras = [l for l in lines if "extra instances detected" in l]
+    engine = next((l for l in lines
+                   if l.startswith("Engine") and "extra" not in l), "")
+    sched = next((l for l in lines
+                  if l.startswith("Scheduler") and "extra" not in l), "")
+
+    if engine.startswith("Engine running"):
+        report.passed("jobs", "job engine", engine)
+    else:
+        report.fail("jobs", "job engine not running",
+                    engine or "no Engine line in jobman output",
+                    "3_mojo_jobs cron revives it within a minute — if it "
+                    "stays down, read var/logs/jobman.log")
+    if sched.startswith("Scheduler running"):
+        report.passed("jobs", "job scheduler", sched)
+    else:
+        report.fail("jobs", "job scheduler not running",
+                    sched or "no Scheduler line in jobman output",
+                    "3_mojo_jobs cron restarts it — check var/logs/jobman.log "
+                    "if it does not come back")
+    if extras and VERBOSE:
+        report.info("jobs", "extra-instance lines ignored",
+                    extras[0] + " — known cosmetic false positive (jobman "
+                    "matches its own pid)")
+
+
+# ---------------------------------------------------------------------------
+# entry
+# ---------------------------------------------------------------------------
+
+def main(argv):
+    global VERBOSE
+    parser = argparse.ArgumentParser(
+        prog="python3 -m mojo.deploy.check_node",
+        description="Audit one node against the on-node deploy-plane contract "
+                    "(the complement of check_setup's AWS-side audit)")
+    parser.add_argument("--project-path", default="/opt/api",
+                        help="the deployed tree being audited (default: /opt/api)")
+    parser.add_argument("--repo-path", default=None,
+                        help="git tree defining the nginx contract "
+                             "(aws/nginx). Default: --project-path. Over "
+                             "--ssh this is a REMOTE path.")
+    parser.add_argument("--ssh", metavar="HOST", default=None,
+                        help="audit HOST instead of this machine — every "
+                             "probe runs as `ssh HOST ...` (BatchMode)")
+    parser.add_argument("--probe-url",
+                        default="http://127.0.0.1/api/version",
+                        help="the health-gate URL the deploy plane probes on "
+                             "this project (default: "
+                             "http://127.0.0.1/api/version)")
+    parser.add_argument("--app-user", default="ec2-user",
+                        help="user that owns the tree and runs the job "
+                             "engines (default: ec2-user)")
+    parser.add_argument("--web-user", default="www",
+                        help="user the asgi app runs as (default: www)")
+    parser.add_argument("--asgi-workers", default="4",
+                        help="the @WORKERS@ value the last render used — only "
+                             "consulted by the template-freshness diff "
+                             "(default: 4)")
+    parser.add_argument("--require-shims", action="store_true",
+                        help="grade a forked aws/ script or an undeclared "
+                             "template collision FAIL instead of WARN")
+    parser.add_argument("--section", default="all",
+                        help=f"comma-separated subset of: {', '.join(SECTIONS)}")
+    parser.add_argument("--json", action="store_true",
+                        help="emit findings as JSON")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="extra INFO-level detail")
+    args = parser.parse_args(argv)
+    VERBOSE = args.verbose
+
+    if args.section == "all":
+        wanted = set(SECTIONS)
+    else:
+        wanted = {s.strip() for s in args.section.split(",")}
+        unknown = wanted - set(SECTIONS)
+        if unknown:
+            parser.error(f"unknown section(s): {', '.join(sorted(unknown))}")
+
+    proj = args.project_path.rstrip("/")
+    repo = args.repo_path.rstrip("/") if args.repo_path else proj
+
+    run = build_runner(args.ssh)
+    if args.ssh:
+        rc, _, err = run("true", timeout=15)
+        if rc != 0:
+            print(f"cannot reach {args.ssh} over ssh (BatchMode): "
+                  f"{err or 'connection failed'}", file=sys.stderr)
+            return 2
+
+    # Root-only material (letsencrypt, TLS keys behind nginx -t) is probed
+    # through passwordless sudo when available; otherwise those probes degrade
+    # to INFO rather than failing the audit blind.
+    sudo = "sudo -n " if run("sudo -n true 2>/dev/null")[0] == 0 else ""
+
+    retired_cron, retired_confd = read_retired(run, proj)
+
+    report = Report()
+    if "repo" in wanted:
+        check_repo(report, run, proj, args.app_user)
+    if "framework" in wanted:
+        check_framework(report, run, proj)
+    if "cron" in wanted:
+        check_cron(report, run, proj)
+    if "systemd" in wanted:
+        check_systemd(report, run, proj)
+    if "nginx" in wanted:
+        check_nginx(report, run, repo, sudo, args.probe_url, retired_confd)
+    if "certs" in wanted:
+        check_certs(report, run, sudo)
+    if "config_plane" in wanted:
+        check_config_plane(report, run, proj, args.app_user, args.web_user)
+    if "shims" in wanted:
+        check_shims(report, run, proj, args.require_shims)
+        check_collisions(report, run, proj, args.require_shims)
+        if not args.ssh:
+            check_template_freshness(report, proj, args.app_user,
+                                     args.web_user, args.asgi_workers)
+        elif VERBOSE:
+            report.info("shims", "template freshness skipped",
+                        "only audited locally — the local package version "
+                        "says nothing about the remote node's")
+    if "legacy" in wanted:
+        check_legacy(report, run, proj, repo, retired_cron)
+    if "var_ownership" in wanted:
+        check_var_ownership(report, run, proj, args.app_user, args.web_user)
+    if "jobs" in wanted:
+        check_jobs(report, run, proj)
+
+    if args.json:
+        print(json.dumps({
+            "findings": report.findings,
+            "counts": report.counts(),
+        }, indent=2))
+    else:
+        report.render()
+
+    return 1 if report.counts()[FAIL] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,19 @@
+[Unit]
+Description=Poll S3 for application config changes
+# Docs: django-mojo docs/django_developer/deploy/README.md (config_sync)
+
+[Timer]
+# Boot is handled by config-sync.service ordering (Before=mojo-asgi), so this
+# only covers config published while nodes are already running.
+OnBootSec=2min
+OnUnitActiveSec=2min
+
+# Nodes boot together and would otherwise poll in lockstep. The script also
+# jitters its app restart by hostname; this jitters the fetch itself, so a
+# fleet does not hit the same key at the same instant.
+RandomizedDelaySec=45
+
+Unit=config-sync.service
+
+[Install]
+WantedBy=timers.target

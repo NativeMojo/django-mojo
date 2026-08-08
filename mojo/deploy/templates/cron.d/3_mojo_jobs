@@ -1,0 +1,5 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Load-bearing for the deploy plane: update.sh ends with `jobman stop`, and
+# this tick is what revives the job engine on the new code within a minute.
+* * * * * @APP_USER@ @PROJ_PATH@/bin/jobman start >> @PROJ_PATH@/var/logs/jobman.log 2>&1
