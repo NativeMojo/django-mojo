@@ -37,9 +37,14 @@ def _run(args):
         env=_settings_free_env(), capture_output=True, text=True, timeout=120)
 
 
+DEPLOY_MODULES = ("config_sync", "check_setup", "jobman", "node_setup")
+
+_IMPORT_ALL = "import " + ", ".join("mojo.deploy." + n for n in DEPLOY_MODULES)
+
+
 @th.django_unit_test()
-def test_both_modules_import_without_django_settings(opts):
-    done = _run(["-c", "import mojo.deploy.config_sync, mojo.deploy.check_setup"])
+def test_every_deploy_module_imports_without_django_settings(opts):
+    done = _run(["-c", _IMPORT_ALL])
 
     th.assert_eq(done.returncode, 0,
                  f"mojo/deploy must import with no settings configured.\n"
@@ -79,6 +84,34 @@ def test_check_setup_help_works_under_dash_m(opts):
 
 
 @th.django_unit_test()
+def test_jobman_help_works_under_dash_m(opts):
+    """The shape the shim execs, on a node with no settings on disk."""
+    done = _run(["-m", "mojo.deploy.jobman", "--help"])
+
+    th.assert_eq(done.returncode, 0,
+                 f"`python3 -m mojo.deploy.jobman --help` must exit 0.\n"
+                 f"stderr: {done.stderr}")
+    th.assert_in("usage:", done.stdout,
+                 f"argparse usage must be printed, got: {done.stdout!r}")
+    th.assert_in("mojo.deploy.jobman", done.stdout,
+                 f"prog must name the -m invocation an operator can copy, not "
+                 f"jobman.py: {done.stdout!r}")
+
+
+@th.django_unit_test()
+def test_node_setup_help_works_under_dash_m(opts):
+    done = _run(["-m", "mojo.deploy.node_setup", "--help"])
+
+    th.assert_eq(done.returncode, 0,
+                 f"`python3 -m mojo.deploy.node_setup --help` must exit 0.\n"
+                 f"stderr: {done.stderr}")
+    th.assert_in("usage:", done.stdout,
+                 f"argparse usage must be printed, got: {done.stdout!r}")
+    th.assert_in("mojo.deploy.node_setup", done.stdout,
+                 f"prog must name the -m invocation: {done.stdout!r}")
+
+
+@th.django_unit_test()
 def test_mojo_helpers_logit_is_never_left_imported(opts):
     """mojo.helpers.logit reads paths.LOG_ROOT at module level, and paths.py
     only creates that attribute inside configure_paths(). A well-meaning
@@ -86,7 +119,7 @@ def test_mojo_helpers_logit_is_never_left_imported(opts):
     bootstrap node — this catches it at test time rather than at 3am on a fleet
     reboot."""
     done = _run(["-c", (
-        "import sys, mojo.deploy.config_sync, mojo.deploy.check_setup; "
+        "import sys; " + _IMPORT_ALL + "; "
         "print('logit' if 'mojo.helpers.logit' in sys.modules else 'clean')")])
 
     th.assert_eq(done.returncode, 0,
