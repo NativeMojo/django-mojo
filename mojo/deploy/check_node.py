@@ -709,6 +709,27 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                     else:
                         report.fail("mojosec", f"{asset_name} metadata drift",
                                     f"{asset_path} must be root:root 0644")
+                render_check = (
+                    "import json,pathlib,sys;"
+                    "from mojo.deploy.mojosec import LOGROTATE_TEXT;"
+                    "from mojo.deploy.mojosec_nginx import "
+                    "render_http_log,render_receiver_location;"
+                    "cidrs=json.loads(sys.argv[1]);"
+                    "pairs=((pathlib.Path('/etc/nginx/conf.d/00_mojosec.conf'),"
+                    "render_http_log('/var/log/nginx/mojosec.json.log',cidrs)),"
+                    "(pathlib.Path('/etc/nginx/snippets/mojosec_receiver.conf'),"
+                    "render_receiver_location()+'\\n'),"
+                    "(pathlib.Path('/etc/logrotate.d/mojosec'),LOGROTATE_TEXT));"
+                    "raise SystemExit(0 if all(p.read_text()==want for p,want in pairs) else 1)"
+                )
+                cidr_json = json.dumps(
+                    provenance.get("trusted_proxy_cidrs", []), separators=(",", ":"))
+                if run(f"{sudo}python3 -I -c {q(render_check)} {q(cidr_json)}")[0] == 0:
+                    report.passed("mojosec", "generated nginx assets",
+                                  "installed bytes match the package render exactly")
+                else:
+                    report.fail("mojosec", "generated nginx asset drift",
+                                "fragment, receiver, or rotation bytes differ from package")
                 log_meta = _secure_metadata(
                     run, "/var/log/nginx/mojosec.json.log", "640", sudo=sudo)
                 if log_meta is not None and log_meta[1]:
