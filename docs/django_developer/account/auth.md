@@ -563,9 +563,13 @@ A gated destination that equals the request's own `HTTP_HOST` is a
 configuration error: the auth page short-circuits a same-origin redirect to
 direct navigation, so no code is ever minted and the JWT already lives in that
 origin's storage. It files a level-2 misconfiguration incident.
-`HTTP_HOST` is `ALLOWED_HOSTS`-validated, so it is a trustworthy signal — but a
-**white-label `auth_domain` on a different host cannot be detected this way**.
-Do not gate a host you serve auth pages from.
+`HTTP_HOST` is only as trustworthy as `ALLOWED_HOSTS` is specific: a
+multi-tenant deployment cannot list a database-driven set of tenant domains in
+Django settings, so it runs `["*"]` — and `*` validates nothing. Treat the
+request host as a hint here, not a guarantee; the authoritative answer lives in
+the registered auth domains. Also note a **white-label `auth_domain` on a
+different host cannot be detected this way**. Do not gate a host you serve auth
+pages from.
 
 #### What a gated exchange does, and deliberately does not do
 

@@ -238,9 +238,21 @@ def host_of(url):
 def request_host(request):
     """The host this request arrived on, normalized, or None.
 
-    HTTP_HOST is ALLOWED_HOSTS-validated by Django, so it is a trustworthy
-    signal — unlike a white-label auth_domain on some other host, which this
-    cannot see and which the documentation covers instead.
+    **Only as trustworthy as ALLOWED_HOSTS is specific**, which on a
+    multi-tenant deployment is not very. Django validates HTTP_HOST against
+    ALLOWED_HOSTS, but a deployment serving a database-driven set of tenant
+    domains cannot enumerate them in a settings list and runs `["*"]` — and
+    `*` validates nothing, so this is then a caller-supplied string. The
+    authoritative answer to "is this a host we serve" lives in the registered
+    auth domains, not in Django settings.
+
+    Sole caller compares it to a redirect destination for a same-origin
+    carve-out, where a forged value can only name a host the attacker already
+    controls the destination of. Anything that needs a real guarantee must
+    resolve the host against the registered domains itself.
+
+    A white-label auth_domain on some other host is invisible here either way;
+    the documentation covers that case instead.
     """
     if request is None:
         return None
