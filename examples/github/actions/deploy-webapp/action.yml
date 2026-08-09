@@ -1,0 +1,63 @@
+name: Deploy django-mojo WebApp
+description: Upload an immutable WebApp release and wait for fleet convergence
+
+inputs:
+  api-url:
+    description: django-mojo platform origin, for example https://api.example.com
+    required: true
+  webapp-id:
+    description: WebApp primary key linked to MOJO_DEPLOY_KEY
+    required: true
+  artifact-dir:
+    description: Directory containing the already-built static WebApp
+    required: false
+    default: dist
+  version:
+    description: Immutable release version; use the Git commit SHA
+    required: true
+  timeout-seconds:
+    description: Maximum time to wait for fleet convergence
+    required: false
+    default: "900"
+  poll-seconds:
+    description: Deployment status polling interval
+    required: false
+    default: "3"
+
+outputs:
+  release:
+    description: django-mojo WebAppRelease id
+    value: ${{ steps.deploy.outputs.release }}
+  deployment:
+    description: django-mojo WebAppDeployment id
+    value: ${{ steps.deploy.outputs.deployment }}
+  status:
+    description: Final deployment status
+    value: ${{ steps.deploy.outputs.status }}
+
+runs:
+  using: composite
+  steps:
+    - id: deploy
+      shell: bash
+      env:
+        INPUT_API_URL: ${{ inputs.api-url }}
+        INPUT_WEBAPP_ID: ${{ inputs.webapp-id }}
+        INPUT_ARTIFACT_DIR: ${{ inputs.artifact-dir }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
+        INPUT_POLL_SECONDS: ${{ inputs.poll-seconds }}
+      run: |
+        set -euo pipefail
+        if [[ -z "${MOJO_DEPLOY_KEY:-}" ]]; then
+          echo "::error::MOJO_DEPLOY_KEY is required"
+          exit 2
+        fi
+        echo "::add-mask::${MOJO_DEPLOY_KEY}"
+        python3 "${GITHUB_ACTION_PATH}/deploy.py" \
+          --api-url "${INPUT_API_URL}" \
+          --webapp-id "${INPUT_WEBAPP_ID}" \
+          --artifact-dir "${INPUT_ARTIFACT_DIR}" \
+          --version "${INPUT_VERSION}" \
+          --timeout-seconds "${INPUT_TIMEOUT_SECONDS}" \
+          --poll-seconds "${INPUT_POLL_SECONDS}"
