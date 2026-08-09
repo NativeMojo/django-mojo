@@ -130,8 +130,10 @@ rejected and group/member grants never authorize this platform-wide surface.
 | `POST` | `/api/incident/mojosec/shadow` | global `manage_security` or `security` | Explicit offline evaluation of a shadow-labelled proposal |
 | `GET` | `/api/incident/mojosec/metrics` | global `view_security` or `security` | Bounded detector receipt/disposition counts |
 
-Feedback accepts exactly one of `receipt_id`, `incident_id`, or
-`manual_exemplar`. A manual exemplar is only
+Feedback accepts exactly one subject: `receipt_id` or `manual_exemplar`.
+Optional `incident_id` is linked context and must match the explicit published
+receipt; the server never chooses an arbitrary receipt from an incident. A
+manual exemplar is only
 `{"kind": "web.probe", "count": 3, "severity": "high"}`-shaped; arbitrary
 evidence is rejected. `disposition` is one of `confirmed_threat`,
 `expected_administrative`, `benign_noise`, `operational_failure`, `unknown`, or
@@ -160,11 +162,19 @@ Proposal content is deliberately non-executable:
 Create a revision by sending the prior row as `supersedes_id`. Only `draft`,
 `shadow`, and `rejected` exist; no request can activate live policy. Content
 cannot contain regex, URL, handler, job, action, or arbitrary detector names.
+Only an unsuperseded leaf may be evaluated, and a rejected leaf cannot be
+evaluated or revised.
 
 Replay/shadow requests require `proposal_id` plus an explicit, duplicate-free
 `receipt_ids` list containing 1–100 retained receipts. The evaluator uses
-stored `replay_features_v1` only, canonicalizes IDs in ascending order, and
-returns bounded aggregate metrics and digests. `shadow` is not live-event
+stored `replay_features_v1` only, canonicalizes IDs in ascending order, ignores
+host-reported severity in favor of the server `KIND_POLICY` level mapping, and
+returns bounded aggregate metrics and digests. Digests bind the proposal
+content, evaluator schema/version, and server policy-registry digest. `shadow`
+is not live-event
 evaluation and does not attach anything to ingestion. Neither operation can
 create an Event/Incident, call a handler or LLM, send an alert, or ban an IP.
-Metrics are bounded sample counts, not fleet coverage or sensor health.
+Metrics cap and stratify samples per stable installation identity; they contain
+no customer group/tenant stamp and are not fleet coverage or sensor health.
+There is no MojoSec assistant/LLM learning tool in this prototype. Existing
+incident-triage and live RuleSet assistant tools are unchanged.

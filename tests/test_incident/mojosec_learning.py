@@ -1,7 +1,9 @@
+import uuid
+
 from testit import helpers as th
 
 
-PREFIX = "mojosec_learning_test"
+PREFIX = f"mojosec_learning_test_{uuid.uuid4().hex[:12]}"
 PASSWORD = "MojoSecLearning##1"
 
 
@@ -22,33 +24,12 @@ def _policy(decision="flag"):
     }
 
 
-def _delete_feedback_rows(Model):
-    while Model.objects.filter(note__startswith=PREFIX).exists():
-        leaf_ids = list(Model.objects.filter(
-            note__startswith=PREFIX, reversed_by__isnull=True).values_list("id", flat=True))
-        Model.objects.filter(pk__in=leaf_ids).delete()
-
-
 @th.django_unit_setup()
 def setup_mojosec_learning(opts):
     from mojo.apps.account.models import ApiKey, Group, User
     from mojo.apps.incident.models import (
-        Event, Incident, MojoSecDetectorFeedback, MojoSecPolicyEvaluation,
-        MojoSecPolicyProposal, MojoSecReceipt)
+        Event, Incident, MojoSecReceipt)
     from mojo.helpers import dates
-
-    MojoSecPolicyEvaluation.objects.filter(proposal__summary__startswith=PREFIX).delete()
-    while MojoSecPolicyProposal.objects.filter(summary__startswith=PREFIX).exists():
-        leaf_ids = list(MojoSecPolicyProposal.objects.filter(
-            summary__startswith=PREFIX, superseded_by__isnull=True).values_list("id", flat=True))
-        MojoSecPolicyProposal.objects.filter(pk__in=leaf_ids).delete()
-    _delete_feedback_rows(MojoSecDetectorFeedback)
-    MojoSecReceipt.objects.filter(sensor_id__startswith=PREFIX).delete()
-    Incident.objects.filter(category="mojosec.learning.test").delete()
-    Event.objects.filter(category="mojosec.learning.test").delete()
-    ApiKey.objects.filter(name__startswith=PREFIX).delete()
-    Group.objects.filter(name=PREFIX).delete()
-    User.objects.filter(username__startswith=PREFIX).delete()
 
     author = User.objects.create_user(
         f"{PREFIX}@example.test", PASSWORD, username=f"{PREFIX}_author")
@@ -60,8 +41,13 @@ def setup_mojosec_learning(opts):
     disposable.add_permission("manage_security")
     disposable.save()
     group = Group.objects.create(name=PREFIX, kind="organization")
+    group.add_member(author)
     api_key, token = ApiKey.create_for_group(
         group, f"{PREFIX}_key", permissions={"security": True})
+    override_key, override_token = ApiKey.create_for_group(
+        group, f"{PREFIX}_override_key", permissions={}, user=author,
+        override_user=True)
+    from mojo.apps.account.services import group_token
 
     event = Event.objects.create(
         category="mojosec.learning.test", scope="mojosec", level=8,
@@ -88,6 +74,9 @@ def setup_mojosec_learning(opts):
     opts.learning_disposable = disposable
     opts.learning_api_key = api_key
     opts.learning_api_token = token
+    opts.learning_override_api_key = override_key
+    opts.learning_override_api_token = override_token
+    opts.learning_group_token = group_token.mint(author, group)
     opts.learning_receipt_one = receipt_one
     opts.learning_receipt_two = receipt_two
     opts.learning_incident = incident
@@ -106,6 +95,23 @@ def test_mojosec_policy_validator_is_bounded_and_non_executable(opts):
         invalid["detectors"][0][forbidden] = "https://example.test/run"
         with th.assert_raises(mojosec_learning.MojoSecLearningError):
             mojosec_learning.validate_policy_content(invalid)
+
+    server_policy = {
+        "schema": "mojosec.policy-proposal.v1",
+        "detectors": [{
+            "kind": "web.error", "decision": "flag",
+            "minimum_severity": "high",
+        }],
+    }
+    evaluated = mojosec_learning.evaluate_features(server_policy, [{
+        "id": 1, "payload_digest": "a" * 64,
+        "replay_features": _features(
+            kind="web.error", count=1, severity="critical"),
+    }])
+    th.assert_eq(evaluated["metrics"]["flagged"], 0,
+                 "host critical severity must not override server web.error level 5")
+    th.assert_eq(evaluated["metrics"]["unmatched"], 1,
+                 "effective replay severity must be derived from server KIND_POLICY")
 
 
 @th.django_unit_test()
@@ -137,7 +143,7 @@ def test_mojosec_feedback_exact_subject_and_reversal_chain(opts):
     th.assert_eq(third.subject_id_snapshot, first.subject_id_snapshot,
                  "every reversal must preserve the original immutable subject snapshot")
     th.assert_eq(MojoSecDetectorFeedback.objects.filter(
-        subject_key=first.subject_key, reversed_by__isnull=True).count(), 1,
+        subject_key=first.subject_key, current_subject_head__isnull=False).count(), 1,
         "a reversal chain must expose exactly one current disposition")
     first.note = "mutation"
     with th.assert_raises(ValueError):
@@ -170,16 +176,21 @@ def test_mojosec_feedback_survives_subject_and_author_deletion(opts):
     th.assert_eq(reversal.subject_id_snapshot, str(receipt_pk),
                  "a reversal must inherit a pruned subject's durable identity snapshot")
 
+    with th.assert_raises(mojosec_learning.MojoSecLearningError):
+        mojosec_learning.create_feedback(
+            opts.learning_author, "missed_incomplete",
+            incident_id=opts.learning_incident.pk, note=PREFIX)
     incident_feedback = mojosec_learning.create_feedback(
         opts.learning_author, "missed_incomplete",
+        receipt_id=opts.learning_incident_receipt.pk,
         incident_id=opts.learning_incident.pk, note=PREFIX)
     incident_pk = opts.learning_incident.pk
     Incident.objects.filter(pk=incident_pk).delete()
     incident_feedback.refresh_from_db()
     th.assert_true(incident_feedback.incident_id is None,
                    "incident lifecycle deletion must not erase its human disposition")
-    th.assert_eq(incident_feedback.subject_id_snapshot, str(incident_pk),
-                 "incident identity must remain in an immutable scalar snapshot")
+    th.assert_eq(incident_feedback.incident_id_snapshot, incident_pk,
+                 "linked incident context must remain in an immutable scalar snapshot")
 
 
 @th.django_unit_test()
@@ -210,12 +221,30 @@ def test_mojosec_replay_requires_explicit_unique_receipts_and_is_deterministic(o
                  "receipt ordering must be canonical and deterministic")
     th.assert_eq(first.result_digest, second.result_digest,
                  "the same explicit evidence set must produce the same result digest")
+    th.assert_eq(first.metrics["evaluator"]["schema"], "mojosec.offline-evaluator",
+                 "persisted replay metrics must identify the evaluator schema")
+    th.assert_true(bool(first.metrics["evaluator"]["kind_policy_registry_digest"]),
+                   "replay provenance must bind the server KIND_POLICY registry")
     th.assert_eq(MojoSecPolicyEvaluation.objects.filter(proposal=shadow).count(), 2,
                  "explicit shadow calls should persist only bounded evaluation summaries")
     th.assert_eq(Incident.objects.count(), incident_count,
                  "offline shadow evaluation must never create an incident")
     th.assert_eq(RuleSet.objects.count(), ruleset_count,
                  "policy proposals must never modify manually-authored live RuleSets")
+    with th.assert_raises(mojosec_learning.MojoSecLearningError):
+        mojosec_learning.evaluate_proposal(
+            opts.learning_author, proposal.pk,
+            receipt_ids=[opts.learning_receipt_one.pk])
+    rejected = mojosec_learning.create_policy_proposal(
+        opts.learning_author, _policy(), summary=f"{PREFIX} rejected",
+        status="rejected", supersedes=shadow.pk)
+    with th.assert_raises(mojosec_learning.MojoSecLearningError):
+        mojosec_learning.evaluate_proposal(
+            opts.learning_author, rejected.pk,
+            receipt_ids=[opts.learning_receipt_one.pk])
+    with th.assert_raises(mojosec_learning.MojoSecLearningError):
+        mojosec_learning.create_policy_proposal(
+            opts.learning_author, _policy(), supersedes=rejected.pk)
     from mojo.helpers import dates
     mojosec_learning.prune_learning_evaluations(
         now=first.created + dates.timedelta(days=91))
@@ -239,6 +268,16 @@ def test_mojosec_learning_rejects_api_key_authors_and_reports_bounded_metrics(op
         "/api/incident/mojosec/proposal", {"content": _policy()})
     th.assert_eq(denied.status_code, 403,
                  "a globally permissioned ApiKey must still be denied from learning writes")
+    override_denied = opts.client.post(
+        "/api/incident/mojosec/proposal", {"content": _policy()},
+        headers={"Authorization": f"apikey {opts.learning_override_api_token}"})
+    th.assert_eq(override_denied.status_code, 403,
+                 "an override-user ApiKey must not turn its linked human into a global caller")
+    group_token_denied = opts.client.post(
+        "/api/incident/mojosec/proposal", {"content": _policy()},
+        headers={"Authorization": f"grouptoken {opts.learning_group_token}"})
+    th.assert_eq(group_token_denied.status_code, 403,
+                 "a group-scoped token must never reach the global learning control plane")
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1", key="login")
     logged_in = opts.client.login(f"{PREFIX}@example.test", PASSWORD)
@@ -255,13 +294,102 @@ def test_mojosec_learning_rejects_api_key_authors_and_reports_bounded_metrics(op
                    "detector metrics should be derived from bounded receipt and feedback rows")
     th.assert_true("fleet" not in metrics and "sensor_health" not in metrics,
                    "learning metrics must not fabricate fleet or sensor-health truth")
+    th.assert_true(bool(metrics["installations"]),
+                   "bounded metrics should expose stable installation strata")
+    th.assert_true(all(
+        "group" not in row and "tenant" not in row
+        and row["receipts"] <= metrics["per_installation_sample_limit"]
+        and row["feedback"] <= metrics["per_installation_sample_limit"]
+        for row in metrics["installations"]),
+        "installation strata must remain bounded and must not carry tenant identity")
 
     from mojo.apps.assistant import get_registry
     registry = get_registry()
-    th.assert_true("propose_mojosec_policy" in registry,
-                   "the assistant should expose proposal creation as its only learning write")
+    th.assert_true("propose_mojosec_policy" not in registry,
+                   "learning must remain human-only until structural approval exists")
     th.assert_true("create_rule" in registry,
                    "the learning prototype must not remove ordinary incident triage tools")
-    schema = registry["propose_mojosec_policy"]["definition"]["input_schema"]
-    th.assert_true("status" not in schema["properties"],
-                   "the assistant must not choose shadow/rejected status or activate policy")
+
+
+@th.django_unit_test()
+def test_mojosec_learning_history_guards_queryset_mutation_and_detects_tamper(opts):
+    from mojo.apps.incident.models import (
+        MojoSecDetectorFeedback, MojoSecPolicyProposal)
+    from mojo.apps.incident.services import mojosec_learning
+
+    feedback = mojosec_learning.create_feedback(
+        opts.learning_author, "unknown",
+        manual_exemplar={"kind": "web.denied", "count": 77, "severity": "warning"},
+        note=f"{PREFIX} immutable feedback")
+    proposal = mojosec_learning.create_policy_proposal(
+        opts.learning_author, _policy(), summary=f"{PREFIX} immutable proposal")
+    with th.assert_raises(ValueError):
+        MojoSecDetectorFeedback.objects.filter(pk=feedback.pk).update(note="changed")
+    with th.assert_raises(ValueError):
+        MojoSecDetectorFeedback.objects.filter(pk=feedback.pk).delete()
+    with th.assert_raises(ValueError):
+        MojoSecPolicyProposal.objects.bulk_update([proposal], ["summary"])
+    with th.assert_raises(ValueError):
+        MojoSecPolicyProposal.objects.bulk_create([
+            MojoSecPolicyProposal(
+                created_by=opts.learning_author, content=_policy(),
+                content_digest="0" * 64, summary=f"{PREFIX} bulk")])
+
+    # This named manager is the documented migration/DB-administration escape
+    # hatch. Simulate out-of-band tampering and prove services fail closed.
+    MojoSecPolicyProposal.maintenance_objects.filter(pk=proposal.pk).update(
+        summary="tampered out of band")
+    with th.assert_raises(ValueError):
+        mojosec_learning.evaluate_proposal(
+            opts.learning_author, proposal.pk,
+            receipt_ids=[opts.learning_receipt_one.pk])
+
+    MojoSecDetectorFeedback.maintenance_objects.filter(pk=feedback.pk).update(
+        note="tampered feedback out of band")
+    with th.assert_raises(ValueError):
+        mojosec_learning.detector_metrics(opts.learning_author, days=30, limit=100)
+
+
+@th.django_unit_test()
+def test_mojosec_first_feedback_label_is_concurrency_safe(opts):
+    import threading
+    from django.db import close_old_connections
+    from mojo.apps.account.models import User
+    from mojo.apps.incident.models import MojoSecDetectorFeedback
+    from mojo.apps.incident.services import mojosec_learning
+
+    barrier = threading.Barrier(2)
+    results = []
+    exemplar = {"kind": "web.error", "count": 99, "severity": "critical"}
+
+    def label(disposition):
+        close_old_connections()
+        try:
+            author = User.objects.get(pk=opts.learning_author.pk)
+            barrier.wait(timeout=5)
+            row = mojosec_learning.create_feedback(
+                author, disposition, manual_exemplar=exemplar,
+                note=f"{PREFIX} concurrent {disposition}")
+            results.append(("created", row.pk))
+        except Exception as err:
+            results.append(("error", type(err).__name__))
+        finally:
+            close_old_connections()
+
+    threads = [
+        threading.Thread(target=label, args=("confirmed_threat",)),
+        threading.Thread(target=label, args=("benign_noise",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    th.assert_true(all(not thread.is_alive() for thread in threads),
+                   "concurrent first-label writers must not deadlock")
+    created = [item for item in results if item[0] == "created"]
+    th.assert_eq(len(created), 1,
+                 f"the unique locked subject head must admit one first label: {results}")
+    subject_rows = MojoSecDetectorFeedback.objects.filter(
+        subject_key=f"manual:{mojosec_learning._digest(exemplar)}")
+    th.assert_eq(subject_rows.count(), 1,
+                 "a first-label race must leave one immutable history row")

@@ -9,5 +9,6 @@ from .maestro_board_link import MaestroBoardLink
 from .maestro_item_link import MaestroItemLink
 from .mojosec_receipt import MojoSecReceipt
 from .mojosec_detector_feedback import MojoSecDetectorFeedback
+from .mojosec_detector_feedback_head import MojoSecDetectorFeedbackHead
 from .mojosec_policy_proposal import MojoSecPolicyProposal
 from .mojosec_policy_evaluation import MojoSecPolicyEvaluation

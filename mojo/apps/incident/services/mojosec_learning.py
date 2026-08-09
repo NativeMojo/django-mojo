@@ -4,6 +4,8 @@ import hashlib
 import json
 
 from django.db import transaction
+from django.db.models import F, Window
+from django.db.models.functions import RowNumber
 
 from mojo.helpers import dates
 from mojo.helpers.settings import settings
@@ -12,10 +14,13 @@ from mojo.apps.incident.services.mojosec import KIND_POLICY, UNKNOWN_KIND_POLICY
 
 POLICY_SCHEMA = "mojosec.policy-proposal.v1"
 REPLAY_SCHEMA = "replay_features_v1"
+EVALUATOR_SCHEMA = "mojosec.offline-evaluator"
+EVALUATOR_VERSION = 1
 MAX_POLICY_BYTES = 16 * 1024
 MAX_DETECTORS = 24
 MAX_REPLAY_ROWS = 100
 MAX_METRIC_ROWS = 1000
+MAX_METRIC_ROWS_PER_INSTALLATION = 100
 MAX_NOTE = 1000
 MAX_SUMMARY = 500
 ALLOWED_KINDS = frozenset(KIND_POLICY)
@@ -34,6 +39,21 @@ def _canonical_json(value):
 
 def _digest(value):
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _kind_policy_registry_digest():
+    return _digest({
+        "kind_policy": {key: KIND_POLICY[key] for key in sorted(KIND_POLICY)},
+        "unknown_kind_policy": UNKNOWN_KIND_POLICY,
+    })
+
+
+def _evaluator_provenance():
+    return {
+        "schema": EVALUATOR_SCHEMA,
+        "version": EVALUATOR_VERSION,
+        "kind_policy_registry_digest": _kind_policy_registry_digest(),
+    }
 
 
 def _bounded_text(value, field, limit, required=False):
@@ -150,33 +170,32 @@ def _receipt_snapshot(receipt):
             receipt.sensor_policy_revision.encode("utf-8")).hexdigest()
             if receipt.sensor_policy_revision else "",
         "observed_count": max(1, min(10000, int(event_features.get("count") or 1))),
+        "receipt_wire_event_id_snapshot": receipt.wire_event_id,
+        "incident_id_snapshot": receipt.incident_id,
     }
-
-
-def _incident_snapshot(incident):
-    from mojo.apps.incident.models import MojoSecReceipt
-
-    receipt = MojoSecReceipt.objects.filter(incident=incident).order_by("id").first()
-    if receipt is None:
-        raise MojoSecLearningError("incident is not backed by MojoSec receipt evidence")
-    return _receipt_snapshot(receipt)
 
 
 def _subject_key(receipt, incident, manual):
     if receipt is not None:
         return f"receipt:{receipt.pk}"
-    if incident is not None:
-        return f"incident:{incident.pk}"
     return f"manual:{_digest(manual)}"
 
 
 def _subject_snapshot(receipt, incident, manual):
     if receipt is not None:
         return "receipt", str(receipt.pk)
-    if incident is not None:
-        return "incident", str(incident.pk)
     digest = _digest(manual)
     return "manual", digest
+
+
+def _locked_feedback_head(subject_key):
+    from mojo.apps.incident.models import MojoSecDetectorFeedbackHead
+
+    # Django's get_or_create retries a unique-key insert race in its own
+    # savepoint. Lock the resulting stable row before inspecting its pointer.
+    MojoSecDetectorFeedbackHead.objects.get_or_create(subject_key=subject_key)
+    return MojoSecDetectorFeedbackHead.objects.select_for_update().get(
+        subject_key=subject_key)
 
 
 def create_feedback(author, disposition, receipt_id=None, incident_id=None,
@@ -189,7 +208,10 @@ def create_feedback(author, disposition, receipt_id=None, incident_id=None,
     if disposition not in choices:
         raise MojoSecLearningError("disposition is not allowlisted")
     note = _bounded_text(note, "note", MAX_NOTE)
-    subjects = sum(value is not None for value in (receipt_id, incident_id, manual_exemplar))
+    subjects = sum(value is not None for value in (receipt_id, manual_exemplar))
+    if incident_id is not None and receipt_id is None:
+        raise MojoSecLearningError(
+            "incident context requires an explicit MojoSec receipt exemplar")
     if subjects != 1 and not (reverses_id is not None and subjects == 0):
         raise MojoSecLearningError(
             "exactly one subject is required, unless a reversal inherits its prior subject")
@@ -199,8 +221,7 @@ def create_feedback(author, disposition, receipt_id=None, incident_id=None,
         if reverses_id is not None:
             reverses = MojoSecDetectorFeedback.objects.select_for_update().get(
                 pk=_bounded_int(reverses_id, "reverses_id", 1, 2 ** 63 - 1))
-            if hasattr(reverses, "reversed_by"):
-                raise MojoSecLearningError("feedback has already been reversed")
+            reverses.assert_integrity()
             if not note:
                 raise MojoSecLearningError("a reversal requires a bounded note")
         receipt = None
@@ -218,6 +239,8 @@ def create_feedback(author, disposition, receipt_id=None, incident_id=None,
                 "sensor_id": reverses.sensor_id,
                 "sensor_policy_revision_sha256": reverses.sensor_policy_revision_sha256,
                 "observed_count": reverses.observed_count,
+                "receipt_wire_event_id_snapshot": reverses.receipt_wire_event_id_snapshot,
+                "incident_id_snapshot": reverses.incident_id_snapshot,
             }
             subject_key = reverses.subject_key
             subject_type = reverses.subject_type
@@ -227,11 +250,15 @@ def create_feedback(author, disposition, receipt_id=None, incident_id=None,
             # joined side, so lock the receipt alone and resolve Event after.
             receipt = MojoSecReceipt.objects.select_for_update().get(
                 pk=_bounded_int(receipt_id, "receipt_id", 1, 2 ** 63 - 1))
+            if receipt.publish_state != MojoSecReceipt.PUBLISH_PUBLISHED:
+                raise MojoSecLearningError("receipt exemplar must be published")
+            if incident_id is not None:
+                context_id = _bounded_int(incident_id, "incident_id", 1, 2 ** 63 - 1)
+                if receipt.incident_id != context_id:
+                    raise MojoSecLearningError(
+                        "incident context must match the explicit receipt exemplar")
+                incident = Incident.objects.select_for_update().get(pk=context_id)
             snapshot = _receipt_snapshot(receipt)
-        elif incident_id is not None:
-            incident = Incident.objects.select_for_update().get(
-                pk=_bounded_int(incident_id, "incident_id", 1, 2 ** 63 - 1))
-            snapshot = _incident_snapshot(incident)
         else:
             manual = validate_manual_exemplar(manual_exemplar)
             policy = KIND_POLICY[manual["kind"]]
@@ -243,6 +270,8 @@ def create_feedback(author, disposition, receipt_id=None, incident_id=None,
                 "sensor_id": "",
                 "sensor_policy_revision_sha256": "",
                 "observed_count": manual["count"],
+                "receipt_wire_event_id_snapshot": "",
+                "incident_id_snapshot": None,
             }
         if subjects:
             subject_key = _subject_key(receipt, incident, manual)
@@ -258,19 +287,30 @@ def create_feedback(author, disposition, receipt_id=None, incident_id=None,
                 "sensor_id": reverses.sensor_id,
                 "sensor_policy_revision_sha256": reverses.sensor_policy_revision_sha256,
                 "observed_count": reverses.observed_count,
+                "receipt_wire_event_id_snapshot": reverses.receipt_wire_event_id_snapshot,
+                "incident_id_snapshot": reverses.incident_id_snapshot,
             }
             manual = dict(reverses.manual_exemplar or {})
             subject_type = reverses.subject_type
             subject_id_snapshot = reverses.subject_id_snapshot
-        elif MojoSecDetectorFeedback.objects.filter(
-                subject_key=subject_key, reversed_by__isnull=True).exists():
+        head = _locked_feedback_head(subject_key)
+        if reverses is not None and head.current_id != reverses.pk:
+            raise MojoSecLearningError("only the current feedback may be reversed")
+        if reverses is None and head.current_id is not None:
             raise MojoSecLearningError(
                 "the subject already has current feedback; reverse it explicitly")
-        return MojoSecDetectorFeedback.objects.create(
+        feedback = MojoSecDetectorFeedback.objects.create(
             author=author, receipt=receipt, incident=incident, reverses=reverses,
             disposition=disposition, note=note, subject_key=subject_key,
             subject_type=subject_type, subject_id_snapshot=subject_id_snapshot,
-            author_id_snapshot=author.pk, manual_exemplar=manual, **snapshot)
+            author_id_snapshot=author.pk,
+            author_identity_snapshot=str(
+                getattr(author, "username", None) or getattr(author, "email", author.pk)
+            )[:254],
+            manual_exemplar=manual, **snapshot)
+        head.current = feedback
+        head.save(update_fields=["current", "modified"])
+        return feedback
 
 
 def create_policy_proposal(author, content, summary="", status="draft", supersedes=None):
@@ -287,6 +327,9 @@ def create_policy_proposal(author, content, summary="", status="draft", supersed
         previous = None
         if supersedes is not None:
             previous = MojoSecPolicyProposal.objects.select_for_update().get(pk=supersedes)
+            previous.assert_integrity()
+            if previous.content_digest != _digest(validate_policy_content(previous.content)):
+                raise MojoSecLearningError("superseded proposal content digest does not match")
             if previous.status == MojoSecPolicyProposal.REJECTED:
                 raise MojoSecLearningError("a rejected proposal cannot be revised")
             if hasattr(previous, "superseded_by"):
@@ -314,13 +357,28 @@ def _feature_projection(replay_features):
     if not isinstance(event, dict):
         return None
     kind = event.get("kind")
-    severity = event.get("severity")
     count = event.get("count")
-    if kind not in ALLOWED_KINDS or severity not in ALLOWED_SEVERITIES:
+    if kind not in ALLOWED_KINDS:
         return None
     if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 10000:
         return None
-    return {"kind": kind, "severity": severity, "count": count}
+    level = KIND_POLICY[kind]["level"]
+    if level >= 12:
+        severity = "critical"
+    elif level >= 8:
+        severity = "high"
+    elif level >= 5:
+        severity = "warning"
+    else:
+        severity = "info"
+    effective = replay_features.get("effective")
+    if effective is not None:
+        expected = {
+            "kind": kind, "severity": severity, "level": level, "count": count,
+        }
+        if not isinstance(effective, dict) or effective != expected:
+            return None
+    return {"kind": kind, "severity": severity, "level": level, "count": count}
 
 
 def evaluate_features(content, rows):
@@ -354,12 +412,18 @@ def evaluate_features(content, rows):
         kind_metrics[outcome] += 1
         sample.append({"id": receipt_id, "payload_digest": payload_digest})
         decisions.append({"id": receipt_id, "outcome": outcome})
+    provenance = _evaluator_provenance()
     metrics = dict(totals)
     metrics["by_kind"] = {key: kinds[key] for key in sorted(kinds)}
+    metrics["evaluator"] = provenance
+    content_digest = _digest(policy)
     return {
         "sample_count": len(sample),
-        "sample_digest": _digest(sample),
-        "result_digest": _digest({"policy": policy, "decisions": decisions}),
+        "sample_digest": _digest({"evaluator": provenance, "sample": sample}),
+        "result_digest": _digest({
+            "evaluator": provenance, "content_digest": content_digest,
+            "decisions": decisions,
+        }),
         "metrics": metrics,
     }
 
@@ -373,13 +437,6 @@ def evaluate_proposal(author, proposal_id, mode="replay", receipt_ids=None, limi
         raise MojoSecLearningError("mode must be replay or shadow")
     limit = _bounded_int(limit, "limit", 1, MAX_REPLAY_ROWS)
     proposal_id = _bounded_int(proposal_id, "proposal_id", 1, 2 ** 63 - 1)
-    proposal = MojoSecPolicyProposal.objects.get(pk=proposal_id)
-    content = validate_policy_content(proposal.content)
-    if proposal.status == MojoSecPolicyProposal.REJECTED:
-        raise MojoSecLearningError("rejected proposals cannot be evaluated")
-    if mode == MojoSecPolicyEvaluation.SHADOW and proposal.status != MojoSecPolicyProposal.SHADOW:
-        raise MojoSecLearningError("shadow evaluation requires a shadow proposal revision")
-
     if not isinstance(receipt_ids, list) or not receipt_ids or len(receipt_ids) > limit:
         raise MojoSecLearningError("receipt_ids must be an explicit non-empty bounded list")
     normalized_ids = [
@@ -389,23 +446,36 @@ def evaluate_proposal(author, proposal_id, mode="replay", receipt_ids=None, limi
     if len(set(normalized_ids)) != len(normalized_ids):
         raise MojoSecLearningError("receipt_ids must not contain duplicates")
     normalized_ids.sort()
-    rows_by_id = {
-        row["id"]: row
-        for row in MojoSecReceipt.objects.filter(
-            publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
-            pk__in=normalized_ids,
-        ).values("id", "payload_digest", "replay_features")
-    }
-    if set(rows_by_id) != set(normalized_ids):
-        raise MojoSecLearningError("every receipt_id must identify retained published evidence")
-    rows = [rows_by_id[value] for value in normalized_ids]
-    result = evaluate_features(content, rows)
-    if result["sample_count"] != len(rows):
-        raise MojoSecLearningError("every receipt_id must contain replay_features_v1")
-    return MojoSecPolicyEvaluation.objects.create(
-        proposal=proposal, created_by=author, mode=mode,
-        sample_count=result["sample_count"], sample_digest=result["sample_digest"],
-        result_digest=result["result_digest"], metrics=result["metrics"])
+    with transaction.atomic():
+        proposal = MojoSecPolicyProposal.objects.select_for_update().get(pk=proposal_id)
+        proposal.assert_integrity()
+        if MojoSecPolicyProposal.objects.filter(supersedes=proposal).exists():
+            raise MojoSecLearningError("only an unsuperseded proposal leaf may be evaluated")
+        content = validate_policy_content(proposal.content)
+        if proposal.content_digest != _digest(content):
+            raise MojoSecLearningError("proposal content digest does not match")
+        if proposal.status == MojoSecPolicyProposal.REJECTED:
+            raise MojoSecLearningError("a rejected proposal leaf closes its lineage")
+        if mode == MojoSecPolicyEvaluation.SHADOW and proposal.status != MojoSecPolicyProposal.SHADOW:
+            raise MojoSecLearningError("shadow evaluation requires a shadow proposal revision")
+        rows_by_id = {
+            row["id"]: row
+            for row in MojoSecReceipt.objects.filter(
+                publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
+                pk__in=normalized_ids,
+            ).values("id", "payload_digest", "replay_features")
+        }
+        if set(rows_by_id) != set(normalized_ids):
+            raise MojoSecLearningError(
+                "every receipt_id must identify retained published evidence")
+        rows = [rows_by_id[value] for value in normalized_ids]
+        result = evaluate_features(content, rows)
+        if result["sample_count"] != len(rows):
+            raise MojoSecLearningError("every receipt_id must contain replay_features_v1")
+        return MojoSecPolicyEvaluation.objects.create(
+            proposal=proposal, created_by=author, mode=mode,
+            sample_count=result["sample_count"], sample_digest=result["sample_digest"],
+            result_digest=result["result_digest"], metrics=result["metrics"])
 
 
 def detector_metrics(author, days=30, limit=1000):
@@ -415,12 +485,31 @@ def detector_metrics(author, days=30, limit=1000):
     days = _bounded_int(days, "days", 1, 365)
     limit = _bounded_int(limit, "limit", 1, MAX_METRIC_ROWS)
     cutoff = dates.utcnow() - dates.timedelta(days=days)
-    receipts = list(MojoSecReceipt.objects.filter(created__gte=cutoff).order_by("-created").values(
-        "id", "replay_features")[:limit])
+    per_installation = min(
+        MAX_METRIC_ROWS_PER_INSTALLATION, max(1, limit // 10))
+    receipts = list(MojoSecReceipt.objects.filter(
+        created__gte=cutoff, publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
+    ).annotate(
+        installation_row=Window(
+            expression=RowNumber(),
+            partition_by=[F("api_key_id"), F("sensor_id")],
+            order_by=[F("created").desc(), F("id").desc()],
+        ),
+    ).filter(installation_row__lte=per_installation).order_by(
+        "api_key_id", "sensor_id", "-created", "-id").values(
+            "id", "api_key_id", "sensor_id", "replay_features")[:limit])
     feedback = list(MojoSecDetectorFeedback.objects.filter(
-        created__gte=cutoff, reversed_by__isnull=True).order_by("-created").values(
-            "detector_kind", "disposition")[:limit])
+        created__gte=cutoff, current_subject_head__isnull=False,
+    ).annotate(
+        installation_row=Window(
+            expression=RowNumber(),
+            partition_by=[F("installation_key_id_snapshot"), F("sensor_id")],
+            order_by=[F("created").desc(), F("id").desc()],
+        ),
+    ).filter(installation_row__lte=per_installation).order_by(
+        "installation_key_id_snapshot", "sensor_id", "-created", "-id")[:limit])
     kinds = {}
+    installations = {}
     for receipt in receipts:
         feature = _feature_projection(receipt["replay_features"])
         if feature is None:
@@ -428,17 +517,32 @@ def detector_metrics(author, days=30, limit=1000):
         row = kinds.setdefault(feature["kind"], {"receipts": 0, "occurrences": 0, "feedback": {}})
         row["receipts"] += 1
         row["occurrences"] += feature["count"]
+        installation = f"{receipt['api_key_id']}:{receipt['sensor_id']}"
+        install_row = installations.setdefault(
+            installation, {"installation_key_id": receipt["api_key_id"],
+                           "sensor_id": receipt["sensor_id"], "receipts": 0,
+                           "feedback": 0})
+        install_row["receipts"] += 1
     for item in feedback:
-        row = kinds.setdefault(item["detector_kind"], {"receipts": 0, "occurrences": 0, "feedback": {}})
-        disposition = item["disposition"]
+        item.assert_integrity()
+        row = kinds.setdefault(item.detector_kind, {"receipts": 0, "occurrences": 0, "feedback": {}})
+        disposition = item.disposition
         row["feedback"][disposition] = row["feedback"].get(disposition, 0) + 1
+        installation = f"{item.installation_key_id_snapshot or 'manual'}:{item.sensor_id}"
+        install_row = installations.setdefault(
+            installation, {"installation_key_id": item.installation_key_id_snapshot,
+                           "sensor_id": item.sensor_id, "receipts": 0,
+                           "feedback": 0})
+        install_row["feedback"] += 1
     return {
         "window_days": days,
         "receipt_sample_limit": limit,
         "feedback_sample_limit": limit,
+        "per_installation_sample_limit": per_installation,
         "receipt_rows_scanned": len(receipts),
         "feedback_rows_scanned": len(feedback),
         "detectors": {key: kinds[key] for key in sorted(kinds)},
+        "installations": [installations[key] for key in sorted(installations)],
     }
 
 
