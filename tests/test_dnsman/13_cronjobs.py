@@ -21,18 +21,16 @@ def test_poll_publishes_rather_than_running_inline(opts):
     from mojo.apps.dnsman import cronjobs
     from mojo.apps.dnsman.services import registrar
 
-    published = []
-
-    def fake_publish(func=None, payload=None, **kwargs):
-        published.append(dict(func=func, payload=payload, **kwargs))
-        return "job-1"
-
     def exploding_poll():
         raise AssertionError(
             "poll_pending ran INLINE in the cron function — it must be "
             "published to the job engine, not executed on the cron thread")
 
-    with mock.patch.object(cronjobs.jobs, "publish", fake_publish), \
+    # Scoped capture, not a plain mock: test modules run as parallel threads
+    # and a swallowing publish mock here eats other modules' real publishes.
+    with th.capture_publishes(
+            lambda c: str(c.get("func", "")).startswith("mojo.apps.dnsman.")
+    ) as published, \
             mock.patch.object(registrar, "poll_pending", exploding_poll):
         result = cronjobs.poll_domain_operations()
 
@@ -40,7 +38,7 @@ def test_poll_publishes_rather_than_running_inline(opts):
         f"expected exactly one published job, got {len(published)}"
     assert published[0]["func"] == "mojo.apps.dnsman.asyncjobs.poll_domain_operations", \
         f"published the wrong job func: {published[0]['func']}"
-    assert result == "job-1", \
+    assert result == "fake-job-1", \
         "the cron function should return the published job id"
 
 

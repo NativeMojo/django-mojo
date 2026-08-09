@@ -99,12 +99,25 @@ class FakeDns(object):
 
 
 class FakeJobs(object):
-    """Captures every ``jobs.publish`` call the service makes."""
+    """Captures the dnsman publishes the certs service makes.
+
+    Anything else is FORWARDED to the real ``jobs.publish``: the patch is
+    process-global while test modules run as parallel threads, and swallowing
+    a foreign module's real publish mid-window is the
+    15_deploy_orchestrate/test_run_jobs_helper flake. Kept as a stub class
+    (rather than th.capture_publishes) because the tests read ``.published``
+    objicts; the real publish is bound at construction, before the patch.
+    """
 
     def __init__(self):
+        import mojo.apps.jobs as jobs_module
+
         self.published = []
+        self._real_publish = jobs_module.publish
 
     def publish(self, func, payload=None, **kwargs):
+        if not str(func).startswith("mojo.apps.dnsman."):
+            return self._real_publish(func, payload=payload, **kwargs)
         job_id = f"job-{len(self.published) + 1}"
         self.published.append(objict(
             func=func,

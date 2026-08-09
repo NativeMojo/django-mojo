@@ -1151,6 +1151,59 @@ def promote_scheduled_jobs(channel=None, now=None):
     return promoted
 
 
+@contextlib.contextmanager
+def capture_publishes(match, side_effect=None, result=None):
+    """
+    Capture the `jobs.publish` calls a test cares about — forward the rest.
+
+    `mock.patch.object(jobs, "publish", <recorder>)` is process-global while
+    test modules run as parallel threads: a foreign module's REAL publish that
+    lands inside the patched window is swallowed, its job ids come back fake,
+    and its tests fail with nothing on the queue (the 15_deploy_orchestrate /
+    test_run_jobs_helper flake). This wrapper keeps the recording semantics
+    but only for calls the predicate claims; everything else goes through to
+    the real publish untouched.
+
+        with th.capture_publishes(lambda c: c["func"] == MY_JOB) as calls:
+            service.do_thing()
+        assert calls[0]["channel"] == "mine"
+
+    Args:
+        match: predicate(call_dict) -> bool. REQUIRED — an always-True match
+            recreates the cross-thread bug, so scope it to the funcs or
+            channels the test owns. Positional (func, payload) arguments are
+            normalized into the dict before matching.
+        side_effect: exception instance to raise for MATCHING calls, for
+            tests exercising their own publish-failure path.
+        result: fixed return value for matching calls; default
+            "fake-job-<n>".
+
+    Yields the list of captured call dicts. Captured calls are NOT queued.
+    """
+    from unittest import mock
+
+    import mojo.apps.jobs as jobs_module
+
+    real_publish = jobs_module.publish
+    captured = []
+
+    def capturing_publish(*args, **kwargs):
+        call = dict(kwargs)
+        if args:
+            call.setdefault("func", args[0])
+            if len(args) > 1:
+                call.setdefault("payload", args[1])
+        if not match(call):
+            return real_publish(*args, **kwargs)
+        captured.append(call)
+        if side_effect is not None:
+            raise side_effect
+        return result if result is not None else f"fake-job-{len(captured)}"
+
+    with mock.patch.object(jobs_module, "publish", capturing_publish):
+        yield captured
+
+
 def run_jobs(channel=None, max_jobs=100, include_scheduled=True):
     """
     Execute every pending job synchronously, in THIS process, then return.

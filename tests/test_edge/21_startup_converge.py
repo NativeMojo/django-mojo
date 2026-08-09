@@ -32,28 +32,18 @@ def test_startup_hook_is_registered(opts):
 
 @th.django_unit_test("startup converge installs every pool, publishes nothing")
 def test_startup_converge_installs_pools(opts):
-    import mojo.apps.jobs as jobs_module
     from mojo.apps.edge import asyncjobs
 
     declare_pools(["alpha", "beta"])
     installed = []
-    edge_broadcasts = []
-
-    # Wrap-and-forward rather than replace: test modules run in parallel
-    # threads, and swallowing jobs.publish here breaks any concurrent module
-    # publishing real jobs (the 15_deploy_orchestrate/test_jobs race).
-    real_publish = jobs_module.publish
-
-    def spying_publish(*args, **kw):
-        if kw.get("channel") == "edge" and kw.get("broadcast"):
-            edge_broadcasts.append(kw)
-        return real_publish(*args, **kw)
 
     try:
         with mock.patch(
                 "mojo.apps.edge.services.installer.install",
                 side_effect=lambda pool: installed.append(pool) or mock.Mock(changed=True)), \
-                mock.patch.object(jobs_module, "publish", spying_publish):
+                th.capture_publishes(
+                    lambda c: c.get("channel") == "edge" and c.get("broadcast")
+                ) as edge_broadcasts:
             result = asyncjobs.on_engine_start(_engine())
     finally:
         declare_pools()

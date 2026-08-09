@@ -7,6 +7,12 @@ job rows drained with `th.run_pending_jobs` on a private channel so the
 handlers run with the engine's own calling convention (`func(job)` with a Job
 instance) without touching any other module's queue.
 
+Publishes are captured with `th.capture_publishes` scoped to the deploy
+plane's own job funcs: test modules run as parallel threads, and a plain
+publish mock here swallowed other modules' real publishes mid-window (the
+test_run_jobs_helper flake). Only deploy_node/deploy_orchestrate publishes
+are recorded and suppressed; foreign traffic flows through untouched.
+
 The properties under test are mostly ORDERINGS and ABSENCES: the fleet is
 never told before the canary proves the release, self is told last, a moved
 target is chained rather than lost, and a ghost cannot stomp a later deploy.
@@ -33,21 +39,22 @@ class FakeProc:
         self.stderr = stderr
 
 
-class PublishRecorder:
-    def __init__(self):
-        self.calls = []
+def _deploy_publish(call):
+    """capture_publishes predicate: only the deploy plane's own publishes."""
+    from mojo.apps.edge.services import deploy
 
-    def __call__(self, **kwargs):
-        self.calls.append(kwargs)
-        return f"fake-job-{len(self.calls)}"
+    return call.get("func") in (deploy.DEPLOY_NODE_JOB,
+                                deploy.DEPLOY_ORCHESTRATE_JOB)
 
-    def channels(self):
-        return [c.get("channel") for c in self.calls]
 
-    def node_calls(self):
-        from mojo.apps.edge.services import deploy
+def _channels(calls):
+    return [c.get("channel") for c in calls]
 
-        return [c for c in self.calls if c.get("func") == deploy.DEPLOY_NODE_JOB]
+
+def _node_calls(calls):
+    from mojo.apps.edge.services import deploy
+
+    return [c for c in calls if c.get("func") == deploy.DEPLOY_NODE_JOB]
 
 
 def _runners(*alive_ids, dead=()):
@@ -111,18 +118,17 @@ def test_single_runner(opts):
     deploy.arm_status(SHA_A)
     _publish_orchestrate(SHA_A)
 
-    recorder = PublishRecorder()
-    with mock.patch.object(jobs_module, "get_runners",
+    with th.capture_publishes(_deploy_publish) as calls, \
+         mock.patch.object(jobs_module, "get_runners",
                            return_value=_runners(opts.me)), \
-         mock.patch.object(jobs_module, "publish", recorder), \
          mock.patch.object(deploy, "resolve_framework_version",
                            return_value=FRAMEWORK):
         ran = _drain(opts)
 
     th.assert_eq(ran, 1, f"the orchestrate job must have executed, ran={ran}")
-    th.assert_eq(len(recorder.calls), 1,
-                 f"a single-runner fleet publishes exactly one node job, got {recorder.calls!r}")
-    call = recorder.calls[0]
+    th.assert_eq(len(calls), 1,
+                 f"a single-runner fleet publishes exactly one node job, got {calls!r}")
+    call = calls[0]
     th.assert_eq(call["channel"], opts.me, "the local node must be the target")
     th.assert_true(call["payload"]["migrate"],
                    "the single node runs the migrating update")
@@ -148,19 +154,18 @@ def test_canary_failure(opts):
     deploy.set_status(deploy.STATUS_FAILED, SHA_A, detail="sanity check failed: local request")
     _publish_orchestrate(SHA_A)
 
-    recorder = PublishRecorder()
     incidents = mock.Mock()
-    with mock.patch.object(jobs_module, "get_runners",
+    with th.capture_publishes(_deploy_publish) as calls, \
+         mock.patch.object(jobs_module, "get_runners",
                            return_value=_runners(CANARY_ID, opts.me, FLEET_ID)), \
-         mock.patch.object(jobs_module, "publish", recorder), \
          mock.patch.object(deploy, "resolve_framework_version",
                            return_value=FRAMEWORK), \
          mock.patch.object(reporter_module, "report_event", incidents):
         _drain(opts)
 
-    th.assert_eq(len(recorder.node_calls()), 1,
-                 f"only the canary may ever have been told, got {recorder.calls!r}")
-    th.assert_eq(recorder.node_calls()[0]["channel"], CANARY_ID,
+    th.assert_eq(len(_node_calls(calls)), 1,
+                 f"only the canary may ever have been told, got {calls!r}")
+    th.assert_eq(_node_calls(calls)[0]["channel"], CANARY_ID,
                  "the one node publish must be the canary")
     th.assert_true(incidents.called, "a canary failure must file an incident")
     th.assert_eq(incidents.call_args.kwargs.get("level"), 7,
@@ -181,19 +186,18 @@ def test_canary_success_flow(opts):
     deploy.set_status(deploy.STATUS_DEPLOYING, SHA_A)
     _publish_orchestrate(SHA_A)
 
-    recorder = PublishRecorder()
     get_runners = mock.Mock(return_value=_runners(CANARY_ID, opts.me, FLEET_ID,
                                                   dead=(DEAD_ID,)))
-    with mock.patch.object(jobs_module, "get_runners", get_runners), \
-         mock.patch.object(jobs_module, "publish", recorder), \
+    with th.capture_publishes(_deploy_publish) as calls, \
+         mock.patch.object(jobs_module, "get_runners", get_runners), \
          mock.patch.object(deploy, "resolve_framework_version",
                            return_value=FRAMEWORK):
         _drain(opts)
 
-    node_calls = recorder.node_calls()
+    node_calls = _node_calls(calls)
     th.assert_eq(
         [c["channel"] for c in node_calls], [CANARY_ID, FLEET_ID, opts.me],
-        f"order must be canary, fleet, SELF LAST — got {recorder.channels()!r}")
+        f"order must be canary, fleet, SELF LAST — got {_channels(calls)!r}")
     th.assert_true(node_calls[0]["payload"]["migrate"],
                    "only the canary migrates")
     th.assert_true(not node_calls[1]["payload"]["migrate"],
@@ -209,7 +213,7 @@ def test_canary_success_flow(opts):
                      f"every deploy publish is max_retries=0, got {call!r}")
         th.assert_true(call.get("expires_in"),
                        f"every deploy publish carries an expiry, got {call!r}")
-    th.assert_true(DEAD_ID not in recorder.channels(),
+    th.assert_true(DEAD_ID not in _channels(calls),
                    "a dead runner must never be told to deploy")
     th.assert_eq(get_runners.call_count, 1,
                  "the fleet list is the START-of-deploy snapshot — one read, no re-read")
@@ -228,11 +232,10 @@ def test_canary_timeout(opts):
     deploy.arm_status(SHA_A)  # never leaves migrating — the canary is silent
     _publish_orchestrate(SHA_A)
 
-    recorder = PublishRecorder()
     incidents = mock.Mock()
-    with mock.patch.object(jobs_module, "get_runners",
+    with th.capture_publishes(_deploy_publish) as calls, \
+         mock.patch.object(jobs_module, "get_runners",
                            return_value=_runners(CANARY_ID, opts.me, FLEET_ID)), \
-         mock.patch.object(jobs_module, "publish", recorder), \
          mock.patch.object(deploy, "resolve_framework_version",
                            return_value=FRAMEWORK), \
          mock.patch.object(deploy, "canary_timeout", return_value=1), \
@@ -240,8 +243,8 @@ def test_canary_timeout(opts):
          mock.patch.object(reporter_module, "report_event", incidents):
         _drain(opts)
 
-    th.assert_eq(len(recorder.node_calls()), 1,
-                 f"a timed-out canary must leave the fleet untouched, got {recorder.calls!r}")
+    th.assert_eq(len(_node_calls(calls)), 1,
+                 f"a timed-out canary must leave the fleet untouched, got {calls!r}")
     th.assert_true(incidents.called, "a canary timeout must file an incident")
     th.assert_in("did not report", incidents.call_args.args[0],
                  f"the incident must say the canary went silent, got {incidents.call_args!r}")
@@ -263,23 +266,22 @@ def test_chain_on_moved_target(opts):
         deploy.set_target(SHA_B, actor="github:later")
         return dict(state=deploy.STATUS_DEPLOYING, sha=SHA_A)
 
-    recorder = PublishRecorder()
-    with mock.patch.object(jobs_module, "get_runners",
+    with th.capture_publishes(_deploy_publish) as calls, \
+         mock.patch.object(jobs_module, "get_runners",
                            return_value=_runners(CANARY_ID, opts.me, FLEET_ID)), \
-         mock.patch.object(jobs_module, "publish", recorder), \
          mock.patch.object(deploy, "resolve_framework_version",
                            return_value=FRAMEWORK), \
          mock.patch.object(deploy, "get_status", side_effect=status_with_push):
         _drain(opts)
 
-    channels = [c["channel"] for c in recorder.node_calls()]
+    channels = [c["channel"] for c in _node_calls(calls)]
     th.assert_eq(channels, [CANARY_ID, FLEET_ID],
                  f"the proven release still ships to the fleet, but the stale "
                  f"self-update must be skipped — got {channels!r}")
-    chained = [c for c in recorder.calls
+    chained = [c for c in calls
                if c.get("func") == deploy.DEPLOY_ORCHESTRATE_JOB]
     th.assert_eq(len(chained), 1,
-                 f"the moved target must chain exactly one fresh orchestrate, got {recorder.calls!r}")
+                 f"the moved target must chain exactly one fresh orchestrate, got {calls!r}")
     th.assert_eq(chained[-1]["payload"]["sha"], SHA_B,
                  "the chained deploy must carry the NEW target")
     status = deploy.get_status()
@@ -299,17 +301,16 @@ def test_resolution_failure_fails_deploy(opts):
     deploy.arm_status(SHA_A)
     _publish_orchestrate(SHA_A)
 
-    recorder = PublishRecorder()
     incidents = mock.Mock()
-    with mock.patch.object(jobs_module, "get_runners",
+    with th.capture_publishes(_deploy_publish) as calls, \
+         mock.patch.object(jobs_module, "get_runners",
                            return_value=_runners(CANARY_ID, opts.me)), \
-         mock.patch.object(jobs_module, "publish", recorder), \
          mock.patch.object(deploy, "resolve_framework_version",
                            side_effect=ValueError("pypi unreachable")), \
          mock.patch.object(reporter_module, "report_event", incidents):
         _drain(opts)
 
-    th.assert_eq(recorder.node_calls(), [],
+    th.assert_eq(_node_calls(calls), [],
                  "an unpinned deploy must never reach a node (C1)")
     th.assert_true(incidents.called, "the failed resolution must file an incident")
     th.assert_eq(deploy.get_status(), None,
@@ -368,7 +369,6 @@ def test_node_runs_script(opts):
 @th.django_unit_test("deploy_node: a fleet-node failure is an incident, never a rollback")
 def test_node_failure_no_rollback(opts):
     import mojo.apps.incident.reporter as reporter_module
-    import mojo.apps.jobs as jobs_module
     from mojo.apps import jobs
     from mojo.apps.edge.services import deploy
     from mojo.apps.jobs.models import Job
@@ -379,13 +379,12 @@ def test_node_failure_no_rollback(opts):
         func=deploy.DEPLOY_NODE_JOB,
         payload=dict(sha=SHA_A, framework=FRAMEWORK, migrate=False),
         channel=CHANNEL)
-    recorder = PublishRecorder()
     incidents = mock.Mock()
-    with mock.patch.object(deploy, "deploy_script_argv",
+    with th.capture_publishes(_deploy_publish) as calls, \
+         mock.patch.object(deploy, "deploy_script_argv",
                            return_value=["/bin/echo"]), \
          mock.patch.object(deploy, "_run",
                            return_value=FakeProc(1, stderr="pip exploded")), \
-         mock.patch.object(jobs_module, "publish", recorder), \
          mock.patch.object(reporter_module, "report_event", incidents):
         _drain(opts)
 
@@ -394,7 +393,7 @@ def test_node_failure_no_rollback(opts):
     th.assert_true(incidents.called, "the failed node must appear on the dashboard (D7)")
     th.assert_in("pip exploded", incidents.call_args.args[0],
                  "the script's stderr tail must travel into the incident")
-    th.assert_eq(recorder.calls, [],
+    th.assert_eq(calls, [],
                  "one node's failure after release must not publish anything — no rollback")
     status = deploy.get_status()
     th.assert_true(status and status["sha"] == SHA_A,

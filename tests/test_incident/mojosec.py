@@ -423,7 +423,13 @@ def test_mojosec_handler_outbox_is_durable_and_retryable(opts):
     batch["events"] = [batch["events"][0]]
     batch["events"][0].update({"id": "4" * 64, "kind": "auth.ssh_failure", "count": 8})
 
-    with mock.patch("mojo.apps.jobs.publish", side_effect=RuntimeError("queue unavailable")):
+    # Scoped to incident publishes and forwarding the rest: test modules run
+    # as parallel threads, and an unscoped side_effect here would make OTHER
+    # modules' real publishes raise "queue unavailable" mid-window.
+    _incident_publish = lambda c: str(c.get("func", "")).startswith("mojo.apps.incident.")
+
+    with th.capture_publishes(_incident_publish,
+                              side_effect=RuntimeError("queue unavailable")):
         ack = mojosec.ingest_batch(key, batch)
     th.assert_eq(ack["results"][0]["status"], "retry",
                  "the receiver must not acknowledge required work before durable queueing")
@@ -431,8 +437,7 @@ def test_mojosec_handler_outbox_is_durable_and_retryable(opts):
     th.assert_eq(receipt.handler_state, MojoSecReceipt.HANDLER_FAILED,
                  "a queue failure must remain visible and replayable")
 
-    calls = []
-    with mock.patch("mojo.apps.jobs.publish", side_effect=lambda *a, **kw: calls.append(kw) or "a" * 32):
+    with th.capture_publishes(_incident_publish, result="a" * 32) as calls:
         replay = mojosec.ingest_batch(key, batch)
     th.assert_eq(replay["results"][0]["status"], "duplicate",
                  "request replay must recover an already-published receipt")
