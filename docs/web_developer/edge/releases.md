@@ -62,6 +62,10 @@ missing header and a body that does not match it.
 Each URL is good for one object and expires in an hour (default). Bytes never
 pass through the API.
 
+The URLs are SigV4-signed, and the checksum header is the **only** header the
+signature covers. `Content-Type` in particular is not signed — whatever your
+HTTP client adds on its own is fine.
+
 ```bash
 curl -X PUT --upload-file dist/index.html \
   -H "x-amz-checksum-sha256: <the value from the response>" \

@@ -93,12 +93,21 @@ def get_client(service, access_key=None, secret_key=None, region=None,
         region=region,
         profile=profile,
     )
-    client_config = config or Config(
-        connect_timeout=timeout,
-        read_timeout=timeout,
-        retries={"max_attempts": max_attempts, "mode": "standard"},
-    )
-    kwargs = {"config": client_config}
+    if config is None:
+        config_kwargs = {
+            "connect_timeout": timeout,
+            "read_timeout": timeout,
+            "retries": {"max_attempts": max_attempts, "mode": "standard"},
+        }
+        if service == "s3":
+            # Pinned because botocore's presigner falls back to SigV2 for S3
+            # when the signature version is unset (API calls are v4 either
+            # way). SigV2 signs Content-Type into presigned URLs, and the
+            # platform presigns without one, so any uploader whose HTTP
+            # client adds a Content-Type gets 403 SignatureDoesNotMatch.
+            config_kwargs["signature_version"] = "s3v4"
+        config = Config(**config_kwargs)
+    kwargs = {"config": config}
     if region:
         kwargs["region_name"] = region
     if endpoint_url:
