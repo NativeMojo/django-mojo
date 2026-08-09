@@ -13,7 +13,7 @@ from testit import helpers as th
 
 from tests.test_edge._helpers import (
     declare_pools,
-    cleanup, declare_reserved_names, declare_release_buckets, make_certificate,
+    cleanup, declare_release_buckets, make_certificate,
     make_domain, make_group, make_release, make_vhost, make_webapp, raises,
     RELEASE_BUCKET,
 )
@@ -22,7 +22,6 @@ from tests.test_edge._helpers import (
 @th.django_unit_setup()
 def setup_webapp_models(opts):
     cleanup()
-    declare_reserved_names()
     declare_pools()
     declare_release_buckets()
     opts.group = make_group("edgewebapp")

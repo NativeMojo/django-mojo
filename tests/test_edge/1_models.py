@@ -15,7 +15,7 @@ from testit import helpers as th
 
 from tests.test_edge._helpers import (
     declare_pools,
-    API_HOSTNAME, cleanup, declare_reserved_names, make_certificate,
+    API_HOSTNAME, cleanup, make_certificate,
     make_domain, make_group, make_route, make_upstream, make_vhost, raises,
 )
 
@@ -23,7 +23,6 @@ from tests.test_edge._helpers import (
 @th.django_unit_setup()
 def setup_models(opts):
     cleanup()
-    declare_reserved_names()
     declare_pools()
     opts.group = make_group("edgemodel")
     opts.domain = make_domain(group=opts.group)
@@ -239,23 +238,37 @@ def test_disabled_may_shadow(opts):
         f"a disabled duplicate was refused, so a replacement cannot be staged: {err}"
 
 
-@th.django_unit_test("a vhost cannot claim the API's own hostname")
-def test_vhost_cannot_shadow_api(opts):
-    """The shadowing attack, at the model layer.
+@th.django_unit_test("a vhost may take any name under a domain its group owns")
+def test_vhost_may_take_a_formerly_reserved_name(opts):
+    """Removal of EDGE_RESERVED_SERVER_NAMES, asserted at the model layer.
 
-    The API hostname is reserved, so even a domain whose name IS that hostname
-    cannot be served. Note this is the check that matters — `nginx -t` treats a
-    duplicate server_name as a warning and exits 0.
+    This name was refused outright before #1646 — it was the fixture's
+    stand-in for the deployment's own hostname. Owning the Domain and
+    holding manage_dns is now the whole gate.
     """
+    from mojo.apps.dnsman.models import Certificate, Domain
     from mojo.apps.edge.models import Vhost
 
-    hostile = make_domain(name=API_HOSTNAME, group=opts.group)
-    certificate = make_certificate(hostile)
-    err = raises(
-        Vhost.objects.create, domain=hostile, certificate=certificate,
-        label="", kind="site")
-    assert err is not None, \
-        "a tenant vhost claimed the API's own hostname"
+    domain = make_domain(name=API_HOSTNAME, group=opts.group)
+    certificate = make_certificate(domain)
+    vhost = None
+    try:
+        vhost = Vhost.objects.create(
+            domain=domain, certificate=certificate, label="", kind="site",
+            is_enabled=True)
+        assert vhost.pk, \
+            "a vhost on a formerly reserved name was refused — the removal " \
+            "did not land"
+        assert vhost.is_enabled is True, \
+            "the formerly reserved name saved only as a disabled row"
+    finally:
+        # `API_HOSTNAME` is outside the `edge-` prefix the shared cleanup()
+        # sweeps, and `Vhost.certificate` is PROTECT — so drop them here, in
+        # this order, or an enabled vhost leaks into every later module.
+        if vhost is not None and vhost.pk:
+            Vhost.objects.filter(pk=vhost.pk).delete()
+        Certificate.objects.filter(pk=certificate.pk).delete()
+        Domain.objects.filter(pk=domain.pk).delete()
 
 
 @th.django_unit_test("a certificate from another domain cannot be attached")

@@ -16,7 +16,7 @@ from testit import helpers as th
 
 from tests.test_edge._helpers import (
     declare_pools,
-    cleanup, declare_release_buckets, declare_reserved_names, login,
+    cleanup, declare_release_buckets, login,
     make_certificate, make_domain, make_group, make_manifest, make_release,
     make_user, make_vhost, make_webapp,
 )
@@ -28,7 +28,6 @@ def setup_promote(opts):
 
     cleanup()
     ApiKey.objects.filter(name__startswith="webapp:").delete()
-    declare_reserved_names()
     declare_pools()
     declare_release_buckets()
 

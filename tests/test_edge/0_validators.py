@@ -13,10 +13,7 @@ matched against a whitelist regex.
 
 from testit import helpers as th
 
-from tests.test_edge._helpers import (
-    declare_pools,
-    API_HOSTNAME, clear_reserved_names, declare_reserved_names, raises,
-)
+from tests.test_edge._helpers import declare_pools, raises
 
 
 # Every one of these is a documented nginx-injection attempt. `\n` and `\r\n`
@@ -47,7 +44,6 @@ INJECTION_STRINGS = [
 
 @th.django_unit_setup()
 def setup_validators(opts):
-    declare_reserved_names()
     declare_pools()
 
 
@@ -124,40 +120,6 @@ def test_server_name_derivation(opts):
         "a label must prefix the domain"
     assert validators.server_name_for("example.com", "*") == "*.example.com", \
         "a wildcard label must render as the wildcard name"
-
-
-@th.django_unit_test("reserved names refuse the API's own hostname")
-def test_reserved_names(opts):
-    from mojo.apps.edge import validators
-
-    err = raises(validators.validate_not_reserved, API_HOSTNAME)
-    assert err is not None, \
-        "a vhost was allowed to claim the API's own hostname — that is the shadowing attack"
-    assert raises(validators.validate_not_reserved, API_HOSTNAME.upper()) is not None, \
-        "the reserved check must be case-insensitive"
-    assert raises(validators.validate_not_reserved, "tenant.example.com") is None, \
-        "an unrelated name must be allowed"
-
-
-@th.django_unit_test("with no declared hostnames the validator FAILS CLOSED")
-def test_reserved_names_fail_closed(opts):
-    """A deployment that cannot name itself cannot protect itself.
-
-    The test project ships ALLOWED_HOSTS = ["*"], so clearing the setting is
-    genuinely the misconfigured state — not a contrived one.
-    """
-    from mojo.apps.edge import validators
-
-    clear_reserved_names()
-    try:
-        assert validators.reserved_server_names() is None, \
-            "with no concrete ALLOWED_HOSTS and no setting there is nothing to reserve"
-        err = raises(validators.validate_not_reserved, "anything.example.com")
-        assert err is not None, \
-            "an undeclared deployment must refuse every vhost, not allow every name"
-    finally:
-        declare_reserved_names()
-    declare_pools()
 
 
 @th.django_unit_test("the instance metadata service can never be an upstream")
@@ -333,66 +295,6 @@ def test_redirect_target_shape(opts):
     err = raises(validators.validate_redirect_target, "www.example.com")
     assert err is None, \
         f"validate_redirect_target rejected a legitimate host: {err}"
-
-
-@th.django_unit_test("claims_reserved: house-only, declared-set-only, then it enables")
-def test_claims_reserved_rules(opts):
-    """The reserved-name override in all three postures:
-
-    - a TENANT domain can never carry the flag (it suspends the shadowing
-      defence, and only the platform may do that, for its own names);
-    - with NO declared reserved set, even a claimed house vhost is refused —
-      the override never converts fail-closed into fail-open;
-    - a claimed house vhost ENABLES on a reserved name, which is the whole
-      point of the mechanism.
-    """
-    from tests.test_edge._helpers import (
-        API_HOSTNAME, cleanup, make_certificate, make_domain, make_group,
-        make_vhost,
-    )
-
-    cleanup()
-
-    tenant_group = make_group("edgeclaim")
-    tenant_domain = make_domain(group=tenant_group)
-    tenant_cert = make_certificate(tenant_domain)
-    err = raises(make_vhost, tenant_domain, tenant_cert, label="www",
-                 claims_reserved=True)
-    assert err is not None, \
-        "a TENANT vhost carried claims_reserved — that suspends the " \
-        "shadowing defence for a tenant name"
-
-    house_domain = make_domain(name=API_HOSTNAME, group=None)
-    house_cert = make_certificate(house_domain)
-
-    # The unclaimed baseline: the reserved set refuses the API's own name.
-    err = raises(make_vhost, house_domain, house_cert, label="")
-    assert err is not None, \
-        "an UNCLAIMED house vhost enabled on a reserved name"
-
-    # No declared set -> even a claimed house vhost fails closed.
-    clear_reserved_names()
-    try:
-        err = raises(make_vhost, house_domain, house_cert, label="",
-                     claims_reserved=True)
-        assert err is not None, (
-            "a claimed vhost enabled with NO declared reserved set — the "
-            "override turned fail-closed into fail-open")
-    finally:
-        declare_reserved_names()
-        declare_pools()
-
-    # Claimed, declared, house: enables.
-    err = raises(make_vhost, house_domain, house_cert, label="",
-                 claims_reserved=True)
-    assert err is None, \
-        f"a claimed house vhost could not enable on the reserved name: {err}"
-
-    # This vhost sits outside the edge- name prefix the shared cleanup
-    # sweeps, so drop it here rather than leaking it into later modules.
-    from mojo.apps.edge.models import Vhost
-
-    Vhost.objects.filter(domain__name=API_HOSTNAME).delete()
 
 
 @th.django_unit_test("wildcard certificate coverage follows the one-label TLS rule")

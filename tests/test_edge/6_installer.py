@@ -24,7 +24,7 @@ from testit import helpers as th
 
 from tests.test_edge._helpers import (
     declare_pools,
-    cleanup, declare_reserved_names, make_certificate, make_domain, make_group,
+    cleanup, make_certificate, make_domain, make_group,
     make_upstream, make_vhost, raises,
 )
 
@@ -63,7 +63,6 @@ class Recorder:
 @th.django_unit_setup()
 def setup_installer(opts):
     cleanup()
-    declare_reserved_names()
     declare_pools()
     opts.group = make_group("edgeinstall")
     opts.domain = make_domain(group=opts.group)

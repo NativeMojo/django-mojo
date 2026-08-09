@@ -12,7 +12,7 @@ from testit import helpers as th
 
 from tests.test_edge._helpers import (
     declare_pools,
-    cleanup, declare_reserved_names, ensure_blocklist_seed, make_certificate,
+    cleanup, ensure_blocklist_seed, make_certificate,
     make_domain, make_group, make_upstream, make_vhost, raises,
 )
 
@@ -39,7 +39,6 @@ def setup_blocklist(opts):
     # The runner flushes tables but keeps migration records, so the 0004
     # seed is re-applied here — through the migration's own function.
     ensure_blocklist_seed()
-    declare_reserved_names()
     declare_pools()
     opts.group = make_group("edgebl")
     opts.domain = make_domain(group=opts.group)

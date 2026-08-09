@@ -22,7 +22,7 @@ from testit import helpers as th
 
 from tests.test_edge._helpers import (
     RELEASE_BUCKET, cleanup, declare_pools, declare_release_buckets,
-    declare_reserved_names, make_certificate, make_domain, make_group,
+    make_certificate, make_domain, make_group,
     make_release, make_vhost, make_webapp, raises,
 )
 
@@ -97,7 +97,6 @@ class FakeS3:
 @th.django_unit_setup()
 def setup_www_sync(opts):
     cleanup()
-    declare_reserved_names()
     declare_pools()
     declare_release_buckets()
     opts.group = make_group("edgewwwsync")

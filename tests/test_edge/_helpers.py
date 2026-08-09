@@ -1,15 +1,6 @@
 """Shared fixtures for the edge tests.
 
 Filename starts with `_` so testit skips it during discovery.
-
-**The reserved-names fixture is load-bearing, not boilerplate.** The test
-project ships `ALLOWED_HOSTS = ["*"]`, so `validators.reserved_server_names()`
-returns None and every attempt to enable a vhost fails closed — which is the
-designed behaviour, not a bug. `declare_reserved_names()` writes a DB-backed
-`Setting`, which both this process and the live server read through
-`settings.get`, so a test can model a correctly-configured deployment without a
-server reload. `0_validators.py` deliberately clears it to prove the
-fail-closed path.
 """
 
 import uuid as _uuid
@@ -17,23 +8,12 @@ import uuid as _uuid
 
 EDGE_PERMS = ["view_dns", "manage_dns"]
 
-RESERVED_KEY = "EDGE_RESERVED_SERVER_NAMES"
-
-# The hostname a tenant vhost must never be able to claim.
+# The hostname a vhost used to be refused outright — it stood in for the
+# deployment's own name while EDGE_RESERVED_SERVER_NAMES existed. Kept so the
+# removal (#1646) has a positive proof that reads as "the exact name that used
+# to be refused". Note it does NOT start with `edge-`, so `cleanup()` does not
+# sweep rows built on it — a test that uses it cleans up after itself.
 API_HOSTNAME = "api.edge-tests.internal"
-
-
-def declare_reserved_names(names=None):
-    """Give this deployment a name of its own, so vhosts may be enabled."""
-    from mojo.apps.account.models.setting import Setting
-
-    Setting.set(RESERVED_KEY, list(names or [API_HOSTNAME]), group=None)
-
-
-def clear_reserved_names():
-    from mojo.apps.account.models.setting import Setting
-
-    Setting.remove(RESERVED_KEY, group=None)
 
 
 def unique_email(prefix):
@@ -141,7 +121,7 @@ def make_upstream(name=None, group=None, kind="http", host="127.0.0.1",
 def make_vhost(domain, certificate=None, label="", kind="site",
                upstream=None, pool="default", is_enabled=True, **extra):
     """`extra` passes the per-kind knobs straight through: spa, body_size_mb,
-    quiet_paths, serve_static, redirect_to, claims_reserved."""
+    quiet_paths, serve_static, redirect_to."""
     from mojo.apps.edge.models import Vhost
 
     if certificate is None:

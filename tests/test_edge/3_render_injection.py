@@ -15,7 +15,7 @@ from testit import helpers as th
 
 from tests.test_edge._helpers import (
     declare_pools,
-    cleanup, declare_reserved_names, make_certificate, make_domain, make_group,
+    cleanup, make_certificate, make_domain, make_group,
     make_route, make_upstream, make_vhost, raises,
 )
 
@@ -26,7 +26,6 @@ HOSTILE_DOMAIN = "example.com; } server { listen 443; root /etc; #"
 @th.django_unit_setup()
 def setup_render(opts):
     cleanup()
-    declare_reserved_names()
     declare_pools()
     opts.group = make_group("edgerender")
     opts.domain = make_domain(name="edge-render-example.com", group=opts.group)
@@ -389,8 +388,6 @@ def test_tls_floor_is_not_reachable(opts):
     # create too, so pinning it there would make a vhost un-creatable over
     # REST; `Vhost.on_rest_pre_save` freezes it after create instead.
     #
-    # `claims_reserved` is deliberately ABSENT: it suspends the reserved-name
-    # defence and moves only through the platform-gated claim_reserved action.
     # Every knob listed here is whitelist-validated before it renders — see
     # validators.validate_vhost — and none can reach the TLS block.
     assert writable == {"domain", "label", "kind", "upstream", "certificate",

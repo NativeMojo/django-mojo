@@ -10,7 +10,7 @@ so a future reader can see what was nearly shipped.
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
-    cleanup, declare_pools, declare_release_buckets, declare_reserved_names,
+    cleanup, declare_pools, declare_release_buckets,
     login, make_certificate, make_domain, make_group, make_manifest,
     make_user, make_vhost, make_webapp, raises,
 )
@@ -22,7 +22,6 @@ def setup_security_review(opts):
 
     cleanup()
     ApiKey.objects.filter(name__startswith="webapp:").delete()
-    declare_reserved_names()
     declare_pools()
     declare_release_buckets()
 
