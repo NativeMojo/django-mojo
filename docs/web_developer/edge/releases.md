@@ -136,8 +136,9 @@ Read history from `GET /api/edge/release?webapp=42`. Statuses are `pending`,
 ## Key rotation
 
 `POST /api/edge/webapp/link_key` again. The previous key is deactivated
-**immediately** — there is no grace window, so update your pipeline's secret
-before rotating, not after.
+**immediately** and the new token is returned once. Capture that response and
+immediately replace the GitHub `MOJO_DEPLOY_KEY` secret. A run caught in the
+short cutover window fails safely and can be rerun.
 
 Revoking a key stops future releases and does **not** change what the site is
 currently serving.

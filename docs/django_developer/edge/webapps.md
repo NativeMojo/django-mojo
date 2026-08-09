@@ -179,7 +179,9 @@ rollback use the same deployment coordinator.
 `POST /api/edge/webapp/link_key` mints the CI credential and returns the token
 once. Re-linking is a **hard cutover** — the previous key is deactivated
 immediately, no grace window, because two live credentials for one site is
-exactly the state that makes revocation unprovable.
+exactly the state that makes revocation unprovable. Capture the returned token
+and immediately replace the repository's `MOJO_DEPLOY_KEY` secret; a workflow
+caught between those operations fails safely and can be rerun.
 
 The cross-site check is an FK identity comparison (`request.api_key_id ==
 webapp.api_key_id`), not a permissions lookup, and it **fails closed on null**:
