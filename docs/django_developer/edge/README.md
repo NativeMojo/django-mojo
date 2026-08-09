@@ -152,6 +152,8 @@ EDGE_ROOT (default /opt/api/var/edge)
       http.d/00_base.conf            rendered http context (maps, logs, knobs)
       http.d/10_upstreams.conf       upstream edge_up_<pk> blocks
       conf.d/<vhost-id>.conf         two server blocks per vhost
+      staging/{http.d,conf.d}/       listen-remapped copies — what the
+                                     unprivileged pre-filter validates
       certs/<cert-id>/{fullchain.pem,privkey.pem}   0600, app-user owned
       www/<vhost-id>/                the web root (a release symlink later)
   current -> generations/<generation>
@@ -287,11 +289,32 @@ mojo ALL=(root) NOPASSWD: /usr/bin/systemctl reload nginx
 > `load_module /tmp/evil.so;` line in it is arbitrary root code execution — and
 > because the hash is in the path, the wildcard cannot be narrowed away.
 >
-> The staged check therefore runs **unprivileged**, which it can, because every
-> file it reads is app-owned and `-t` binds no ports. That is why
-> `render_nginx_harness` puts `pid`, `error_log` and every `*_temp_path` inside
-> the generation directory: an app user cannot write nginx's packaged prefix,
-> so the defaults would fail the check for permissions rather than for config.
+> The staged check therefore runs **unprivileged**, and two things make that
+> survivable. First, every file it reads is app-owned: `render_nginx_harness`
+> puts `pid`, `error_log` and every `*_temp_path` inside the generation
+> directory, because an app user cannot write nginx's packaged prefix and the
+> defaults would fail the check for permissions rather than for config.
+> Second — and this is NOT folklore-compatible — **`nginx -t` attempts
+> `bind()` on every `listen` it parses.** Only `EADDRINUSE` is tolerated in
+> test mode (which is why `-t` famously "doesn't catch port conflicts");
+> any other errno, such as the `EACCES` an unprivileged process gets for
+> 443/80 on Linux, is a fatal `[emerg]`. So the harness includes the
+> generation's **`staging/`** trees — copies of `http.d/` and `conf.d/`
+> identical in every byte except that listen ports are remapped to
+> `EDGE_STAGED_HTTP_PORT`/`EDGE_STAGED_HTTPS_PORT` (61080/61443). The `ssl`
+> parameter survives the remap, so the staged certificate material is still
+> opened and validated; certificate, root and log paths are absolute into
+> the real generation. The real trees keep their real ports and are
+> validated by the post-swap root check.
+>
+> One cosmetic wrinkle: before reading any config, nginx opens its
+> **compiled-in** default error log (`/var/log/nginx/error.log` on distro
+> builds). Unprivileged that fails with a harmless
+> `[alert] could not open error log file` and nginx falls back to stderr and
+> continues — it never fails the check, but it used to lead every real
+> failure's output and misdirect diagnosis. The staged command's default
+> argv carries `-e stderr` (nginx ≥1.19.5; every edge deployment already
+> needs ≥1.25.1 for `http2 on;`) so the alert never appears.
 
 Absolute binary paths matter — a sudoers rule naming a bare `nginx` is
 satisfied by anything first on `PATH`.
@@ -301,9 +324,11 @@ satisfied by anything first on `PATH`.
 > which now has a path to nginx configuration. What bounds that is the sudoers
 > narrowness plus the app user owning only `EDGE_ROOT` — not the renderer.
 
-Writing that sudoers rule and the `/etc/nginx/conf.d/mojo.conf` include is
-**django-mojo-skeleton work** and is a deployment dependency of this app. Until
-it exists, the installer can be unit-tested but cannot be exercised on a node.
+Writing that sudoers rule and the `/etc/nginx/nginx.conf` bootstrap (the
+~12-line form whose `current/` includes are the whole read path — text and
+prerequisites in [templates.md](templates.md)) is **django-mojo-skeleton
+work** and is a deployment dependency of this app. Until it exists, the
+installer can be unit-tested but cannot be exercised on a node.
 
 ## Settings
 
@@ -325,8 +350,10 @@ it exists, the installer can be unit-tested but cannot be exercised on a node.
 | `EDGE_KEEP_GENERATIONS` | `5` | Retained generations (rollback depth) |
 | `EDGE_POOLS` | `["default"]` | Pools the convergence sweep covers |
 | `EDGE_NGINX_TEST_CMD` | `["sudo","-n","nginx","-t"]` | Root check, no arguments |
-| `EDGE_NGINX_STAGED_TEST_CMD` | `["nginx","-t","-c"]` | Staged check, **unprivileged** |
+| `EDGE_NGINX_STAGED_TEST_CMD` | `["nginx","-e","stderr","-t","-c"]` | Staged check, **unprivileged** (`-e stderr` suppresses the default-error-log alert) |
 | `EDGE_NGINX_RELOAD_CMD` | `["sudo","-n","systemctl","reload","nginx"]` | Constant argv |
+| `EDGE_STAGED_HTTP_PORT` | `61080` | Port the `staging/` copies remap `listen 80` to (static; 1024–65535, must differ from the https port) |
+| `EDGE_STAGED_HTTPS_PORT` | `61443` | Port the `staging/` copies remap `listen 443` to (static; same bounds) |
 | `EDGE_COMMAND_TIMEOUT` | `60` | Seconds |
 
 ("static" = read with `settings.get_static`: a file-only setting a DB row

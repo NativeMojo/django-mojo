@@ -19,7 +19,7 @@ from testit import helpers as th
 from tests.test_edge._helpers import (
     declare_pools,
     cleanup, declare_reserved_names, make_certificate, make_domain, make_group,
-    make_route, make_upstream, make_vhost,
+    make_route, make_upstream, make_vhost, raises,
 )
 
 
@@ -221,3 +221,86 @@ def test_golden_upstreams(opts):
     unix = Upstream.objects.get(pk=opts.unix_upstream.pk)
     http.pk, unix.pk = 71, 72
     _compare("upstreams.conf", render.render_upstreams([http, unix]))
+
+
+def _listen_split(line):
+    """(port, params) of a `listen` directive line.
+
+    The port is parsed as a TOKEN out of the address field — substring
+    checks are a trap (`61443` contains `443`, `61080` contains `80`, and
+    the upstreams file legitimately carries `127.0.0.1:8000`).
+    """
+    tokens = line.strip().rstrip(";").split()
+    address = tokens[1]
+    port = address.rsplit(":", 1)[-1] if ":" in address else address
+    return int(port), tokens[2:]
+
+
+@th.django_unit_test("staged variant: every listen remapped, nothing else moves")
+def test_staged_variant_remaps_only_listens(opts):
+    """The staged `nginx -t` runs unprivileged and nginx binds every listen
+    during -t, so the staged copies must carry no privileged port — while
+    every non-listen byte stays identical, or the pre-filter validates
+    something other than what swaps in (item 1623)."""
+    from mojo.apps.edge.services import render
+
+    rendered = [
+        _render(opts, label="sv-www", kind="site"),
+        _render(opts, label="sv-api", kind="api", upstream=opts.http_upstream),
+        _render(opts, label="sv-mix", kind="site_api",
+                routes=[("/api", opts.http_upstream)]),
+        _render(opts, label="sv-old", kind="redirect",
+                redirect_to="www.edge-golden.example.com"),
+    ]
+    knobs = render.http_knobs()
+    knobs["default_server"] = True
+    rendered.append(render.render_http_base(knobs, security=[]))
+
+    staged_ports = {render.staged_http_port(), render.staged_https_port()}
+    for text in rendered:
+        staged = render.render_staged_variant(text)
+        before_lines = text.split("\n")
+        after_lines = staged.split("\n")
+        assert len(before_lines) == len(after_lines), \
+            "the staged variant added or dropped lines"
+        listens = 0
+        for before, after in zip(before_lines, after_lines):
+            if not before.strip().startswith("listen"):
+                assert before == after, (
+                    f"a non-listen line moved in the staged variant:\n"
+                    f"  before: {before!r}\n  after:  {after!r}")
+                continue
+            listens += 1
+            real_port, real_params = _listen_split(before)
+            staged_port, staged_params = _listen_split(after)
+            assert real_port in (443, 80), \
+                f"unexpected real listen port {real_port}: {before!r}"
+            assert staged_port in staged_ports, (
+                f"staged listen port {staged_port} is not a configured "
+                f"staged port: {after!r}")
+            assert staged_port >= 1024, \
+                f"staged listen is still privileged: {after!r}"
+            assert real_params == staged_params, (
+                f"listen parameters moved in the staged variant:\n"
+                f"  before: {before!r}\n  after:  {after!r}")
+            assert ("[::]" in before) == ("[::]" in after), \
+                f"the address family moved in the staged variant: {after!r}"
+        assert listens > 0, "a rendered server file carried no listen at all"
+
+    # The upstreams file has no listen lines and must pass through untouched.
+    ups = render.render_upstreams([opts.http_upstream, opts.unix_upstream])
+    assert render.render_staged_variant(ups) == ups, \
+        "the staged variant altered the upstreams file"
+
+
+@th.django_unit_test("staged variant: an unknown listen shape is refused")
+def test_staged_variant_fail_closed(opts):
+    """A builder growing a new listen shape must teach the staged remap
+    before it can ship — an unmapped line renders nothing, loudly."""
+    from mojo.apps.edge.services import render
+
+    err = raises(render.render_staged_variant,
+                 "server {\n    listen 8443 ssl;\n}\n")
+    assert err is not None, (
+        "an unknown listen line was silently accepted — a new listen shape "
+        "would reach the staged check with a privileged or unmapped bind")

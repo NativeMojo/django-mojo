@@ -94,9 +94,15 @@ def command_timeout():
 # wildcard is unavoidable in such a rule, because the generation hash is in the
 # path — so the rule cannot be narrowed into safety.
 #
-# The staged pre-filter does not need root at all: every file it reads (the
-# rendered conf.d, the staged certificates, the harness) is owned by the app
-# user, and `-t` binds no ports. So it runs unprivileged.
+# The staged pre-filter runs unprivileged: every file it reads (the rendered
+# trees, the staged certificates, the harness) is owned by the app user. What
+# unprivileged does NOT survive is the binds — `nginx -t` attempts bind() on
+# every listen it parses (only EADDRINUSE is tolerated in test mode; EACCES on
+# 443/80 is a fatal [emerg]) — which is why the harness includes the staging/
+# listen-remapped copies instead of the real trees (render_staged_variant).
+# `-e stderr` keeps nginx from opening its compiled-in default error log,
+# whose root-owned path otherwise leads every failure's output with a
+# harmless-but-misleading permission alert.
 #
 # The authoritative check reads /etc/nginx/nginx.conf, which is root-owned, so
 # it does need sudo — but it takes NO arguments, which leaves no injection
@@ -108,7 +114,8 @@ def command_timeout():
 def _nginx_staged_test_argv(config_path):
     """Validate a staged generation. **Unprivileged** — see above."""
     argv = list(settings.get_static(
-        "EDGE_NGINX_STAGED_TEST_CMD", ["nginx", "-t", "-c"], kind="list"))
+        "EDGE_NGINX_STAGED_TEST_CMD",
+        ["nginx", "-e", "stderr", "-t", "-c"], kind="list"))
     return argv + [str(config_path)]
 
 
@@ -331,10 +338,16 @@ def stage_generation(vhosts, generation, webapps=None):
 
     files = render.render_generation(installable, generation)
     for name, text in files.items():
-        path = os.path.join(gen_dir, name)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as handle:
-            handle.write(text)
+        # Two copies of every rendered file: the real tree (what `current`
+        # serves after the swap) and the staging/ listen-remapped copy the
+        # unprivileged pre-filter validates — see render.render_staged_variant.
+        for target, body in ((name, text),
+                             (f"staging/{name}",
+                              render.render_staged_variant(text))):
+            path = os.path.join(gen_dir, target)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as handle:
+                handle.write(body)
 
     with open(os.path.join(gen_dir, "nginx.conf"), "w") as handle:
         handle.write(render.render_nginx_harness(generation))
@@ -530,9 +543,11 @@ def _fail(generation, message, reverted_to=None, revert_note=None):
 # `_run` with a constant argv list built from settings, never from row data,
 # behind a narrow sudoers rule.
 #
-# Writing that sudoers rule and the `/etc/nginx/conf.d/mojo.conf` include is
-# django-mojo-skeleton work and is a cross-repo dependency of this file. It is
-# also what bounds the risk this module introduces, so state it plainly:
+# Writing that sudoers rule and the `/etc/nginx/nginx.conf` bootstrap (the
+# ~12-line form with the current/ includes — see
+# docs/django_developer/edge/templates.md) is django-mojo-skeleton work and is
+# a cross-repo dependency of this file. It is also what bounds the risk this
+# module introduces, so state it plainly:
 #
 #   The structured-model constraint (no free-text nginx) defends against a
 #   malicious ADMIN. It does nothing about a compromised API PROCESS, which
