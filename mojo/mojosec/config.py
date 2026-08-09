@@ -126,7 +126,8 @@ def validate_config(value):
         raise ConfigError("endpoint must be an https URL")
     parsed_endpoint = urllib.parse.urlsplit(endpoint)
     if (parsed_endpoint.scheme != "https" or not parsed_endpoint.hostname or
-            parsed_endpoint.username or parsed_endpoint.password or parsed_endpoint.fragment):
+            parsed_endpoint.username or parsed_endpoint.password or parsed_endpoint.query or
+            parsed_endpoint.fragment):
         raise ConfigError("endpoint must be an https URL without credentials or a fragment")
     if parsed_endpoint.path.rstrip("/") != "/api/incident/mojosec/batch":
         raise ConfigError("endpoint must target /api/incident/mojosec/batch")

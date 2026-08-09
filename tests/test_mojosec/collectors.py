@@ -23,12 +23,28 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
 
     failed = detect_journal({
         "SYSLOG_IDENTIFIER": "sshd",
+        "_SYSTEMD_UNIT": "session-187.scope",
         "MESSAGE": "Failed password for invalid user admin from 198.51.100.9 port 43812 ssh2",
     })
     th.assert_eq(failed["kind"], "auth.ssh_failure",
                  "failed SSH authentication should be retained as a security signal")
     th.assert_eq(failed["aggregate"], True,
                  "repeated SSH failures should be aggregated before delivery")
+
+    facility_only = detect_journal({
+        "SYSLOG_FACILITY": "10", "_SYSTEMD_UNIT": "session-201.scope",
+        "MESSAGE": "Accepted publickey for deploy from 203.0.113.8 port 50221 ssh2",
+    })
+    th.assert_eq(facility_only["kind"], "auth.ssh_login",
+                 "AL2023 facility-10 auth records must work without a stable systemd unit")
+
+    sudo = detect_journal({
+        "SYSLOG_IDENTIFIER": "sudo", "SYSLOG_FACILITY": "10",
+        "_SYSTEMD_UNIT": "session-202.scope",
+        "MESSAGE": "deploy : TTY=pts/0 ; PWD=/opt/api ; USER=root ; COMMAND=/usr/bin/systemctl restart api",
+    })
+    th.assert_eq(sudo["kind"], "auth.sudo_command",
+                 "sudo commands attached to transient AL2023 scopes must be retained")
 
 
 @th.django_unit_test()
@@ -45,8 +61,9 @@ def test_nginx_detector_is_behavioral_and_quiet(opts):
 
     probe = detect_nginx({
         "time_iso8601": "2026-08-08T12:00:00+00:00", "status": 404,
-        "request_method": "GET", "uri": "/wp-login.php?redirect=secret",
+        "request_method": "GET", "request_uri": "/wp-login.php?redirect=secret",
         "remote_addr": "198.51.100.5", "realip_remote_addr": "10.0.0.10",
+        "referer": "https://example.invalid/private?token=secret",
     })
     th.assert_eq(probe["kind"], "web.probe",
                  "a known exploit path should create a high-signal probe event")
@@ -54,6 +71,8 @@ def test_nginx_detector_is_behavioral_and_quiet(opts):
                  "known exploit probes should carry an advisory block recommendation")
     th.assert_eq(probe["attributes"]["path"], "/wp-login.php",
                  "query strings must never be copied into incident evidence")
+    th.assert_true("referer" not in probe["attributes"],
+                   "client-controlled referrers must never enter MojoSec evidence")
 
     server_error = detect_nginx({
         "status": 502, "method": "POST", "path": "/api/orders",
@@ -125,4 +144,3 @@ def test_fim_detects_changes_without_following_symlinks(opts):
                      "one targeted file modification should produce one FIM event")
         th.assert_eq(events[0]["attributes"]["change"], "modified",
                      "the FIM event must identify a file modification")
-

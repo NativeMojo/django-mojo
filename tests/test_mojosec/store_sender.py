@@ -1,0 +1,198 @@
+import gzip
+import json
+import os
+import tempfile
+
+from testit import helpers as th
+
+
+AGGREGATION = {"window_seconds": 60, "flush_count": 2, "max_aggregates": 100}
+DELIVERY = {
+    "batch_events": 100, "batch_bytes": 256 * 1024, "timeout_seconds": 10,
+    "retry_min_seconds": 1, "retry_max_seconds": 30, "gzip": True,
+    "max_spool_events": 100, "critical_reserve_events": 10,
+}
+
+
+def _observation(source="192.0.2.1", aggregate=True):
+    from mojo.mojosec.events import observation
+
+    return observation(
+        "web.probe", "high", "Known exploit path probe",
+        attributes={"source_ip": source, "path": "/wp-login.php", "status": 404},
+        fingerprint_values=(source, "/wp-login.php"), aggregate=aggregate,
+        recommendation="block_ip", observed_at="2026-08-08T12:00:00Z",
+    )
+
+
+class _AckTransport:
+    def __init__(self):
+        self.calls = []
+
+    def post(self, endpoint, body, headers, timeout):
+        self.calls.append((endpoint, body, headers, timeout))
+        batch = json.loads(gzip.decompress(body))
+        response = {
+            "schema": "mojosec.ack", "version": 1,
+            "results": [{"id": event["id"], "status": "accepted"} for event in batch["events"]],
+        }
+        return 200, json.dumps(response).encode("utf-8")
+
+
+class _PartialAckTransport:
+    def post(self, endpoint, body, headers, timeout):
+        batch = json.loads(gzip.decompress(body))
+        response = {
+            "schema": "mojosec.ack", "version": 1,
+            "results": [{"id": batch["events"][0]["id"], "status": "accepted"}],
+        }
+        return 200, json.dumps(response).encode("utf-8")
+
+
+@th.django_unit_test()
+def test_store_aggregates_durably_and_commits_cursor_with_evidence(opts):
+    from mojo.mojosec.store import Store
+
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        store = Store(root, "sensor-test", AGGREGATION, DELIVERY)
+        try:
+            store.ingest([_observation()], cursor_key="nginx", cursor={"offset": 10})
+            th.assert_eq(store.stats()["spooled_events"], 0,
+                         "one noisy probe should remain in the durable aggregation window")
+            store.ingest([_observation()], cursor_key="nginx", cursor={"offset": 20})
+            pending = store.pending_batch(100, 256 * 1024)
+            th.assert_eq(len(pending), 1,
+                         "reaching the aggregation threshold should queue one event")
+            th.assert_eq(pending[0]["count"], 2,
+                         "the queued event should preserve the aggregate occurrence count")
+            th.assert_eq(store.get_meta("cursor:nginx"), {"offset": 20},
+                         "the collector cursor must advance in the same transaction as evidence")
+        finally:
+            store.close()
+
+
+@th.django_unit_test()
+def test_fim_baseline_and_event_are_updated_atomically(opts):
+    from mojo.mojosec.store import Store
+
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        store = Store(root, "sensor-test", AGGREGATION, DELIVERY)
+        try:
+            first = {"/etc/example": {"kind": "file", "sha256": "a" * 64}}
+            store.record_fim_scan("profile", first, [], complete=True)
+            th.assert_true(store.fim_initialized("profile"),
+                           "a complete first scan should establish the persistent FIM baseline")
+            th.assert_eq(store.load_fim_baseline("profile"), first,
+                         "the complete FIM baseline should survive a store readback")
+
+            changed = {"/etc/example": {"kind": "file", "sha256": "b" * 64}}
+            store.record_fim_scan("profile", changed, [_observation(aggregate=False)], complete=True)
+            th.assert_eq(store.load_fim_baseline("profile"), changed,
+                         "the changed baseline must commit with its queued evidence")
+            th.assert_eq(store.stats()["spooled_events"], 1,
+                         "the FIM transaction should durably queue its immediate evidence")
+        finally:
+            store.close()
+
+
+@th.django_unit_test()
+def test_sender_gzips_batches_and_removes_only_acknowledged_events(opts):
+    from mojo.mojosec.sender import Sender
+    from mojo.mojosec.store import Store
+
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        credential = os.path.join(root, "credential")
+        with open(credential, "w", encoding="utf-8") as handle:
+            handle.write("secret-api-key\n")
+        os.chmod(credential, 0o600)
+        store = Store(os.path.join(root, "state"), "sensor-test", AGGREGATION, DELIVERY)
+        store.ingest([_observation(aggregate=False)])
+        transport = _AckTransport()
+        config = {
+            "sensor_id": "sensor-test", "policy_revision": "one",
+            "endpoint": "https://incident.example/api/incident/mojosec/batch",
+            "credential_path": credential, "delivery": DELIVERY,
+        }
+        try:
+            result = Sender(config, store, transport=transport).send_once()
+            th.assert_eq(result["accepted"], 1,
+                         "a per-item accepted acknowledgement should drain one event")
+            th.assert_eq(store.stats()["spooled_events"], 0,
+                         "only an acknowledged event may be removed from the durable spool")
+            headers = transport.calls[0][2]
+            th.assert_eq(headers["Authorization"], "apikey secret-api-key",
+                         "delivery must use the existing per-installation API-key scheme")
+            th.assert_eq(headers["Content-Encoding"], "gzip",
+                         "bounded batches should be compressed when configured")
+        finally:
+            store.close()
+
+
+@th.django_unit_test()
+def test_partial_ack_retries_only_the_unacknowledged_event(opts):
+    from mojo.mojosec.sender import Sender
+    from mojo.mojosec.store import Store
+
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        credential = os.path.join(root, "credential")
+        with open(credential, "w", encoding="utf-8") as handle:
+            handle.write("secret-api-key\n")
+        os.chmod(credential, 0o600)
+        store = Store(os.path.join(root, "state"), "sensor-test", AGGREGATION, DELIVERY)
+        store.ingest([_observation("192.0.2.1", aggregate=False),
+                      _observation("192.0.2.2", aggregate=False)])
+        config = {
+            "sensor_id": "sensor-test", "policy_revision": "one",
+            "endpoint": "https://incident.example/api/incident/mojosec/batch",
+            "credential_path": credential, "delivery": DELIVERY,
+        }
+        try:
+            result = Sender(config, store, transport=_PartialAckTransport()).send_once()
+            th.assert_eq(result["accepted"], 1,
+                         "the explicit accepted result should drain exactly one event")
+            th.assert_eq(result["retry"], 1,
+                         "an omitted per-item acknowledgement must schedule only that event for retry")
+            th.assert_eq(store.stats()["spooled_events"], 1,
+                         "the unacknowledged event must remain durable in SQLite")
+        finally:
+            store.close()
+
+
+@th.django_unit_test()
+def test_runtime_publishes_secret_free_status_with_collectors_disabled(opts):
+    from mojo.mojosec.runtime import Runtime
+
+    class IdleSender:
+        def send_once(self):
+            return {"sent": 0, "accepted": 0, "retry": 0}
+
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        status_path = os.path.join(root, "run", "status.json")
+        config = {
+            "sensor_id": "sensor-test", "state_dir": os.path.join(root, "state"),
+            "status_path": status_path, "poll_seconds": 5,
+            "aggregation": AGGREGATION, "delivery": DELIVERY,
+            "collectors": {
+                "journal": {"enabled": False}, "nginx": {"enabled": False},
+                "fim": {"enabled": False},
+            },
+        }
+        runtime = Runtime(config, sender=IdleSender())
+        try:
+            runtime.run_once()
+            with open(status_path, encoding="utf-8") as handle:
+                status_text = handle.read()
+            status = json.loads(status_text)
+            th.assert_eq(status["schema"], "mojosec.status",
+                         "the service status file should carry a versioned public schema")
+            th.assert_eq(status["spooled_events"], 0,
+                         "status should expose spool health without reading the private database")
+            th.assert_true("credential" not in status_text and "secret" not in status_text,
+                           "the public status snapshot must not expose credentials or secrets")
+        finally:
+            runtime.store.close()

@@ -45,9 +45,12 @@ def detect_journal(record):
     identifier = bounded_text(
         record.get("SYSLOG_IDENTIFIER") or record.get("_COMM") or record.get("_SYSTEMD_UNIT"), 96
     ).lower()
+    auth_facility = str(record.get("SYSLOG_FACILITY", "")) == "10"
     observed_at = _journal_time(record)
 
-    if identifier in ("sshd", "sshd.service") or "sshd" in identifier:
+    if (identifier in ("sshd", "sshd.service") or "sshd" in identifier or
+            (auth_facility and (_SSH_ACCEPTED.search(message) or _SSH_FAILED.search(message) or
+                                _SSH_INVALID.search(message)))):
         match = _SSH_ACCEPTED.search(message)
         if match and valid_ip(match.group("ip")):
             values = match.groupdict()
@@ -73,7 +76,9 @@ def detect_journal(record):
                 aggregate=True, recommendation="review", observed_at=observed_at,
             )
 
-    if identifier in ("sudo", "sudo.service"):
+    if (identifier in ("sudo", "sudo.service") or
+            (auth_facility and (_SUDO_COMMAND.search(message) or
+                                "sudo" in message.lower()))):
         match = _SUDO_COMMAND.search(message)
         if match:
             values = match.groupdict()
@@ -155,7 +160,9 @@ def detect_nginx(record):
     if not isinstance(record, dict):
         return None
     method = bounded_text(record.get("method") or record.get("request_method"), 16).upper()
-    raw_path = bounded_text(record.get("uri") or record.get("path"), 2048)
+    raw_path = bounded_text(
+        record.get("uri") or record.get("request_uri") or record.get("path"), 2048
+    )
     path = raw_path.split("?", 1)[0][:512]
     try:
         decoded = urllib.parse.unquote(path, errors="replace").lower()
