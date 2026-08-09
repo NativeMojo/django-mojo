@@ -72,13 +72,26 @@ class FakeS3:
     def __init__(self, objects=None):
         self.objects = dict(objects or {})
         self.calls = []
+        # Bytes actually handed to disk per key. A transfer the fetcher aborts
+        # part-way is only distinguishable from one it rejects afterwards by
+        # how much of it landed.
+        self.written = {}
 
-    def download_file(self, Bucket, Key, Filename):
+    def download_file(self, Bucket, Key, Filename, Callback=None):
         self.calls.append((Bucket, Key))
         if (Bucket, Key) not in self.objects:
             raise RuntimeError(f"no such object: s3://{Bucket}/{Key}")
+        body = self.objects[(Bucket, Key)]
+        # Written in pieces like s3transfer does, so a Callback that aborts
+        # part-way through a transfer aborts here too — that is the whole
+        # point of the size guard.
         with open(Filename, "wb") as handle:
-            handle.write(self.objects[(Bucket, Key)])
+            for start in range(0, len(body), 8):
+                piece = body[start:start + 8]
+                handle.write(piece)
+                self.written[Key] = self.written.get(Key, 0) + len(piece)
+                if Callback is not None:
+                    Callback(len(piece))
 
 
 @th.django_unit_setup()
@@ -242,6 +255,87 @@ def test_corrupt_object_is_refused(opts):
         assert os.path.isfile(os.path.join(target, "assets/js/app.js")), \
             "one bad object discarded the files that verified fine"
     finally:
+        _exit(patches, root, www)
+
+
+@th.django_unit_test("an object larger than the manifest declares is aborted mid-transfer")
+def test_oversized_object_is_aborted(opts):
+    """The sha256 cannot judge an object until all of it is on disk, so the
+    declared size has to bound the transfer. Without it one overwritten key
+    fills the node's disk and takes down every vhost on it — the pool-wide
+    failure this module exists to prevent."""
+    from mojo.apps.edge.services import installer, www_sync
+
+    root = tempfile.mkdtemp(prefix="edge-sync-")
+    www = tempfile.mkdtemp(prefix="edge-www-")
+    patches = _patches(root, www)
+    _enter(patches)
+    try:
+        row = _row(opts.vhost.pk, "huge1", FILES_V1)
+        objects = _objects(row["release"]["prefix"], FILES_V1)
+        prefix = row["release"]["prefix"]
+        # The manifest still declares the small, legitimately-registered file.
+        # The object behind the key was replaced with something enormous.
+        objects[(RELEASE_BUCKET, f"{prefix}/index.html")] = b"x" * 100000
+        fake = FakeS3(objects)
+        www_sync._client = fake
+        declared = len(FILES_V1["index.html"])
+
+        failures = www_sync.fetch_webapps([row])
+        assert opts.vhost.pk in failures, \
+            "an oversized object was not reported as a failure"
+        assert "index.html" in failures[opts.vhost.pk], \
+            f"the failure does not name the bad file: {failures[opts.vhost.pk]}"
+
+        # The load-bearing assertion. Rejecting the object AFTER it lands is
+        # what the sha256 already did; the guard has to stop the bytes.
+        landed = fake.written[f"{prefix}/index.html"]
+        assert landed < declared + 64, \
+            (f"{landed} bytes were written to disk for a file the manifest "
+             f"declares as {declared} — the transfer was not bounded")
+
+        target = installer.release_dir(opts.vhost.pk, "huge1")
+        assert not os.path.exists(os.path.join(target, "index.html")), \
+            "the oversized object became the file nginx serves"
+        leftovers = [name
+                     for dirpath, _dirs, names in os.walk(target)
+                     for name in names
+                     if name.startswith(www_sync.TMP_PREFIX)]
+        assert leftovers == [], \
+            f"an aborted download left temporary files behind: {leftovers}"
+    finally:
+        _exit(patches, root, www)
+
+
+@th.django_unit_test("a release directory is created traversable for nginx's workers")
+def test_release_directories_are_traversable(opts):
+    """The fetching user is not the serving user. Under a hardened umask an
+    inherited-mode directory is 0700 and every 0644 file inside it is
+    unreachable."""
+    import stat
+
+    from mojo.apps.edge.services import installer, www_sync
+
+    root = tempfile.mkdtemp(prefix="edge-sync-")
+    www = tempfile.mkdtemp(prefix="edge-www-")
+    patches = _patches(root, www)
+    _enter(patches)
+    old_umask = os.umask(0o077)
+    try:
+        row = _row(opts.vhost.pk, "modes1", FILES_V1)
+        www_sync._client = FakeS3(_objects(row["release"]["prefix"], FILES_V1))
+
+        assert www_sync.fetch_webapps([row]) == {}, \
+            "the fetch failed under a restrictive umask"
+
+        target = installer.release_dir(opts.vhost.pk, "modes1")
+        for path in (target, os.path.join(target, "assets", "js")):
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+            assert mode & 0o055 == 0o055, \
+                (f"{path} is {oct(mode)} — nginx's workers cannot traverse "
+                 f"into the release they are meant to serve")
+    finally:
+        os.umask(old_umask)
         _exit(patches, root, www)
 
 

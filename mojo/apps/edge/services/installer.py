@@ -310,11 +310,25 @@ def _disabled_upstreams(vhost):
     return rows
 
 
-def _report_incident(message, title):
-    """Best-effort incident. An outage in the reporter never decides a converge."""
+def _report_incident(message, title, key=None):
+    """Best-effort incident. An outage in the reporter never decides a converge.
+
+    With `key`, the report repeats at most hourly instead of once per call.
+    Reach for it wherever a condition PERSISTS across converges: the caller's
+    own "have I reported this already" check stops the ten-minute repeat, but
+    on its own it also means a vhost stuck on one bad release files exactly one
+    incident ever and then looks healthy forever, which is the silent
+    non-convergence this module exists to make loud.
+    """
     from mojo.apps.incident import reporter
 
     try:
+        if key is not None:
+            # Never raises, by contract.
+            reporter.report_event_suppressed(
+                message, key, title=title, category="edge_install", level=6,
+                window=3600)
+            return
         reporter.report_event(
             message, title=title, category="edge_install", level=6)
     except Exception:
@@ -323,7 +337,7 @@ def _report_incident(message, title):
         logit.exception("edge: failed to report a vhost incident")
 
 
-def _exclude_or_abort(vhost, message, excluded, report=True):
+def _exclude_or_abort(vhost, message, excluded, report=True, key=None):
     """The one fork for a vhost that cannot be staged.
 
     House vhost -> abort the install (the platform's own serving path;
@@ -333,16 +347,20 @@ def _exclude_or_abort(vhost, message, excluded, report=True):
 
     `report=False` is for a failure the previous install already reported —
     a fetch that is still pending is retried every converge, and one incident
-    per ten minutes for one broken release is noise, not signal. The exclusion
-    itself is unconditional.
+    per ten minutes for one broken release is noise, not signal. It picks the
+    log level; `key` (a persisting condition) hands the repeat decision to the
+    suppressed reporter, which re-notifies hourly rather than never. The
+    exclusion itself is unconditional.
     """
     if vhost.domain.group_id is None:
         raise InstallError(f"{message} — it serves a platform vhost")
     if report:
         logit.error(message)
-        _report_incident(message, "Vhost excluded from an edge generation")
     else:
         logit.info(f"{message} (already reported; still retrying)")
+    if report or key is not None:
+        _report_incident(
+            message, "Vhost excluded from an edge generation", key=key)
     excluded.append(vhost.pk)
 
 
@@ -425,23 +443,29 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
             row = by_vhost.get(vhost.pk) or {}
             version = (row.get("release") or {}).get("version")
             is_new = reported.get(str(vhost.pk)) != version
+            # Keyed per vhost+version: the same broken release stays one
+            # incident an hour however often the converge retries it, and a
+            # NEW version failing reports immediately.
+            key = f"webapp-fetch:{vhost.pk}:{version}"
             fallback = _previous_web_root(previous, vhost.pk)
             if fallback is None:
                 # It has never served anything, so there is nothing to keep
                 # serving. Dark beats a live vhost pointing at nothing.
                 _exclude_or_abort(
-                    vhost, f"edge: {failure}", excluded, report=is_new)
+                    vhost, f"edge: {failure}", excluded, report=is_new,
+                    key=key)
                 continue
             fallbacks[vhost.pk] = fallback
             message = (f"edge: {failure} — {vhost.server_name} is serving its "
                        f"previous release from {fallback}")
             if is_new:
                 logit.error(message)
-                _report_incident(
-                    message, "Edge release fetch failed; serving the previous "
-                             "release")
             else:
                 logit.info(f"{message} (already reported; still retrying)")
+            _report_incident(
+                message,
+                "Edge release fetch failed; serving the previous release",
+                key=key)
 
         if _write_material(generation, vhost.certificate):
             installable.append(vhost)

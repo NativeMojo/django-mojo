@@ -178,7 +178,9 @@ generation whose own files are still on disk.
 
 ```
 fetch desired state (from the DB, via render.desired_state)
-if generation == installed.json.generation: return          idempotent no-op
+if generation == installed AND no www_pending: return       idempotent no-op
+fetch promoted release bytes from S3, verified per file (www_sync.py)
+    unfetchable: degrade THAT vhost only, never the pool — see webapps.md
 render generations/<new>/, write certificate material 0600
     material unfetchable:  house vhost  -> abort
                            tenant vhost -> exclude it, report an incident
@@ -186,7 +188,7 @@ nginx -t -c generations/<new>/nginx.conf                    cheap pre-filter
 os.replace(current -> generations/<new>)                    nothing has reloaded
 nginx -t                                                    against the REAL config
     fail, or "conflicting server name" on stderr -> revert current, incident, raise
-    ok -> systemctl reload nginx, write installed.json, prune
+    ok -> systemctl reload nginx, write installed.json (+ www_pending), prune
 ```
 
 Three properties this buys, each with its own test:

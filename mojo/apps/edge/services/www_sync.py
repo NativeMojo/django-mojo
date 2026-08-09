@@ -134,7 +134,53 @@ def _unlink(path):
         pass
 
 
-def _sweep_tmp(target, declared):
+def _make_servable_dir(path):
+    """Create a release directory nginx's workers can traverse.
+
+    The mode is explicit for the same reason the file mode is: the fetching
+    user is not the serving user. Under a hardened umask (0077 is ordinary in
+    a systemd unit) an inherited-mode directory is 0700, and every file we
+    carefully chmod 0644 sits behind a door nginx cannot open.
+    """
+    os.makedirs(path, exist_ok=True)
+    try:
+        os.chmod(path, 0o755)
+    except OSError:
+        # Someone else owns it. The traversal check is nginx's to fail, not
+        # ours to abort a converge over.
+        pass
+
+
+def _safe_mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0
+
+
+class _SizeGuard:
+    """Abort a download whose bytes exceed what the manifest declared.
+
+    The sha256 check cannot run until the whole object is on disk, so without
+    this a single overwritten key streams unbounded bytes into the release
+    directory and fills the node's disk — taking down every vhost on it, which
+    is exactly the pool-wide failure this module exists to prevent. boto3
+    propagates an exception raised in the callback, which unlinks the temp.
+    """
+
+    def __init__(self, entry):
+        self.entry = entry
+        self.seen = 0
+
+    def __call__(self, chunk):
+        self.seen += chunk
+        if self.seen > self.entry["size"]:
+            raise ValueError(
+                f"object is larger than the manifest declares "
+                f"({self.entry['size']} bytes)")
+
+
+def _sweep_tmp(target, declared, started):
     """Delete leftover `.wwwsync-*` files under `target`.
 
     Recursive: manifest paths nest, so a temp file lands beside its nested
@@ -142,13 +188,27 @@ def _sweep_tmp(target, declared):
     relative paths — a release is allowed to ship a file whose name happens to
     look like ours, and deleting it would corrupt the very release we just
     verified.
+
+    `started` is when this fetch began: anything newer belongs to an install
+    running concurrently with ours (the broadcast and the sweep can overlap),
+    and unique temp names do not make deleting someone else's in-flight
+    download safe. s3transfer's own inner temp carries our prefix too.
     """
+    # os.walk descends into its root even when the root is itself a symlink, so
+    # the per-entry containment check is not enough to bound what we delete.
+    if not validators.contained_under(validators.www_base(), target):
+        return
     for dirpath, _dirnames, filenames in os.walk(target):
         for name in filenames:
             if not name.startswith(TMP_PREFIX):
                 continue
             full = os.path.join(dirpath, name)
             if os.path.relpath(full, target) in declared:
+                continue
+            try:
+                if os.path.getmtime(full) >= started:
+                    continue
+            except OSError:
                 continue
             _unlink(full)
 
@@ -175,11 +235,12 @@ def sync_release(row):
     # release_dir validates the version, so the path cannot climb out of the
     # vhost's own tree even if a row reached us with something odd in it.
     target = installer.release_dir(row["vhost"], version)
-    os.makedirs(target, exist_ok=True)
+    _make_servable_dir(target)
 
     bucket = row["bucket"]
     prefix = row["release"]["prefix"]
     client = get_s3_client()
+    started = time.time()
     deadline = time.monotonic() + fetch_budget()
 
     # Built from the WHOLE manifest, not from the entries this pass reached:
@@ -190,11 +251,6 @@ def sync_release(row):
     skipped = 0
 
     for entry in cleaned:
-        if time.monotonic() >= deadline:
-            problems.append(
-                f"fetch budget exceeded after {fetched + skipped} files")
-            break
-
         final = os.path.join(target, entry["path"])
         try:
             # Belt and braces over the manifest whitelist: this also catches a
@@ -208,8 +264,18 @@ def sync_release(row):
                 skipped += 1
                 continue
 
+            # Checked here rather than at the top of the loop: the budget
+            # bounds time spent waiting on S3, and hashing files that are
+            # already correct is local work. Counting it would let a large
+            # release that is fully on disk exhaust its own budget every
+            # converge and never report success.
+            if time.monotonic() >= deadline:
+                problems.append(
+                    f"fetch budget exceeded after {fetched + skipped} files")
+                break
+
             parent = os.path.dirname(final)
-            os.makedirs(parent, exist_ok=True)
+            _make_servable_dir(parent)
             # Unique name in the destination directory, so two overlapping
             # installs cannot write the same temp file, and the final move is
             # a same-filesystem atomic replace.
@@ -218,13 +284,16 @@ def sync_release(row):
             # holding this descriptor leaks one per manifest entry.
             os.close(handle)
             try:
-                client.download_file(bucket, f"{prefix}/{entry['path']}", tmp)
+                client.download_file(bucket, f"{prefix}/{entry['path']}", tmp,
+                                     Callback=_SizeGuard(entry))
                 if _file_sha256(tmp) != entry["sha256"]:
                     problems.append(f"{entry['path']}: checksum mismatch")
                     _unlink(tmp)
                     continue
-                # mkstemp creates 0600 and nginx WORKERS read these files, not
-                # the app user that fetched them.
+                # nginx WORKERS read these files, not the app user that
+                # fetched them. Set explicitly: the mkstemp mode does not
+                # survive (s3transfer renames its own file over ours), and
+                # the runner's umask is not ours to assume.
                 os.chmod(tmp, 0o644)
                 os.replace(tmp, final)
             except Exception:
@@ -234,7 +303,7 @@ def sync_release(row):
         except Exception as err:
             problems.append(f"{entry['path']}: {err}")
 
-    _sweep_tmp(target, declared)
+    _sweep_tmp(target, declared, started)
 
     if problems:
         shown = "; ".join(problems[:_MAX_REPORTED])
@@ -263,13 +332,21 @@ def fetch_webapps(webapps):
     for row in webapps or []:
         try:
             problem = sync_release(row)
+            if problem:
+                # Inside the try on purpose: the installer's isolation rests on
+                # this function returning rather than raising, so even a row
+                # too malformed to describe must not escape.
+                version = (row.get("release") or {}).get("version")
+                failures[row["vhost"]] = (
+                    f"{row.get('slug')} release {version} "
+                    f"could not be fetched: {problem}")
         except Exception as err:
             logit.exception("edge: release fetch raised")
-            problem = str(err) or err.__class__.__name__
-        if problem:
-            failures[row["vhost"]] = (
-                f"{row.get('slug')} release {row['release']['version']} "
-                f"could not be fetched: {problem}")
+            vhost_id = row.get("vhost") if hasattr(row, "get") else None
+            if vhost_id is not None:
+                failures[vhost_id] = (
+                    f"release could not be fetched: "
+                    f"{err or err.__class__.__name__}")
     return failures
 
 
@@ -338,7 +415,10 @@ def prune_releases(webapps, keep=None):
             path for path in entries
             if os.path.isdir(path) and os.path.realpath(path) not in exempt
         ]
-        entries.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+        # Guarded: prune runs AFTER the reload and after installed.json is
+        # written, so a directory vanishing under us here would fail a job
+        # whose install actually succeeded.
+        entries.sort(key=_safe_mtime, reverse=True)
         for path in entries[max(keep - 1, 0):]:
             shutil.rmtree(path, ignore_errors=True)
             removed.append(path)
