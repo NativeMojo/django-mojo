@@ -106,10 +106,13 @@ def _exit(patches, *dirs):
         shutil.rmtree(path, ignore_errors=True)
 
 
-def _seed_cert(opts):
+def _seed_cert(opts, certificate=None):
+    """Give a certificate readable material, or the installer excludes its
+    vhost before any release logic runs."""
     from mojo.apps.dnsman.models import Certificate
 
-    Certificate.objects.filter(pk=opts.certificate.pk).update(
+    pk = (certificate or opts.certificate).pk
+    Certificate.objects.filter(pk=pk).update(
         cert_pem="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
 
 
@@ -159,6 +162,7 @@ def test_unfetchable_release_excludes_one_vhost(opts):
         # that IT still installs.
         other_domain = make_domain(group=opts.group)
         other_cert = make_certificate(other_domain)
+        _seed_cert(opts, other_cert)
         other = make_vhost(other_domain, other_cert, label="ok", kind="site",
                            pool=POOL)
 
