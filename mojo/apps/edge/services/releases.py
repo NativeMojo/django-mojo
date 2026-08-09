@@ -1,6 +1,6 @@
 """
-Register a build, verify it landed, promote it. The three are deliberately
-separate operations with different authority.
+Register a build, verify it landed, and hand desired state to the fleet
+deployment coordinator.
 
 ## The upload flow
 
@@ -11,8 +11,9 @@ separate operations with different authority.
 2. CI:  PUT <url>                  straight to S3, never through this process
 3. CI:  POST edge/release/complete {release}
         -> HeadObject per entry, compare checksum and size
-        -> status=uploaded          (NOT live)
-4. promote                          auto_promote, or a human with manage_webapp
+        -> status=uploaded
+4. WebAppDeployment                 automatic by default; manual hold opt-out
+5. CI polls deployment status       live only after active-runner proof
 ```
 
 **Why presigned PUTs rather than STS session credentials.** The item's own
@@ -46,7 +47,10 @@ from mojo.helpers.aws import s3
 from mojo.helpers.settings import settings
 
 from mojo.apps.edge import validators
-from mojo.apps.edge.models import WebApp, WebAppRelease
+from mojo.apps.edge.models import WebApp, WebAppDeployment, WebAppRelease
+from mojo.apps.edge.models.web_app_deployment import (
+    ACTIVE_STATUSES, STATUS_LIVE as DEPLOYMENT_LIVE,
+)
 from mojo.apps.edge.models.web_app_release import (
     STATUS_LIVE, STATUS_PENDING, STATUS_SUPERSEDED, STATUS_UPLOADED,
 )
@@ -65,28 +69,12 @@ def hex_to_b64(digest_hex):
     return base64.b64encode(bytes.fromhex(digest_hex)).decode("ascii")
 
 
-def register(web_app, version, manifest, user=None):
-    """Create a `pending` release and mint one upload URL per declared file."""
-    validators.validate_release_version(version)
-    # Re-check the bucket at MINT time, not only when the row was created: a
-    # bucket removed from EDGE_RELEASE_BUCKETS would otherwise keep receiving
-    # presigned writes from existing sites.
-    validators.validate_release_bucket(web_app.bucket or "")
-    cleaned = validators.validate_manifest(manifest)
-
-    if WebAppRelease.objects.filter(webapp=web_app, version=version).exists():
-        # Immutability is what rollback depends on: re-registering a version
-        # would silently change what an older, still-referenced row means.
-        raise me.ValueException(
-            f"release {version} already exists for {web_app.slug}")
-
-    release = WebAppRelease.objects.create(
-        webapp=web_app, version=version, manifest=cleaned,
-        status=STATUS_PENDING, created_by=user)
-
+def _upload_urls(release):
+    """Mint upload URLs for a pending release's immutable manifest."""
+    web_app = release.webapp
     prefix = release.storage_prefix()
     uploads = []
-    for entry in cleaned:
+    for entry in release.manifest:
         key = f"{prefix}/{entry['path']}"
         checksum = hex_to_b64(entry["sha256"])
         uploads.append(dict(
@@ -98,6 +86,33 @@ def register(web_app, version, manifest, user=None):
                 content_length=entry["size"]),
             headers={"x-amz-checksum-sha256": checksum},
         ))
+    return uploads
+
+
+def register(web_app, version, manifest, user=None):
+    """Create or safely reuse one immutable release version."""
+    validators.validate_release_version(version)
+    # Re-check the bucket at MINT time, not only when the row was created: a
+    # bucket removed from EDGE_RELEASE_BUCKETS would otherwise keep receiving
+    # presigned writes from existing sites.
+    validators.validate_release_bucket(web_app.bucket or "")
+    cleaned = validators.validate_manifest(manifest)
+
+    existing = WebAppRelease.objects.filter(
+        webapp=web_app, version=version).first()
+    if existing is not None:
+        if existing.manifest != cleaned:
+            # Reuse is allowed only when it proves the exact same artifact.
+            raise me.ValueException(
+                f"release {version} already exists with a different manifest")
+        uploads = _upload_urls(existing) if existing.status == STATUS_PENDING else []
+        return existing, uploads
+
+    release = WebAppRelease.objects.create(
+        webapp=web_app, version=version, manifest=cleaned,
+        status=STATUS_PENDING, created_by=user)
+
+    uploads = _upload_urls(release)
 
     logit.info(
         f"edge: registered release {version} for {web_app.slug} "
@@ -112,6 +127,8 @@ def complete(release):
     half-failed should learn which objects are missing, not just that
     something is.
     """
+    if release.status in (STATUS_UPLOADED, STATUS_LIVE, STATUS_SUPERSEDED):
+        return release
     if release.status != STATUS_PENDING:
         raise me.ValueException(
             f"release {release.version} is {release.status}, not pending")
@@ -162,12 +179,13 @@ def complete(release):
 
 
 def promote(web_app, release, user=None):
-    """Point a site at a release. Promotion and rollback are this one call.
+    """Point a site at a release and coordinate active-fleet convergence.
 
     Wrapped in a row lock so two concurrent promotes cannot interleave and
     leave `current_release` disagreeing with the `live` row.
     """
     from django.db import transaction
+    from mojo.apps.edge.services import webapp_deploy
 
     if release.webapp_id != web_app.pk:
         raise me.ValueException("that release belongs to another site")
@@ -178,7 +196,15 @@ def promote(web_app, release, user=None):
 
     with transaction.atomic():
         locked = WebApp.objects.select_for_update().get(pk=web_app.pk)
+        active = WebAppDeployment.objects.filter(
+            webapp=locked, release=release,
+            status__in=ACTIVE_STATUSES + (DEPLOYMENT_LIVE,)
+        ).order_by("-created").first()
+        if locked.current_release_id == release.pk and active is not None:
+            return active
+
         previous = locked.current_release
+        release_previous_status = release.status
 
         if previous and previous.pk != release.pk:
             WebAppRelease.objects.filter(
@@ -189,19 +215,26 @@ def promote(web_app, release, user=None):
         locked.current_release = release
         locked.save()
 
+        deployment = WebAppDeployment.objects.create(
+            webapp=locked,
+            release=release,
+            previous_release=previous if previous != release else None,
+            release_previous_status=release_previous_status,
+        )
+        transaction.on_commit(
+            lambda deployment_id=deployment.pk:
+            webapp_deploy.publish_or_restore(deployment_id),
+            robust=True)
+
     release.refresh_from_db()
     logit.info(
         f"edge: {web_app.slug} now serving {release.version} "
         f"(was {previous.version if previous else 'nothing'})")
-    return release
+    return deployment
 
 
 def maybe_auto_promote(release):
-    """Promote on verification when the site opts in.
-
-    Per-site rather than a global posture: a marketing site goes live on push,
-    an admin portal waits for a human, from the same pipeline.
-    """
+    """Deploy on verification unless this site explicitly uses manual hold."""
     web_app = release.webapp
     if not web_app.auto_promote:
         return None

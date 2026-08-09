@@ -8,14 +8,15 @@ Backend reference:
 ## What your pipeline needs
 
 - A **site** (`WebApp`) already registered by an administrator.
-- The site's **API key**, minted with `POST /api/edge/webapp/link_key` and
-  handed to you once. Authenticate with `Authorization: apikey <token>`.
+- The site's **service key**, minted once with
+  `POST /api/edge/webapp/link_key` and stored in GitHub Actions as the secret
+  named exactly **`MOJO_DEPLOY_KEY`**. Authenticate with
+  `Authorization: apikey <token>`.
 
-That key carries exactly one permission, `release_webapp`. **It can upload and
-it can never promote.** If your pipeline needs a build to go live
-automatically, ask an administrator to turn on `auto_promote` for that site —
-it is a per-site setting, so a marketing site can go live on push while an
-admin portal waits for a human, from the same pipeline.
+Developers do not receive deploy keys. A merge or push to the configured branch
+starts the repository's workflow; the WebApp-linked service key can release
+only that one WebApp. Automatic deployment is the default. `auto_promote=False`
+is reserved for an explicit manual-hold exception.
 
 ## The flow
 
@@ -83,8 +84,15 @@ The API checks every declared object against what actually landed — presence,
 size, and S3's stored checksum. It does **not** take your word for it: a job
 that half-failed can still call this, so "I am done" is not evidence.
 
-On success the release becomes `uploaded`, and `promoted: true` comes back if
-the site has `auto_promote` on.
+On success the response includes `deployment` and `deployment_status`. Poll:
+
+```
+GET /api/edge/release/deployment/<deployment>
+```
+
+until `status` is `live` or `terminal` is true. The response includes each
+active runner's job status and bounded diagnostics. `rolled_back`, `failed`,
+and `superseded` are terminal failures for the workflow.
 
 On failure you get a 400 naming the paths that did not verify. The release
 stays `pending` and is not promotable.
@@ -93,21 +101,20 @@ stays `pending` and is not promotable.
 
 | Situation | What to do |
 |---|---|
-| 400 "release ... already exists" | Versions are immutable. Use a new one — do not retry with the same id. |
+| Existing identical version | Safe retry. The existing release is reused; a different manifest for that version is still refused. |
 | 400 listing paths at `complete` | Some uploads did not land. Re-upload those objects and call `complete` again. |
 | 400 "no stored checksum" | The PUT omitted the checksum header. Send it. |
 | 404 on `webapp` | The key is not this site's key, or the site has no key linked. Both look identical on purpose. |
-| 403 on promote | Expected. CI cannot promote; that needs `manage_webapp`. |
+| Deployment `rolled_back` | At least one active node failed; the prior release was restored. Surface the runner diagnostics and fail CI. |
 
-## Promotion and rollback (admin UI, not CI)
+## Manual promotion and rollback (exceptional admin flow)
 
 ```
 POST /api/edge/webapp/promote  {"webapp": 42, "release": 7}
 ```
 
-Requires `manage_webapp`. **Rollback is the same call** with an older release
-id — there is no separate endpoint, and no re-upload: the previous build is
-still on the nodes, so it is a symlink flip.
+Requires `manage_webapp`. It uses the same fleet coordinator as automatic
+deployment. **Rollback is the same call** with an older release id.
 
 Rolling back to something older is safe too. Nodes retain a bounded number of
 releases, and a target that has aged out is simply **re-fetched from S3** on

@@ -1,9 +1,9 @@
 """
 Site management: CRUD, key linkage, and the promote/rollback action.
 
-**Promotion is a different permission from release.** `release_webapp` is what
-CI holds; `manage_webapp` is what a human holds. A site's CI credential can
-never reach `live`.
+The linked release credential can complete the site's normal automatic deploy;
+`manage_webapp` remains the authority for manual promote/rollback and key
+rotation.
 """
 
 import mojo.decorators as md
@@ -91,12 +91,14 @@ def on_webapp_promote(request):
     if release is None:
         raise me.ValueException("Release not found", code=404, status=404)
 
-    releases.promote(web_app, release,
-                     user=getattr(request, "user", None))
+    deployment = releases.promote(
+        web_app, release, user=getattr(request, "user", None))
     web_app.refresh_from_db()
     return dict(
         webapp=web_app.pk,
         current_release=web_app.current_release_id,
         version=release.version,
         status=release.status,
+        deployment=deployment.pk,
+        deployment_status=deployment.status,
     )

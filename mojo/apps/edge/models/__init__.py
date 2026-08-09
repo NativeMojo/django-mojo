@@ -8,6 +8,7 @@ from .route import VhostRoute
 from .blocklist import BlocklistEntry
 from .web_app_release import WebAppRelease
 from .web_app import WebApp
+from .web_app_deployment import WebAppDeployment
 
 __all__ = [
     "BlocklistEntry",
@@ -15,5 +16,6 @@ __all__ = [
     "Vhost",
     "VhostRoute",
     "WebApp",
+    "WebAppDeployment",
     "WebAppRelease",
 ]

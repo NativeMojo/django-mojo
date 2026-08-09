@@ -140,16 +140,19 @@ def test_checksum_encoding(opts):
     assert encoded != digest, "the checksum was passed through as hex"
 
 
-@th.django_unit_test("a version cannot be registered twice")
+@th.django_unit_test("an identical immutable version is safely reusable")
 def test_version_is_immutable(opts):
     from mojo.apps.edge.services import releases
 
     with _fake_s3():
-        releases.register(opts.webapp, "dup1", make_manifest())
-        err = raises(releases.register, opts.webapp, "dup1", make_manifest())
-    assert err is not None, (
-        "a version was re-registered — an older, still-referenced release row "
-        "would silently change meaning")
+        first, _ = releases.register(opts.webapp, "dup1", make_manifest())
+        second, uploads = releases.register(
+            opts.webapp, "dup1", make_manifest())
+        err = raises(
+            releases.register, opts.webapp, "dup1", make_manifest(["other.js"]))
+    assert second.pk == first.pk, "an identical rerun created another release row"
+    assert uploads, "a pending rerun did not receive fresh upload URLs"
+    assert err is not None, "the same version accepted a different manifest"
 
 
 @th.django_unit_test("complete FAILS when the declared files are not in S3")
@@ -282,7 +285,7 @@ def test_complete_reports_which_files(opts):
         f"the error does not name the failing path: {err}"
 
 
-@th.django_unit_test("completing a release twice is refused")
+@th.django_unit_test("completing an already verified release is idempotent")
 def test_complete_is_not_repeatable(opts):
     from mojo.apps.edge.services import releases
 
@@ -293,10 +296,10 @@ def test_complete_is_not_repeatable(opts):
         _put(f"{prefix}/index.html", sha256_hex=manifest[0]["sha256"],
              size=manifest[0]["size"])
         releases.complete(release)
-        err = raises(releases.complete, release)
+        again = releases.complete(release)
 
-    assert err is not None, \
-        "a release was completed twice — the second call would re-open a live one"
+    assert again.pk == release.pk, "idempotent completion changed the release"
+    assert again.status == "uploaded", "idempotent completion reopened the release"
 
 
 @th.django_unit_test("uploads land under the site's DERIVED prefix")

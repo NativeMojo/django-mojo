@@ -41,6 +41,17 @@ def test_prefix_is_derived(opts):
         f"release prefix is wrong: {web_app.release_prefix('v1')}"
 
 
+@th.django_unit_test("new WebApps deploy verified releases automatically")
+def test_auto_promote_default(opts):
+    from mojo.apps.edge.models import WebApp
+
+    web_app = WebApp.objects.create(
+        group=opts.group, slug="autodefault", bucket=RELEASE_BUCKET,
+        prefix="pending")
+    assert web_app.auto_promote is True, \
+        "the WebApp model default still requires human promotion"
+
+
 @th.django_unit_test("a bucket outside the allowlist is refused")
 def test_bucket_allowlist(opts):
     from mojo.apps.edge.models import WebApp

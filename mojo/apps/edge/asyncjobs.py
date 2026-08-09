@@ -87,6 +87,25 @@ def on_engine_start(engine):
 
 
 # ----------------------------------------------------------------------
+# WebApp release deploys
+# ----------------------------------------------------------------------
+
+def webapp_deploy_node(job):
+    """Install and prove one WebApp deployment on this targeted runner."""
+    from mojo.apps.edge.services import webapp_deploy
+
+    return webapp_deploy.install_node(job)
+
+
+def webapp_deploy_orchestrate(job):
+    """Wait for active runners and restore prior state on partial failure."""
+    from mojo.apps.edge.services import webapp_deploy
+
+    deployment_id = (job.payload or {}).get("deployment")
+    return webapp_deploy.orchestrate(deployment_id)
+
+
+# ----------------------------------------------------------------------
 # fleet code deploy (maestro item #1458)
 # ----------------------------------------------------------------------
 #

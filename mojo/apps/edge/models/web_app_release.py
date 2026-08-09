@@ -26,9 +26,9 @@ class WebAppRelease(models.Model, MojoModel):
     registered but unverified must never be promotable — an abandoned CI run
     would otherwise leave a row that looks shippable and 404s in production.
 
-    `uploaded` and `live` are deliberately different states. That separation is
-    the entire reason this moved into django-mojo: CI's credential can reach
-    `uploaded` and can never reach `live`.
+    `uploaded` and `live` are deliberately different states. Verification
+    reaches `uploaded`; the WebApp deployment coordinator owns the transition
+    to desired/live state and proves the active fleet separately.
 
     Rows are immutable once created. Rollback is repointing
     `WebApp.current_release` at an older row, which is why nothing here is
