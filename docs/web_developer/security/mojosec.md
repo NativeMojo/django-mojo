@@ -112,8 +112,10 @@ method/host/status/upstream values, HTTP(S) referrer origin, structured UA
 family/major plus digest, and sudo executable/full-command digest/argument
 count plus one constant redaction marker. Generic arguments and per-token
 digests never project.
-Bodies, cookies, authorization, arbitrary headers, and raw sensitive strings
-are never part of this protocol evidence or Event projection.
+The native nginx stream never collects bodies, cookies, the Authorization
+header, or arbitrary headers. Bounded request targets, referrers, user agents,
+and sudo commands can still contain untrusted sensitive text, but those raw
+values remain in the protected receipt and never project verbatim to Event.
 
 ### Native sensor evidence limits and attribution
 
@@ -135,7 +137,7 @@ User-agent text alone is never a detector signal.
 
 Accepted SSH logins establish a `(boot_id, audit_session)` source mapping.
 The mapping source must be a successful trusted Linux audit-transport
-`USER_START`/`USER_LOGIN` record for root-owned sshd with `terminal=ssh`;
+`USER_START`/`USER_LOGIN` record for root-UID sshd with `terminal=ssh`;
 message text and a caller-chosen syslog identifier are insufficient.
 Sudo uses it only when actor and TTY are compatible; the mapping is retained
 for 30 days with a 4,096-row cap. Without an exact audit-session mapping,
