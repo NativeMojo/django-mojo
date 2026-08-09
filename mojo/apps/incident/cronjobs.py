@@ -49,6 +49,13 @@ def prune_mojosec_receipts(force=False, verbose=False, now=None):
         channel="cleanup", payload={})
 
 
+@schedule(minutes="25", hours="8")
+def prune_mojosec_learning(force=False, verbose=False, now=None):
+    jobs.publish(
+        func="mojo.apps.incident.services.mojosec_learning.prune_learning_evaluations",
+        channel="cleanup", payload={})
+
+
 @schedule(minutes="*/5")
 def replay_mojosec_handler_outbox(force=False, verbose=False, now=None):
     jobs.publish(

@@ -235,6 +235,18 @@ def _create_receipt(api_key, batch, sensor_event, digest):
 
     try:
         with transaction.atomic():
+            effective_kind = sensor_event["kind"]
+            effective_count = sensor_event["count"]
+            effective_level = KIND_POLICY.get(
+                effective_kind, UNKNOWN_KIND_POLICY)["level"]
+            if effective_level >= 12:
+                effective_severity = "critical"
+            elif effective_level >= 8:
+                effective_severity = "high"
+            elif effective_level >= 5:
+                effective_severity = "warning"
+            else:
+                effective_severity = "info"
             projection_batch = dict(batch)
             projection_batch["installation_key_id"] = api_key.pk
             event = _event_projection(projection_batch, sensor_event)
@@ -247,10 +259,17 @@ def _create_receipt(api_key, batch, sensor_event, digest):
                 protocol_version=batch["version"],
                 sensor_policy_revision=batch["policy_revision"],
                 replay_features={
+                    "feature_schema": "replay_features_v1",
                     "schema": batch["schema"],
                     "version": batch["version"],
                     "sensor_id": batch["sensor_id"],
                     "policy_revision": batch["policy_revision"],
+                    "effective": {
+                        "kind": effective_kind,
+                        "count": effective_count,
+                        "level": effective_level,
+                        "severity": effective_severity,
+                    },
                     "event": sensor_event,
                 },
             )

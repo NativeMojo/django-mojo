@@ -833,7 +833,7 @@ Default health rules are auto-created on first health check run. They send notif
 | Job | Schedule | What it does |
 |-----|----------|--------------|
 | `prune_mojosec_receipts` | Daily 8:15 AM | Deletes published MojoSec receipts older than `MOJOSEC_RECEIPT_RETENTION_DAYS`; never deletes pending publication rows |
-| `replay_mojosec_handler_outbox` | Every 5 minutes | Replays published MojoSec receipts whose required exact-RuleSet handler dispatch is pending or failed |
+| `prune_mojosec_learning` | Daily 8:25 AM | Deletes bounded offline evaluation summaries older than `MOJOSEC_LEARNING_EVALUATION_RETENTION_DAYS`; feedback/proposal audit rows remain |
 | `replay_mojosec_handler_outbox` | Every 5 minutes | Replays published MojoSec receipts whose required exact-RuleSet handler dispatch is pending or failed |
 | `prune_events` | Daily 9:45 AM | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` days with level < 6 |
 | `sweep_expired_blocks` | Every 5 minutes | Unblocks IPs where `blocked_until` has passed |

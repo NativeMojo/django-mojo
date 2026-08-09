@@ -66,6 +66,7 @@ def on_assistant_message(request):
 def on_assistant_context(request):
     """Create a conversation pre-loaded with context from any MojoModel instance."""
     from mojo.apps.assistant.services.context import resolve_model, build_context
+    from mojo.apps.assistant.services.tools.models import check_ai_access
     from mojo.helpers.request import is_key_backed_session
 
     # Refused outright for any confined credential (ApiKey / GroupScopedToken).
@@ -84,6 +85,14 @@ def on_assistant_context(request):
     model, err = resolve_model(model_string)
     if err:
         return JsonResponse({"status": False, "error": err["error"]}, status=400)
+
+    # Apply the shared model-tool policy before permissions, object lookup,
+    # serialization, duplicate lookup, or conversation/message creation.
+    # DENY_AI is a structural data-boundary, not a permission the caller can
+    # overcome. The gate's security event deliberately has no group stamp.
+    ai_error = check_ai_access(model, "view", request.user, request=request)
+    if ai_error:
+        return JsonResponse({"status": False, "error": ai_error["error"]}, status=403)
 
     # Check user has VIEW_PERMS for this model
     view_perms = getattr(model.RestMeta, "VIEW_PERMS", [])
@@ -142,4 +151,3 @@ def on_conversation(request, pk=None):
 @md.uses_model_security(Skill)
 def on_skill(request, pk=None):
     return Skill.on_rest_request(request, pk)
-

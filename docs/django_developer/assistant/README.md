@@ -363,7 +363,7 @@ Every read tool calls `mojo.apps.metrics.rest.helpers.check_view_permissions(req
 
 #### `DENY_AI_*` RestMeta flags
 
-Every tool in the Models Domain honors per-model opt-out flags on `RestMeta`: `DENY_AI_VIEW` (describe/query/aggregate/export), `DENY_AI_CREATE`, `DENY_AI_UPDATE`, `DENY_AI_DELETE`, plus `DENY_AI` as a shorthand for all four. All default `False`.
+Every tool in the Models Domain honors per-model opt-out flags on `RestMeta`: `DENY_AI_VIEW` (context attachment/describe/query/aggregate/export), `DENY_AI_CREATE`, `DENY_AI_UPDATE`, `DENY_AI_DELETE`, plus `DENY_AI` as a shorthand for all four. `POST /api/assistant/context` applies the same view gate before object lookup, serialization, or conversation creation. All flags default `False`.
 
 The AI gate runs **before** the REST permission check, so denied requests return a distinct error — `"<app>.<Model> is not available to the assistant"` — to signal that the block is policy, not permission. Denials emit a level-4 `assistant_ai_denied` incident event for operator visibility. REST continues to work unchanged for humans — only the assistant tools honor the flags. See [docs/django_developer/rest/permissions.md](../rest/permissions.md#assistant-access-flags) for details.
 

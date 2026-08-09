@@ -120,3 +120,72 @@ Errors use a small unwrapped JSON object: `{"error": "reason"}`.
 
 Valid batches always return `200`; persistence or central-publication failures
 are represented by per-event `retry` results rather than a batch-level 5xx.
+
+## Learning API
+
+The browser-facing learning endpoints are separate from machine ingestion.
+They require a human JWT with global security permissions; API keys are always
+rejected and group/member grants never authorize this platform-wide surface.
+
+| Method | Path | Permission | Purpose |
+|---|---|---|---|
+| `POST` | `/api/incident/mojosec/feedback` | global `manage_security` or `security` | Append a disposition or immutable reversal |
+| `POST` | `/api/incident/mojosec/proposal` | global `manage_security` or `security` | Create a draft/shadow/rejected immutable proposal revision |
+| `POST` | `/api/incident/mojosec/replay` | global `manage_security` or `security` | Explicit offline evaluation of a draft/shadow proposal |
+| `POST` | `/api/incident/mojosec/shadow` | global `manage_security` or `security` | Explicit offline evaluation of a shadow-labelled proposal |
+| `GET` | `/api/incident/mojosec/metrics` | global `view_security` or `security` | Bounded detector receipt/disposition counts |
+
+Feedback accepts exactly one subject: `receipt_id` or `manual_exemplar`.
+Optional `incident_id` is linked context and must match the explicit published
+receipt; the server never chooses an arbitrary receipt from an incident. A
+manual exemplar is only
+`{"kind": "web.probe", "count": 3, "severity": "high"}`-shaped; arbitrary
+evidence is rejected. `disposition` is one of `confirmed_threat`,
+`expected_administrative`, `benign_noise`, `operational_failure`, `unknown`, or
+`missed_incomplete`. To correct a row, repeat the same subject and include
+`reverses_id` plus a required note. Notes are untrusted and capped at 1,000
+characters.
+
+Proposal content is deliberately non-executable:
+
+```json
+{
+  "summary": "Raise the aggregate threshold for repeated web probes",
+  "status": "draft",
+  "content": {
+    "schema": "mojosec.policy-proposal.v1",
+    "detectors": [{
+      "kind": "web.probe",
+      "decision": "flag",
+      "minimum_count": 5,
+      "minimum_severity": "warning"
+    }]
+  }
+}
+```
+
+Create a revision by sending the prior row as `supersedes_id`. Only `draft`,
+`shadow`, and `rejected` exist; no request can activate live policy. Content
+cannot contain regex, URL, handler, job, action, or arbitrary detector names.
+Only an unsuperseded leaf may be evaluated, and a rejected leaf cannot be
+evaluated or revised.
+
+Replay/shadow requests require `proposal_id` plus an explicit, duplicate-free
+`receipt_ids` list containing 1–100 retained receipts. The evaluator uses
+stored `replay_features_v1` only, canonicalizes IDs in ascending order, and
+recomputes each stored event projection's canonical digest against the receipt
+payload digest before use. Altered or incomplete evidence fails closed. It
+ignores host-reported severity in favor of the server `KIND_POLICY` level
+mapping and returns bounded aggregate metrics and digests. Digests bind the
+proposal content, evaluator schema/version, and server policy-registry digest.
+`shadow` is not live-event
+evaluation and does not attach anything to ingestion. Neither operation can
+create an Event/Incident, call a handler or LLM, send an alert, or ban an IP.
+Metrics inspect a hard-capped newest candidate pool (at most 4,000 rows per
+receipt/current-feedback plane), then cap and stratify the requested sample per
+stable installation identity. A noisy installation can make the result smaller
+than the requested limit. Results contain no customer group/tenant stamp and
+are not fleet coverage or sensor health. All learning models are excluded from
+generic AI/model queries and assistant context attachment, and there is no
+MojoSec assistant/LLM learning tool in this prototype. Existing incident-triage
+and live RuleSet assistant tools are unchanged.

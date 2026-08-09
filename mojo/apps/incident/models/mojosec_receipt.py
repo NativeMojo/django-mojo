@@ -66,6 +66,9 @@ class MojoSecReceipt(models.Model, MojoModel):
         ]
         indexes = [
             models.Index(fields=("publish_state", "modified"), name="incident_mo_publish_0ddfd1_idx"),
+            models.Index(
+                fields=("publish_state", "-created", "-id"),
+                name="incident_mo_pub_created_idx"),
         ]
 
     class RestMeta:

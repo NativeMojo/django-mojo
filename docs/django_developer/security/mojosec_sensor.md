@@ -429,6 +429,88 @@ Published receipt rows are retained for `MOJOSEC_RECEIPT_RETENTION_DAYS`
 (default 45, minimum 7) and pruned daily. Pending publication and incomplete
 handler-outbox receipts are never removed by that retention job.
 
+## Human feedback and offline policy evaluation
+
+MojoSec's learning loop is an operator-only, infrastructure-global control
+plane. Every learning endpoint uses global `view_security` or
+`manage_security`/`security` authorization and rejects API keys, including
+keys that otherwise carry those permissions. Feedback is never tenant-owned:
+it has no `group`, and sensor identity is snapshotted from the protected
+`MojoSecReceipt.sensor_id` and installation API-key ID rather than an Event
+group or a payload claim.
+
+`MojoSecDetectorFeedback` is append-only. A disposition is exactly one of
+`confirmed_threat`, `expected_administrative`, `benign_noise`,
+`operational_failure`, `unknown`, or `missed_incomplete`. Exactly one subject
+is required: an explicit published receipt exemplar or a manual exemplar
+containing only allowlisted `kind`, `count`, and `severity` scalars. An
+`incident_id` is optional linked context only and is accepted only when it
+matches that explicit receipt; an incident is never sampled implicitly.
+Corrections append a row through `reverses`; they never update the prior row.
+The actor, subject, detector/category/level, enrolled sensor and policy-revision
+digest are scalar snapshots. Nullable actor/receipt/incident links may later be
+pruned without losing that audit record. Notes are untrusted text capped at
+1,000 characters and the feedback model, notes, and manual evidence are denied
+to generic AI/model-query tools.
+
+Feedback, proposal, and evaluation rows reject instance updates/deletes and
+default-manager queryset update/delete/bulk operations. Each carries a
+canonical digest of its immutable fields, which services revalidate before
+reversal, revision, evaluation, or metrics use. Evaluation deletion is exposed
+only through the clamped retention service. A separate unique subject-head row
+rejects ordinary update/delete and advances only through a transactional,
+subject-matching compare-and-swap, so concurrent writers cannot fork or repoint
+the current disposition. The named `maintenance_objects` managers on feedback
+and proposal are only for database administration and migrations; ordinary
+application code must never use them. Django's deletion collector may use an
+unguarded base manager to apply the subject/author `SET_NULL` lifecycle.
+Database flush/migration tooling may bypass these application guards
+deliberately. All learning models are denied to generic AI/model-query tools
+and assistant context attachment.
+
+`MojoSecPolicyProposal` is a separate immutable revision chain. Its only states
+are `draft`, `shadow`, and `rejected`; there is intentionally no active state.
+Content uses `mojosec.policy-proposal.v1` and accepts at most 24 known detector
+kinds with fixed `flag`/`ignore`, integer count, and enumerated severity
+predicates. Extra keys are rejected, so proposal content cannot carry code,
+regex, URLs, jobs, handlers, or actions. It never becomes a `RuleSet`, and
+manually authored live RuleSet/regex behavior is unchanged. The prototype has
+no assistant/LLM learning tools: feedback, proposal creation, replay, and
+shadow evaluation are human-only REST/service operations until a structural
+server-side human-approval boundary exists. Existing incident-triage and live
+RuleSet assistant tools are unchanged.
+
+Replay and shadow are explicit offline operations. The operator must supply a
+non-empty, duplicate-free set of at most 100 retained receipt IDs. IDs are
+evaluated in canonical ascending order using only their stored
+`replay_features_v1`. Before use, the evaluator recomputes the canonical digest
+of the stored event projection and requires it to match the immutable receipt
+payload digest; altered or incomplete evidence fails closed. No Event
+properties, network calls, LLMs, jobs, handlers, incidents, alerts, or bans are
+involved. Shadow additionally requires a
+proposal revision already labelled `shadow`; only an unsuperseded leaf may be
+evaluated, and a rejected leaf closes its lineage. Host-reported severity is
+not an evaluator input: effective kind/count and severity/level are validated
+and derived under the server's `KIND_POLICY`. Proposal content digests are
+reproved before use. Persisted sample/result digests bind the evaluator
+schema/version and a digest of that registry. The database retains only
+aggregate per-kind metrics and sample/result digests, never per-receipt
+decisions or copied evidence.
+`MOJOSEC_LEARNING_EVALUATION_RETENTION_DAYS` controls these summaries (default
+90, clamped to 30–3,650 days); human feedback and proposal revisions remain
+audit history.
+
+Detector metrics inspect at most four times the requested sample, capped at
+4,000 indexed, newest candidates in each of the published-receipt and
+current-feedback planes. They then return at most the requested 1,000 rows per
+plane and cap each stable installation (`api_key_id` plus enrolled `sensor_id`)
+to at most 100 and one tenth of the requested sample. A noisy installation can
+therefore make a bounded run return fewer rows; this is a detector sample, not
+a complete fleet census. Receipt candidates are canonically digest-verified.
+Installation strata have no tenant/group stamp and report receipt/occurrence
+and disposition counts only; they make no fleet coverage, liveness, or
+sensor-health claim.
+
 The receiver should return one result per event using the strict acknowledgement
 schema (a `reason` string is optional):
 
