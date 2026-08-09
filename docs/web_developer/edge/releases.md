@@ -105,6 +105,14 @@ Requires `manage_webapp`. **Rollback is the same call** with an older release
 id — there is no separate endpoint, and no re-upload: the previous build is
 still on the nodes, so it is a symlink flip.
 
+Rolling back to something older is safe too. Nodes retain a bounded number of
+releases, and a target that has aged out is simply **re-fetched from S3** on
+the next converge — you never need to re-upload a build, and you never need to
+know whether a given node still has one. Recent releases stay a pure symlink
+flip; an older one costs a download before it goes live. The one thing that
+does end a rollback is the bucket: a lifecycle rule that expires old release
+objects expires your ability to roll back to them.
+
 Read history from `GET /api/edge/release?webapp=42`. Statuses are `pending`,
 `uploaded`, `live`, `superseded`.
 

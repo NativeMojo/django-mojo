@@ -161,12 +161,67 @@ release, outside the atomic swap — so a failed `nginx -t` abandoned the config
 change but left the content already moved, and the node served a new bundle
 under old config.
 
-**Nothing in this app downloads release files.** Getting the bytes from S3
-onto a node is node-side tooling (skeleton work), outside this codebase. The
-installer's contract is strict either way: a release that is not on disk
-**fails the install** rather than producing a live vhost pointing at
-nothing — and a rollback to a release still on disk is a pure symlink flip,
-no re-download involved.
+### The app fetches the bytes
+
+`services/www_sync.py` runs **inside `install()`**, before anything is staged,
+so a promote lands on the fleet with no operator action. Per file: skip it when
+the on-disk sha256 already matches the manifest, otherwise download to a
+`.wwwsync-*` temp file in the destination directory, **re-hash it**, and only
+then `chmod 0644` + `os.replace` it into place. The manifest hash is the only
+thing trusted — a swapped bucket, an overwritten key or a truncated transfer
+all fail identically, leaving the previous file untouched.
+
+That skip is what makes it cheap enough to run every ten minutes: a converge
+that changes no release does a stat and a hash per file and no S3 call at all.
+`EDGE_RELEASE_FETCH_BUDGET` bounds one release's fetch; past it the remaining
+files are left for the next converge, which resumes by hash.
+
+**A release that will not fetch degrades ONE vhost:**
+
+| Situation | What the node does |
+|---|---|
+| The vhost was already serving | Keeps serving **the exact release it served before** — the new generation's `www/<id>` is linked at `current`'s old target, not at the promoted version. |
+| The vhost never served anything | Excluded from the generation (dark). A live vhost pointing at nothing is worse. |
+| Either | `installed.json` records `www_pending: {<vhost id>: <version>}`, one incident is reported **the first time**, and every later converge retries silently. |
+
+`www_pending` **defeats the generation short-circuit**: a degraded node
+re-installs the same generation every converge until the fetch succeeds, at
+which point the web root re-points itself. A healthy node still returns
+`unchanged` and does zero S3 work. Cert exclusions are unaffected — this is
+fetch-only.
+
+`stage_web_roots` still refuses a release directory that is not on disk. That
+check is now the safety net *behind* the fetch (a hand-deleted release, a disk
+that filled mid-install), not the fetch's error path — reaching it means
+something removed a directory `www_sync` had already verified.
+
+A rollback to a release still on disk remains a pure symlink flip, no
+re-download; `prune_releases` will not delete a release any retained
+generation still references, which is what keeps that true.
+
+### Credentials for the fetch
+
+**Ambient, and deliberately not the platform's.** `www_sync.get_s3_client`
+passes no access key, so boto3's default chain resolves — on a node that is the
+instance role. The grant it needs is exactly:
+
+```
+s3:GetObject on arn:aws:s3:::<release bucket>/webapps/*
+```
+
+No `ListBucket`: every key comes from the manifest, so a node never enumerates.
+Never the platform `S3Config` rows or `AWS_KEY`/`AWS_SECRET` — those sign
+uploads, and a node only reads. **Do not export platform AWS keys into the
+runner's environment**: botocore's default chain prefers environment variables
+over the instance role, so an ambient key silently widens what a node's fetch
+could reach.
+
+`EDGE_RELEASE_BUCKETS` is DB-backed (`settings.get`, so a `Setting` row can
+change it) **by design** — parity with the upload-signing path, which resolves
+it the same way. It is re-checked here at fetch time, so a bucket removed from
+the allowlist stops being read as well as written; and the bound that survives
+a moved allowlist is the manifest hash, which is stored on the release row and
+never comes from the bucket.
 
 ## A site served elsewhere
 
@@ -179,13 +234,27 @@ change; a delivery-mode enum would be a speculative second code path.
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `EDGE_RELEASE_BUCKETS` | — | **Fails closed.** No declared buckets, no sites. |
+| `EDGE_RELEASE_BUCKETS` | — | **Fails closed.** No declared buckets, no sites — and no fetches. DB-backed, both when signing an upload and when a node reads. |
 | `EDGE_RELEASE_MAX_FILES` | `5000` | Manifest entry cap |
 | `EDGE_RELEASE_UPLOAD_TTL` | `3600` | Presigned PUT lifetime, seconds |
-| `EDGE_KEEP_RELEASES` | `5` | Retained releases per vhost |
+| `EDGE_RELEASE_FETCH_TIMEOUT` | `60` | Per-attempt connect/read timeout for a node's S3 GET (static) |
+| `EDGE_RELEASE_FETCH_BUDGET` | `300` | Wall-clock ceiling for one release's fetch; the remainder resumes next converge (static) |
+| `EDGE_KEEP_RELEASES` | `5` | Retained releases per vhost, enforced by `www_sync.prune_releases` (static) |
+
+`EDGE_KEEP_RELEASES` counts the promoted release, so it bounds how many
+*extra* releases stay on disk for a quick rollback. It never overrides the two
+exemptions — the desired version and anything a retained generation still
+symlinks — so setting it to `1` (or `0`) cannot delete what is being served.
+Pair it with `EDGE_KEEP_GENERATIONS`: a generation retained for rollback is
+useless if the release it points at was pruned, so keeping N generations means
+wanting at least N releases.
 
 ## Scope boundary
 
 django-mojo **tracks and orchestrates**. It does not build, and it does not
 proxy the upload — CI uploads to S3 directly and the API only registers what
 landed. Keeping multi-megabyte bundles out of the request path is deliberate.
+
+The node-side fetch is not an exception to that: it runs in the converge job on
+the node that will serve the bytes, streaming S3 to disk, and never inside a
+request.

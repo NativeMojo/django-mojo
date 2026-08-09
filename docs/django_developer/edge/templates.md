@@ -175,8 +175,12 @@ app writes:
   bootstrap's `user`; web roots resolve through
   `EDGE_ROOT → generations/<gen>/www/<pk> → EDGE_WWW_BASE` releases, so that
   chain must be traversable (`o+x`) and the release files readable by that
-  user. Certificate material does not need this: the root master process
-  reads keys at load time.
+  user. The fetcher sets both explicitly for exactly this reason: every
+  release file lands `0644` and every release directory it creates is
+  `0755`, rather than inheriting the runner's umask — under a hardened
+  `UMask=0077` an inherited mode is `0700`, and nginx cannot traverse into
+  the release it is meant to serve. Certificate material does not need this:
+  the root master process reads keys at load time.
 
 ## Blocklists — data, log-first
 

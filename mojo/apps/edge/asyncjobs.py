@@ -8,7 +8,10 @@ convergence sweep (see cronjobs.py) without anyone maintaining an inventory.
 
 An install is idempotent — a node already on the published generation does
 nothing — so a duplicate broadcast, an overlapping cron sweep and a manual
-trigger all cost one comparison.
+trigger all cost one comparison. The one exception is a node with an
+unfetchable release (`installed.json`'s `www_pending`): it re-installs the same
+generation every sweep, on purpose, because retrying the fetch is the only
+thing that heals it.
 """
 
 from mojo.helpers import logit
@@ -30,7 +33,8 @@ def install_generation(job):
     if not result.changed:
         return f"completed:unchanged={result.generation}"
     return (f"completed:generation={result.generation},"
-            f"excluded={len(result.excluded or [])}")
+            f"excluded={len(result.excluded or [])},"
+            f"www_pending={len(result.www_pending or {})}")
 
 
 def converge(job):

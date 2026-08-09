@@ -18,7 +18,7 @@ from unittest import mock
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
-    declare_pools,
+    RELEASE_BUCKET, declare_pools,
     cleanup, declare_release_buckets, declare_reserved_names, make_certificate,
     make_domain, make_group, make_release, make_vhost, make_webapp, raises,
 )
@@ -80,6 +80,13 @@ def _patches(root, www_base):
     return [
         mock.patch("mojo.apps.edge.services.render.edge_root", return_value=root),
         mock.patch("mojo.apps.edge.validators.www_base", return_value=www_base),
+        # This module stages release bytes by hand, deliberately NOT matching
+        # the manifests its fixtures declare — so a real fetch would try to
+        # pull every file from S3. The fetch itself is covered in
+        # `20_www_sync.py`; here it is stubbed to "everything is already on
+        # disk" so these tests keep testing the installer.
+        mock.patch("mojo.apps.edge.services.www_sync.fetch_webapps",
+                   return_value={}),
         mock.patch(
             "mojo.apps.dnsman.models.certificate.Certificate.private_key_pem",
             new_callable=mock.PropertyMock,
@@ -99,10 +106,13 @@ def _exit(patches, *dirs):
         shutil.rmtree(path, ignore_errors=True)
 
 
-def _seed_cert(opts):
+def _seed_cert(opts, certificate=None):
+    """Give a certificate readable material, or the installer excludes its
+    vhost before any release logic runs."""
     from mojo.apps.dnsman.models import Certificate
 
-    Certificate.objects.filter(pk=opts.certificate.pk).update(
+    pk = (certificate or opts.certificate).pk
+    Certificate.objects.filter(pk=pk).update(
         cert_pem="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
 
 
@@ -134,35 +144,97 @@ def test_web_root_links_into_the_generation(opts):
         _exit(patches, root, www)
 
 
-@th.django_unit_test("a release that is not on disk fails the install")
-def test_missing_release_fails(opts):
-    """Better a refused generation than a live vhost pointing at nothing."""
+@th.django_unit_test("an unfetchable release on a never-served vhost darkens THAT vhost only")
+def test_unfetchable_release_excludes_one_vhost(opts):
+    """The pool still converges. A vhost with no previous release has nothing
+    to keep serving, so it goes dark rather than pointing at nothing — and the
+    version is recorded so the next converge retries the fetch."""
     from mojo.apps.edge.services import installer, releases, render
 
     root = tempfile.mkdtemp(prefix="edge-rel-")
     www = tempfile.mkdtemp(prefix="edge-www-")
     patches = _patches(root, www)
     _enter(patches)
+    other = None
     try:
         _seed_cert(opts)
+        # A second, healthy vhost in the same pool: the point of the degrade is
+        # that IT still installs.
+        other_domain = make_domain(group=opts.group)
+        other_cert = make_certificate(other_domain)
+        _seed_cert(opts, other_cert)
+        other = make_vhost(other_domain, other_cert, label="ok", kind="site",
+                           pool=POOL)
+
         release = make_release(opts.webapp, "absent1", status="uploaded")
         releases.promote(opts.webapp, release)
-        # deliberately NOT staged on disk
+        # deliberately NOT staged on disk, and the fetch cannot get it either
 
         recorder = Recorder()
-        with mock.patch.object(installer, "_run", recorder):
-            err = raises(installer.install, pool=POOL)
+        failures = {opts.vhost.pk: "relsite release absent1 could not be "
+                                   "fetched: index.html: no such object"}
+        with mock.patch("mojo.apps.edge.services.www_sync.fetch_webapps",
+                        return_value=failures):
+            with mock.patch.object(installer, "_run", recorder):
+                result = installer.install(pool=POOL)
 
-        assert err is not None, \
-            "a generation installed while its release was not on disk"
-        assert not os.path.islink(render.current_link()), \
-            "current was swapped despite a missing release"
-        assert not recorder.reloaded, "nginx was reloaded despite a missing release"
+        assert result.changed, \
+            "one unfetchable release stopped the whole pool converging"
+        assert opts.vhost.pk in result.excluded, \
+            "the vhost whose release could not be fetched was not excluded"
+        assert other.pk not in result.excluded, \
+            "a healthy vhost was excluded over another vhost's release"
+
+        installed = installer.read_installed()
+        assert opts.vhost.pk in installed["excluded"], \
+            "installed.json does not record the exclusion — it is invisible"
+        assert installed.get("www_pending") == {str(opts.vhost.pk): "absent1"}, \
+            (f"the pending fetch was not recorded, so the next converge would "
+             f"short-circuit: {installed.get('www_pending')}")
+        assert os.path.islink(render.current_link()), \
+            "current was not swapped — the healthy vhost never went live"
+        assert recorder.reloaded, "nginx was not reloaded for the healthy vhost"
     finally:
-        # Leave no promoted-but-unstaged release behind: it would abort every
-        # later install in this module.
-        from mojo.apps.edge.models import WebApp
+        # Leave no promoted-but-unstaged release behind: it would degrade every
+        # later install in this module. The second vhost goes too — every other
+        # test here reasons about a single-vhost pool.
+        from mojo.apps.edge.models import Vhost, WebApp
         WebApp.objects.filter(pk=opts.webapp.pk).update(current_release=None)
+        if other is not None:
+            Vhost.objects.filter(pk=other.pk).delete()
+        _exit(patches, root, www)
+
+
+@th.django_unit_test("stage_web_roots still refuses a release that is not on disk")
+def test_stage_web_roots_requires_the_release_on_disk(opts):
+    """The safety net BEHIND the fetch. www_sync degrades what it cannot pull,
+    so reaching here means the directory went missing some other way — and a
+    live vhost pointing at nothing is worse than a refused generation."""
+    from mojo.apps.edge.services import installer, render
+
+    root = tempfile.mkdtemp(prefix="edge-rel-")
+    www = tempfile.mkdtemp(prefix="edge-www-")
+    patches = _patches(root, www)
+    _enter(patches)
+    try:
+        generation = "safetynet"
+        os.makedirs(os.path.join(render.generation_dir(generation), "www"))
+        webapps = [dict(vhost=opts.vhost.pk, slug="relsite",
+                        bucket=RELEASE_BUCKET,
+                        release=dict(id=1, version="ghost1",
+                                     prefix="webapps/1/1/releases/ghost1",
+                                     manifest=[]))]
+
+        # No fallback: nothing was ever served, and the directory is absent.
+        err = raises(installer.stage_web_roots, generation, [opts.vhost],
+                     webapps)
+        assert isinstance(err, installer.InstallError), \
+            f"an absent release directory did not raise InstallError: {err!r}"
+        assert "ghost1" in str(err), \
+            f"the error does not name the missing release: {err}"
+        assert not os.path.islink(render.www_dir(generation, opts.vhost.pk)), \
+            "a web root was linked at a release that is not on disk"
+    finally:
         _exit(patches, root, www)
 
 
