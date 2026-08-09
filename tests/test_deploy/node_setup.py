@@ -132,6 +132,29 @@ def test_var_dirs_fixes_file_modes_and_then_changes_nothing(opts):
 
 
 @th.django_unit_test()
+def test_var_dirs_never_relaxes_the_root_mojosec_config(opts):
+    from mojo.deploy import node_setup as ns
+
+    base = _tempdir()
+    try:
+        var_root = os.path.join(base, "var")
+        ns.sync_var_dirs(var_root, "", False)
+        config = _write(os.path.join(var_root, "mojosec.json"), "{}\n")
+        os.chmod(config, 0o600)
+
+        ns.sync_var_dirs(var_root, "", False)
+
+        th.assert_eq(_mode(config), 0o600,
+                     "the recursive app-var convergence must never relax the "
+                     "root service config to its normal group-readable 0664")
+        th.assert_eq(ns.PROTECTED_VAR_FILES, {"mojosec.json": 0o600},
+                     "the recursive exception must remain exact, not a broad "
+                     "directory skip that hides unrelated var drift")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+@th.django_unit_test()
 def test_var_dirs_unresolvable_owner_is_a_warning_not_a_refusal(opts):
     from mojo.deploy import node_setup as ns
 

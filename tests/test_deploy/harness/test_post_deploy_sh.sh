@@ -224,6 +224,8 @@ assert_has "$TMP/cron_etc/3_mojo_jobs" "ec2-user" "default APP_USER renders into
 assert_in_log "CMD systemctl enable --now config-sync.timer" "shipped timer enabled"
 assert_in_log "CMD systemctl enable --now project-extra.timer" "project extra timer enabled"
 assert_in_log "CMD chown -R ec2-user:www" "var/logs ownership pass uses the default users"
+assert_in_log "CMD python3 -I -m mojo.deploy.mojosec converge --mode observe --criticality best_effort" \
+    "MojoSec defaults to observe-only and does not block unenrolled legacy nodes"
 assert_file "$PROJ/var/deploy/post_deploy.sh" "self-snapshot present after success"
 if cmp -s "$PROJ/aws/post_deploy.sh" "$PROJ/var/deploy/post_deploy.sh"; then
     ok "self-snapshot is byte-identical to the executing copy"
@@ -253,6 +255,13 @@ assert_in_log "CMD chown -R appu:webu" "chown argv carries APP_USER:WEB_USER"
 assert_has "$TMP/systemd_etc/mojo-asgi.service" "--workers 7" "ASGI_WORKERS renders into the unit"
 assert_has "$TMP/systemd_etc/mojo-asgi.service" "User=webu" "WEB_USER renders into the unit"
 assert_has "$TMP/cron_etc/3_mojo_jobs" "appu" "APP_USER renders into 3_mojo_jobs"
+
+echo "post_deploy.sh: MojoSec mode and criticality are explicit"
+setup_env
+run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" -- >/dev/null 2>&1
+assert_eq "$?" 0 "explicit MojoSec off run exits 0"
+assert_in_log "CMD python3 -I -m mojo.deploy.mojosec converge --mode off --criticality required" \
+    "off/required reaches the exact package lifecycle command"
 
 echo "post_deploy.sh: undeclared collision is inert; declared override applies"
 setup_env

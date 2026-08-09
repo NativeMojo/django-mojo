@@ -76,6 +76,9 @@ def test_config_is_strict_and_applies_safe_defaults(opts):
                      "strict config loading should fill the bounded batch default")
         th.assert_eq(loaded["collectors"]["fim"]["targets"][0]["recursive"], True,
                      "explicit targeted FIM settings must survive default merging")
+        th.assert_eq(loaded["expected_changes_path"],
+                     "/etc/mojosec/expected_changes.json",
+                     "deployment annotations must have one root-owned default path")
 
         bad = _config(root)
         bad["surprise"] = True

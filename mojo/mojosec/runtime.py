@@ -20,7 +20,8 @@ class Runtime:
         collectors = config["collectors"]
         self.journal = JournalCollector(collectors["journal"]) if collectors["journal"]["enabled"] else None
         self.nginx = NginxCollector(collectors["nginx"]) if collectors["nginx"]["enabled"] else None
-        self.fim = FimCollector(collectors["fim"]) if collectors["fim"]["enabled"] else None
+        self.fim = (FimCollector(collectors["fim"], config["expected_changes_path"])
+                    if collectors["fim"]["enabled"] else None)
         self.sender = sender or Sender(config, self.store)
         self.collector_status = {}
         self.last_delivery = {}

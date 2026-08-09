@@ -8,7 +8,7 @@ Three idempotent actions, each safe to re-run on every deploy:
 
     var dirs   create var/{logs,pids,keys}, chown --owner, 2775 on directories
                (INCLUDING var/ itself — the setgid bit there is the point) and
-               0664 on files
+               0664 on files; preserve var/mojosec.json as root:root 0600
     systemd    copy *.service AND *.timer whose bytes differ, daemon-reload only
                when something changed, then `enable --now` the TIMERS
     cron       write /etc/cron.d/3_mojo_jobs, whose user field is --cron-user
@@ -67,6 +67,7 @@ VAR_SUBDIRS = ("logs", "pids", "keys")
 # app reads through; 0664 on files so the owner writes and the group reads.
 DIR_MODE = 0o2775
 FILE_MODE = 0o664
+PROTECTED_VAR_FILES = {"mojosec.json": 0o600}
 # Units and cron files are read by root daemons and by nobody else in particular.
 INSTALL_MODE = 0o644
 
@@ -168,7 +169,9 @@ def sync_var_dirs(var_root, owner, dry_run):
             log.debug("cannot stat %s: %s", path, err)
             continue
 
-        wanted = DIR_MODE if is_dir else FILE_MODE
+        relative = os.path.relpath(path, var_root)
+        protected_mode = PROTECTED_VAR_FILES.get(relative)
+        wanted = protected_mode if protected_mode is not None else (DIR_MODE if is_dir else FILE_MODE)
         if stat.S_IMODE(info.st_mode) != wanted:
             wrong_mode += 1
             if not dry_run:
@@ -177,20 +180,23 @@ def sync_var_dirs(var_root, owner, dry_run):
                 except OSError as err:
                     log.warning("cannot chmod %s: %s", path, err)
 
-        if uid is not None and (info.st_uid != uid or info.st_gid != gid):
+        wanted_uid = 0 if protected_mode is not None else uid
+        wanted_gid = 0 if protected_mode is not None else gid
+        if wanted_uid is not None and (info.st_uid != wanted_uid or info.st_gid != wanted_gid):
             wrong_owner += 1
             if not dry_run:
                 try:
-                    os.chown(path, uid, gid)
+                    os.chown(path, wanted_uid, wanted_gid)
                 except OSError as err:
                     log.warning("cannot chown %s: %s", path, err)
 
     if wrong_mode:
-        changes.append("chmod %d path(s) under %s (2775 dirs, 0664 files)"
+        changes.append("chmod %d path(s) under %s (2775 dirs, 0664 files, "
+                       "mojosec.json 0600)"
                        % (wrong_mode, var_root))
     if wrong_owner:
-        changes.append("chown %s on %d path(s) under %s"
-                       % (owner, wrong_owner, var_root))
+        changes.append("chown standard/protected ownership on %d path(s) under %s"
+                       % (wrong_owner, var_root))
     return changes
 
 

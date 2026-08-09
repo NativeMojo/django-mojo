@@ -65,7 +65,7 @@ INFO = "INFO"
 # schedules and serves it, then the trailing edges (certs, config, shims,
 # leftovers).
 SECTIONS = (
-    "repo", "framework", "cron", "systemd", "nginx",
+    "repo", "framework", "cron", "systemd", "mojosec", "nginx",
     "certs", "config_plane", "shims", "legacy", "var_ownership", "jobs",
 )
 
@@ -504,6 +504,100 @@ def check_systemd(report, run, proj):
                             "the rendered contract ships this timer; "
                             "present-but-idle means its job silently never runs",
                             f"sudo systemctl enable --now {timer}")
+
+
+# ---------------------------------------------------------------------------
+# MojoSec — metadata and bounded public status only; never read the credential
+# ---------------------------------------------------------------------------
+
+def _secure_metadata(run, path, wanted_mode, kind="file", sudo=""):
+    flag = "-d" if kind == "directory" else "-f"
+    rc, out, _ = run(
+        f"{sudo}test ! -L {q(path)} && {sudo}test {flag} {q(path)} && "
+        f"{sudo}stat -c '%U %G %a' {q(path)} 2>/dev/null")
+    if rc != 0:
+        return None
+    parts = out.split()
+    if len(parts) != 3:
+        return None
+    return parts, parts == ["root", "root", wanted_mode]
+
+
+def check_mojosec(report, run, mode, sudo):
+    active = run("systemctl is-active mojosec.service 2>&1")[1]
+    enabled = run("systemctl is-enabled mojosec.service 2>&1")[1]
+    if mode == "auto":
+        mode = "observe" if enabled == "enabled" else "off"
+        report.info("mojosec", f"auto-derived mode: {mode}",
+                    "derived from systemctl is-enabled; pass --mojosec-mode "
+                    "to audit a not-yet-converged desired state")
+    paths = (
+        ("config", "/opt/api/var/mojosec.json", "600", "file"),
+        ("credential", "/etc/mojosec/credential", "600", "file"),
+        ("private state", "/var/lib/mojosec", "700", "directory"),
+        ("service unit", "/etc/systemd/system/mojosec.service", "644", "file"),
+    )
+    present = {}
+    for name, path, wanted, kind in paths:
+        result = _secure_metadata(run, path, wanted, kind=kind, sudo=sudo)
+        present[name] = result is not None
+        if result is None:
+            status = report.info if mode == "off" else report.fail
+            status("mojosec", f"{name} absent or unsafe", path,
+                   *([] if mode == "off" else ["sudo bash aws/post_deploy.sh"] ))
+        elif result[1]:
+            report.passed("mojosec", name, f"{path} is root:root {wanted}")
+        else:
+            report.fail("mojosec", f"{name} metadata drift",
+                        f"{path} is {' '.join(result[0])}; want root root {wanted}",
+                        "sudo bash aws/post_deploy.sh")
+
+    expected = _secure_metadata(
+        run, "/etc/mojosec/expected_changes.json", "600", sudo=sudo)
+    if expected is None:
+        report.info("mojosec", "expected-change manifest absent",
+                    "FIM still reports every change; no deployment annotations configured")
+    elif expected[1]:
+        report.passed("mojosec", "expected-change manifest",
+                      "root-owned 0600 annotation input")
+    else:
+        report.fail("mojosec", "expected-change manifest metadata drift",
+                    f"got {' '.join(expected[0])}; want root root 600")
+
+    if mode == "observe":
+        if active == "active" and enabled == "enabled":
+            report.passed("mojosec", "observe lifecycle", "service is enabled and active")
+        else:
+            report.fail("mojosec", "observe lifecycle drift",
+                        f"service is active={active or '?'} enabled={enabled or '?'}",
+                        "sudo python3 -I -m mojo.deploy.mojosec converge --mode observe")
+    elif active in ("inactive", "failed", "unknown", "") and enabled != "enabled":
+        report.passed("mojosec", "off lifecycle", "service is disabled and not active")
+    else:
+        report.fail("mojosec", "off lifecycle drift",
+                    f"service is active={active or '?'} enabled={enabled or '?'}",
+                    "sudo python3 -I -m mojo.deploy.mojosec converge --mode off")
+
+    status_meta = _secure_metadata(run, "/run/mojosec/status.json", "644", sudo=sudo)
+    if mode == "observe" and status_meta is None:
+        report.fail("mojosec", "public status absent or unsafe",
+                    "/run/mojosec/status.json is not a root-owned regular file",
+                    "journalctl -u mojosec -n 50")
+    elif status_meta is not None and status_meta[1]:
+        # Read only four bounded, non-secret health fields. The credential,
+        # config, SQLite spool and FIM manifest are never opened here.
+        command = (
+            "python3 -c \"import json; p=json.load(open('/run/mojosec/status.json')); "
+            "print(p.get('schema',''),p.get('version',''),p.get('state',''),"
+            "p.get('spool_events',''))\"")
+        rc, out, _ = run(command)
+        if rc == 0 and out.startswith("mojosec.status 1 "):
+            report.passed("mojosec", "public status", out[:200])
+        else:
+            report.fail("mojosec", "public status malformed",
+                        "bounded status JSON could not be parsed")
+    elif status_meta is None:
+        report.info("mojosec", "public status absent", "expected while mode is off")
 
 
 # ---------------------------------------------------------------------------
@@ -1085,6 +1179,11 @@ def main(argv):
                         help="the @WORKERS@ value the last render used — only "
                              "consulted by the template-freshness diff "
                              "(default: 4)")
+    parser.add_argument("--mojosec-mode", choices=("auto", "off", "observe"),
+                        default="auto",
+                        help="desired MojoSec lifecycle; auto derives it from "
+                             "the enabled state so legacy nodes remain INFO "
+                             "(default: auto)")
     parser.add_argument("--require-shims", action="store_true",
                         help="grade a forked aws/ script or an undeclared "
                              "template collision FAIL instead of WARN")
@@ -1132,6 +1231,8 @@ def main(argv):
         check_cron(report, run, proj)
     if "systemd" in wanted:
         check_systemd(report, run, proj)
+    if "mojosec" in wanted:
+        check_mojosec(report, run, args.mojosec_mode, sudo)
     if "nginx" in wanted:
         check_nginx(report, run, repo, sudo, args.probe_url, retired_confd)
     if "certs" in wanted:

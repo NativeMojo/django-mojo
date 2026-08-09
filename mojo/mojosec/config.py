@@ -16,6 +16,7 @@ DEFAULTS = {
     "state_dir": "/var/lib/mojosec",
     "status_path": "/run/mojosec/status.json",
     "credential_path": "/etc/mojosec/credential",
+    "expected_changes_path": "/etc/mojosec/expected_changes.json",
     "poll_seconds": 5,
     "collectors": {
         "journal": {
@@ -138,7 +139,7 @@ def validate_config(value):
         raise ConfigError("endpoint must target /api/incident/mojosec/batch")
     if not isinstance(value["policy_revision"], str) or len(value["policy_revision"]) > 128:
         raise ConfigError("policy_revision must be a string up to 128 characters")
-    for field in ("state_dir", "status_path", "credential_path"):
+    for field in ("state_dir", "status_path", "credential_path", "expected_changes_path"):
         _absolute(value[field], field)
     if value["status_path"].startswith(value["state_dir"].rstrip("/") + "/"):
         raise ConfigError("status_path must not expose the private state directory")

@@ -130,6 +130,56 @@ def test_absent_rendered_contract_is_info_never_fail(opts):
 
 
 @th.django_unit_test()
+def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
+    from mojo.deploy import check_node as cn
+
+    metadata = "root root 600"
+    run = FakeRunner([
+        ("/opt/api/var/mojosec.json", (0, metadata, "")),
+        ("/etc/mojosec/credential", (0, metadata, "")),
+        ("/var/lib/mojosec", (0, "root root 700", "")),
+        ("/etc/systemd/system/mojosec.service", (0, "root root 644", "")),
+        ("/etc/mojosec/expected_changes.json", (1, "", "")),
+        ("is-active mojosec", (0, "active", "")),
+        ("is-enabled mojosec", (0, "enabled", "")),
+        ("python3 -c", (0, "mojosec.status 1 running 3", "")),
+        ("/run/mojosec/status.json", (0, "root root 644", "")),
+    ])
+    report = cn.Report()
+    cn.check_mojosec(report, run, "observe", "")
+
+    statuses = _statuses(report, "mojosec")
+    th.assert_eq(statuses.get("observe lifecycle"), cn.PASS,
+                 f"active+enabled observe service must pass: {statuses}")
+    th.assert_eq(statuses.get("public status"), cn.PASS,
+                 f"bounded public status must be inspectable: {statuses}")
+    secret_commands = [command for command in run.commands
+                       if ("cat /etc/mojosec/credential" in command or
+                           "open('/etc/mojosec/credential" in command)]
+    th.assert_eq(secret_commands, [],
+                 f"check_node must never open or print the credential: {secret_commands}")
+
+
+@th.django_unit_test()
+def test_mojosec_auto_mode_keeps_legacy_nodes_informational(opts):
+    from mojo.deploy import check_node as cn
+
+    run = FakeRunner([
+        ("is-active mojosec", (3, "inactive", "")),
+        ("is-enabled mojosec", (1, "disabled", "")),
+    ])
+    report = cn.Report()
+    cn.check_mojosec(report, run, "auto", "")
+
+    failures = [row for row in _findings(report, "mojosec")
+                if row["status"] == cn.FAIL]
+    th.assert_eq(failures, [],
+                 f"an upgraded legacy node with no enabled sensor must not fail: {failures}")
+    th.assert_true(_find(report, "mojosec", "auto-derived mode: off") is not None,
+                   "auto mode must explain that it derived the legacy node as off")
+
+
+@th.django_unit_test()
 def test_rendered_contract_present_runs_the_stale_sweep(opts):
     from mojo.deploy import check_node as cn
 

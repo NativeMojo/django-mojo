@@ -6,14 +6,16 @@ import os
 import stat
 
 from ..events import observation
+from ..expected_changes import load_manifest, annotation
 from ..protocol import canonical_json
 
 
 class FimCollector:
     name = "fim"
 
-    def __init__(self, config):
+    def __init__(self, config, expected_changes_path=None):
         self.config = config
+        self.expected_changes_path = expected_changes_path
         self.profile = hashlib.sha256(
             canonical_json(config["targets"]).encode("utf-8")
         ).hexdigest()
@@ -167,6 +169,7 @@ class FimCollector:
 
     def diff(self, baseline, scan):
         observations = []
+        expected = load_manifest(self.expected_changes_path)
         current = scan["snapshot"]
         paths = set(current) | (set(baseline) if scan["complete"] else set())
         for path in sorted(paths):
@@ -181,9 +184,16 @@ class FimCollector:
             else:
                 change = "modified"
             entry = after or before or {}
+            attributes = {
+                "path": path[:2048], "change": change,
+                "kind": entry.get("kind", "unknown"),
+            }
+            expected_annotation = annotation(expected, path, change, before, after)
+            if expected_annotation:
+                attributes["expected_change"] = expected_annotation
             observations.append(observation(
                 "fim.change", "high", "Targeted filesystem integrity change",
-                attributes={"path": path[:2048], "change": change, "kind": entry.get("kind", "unknown")},
+                attributes=attributes,
                 fingerprint_values=(path, change, canonical_json(after or {})),
                 aggregate=False, recommendation="review",
             ))

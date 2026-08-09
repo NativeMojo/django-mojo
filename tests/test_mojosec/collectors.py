@@ -8,6 +8,42 @@ from unittest import mock
 from testit import helpers as th
 
 
+@th.django_unit_test()
+def test_expected_fim_changes_are_annotated_never_suppressed(opts):
+    import datetime
+    import hashlib
+    import tempfile
+
+    from mojo.mojosec.expected_changes import annotation, load_manifest
+
+    with tempfile.TemporaryDirectory() as root:
+        path = os.path.join(root, "settings.py")
+        digest = hashlib.sha256(b"new bytes").hexdigest()
+        manifest_path = os.path.join(root, "expected.json")
+        manifest = {
+            "schema": "mojosec.expected_changes", "version": 1,
+            "entries": [{
+                "path": path, "change": "modified", "sha256": digest,
+                "expires_at": "2099-01-01T00:00:00Z",
+                "deployment_id": "deploy-123",
+            }],
+        }
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle)
+        os.chmod(manifest_path, 0o600)
+
+        entries = load_manifest(manifest_path, require_root=False)
+        value = annotation(entries, path, "modified", {}, {"sha256": digest})
+        th.assert_eq(value["deployment_id"], "deploy-123",
+                     "an exact path+change+digest+live-expiry match must annotate")
+        th.assert_eq(annotation(entries, path, "modified", {}, {"sha256": "0" * 64}), None,
+                     "a digest mismatch must not be called an expected deploy change")
+        expired = annotation(
+            entries, path, "modified", {}, {"sha256": digest},
+            now=datetime.datetime(2100, 1, 1, tzinfo=datetime.timezone.utc))
+        th.assert_eq(expired, None, "expired deployment expectations must not annotate")
+
+
 def _journal_config(max_records=10, max_bytes=65536):
     return {
         "max_records": max_records, "max_bytes_per_poll": max_bytes,
@@ -233,6 +269,18 @@ def test_nginx_collector_resumes_at_a_durable_byte_cursor(opts):
                      "resuming from the committed byte cursor must collect only new lines")
         th.assert_eq(resumed["observations"][0]["attributes"]["path"], "/two",
                      "the resumed nginx event should be the newly appended record")
+
+        os.replace(path, path + ".1")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({
+                "status": 503, "method": "GET", "path": "/after-rotate",
+            }) + "\n")
+        rotated = collector.poll(resumed["cursor"])
+        th.assert_eq(len(rotated["observations"]), 1,
+                     "a normal nginx rename+USR1 rotation must resume on the new inode")
+        th.assert_eq(rotated["observations"][0]["attributes"]["path"],
+                     "/after-rotate",
+                     "the first complete record after rotation must be collected")
 
 
 @th.django_unit_test()

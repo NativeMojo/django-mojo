@@ -41,6 +41,10 @@ PROBE_URL="${PROBE_URL:-http://127.0.0.1/api/version}"
 APP_USER="${APP_USER:-ec2-user}"
 WEB_USER="${WEB_USER:-www}"
 ASGI_WORKERS="${ASGI_WORKERS:-4}"
+MOJOSEC_MODE="${MOJOSEC_MODE:-observe}"
+MOJOSEC_DEPLOY_CRITICALITY="${MOJOSEC_DEPLOY_CRITICALITY:-best_effort}"
+MOJOSEC_TRUSTED_PROXY_CIDRS="${MOJOSEC_TRUSTED_PROXY_CIDRS:-}"
+MOJOSEC_NGINX_LOG_PATH="${MOJOSEC_NGINX_LOG_PATH:-/var/log/nginx/mojosec.json.log}"
 # Test seams: prod-identical defaults, overridable only by the shell harness.
 NGINX_ETC="${NGINX_ETC:-/etc/nginx}"
 SYSTEMD_ETC="${SYSTEMD_ETC:-/etc/systemd/system}"
@@ -160,6 +164,18 @@ if compgen -G "${PROJ_PATH}/aws/nginx/conf.d/*.conf" > /dev/null; then
     done
 fi
 log "  converged ${VHOSTS} vhost(s) from aws/nginx/conf.d"
+
+# MojoSec root assets come from the installed package, never from var/deploy
+# or the application-writable project tree. `observe` reports only; all ban
+# policy remains central. best_effort makes an unenrolled old node a warning,
+# while required makes a configured fleet fail closed at deploy time.
+log "Converging MojoSec (${MOJOSEC_MODE}, ${MOJOSEC_DEPLOY_CRITICALITY})..."
+python3 -I -m mojo.deploy.mojosec converge \
+    --mode "$MOJOSEC_MODE" \
+    --criticality "$MOJOSEC_DEPLOY_CRITICALITY" \
+    --trusted-proxy-cidrs "$MOJOSEC_TRUSTED_PROXY_CIDRS" \
+    --nginx-log-path "$MOJOSEC_NGINX_LOG_PATH" \
+    || die "MojoSec required deployment failed"
 
 # ── retired names ────────────────────────────────────────────────────────────
 #

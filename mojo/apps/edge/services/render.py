@@ -33,6 +33,13 @@ import json
 
 from mojo import errors as me
 from mojo.helpers.settings import settings
+from mojo.deploy.mojosec_nginx import (
+    DEFAULT_LOG_PATH as MOJOSEC_LOG_PATH,
+    RECEIVER_BODY_LIMIT as MOJOSEC_BODY_LIMIT,
+    RECEIVER_PATH as MOJOSEC_RECEIVER_PATH,
+    render_http_log as render_mojosec_http_log,
+    trusted_proxy_cidrs,
+)
 
 from mojo.apps.edge import validators
 from mojo.apps.edge.models.upstream import KIND_UNIX
@@ -111,6 +118,25 @@ def default_server_enabled():
     return bool(settings.get_static("EDGE_HTTP_DEFAULT_SERVER", False))
 
 
+def mojosec_log_path():
+    return settings.get_static("MOJOSEC_NGINX_LOG_PATH", MOJOSEC_LOG_PATH)
+
+
+def mojosec_mode():
+    value = str(settings.get_static("MOJOSEC_MODE", "off")).strip().lower()
+    if value not in ("off", "observe"):
+        raise me.ValueException(
+            f"MOJOSEC_MODE must be off or observe, got {value!r}")
+    return value
+
+
+def mojosec_trusted_proxy_cidrs():
+    # File-only: trusting an address range changes the authoritative client IP
+    # used by both nginx and the security sensor.
+    return trusted_proxy_cidrs(
+        settings.get_static("MOJOSEC_TRUSTED_PROXY_CIDRS", ""))
+
+
 def _staged_port_value(name, default):
     raw = settings.get_static(name, default)
     try:
@@ -171,6 +197,9 @@ def http_knobs():
         default_server=default_server_enabled(),
         tls_protocols=tls_protocols(),
         tls_ciphers=tls_ciphers(),
+        mojosec_log_path=mojosec_log_path(),
+        mojosec_trusted_proxy_cidrs=mojosec_trusted_proxy_cidrs(),
+        mojosec_mode=mojosec_mode(),
     )
 
 
@@ -414,6 +443,16 @@ def _quiet_location(path, upstream):
     ])
 
 
+def _mojosec_receiver_location(upstream):
+    """The exact machine receiver has a wire cap below a vhost's normal cap."""
+    return "\n".join([
+        f"    location = {MOJOSEC_RECEIVER_PATH} {{",
+        f"        client_max_body_size {MOJOSEC_BODY_LIMIT};",
+        _proxy_location_body(upstream),
+        "    }",
+    ])
+
+
 # Hashed build assets — safe to cache forever because their names change when
 # their bytes do. This location declares add_header, so it re-emits the
 # security header block (nginx add_header inheritance is replace-not-merge).
@@ -449,8 +488,12 @@ def _render_api(vhost, generation, server_name):
         "",
     ]
     for path in sorted(vhost.quiet_paths or []):
+        if path == MOJOSEC_RECEIVER_PATH:
+            continue
         parts.append(_quiet_location(path, vhost.upstream))
         parts.append("")
+    if mojosec_mode() == "observe":
+        parts.extend([_mojosec_receiver_location(vhost.upstream), ""])
     if vhost.serve_static:
         parts.extend([
             "    location /static/ {",
@@ -541,6 +584,8 @@ def _render_site_api(vhost, generation, server_name):
         "",
     ]
     for path in sorted(vhost.quiet_paths or []):
+        if path == MOJOSEC_RECEIVER_PATH:
+            continue
         covering = None
         for route in routes:
             validators.validate_route_prefix(route.path_prefix)
@@ -552,6 +597,14 @@ def _render_site_api(vhost, generation, server_name):
             continue
         parts.append(_quiet_location(path, covering.upstream))
         parts.append("")
+    receiver_route = None
+    for route in routes:
+        prefix = validators.validate_route_prefix(route.path_prefix)
+        if MOJOSEC_RECEIVER_PATH.startswith(prefix):
+            if receiver_route is None or len(prefix) > len(receiver_route.path_prefix):
+                receiver_route = route
+    if receiver_route is not None and mojosec_mode() == "observe":
+        parts.extend([_mojosec_receiver_location(receiver_route.upstream), ""])
     if vhost.serve_static:
         parts.extend([
             "    location /static/ {",
@@ -752,6 +805,13 @@ def render_http_base(knobs=None, security=None):
         "",
         f"access_log {knobs['log_dir']}/access.log main if=$loggable;",
         "",
+    ]
+    if knobs["mojosec_mode"] == "observe":
+        parts.extend(render_mojosec_http_log(
+            knobs["mojosec_log_path"], knobs["mojosec_trusted_proxy_cidrs"]
+        ).rstrip().splitlines())
+        parts.append("")
+    parts.extend([
         "map $http_upgrade $connection_upgrade {",
         "    default upgrade;",
         "    '' close;",
@@ -768,7 +828,7 @@ def render_http_base(knobs=None, security=None):
         "gzip_types text/plain text/css application/json "
         "application/javascript text/xml application/xml image/svg+xml;",
         "",
-    ]
+    ])
     parts.extend(_blocklist_section(knobs, security))
     if knobs["default_server"]:
         parts.extend([
