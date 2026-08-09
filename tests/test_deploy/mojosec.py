@@ -33,13 +33,22 @@ def test_nginx_security_log_is_queryless_bounded_json(opts):
 
 @th.django_unit_test()
 def test_nginx_rejects_ambiguous_proxy_ranges_and_paths(opts):
-    from mojo.deploy.mojosec_nginx import NginxConfigError, render_http_log
+    from mojo.deploy.mojosec_nginx import (
+        NginxConfigError, render_http_log, render_receiver_location,
+    )
 
     for cidr in ("10.0.0.1/8", "0.0.0.0/0; include /tmp/x"):
         with th.assert_raises(NginxConfigError):
             render_http_log(proxy_cidrs=[cidr])
     with th.assert_raises(NginxConfigError):
         render_http_log("/var/log/nginx/x;error_log")
+    receiver = render_receiver_location()
+    th.assert_in("include /etc/nginx/asgi.inc;", receiver,
+                 "the exact receiver must use the location-safe proxy include")
+    th.assert_in("proxy_pass http://asgi_upstream;", receiver,
+                 "the standard receiver must target the deployed ASGI upstream")
+    th.assert_true("django.inc" not in receiver,
+                   "django.inc declares locations and cannot be nested here")
 
 
 @th.django_unit_test()

@@ -86,7 +86,7 @@ def render_http_log(log_path=DEFAULT_LOG_PATH, proxy_cidrs=None):
     return "\n".join(lines) + "\n"
 
 
-def render_receiver_location(proxy_include="/etc/nginx/django.inc", indent="    "):
+def render_receiver_location(proxy_include="/etc/nginx/asgi.inc", indent="    "):
     """Render the standard EC2 exact receiver route with its wire-body cap."""
     include = str(proxy_include or "")
     if not _PATH_RE.fullmatch(include):
@@ -95,5 +95,6 @@ def render_receiver_location(proxy_include="/etc/nginx/django.inc", indent="    
         f"{indent}location = {RECEIVER_PATH} {{",
         f"{indent}    client_max_body_size {RECEIVER_BODY_LIMIT};",
         f"{indent}    include {include};",
+        f"{indent}    proxy_pass http://asgi_upstream;",
         f"{indent}}}",
     ])

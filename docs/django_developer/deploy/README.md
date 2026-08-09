@@ -679,7 +679,9 @@ both the direct peer (`$realip_remote_addr`) and resolved client
 The standard EC2 path installs
 `/etc/nginx/snippets/mojosec_receiver.conf`; each API server block must include
 that root-owned snippet. It sets an exact receiver location with a 512 KiB body
-cap. Edge renders the same log and location only when its file-only
+cap using the standard `/etc/nginx/asgi.inc` and `asgi_upstream` contract (not
+`django.inc`, which declares locations and cannot be nested). Edge renders the
+same log and location only when its file-only
 `MOJOSEC_MODE=observe`; Edge defaults off for backward-compatible upgrades.
 
 The two nginx fragments are transactional: the deploy snapshots their exact
