@@ -52,6 +52,7 @@ class MojoSecPolicyProposal(models.Model, MojoModel):
         CAN_CREATE = False
         CAN_UPDATE = False
         CAN_DELETE = False
+        DENY_AI = True
         GRAPHS = {
             "default": {
                 "fields": [

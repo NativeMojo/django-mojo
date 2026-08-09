@@ -308,8 +308,10 @@ def create_feedback(author, disposition, receipt_id=None, incident_id=None,
                 getattr(author, "username", None) or getattr(author, "email", author.pk)
             )[:254],
             manual_exemplar=manual, **snapshot)
-        head.current = feedback
-        head.save(update_fields=["current", "modified"])
+        try:
+            head.advance(feedback)
+        except ValueError as exc:
+            raise MojoSecLearningError(str(exc)) from exc
         return feedback
 
 
@@ -547,13 +549,14 @@ def detector_metrics(author, days=30, limit=1000):
 
 
 def prune_learning_evaluations(job=None, now=None):
-    from mojo.apps.incident.models import MojoSecPolicyEvaluation
+    from mojo.apps.incident.models.mojosec_policy_evaluation import (
+        _prune_policy_evaluations_before)
 
     retention_days = settings.get_static(
         "MOJOSEC_LEARNING_EVALUATION_RETENTION_DAYS", 90, kind="int")
     retention_days = max(30, min(3650, retention_days))
     cutoff = (now or dates.utcnow()) - dates.timedelta(days=retention_days)
-    deleted, _ = MojoSecPolicyEvaluation.objects.filter(created__lt=cutoff).delete()
+    deleted, _ = _prune_policy_evaluations_before(cutoff)
     if job is not None and hasattr(job, "add_log"):
         job.add_log(f"Pruned {deleted} expired MojoSec offline evaluation rows")
     return deleted

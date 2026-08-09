@@ -1,3 +1,5 @@
+import hashlib
+import json
 import uuid
 
 from testit import helpers as th
@@ -12,6 +14,12 @@ def _features(kind="web.probe", count=3, severity="high"):
         "feature_schema": "replay_features_v1",
         "event": {"kind": kind, "count": count, "severity": severity},
     }
+
+
+def _payload_digest(features):
+    payload = json.dumps(
+        features["event"], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _policy(decision="flag"):
@@ -52,23 +60,26 @@ def setup_mojosec_learning(opts):
     event = Event.objects.create(
         category="mojosec.learning.test", scope="mojosec", level=8,
         title="Learning replay fixture")
+    features_one = _features()
     receipt_one = MojoSecReceipt.objects.create(
         api_key=api_key, event=event, sensor_id=f"{PREFIX}_sensor",
-        wire_event_id="a" * 64, payload_digest="1" * 64,
+        wire_event_id="a" * 64, payload_digest=_payload_digest(features_one),
         sensor_policy_revision="fixture-policy", publish_state="published",
-        published_at=dates.utcnow(), replay_features=_features())
+        published_at=dates.utcnow(), replay_features=features_one)
+    features_two = _features(count=1)
     receipt_two = MojoSecReceipt.objects.create(
         api_key=api_key, event=event, sensor_id=f"{PREFIX}_sensor",
-        wire_event_id="b" * 64, payload_digest="2" * 64,
+        wire_event_id="b" * 64, payload_digest=_payload_digest(features_two),
         sensor_policy_revision="fixture-policy", publish_state="published",
-        published_at=dates.utcnow(), replay_features=_features(count=1))
+        published_at=dates.utcnow(), replay_features=features_two)
     incident = Incident.objects.create(
         category="mojosec.learning.test", scope="mojosec", title="Learning incident")
+    incident_features = _features(kind="auth.sudo_command")
     incident_receipt = MojoSecReceipt.objects.create(
         api_key=api_key, event=event, incident=incident, sensor_id=f"{PREFIX}_sensor",
-        wire_event_id="c" * 64, payload_digest="3" * 64,
+        wire_event_id="c" * 64, payload_digest=_payload_digest(incident_features),
         sensor_policy_revision="fixture-policy", publish_state="published",
-        published_at=dates.utcnow(), replay_features=_features(kind="auth.sudo_command"))
+        published_at=dates.utcnow(), replay_features=incident_features)
 
     opts.learning_author = author
     opts.learning_disposable = disposable
@@ -103,10 +114,10 @@ def test_mojosec_policy_validator_is_bounded_and_non_executable(opts):
             "minimum_severity": "high",
         }],
     }
+    replay_features = _features(kind="web.error", count=1, severity="critical")
     evaluated = mojosec_learning.evaluate_features(server_policy, [{
-        "id": 1, "payload_digest": "a" * 64,
-        "replay_features": _features(
-            kind="web.error", count=1, severity="critical"),
+        "id": 1, "payload_digest": _payload_digest(replay_features),
+        "replay_features": replay_features,
     }])
     th.assert_eq(evaluated["metrics"]["flagged"], 0,
                  "host critical severity must not override server web.error level 5")
@@ -116,7 +127,8 @@ def test_mojosec_policy_validator_is_bounded_and_non_executable(opts):
 
 @th.django_unit_test()
 def test_mojosec_feedback_exact_subject_and_reversal_chain(opts):
-    from mojo.apps.incident.models import MojoSecDetectorFeedback
+    from mojo.apps.incident.models import (
+        MojoSecDetectorFeedback, MojoSecDetectorFeedbackHead)
     from mojo.apps.incident.services import mojosec_learning
 
     with th.assert_raises(mojosec_learning.MojoSecLearningError):
@@ -148,6 +160,20 @@ def test_mojosec_feedback_exact_subject_and_reversal_chain(opts):
     first.note = "mutation"
     with th.assert_raises(ValueError):
         first.save()
+    head = MojoSecDetectorFeedbackHead.objects.get(subject_key=first.subject_key)
+    with th.assert_raises(ValueError):
+        MojoSecDetectorFeedbackHead.objects.filter(pk=head.pk).update(current=first)
+    with th.assert_raises(ValueError):
+        MojoSecDetectorFeedbackHead.objects.filter(pk=head.pk).delete()
+    head.current = None
+    with th.assert_raises(ValueError):
+        head.save()
+    other = mojosec_learning.create_feedback(
+        opts.learning_author, "unknown",
+        manual_exemplar={"kind": "system.oom", "count": 1, "severity": "high"},
+        note=f"{PREFIX} other subject")
+    with th.assert_raises(ValueError):
+        head.advance(other)
 
 
 @th.django_unit_test()
@@ -227,6 +253,14 @@ def test_mojosec_replay_requires_explicit_unique_receipts_and_is_deterministic(o
                    "replay provenance must bind the server KIND_POLICY registry")
     th.assert_eq(MojoSecPolicyEvaluation.objects.filter(proposal=shadow).count(), 2,
                  "explicit shadow calls should persist only bounded evaluation summaries")
+    first.assert_integrity()
+    with th.assert_raises(ValueError):
+        MojoSecPolicyEvaluation.objects.filter(pk=first.pk).update(sample_count=0)
+    with th.assert_raises(ValueError):
+        MojoSecPolicyEvaluation.objects.filter(pk=first.pk).delete()
+    first.metrics = {"tampered": True}
+    with th.assert_raises(ValueError):
+        first.save()
     th.assert_eq(Incident.objects.count(), incident_count,
                  "offline shadow evaluation must never create an incident")
     th.assert_eq(RuleSet.objects.count(), ruleset_count,
@@ -314,7 +348,8 @@ def test_mojosec_learning_rejects_api_key_authors_and_reports_bounded_metrics(op
 @th.django_unit_test()
 def test_mojosec_learning_history_guards_queryset_mutation_and_detects_tamper(opts):
     from mojo.apps.incident.models import (
-        MojoSecDetectorFeedback, MojoSecPolicyProposal)
+        MojoSecDetectorFeedback, MojoSecDetectorFeedbackHead,
+        MojoSecPolicyEvaluation, MojoSecPolicyProposal)
     from mojo.apps.incident.services import mojosec_learning
 
     feedback = mojosec_learning.create_feedback(
@@ -323,6 +358,12 @@ def test_mojosec_learning_history_guards_queryset_mutation_and_detects_tamper(op
         note=f"{PREFIX} immutable feedback")
     proposal = mojosec_learning.create_policy_proposal(
         opts.learning_author, _policy(), summary=f"{PREFIX} immutable proposal")
+    th.assert_true(all(
+        getattr(model.RestMeta, "DENY_AI", False)
+        for model in (
+            MojoSecDetectorFeedback, MojoSecDetectorFeedbackHead,
+            MojoSecPolicyProposal, MojoSecPolicyEvaluation)),
+        "every learning model must be excluded from generic assistant model tools")
     with th.assert_raises(ValueError):
         MojoSecDetectorFeedback.objects.filter(pk=feedback.pk).update(note="changed")
     with th.assert_raises(ValueError):

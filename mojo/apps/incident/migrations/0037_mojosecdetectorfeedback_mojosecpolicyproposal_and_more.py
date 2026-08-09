@@ -47,6 +47,7 @@ class Migration(migrations.Migration):
                 ("sample_digest", models.CharField(max_length=64)),
                 ("result_digest", models.CharField(max_length=64)),
                 ("metrics", models.JSONField(default=dict)),
+                ("row_digest", models.CharField(editable=False, max_length=64)),
                 ("created_by", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="+", to="account.user")),
                 ("proposal", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="evaluations", to="incident.mojosecpolicyproposal")),
             ],
@@ -98,7 +99,10 @@ class Migration(migrations.Migration):
                 ("subject_key", models.CharField(max_length=160, unique=True)),
                 ("current", models.OneToOneField(blank=True, default=None, null=True, on_delete=django.db.models.deletion.PROTECT, related_name="current_subject_head", to="incident.mojosecdetectorfeedback")),
             ],
-            options={"ordering": ["subject_key"]},
+            options={
+                "ordering": ["subject_key"],
+                "indexes": [models.Index(fields=["-modified", "-id"], name="incident_msfh_modified_idx")],
+            },
             bases=(models.Model, mojo.models.rest.MojoModel),
         ),
     ]
