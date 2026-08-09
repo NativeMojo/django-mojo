@@ -103,7 +103,8 @@ resolved through the owning vhost's domain.
 - `path_prefix` starts with `/`, same charset as quiet paths; a bare `/` is
   rejected (that is what `kind: api` is for). Longest prefix wins at
   request time, so `/api` and `/api/ws` can coexist pointing at different
-  upstreams.
+  upstreams. Declared prefixes take precedence over the site's asset-cache
+  matching, so asset-shaped paths such as `/api/app.js` still reach the route.
 - `upstream` must be a shared (house) upstream or one belonging to your
   group — another tenant's upstream is a 400.
 - Deleting an upstream that routes still reference is refused; retire the
@@ -185,4 +186,6 @@ global `edge_node` permission, which is protected: a group administrator cannot
 grant it to an API key, and a member-scoped grant plus `?group=` does not open
 them. Nothing in a portal should call these.
 
-`desired_state` carries certificate **identifiers only** — never key material.
+Each `desired_state` vhost carries non-secret certificate identity and revision
+metadata (`certificate` and `certificate_serial`) so nodes notice an in-place
+renewal. It never carries certificate PEM, chain, or private-key material.

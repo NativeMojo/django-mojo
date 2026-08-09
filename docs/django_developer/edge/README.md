@@ -143,7 +143,10 @@ the complete house inventory.
 
 A **generation** is the complete set of files a node should be serving,
 identified by a sha256 over the desired-state *inputs* (never the rendered
-text — the text embeds the generation directory).
+text — the text embeds the generation directory). Each vhost input carries
+both the certificate id and its non-secret serial revision, so renewing an
+existing Certificate row in place moves the generation and stages its new
+material through the ordinary install path.
 
 ```
 EDGE_ROOT (default /opt/api/var/edge)
@@ -259,6 +262,10 @@ included.
 
 `edge_node` is also on `APIKEY_PERMS_PROTECTION_DEFAULTS`, so the ApiKey half
 is closed too: granting it requires the granter's global `sys.edge_node`.
+
+Desired-state vhost rows expose only non-secret certificate identity/revision
+metadata (`certificate` and `certificate_serial`). PEM, chain, and private-key
+material never travel in the desired-state response.
 
 **Why a second material endpoint exists.** dnsman's
 `certificate/material/<pk>` runs `require_platform_admin`, which refuses

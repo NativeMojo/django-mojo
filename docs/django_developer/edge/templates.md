@@ -66,13 +66,16 @@ vhost**, asserted in `tests/test_edge/3_render_injection.py`.
   freezing the pool).
 - **`serve_static`** (`api`, `site_api`) — a `/static/` alias onto
   `EDGE_DJANGO_STATIC_ROOT`, the fleet's own Django static root. A
-  `get_static` path: no row can point it anywhere else.
+  `get_static` path: no row can point it anywhere else. On `site_api` the
+  alias uses nginx's `^~` prefix modifier so the site's asset-suffix regex
+  cannot capture a Django static request and look for it in the release root.
 - **`spa`** (`site`, `site_api`) — `try_files ... /index.html` history
   fallback instead of `=404` + `error_page`.
-- **Routes** (`site_api`) — one `location <prefix>` per `VhostRoute`,
-  longest-prefix wins (nginx's own rule). Every proxied location carries the
-  canonical proxy body: upgrade headers (`$connection_upgrade` map lives in
-  the base), X-Forwarded set, no-cache posture, buffering off,
+- **Routes** (`site_api`) — one `location ^~ <prefix>` per `VhostRoute`, so
+  longest-prefix wins while the site's asset-suffix regex cannot capture an
+  asset-shaped request below a declared API prefix. Every proxied location
+  carries the canonical proxy body: upgrade headers (`$connection_upgrade`
+  map lives in the base), X-Forwarded set, no-cache posture, buffering off,
   `proxy_read_timeout` from `EDGE_PROXY_READ_TIMEOUT`. `proxy_pass` targets
   are **named upstream blocks** (`edge_up_<pk>`), never inline addresses.
 

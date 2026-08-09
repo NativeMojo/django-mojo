@@ -617,7 +617,7 @@ def _render_site_api(vhost, generation, server_name):
         parts.extend([_mojosec_receiver_location(receiver_route.upstream), ""])
     if vhost.serve_static:
         parts.extend([
-            "    location /static/ {",
+            "    location ^~ /static/ {",
             f"        alias {django_static_root()}/;",
             "    }",
             "",
@@ -625,7 +625,7 @@ def _render_site_api(vhost, generation, server_name):
     for route in routes:
         prefix = validators.validate_route_prefix(route.path_prefix)
         parts.extend([
-            f"    location {prefix} {{",
+            f"    location ^~ {prefix} {{",
             _proxy_location_body(route.upstream),
             "    }",
             "",
@@ -1028,6 +1028,7 @@ def vhost_payload(vhost):
         serve_static=vhost.serve_static,
         redirect_to=vhost.redirect_to,
         certificate=vhost.certificate_id,
+        certificate_serial=vhost.certificate.serial,
         upstream=upstream,
         routes=routes,
     )

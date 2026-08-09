@@ -54,9 +54,10 @@ def enabled_vhosts(pool):
 def on_desired_state(request):
     """What this pool's nodes should be serving, and the hash that identifies it.
 
-    Carries certificate IDENTIFIERS only — never material. A node that needs a
-    key pulls it from `material` below, which is one gated, access-logged call
-    per certificate rather than a fleet-wide key broadcast on every poll.
+    Carries non-secret certificate identity/revision metadata only — never
+    material. A node that needs a key pulls it from `material` below, which is
+    one gated, access-logged call per certificate rather than a fleet-wide key
+    broadcast on every poll.
     """
     from mojo.apps.edge.services import releases
 

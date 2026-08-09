@@ -214,6 +214,55 @@ def test_idempotent(opts):
         _exit(patches, root)
 
 
+@th.django_unit_test("same-row certificate renewal moves the generation and installs new material")
+def test_certificate_renewal_converges(opts):
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.edge.services import installer, render
+
+    root = _root(opts)
+    patches = _with_root(root, material=False)
+    _enter(patches)
+    try:
+        certificate_a = "-----BEGIN CERTIFICATE-----\nmaterial-a\n-----END CERTIFICATE-----\n"
+        certificate_b = "-----BEGIN CERTIFICATE-----\nmaterial-b\n-----END CERTIFICATE-----\n"
+        Certificate.objects.filter(pk=opts.certificate.pk).update(
+            serial="a1", cert_pem=certificate_a, chain_pem="")
+
+        with mock.patch.object(
+                Certificate, "private_key_pem",
+                new_callable=mock.PropertyMock) as private_key:
+            private_key.return_value = (
+                "-----BEGIN PRIVATE KEY-----\nkey-a\n-----END PRIVATE KEY-----\n")
+            with mock.patch.object(installer, "_run", Recorder()):
+                first = installer.install(pool=_pool("happy"))
+
+            Certificate.objects.filter(pk=opts.certificate.pk).update(
+                serial="b2", cert_pem=certificate_b, chain_pem="")
+            private_key.return_value = (
+                "-----BEGIN PRIVATE KEY-----\nkey-b\n-----END PRIVATE KEY-----\n")
+            recorder = Recorder()
+            with mock.patch.object(installer, "_run", recorder):
+                renewed = installer.install(pool=_pool("happy"))
+
+        assert renewed.generation != first.generation, (
+            "renewing a Certificate row in place did not move the edge generation")
+        assert renewed.changed, (
+            "ordinary install treated renewed same-pk certificate material as unchanged")
+        assert recorder.reloaded, (
+            "ordinary renewal convergence staged no nginx reload")
+        fullchain_path = os.path.join(
+            render.generation_dir(renewed.generation), "certs",
+            str(opts.certificate.pk), "fullchain.pem")
+        with open(fullchain_path) as handle:
+            fullchain = handle.read()
+        assert "material-b" in fullchain, (
+            f"the live renewed fullchain does not contain material B: {fullchain!r}")
+        assert "material-a" not in fullchain, (
+            f"the live renewed fullchain still contains material A: {fullchain!r}")
+    finally:
+        _exit(patches, root)
+
+
 @th.django_unit_test("a generation failing the STAGED nginx -t never touches current")
 def test_staged_failure_does_not_swap(opts):
     from mojo.apps.edge.services import installer, render

@@ -329,8 +329,9 @@ def test_site_api_shapes(opts):
 
     text = render.render_vhost(vhost, opts.generation)
 
-    assert "location /api {" in text, "the /api route has no location"
-    assert "location /api/ws {" in text, "the /api/ws route has no location"
+    assert "location ^~ /api {" in text, "the /api route has no prefix location"
+    assert "location ^~ /api/ws {" in text, \
+        "the /api/ws route has no prefix location"
     assert f"proxy_pass http://edge_up_{api_up.pk};" in text, \
         "the /api route does not reach its upstream"
     assert f"proxy_pass http://edge_up_{ws_up.pk};" in text, \
@@ -344,6 +345,31 @@ def test_site_api_shapes(opts):
     assert f"proxy_pass http://edge_up_{ws_up.pk};" in quiet_block, (
         "the quiet path proxied to the wrong route — longest-prefix "
         f"association broke:\n{quiet_block}")
+
+
+@th.django_unit_test("site_api route and static prefixes outrank the site asset regex")
+def test_site_api_prefixes_outrank_asset_regex(opts):
+    from mojo.apps.edge.services import render
+
+    vhost = make_vhost(
+        opts.domain, opts.certificate, label="siteapiprefix", kind="site_api",
+        serve_static=True, is_enabled=False)
+    make_route(vhost, "/api/account", opts.upstream)
+    vhost.is_enabled = True
+    vhost.save()
+    vhost = (type(vhost).objects.select_related("domain", "certificate")
+             .prefetch_related("routes__upstream").get(pk=vhost.pk))
+
+    text = render.render_vhost(vhost, opts.generation)
+
+    assert "location ^~ /api/account {" in text, (
+        "site_api route prefixes must outrank the asset-suffix regex so "
+        "proxied asset requests do not fall through to the release root")
+    assert "location ^~ /static/ {" in text, (
+        "the site_api static alias must outrank the asset-suffix regex so "
+        "Django static assets do not fall through to the release root")
+    assert "location ~* \\.(css|js|mjs|map|ico|svg|gif|png|jpe?g|webp|avif|woff2?|ttf|otf|eot)$ {" in text, (
+        "the regression requires the site asset-cache regex to remain present")
 
 
 @th.django_unit_test("no model field can weaken or remove the TLS floor")

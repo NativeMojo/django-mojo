@@ -570,6 +570,43 @@ def test_certs_issue_success_stores_and_cleans_up(opts):
         f"cleanup should name exactly the digests it planted, got {cleared.record_values}")
 
 
+@th.django_unit_test("dnsman certs: production renewal reuses the row while replacing PEM and serial")
+def test_certs_renewal_reuses_row_and_revises_material(opts):
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.services import certs
+    from mojo.helpers import dates
+
+    domain = _reset_domain("direct-renewal-certs.test")
+    names = [domain.name]
+    old_pem, _old_leaf = _make_chain(names, days=20, serial=0xA11CE)
+    new_chain, _new_leaf = _make_chain(names, days=90, serial=0xB22CE)
+    now = dates.utcnow()
+    certificate = Certificate.objects.create(
+        domain=domain, common_name=domain.name, sans=names, status="active",
+        cert_pem=old_pem, serial="a11ce", not_after=now + timedelta(days=20),
+        renew_after=now - timedelta(days=1))
+    original_pk = certificate.pk
+    original_pem = certificate.cert_pem
+    original_serial = certificate.serial
+    client = FakeAcmeClient([domain.name], chain=new_chain)
+
+    with _issuance_env(client):
+        certificate.set_private_key_pem("OLD PRIVATE KEY")
+        certificate.save()
+        result = certs.issue(certificate)
+
+    assert result.ok, f"renewal should have succeeded, error was: {result.get('error')}"
+    renewed = Certificate.objects.get(pk=original_pk)
+    assert renewed.pk == original_pk, (
+        f"renewal replaced the Certificate row instead of reusing pk {original_pk}")
+    assert renewed.cert_pem != original_pem, (
+        "renewal left the old certificate PEM on the reused row")
+    assert renewed.serial != original_serial, (
+        f"renewal left the old non-null serial {original_serial!r} on the reused row")
+    assert renewed.serial == "b22ce", (
+        f"renewal did not persist the new leaf serial, got {renewed.serial!r}")
+
+
 @th.django_unit_test("dnsman certs: a cleanup failure never fails an issuance that worked")
 def test_certs_cleanup_failure_does_not_fail_issuance(opts):
     """Cleanup runs in a ``finally`` and swallows -- the cert is already issued."""

@@ -155,6 +155,30 @@ def test_desired_state_has_no_material(opts):
             f"the desired-state payload leaked {marker}"
 
 
+@th.django_unit_test("desired-state vhosts carry certificate revision metadata, never material")
+def test_desired_state_vhost_certificate_revision(opts):
+    from mojo.apps.dnsman.models import Certificate
+
+    Certificate.objects.filter(pk=opts.certificate.pk).update(serial="c0ffee")
+    login(opts, opts.node_email, opts.node_pw)
+
+    state = _state(opts)
+    row = next(
+        (candidate for candidate in state.get("vhosts") or []
+         if candidate["id"] == opts.vhost.pk), None)
+
+    assert row is not None, (
+        f"the authenticated desired state omitted vhost {opts.vhost.pk}")
+    assert row.get("certificate") == opts.certificate.pk, (
+        f"the vhost lost its certificate identity: {row}")
+    assert row.get("certificate_serial") == "c0ffee", (
+        f"the vhost omitted the expected certificate revision: {row}")
+    for forbidden in ("cert_pem", "chain_pem", "private_key_pem"):
+        assert forbidden not in row, (
+            f"the desired-state vhost leaked certificate material field "
+            f"{forbidden}: {row}")
+
+
 @th.django_unit_test("pool filtering selects a different set and a different generation")
 def test_pool_filtering(opts):
     login(opts, opts.node_email, opts.node_pw)
