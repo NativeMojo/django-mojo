@@ -36,9 +36,13 @@ continue through their existing django-mojo paths.
 ## Configuration
 
 The file is strict JSON: unknown fields, duplicate keys, non-finite numbers,
-invalid bounds, symlinks, insecure endpoints, and unsupported versions fail
-closed. The root service also requires the config and API-key credential to be
-regular files with mode `0600` (or stricter) and root ownership.
+invalid bounds, insecure endpoints, and unsupported versions fail closed. The
+config file and API-key credential must be regular files rather than symlinks,
+with mode `0600` (or stricter); a root service also requires root ownership.
+The endpoint must use HTTPS, have no credentials, query, or fragment, and use
+the `/api/incident/mojosec/batch` path (an optional trailing slash is accepted).
+Delivery deliberately ignores proxy environment variables and refuses
+redirects so credentials cannot be forwarded to a different host.
 
 ```json
 {
@@ -96,12 +100,35 @@ regular files with mode `0600` (or stricter) and root ownership.
 FIM targets are operational policy, not universal defaults. Keep the profile
 small enough that every change is meaningful. The deployment should generate
 the exact code/config/systemd/nginx paths for that project rather than copying
-the sample unchanged.
+the sample unchanged. An enabled FIM collector requires at least one target;
+set `collectors.fim.enabled` to `false` when the deployment has no approved
+profile. The public `status_path` must remain outside the private `state_dir`.
+
+### Structured nginx input
+
+Each configured nginx path is a newline-delimited JSON log, not the ordinary
+combined access log. A record needs a numeric `status` and a non-empty path.
+The detector recognizes these field names:
+
+| Meaning | Accepted fields |
+|---|---|
+| timestamp | `time`, `time_iso8601`, or `timestamp` |
+| method | `method` or `request_method` |
+| path | `uri`, `request_uri`, or `path` |
+| client IP | `remote_addr` or `source_ip` |
+| direct peer IP | `peer_addr` or `realip_remote_addr` |
+| duration in seconds | `request_time` |
+
+The timestamp is optional but, when present, must be timezone-aware ISO-8601.
+Query strings are removed before an event is stored. Referrers, user agents,
+and unrecognized fields are ignored. Keep each JSON record on one complete
+line; oversized, malformed, and partial trailing lines are skipped or deferred
+without copying raw input into event evidence.
 
 ## Commands and health
 
 ```bash
-# Parse all fields and audit config ownership/mode.
+# Parse all fields and audit the config file's type, ownership, and mode.
 python -I -m mojo.mojosec --config /opt/api/var/mojosec.json check
 
 # One collection/delivery cycle; useful for a deployment canary.
@@ -110,6 +137,12 @@ python -I -m mojo.mojosec --config /opt/api/var/mojosec.json once
 # Read the public health snapshot without opening the private SQLite database.
 python -I -m mojo.mojosec --config /opt/api/var/mojosec.json status
 ```
+
+`check` does not open the API-key credential; `once` and `run` validate it when
+there is a batch to send. A delivery failure during `once` is written to stderr
+and the status snapshot, but does not make the command exit nonzero. Treat the
+`delivery` object in `status` as the canary result rather than relying only on
+the process exit code.
 
 `/run/mojosec/status.json` is atomically written as mode `0644` and contains
 only sensor identity, collector freshness/errors, delivery counts, spool depth,
@@ -122,8 +155,9 @@ Private state lives in root-owned mode-`0700` `/var/lib/mojosec`; it must not be
 placed under the application-writable `/opt/api/var` tree. SQLite uses WAL mode
 and `synchronous=FULL`.
 
-- A journal/nginx cursor advances in the same transaction that queues or
-  aggregates the observations preceding it.
+- A journal/nginx cursor advances in the same transaction that processes the
+  observations preceding it. Capacity rejection records a drop counter in that
+  transaction rather than retaining the rejected observation.
 - A complete FIM baseline advances in the same transaction as its change
   events. An incomplete/overflow scan leaves the baseline untouched and emits
   one aggregatable overflow signal; the next complete scan reconciles it.
@@ -139,8 +173,26 @@ and `synchronous=FULL`.
 
 The wire format is `mojosec.batch` version 1, optionally gzip-compressed, over
 HTTPS with `Authorization: apikey <per-installation-token>`. The checked-in
-golden fixture under `tests/test_mojosec/golden/` is the compatibility contract
-for sensor and receiver implementations.
+golden fixture under `tests/test_mojosec/golden/` is the request compatibility
+contract for sensor and receiver implementations.
+
+The receiver should return one result per event using the strict acknowledgement
+schema (a `reason` string is optional):
+
+```json
+{
+  "schema": "mojosec.ack",
+  "version": 1,
+  "results": [
+    {"id": "<64-character-lowercase-sha256>", "status": "accepted"}
+  ]
+}
+```
+
+`accepted`, `duplicate`, and `rejected` are terminal and remove that event from
+the spool. `retry` and omitted event IDs retain only those events with bounded
+exponential backoff. A non-2xx response or malformed acknowledgement retains
+the entire sent batch for retry.
 
 ## Trust boundary
 
