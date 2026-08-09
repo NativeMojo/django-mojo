@@ -16,7 +16,13 @@ def build_parser():
     parser.add_argument("--config", default="/etc/mojosec/config.json",
                         help="strict JSON config (default: %(default)s)")
     parser.add_argument("command", nargs="?", default="run",
-                        choices=("run", "once", "check", "status"))
+                        choices=("run", "once", "check", "status",
+                                 "baseline-preview", "baseline-initialize",
+                                 "baseline-rollback"))
+    parser.add_argument("--confirm-digest", default="",
+                        help="exact profile digest required for baseline mutation")
+    parser.add_argument("--reason", default="operator",
+                        help="bounded baseline initialization reason")
     return parser
 
 
@@ -38,7 +44,38 @@ def main(argv=None):
 
         from .runtime import Runtime
         runtime = Runtime(config)
-        if args.command == "once":
+        if args.command in ("baseline-preview", "baseline-initialize"):
+            scans = runtime.preview_integrity()
+            identity = runtime.profile_identity
+            preview = {
+                "profile": identity,
+                "complete": all(scan["complete"] for scan in scans.values()),
+                "tiers": {
+                    tier: {
+                        "complete": scan["complete"], "entries": len(scan["snapshot"]),
+                        "duration": scan.get("duration", 0),
+                        "bounds": scan.get("bounds", {}),
+                        "packages": scan.get("packages", 0),
+                        "rpm_anomalies": scan.get("anomalies", 0),
+                    } for tier, scan in scans.items()
+                },
+            }
+            if args.command == "baseline-initialize":
+                if not identity or args.confirm_digest != identity["digest"]:
+                    raise ValueError("baseline initialization requires the exact previewed digest")
+                if not preview["complete"]:
+                    raise ValueError("baseline initialization refuses an incomplete tier")
+                runtime.initialize_integrity(scans, reason=args.reason)
+                preview["initialized"] = True
+            _print_json(preview)
+            runtime.store.close()
+        elif args.command == "baseline-rollback":
+            if not args.confirm_digest:
+                raise ValueError("baseline rollback requires an exact prior digest")
+            identity = runtime.store.rollback_fim_profile(args.confirm_digest)
+            _print_json({"rolled_back": True, "profile": identity})
+            runtime.store.close()
+        elif args.command == "once":
             runtime.run_once()
         else:
             runtime.run()

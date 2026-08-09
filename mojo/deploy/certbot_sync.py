@@ -408,6 +408,8 @@ def pull(s3, bucket, domain, dry_run):
     # and keeps the downloaded privkey out of world-traversable /tmp until
     # install_file() chmods it 0600.
     staging_dir = tempfile.mkdtemp(prefix=".certbot_sync.", dir=LETSENCRYPT_DIR)
+    change_journal = None
+    change_operation = ""
     try:
         for name in LINEAGE_FILES:
             temp_path = os.path.join(staging_dir, name)
@@ -439,11 +441,25 @@ def pull(s3, bucket, domain, dry_run):
                      ", ".join(sorted(staged)))
             return 0
 
+        destinations = [os.path.join(directory, name) for name in staged]
+        if os.path.exists("/etc/mojosec/config.json"):
+            import hashlib
+            from mojo.deploy.mojosec_changes import ChangeJournal
+            change_operation = "certbot-sync-" + hashlib.sha256(
+                (domain + ":" + str(remote_mtime)).encode("utf-8")).hexdigest()[:24]
+            change_journal = ChangeJournal()
+            change_journal.begin(
+                change_operation, "certbot-lineage-sync", destinations,
+                deployment_id="certbot-" + str(remote_mtime), ttl_seconds=900)
         for name in LINEAGE_FILES:
             if name in staged:
                 install_file(staged.pop(name),
                              os.path.join(directory, name),
                              FILE_MODES[name])
+    except Exception:
+        if change_journal is not None:
+            change_journal.abort(change_operation)
+        raise
     finally:
         for leftover in staged.values():
             try:
@@ -456,7 +472,18 @@ def pull(s3, bucket, domain, dry_run):
             pass
 
     log.info("synced lineage %s from S3 (mtime %d)", domain, remote_mtime)
-    return 0 if reload_nginx(dry_run) else 1
+    try:
+        reloaded = reload_nginx(dry_run)
+        if change_journal is not None:
+            if reloaded:
+                change_journal.complete(change_operation)
+            else:
+                change_journal.abort(change_operation)
+    except Exception:
+        if change_journal is not None:
+            change_journal.abort(change_operation)
+        raise
+    return 0 if reloaded else 1
 
 
 # ---------------------------------------------------------------------------
@@ -536,12 +563,41 @@ def renew(config, dry_run):
     if dry_run:
         log.info("[dry-run] would run: %s", " ".join(argv))
     else:
-        done = subprocess.run(argv, capture_output=True)
+        change_journal = None
+        change_operation = ""
+        if configured and os.path.exists("/etc/mojosec/config.json"):
+            import datetime
+            import hashlib
+            from mojo.deploy.mojosec_changes import ChangeJournal
+            paths = [os.path.join(lineage_dir(domain), name) for name in LINEAGE_FILES]
+            paths.append(os.path.join(LETSENCRYPT_DIR, "renewal", domain + ".conf"))
+            change_operation = "certbot-renew-" + hashlib.sha256(
+                (domain + ":" + datetime.date.today().isoformat()).encode("utf-8")
+            ).hexdigest()[:24]
+            change_journal = ChangeJournal()
+            change_journal.begin(
+                change_operation, "certbot-renew", paths,
+                deployment_id="certbot-renew-" + datetime.date.today().isoformat(),
+                ttl_seconds=900)
+        try:
+            done = subprocess.run(argv, capture_output=True)
+        except Exception:
+            if change_journal is not None:
+                change_journal.abort(change_operation)
+            raise
         if done.returncode != 0:
+            if change_journal is not None:
+                change_journal.abort(change_operation)
             log.error("renew failed rc %d: %s", done.returncode,
                       (done.stderr or done.stdout or b"").decode(
                           "utf-8", "replace").strip()[-800:])
             return 1
+        if change_journal is not None:
+            try:
+                change_journal.complete(change_operation)
+            except Exception:
+                change_journal.abort(change_operation)
+                raise
         if configured:
             log.info("renew ok (this node is the primary) — pushing to S3")
         else:

@@ -651,8 +651,10 @@ off or retire an absent old service during an ordinary framework upgrade.
 `-E` ignores `PYTHON*` injection and `-P` removes the
 current directory from imports while retaining AL2023's root-pip
 `/usr/local/lib/python3.x/site-packages`. The unit also runs from root-owned
-`/`, clears Python path/home variables, hides home directories, and
-`check_node` rejects a Mojo package outside a root-owned, non-writable system
+`/`, clears Python path/home variables, uses `ProtectHome=tmpfs`, and exposes
+only exact read-only binds for approved root and `ec2-user` persistence paths;
+unrelated home content stays hidden. `check_node` probes that live namespace and
+rejects a Mojo package outside a root-owned, non-writable system
 site. Do not substitute `-I` or `-s`: on AL2023 both hide the root-pip package.
 
 The packaged script passes `--mode enrolled --criticality enrolled`: root-only
@@ -680,8 +682,38 @@ sensor; invalid policy keeps the prior canonical file and service.
 | `/etc/mojosec/credential` | root:root 0600 per-installation API key |
 | `/var/lib/mojosec` | root:root 0700 durable SQLite spool; retained across off/rollback |
 | `/run/mojosec/status.json` | root:root 0640 bounded health/provenance snapshot; inspect through `sudo check_node` |
-| `/etc/mojosec/expected_changes.json` | optional root:root 0600 exact FIM annotations |
+| `/etc/mojosec/expected_changes.json` | optional root:root 0600 v2 exact FIM annotations; v1 remains readable during rollout |
 | `/etc/systemd/system/mojosec.service` | root-owned packaged unit, Python safe-path launch, runs as root with systemd hardening |
+| `/usr/local/lib/mojosec/mojosec_changes.py` | root-owned stable producer helper used before pip replaces site-packages |
+
+The recommended desired policy sets `"profile":"al2023-web-v1"`. The profile
+is packaged and immutable: fast host/config/home/cloud-init/local-library
+coverage runs each minute, slow boot and system-binary coverage runs every six
+hours, and RPM verification includes the isolated system Python's constrained
+site-packages roots. It excludes `/opt/api`, `/opt/www`, and MojoSec's own
+private/control state. Profile activation is an explicit
+`baseline-preview` → `baseline-initialize --confirm-digest <digest>` ceremony;
+ordinary service startup never blesses the first scan. `check_node` fails an
+active digest without initialized fast, slow, and RPM baselines.
+
+Post-deploy, `node_setup`, and `certbot_sync` route monitored host changes
+through the stable expected-change helper. The helper declares exact paths
+before one child mutation, completes only on success, and aborts failure so the
+sensor still reports those bytes as unexplained. Pip resolution is bounded and
+uses incoming plus installed wheel `RECORD` paths, including exact installer
+metadata and generated scripts/bytecode; it never diffs an arbitrary
+site-packages scope. The v2 manifest adds operation identity/kind/completion
+time. Events are durable immediately and wait no more than 120 seconds for a
+late matching annotation.
+
+Roll out the producer-capable package before selecting the integrity profile:
+deploy the helper and exercise normal deploy, node setup, and certificate
+operations while the profile remains inactive. Only then select
+`al2023-web-v1`, preview all tiers, and initialize the exact previewed digest.
+This keeps the first active integrity baseline from coinciding with a framework
+upgrade that has no producer. A rollback either selects a retained initialized
+profile digest or turns enrollment off; it never silently creates a replacement
+baseline.
 
 Install root enrollment and credentials only through stdin:
 
@@ -739,6 +771,15 @@ install desired policy and a root enrollment containing
 run ordinary `post_deploy`. Do not run another deploy during a disposable
 canary started with a temporary CLI/environment override; the next deploy
 correctly returns to the enrolled lifecycle. Observe never bans locally.
+
+For `al2023-web-v1`, use a disposable enrolled AL2023 node. First deploy the
+producer-capable package with no profile selected and exercise its normal
+deploy, node setup, and certificate paths. Then select the profile, record the
+complete `baseline-preview`, and initialize only the digest it prints. Require
+`check_node` to show initialized `fast`, `slow`, and `rpm` tiers, the expected
+60-second/six-hour cadence, system-Python RPM/non-RPM coverage, and the exact
+`ProtectHome=tmpfs` bind visibility before proceeding with the signal checks
+below. Keep this canary as a release gate; automated tests do not replace it.
 
 Record a UTC `CANARY_STARTED_AT`, baseline status/log inode+size and
 `systemctl show mojosec.service -p MemoryCurrent -p CPUUsageNSec -p TasksCurrent`,

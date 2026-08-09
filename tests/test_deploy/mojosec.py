@@ -97,13 +97,13 @@ def test_desired_policy_cannot_override_root_enrollment_or_log_boundary(opts):
     desired = {
         "version": 1, "policy_revision": "fleet-r7",
         "collectors": {"fim": {"enabled": True, "targets": [
-            {"path": "/opt/api/app", "recursive": True, "exclude": []},
+            {"path": "/etc/nginx", "recursive": True, "exclude": []},
         ]}},
     }
     enrollment = {
         "version": 1, "sensor_id": "i-012345.us-west-2",
         "endpoint": "https://incident.example/api/incident/mojosec/batch",
-        "fim_allowed_roots": ["/opt/api"], "trusted_proxy_cidrs": ["10.0.0.0/8"],
+        "fim_allowed_roots": ["/etc"], "trusted_proxy_cidrs": ["10.0.0.0/8"],
     }
 
     def read(path, *args, **kwargs):
@@ -144,13 +144,15 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
             "Environment=PYTHONHOME=", "Environment=PYTHONPATH=",
             "StateDirectoryMode=0700", "RuntimeDirectoryMode=0755",
             "NoNewPrivileges=true", "ProtectKernelModules=true",
-            "ProtectSystem=strict",
+            "ProtectSystem=strict", "ProtectHome=tmpfs", "BindReadOnlyPaths=",
             "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
             "ConditionPathExists=/etc/mojosec/config.json"):
         th.assert_in(expected, unit, f"service is missing deployment contract: {expected}")
     for forbidden in ("fail2ban", "iptables", "nft", "firewall", "/opt/api/var"):
         th.assert_true(forbidden not in unit.lower(),
                        f"root service must not execute {forbidden!r}")
+    th.assert_true(all(path in unit for path in deploy.HOME_BIND_PATHS),
+                   "every exact root/ec2-user persistence path must be a non-optional bind")
     th.assert_true(" -I " not in unit and " -s " not in unit,
                    "AL2023 root-pip packages disappear under -I/-s")
     rotation = deploy.LOGROTATE_TEXT
@@ -161,6 +163,49 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
     for forbidden in ("create ", "postrotate", "USR1"):
         th.assert_true(forbidden not in rotation,
                        f"rotation must preserve the root-owned active inode: {forbidden}")
+
+
+@th.django_unit_test()
+def test_home_binds_create_aws_parent_and_reject_unsafe_parents(opts):
+    from mojo.deploy import mojosec as deploy
+
+    with tempfile.TemporaryDirectory() as root:
+        home = os.path.join(root, "home")
+        os.mkdir(home, 0o700)
+        owner = (os.getuid(), os.getgid())
+        paths = (
+            os.path.join(home, ".aws", "config"),
+            os.path.join(home, ".aws", "credentials"),
+            os.path.join(home, ".ssh"),
+        )
+        deploy._prepare_home_binds(paths=paths, users={home: owner})
+        th.assert_true(os.path.isdir(os.path.join(home, ".aws")),
+                       "a clean home must get its required .aws parent")
+        th.assert_true(all(os.path.isfile(path) for path in paths[:2]),
+                       "exact AWS leaf binds must exist before service activation")
+
+    with tempfile.TemporaryDirectory() as root:
+        home = os.path.join(root, "home")
+        outside = os.path.join(root, "outside")
+        os.mkdir(home, 0o700)
+        os.mkdir(outside, 0o700)
+        os.symlink(outside, os.path.join(home, ".aws"))
+        with th.assert_raises(deploy.DeployError):
+            deploy._prepare_home_binds(
+                paths=(os.path.join(home, ".aws", "credentials"),),
+                users={home: (os.getuid(), os.getgid())})
+        th.assert_true(not os.path.exists(os.path.join(outside, "credentials")),
+                       "a parent symlink must be rejected before leaf creation")
+
+    with tempfile.TemporaryDirectory() as root:
+        home = os.path.join(root, "home")
+        os.mkdir(home, 0o700)
+        os.mkdir(os.path.join(home, ".aws"), 0o777)
+        os.chmod(os.path.join(home, ".aws"), 0o777)
+        with th.assert_raises(deploy.DeployError):
+            deploy._prepare_home_binds(
+                paths=(os.path.join(home, ".aws", "config"),),
+                users={home: (os.getuid(), os.getgid())})
 
 
 @th.django_unit_test()
@@ -215,6 +260,7 @@ def test_converge_lifecycle_is_an_exact_allowlist(opts):
             states["active"] = True
 
     with mock.patch.object(deploy, "_ensure_dir"), \
+            mock.patch.object(deploy, "_prepare_home_binds"), \
             mock.patch.object(deploy, "_require_root_install_dir"), \
             mock.patch.object(deploy, "_retire_stale_units"), \
             mock.patch.object(deploy, "_retired_unit_snapshot", return_value={}), \
@@ -362,6 +408,7 @@ def test_late_converge_failure_restores_nginx_config_and_units(opts):
     )
     with mock.patch.object(deploy.os, "geteuid", return_value=0), \
             mock.patch.object(deploy, "_prepare_effective_config", return_value=prepared), \
+            mock.patch.object(deploy, "_prepare_home_binds"), \
             mock.patch.object(deploy, "_lstat_regular"), \
             mock.patch.object(deploy, "_ensure_dir"), \
             mock.patch.object(deploy, "_require_root_install_dir"), \
@@ -421,7 +468,7 @@ def test_enrollment_installs_protected_host_identity_from_stdin(opts):
         "version": 1, "sensor_id": "i-012345.us-west-2",
         "endpoint": "https://incident.example/api/incident/mojosec/batch",
         "nginx_plane": "standard", "trusted_proxy_cidrs": ["10.0.0.0/8"],
-        "fim_allowed_roots": ["/opt/api"],
+        "fim_allowed_roots": ["/etc"],
     }
     captured = {}
     stream = io.TextIOWrapper(

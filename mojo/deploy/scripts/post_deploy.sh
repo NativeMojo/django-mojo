@@ -71,7 +71,69 @@ done
 install_file() {
     local src="$1" dest="$2"
     [[ -f "$src" ]] || die "expected file is missing: $src"
-    cp -f "$src" "$dest"
+    trusted_change rendered-host-config "$dest" -- cp -f "$src" "$dest"
+}
+
+# The producer helper deliberately lives outside site-packages. A release that
+# first ships it copies it here while the integrity profile is still inactive;
+# later releases use the already-installed, root-owned copy before pip replaces
+# any package code. That stable process derives exact paths from wheel and
+# installed RECORDs, spans the mutating pip child, and aborts on child failure.
+MOJOSEC_STABLE_HELPER="/usr/local/lib/mojosec/mojosec_changes.py"
+MOJOSEC_PY_FLAGS=(-E)
+if (cd / && "$MOJOSEC_PYTHON" -E -c \
+        'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'); then
+    MOJOSEC_PY_FLAGS+=(-P)
+fi
+MOJOSEC_CHANGE_SEQUENCE=0
+stable_helper_is_safe() {
+    [ -f "$MOJOSEC_STABLE_HELPER" ] && [ ! -L "$MOJOSEC_STABLE_HELPER" ] && \
+        [ "$(stat -c %u "$MOJOSEC_STABLE_HELPER")" = "0" ] && \
+        [ $((8#$(stat -c %a "$MOJOSEC_STABLE_HELPER") & 022)) -eq 0 ]
+}
+MOJOSEC_STABLE_HELPER_AVAILABLE=0
+stable_helper_is_safe && MOJOSEC_STABLE_HELPER_AVAILABLE=1
+MOJOSEC_CHANGES_AVAILABLE=0
+[ -e /etc/mojosec/config.json ] && \
+    [ "$MOJOSEC_STABLE_HELPER_AVAILABLE" = "1" ] && \
+    MOJOSEC_CHANGES_AVAILABLE=1
+
+run_change_helper() {
+    (cd / && "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" \
+        "$MOJOSEC_STABLE_HELPER" "$@")
+}
+
+trusted_change() {
+    local kind="$1"
+    shift
+    local change_args=()
+    while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+        change_args+=(--path "$1")
+        shift
+    done
+    [ "$#" -gt 0 ] || die "trusted change is missing child separator"
+    shift
+    [ "$#" -gt 0 ] || die "trusted change is missing child command"
+    if [ "$MOJOSEC_CHANGES_AVAILABLE" = "1" ]; then
+        MOJOSEC_CHANGE_SEQUENCE=$((MOJOSEC_CHANGE_SEQUENCE+1))
+        run_change_helper run \
+            --operation-id "post-deploy-$$-${MOJOSEC_CHANGE_SEQUENCE}" \
+            --kind "$kind" --deployment-id "post-deploy-$$" \
+            "${change_args[@]}" -- "$@"
+    else
+        "$@"
+    fi
+}
+
+trusted_pip() {
+    if [ "$MOJOSEC_CHANGES_AVAILABLE" = "1" ]; then
+        MOJOSEC_CHANGE_SEQUENCE=$((MOJOSEC_CHANGE_SEQUENCE+1))
+        run_change_helper pip-run \
+            --operation-id "post-deploy-$$-${MOJOSEC_CHANGE_SEQUENCE}" \
+            --deployment-id "post-deploy-$$" -- "$@"
+    else
+        "$@"
+    fi
 }
 
 # ── dependencies ─────────────────────────────────────────────────────────────
@@ -85,17 +147,38 @@ install_file() {
 # install latest, so releases are never missed. Either way a failure is loud.
 
 log "Installing project dependencies..."
-pip install -r requirements.txt \
+trusted_pip pip install -r requirements.txt \
     || die "dependency install failed — refusing to restart with an incomplete environment"
 
 if [ -n "$FRAMEWORK" ]; then
     log "Installing django-mojo==${FRAMEWORK} (fleet-pinned)..."
-    pip install "django-mojo==${FRAMEWORK}" \
+    trusted_pip pip install "django-mojo==${FRAMEWORK}" \
         || die "django-mojo ${FRAMEWORK} install failed — refusing to deploy on an unknown framework version"
 else
     log "Upgrading django-mojo (latest)..."
-    pip install --upgrade django-mojo \
+    trusted_pip pip install --upgrade django-mojo \
         || die "django-mojo upgrade failed — refusing to deploy on an unknown framework version"
+fi
+
+# Refresh the stable producer only after the framework install is complete.
+# When an old stable copy exists, it journals its own exact replacement; the
+# running interpreter already has the old inode loaded, so self-replacement is
+# safe in the same way as this shell script's packaged inode replacement.
+MOJOSEC_CURRENT_HELPER="$(cd / && "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" -c \
+    'import mojo.deploy.mojosec_changes as m; print(m.__file__)' 2>/dev/null || true)"
+if [ -n "$MOJOSEC_CURRENT_HELPER" ] && [ -f "$MOJOSEC_CURRENT_HELPER" ] && \
+        [ ! -L "$MOJOSEC_CURRENT_HELPER" ]; then
+    if [ "$MOJOSEC_STABLE_HELPER_AVAILABLE" = "1" ]; then
+        trusted_change mojosec-producer-helper \
+            "$(dirname "$MOJOSEC_STABLE_HELPER")" "$MOJOSEC_STABLE_HELPER" -- \
+            install -D -m 0755 "$MOJOSEC_CURRENT_HELPER" "$MOJOSEC_STABLE_HELPER"
+    else
+        install -D -m 0755 "$MOJOSEC_CURRENT_HELPER" "$MOJOSEC_STABLE_HELPER"
+    fi
+    stable_helper_is_safe \
+        || die "stable MojoSec trusted-change helper has unsafe ownership or mode"
+    MOJOSEC_STABLE_HELPER_AVAILABLE=1
+    [ ! -e /etc/mojosec/config.json ] || MOJOSEC_CHANGES_AVAILABLE=1
 fi
 
 # ── migrations ───────────────────────────────────────────────────────────────
@@ -141,7 +224,7 @@ log "Updating nginx configs..."
 install_file "${PROJ_PATH}/aws/nginx/nginx.conf"  "${NGINX_ETC}/nginx.conf"
 install_file "${PROJ_PATH}/aws/nginx/asgi.inc"    "${NGINX_ETC}/asgi.inc"
 MOJOSEC_DJANGO_EXISTED=0
-MOJOSEC_DJANGO_BACKUP="$(mktemp "${NGINX_ETC}/.mojosec-django.XXXXXX")"
+MOJOSEC_DJANGO_BACKUP="$(mktemp "${DEPLOY_DIR}/.mojosec-django.XXXXXX")"
 if [ -e "${NGINX_ETC}/django.inc" ]; then
     [ ! -L "${NGINX_ETC}/django.inc" ] \
         || die "refusing symlink nginx django.inc"
@@ -153,8 +236,11 @@ fi
 install_file "${PROJ_PATH}/aws/nginx/django.inc"  "${NGINX_ETC}/django.inc"
 
 if compgen -G "${PROJ_PATH}/aws/nginx/sec.d/*.conf" > /dev/null; then
-    mkdir -p "${NGINX_ETC}/sec.d"
-    cp -f "${PROJ_PATH}/aws/nginx/sec.d/"*.conf "${NGINX_ETC}/sec.d/"
+    trusted_change rendered-nginx "${NGINX_ETC}/sec.d" -- \
+        mkdir -p "${NGINX_ETC}/sec.d"
+    for source in "${PROJ_PATH}/aws/nginx/sec.d/"*.conf; do
+        install_file "$source" "${NGINX_ETC}/sec.d/$(basename "$source")"
+    done
 fi
 
 # Repo-owned vhosts, converged on every deploy — the repo's aws/nginx/conf.d/
@@ -163,13 +249,14 @@ fi
 # (single-node domains) stay node-managed and are not touched from git;
 # retiring a once-shipped name is aws/node_retired.conf's job below.
 
-mkdir -p "${NGINX_ETC}/conf.d"
+trusted_change rendered-nginx "${NGINX_ETC}/conf.d" -- \
+    mkdir -p "${NGINX_ETC}/conf.d"
 VHOSTS=0
 if compgen -G "${PROJ_PATH}/aws/nginx/conf.d/*.conf" > /dev/null; then
     for vhost in "${PROJ_PATH}/aws/nginx/conf.d/"*.conf; do
         name="$(basename "$vhost")"
         case "$name" in *.example*) continue ;; esac
-        cp -f "$vhost" "${NGINX_ETC}/conf.d/${name}"
+        install_file "$vhost" "${NGINX_ETC}/conf.d/${name}"
         VHOSTS=$((VHOSTS+1))
     done
 fi
@@ -182,22 +269,14 @@ log "  converged ${VHOSTS} vhost(s) from aws/nginx/conf.d"
 log "Converging MojoSec (${MOJOSEC_MODE}, ${MOJOSEC_DEPLOY_CRITICALITY})..."
 restore_mojosec_django() {
     if [ "$MOJOSEC_DJANGO_EXISTED" = "1" ]; then
-        cp -p "$MOJOSEC_DJANGO_BACKUP" "${NGINX_ETC}/django.inc"
+        trusted_change mojosec-rollback "${NGINX_ETC}/django.inc" -- \
+            cp -p "$MOJOSEC_DJANGO_BACKUP" "${NGINX_ETC}/django.inc"
     else
-        rm -f -- "${NGINX_ETC}/django.inc"
+        trusted_change mojosec-rollback "${NGINX_ETC}/django.inc" -- \
+            rm -f -- "${NGINX_ETC}/django.inc"
     fi
     rm -f -- "$MOJOSEC_DJANGO_BACKUP"
 }
-
-# MojoSec uses Python's safe-path mode while retaining the root-owned
-# /usr/local site-packages used by AL2023 root pip. Python 3.11 introduced
-# `-P`; on an older legacy node, `-E` plus root-owned cwd `/` remains safe for
-# off/absence cleanup. The Python convergence guard refuses observe on <3.11.
-MOJOSEC_PY_FLAGS=(-E)
-if (cd / && "$MOJOSEC_PYTHON" -E -c \
-        'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'); then
-    MOJOSEC_PY_FLAGS+=(-P)
-fi
 
 # Distinguish an old package that truly lacks the module from any safety or
 # convergence failure inside a present module. Only exact exit 3 means absent.
@@ -214,10 +293,16 @@ else
 fi
 
 if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ]; then
-    if ! (cd / && "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" \
+    if ! trusted_change mojosec-converge \
+            "${SYSTEMD_ETC}/mojosec.service" \
+            "${NGINX_ETC}/conf.d/00_mojosec.conf" \
+            "${NGINX_ETC}/snippets/mojosec_receiver.conf" \
+            "${NGINX_ETC}/django.inc" \
+            "${LOGROTATE_ETC}/mojosec" -- \
+            "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" \
             -m mojo.deploy.mojosec converge \
             --mode "$MOJOSEC_MODE" \
-            --criticality "$MOJOSEC_DEPLOY_CRITICALITY"); then
+            --criticality "$MOJOSEC_DEPLOY_CRITICALITY"; then
         restore_mojosec_django
         nginx -t || die "MojoSec failed and the exact prior django.inc is invalid"
         systemctl reload nginx \
@@ -237,7 +322,7 @@ else
     [ "$fallback_mode" = "off" ] \
         || { restore_mojosec_django; die "old package cannot deploy MojoSec observe mode"; }
     log "MojoSec module absent; applying transactional pre-feature off cleanup"
-    fallback_dir="$(mktemp -d "${NGINX_ETC}/.mojosec-off.XXXXXX")"
+    fallback_dir="$(mktemp -d "${DEPLOY_DIR}/.mojosec-off.XXXXXX")"
     prior_active=0
     prior_enabled=0
     systemctl is-active --quiet mojosec.service && prior_active=1
@@ -314,7 +399,7 @@ if [[ -f "$RETIRED_LIST" ]]; then
         esac
         if [[ -f "$target" ]]; then
             log "  retiring declared name: ${line}"
-            rm -f "$target"
+            trusted_change retired-node-config "$target" -- rm -f "$target"
         fi
     done < "$RETIRED_LIST"
 fi
@@ -335,10 +420,14 @@ systemctl reload nginx
 log "Updating systemd units..."
 UNIT_SRC="${DEPLOY_DIR}/systemd"
 if compgen -G "${UNIT_SRC}/*.service" > /dev/null; then
-    cp -f "${UNIT_SRC}/"*.service "${SYSTEMD_ETC}/"
+    for source in "${UNIT_SRC}/"*.service; do
+        install_file "$source" "${SYSTEMD_ETC}/$(basename "$source")"
+    done
 fi
 if compgen -G "${UNIT_SRC}/*.timer" > /dev/null; then
-    cp -f "${UNIT_SRC}/"*.timer "${SYSTEMD_ETC}/"
+    for source in "${UNIT_SRC}/"*.timer; do
+        install_file "$source" "${SYSTEMD_ETC}/$(basename "$source")"
+    done
 fi
 systemctl daemon-reload
 
@@ -366,7 +455,9 @@ done
 
 log "Updating cron entries..."
 if compgen -G "${DEPLOY_DIR}/cron.d/*" > /dev/null; then
-    cp -f "${DEPLOY_DIR}/cron.d/"* "${CRON_ETC}/"
+    for source in "${DEPLOY_DIR}/cron.d/"*; do
+        install_file "$source" "${CRON_ETC}/$(basename "$source")"
+    done
 fi
 for installed in "${CRON_ETC}"/*; do
     [[ -f "$installed" ]] || continue
@@ -375,7 +466,7 @@ for installed in "${CRON_ETC}"/*; do
     grep -q "${PROJ_PATH}" "$installed" 2>/dev/null || continue
     [[ -f "${DEPLOY_DIR}/cron.d/${name}" ]] && continue
     log "  retiring stale project cron: ${name}"
-    rm -f "$installed"
+    trusted_change retired-project-cron "$installed" -- rm -f "$installed"
 done
 
 # The root-run manage.py steps above can be the FIRST writer of a framework

@@ -32,6 +32,7 @@ KIND_POLICY = {
     "web.denied": {"level": 5},
     "fim.change": {"level": 8},
     "fim.overflow": {"level": 12},
+    "fim.expected_change_error": {"level": 8},
 }
 UNKNOWN_KIND_POLICY = {"category": "mojosec.unrecognized", "level": 2}
 _DEPLOYMENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -146,7 +147,9 @@ def _expected_change_projection(kind, attributes):
     if kind != "fim.change" or not isinstance(attributes, dict):
         return None
     value = attributes.get("expected_change")
-    if not isinstance(value, dict) or set(value) != {"deployment_id", "expires_at"}:
+    v1_fields = {"deployment_id", "expires_at"}
+    v2_fields = v1_fields | {"operation_id", "operation_kind", "completed_at"}
+    if not isinstance(value, dict) or set(value) not in (v1_fields, v2_fields):
         return None
     deployment_id = value.get("deployment_id")
     expires_at = value.get("expires_at")
@@ -159,7 +162,28 @@ def _expected_change_projection(kind, attributes):
         return None
     if parsed.tzinfo is None:
         return None
-    return {"deployment_id": deployment_id, "expires_at": expires_at}
+    result = {"deployment_id": deployment_id, "expires_at": expires_at}
+    if set(value) == v2_fields:
+        for field in ("operation_id", "operation_kind"):
+            if (not isinstance(value[field], str) or
+                    not _DEPLOYMENT_ID.fullmatch(value[field])):
+                return None
+        completed_at = value["completed_at"]
+        if not isinstance(completed_at, str) or len(completed_at) > 40:
+            return None
+        try:
+            completed = datetime.datetime.fromisoformat(
+                completed_at.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if completed.tzinfo is None or completed > parsed:
+            return None
+        result.update({
+            "operation_id": value["operation_id"],
+            "operation_kind": value["operation_kind"],
+            "completed_at": completed_at,
+        })
+    return result
 
 
 def _event_projection(batch, sensor_event):

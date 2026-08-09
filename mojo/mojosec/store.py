@@ -11,6 +11,10 @@ from .protocol import canonical_json, make_event
 
 
 SCHEMA_VERSION = 1
+ANNOTATION_GRACE_SECONDS = 120
+# The producer caps an active operation at 15 minutes. Retain exact active
+# paths for that ceiling plus the five-minute post-completion match window.
+ANNOTATION_MAX_GRACE_SECONDS = 20 * 60
 
 
 class StoreError(RuntimeError):
@@ -68,6 +72,7 @@ class Store:
                 created REAL NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 next_attempt REAL NOT NULL DEFAULT 0,
+                annotation_deadline REAL NOT NULL DEFAULT 0,
                 last_error TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS events_delivery
@@ -108,6 +113,12 @@ class Store:
                     "UPDATE aggregates SET severity = ? WHERE fingerprint = ?",
                     (severity, row["fingerprint"]),
                 )
+        event_columns = {
+            row["name"] for row in self.db.execute("PRAGMA table_info(events)").fetchall()
+        }
+        if "annotation_deadline" not in event_columns:
+            self.db.execute(
+                "ALTER TABLE events ADD COLUMN annotation_deadline REAL NOT NULL DEFAULT 0")
         version = self.get_meta("schema_version")
         if version is None:
             self.set_meta("schema_version", SCHEMA_VERSION)
@@ -149,9 +160,17 @@ class Store:
             self._increment("dropped_capacity")
             self._increment(f"dropped_capacity_{event['severity']}")
             return False
+        grace = (
+            ANNOTATION_GRACE_SECONDS
+            if event.get("kind") == "fim.change" and
+            not event.get("attributes", {}).get("expected_change") else 0
+        )
         cursor = self.db.execute(
-            "INSERT OR IGNORE INTO events(id, payload, severity, created) VALUES(?, ?, ?, ?)",
-            (event["id"], canonical_json(event), event["severity"], now),
+            "INSERT OR IGNORE INTO events("
+            "id, payload, severity, created, next_attempt, annotation_deadline) "
+            "VALUES(?, ?, ?, ?, ?, ?)",
+            (event["id"], canonical_json(event), event["severity"], now,
+             now + grace, now + grace if grace else 0),
         )
         return cursor.rowcount == 1
 
@@ -258,6 +277,67 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
 
+    def annotate_pending_fim(self, expected_changes_path, active_paths=None, now=None):
+        """Enrich already-durable FIM evidence during its bounded delivery grace."""
+        from .expected_changes import ExpectedChangeError, annotation, load_manifest
+
+        try:
+            entries = load_manifest(expected_changes_path)
+        except ExpectedChangeError:
+            entries = []
+        now = now if now is not None else time.time()
+        active_paths = set(active_paths or ())
+        changed = 0
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            rows = self.db.execute(
+                "SELECT id, payload, created, next_attempt, annotation_deadline "
+                "FROM events WHERE annotation_deadline > 0 AND attempts = 0 "
+                "AND last_error = '' ORDER BY created LIMIT 4096",
+            ).fetchall()
+            for row in rows:
+                event = json.loads(row["payload"])
+                if (event.get("kind") != "fim.change" or
+                        event.get("attributes", {}).get("expected_change")):
+                    continue
+                attributes = event["attributes"]
+                deadline = row["annotation_deadline"]
+                if (attributes.get("path") in active_paths and
+                        now < row["created"] + ANNOTATION_MAX_GRACE_SECONDS):
+                    deadline = min(
+                        row["created"] + ANNOTATION_MAX_GRACE_SECONDS,
+                        max(deadline, now + ANNOTATION_GRACE_SECONDS),
+                    )
+                    if deadline > row["annotation_deadline"]:
+                        self.db.execute(
+                            "UPDATE events SET next_attempt = ?, annotation_deadline = ? "
+                            "WHERE id = ?", (deadline, deadline, row["id"]))
+                if deadline <= now or not entries:
+                    continue
+                evidence = {field: attributes.get(field) for field in (
+                    "kind", "mode", "uid", "gid", "size", "mtime_ns", "ctime_ns",
+                    "device", "inode", "sha256", "target_sha256")}
+                value = annotation(
+                    entries, attributes.get("path"), attributes.get("change"),
+                    evidence if attributes.get("change") == "deleted" else None,
+                    evidence if attributes.get("change") != "deleted" else None,
+                    now=now, observed_at=row["created"],
+                )
+                if value is None:
+                    continue
+                attributes["expected_change"] = value
+                self.db.execute(
+                    "UPDATE events SET payload = ?, next_attempt = ?, "
+                    "annotation_deadline = 0 WHERE id = ?",
+                    (canonical_json(event), now, row["id"]),
+                )
+                changed += 1
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+        return changed
+
     def pending_batch(self, max_events, max_bytes):
         rows = self.db.execute(
             "SELECT id, payload FROM events WHERE next_attempt <= ? ORDER BY created LIMIT ?",
@@ -266,10 +346,18 @@ class Store:
         events = []
         used = 1024
         for row in rows:
-            size = len(row["payload"].encode("utf-8")) + 1
+            event = json.loads(row["payload"])
+            if event.get("kind") == "fim.change":
+                attributes = event.get("attributes", {})
+                for field in (
+                        "mtime_ns", "ctime_ns", "device", "inode",
+                        "sha256", "target_sha256"):
+                    attributes.pop(field, None)
+            payload = canonical_json(event)
+            size = len(payload.encode("utf-8")) + 1
             if events and used + size > max_bytes:
                 break
-            events.append(json.loads(row["payload"]))
+            events.append(event)
             used += size
         return events
 
@@ -295,7 +383,8 @@ class Store:
                 )
                 reason = str(result.get("reason") or error or "retry")[:256]
                 self.db.execute(
-                    "UPDATE events SET attempts=?, next_attempt=?, last_error=? WHERE id=?",
+                    "UPDATE events SET attempts=?, next_attempt=?, annotation_deadline=0, "
+                    "last_error=? WHERE id=?",
                     (attempts, now + delay, reason, event_id),
                 )
                 self._increment("delivery_retry")
@@ -321,18 +410,113 @@ class Store:
             for found in observations:
                 self._ingest_one(found, now)
             if complete:
-                self.db.execute("DELETE FROM fim_baseline WHERE profile <> ?", (profile,))
                 self.db.execute("DELETE FROM fim_baseline WHERE profile = ?", (profile,))
                 self.db.executemany(
                     "INSERT INTO fim_baseline(profile, path, entry) VALUES(?, ?, ?)",
                     ((profile, path, canonical_json(entry)) for path, entry in snapshot.items()),
                 )
                 self.set_meta(f"fim_initialized:{profile}", True)
+                self.set_meta(f"fim_scan:{profile}", {
+                    "at": now, "complete": True, "entries": len(snapshot),
+                })
             self._flush_due(now)
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
             raise
+
+    def activate_fim_profile(self, identity, scans, reason="initialize"):
+        """Atomically commit every complete tier and select one immutable profile."""
+        if (not isinstance(identity, dict) or
+                set(identity) != {"name", "version", "digest"}):
+            raise StoreError("profile activation identity is invalid")
+        if not isinstance(scans, dict) or not scans:
+            raise StoreError("profile activation requires complete tier scans")
+        for tier, scan in scans.items():
+            if (not isinstance(tier, str) or not isinstance(scan, dict) or
+                    scan.get("tier") != tier or scan.get("complete") is not True or
+                    not isinstance(scan.get("snapshot"), dict)):
+                raise StoreError("profile activation refuses an incomplete tier")
+        now = time.time()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            for tier, scan in sorted(scans.items()):
+                key = scan["baseline_key"]
+                self.db.execute("DELETE FROM fim_baseline WHERE profile = ?", (key,))
+                self.db.executemany(
+                    "INSERT INTO fim_baseline(profile, path, entry) VALUES(?, ?, ?)",
+                    ((key, path, canonical_json(entry))
+                     for path, entry in scan["snapshot"].items()),
+                )
+                self.set_meta(f"fim_initialized:{key}", True)
+                self.set_meta(f"fim_scan:{key}", {
+                    "at": now, "complete": True,
+                    "entries": len(scan["snapshot"]),
+                    "duration": scan.get("duration", 0),
+                    "bounds": scan.get("bounds", {}),
+                })
+            prior = self.get_meta("fim_active_profile")
+            history = self.get_meta("fim_profile_history", [])
+            if prior and prior != identity:
+                history = [prior] + [item for item in history if item != prior]
+                history = history[:8]
+            self.set_meta("fim_profile_history", history)
+            self.set_meta("fim_active_profile", identity)
+            self.set_meta("fim_baseline_reason", str(reason)[:128])
+            self.set_meta("fim_baseline_at", now)
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def active_fim_profile(self):
+        return self.get_meta("fim_active_profile")
+
+    def rollback_fim_profile(self, digest):
+        history = self.get_meta("fim_profile_history", [])
+        identity = next((item for item in history if item.get("digest") == digest), None)
+        if identity is None:
+            raise StoreError("requested profile digest is not in intact rollback history")
+        keys = [f"{identity['name']}:{identity['digest']}:{tier}"
+                for tier in ("fast", "slow", "rpm")]
+        if not all(self.fim_initialized(key) for key in keys):
+            raise StoreError("requested rollback profile has an incomplete baseline")
+        current = self.active_fim_profile()
+        now = time.time()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.set_meta("fim_active_profile", identity)
+            self.set_meta("fim_profile_history", [current] + [
+                item for item in history if item != identity and item != current
+            ][:7])
+            self.set_meta("fim_baseline_reason", "rollback")
+            self.set_meta("fim_baseline_at", now)
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+        return identity
+
+    def fim_profile_health(self, identity, tier_keys):
+        active = self.active_fim_profile()
+        tiers = {}
+        for tier, key in tier_keys.items():
+            meta = self.get_meta(f"fim_scan:{key}", {})
+            tiers[tier] = {
+                "initialized": self.fim_initialized(key),
+                "last_complete": meta.get("at"),
+                "entries": meta.get("entries", 0),
+                "duration": meta.get("duration", 0),
+                "bounds": meta.get("bounds", {}),
+            }
+        return {
+            "active": active == identity,
+            "digest_drift": bool(active and active != identity),
+            "identity": identity,
+            "baseline_at": self.get_meta("fim_baseline_at"),
+            "baseline_reason": self.get_meta("fim_baseline_reason", ""),
+            "tiers": tiers,
+        }
 
     def stats(self):
         events = self.db.execute("SELECT COUNT(*) AS count FROM events").fetchone()["count"]

@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import pwd
 import re
 import stat
 import subprocess
@@ -43,12 +44,22 @@ DJANGO_RECEIVER_COMMENT = "# MojoSec exact receiver cap"
 MODES = ("off", "observe")
 CRITICALITIES = ("best_effort", "required")
 DESIRED_KEYS = {
-    "version", "policy_revision", "poll_seconds", "collectors",
+    "version", "profile", "policy_revision", "poll_seconds", "collectors",
     "aggregation", "delivery",
 }
-DEFAULT_FIM_ROOTS = (
-    "/opt/api", "/etc/nginx", "/etc/systemd/system", "/usr/local/bin",
+HOME_BIND_PATHS = (
+    "/root/.ssh", "/root/.config/systemd/user", "/root/.local/bin",
+    "/root/.aws/config", "/root/.aws/credentials",
+    "/root/.bashrc", "/root/.bash_profile", "/root/.profile",
+    "/home/ec2-user/.ssh", "/home/ec2-user/.config/systemd/user",
+    "/home/ec2-user/.local/bin", "/home/ec2-user/.aws/config",
+    "/home/ec2-user/.aws/credentials",
+    "/home/ec2-user/.bashrc", "/home/ec2-user/.bash_profile",
+    "/home/ec2-user/.profile",
 )
+DEFAULT_FIM_ROOTS = (
+    "/etc", "/usr", "/usr/local", "/boot", "/var/lib/cloud", "/var/spool",
+) + HOME_BIND_PATHS
 EDGE_LOG_DIR = "/opt/api/var/edge/log"
 # Exact historical prerelease name only. Legacy OSSEC/Wazuh units are not on
 # this list and are intentionally left alone.
@@ -81,7 +92,7 @@ TimeoutStopSec=30s
 KillMode=mixed
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectHome=true
+ProtectHome=tmpfs
 ProtectSystem=strict
 ProtectKernelTunables=true
 ProtectKernelModules=true
@@ -95,6 +106,7 @@ SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH
 ReadWritePaths=/var/lib/mojosec /run/mojosec
+BindReadOnlyPaths=/root/.ssh /root/.config/systemd/user /root/.local/bin /root/.aws/config /root/.aws/credentials /root/.bashrc /root/.bash_profile /root/.profile /home/ec2-user/.ssh /home/ec2-user/.config/systemd/user /home/ec2-user/.local/bin /home/ec2-user/.aws/config /home/ec2-user/.aws/credentials /home/ec2-user/.bashrc /home/ec2-user/.bash_profile /home/ec2-user/.profile
 RuntimeDirectory=mojosec
 RuntimeDirectoryMode=0755
 StateDirectory=mojosec
@@ -202,6 +214,62 @@ def _ensure_dir(path, mode):
         raise DeployError(f"{path} must be owned by root")
     os.chown(path, 0, 0)
     os.chmod(path, mode)
+
+
+def _prepare_home_binds(paths=None, users=None):
+    """Precreate the exact non-optional paths exposed through ProtectHome=tmpfs."""
+    paths = tuple(paths or HOME_BIND_PATHS)
+    if users is None:
+        users = {"/root": (0, 0)}
+        try:
+            account = pwd.getpwnam("ec2-user")
+        except KeyError as err:
+            raise DeployError("ec2-user is required for the standard MojoSec profile") from err
+        users["/home/ec2-user"] = (account.pw_uid, account.pw_gid)
+    # Bind AWS credentials and shell startup files exactly; every other target
+    # is a directory subtree approved by the immutable profile.
+    files = {path for path in paths
+             if os.path.basename(path) in (
+                 ".bashrc", ".bash_profile", ".profile", "config", "credentials")}
+    directories = set(paths) - files
+
+    def prepare_directory(home, path, owner):
+        current = home
+        for component in os.path.relpath(path, home).split(os.sep):
+            current = os.path.join(current, component)
+            try:
+                child = os.lstat(current)
+            except FileNotFoundError:
+                os.mkdir(current, 0o700)
+                os.chown(current, *owner)
+                child = os.lstat(current)
+            if not stat.S_ISDIR(child.st_mode) or stat.S_ISLNK(child.st_mode):
+                raise DeployError(f"home bind ancestor is not a real directory: {current}")
+            if child.st_uid != owner[0] or child.st_mode & 0o022:
+                raise DeployError(f"home bind ancestor has unsafe ownership/mode: {current}")
+
+    for home, owner in users.items():
+        info = os.lstat(home)
+        if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or
+                info.st_uid != owner[0] or info.st_mode & 0o022):
+            raise DeployError(f"standard home has unsafe ownership, mode, or type: {home}")
+        for path in sorted(item for item in directories if item.startswith(home + "/")):
+            prepare_directory(home, path, owner)
+        for path in sorted(item for item in files if item.startswith(home + "/")):
+            prepare_directory(home, os.path.dirname(path), owner)
+            try:
+                info = os.lstat(path)
+            except FileNotFoundError:
+                descriptor = os.open(
+                    path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                    getattr(os, "O_NOFOLLOW", 0), 0o600)
+                os.fchown(descriptor, *owner)
+                os.close(descriptor)
+                info = os.lstat(path)
+            if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                raise DeployError(f"home bind path is not a regular file: {path}")
+            if info.st_uid != owner[0] or info.st_mode & 0o022:
+                raise DeployError(f"home bind path has unsafe ownership/mode: {path}")
 
 
 def _require_root_install_dir(path, create=False):
@@ -472,12 +540,21 @@ def _normal_root(path, label):
     normalized = os.path.normpath(path)
     if normalized != path or path == "/":
         raise DeployError(f"{label} must be normalized and narrower than /")
-    if path == "/home" or path.startswith("/home/"):
-        raise DeployError("/home FIM is inaccessible under ProtectHome=true")
+    if path == "/home" or (path.startswith("/home/") and
+                            not _target_allowed(path, HOME_BIND_PATHS)):
+        raise DeployError("only exact standard home persistence paths are selectable")
+    if path == "/root" or (path.startswith("/root/") and
+                            not _target_allowed(path, HOME_BIND_PATHS)):
+        raise DeployError("only exact root persistence paths are selectable")
     if path == "/etc/mojosec" or path.startswith("/etc/mojosec/"):
         raise DeployError("MojoSec private state cannot be a FIM target")
     if path == "/var/lib/mojosec" or path.startswith("/var/lib/mojosec/"):
         raise DeployError("MojoSec private state cannot be a FIM target")
+    if path == "/run/mojosec" or path.startswith("/run/mojosec/"):
+        raise DeployError("MojoSec runtime state cannot be a FIM target")
+    if path == "/opt/api" or path.startswith("/opt/api/") or \
+            path == "/opt/www" or path.startswith("/opt/www/"):
+        raise DeployError("application release trees cannot be FIM targets")
     return path
 
 
@@ -734,6 +811,8 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         _ensure_dir(STATE_DIR, 0o700)
         _ensure_dir(ETC_DIR, 0o700)
         _ensure_dir(STATUS_DIR, 0o755)
+        if mode == "observe" and service_path == SERVICE_PATH:
+            _prepare_home_binds()
         _require_root_install_dir(os.path.dirname(service_path))
         _require_root_install_dir(os.path.dirname(nginx_path))
         _require_root_install_dir(os.path.dirname(receiver_snippet_path), create=True)
