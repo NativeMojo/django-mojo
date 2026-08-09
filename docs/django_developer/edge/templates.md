@@ -76,9 +76,13 @@ generations/<gen>/
   http.d/10_upstreams.conf  upstream edge_up_<pk> { server <target>; } blocks —
                             the ONLY place a literal host:port / socket appears
   conf.d/<vhost-pk>.conf    exactly two server blocks per vhost
+  staging/http.d/           listen-remapped copies of the two trees above —
+  staging/conf.d/           identical bytes except 443/80 become the staged
+                            ports; ONLY the pre-filter reads them
   certs/<cert-pk>/          fullchain.pem + privkey.pem, 0600
   www/<vhost-pk>/           web roots (release symlinks)
-  nginx.conf                the staging harness (pre-filter nginx -t only)
+  nginx.conf                the staging harness (pre-filter nginx -t only;
+                            includes staging/, never the real trees)
 ```
 
 `/etc/nginx/nginx.conf` on a node shrinks to a **provision-time bootstrap** —
@@ -119,10 +123,60 @@ Notes that bite:
   everywhere" but does not serve, check the node's bootstrap first.
 
 The staging harness (`nginx.conf` inside the generation) mirrors the
-bootstrap: main context + scratch paths + the same two directives + the same
-two includes, every path inside the generation so the staged `nginx -t` runs
-unprivileged. The authoritative check is still the real config after the
-swap — see README's install sequence.
+bootstrap: main context + scratch paths + the same two directives — but its
+two includes read the **`staging/`** copies, not the real trees. The staged
+`nginx -t` runs unprivileged, and nginx attempts `bind()` on every `listen`
+during `-t` (only `EADDRINUSE` is tolerated in test mode; the `EACCES` an
+unprivileged process gets for 443/80 on Linux is fatal) — so the staged
+copies remap every listen port to `EDGE_STAGED_HTTP_PORT` /
+`EDGE_STAGED_HTTPS_PORT` and change nothing else: `ssl` survives, so the
+staged certificates are still opened and validated. The authoritative check
+is still the real config, real ports included, after the swap — see README's
+install sequence.
+
+## Node prerequisites (1.6.0)
+
+What a node must provide before the edge plane can converge — everything
+below is provision-time (skeleton/`aws/` contract) work, not something this
+app writes:
+
+- **nginx ≥1.25.1.** The rendered 443 blocks carry `http2 on;`, which does
+  not exist below 1.25.1 — an older nginx fails every check at parse time
+  with `unknown directive "http2"`.
+- **Kernel IPv6 enabled.** Every vhost renders `[::]` listens. A node booted
+  with `ipv6.disable=1` fails both the staged and the root check with a
+  socket-family `[emerg]` that looks nothing like a config problem.
+- **The bootstrap includes.** `/etc/nginx/nginx.conf` must include
+  `current/http.d/*.conf` then `current/conf.d/*.conf` (the ~12-line form
+  above). Without them the node converges silently and serves nothing — the
+  failure mode described under "Notes that bite". **Keep both globs exactly
+  this shape — non-recursive.** `staging/` lives inside the directory
+  `current` points at; a broadened glob (`current/*/*.conf`) would make the
+  root nginx serve a full duplicate of every vhost on the staged ports, and
+  nothing would flag it — a different addr:port raises no
+  `conflicting server name` warning.
+- **The app user owns `EDGE_ROOT` and `EDGE_LOG_DIR`**, and everything the
+  installer writes lives under them: generations (including `staging/`),
+  certificate material, `installed.json`, the access/watch logs. Release
+  bundles under `EDGE_WWW_BASE` are app-written too.
+- **What the app user does NOT need** — and must not be given: write access
+  to `/var/log/nginx`, and the ability to bind 443/80. The staged check
+  binds only the two staged ports; the harness keeps every scratch path
+  inside the generation.
+- **Keep the staged ports unreachable from outside the node.** 61080/61443
+  are validation scratch, not a serving contract: the staged `-t` briefly
+  listens on them (never accepting a connection, gone in milliseconds).
+  No security-group or firewall rule should expose them.
+- **The two sudoers commands**, exactly and only: the argument-free root
+  `nginx -t` and `systemctl reload nginx` — the exact text and the reasoning
+  (including why the staged check must never get a sudo rule) are in
+  [README's privilege boundary](README.md#the-privilege-boundary--state-it-plainly).
+- **The nginx worker user can read what it serves.** Workers run as the
+  bootstrap's `user`; web roots resolve through
+  `EDGE_ROOT → generations/<gen>/www/<pk> → EDGE_WWW_BASE` releases, so that
+  chain must be traversable (`o+x`) and the release files readable by that
+  user. Certificate material does not need this: the root master process
+  reads keys at load time.
 
 ## Blocklists — data, log-first
 
@@ -229,4 +283,5 @@ the fleet goes quiet in the places dashboards watch. nginx's own
 See README's settings table for the full list; the template-plane knobs are
 `EDGE_ACME_WEBROOT`, `EDGE_LOG_DIR`, `EDGE_MIME_TYPES`,
 `EDGE_DJANGO_STATIC_ROOT`, `EDGE_PROXY_READ_TIMEOUT`,
-`EDGE_HTTP_KEEPALIVE_TIMEOUT`, `EDGE_HTTP_DEFAULT_SERVER`.
+`EDGE_HTTP_KEEPALIVE_TIMEOUT`, `EDGE_HTTP_DEFAULT_SERVER`,
+`EDGE_STAGED_HTTP_PORT`, `EDGE_STAGED_HTTPS_PORT`.

@@ -111,6 +111,49 @@ def default_server_enabled():
     return bool(settings.get_static("EDGE_HTTP_DEFAULT_SERVER", False))
 
 
+def _staged_port_value(name, default):
+    raw = settings.get_static(name, default)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        # The same named-refusal style as every other bad input here — a bare
+        # int() traceback would not say which setting to fix.
+        raise me.ValueException(
+            f"edge staged listen port is not an integer: {name}={raw!r}")
+
+
+def _staged_ports():
+    """The (http, https) ports the STAGED copies listen on.
+
+    Refused, not clamped: these are file-only settings (get_static), so a bad
+    value is an operator error worth stopping on. A port ≤1023 silently
+    reintroduces the unprivileged-bind EACCES failure the staged remap exists
+    to avoid, and equal ports collapse each vhost's 443/80 block pair onto one
+    addr:port — which surfaces as a baffling `conflicting server name`
+    failure instead of a named refusal. Defaults sit above Linux's default
+    ephemeral ceiling (60999), though a collision could not fail the check
+    anyway — `nginx -t` tolerates EADDRINUSE.
+    """
+    http = _staged_port_value("EDGE_STAGED_HTTP_PORT", 61080)
+    https = _staged_port_value("EDGE_STAGED_HTTPS_PORT", 61443)
+    for port in (http, https):
+        if not 1024 <= port <= 65535:
+            raise me.ValueException(
+                f"edge staged listen port out of range (1024-65535): {port}")
+    if http == https:
+        raise me.ValueException(
+            f"edge staged listen ports must differ, both are {http}")
+    return http, https
+
+
+def staged_http_port():
+    return _staged_ports()[0]
+
+
+def staged_https_port():
+    return _staged_ports()[1]
+
+
 def http_knobs():
     """Every resolved http-level knob, as one dict.
 
@@ -785,6 +828,60 @@ def render_upstreams(upstreams):
     return "\n".join(parts)
 
 
+def _staged_listen_map():
+    """Stripped real listen body -> its staged replacement.
+
+    EXHAUSTIVE over the bodies the builders emit: `_open` (443 pair),
+    `_port80_block` (80 pair), and the flag-gated default servers in
+    `render_http_base`. A listen line not in this map refuses the render —
+    see render_staged_variant.
+    """
+    http, https = _staged_ports()
+    entries = {}
+    for real, staged, params in (("443", https, " ssl"), ("80", http, "")):
+        for addr in ("", "[::]:"):
+            for suffix in ("", " default_server"):
+                entries[f"listen {addr}{real}{params}{suffix};"] = (
+                    f"listen {addr}{staged}{params}{suffix};")
+    return entries
+
+
+def render_staged_variant(text):
+    """The same rendered file with every listen port remapped unprivileged.
+
+    The staged `nginx -t` runs as the app user, and nginx DOES attempt
+    `bind()` on every listen during `-t` — only EADDRINUSE is tolerated in
+    test mode; EACCES on 443/80 is a fatal `[emerg]`, which froze fleet
+    convergence on the first standard node (item #1623). The staged copies
+    keep every byte identical except the listen ports, so the pre-filter
+    still validates the real certificate material, maps and upstreams while
+    binding only unprivileged ports. `ssl`, `default_server` and the address
+    family are preserved — stripping `listen` instead would drop the ssl
+    context and skip certificate validation, the pre-filter's chief value.
+
+    Fails CLOSED: a listen line the map does not know means a builder grew a
+    new listen shape without teaching the staged remap. Refusing here aborts
+    the install before anything swaps, same as every other render refusal.
+    """
+    remap = _staged_listen_map()
+    out = []
+    for line in text.split("\n"):
+        body = line.strip()
+        # First-token match, not startswith: `listen\t443;` must reach the
+        # refusal below, not slip through as a non-listen line.
+        tokens = body.split()
+        if not tokens or tokens[0] != "listen":
+            out.append(line)
+            continue
+        replacement = remap.get(body)
+        if replacement is None:
+            raise me.ValueException(
+                f"edge staged remap refused an unknown listen line: {line!r}")
+        indent = line[:len(line) - len(line.lstrip())]
+        out.append(indent + replacement)
+    return "\n".join(out)
+
+
 def render_nginx_harness(generation):
     """A minimal wrapper used ONLY by the staging `nginx -t` pre-filter.
 
@@ -792,9 +889,14 @@ def render_nginx_harness(generation):
     since the generation now carries its own http base (maps, log format,
     upstreams), the approximation is close: the harness contributes only the
     main context, the scratch paths, and the two directives the bootstrap
-    owns (`default_type`, `types_hash_max_size`). The authoritative check is
-    `nginx -t` against the REAL config after the swap — see
-    services/installer.py.
+    owns (`default_type`, `types_hash_max_size`). It includes the `staging/`
+    listen-remapped copies rather than the real trees: `nginx -t` attempts
+    `bind()` on every listen (EADDRINUSE tolerated in test mode, anything
+    else fatal), and the unprivileged check cannot bind 443/80. Certificate,
+    root and log paths in those copies are absolute into the real
+    generation, so the material is still what gets validated. The
+    authoritative check is `nginx -t` against the REAL config after the
+    swap — see services/installer.py.
     """
     gen = generation_dir(generation)
     return "\n".join([
@@ -805,6 +907,8 @@ def render_nginx_harness(generation):
         "# app-writable file is a root escalation via load_module). An app user",
         "# cannot write nginx's packaged prefix, so leaving these at their",
         "# defaults would fail the check for permissions rather than for config.",
+        "# The staging/ trees are listen-remapped copies of http.d/ and conf.d/:",
+        "# nginx -t binds every listen it parses, and 443/80 need root.",
         f"pid {gen}/nginx.pid;",
         f"error_log {gen}/error.log;",
         "events { worker_connections 64; }",
@@ -816,8 +920,8 @@ def render_nginx_harness(generation):
         f"    fastcgi_temp_path {gen}/tmp/fastcgi;",
         f"    uwsgi_temp_path {gen}/tmp/uwsgi;",
         f"    scgi_temp_path {gen}/tmp/scgi;",
-        f"    include {gen}/http.d/*.conf;",
-        f"    include {gen}/conf.d/*.conf;",
+        f"    include {gen}/staging/http.d/*.conf;",
+        f"    include {gen}/staging/conf.d/*.conf;",
         "}",
         "",
     ])

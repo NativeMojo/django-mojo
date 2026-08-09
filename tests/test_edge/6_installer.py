@@ -103,6 +103,24 @@ def _same_path(a, b):
     return os.path.realpath(a) == os.path.realpath(b)
 
 
+def _listen_ports(text):
+    """Every `listen` directive's port in `text`, as ints.
+
+    Parses the port TOKEN out of the address field — substring checks are a
+    trap here (`61443` contains `443`, `61080` contains `80`, and the
+    upstreams file legitimately carries `127.0.0.1:8000`).
+    """
+    ports = []
+    for line in text.splitlines():
+        tokens = line.strip().rstrip(";").split()
+        if not tokens or tokens[0] != "listen":
+            continue
+        address = tokens[1]
+        port = address.rsplit(":", 1)[-1] if ":" in address else address
+        ports.append(int(port))
+    return ports
+
+
 def _with_root(root, material=True):
     """Patch EDGE_ROOT and, optionally, readable certificate material.
 
@@ -475,6 +493,53 @@ def test_include_graph_staged(opts):
         assert os.path.isdir(render.log_dir()), \
             "EDGE_LOG_DIR was not created — the staged nginx -t would fail " \
             "opening the access log"
+
+        # The staged tree: a listen-remapped copy of every rendered file,
+        # because the unprivileged staged `nginx -t` DOES attempt bind() and
+        # EACCES on 443/80 is fatal (item 1623 — froze converge fleet-wide).
+        staged_base = os.path.join(current, "staging", "http.d", "00_base.conf")
+        staged_ups = os.path.join(
+            current, "staging", "http.d", "10_upstreams.conf")
+        assert os.path.exists(staged_base), \
+            "staging/http.d/00_base.conf was not staged — the staged nginx -t " \
+            "has nothing unprivileged to validate"
+        assert os.path.exists(staged_ups), \
+            "staging/http.d/10_upstreams.conf was not staged"
+
+        staged_conf_d = os.path.join(current, "staging", "conf.d")
+        assert os.path.isdir(staged_conf_d) and os.listdir(staged_conf_d), \
+            "staging/conf.d/ is empty — no vhost reaches the staged check"
+
+        staged_ports = []
+        for dirpath in (os.path.join(current, "staging", "http.d"),
+                        staged_conf_d):
+            for name in os.listdir(dirpath):
+                staged_ports += _listen_ports(
+                    open(os.path.join(dirpath, name)).read())
+        assert staged_ports, "the staged copies carry no listen directives"
+        privileged = [p for p in staged_ports if p < 1024]
+        assert not privileged, (
+            f"staged copies still listen on privileged ports {privileged} — "
+            "the unprivileged staged nginx -t would fail bind() with EACCES")
+        expected = {render.staged_http_port(), render.staged_https_port()}
+        assert set(staged_ports) == expected, (
+            f"staged listen ports {sorted(set(staged_ports))} are not the "
+            f"configured staged ports {sorted(expected)}")
+
+        # And the real conf.d must be untouched by the remap.
+        real_ports = []
+        for name in os.listdir(conf_d):
+            real_ports += _listen_ports(open(os.path.join(conf_d, name)).read())
+        assert set(real_ports) == {443, 80}, (
+            f"the REAL conf.d listen ports moved: {sorted(set(real_ports))} — "
+            "the remap belongs only in staging/")
+
+        harness = open(os.path.join(current, "nginx.conf")).read()
+        assert "/staging/http.d/*.conf" in harness, \
+            "the harness does not include staging/http.d — the staged check " \
+            "would still parse the privileged listens"
+        assert "/staging/conf.d/*.conf" in harness, \
+            "the harness does not include staging/conf.d"
     finally:
         _exit(patches, root)
 
@@ -604,6 +669,16 @@ def test_commands_are_constant(opts):
     assert "sudo" not in staged_argv, (
         "the staged nginx check runs under sudo against a file the app user "
         f"writes — that is root code execution via load_module: {staged_argv}")
+
+    # The staged default routes nginx's pre-config log to stderr (`-e stderr`),
+    # so the unprivileged check never emits the misleading "could not open
+    # error log file" alert for the root-owned compiled-in default path.
+    assert staged_argv[-2:] == ["-c", "/tmp/gen/nginx.conf"], (
+        f"the staged argv no longer ends with the config path: {staged_argv}")
+    assert "-e" in staged_argv and \
+        staged_argv[staged_argv.index("-e") + 1] == "stderr", (
+        "the staged argv lost `-e stderr` — every staged failure will again "
+        f"lead with the harmless default-error-log alert: {staged_argv}")
 
     for argv in (test_argv, reload_argv, staged_argv):
         for token in argv:

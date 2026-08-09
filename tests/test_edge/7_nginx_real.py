@@ -163,25 +163,38 @@ def test_real_nginx_accepts_every_kind(opts):
             # this on a node; this test writes files itself, so it does too.
             os.makedirs(render.log_dir(), exist_ok=True)
 
+            # Both trees, exactly as stage_generation writes them: the real
+            # files plus the staging/ listen-remapped copies the harness
+            # includes. nginx -t binds every listen it parses, so the staged
+            # copies are what make this check genuinely unprivileged-safe on
+            # Linux (macOS allows low-port binds unprivileged, which is how
+            # the original privileged-bind bug shipped — item 1623).
             for name, text in render.render_generation(vhosts, GENERATION).items():
-                path = os.path.join(gen_dir, name)
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, "w") as handle:
-                    handle.write(text)
+                for target, body in ((name, text),
+                                     (f"staging/{name}",
+                                      render.render_staged_variant(text))):
+                    path = os.path.join(gen_dir, target)
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, "w") as handle:
+                        handle.write(body)
             for vhost in vhosts:
                 os.makedirs(render.www_dir(GENERATION, vhost.pk), exist_ok=True)
 
-            # The PRODUCTION harness, byte-for-byte what a node feeds nginx.
-            # It is unprivileged-safe by construction (all scratch paths live
-            # inside the generation), so there is no test-only wrapper here —
-            # a wrapper would have meant this never validated the real thing.
+            # The PRODUCTION harness, byte-for-byte what a node feeds nginx
+            # for the staged pre-filter (the real trees' privileged listen
+            # lines are validated on-node by the post-swap root check). There
+            # is no test-only wrapper here — a wrapper would have meant this
+            # never validated the real thing.
             os.makedirs(os.path.join(gen_dir, "tmp"), exist_ok=True)
             harness_path = os.path.join(gen_dir, "nginx.conf")
             with open(harness_path, "w") as handle:
                 handle.write(render.render_nginx_harness(GENERATION))
 
+            # The installer's own staged argv (nginx -e stderr -t -c <path>),
+            # not a hand-built one — this run should be the node's run.
+            from mojo.apps.edge.services import installer
             result = subprocess.run(
-                [binary, "-t", "-c", harness_path],
+                installer._nginx_staged_test_argv(harness_path),
                 capture_output=True, text=True, timeout=60)
 
         output = f"{result.stdout}{result.stderr}"
