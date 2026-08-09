@@ -61,7 +61,11 @@ class MojoMiddleware:
             and "/fileman/upload/" in request.path
             and not request.path.rstrip("/").endswith("/initiate")
         )
-        if settings.LOGIT_REQUEST_BODY and not is_raw_file_upload:
+        is_mojosec_batch = (
+            request.method == "POST"
+            and request.path.rstrip("/") == "/api/incident/mojosec/batch"
+        )
+        if settings.LOGIT_REQUEST_BODY and not is_raw_file_upload and not is_mojosec_batch:
             request._raw_body = str(request.body)
         else:
             request._raw_body = None

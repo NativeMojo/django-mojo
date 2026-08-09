@@ -4,3 +4,4 @@ from .ticket import *
 from .ipset import *
 from .maestro_board import *
 from .maestro_webhook import *
+from .mojosec import *

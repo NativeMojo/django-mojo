@@ -248,15 +248,21 @@ class Event(models.Model, MojoModel):
         # Update the metadata with these values
         self.metadata.update(field_values)
 
-    def publish(self, use_catchall=True, dispatch_handlers=True):
+    def publish(self, use_catchall=True, dispatch_handlers=True,
+                allow_default_llm=True, exact_category=False):
         from mojo.apps.incident.models import RuleSet
         # Record metrics and find the RuleSet by category
         self.record_event_metrics()
-        # check by scope first
-        rule_set = RuleSet.check_by_category(self.scope, self)
-        if rule_set is None:
+        # Trusted receivers may request an exact, server-owned policy lookup.
+        # In that mode neither a broad scope rule nor the global catch-all may
+        # turn attacker-controlled evidence into an action.
+        if exact_category:
             rule_set = RuleSet.check_by_category(self.category, self)
-        if rule_set is None and use_catchall:
+        else:
+            rule_set = RuleSet.check_by_category(self.scope, self)
+            if rule_set is None:
+                rule_set = RuleSet.check_by_category(self.category, self)
+        if rule_set is None and use_catchall and not exact_category:
             rule_set = RuleSet.check_by_category("*", self)
 
         # Honor action=ignore from RuleSet metadata (accept both "ignore" and "ignore://")
@@ -282,7 +288,7 @@ class Event(models.Model, MojoModel):
             if trigger_window is None and rule_set.bundle_minutes and rule_set.bundle_minutes > 0:
                 trigger_window = rule_set.bundle_minutes
 
-        if rule_set or self.level >= INCIDENT_LEVEL_THRESHOLD:
+        if rule_set or (not exact_category and self.level >= INCIDENT_LEVEL_THRESHOLD):
             with transaction.atomic():
                 incident, created = self.get_or_create_incident(rule_set)
 
@@ -364,7 +370,7 @@ class Event(models.Model, MojoModel):
                                     rule_set.run_handler(self, incident)
                         except Exception:
                             logger.exception("Error during re-trigger check (incident=%s)", incident.pk)
-                elif created and LLM_API_KEY:
+                elif created and allow_default_llm and LLM_API_KEY:
                     # No rule matched but level exceeded threshold — default to LLM triage
                     try:
                         from mojo.apps import jobs
