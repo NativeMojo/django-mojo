@@ -20,7 +20,7 @@ from mojo.deploy.mojosec_nginx import (
 
 SERVICE = "mojosec.service"
 SERVICE_PATH = "/etc/systemd/system/mojosec.service"
-CONFIG_PATH = "/opt/api/var/mojosec.json"
+CONFIG_PATH = "/etc/mojosec/config.json"
 STATE_DIR = "/var/lib/mojosec"
 ETC_DIR = "/etc/mojosec"
 CREDENTIAL_PATH = "/etc/mojosec/credential"
@@ -43,7 +43,7 @@ Description=MojoSec host security sensor
 Documentation=https://django-mojo.readthedocs.io/
 After=network-online.target nginx.service
 Wants=network-online.target
-ConditionPathExists=/opt/api/var/mojosec.json
+ConditionPathExists=/etc/mojosec/config.json
 
 [Service]
 Type=simple
@@ -52,8 +52,8 @@ Group=root
 UMask=0077
 Environment=PYTHONUNBUFFERED=1
 WorkingDirectory=/
-ExecStartPre=/usr/bin/python3 -I -m mojo.mojosec --config /opt/api/var/mojosec.json check
-ExecStart=/usr/bin/python3 -I -m mojo.mojosec --config /opt/api/var/mojosec.json run
+ExecStartPre=/usr/bin/python3 -I -m mojo.mojosec --config /etc/mojosec/config.json check
+ExecStart=/usr/bin/python3 -I -m mojo.mojosec --config /etc/mojosec/config.json run
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
@@ -61,7 +61,7 @@ KillMode=mixed
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
-ProtectSystem=full
+ProtectSystem=strict
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
@@ -71,6 +71,9 @@ LockPersonality=true
 RestrictRealtime=true
 RestrictNamespaces=true
 SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_DAC_READ_SEARCH
 ReadWritePaths=/var/lib/mojosec /run/mojosec
 RuntimeDirectory=mojosec
 RuntimeDirectoryMode=0755
@@ -286,7 +289,8 @@ def _converge_nginx(enabled, log_path, proxy_cidrs, nginx_path,
         raise
 
 
-def _audit_config(path=CONFIG_PATH):
+def _audit_config(path=None):
+    path = path or CONFIG_PATH
     _lstat_regular(path, mode=0o600)
     from mojo.mojosec.config import load_config
     config = load_config(path, require_root=True)
@@ -294,6 +298,8 @@ def _audit_config(path=CONFIG_PATH):
         raise DeployError("MojoSec config must use the deployment state/credential paths")
     if config["status_path"] != STATUS_PATH:
         raise DeployError("MojoSec config must use the public deployment status path")
+    if config["expected_changes_path"] != EXPECTED_CHANGES_PATH:
+        raise DeployError("MojoSec config must use the fixed expected-change path")
     return config
 
 

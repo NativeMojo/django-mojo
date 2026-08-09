@@ -59,9 +59,12 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
     for expected in (
             "User=root", "WorkingDirectory=/", "python3 -I -m mojo.mojosec",
             "StateDirectoryMode=0700", "RuntimeDirectoryMode=0755",
-            "NoNewPrivileges=true", "ProtectKernelModules=true"):
+            "NoNewPrivileges=true", "ProtectKernelModules=true",
+            "ProtectSystem=strict",
+            "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+            "ConditionPathExists=/etc/mojosec/config.json"):
         th.assert_in(expected, unit, f"service is missing deployment contract: {expected}")
-    for forbidden in ("fail2ban", "iptables", "nft", "firewall", "/opt/api/var/deploy"):
+    for forbidden in ("fail2ban", "iptables", "nft", "firewall", "/opt/api/var"):
         th.assert_true(forbidden not in unit.lower(),
                        f"root service must not execute {forbidden!r}")
     rotation = deploy.LOGROTATE_TEXT
