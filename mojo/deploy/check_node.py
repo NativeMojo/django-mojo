@@ -580,6 +580,7 @@ def _audit_mojosec_unit(report, run, sudo, mode="observe"):
         "ProtectControlGroups", "RestrictSUIDSGID", "LockPersonality",
         "RestrictRealtime", "RestrictNamespaces", "RestrictAddressFamilies",
         "CapabilityBoundingSet", "AmbientCapabilities", "ReadWritePaths",
+        "BindReadOnlyPaths",
     )
     command = "systemctl show mojosec.service " + " ".join(
         f"--property={name}" for name in properties)
@@ -598,7 +599,7 @@ def _audit_mojosec_unit(report, run, sudo, mode="observe"):
         "WorkingDirectory": "/",
         "FragmentPath": "/etc/systemd/system/mojosec.service",
         "DropInPaths": "", "NoNewPrivileges": "yes", "PrivateTmp": "yes",
-        "ProtectHome": "yes", "ProtectSystem": "strict",
+        "ProtectHome": "tmpfs", "ProtectSystem": "strict",
         "ProtectKernelTunables": "yes", "ProtectKernelModules": "yes",
         "ProtectKernelLogs": "yes", "ProtectControlGroups": "yes",
         "RestrictSUIDSGID": "yes", "LockPersonality": "yes",
@@ -618,6 +619,13 @@ def _audit_mojosec_unit(report, run, sudo, mode="observe"):
     if set(found.get("ReadWritePaths", "").split()) != {
             "/var/lib/mojosec", "/run/mojosec"}:
         drift.append("ReadWritePaths=" + found.get("ReadWritePaths", "<missing>"))
+    from mojo.deploy.mojosec import HOME_BIND_PATHS
+    effective_binds = {
+        item.lstrip("-").split(":", 1)[0]
+        for item in found.get("BindReadOnlyPaths", "").split()
+    }
+    if effective_binds != set(HOME_BIND_PATHS):
+        drift.append("BindReadOnlyPaths=" + found.get("BindReadOnlyPaths", "<missing>"))
     try:
         environment = set(shlex.split(found.get("Environment", "")))
     except ValueError:
@@ -634,6 +642,21 @@ def _audit_mojosec_unit(report, run, sudo, mode="observe"):
     else:
         report.passed("mojosec", "effective systemd sandbox",
                       "no drop-ins; exact identity, filesystem, capability, and namespace limits")
+
+    if mode == "observe" and not drift:
+        quoted = " ".join(shlex.quote(path) for path in HOME_BIND_PATHS)
+        namespace = (
+            "p=$(systemctl show --property=MainPID --value mojosec.service); "
+            "test \"$p\" -gt 1 && nsenter -t \"$p\" -m -- /bin/sh -c " +
+            q("for x in " + quoted + "; do test -e \"$x\" || exit 1; done; "
+              "test ! -e /root/.cache")
+        )
+        if run(f"{sudo}/bin/sh -c {q(namespace)}")[0] == 0:
+            report.passed("mojosec", "home mount namespace",
+                          "exact persistence binds are visible and unrelated root home stays hidden")
+        else:
+            report.fail("mojosec", "home mount namespace drift",
+                        "effective MojoSec namespace did not preserve exact home isolation")
 
     analyze_rc, analyze_out, _ = run(
         "systemd-analyze security --no-pager mojosec.service 2>&1")
@@ -772,7 +795,8 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
             "assert os.path.getsize(path)<=32768;"
             "p=json.load(open(path));"
             "keys=('schema','version','sensor_id','state','updated_at',"
-            "'spooled_events','delivery_accepted','collectors','delivery','config');"
+            "'spooled_events','delivery_accepted','collectors','delivery','config',"
+            "'integrity');"
             "print(json.dumps({k:p.get(k) for k in keys},separators=(',',':')))"
         )
         command = f"{sudo}python3 -c {q(projection)}"
@@ -812,6 +836,27 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                             "missing or unhealthy core collectors: " + ", ".join(unhealthy))
             else:
                 report.passed("mojosec", "collector health", "journal and nginx are healthy")
+            integrity = status.get("integrity")
+            if integrity is not None:
+                identity = integrity.get("identity") if isinstance(integrity, dict) else None
+                tiers = integrity.get("tiers") if isinstance(integrity, dict) else None
+                healthy = (
+                    isinstance(identity, dict) and identity.get("name") and
+                    len(str(identity.get("digest", ""))) == 64 and
+                    integrity.get("active") is True and
+                    integrity.get("digest_drift") is False and
+                    isinstance(tiers, dict) and set(tiers) == {"fast", "slow", "rpm"} and
+                    all(item.get("initialized") and item.get("last_complete")
+                        for item in tiers.values())
+                )
+                if healthy:
+                    report.passed(
+                        "mojosec", "integrity profile",
+                        f"{identity['name']} v{identity.get('version')} {identity['digest'][:12]}")
+                else:
+                    report.fail(
+                        "mojosec", "integrity profile unhealthy",
+                        "profile digest, baseline, or fast/slow/RPM tier health is incomplete")
             spooled = status.get("spooled_events")
             if isinstance(spooled, int) and 0 <= spooled <= 10000:
                 report.passed("mojosec", "spool backlog", f"{spooled} pending event(s)")

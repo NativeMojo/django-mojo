@@ -47,6 +47,50 @@ def test_profile_activation_is_all_tier_atomic_and_keeps_rollback_state(opts):
         store.close()
 
 
+@th.django_unit_test()
+def test_fim_evidence_is_durable_before_v2_grace_annotation(opts):
+    import json
+
+    from mojo.mojosec.events import observation
+    from mojo.mojosec.store import Store
+
+    with tempfile.TemporaryDirectory() as root:
+        store = Store(root, "grace-test", AGGREGATION, DELIVERY)
+        path = "/etc/example.conf"
+        digest = "a" * 64
+        found = observation(
+            "fim.change", "high", "integrity change",
+            attributes={"path": path, "change": "modified", "kind": "file",
+                        "sha256": digest},
+            fingerprint_values=(path, digest), aggregate=False, recommendation="review")
+        store.ingest([found])
+        th.assert_eq(store.stats()["spooled_events"], 1,
+                     "an unmatched change must be durable immediately during annotation grace")
+        th.assert_eq(store.pending_batch(10, 65536), [],
+                     "unmatched FIM delivery should wait only for the short bounded grace")
+
+        manifest_path = os.path.join(root, "expected.json")
+        manifest = {
+            "schema": "mojosec.expected_changes", "version": 2,
+            "entries": [{
+                "path": path, "change": "modified", "sha256": digest,
+                "expires_at": "2099-01-01T00:10:00Z", "deployment_id": "deploy-1",
+                "operation_id": "deploy-1-render", "operation_kind": "rendered-config",
+                "completed_at": "2099-01-01T00:00:00Z",
+            }],
+        }
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle)
+        os.chmod(manifest_path, 0o600)
+        th.assert_eq(store.annotate_pending_fim(manifest_path), 1,
+                     "a completed exact operation may enrich already-durable evidence")
+        pending = store.pending_batch(10, 65536)
+        th.assert_eq(pending[0]["attributes"]["expected_change"]["operation_id"],
+                     "deploy-1-render",
+                     "grace enrichment must preserve bounded operation identity")
+        store.close()
+
+
 AGGREGATION = {
     "window_seconds": 60, "flush_count": 2, "max_aggregates": 100,
     "critical_reserve_aggregates": 10,

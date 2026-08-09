@@ -47,6 +47,7 @@ See `docs/django_developer/deploy/README.md`.
 
 import argparse
 import grp
+import hashlib
 import os
 import pwd
 import shutil
@@ -376,12 +377,26 @@ def timer_enabled(name):
 def plan(root, owner, cron_user, units_dir, systemd_dir, cron_path, dry_run):
     """Run (or, under dry_run, describe) all three actions. Returns the changes
     in the order they are applied."""
-    changes = sync_var_dirs(os.path.join(root, "var"), owner, dry_run)
-    unit_changes, timers = install_units(units_dir, systemd_dir, dry_run)
-    changes += unit_changes
-    changes += enable_timers(timers, bool(unit_changes), dry_run)
-    changes += write_cron(cron_path, root, cron_user, dry_run)
-    return changes
+    def mutate():
+        changes = sync_var_dirs(os.path.join(root, "var"), owner, dry_run)
+        unit_changes, timers = install_units(units_dir, systemd_dir, dry_run)
+        changes += unit_changes
+        changes += enable_timers(timers, bool(unit_changes), dry_run)
+        changes += write_cron(cron_path, root, cron_user, dry_run)
+        return changes
+
+    if dry_run or not os.path.exists("/etc/mojosec/config.json"):
+        return mutate()
+    names = sorted(name for name in os.listdir(units_dir)
+                   if name.endswith(UNIT_SUFFIXES)) if os.path.isdir(units_dir) else []
+    paths = [os.path.join(systemd_dir, name) for name in names] + [cron_path]
+    if (not paths or not all(path.startswith(("/etc/systemd/system/", "/etc/cron.d/"))
+                             for path in paths)):
+        return mutate()
+    identity = hashlib.sha256("\x00".join(paths).encode("utf-8")).hexdigest()[:24]
+    from mojo.deploy.mojosec_changes import run_trusted_change
+    return run_trusted_change(
+        "node-setup-" + identity, "rendered-node-config", paths, mutate)
 
 
 def main(argv):

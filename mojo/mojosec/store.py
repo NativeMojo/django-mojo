@@ -11,6 +11,7 @@ from .protocol import canonical_json, make_event
 
 
 SCHEMA_VERSION = 1
+ANNOTATION_GRACE_SECONDS = 120
 
 
 class StoreError(RuntimeError):
@@ -149,9 +150,15 @@ class Store:
             self._increment("dropped_capacity")
             self._increment(f"dropped_capacity_{event['severity']}")
             return False
+        grace = (
+            ANNOTATION_GRACE_SECONDS
+            if event.get("kind") == "fim.change" and
+            not event.get("attributes", {}).get("expected_change") else 0
+        )
         cursor = self.db.execute(
-            "INSERT OR IGNORE INTO events(id, payload, severity, created) VALUES(?, ?, ?, ?)",
-            (event["id"], canonical_json(event), event["severity"], now),
+            "INSERT OR IGNORE INTO events(id, payload, severity, created, next_attempt) "
+            "VALUES(?, ?, ?, ?, ?)",
+            (event["id"], canonical_json(event), event["severity"], now, now + grace),
         )
         return cursor.rowcount == 1
 
@@ -257,6 +264,50 @@ class Store:
         except Exception:
             self.db.execute("ROLLBACK")
             raise
+
+    def annotate_pending_fim(self, expected_changes_path, now=None):
+        """Enrich already-durable FIM evidence during its bounded delivery grace."""
+        from .expected_changes import ExpectedChangeError, annotation, load_manifest
+
+        try:
+            entries = load_manifest(expected_changes_path)
+        except ExpectedChangeError:
+            return 0
+        if not entries:
+            return 0
+        now = now if now is not None else time.time()
+        rows = self.db.execute(
+            "SELECT id, payload FROM events WHERE next_attempt > ? ORDER BY created LIMIT 4096",
+            (now,),
+        ).fetchall()
+        changed = 0
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            for row in rows:
+                event = json.loads(row["payload"])
+                if (event.get("kind") != "fim.change" or
+                        event.get("attributes", {}).get("expected_change")):
+                    continue
+                attributes = event["attributes"]
+                evidence = {"sha256": attributes.get("sha256")}
+                value = annotation(
+                    entries, attributes.get("path"), attributes.get("change"),
+                    evidence if attributes.get("change") == "deleted" else None,
+                    evidence if attributes.get("change") != "deleted" else None,
+                )
+                if value is None:
+                    continue
+                attributes["expected_change"] = value
+                self.db.execute(
+                    "UPDATE events SET payload = ?, next_attempt = ? WHERE id = ?",
+                    (canonical_json(event), now, row["id"]),
+                )
+                changed += 1
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+        return changed
 
     def pending_batch(self, max_events, max_bytes):
         rows = self.db.execute(

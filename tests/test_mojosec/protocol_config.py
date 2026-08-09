@@ -80,6 +80,20 @@ def test_receiver_projects_only_safe_expected_change_annotation(opts):
     poisoned["expected_change"] = {**attributes["expected_change"], "raw": "secret"}
     th.assert_eq(_expected_change_projection("fim.change", poisoned), None,
                  "extra sensor-controlled annotation fields must be dropped centrally")
+    v2 = {
+        "deployment_id": "deploy-20260808.1",
+        "expires_at": "2026-08-08T12:30:00Z",
+        "operation_id": "deploy-20260808.1-nginx",
+        "operation_kind": "rendered-config",
+        "completed_at": "2026-08-08T12:00:00Z",
+    }
+    th.assert_eq(
+        _expected_change_projection("fim.change", {"expected_change": v2}), v2,
+        "expected-change v2 operation identity must be additive on wire version 1")
+    invalid_v2 = dict(v2, completed_at="2026-08-08T13:00:00Z")
+    th.assert_eq(
+        _expected_change_projection("fim.change", {"expected_change": invalid_v2}), None,
+        "an operation completed after its expiry must never be projected as trusted")
 
 
 @th.django_unit_test()

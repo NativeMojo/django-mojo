@@ -6,7 +6,7 @@ import os
 import stat
 
 from ..events import observation
-from ..expected_changes import load_manifest, annotation
+from ..expected_changes import ExpectedChangeError, load_manifest, annotation
 from ..profiles import PRIVATE_TREES
 from ..protocol import canonical_json
 
@@ -260,7 +260,12 @@ class FimCollector:
 
     def diff(self, baseline, scan):
         observations = []
-        expected = load_manifest(self.expected_changes_path)
+        manifest_error = ""
+        try:
+            expected = load_manifest(self.expected_changes_path)
+        except ExpectedChangeError as err:
+            expected = []
+            manifest_error = str(err)[:256]
         current = scan["snapshot"]
         paths = set(current) | (set(baseline) if scan["complete"] else set())
         for path in sorted(paths):
@@ -298,6 +303,14 @@ class FimCollector:
                 attributes={"profile": self.profile, "tier": self.tier,
                             "entries": len(current)},
                 fingerprint_values=(self.profile, self.tier), aggregate=False,
+                recommendation="review",
+            ))
+        if manifest_error:
+            observations.append(observation(
+                "fim.expected_change_error", "high",
+                "Expected-change evidence was malformed; changes remain unexplained",
+                attributes={"tier": self.tier, "error": manifest_error},
+                fingerprint_values=(self.tier, manifest_error), aggregate=False,
                 recommendation="review",
             ))
         return observations

@@ -13,6 +13,7 @@ The modules:
     check_node     read-only audit of ONE node against the deploy contract
     jobman         start/stop/status for the foreground job engine + scheduler
     node_setup     converge var/ ownership, systemd units, and the jobs cron
+    mojosec_changes exact-path trusted-change lifecycle for host mutations
 
 Plus the package entry `python3 -m mojo.deploy` (see `__main__.py`):
 
