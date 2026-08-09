@@ -100,4 +100,3 @@ def test_cli_help_imports_without_django_settings(opts):
                  f"MojoSec CLI must work before Django settings exist: {done.stderr}")
     th.assert_in("run", done.stdout,
                  f"MojoSec CLI help must expose its service command: {done.stdout}")
-

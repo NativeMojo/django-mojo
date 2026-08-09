@@ -150,4 +150,3 @@ central receiver must authenticate the installation, revalidate every bounded
 field, deduplicate IDs, map event kinds to server-owned severity/category
 policy, and allow action only through explicit central rules. No MojoSec host
 code invokes the firewall or incident database directly.
-

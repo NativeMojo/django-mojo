@@ -47,4 +47,3 @@ class JournalCollector:
             if detected:
                 observations.append(detected)
         return {"observations": observations, "cursor": next_cursor, "malformed": malformed}
-

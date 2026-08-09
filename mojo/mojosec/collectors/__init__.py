@@ -5,4 +5,3 @@ from .journal import JournalCollector
 from .nginx import NginxCollector
 
 __all__ = ["FimCollector", "JournalCollector", "NginxCollector"]
-

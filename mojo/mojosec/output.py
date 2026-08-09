@@ -45,4 +45,3 @@ def read_status(path):
     if not isinstance(value, dict):
         raise ValueError("status file must contain a JSON object")
     return value
-
