@@ -18,7 +18,6 @@ import os
 import re
 
 from mojo import errors as me
-from mojo.helpers import logit
 from mojo.helpers.settings import settings
 
 
@@ -141,49 +140,6 @@ def validate_server_name(server_name):
         if not LABEL_RE.match(part):
             raise me.ValueException(
                 f"{server_name} is not a valid server name")
-    return server_name
-
-
-def reserved_server_names():
-    """Names no vhost may ever claim — the API's own hostnames.
-
-    Union of Django's ALLOWED_HOSTS (concrete entries only) and the explicit
-    EDGE_RESERVED_SERVER_NAMES setting. Returns None to mean "this deployment
-    cannot name itself", which callers MUST treat as fail-closed.
-    """
-    from django.conf import settings as django_settings
-
-    explicit = settings.get("EDGE_RESERVED_SERVER_NAMES", [], kind="list") or []
-    allowed = [
-        h.lower().lstrip(".") for h in getattr(django_settings, "ALLOWED_HOSTS", [])
-        if h and h not in ("*",) and not h.startswith(".")
-    ]
-    names = {n.lower() for n in list(explicit) + allowed if n}
-    if not names:
-        return None
-    return names
-
-
-def validate_not_reserved(server_name):
-    """Refuse a name that shadows the API itself.
-
-    **Fail closed.** A deployment whose ALLOWED_HOSTS is `["*"]` (or empty) and
-    which has not set EDGE_RESERVED_SERVER_NAMES cannot say which name is its
-    own — so it cannot protect it, and allowing every name IS the shadowing
-    attack. Refuse rather than silently permit, and say what to configure.
-    """
-    reserved = reserved_server_names()
-    if reserved is None:
-        logit.error(
-            "edge: refusing to enable a vhost — this deployment cannot name its "
-            "own hostname. Set EDGE_RESERVED_SERVER_NAMES (or a concrete "
-            "ALLOWED_HOSTS) so a tenant vhost cannot shadow the API.")
-        raise me.ValueException(
-            "This deployment has not declared its own hostnames "
-            "(EDGE_RESERVED_SERVER_NAMES); refusing to enable a vhost")
-    if server_name.lower() in reserved:
-        raise me.ValueException(
-            f"{server_name} is reserved by this deployment")
     return server_name
 
 
@@ -717,33 +673,16 @@ def validate_vhost(vhost):
     if not vhost.domain_id:
         raise me.ValueException("a vhost requires a domain")
 
-    # The house-only reserved-name override. Refused outright on a tenant
-    # domain — this flag suspends the shadowing defence for one row, and only
-    # the platform may do that, only for its own names.
-    if vhost.claims_reserved and vhost.domain.group_id is not None:
-        raise me.ValueException(
-            "claims_reserved applies to house-domain vhosts only")
-
     server_name = server_name_for(vhost.domain.name, vhost.label or "")
     # Checked unconditionally, enabled or not: an unvalidatable name is a
     # broken row whichever way its flag is set, and storing one would leave a
     # landmine for whoever enables it later.
     validate_server_name(server_name)
 
-    # The reserved-name and certificate-coverage checks gate ENABLING. A
-    # disabled row is inert — it renders nothing — and refusing to store one
-    # would make a vhost impossible to park while its certificate is reissued.
+    # The certificate-coverage check gates ENABLING. A disabled row is inert
+    # — it renders nothing — and refusing to store one would make a vhost
+    # impossible to park while its certificate is reissued.
     if vhost.is_enabled:
-        if vhost.claims_reserved:
-            # The set must still be DECLARED — a deployment that cannot name
-            # itself cannot supervise a claim on its own names either. Only
-            # the membership check is skipped, for exactly this row.
-            if reserved_server_names() is None:
-                raise me.ValueException(
-                    "This deployment has not declared its own hostnames "
-                    "(EDGE_RESERVED_SERVER_NAMES); refusing to enable a vhost")
-        else:
-            validate_not_reserved(server_name)
         validate_certificate_covers(
             vhost.certificate, vhost.domain_id, server_name)
     return vhost

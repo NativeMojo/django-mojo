@@ -46,10 +46,10 @@ without touching `current` at all.
 **`nginx -t` does NOT catch server_name collisions.** A duplicate is a
 *warning* — `conflicting server name "x" on 0.0.0.0:443, ignored` — and nginx
 still exits 0, having silently dropped one block. The platform's own API server
-block also lives in the real config, not in the generated set, so the shadowing
-attack is invisible to the harness. The defences that work are the Phase A
-enabled-uniqueness constraint and `validators.validate_not_reserved`; the
-stderr scan here is a third net, not the first.
+block also lives in the real config, not in the generated set, so a collision
+with it is invisible to the harness. The two defences that work are the Phase A
+enabled-uniqueness constraint (row vs row, in the database) and the
+`conflicting server name` stderr scan below (row vs a hand-written block).
 
 **One tenant cannot freeze the fleet.** Certificate material can be unreadable
 for reasons unrelated to the row (KMS down — `KSMSecrets` returns an empty

@@ -49,38 +49,6 @@ def on_vhost(request, pk=None):
     return Vhost.on_rest_request(request, pk)
 
 
-@md.POST('vhost/claim_reserved')
-@md.requires_params("vhost")
-@md.custom_security("require_platform_admin gate in body")
-def on_vhost_claim_reserved(request):
-    """Set (or release) the reserved-name house override on one vhost.
-
-    `claims_reserved` suspends `validate_not_reserved` for exactly one row —
-    the mechanism that lets the platform serve its OWN reserved hostnames
-    through the edge instead of a hand-managed file. It is in NO_SAVE_FIELDS,
-    so this action is the only writer.
-
-    The gate runs FIRST, like `upstream/declare`: the caller supplied the
-    vhost id themselves, so there is no classification oracle to protect,
-    and a caller who may not claim should learn that before anything is
-    loaded. The model save then re-checks the substance: the vhost must sit
-    on a HOUSE domain, and the deployment must have DECLARED its reserved
-    set — the override never turns fail-closed into fail-open.
-    """
-    require_platform_admin(request, "Claiming a reserved server name")
-    vhost = Vhost.get_instance_or_404(request.DATA.get("vhost"))
-    release = request.DATA.get("release", False) in (True, "true", "True", 1, "1")
-    vhost.claims_reserved = not release
-    # save() -> validate_vhost enforces house-domain-only and the
-    # declared-set requirement; a refusal leaves the flag untouched in the DB.
-    vhost.save()
-    action = "released" if release else "claimed"
-    vhost.log(
-        f"Reserved-name override {action} for {vhost.server_name}",
-        "edge:claim_reserved")
-    return vhost.on_rest_get(request)
-
-
 def _guard_house_domain_create(request):
     """CREATING a vhost on a house domain is also platform-only.
 

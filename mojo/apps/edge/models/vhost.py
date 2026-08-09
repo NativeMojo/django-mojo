@@ -95,12 +95,6 @@ class Vhost(models.Model, MojoModel):
         help_text="redirect only: target HOST (FQDN, validated as a server "
                   "name — never a free URL).")
 
-    claims_reserved = models.BooleanField(
-        default=False,
-        help_text="Platform-only override letting a HOUSE vhost claim a name "
-                  "on the reserved list. Set via POST edge/vhost/claim_reserved, "
-                  "never writable over plain REST.")
-
     is_enabled = models.BooleanField(default=True, db_index=True)
 
     class Meta:
@@ -152,11 +146,7 @@ class Vhost(models.Model, MojoModel):
         # CREATE path too (mojo/models/rest.py), so pinning it would make a
         # vhost impossible to create over REST at all. Immutability after
         # create is enforced in on_rest_pre_save below instead.
-        #
-        # `claims_reserved` IS here: it suspends the reserved-name defence for
-        # a row, so it moves only through the platform-gated claim_reserved
-        # action, never a plain field write.
-        NO_SAVE_FIELDS = ["id", "pk", "created", "uuid", "claims_reserved"]
+        NO_SAVE_FIELDS = ["id", "pk", "created", "uuid"]
         GRAPHS = {
             "basic": {
                 "fields": ["id", "kind", "is_enabled"],
@@ -166,8 +156,7 @@ class Vhost(models.Model, MojoModel):
                 "fields": [
                     "id", "created", "modified", "label", "kind",
                     "pool", "spa", "body_size_mb", "quiet_paths",
-                    "serve_static", "redirect_to", "claims_reserved",
-                    "is_enabled",
+                    "serve_static", "redirect_to", "is_enabled",
                 ],
                 "extra": ["server_name"],
                 "graphs": {
