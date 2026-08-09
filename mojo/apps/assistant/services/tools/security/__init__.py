@@ -4,6 +4,7 @@ from . import events  # noqa: F401
 from . import tickets  # noqa: F401
 from . import rules  # noqa: F401
 from . import ips  # noqa: F401
+from . import mojosec_learning  # noqa: F401
 
 # Re-export handler functions so existing imports from the package path still work.
 from .incidents import (  # noqa: F401

@@ -289,6 +289,55 @@ Published receipt rows are retained for `MOJOSEC_RECEIPT_RETENTION_DAYS`
 (default 45, minimum 7) and pruned daily. Pending publication and incomplete
 handler-outbox receipts are never removed by that retention job.
 
+## Human feedback and offline policy evaluation
+
+MojoSec's learning loop is an operator-only, infrastructure-global control
+plane. Every learning endpoint uses global `view_security` or
+`manage_security`/`security` authorization and rejects API keys, including
+keys that otherwise carry those permissions. Feedback is never tenant-owned:
+it has no `group`, and sensor identity is snapshotted from the protected
+`MojoSecReceipt.sensor_id` and installation API-key ID rather than an Event
+group or a payload claim.
+
+`MojoSecDetectorFeedback` is append-only. A disposition is exactly one of
+`confirmed_threat`, `expected_administrative`, `benign_noise`,
+`operational_failure`, `unknown`, or `missed_incomplete`. Exactly one subject
+is required: a retained receipt, a MojoSec-backed incident, or a manual
+exemplar containing only allowlisted `kind`, `count`, and `severity` scalars.
+Corrections append a row through `reverses`; they never update the prior row.
+The actor, subject, detector/category/level, enrolled sensor and policy-revision
+digest are scalar snapshots. Nullable actor/receipt/incident links may later be
+pruned without losing that audit record. Notes are untrusted text capped at
+1,000 characters and the feedback model, notes, and manual evidence are denied
+to generic AI/model-query tools.
+
+`MojoSecPolicyProposal` is a separate immutable revision chain. Its only states
+are `draft`, `shadow`, and `rejected`; there is intentionally no active state.
+Content uses `mojosec.policy-proposal.v1` and accepts at most 24 known detector
+kinds with fixed `flag`/`ignore`, integer count, and enumerated severity
+predicates. Extra keys are rejected, so proposal content cannot carry code,
+regex, URLs, jobs, handlers, or actions. It never becomes a `RuleSet`, and
+manually authored live RuleSet/regex behavior is unchanged. The admin
+assistant exposes only proposal creation; it cannot create feedback, run a
+replay, shadow live traffic, or activate policy. Existing incident-triage tools
+are unchanged.
+
+Replay and shadow are explicit offline operations. The operator must supply a
+non-empty, duplicate-free set of at most 100 retained receipt IDs. IDs are
+evaluated in canonical ascending order using only their stored
+`replay_features_v1`; no Event properties, network calls, LLMs, jobs, handlers,
+incidents, alerts, or bans are involved. Shadow additionally requires a
+proposal revision already labelled `shadow`; it does not attach an evaluator
+to live ingestion. The database retains only aggregate per-kind metrics and
+sample/result digests, never per-receipt decisions or copied evidence.
+`MOJOSEC_LEARNING_EVALUATION_RETENTION_DAYS` controls these summaries (default
+90, clamped to 30–3,650 days); human feedback and proposal revisions remain
+audit history.
+
+Detector metrics scan at most 1,000 receipt and current-feedback rows from an
+indexed time window. They report receipt/occurrence and disposition counts only;
+they make no fleet coverage, liveness, or sensor-health claim.
+
 The receiver should return one result per event using the strict acknowledgement
 schema (a `reason` string is optional):
 

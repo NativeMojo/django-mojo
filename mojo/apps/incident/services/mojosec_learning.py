@@ -7,7 +7,7 @@ from django.db import transaction
 
 from mojo.helpers import dates
 from mojo.helpers.settings import settings
-from mojo.apps.incident.services.mojosec import KIND_POLICY
+from mojo.apps.incident.services.mojosec import KIND_POLICY, UNKNOWN_KIND_POLICY
 
 
 POLICY_SCHEMA = "mojosec.policy-proposal.v1"
@@ -19,7 +19,7 @@ MAX_METRIC_ROWS = 1000
 MAX_NOTE = 1000
 MAX_SUMMARY = 500
 ALLOWED_KINDS = frozenset(KIND_POLICY)
-ALLOWED_SEVERITIES = ("low", "medium", "high", "critical")
+ALLOWED_SEVERITIES = ("info", "warning", "high", "critical")
 SEVERITY_RANK = {value: index for index, value in enumerate(ALLOWED_SEVERITIES)}
 ALLOWED_DECISIONS = ("flag", "ignore")
 
@@ -135,12 +135,16 @@ def validate_manual_exemplar(value):
 def _receipt_snapshot(receipt):
     features = receipt.replay_features if isinstance(receipt.replay_features, dict) else {}
     event_features = features.get("event") if isinstance(features.get("event"), dict) else {}
-    event = receipt.event
+    kind = str(event_features.get("kind") or "")[:64]
+    if not kind:
+        raise MojoSecLearningError("receipt has no retained detector kind")
+    policy = KIND_POLICY.get(kind, UNKNOWN_KIND_POLICY)
     return {
         "installation_key_id_snapshot": receipt.api_key_id,
-        "detector_kind": str(event_features.get("kind") or "")[:64],
-        "detector_category": str(getattr(event, "category", "") or "")[:124],
-        "detector_level": max(0, min(15, int(getattr(event, "level", 0) or 0))),
+        "detector_kind": kind,
+        "detector_category": str(
+            policy.get("category", f"mojosec.{kind}"))[:124],
+        "detector_level": policy["level"],
         "sensor_id": receipt.sensor_id,
         "sensor_policy_revision_sha256": hashlib.sha256(
             receipt.sensor_policy_revision.encode("utf-8")).hexdigest()
@@ -152,8 +156,7 @@ def _receipt_snapshot(receipt):
 def _incident_snapshot(incident):
     from mojo.apps.incident.models import MojoSecReceipt
 
-    receipt = MojoSecReceipt.objects.filter(incident=incident).select_related("event").order_by(
-        "id").first()
+    receipt = MojoSecReceipt.objects.filter(incident=incident).order_by("id").first()
     if receipt is None:
         raise MojoSecLearningError("incident is not backed by MojoSec receipt evidence")
     return _receipt_snapshot(receipt)
@@ -187,16 +190,42 @@ def create_feedback(author, disposition, receipt_id=None, incident_id=None,
         raise MojoSecLearningError("disposition is not allowlisted")
     note = _bounded_text(note, "note", MAX_NOTE)
     subjects = sum(value is not None for value in (receipt_id, incident_id, manual_exemplar))
-    if subjects != 1:
+    if subjects != 1 and not (reverses_id is not None and subjects == 0):
         raise MojoSecLearningError(
-            "exactly one of receipt_id, incident_id, or manual_exemplar is required")
+            "exactly one subject is required, unless a reversal inherits its prior subject")
 
     with transaction.atomic():
+        reverses = None
+        if reverses_id is not None:
+            reverses = MojoSecDetectorFeedback.objects.select_for_update().get(
+                pk=_bounded_int(reverses_id, "reverses_id", 1, 2 ** 63 - 1))
+            if hasattr(reverses, "reversed_by"):
+                raise MojoSecLearningError("feedback has already been reversed")
+            if not note:
+                raise MojoSecLearningError("a reversal requires a bounded note")
         receipt = None
         incident = None
         manual = {}
-        if receipt_id is not None:
-            receipt = MojoSecReceipt.objects.select_for_update().select_related("event").get(
+        if subjects == 0:
+            receipt = reverses.receipt
+            incident = reverses.incident
+            manual = dict(reverses.manual_exemplar or {})
+            snapshot = {
+                "installation_key_id_snapshot": reverses.installation_key_id_snapshot,
+                "detector_kind": reverses.detector_kind,
+                "detector_category": reverses.detector_category,
+                "detector_level": reverses.detector_level,
+                "sensor_id": reverses.sensor_id,
+                "sensor_policy_revision_sha256": reverses.sensor_policy_revision_sha256,
+                "observed_count": reverses.observed_count,
+            }
+            subject_key = reverses.subject_key
+            subject_type = reverses.subject_type
+            subject_id_snapshot = reverses.subject_id_snapshot
+        elif receipt_id is not None:
+            # Event is nullable; PostgreSQL refuses FOR UPDATE on that outer
+            # joined side, so lock the receipt alone and resolve Event after.
+            receipt = MojoSecReceipt.objects.select_for_update().get(
                 pk=_bounded_int(receipt_id, "receipt_id", 1, 2 ** 63 - 1))
             snapshot = _receipt_snapshot(receipt)
         elif incident_id is not None:
@@ -215,18 +244,12 @@ def create_feedback(author, disposition, receipt_id=None, incident_id=None,
                 "sensor_policy_revision_sha256": "",
                 "observed_count": manual["count"],
             }
-        subject_key = _subject_key(receipt, incident, manual)
-        subject_type, subject_id_snapshot = _subject_snapshot(receipt, incident, manual)
-        reverses = None
-        if reverses_id is not None:
-            reverses = MojoSecDetectorFeedback.objects.select_for_update().get(
-                pk=_bounded_int(reverses_id, "reverses_id", 1, 2 ** 63 - 1))
+        if subjects:
+            subject_key = _subject_key(receipt, incident, manual)
+            subject_type, subject_id_snapshot = _subject_snapshot(receipt, incident, manual)
+        if reverses is not None:
             if reverses.subject_key != subject_key:
                 raise MojoSecLearningError("a reversal must keep the same subject")
-            if hasattr(reverses, "reversed_by"):
-                raise MojoSecLearningError("feedback has already been reversed")
-            if not note:
-                raise MojoSecLearningError("a reversal requires a bounded note")
             snapshot = {
                 "installation_key_id_snapshot": reverses.installation_key_id_snapshot,
                 "detector_kind": reverses.detector_kind,
@@ -268,18 +291,18 @@ def create_policy_proposal(author, content, summary="", status="draft", supersed
                 raise MojoSecLearningError("a rejected proposal cannot be revised")
             if hasattr(previous, "superseded_by"):
                 raise MojoSecLearningError("proposal revision has already been superseded")
-        return MojoSecPolicyProposal.objects.create(
-            created_by=author,
-            lineage_id=previous.lineage_id if previous else None,
-            revision=previous.revision + 1 if previous else 1,
-            supersedes=previous,
-            status=status,
-            summary=summary,
-            content=normalized,
-            content_digest=_digest(normalized),
-        ) if previous else MojoSecPolicyProposal.objects.create(
-            created_by=author, revision=1, status=status, summary=summary,
-            content=normalized, content_digest=_digest(normalized))
+        values = {
+            "created_by": author,
+            "revision": previous.revision + 1 if previous else 1,
+            "supersedes": previous,
+            "status": status,
+            "summary": summary,
+            "content": normalized,
+            "content_digest": _digest(normalized),
+        }
+        if previous:
+            values["lineage_id"] = previous.lineage_id
+        return MojoSecPolicyProposal.objects.create(**values)
 
 
 def _feature_projection(replay_features):
