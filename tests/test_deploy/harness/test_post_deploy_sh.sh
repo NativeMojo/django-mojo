@@ -138,11 +138,17 @@ EOF
 #!/bin/bash
 echo "CMD python3 \$*" >> "\$CALLLOG"
 case "\$*" in
+    *"sys.version_info >= (3,11)"*)
+        [ -f "\$STUBCTL/mojosec.version.exit" ] && exit "\$(cat "\$STUBCTL/mojosec.version.exit")"
+        exit 0
+        ;;
     *"find_spec(\"mojo.deploy.mojosec\")"*)
+        echo "MOJOSEC_CWD \$PWD" >> "\$CALLLOG"
         [ -f "\$STUBCTL/mojosec.preflight.exit" ] && exit "\$(cat "\$STUBCTL/mojosec.preflight.exit")"
         exit 0
         ;;
-    "-I -m mojo.deploy.mojosec converge"*)
+    "-E -P -m mojo.deploy.mojosec converge"*|"-E -m mojo.deploy.mojosec converge"*)
+        echo "MOJOSEC_CWD \$PWD" >> "\$CALLLOG"
         [ -f "\$STUBCTL/mojosec.converge.exit" ] && exit "\$(cat "\$STUBCTL/mojosec.converge.exit")"
         exit 0
         ;;
@@ -162,6 +168,7 @@ run_post_deploy() { # args...
     ( cd "$TMP" && PROJ_PATH="$PROJ" NGINX_ETC="$TMP/nginx_etc" \
         SYSTEMD_ETC="$TMP/systemd_etc" CRON_ETC="$TMP/cron_etc" \
         LOGROTATE_ETC="$TMP/logrotate_etc" PATH="$STUB:$PATH" \
+        MOJOSEC_PYTHON=python3 \
         bash "$PROJ/aws/post_deploy.sh" "$@" )
 }
 
@@ -172,6 +179,7 @@ run_post_deploy_env() { # VAR=val ... -- args...
     ( cd "$TMP" && env "${envs[@]}" PROJ_PATH="$PROJ" NGINX_ETC="$TMP/nginx_etc" \
         SYSTEMD_ETC="$TMP/systemd_etc" CRON_ETC="$TMP/cron_etc" \
         LOGROTATE_ETC="$TMP/logrotate_etc" PATH="$STUB:$PATH" \
+        MOJOSEC_PYTHON=python3 \
         bash "$PROJ/aws/post_deploy.sh" "$@" )
 }
 
@@ -240,8 +248,10 @@ assert_has "$TMP/cron_etc/3_mojo_jobs" "ec2-user" "default APP_USER renders into
 assert_in_log "CMD systemctl enable --now config-sync.timer" "shipped timer enabled"
 assert_in_log "CMD systemctl enable --now project-extra.timer" "project extra timer enabled"
 assert_in_log "CMD chown -R ec2-user:www" "var/logs ownership pass uses the default users"
-assert_in_log "CMD python3 -I -m mojo.deploy.mojosec converge --mode enrolled --criticality enrolled" \
+assert_in_log "CMD python3 -E -P -m mojo.deploy.mojosec converge --mode enrolled --criticality enrolled" \
     "ordinary deploys preserve the root-enrolled MojoSec lifecycle"
+assert_in_log "MOJOSEC_CWD /" \
+    "MojoSec preflight and convergence discard the app-writable cwd"
 assert_file "$PROJ/var/deploy/post_deploy.sh" "self-snapshot present after success"
 if cmp -s "$PROJ/aws/post_deploy.sh" "$PROJ/var/deploy/post_deploy.sh"; then
     ok "self-snapshot is byte-identical to the executing copy"
@@ -276,7 +286,7 @@ echo "post_deploy.sh: MojoSec mode and criticality are explicit"
 setup_env
 run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" -- >/dev/null 2>&1
 assert_eq "$?" 0 "explicit MojoSec off run exits 0"
-assert_in_log "CMD python3 -I -m mojo.deploy.mojosec converge --mode off --criticality required" \
+assert_in_log "CMD python3 -E -P -m mojo.deploy.mojosec converge --mode off --criticality required" \
     "off/required reaches the exact package lifecycle command"
 
 echo "post_deploy.sh: MojoSec absence is distinct from a converge safety failure"
@@ -302,8 +312,24 @@ run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" -- 
     > "$OUT" 2>&1
 assert_eq "$?" 0 "true pre-feature module absence performs exact off cleanup"
 assert_has "$OUT" "module absent" "true absence is logged as downgrade cleanup"
-assert_not_in_log "CMD python3 -I -m mojo.deploy.mojosec converge" \
+assert_not_in_log "CMD python3 -E -P -m mojo.deploy.mojosec converge" \
     "absent module is never mistaken for a runnable converge"
+
+echo "post_deploy.sh: legacy Python can retire/off but cannot activate observe"
+setup_env
+echo "1" > "$CTL/mojosec.version.exit"
+echo "3" > "$CTL/mojosec.preflight.exit"
+run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" -- \
+    > "$OUT" 2>&1
+assert_eq "$?" 0 "Python 3.10 module-absent legacy node still performs off cleanup"
+assert_not_in_log "CMD python3 -E -P" "legacy interpreter is never passed unsupported -P"
+
+setup_env
+echo "1" > "$CTL/mojosec.version.exit"
+run_post_deploy > "$OUT" 2>&1
+assert_eq "$?" 0 "Python 3.10 package-present unenrolled node can converge enrolled-off"
+assert_in_log "CMD python3 -E -m mojo.deploy.mojosec converge --mode enrolled --criticality enrolled" \
+    "legacy enrolled-off convergence uses -E from root-owned cwd without unsupported -P"
 
 setup_env
 printf '# active old graph\n# MojoSec exact receiver cap\ninclude /etc/nginx/snippets/mojosec_receiver.conf;\n' \

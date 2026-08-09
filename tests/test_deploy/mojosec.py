@@ -2,6 +2,10 @@
 
 import io
 import json
+import os
+import subprocess
+import sys
+import tempfile
 from unittest import mock
 
 from testit import helpers as th
@@ -136,7 +140,8 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
 
     unit = deploy.UNIT_TEXT
     for expected in (
-            "User=root", "WorkingDirectory=/", "python3 -I -m mojo.mojosec",
+            "User=root", "WorkingDirectory=/", "python3 -E -P -m mojo.mojosec",
+            "Environment=PYTHONHOME=", "Environment=PYTHONPATH=",
             "StateDirectoryMode=0700", "RuntimeDirectoryMode=0755",
             "NoNewPrivileges=true", "ProtectKernelModules=true",
             "ProtectSystem=strict",
@@ -146,11 +151,50 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
     for forbidden in ("fail2ban", "iptables", "nft", "firewall", "/opt/api/var"):
         th.assert_true(forbidden not in unit.lower(),
                        f"root service must not execute {forbidden!r}")
+    th.assert_true(" -I " not in unit and " -s " not in unit,
+                   "AL2023 root-pip packages disappear under -I/-s")
     rotation = deploy.LOGROTATE_TEXT
     for expected in ("daily", "maxsize 50M", "rotate 14", "create 0640 root root",
                      "systemctl kill -s USR1 nginx.service"):
         th.assert_in(expected, rotation,
                      f"nginx security-log rotation is missing {expected!r}")
+
+
+@th.django_unit_test()
+def test_safe_path_launcher_retains_system_site_without_env_or_cwd(opts):
+    """Model the AL2023 root-pip layout that `-I`/`-s` incorrectly hide."""
+    script = (
+        "import json,site,sys;"
+        "print(json.dumps({'path':sys.path,'site':site.getsitepackages(),"
+        "'safe':sys.flags.safe_path,'env':sys.flags.ignore_environment}))"
+    )
+    with tempfile.TemporaryDirectory() as attacker:
+        environment = dict(os.environ)
+        environment["PYTHONPATH"] = attacker
+        done = subprocess.run(
+            [sys.executable, "-E", "-P", "-c", script], cwd=attacker,
+            env=environment, capture_output=True, text=True, timeout=10)
+    th.assert_eq(done.returncode, 0, f"secure Python probe failed: {done.stderr}")
+    observed = json.loads(done.stdout)
+    th.assert_true(observed["safe"] and observed["env"],
+                   "-E -P must activate environment-ignore and safe-path flags")
+    th.assert_true(attacker not in observed["path"] and "" not in observed["path"],
+                   "attacker PYTHONPATH/current directory survived secure launch")
+    th.assert_true(any(path in observed["path"] for path in observed["site"]),
+                   "safe-path launch must retain an installed system site")
+
+
+@th.django_unit_test()
+def test_python_310_observe_fails_before_any_privileged_mutation(opts):
+    from mojo.deploy import mojosec as deploy
+
+    with mock.patch.object(deploy.sys, "version_info", (3, 10, 14)), \
+            mock.patch.object(deploy, "_ensure_dir") as ensure_dir, \
+            mock.patch.object(deploy, "_prepare_effective_config") as prepare:
+        with th.assert_raises(deploy.DeployError):
+            deploy.converge("observe", "required")
+    th.assert_true(not ensure_dir.called and not prepare.called,
+                   "unsupported observe must fail before config or filesystem mutation")
 
 
 @th.django_unit_test()
@@ -399,6 +443,10 @@ def test_enrollment_installs_protected_host_identity_from_stdin(opts):
 def test_enrolled_lifecycle_persists_observe_across_ordinary_deploys(opts):
     from mojo.deploy import mojosec as deploy
 
+    with mock.patch.object(deploy.os, "lstat", side_effect=FileNotFoundError):
+        th.assert_eq(deploy.resolve_lifecycle("enrolled", "enrolled"),
+                     ("off", "best_effort"),
+                     "an unenrolled legacy node must remain off across upgrades")
     with mock.patch.object(deploy.os, "lstat"), \
             mock.patch.object(deploy, "_load_enrollment", return_value={
                 "mode": "observe", "criticality": "required"}):

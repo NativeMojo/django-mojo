@@ -524,7 +524,38 @@ def _secure_metadata(run, path, wanted_mode, kind="file", sudo=""):
     return parts, parts == ["root", "root", wanted_mode]
 
 
-def _audit_mojosec_unit(report, run, sudo):
+def _mojosec_python(sudo, arguments, safe_path=True):
+    """Run the packaged root interpreter from a trusted cwd with safe-path mode."""
+    flags = "-E -P" if safe_path else "-E"
+    inner = f"cd / && exec /usr/bin/python3 {flags} {arguments}"
+    return f"{sudo}/bin/sh -c {q(inner)}"
+
+
+def _audit_mojosec_unit(report, run, sudo, mode="observe"):
+    launcher = (
+        "import importlib.util,os,stat,sys;"
+        "s=importlib.util.find_spec('mojo');"
+        "o=os.path.realpath(s.origin) if s and s.origin else '';"
+        "d=os.path.dirname(o);p=os.path.dirname(d);"
+        "trusted=p.startswith(('/usr/local/lib/','/usr/local/lib64/',"
+        "'/usr/lib/','/usr/lib64/'));"
+        "paths=(p,d,o);"
+        "meta=all(os.stat(x).st_uid==0 and not(os.stat(x).st_mode&0o022) "
+        "for x in paths);"
+        "ok=(sys.version_info>=(3,11) and sys.flags.ignore_environment and "
+        "getattr(sys.flags,'safe_path',False) and os.getcwd()=='/' and "
+        "'' not in sys.path and '/' not in sys.path and trusted and meta and "
+        "stat.S_ISREG(os.stat(o).st_mode));"
+        "raise SystemExit(0 if ok else 1)"
+    )
+    if run(_mojosec_python(sudo, f"-c {q(launcher)}"))[0] == 0:
+        report.passed("mojosec", "secure Python launcher",
+                      "Python 3.11+ safe-path imports root-owned system packages")
+    else:
+        grade = report.info if mode == "off" else report.fail
+        grade("mojosec", "secure Python launcher unavailable",
+              "observe needs /usr/bin/python3 3.11+ and a root-owned Mojo package")
+
     exact = (
         "import os,stat;from mojo.deploy.mojosec import UNIT_TEXT;"
         "p='/etc/systemd/system/mojosec.service';"
@@ -533,7 +564,8 @@ def _audit_mojosec_unit(report, run, sudo):
         "raise SystemExit(0 if stat.S_ISREG(s.st_mode) and s.st_uid==0 and "
         "s.st_gid==0 and s.st_size==len(want) and got==want else 1)"
     )
-    if run(f"{sudo}python3 -I -c {q(exact)}")[0] == 0:
+    if run(_mojosec_python(
+            sudo, f"-c {q(exact)}", safe_path=(mode == "observe")))[0] == 0:
         report.passed("mojosec", "service unit bytes",
                       "installed unit matches the package exactly")
     else:
@@ -541,7 +573,8 @@ def _audit_mojosec_unit(report, run, sudo):
                     "installed root unit differs from the package contract")
 
     properties = (
-        "User", "Group", "UMask", "FragmentPath", "DropInPaths",
+        "User", "Group", "UMask", "WorkingDirectory", "Environment",
+        "FragmentPath", "DropInPaths",
         "NoNewPrivileges", "PrivateTmp", "ProtectHome", "ProtectSystem",
         "ProtectKernelTunables", "ProtectKernelModules", "ProtectKernelLogs",
         "ProtectControlGroups", "RestrictSUIDSGID", "LockPersonality",
@@ -562,6 +595,7 @@ def _audit_mojosec_unit(report, run, sudo):
             found[key] = value.strip()
     scalar = {
         "User": "root", "Group": "root", "UMask": "0077",
+        "WorkingDirectory": "/",
         "FragmentPath": "/etc/systemd/system/mojosec.service",
         "DropInPaths": "", "NoNewPrivileges": "yes", "PrivateTmp": "yes",
         "ProtectHome": "yes", "ProtectSystem": "strict",
@@ -584,6 +618,16 @@ def _audit_mojosec_unit(report, run, sudo):
     if set(found.get("ReadWritePaths", "").split()) != {
             "/var/lib/mojosec", "/run/mojosec"}:
         drift.append("ReadWritePaths=" + found.get("ReadWritePaths", "<missing>"))
+    try:
+        environment = set(shlex.split(found.get("Environment", "")))
+    except ValueError:
+        environment = set()
+    required_environment = {
+        "PYTHONUNBUFFERED=1", "PYTHONHOME=", "PYTHONPATH=",
+        "PYTHONUSERBASE=", "PYTHONSTARTUP=", "PYTHONINSPECT=",
+    }
+    if not required_environment.issubset(environment):
+        drift.append("Environment lacks cleared Python variables")
     if drift:
         report.fail("mojosec", "effective systemd sandbox drift",
                     ", ".join(drift[:12]))
@@ -616,7 +660,8 @@ def _audit_exact_mojosec_nginx_assets(report, run, sudo, proxy_cidrs):
         "raise SystemExit(0 if all(p.read_text()==want for p,want in pairs) else 1)"
     )
     cidr_json = json.dumps(proxy_cidrs, separators=(",", ":"))
-    if run(f"{sudo}python3 -I -c {q(render_check)} {q(cidr_json)}")[0] == 0:
+    if run(_mojosec_python(
+            sudo, f"-c {q(render_check)} {q(cidr_json)}"))[0] == 0:
         report.passed("mojosec", "generated nginx assets",
                       "installed bytes match the package render exactly")
     else:
@@ -667,7 +712,7 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                         "sudo bash aws/post_deploy.sh")
 
     if present.get("service unit"):
-        _audit_mojosec_unit(report, run, sudo)
+        _audit_mojosec_unit(report, run, sudo, mode)
 
     desired_rc = run(
         "test ! -L /opt/api/var/mojosec.json && "
@@ -701,13 +746,15 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
         else:
             report.fail("mojosec", "observe lifecycle drift",
                         f"service is active={active or '?'} enabled={enabled or '?'}",
-                        "sudo python3 -I -m mojo.deploy.mojosec converge --mode observe")
+                        "cd / && sudo /usr/bin/python3 -E -P -m "
+                        "mojo.deploy.mojosec converge --mode observe")
     elif active in ("inactive", "failed", "unknown", "") and enabled != "enabled":
         report.passed("mojosec", "off lifecycle", "service is disabled and not active")
     else:
         report.fail("mojosec", "off lifecycle drift",
                     f"service is active={active or '?'} enabled={enabled or '?'}",
-                    "sudo python3 -I -m mojo.deploy.mojosec converge --mode off")
+                    "cd / && sudo /usr/bin/python3 -E -P -m "
+                    "mojo.deploy.mojosec converge --mode off")
 
     status_meta = _secure_metadata(run, "/run/mojosec/status.json", "640", sudo=sudo)
     if mode == "off":

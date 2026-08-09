@@ -26,7 +26,7 @@ python3 -m mojo.deploy.certbot_sync --renew
 python3 -m mojo.deploy.check_node --require-shims
 python3 -m mojo.deploy.jobman status
 python3 -m mojo.deploy.node_setup --dry-run
-sudo python3 -I -m mojo.deploy.mojosec converge --mode observe
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.mojosec converge --mode observe)
 python3 -m mojo.deploy locate update.sh
 ```
 
@@ -640,9 +640,20 @@ on the first framework upgrade). It never installs a root unit from the
 group-writable project tree or `var/deploy`:
 
 ```bash
-sudo python3 -I -m mojo.deploy.mojosec converge \
-  --mode enrolled --criticality enrolled
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.mojosec converge \
+  --mode enrolled --criticality enrolled)
 ```
+
+MojoSec observe mode requires Python 3.11 or newer at `/usr/bin/python3` (`-P`
+safe-path support). AL2023 satisfies this contract; an AL2 image must provision
+Python 3.11+ before enrollment. A legacy Python 3.10 node may still converge
+off or retire an absent old service during an ordinary framework upgrade.
+`-E` ignores `PYTHON*` injection and `-P` removes the
+current directory from imports while retaining AL2023's root-pip
+`/usr/local/lib/python3.x/site-packages`. The unit also runs from root-owned
+`/`, clears Python path/home variables, hides home directories, and
+`check_node` rejects a Mojo package outside a root-owned, non-writable system
+site. Do not substitute `-I` or `-s`: on AL2023 both hide the root-pip package.
 
 The packaged script passes `--mode enrolled --criticality enrolled`: root-only
 `/etc/mojosec/enrollment.json` persistently selects `off`/`observe` and
@@ -670,13 +681,13 @@ sensor; invalid policy keeps the prior canonical file and service.
 | `/var/lib/mojosec` | root:root 0700 durable SQLite spool; retained across off/rollback |
 | `/run/mojosec/status.json` | root:root 0640 bounded health/provenance snapshot; inspect through `sudo check_node` |
 | `/etc/mojosec/expected_changes.json` | optional root:root 0600 exact FIM annotations |
-| `/etc/systemd/system/mojosec.service` | root-owned packaged unit, `python3 -I`, runs as root with systemd hardening |
+| `/etc/systemd/system/mojosec.service` | root-owned packaged unit, Python safe-path launch, runs as root with systemd hardening |
 
 Install root enrollment and credentials only through stdin:
 
 ```bash
-sudo python3 -I -m mojo.deploy.mojosec install-enrollment < enrollment.json
-sudo python3 -I -m mojo.deploy.mojosec rotate-credential < credential.txt
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.mojosec install-enrollment) < enrollment.json
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.mojosec rotate-credential) < credential.txt
 ```
 
 Neither command prints the secret. For rotation, rotate the bearer centrally

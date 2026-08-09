@@ -48,6 +48,7 @@ NGINX_ETC="${NGINX_ETC:-/etc/nginx}"
 SYSTEMD_ETC="${SYSTEMD_ETC:-/etc/systemd/system}"
 CRON_ETC="${CRON_ETC:-/etc/cron.d}"
 LOGROTATE_ETC="${LOGROTATE_ETC:-/etc/logrotate.d}"
+MOJOSEC_PYTHON="${MOJOSEC_PYTHON:-/usr/bin/python3}"
 cd "$PROJ_PATH"
 
 DEPLOY_DIR="${PROJ_PATH}/var/deploy"
@@ -188,9 +189,20 @@ restore_mojosec_django() {
     rm -f -- "$MOJOSEC_DJANGO_BACKUP"
 }
 
+# MojoSec uses Python's safe-path mode while retaining the root-owned
+# /usr/local site-packages used by AL2023 root pip. Python 3.11 introduced
+# `-P`; on an older legacy node, `-E` plus root-owned cwd `/` remains safe for
+# off/absence cleanup. The Python convergence guard refuses observe on <3.11.
+MOJOSEC_PY_FLAGS=(-E)
+if (cd / && "$MOJOSEC_PYTHON" -E -c \
+        'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'); then
+    MOJOSEC_PY_FLAGS+=(-P)
+fi
+
 # Distinguish an old package that truly lacks the module from any safety or
 # convergence failure inside a present module. Only exact exit 3 means absent.
-if python3 -I -c 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("mojo.deploy.mojosec") else 3)'; then
+if (cd / && "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" -c \
+        'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("mojo.deploy.mojosec") else 3)'); then
     MOJOSEC_MODULE_AVAILABLE=1
 else
     module_rc=$?
@@ -202,9 +214,10 @@ else
 fi
 
 if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ]; then
-    if ! python3 -I -m mojo.deploy.mojosec converge \
-        --mode "$MOJOSEC_MODE" \
-        --criticality "$MOJOSEC_DEPLOY_CRITICALITY"; then
+    if ! (cd / && "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" \
+            -m mojo.deploy.mojosec converge \
+            --mode "$MOJOSEC_MODE" \
+            --criticality "$MOJOSEC_DEPLOY_CRITICALITY"); then
         restore_mojosec_django
         nginx -t || die "MojoSec failed and the exact prior django.inc is invalid"
         systemctl reload nginx \

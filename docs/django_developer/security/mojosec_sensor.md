@@ -8,10 +8,10 @@ never bans an address locally. The incident system remains the policy and
 enforcement authority.
 
 The Python package is `mojo.mojosec`. A deployed node invokes it as an installed
-package so isolated mode does not trust the current directory:
+package from a root-owned working directory with safe-path mode:
 
 ```bash
-python -I -m mojo.mojosec --config /etc/mojosec/config.json run
+(cd / && /usr/bin/python3 -E -P -m mojo.mojosec --config /etc/mojosec/config.json run)
 ```
 
 ## Deliberately narrow v1 signal set
@@ -55,6 +55,15 @@ mutation. No-follow descriptor reads prevent pathname replacement. The endpoint
 must be HTTPS without credentials/query/fragment and exactly
 `/api/incident/mojosec/batch`; a trailing slash is rejected. Delivery ignores
 proxy environment variables and refuses redirects.
+
+Observe mode's privileged launcher requires `/usr/bin/python3` 3.11+ and uses
+`-E -P` from root-owned `/`. This ignores Python environment injection and the current
+directory without dropping AL2023's root-owned `/usr/local` site-packages.
+AL2 nodes must provision Python 3.11+ before enrollment; legacy Python 3.10
+nodes remain able to converge off during an ordinary framework upgrade.
+`check_node` verifies the version, safe-path flags, package origin, and effective systemd working
+directory/environment. `-I` and `-s` are not compatible with the AL2023
+root-pip layout.
 
 Root enrollment for a standard EC2 nginx node:
 
@@ -195,14 +204,14 @@ queued. There is no pathname-based fallback.
 
 ```bash
 # Parse all fields and audit the config file's type, ownership, and mode.
-sudo python -I -m mojo.mojosec --config /etc/mojosec/config.json check
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.mojosec --config /etc/mojosec/config.json check)
 
 # One collection/delivery cycle; useful for a deployment canary.
-sudo python -I -m mojo.mojosec --config /etc/mojosec/config.json once
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.mojosec --config /etc/mojosec/config.json once)
 
 # Audit bounded status without opening config, credential, or SQLite content.
-sudo python -I -m mojo.deploy.check_node --section mojosec \
-  --mojosec-mode observe --mojosec-sensor-id prod-web-i-0123456789abcdef0
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.check_node --section mojosec \
+  --mojosec-mode observe --mojosec-sensor-id prod-web-i-0123456789abcdef0)
 ```
 
 `check` does not open the API-key credential; `once` and `run` validate it when
@@ -224,8 +233,8 @@ curl -sS -o /dev/null -H 'Host: canary.example.com' \
 curl -sS -o /dev/null -H 'Host: canary.example.com' \
   http://127.0.0.1/__mojosec_canary_503
 sleep 12
-sudo python3 -I -m mojo.deploy.check_node --section mojosec \
-  --mojosec-mode observe --mojosec-sensor-id prod-web-i-0123456789abcdef0
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.check_node --section mojosec \
+  --mojosec-mode observe --mojosec-sensor-id prod-web-i-0123456789abcdef0)
 ```
 
 Then verify centrally that a published receipt for that sensor was created
@@ -252,8 +261,8 @@ five idle minutes. Roll back persistently by reinstalling enrollment with mode
 off, then run:
 
 ```bash
-sudo python3 -I -m mojo.deploy.mojosec converge \
-  --mode enrolled --criticality enrolled
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.mojosec converge \
+  --mode enrolled --criticality enrolled)
 ```
 
 `/run/mojosec/status.json` is atomically written as root:root mode `0640` and contains
@@ -337,12 +346,12 @@ On the host, place the nonsecret desired policy at
 `/opt/api/var/mojosec.json`, then provision protected inputs and converge:
 
 ```bash
-sudo python3 -I -m mojo.deploy.mojosec install-enrollment < enrollment.json
-sudo python3 -I -m mojo.deploy.mojosec rotate-credential < credential.txt
-sudo python3 -I -m mojo.deploy.mojosec converge \
-  --mode enrolled --criticality enrolled
-sudo python3 -I -m mojo.deploy.check_node --section mojosec \
-  --mojosec-mode observe --mojosec-sensor-id prod-web-i-0123456789abcdef0
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.mojosec install-enrollment) < enrollment.json
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.mojosec rotate-credential) < credential.txt
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.mojosec converge \
+  --mode enrolled --criticality enrolled)
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.check_node --section mojosec \
+  --mojosec-mode observe --mojosec-sensor-id prod-web-i-0123456789abcdef0)
 ```
 
 The key-install command never accepts the secret in argv. Delete the transfer

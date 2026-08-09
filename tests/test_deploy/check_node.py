@@ -56,6 +56,9 @@ def _find(report, section, fragment):
 def _mojosec_systemd_show(dropins=""):
     values = {
         "User": "root", "Group": "root", "UMask": "0077",
+        "WorkingDirectory": "/",
+        "Environment": ("PYTHONUNBUFFERED=1 PYTHONHOME= PYTHONPATH= "
+                        "PYTHONUSERBASE= PYTHONSTARTUP= PYTHONINSPECT="),
         "FragmentPath": "/etc/systemd/system/mojosec.service",
         "DropInPaths": dropins, "NoNewPrivileges": "yes", "PrivateTmp": "yes",
         "ProtectHome": "yes", "ProtectSystem": "strict",
@@ -232,7 +235,7 @@ def test_mojosec_unit_audit_rejects_byte_drift_and_dropins(opts):
     from mojo.deploy import check_node as cn
 
     run = FakeRunner([
-        ("python3 -I -c", (1, "", "")),
+        ("UNIT_TEXT", (1, "", "")),
         ("systemctl show mojosec.service",
          (0, _mojosec_systemd_show("/etc/systemd/system/mojosec.service.d/override.conf"), "")),
         ("systemd-analyze security", (0, "ok", "")),
@@ -262,7 +265,7 @@ def test_mojosec_exact_nginx_asset_drift_fails(opts):
 
     report = cn.Report()
     cn._audit_exact_mojosec_nginx_assets(
-        report, FakeRunner([("python3 -I -c", (1, "", ""))]),
+        report, FakeRunner([("LOGROTATE_TEXT", (1, "", ""))]),
         "sudo -n ", ["10.0.0.0/8"])
     th.assert_eq(_statuses(report, "mojosec").get("generated nginx asset drift"),
                  cn.FAIL, "extra or changed generated nginx bytes must fail")

@@ -67,9 +67,14 @@ User=root
 Group=root
 UMask=0077
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONHOME=
+Environment=PYTHONPATH=
+Environment=PYTHONUSERBASE=
+Environment=PYTHONSTARTUP=
+Environment=PYTHONINSPECT=
 WorkingDirectory=/
-ExecStartPre=/usr/bin/python3 -I -m mojo.mojosec --config /etc/mojosec/config.json check
-ExecStart=/usr/bin/python3 -I -m mojo.mojosec --config /etc/mojosec/config.json run
+ExecStartPre=/usr/bin/python3 -E -P -m mojo.mojosec --config /etc/mojosec/config.json check
+ExecStart=/usr/bin/python3 -E -P -m mojo.mojosec --config /etc/mojosec/config.json run
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
@@ -717,6 +722,9 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
     mutation_started = False
     prepared = None
     try:
+        if mode == "observe" and sys.version_info < (3, 11):
+            raise DeployError(
+                "MojoSec observe requires Python 3.11+ safe-path support")
         if os.geteuid() != 0:
             raise DeployError("MojoSec deployment must run as root")
         # Enrollment is a precondition, not something discovered after nginx
@@ -909,7 +917,8 @@ def resolve_lifecycle(mode, criticality):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="python3 -I -m mojo.deploy.mojosec")
+    parser = argparse.ArgumentParser(
+        prog="/usr/bin/python3 -E -P -m mojo.deploy.mojosec")
     sub = parser.add_subparsers(dest="command", required=True)
     install = sub.add_parser("converge")
     install.add_argument("--mode", choices=("enrolled",) + MODES, default="enrolled")
