@@ -37,8 +37,8 @@ on_rest_request(request, pk)
 | `GROUP_FIELD` | `"group"` | FK field name pointing to the owning group. May be a related path (e.g. `"original_file__group"`, `"agent__project"`). Governs detail + list + `?group=` scoping and create-time auto-assign — see [Group-Scoped Permissions](#group-scoped-permissions). |
 | `CREATED_BY_OWNER_FIELD` | `"user"` | FK field auto-stamped with `request.user` on create when the body omits it. Set to `None` to disable auto-stamping entirely. See "Create-time owner stamping" below. |
 | `UPDATED_BY_OWNER_FIELD` | `"modified_by"` | FK field set to `request.user` on every update. Unlike `CREATED_BY_OWNER_FIELD`, the update-path stamp always overwrites — "who last modified" is an actor fact, not a body fact. Both are skipped entirely when there is no real actor; see "When there is no real actor" below. |
-| `DENY_AI` | `False` | Shorthand — denies all assistant model tools on this model regardless of verb. |
-| `DENY_AI_VIEW` | `False` | Blocks the assistant's `describe_model`, `query_model`, `aggregate_model`, and `export_data`. |
+| `DENY_AI` | `False` | Shorthand — denies all assistant model access, including context attachment, regardless of verb. |
+| `DENY_AI_VIEW` | `False` | Blocks assistant context attachment plus `describe_model`, `query_model`, `aggregate_model`, `export_data`, and `add_context`. |
 | `DENY_AI_CREATE` | `False` | Blocks the create path of the assistant's `save_model_instance`. |
 | `DENY_AI_UPDATE` | `False` | Blocks the update path of the assistant's `save_model_instance`. |
 | `DENY_AI_DELETE` | `False` | Blocks the assistant's `delete_model_instance`. |
@@ -139,7 +139,7 @@ def on_rest_pre_save(self, changed_fields, created):
 
 ## Assistant Access Flags
 
-The `DENY_AI_*` flags are **defense in depth on top of REST permissions**. They let model authors express "this model should not be accessible through the LLM assistant, even to users who have the REST perms for it." REST continues to work unchanged for human-driven requests — only the assistant tools honor the flags.
+The `DENY_AI_*` flags are **defense in depth on top of REST permissions**. They let model authors express "this model should not be accessible through the LLM assistant, even to users who have the REST perms for it." Ordinary model REST continues to work unchanged for human-driven requests; assistant tools and `POST /api/assistant/context` honor the flags.
 
 | When to use | Typical flag |
 |---|---|
@@ -158,7 +158,7 @@ class RestMeta:
     DENY_AI_DELETE = True
 ```
 
-Tools that honor the flags: `describe_model`, `query_model`, `aggregate_model`, `export_data`, `save_model_instance` (create vs update picked from pk presence), `delete_model_instance`.
+Paths that honor the flags: `POST /api/assistant/context`, `describe_model`, `query_model`, `aggregate_model`, `export_data`, `add_context`, `save_model_instance` (create vs update picked from pk presence), and `delete_model_instance`.
 
 ## Special Permission Strings
 

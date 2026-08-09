@@ -8,6 +8,7 @@ from testit.helpers import assert_true, assert_eq
 TEST_EMAIL_ADMIN = 'ctx-admin@example.com'
 TEST_EMAIL_LIMITED = 'ctx-limited@example.com'
 TEST_EMAIL_NOAUTH = 'ctx-noauth@example.com'
+TEST_EMAIL_MODEL_AUTHOR = 'ctx-model-author@example.com'
 TEST_PASSWORD = 'TestPass1!'
 
 
@@ -15,12 +16,20 @@ TEST_PASSWORD = 'TestPass1!'
 @th.requires_app("mojo.apps.assistant")
 @th.requires_app("mojo.apps.incident")
 def setup_context(opts):
-    from mojo.apps.account.models import User
+    from mojo.apps.account.models import ApiKey, Group, User
     from mojo.apps.assistant.models import Conversation
-    from mojo.apps.incident.models import Ticket, TicketNote, Incident
+    from mojo.apps.incident.models import (
+        Incident, MojoSecPolicyEvaluation, MojoSecPolicyProposal,
+        Ticket, TicketNote)
+    from mojo.apps.incident.models.mojosec_immutable import canonical_digest
 
-    # Clean up prior test data
+    # Clean up prior mutable test data. The dedicated model author is retained
+    # because immutable proposal/evaluation audit rows protect their author FK.
+    Group.objects.filter(name="[CTX-TEST] Assistant Context").delete()
     User.objects.filter(email__in=[TEST_EMAIL_ADMIN, TEST_EMAIL_LIMITED, TEST_EMAIL_NOAUTH]).delete()
+    model_author, _ = User.objects.get_or_create(
+        username=TEST_EMAIL_MODEL_AUTHOR,
+        defaults={"email": TEST_EMAIL_MODEL_AUTHOR})
 
     opts.admin = User.objects.create_user(
         username=TEST_EMAIL_ADMIN, email=TEST_EMAIL_ADMIN, password=TEST_PASSWORD,
@@ -30,6 +39,7 @@ def setup_context(opts):
     opts.admin.add_permission("view_admin")
     opts.admin.add_permission("view_security")
     opts.admin.add_permission("manage_security")
+    opts.admin.add_permission("manage_groups")
 
     # User with view_admin but NOT view_security
     opts.limited = User.objects.create_user(
@@ -74,6 +84,26 @@ def setup_context(opts):
     )
     opts.incident.add_history("created", note="Incident created by RuleSet")
     opts.incident.add_history("handler:block", note="IP 10.0.0.1 blocked for 3600s")
+
+    opts.context_group = Group.objects.create(
+        name="[CTX-TEST] Assistant Context", kind="organization")
+    opts.context_group.add_member(opts.admin)
+    opts.context_api_key, _ = ApiKey.create_for_group(
+        opts.context_group, "[CTX-TEST] denied credential")
+    proposal_content = {
+        "schema": "mojosec.policy-proposal.v1",
+        "detectors": [{
+            "kind": "web.probe", "decision": "flag", "minimum_count": 2,
+        }],
+    }
+    opts.context_proposal = MojoSecPolicyProposal.objects.create(
+        created_by=model_author, summary="[CTX-TEST] denied proposal",
+        content=proposal_content, content_digest=canonical_digest(proposal_content))
+    opts.context_evaluation = MojoSecPolicyEvaluation.objects.create(
+        proposal=opts.context_proposal, created_by=model_author,
+        mode=MojoSecPolicyEvaluation.REPLAY, sample_count=0,
+        sample_digest="1" * 64, result_digest="2" * 64,
+        metrics={"evaluated": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +265,43 @@ def test_context_bad_model_format(opts):
     assert_eq(resp.status_code, 400, f"Expected 400, got {resp.status_code}")
 
 
+@th.django_unit_test()
+def test_context_deny_ai_models_fail_before_conversation_mutation(opts):
+    """DENY_AI blocks context attachment even with model permissions and a group."""
+    from mojo.apps.assistant.models import Conversation, Message
+
+    opts.client.login(TEST_EMAIL_ADMIN, TEST_PASSWORD)
+    before_conversations = Conversation.objects.filter(user=opts.admin).count()
+    before_messages = Message.objects.filter(conversation__user=opts.admin).count()
+    denied = (
+        ("incident.MojoSecPolicyProposal", opts.context_proposal.pk),
+        ("incident.MojoSecPolicyEvaluation", opts.context_evaluation.pk),
+        ("account.ApiKey", opts.context_api_key.pk),
+    )
+    for model_string, pk in denied:
+        resp = opts.client.post(
+            "/api/assistant/context",
+            {"model": model_string, "pk": pk, "group": opts.context_group.pk},
+        )
+        assert_eq(
+            resp.status_code, 403,
+            f"DENY_AI context for {model_string} must return 403: {resp.json}")
+        assert_true(
+            "not available to the assistant" in str(resp.json),
+            f"DENY_AI must win over model/group permissions for {model_string}: {resp.json}")
+
+    assert_eq(
+        Conversation.objects.filter(user=opts.admin).count(), before_conversations,
+        "denied context attempts must not create or tenant-stamp a conversation")
+    assert_eq(
+        Message.objects.filter(conversation__user=opts.admin).count(), before_messages,
+        "denied context attempts must not create a serialized context message")
+    assert_true(not Conversation.objects.filter(
+        user=opts.admin, group=opts.context_group,
+        metadata__source_model__in=[item[0].lower() for item in denied]).exists(),
+        "request.group must not become a tenant stamp on a DENY_AI attempt")
+
+
 # ---------------------------------------------------------------------------
 # Generic model context (non-ticket, non-incident)
 # ---------------------------------------------------------------------------
@@ -253,7 +320,7 @@ def test_context_generic_model(opts):
     opts.client.login(TEST_EMAIL_ADMIN, TEST_PASSWORD)
     resp = opts.client.post(
         "/api/assistant/context",
-        {"model": "incident.RuleSet", "pk": rs.pk},
+        {"model": "incident.RuleSet", "pk": rs.pk, "group": opts.context_group.pk},
     )
     assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}: {resp.json}")
     assert_true(resp.json.status, f"Expected success, got: {resp.json}")
@@ -262,6 +329,8 @@ def test_context_generic_model(opts):
     from mojo.apps.assistant.models import Conversation, Message
     conv = Conversation.objects.get(pk=conv_id)
     assert_true("RuleSet" in conv.title, f"Title should contain 'RuleSet', got: {conv.title}")
+    assert_eq(conv.group_id, opts.context_group.pk,
+              "an allowed model must preserve the existing request.group stamp")
 
     msg = Message.objects.filter(conversation=conv).first()
     assert_true(msg.content, "Context message should have content")

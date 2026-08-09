@@ -325,7 +325,8 @@ and proposal are only for database administration and migrations; ordinary
 application code must never use them. Django's deletion collector may use an
 unguarded base manager to apply the subject/author `SET_NULL` lifecycle.
 Database flush/migration tooling may bypass these application guards
-deliberately. All learning models are denied to generic AI/model-query tools.
+deliberately. All learning models are denied to generic AI/model-query tools
+and assistant context attachment.
 
 `MojoSecPolicyProposal` is a separate immutable revision chain. Its only states
 are `draft`, `shadow`, and `rejected`; there is intentionally no active state.

@@ -181,6 +181,6 @@ receipt/current-feedback plane), then cap and stratify the requested sample per
 stable installation identity. A noisy installation can make the result smaller
 than the requested limit. Results contain no customer group/tenant stamp and
 are not fleet coverage or sensor health. All learning models are excluded from
-generic AI/model queries, and there is no MojoSec assistant/LLM learning tool
-in this prototype. Existing incident-triage and live RuleSet assistant tools
-are unchanged.
+generic AI/model queries and assistant context attachment, and there is no
+MojoSec assistant/LLM learning tool in this prototype. Existing incident-triage
+and live RuleSet assistant tools are unchanged.

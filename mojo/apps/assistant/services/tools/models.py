@@ -90,7 +90,7 @@ _VERB_TO_FLAG = {
 }
 
 
-def _check_ai_access(model, verb, user, request=None):
+def check_ai_access(model, verb, user, request=None):
     """Check per-model assistant opt-out flags. Returns None on allow, else an
     error dict.
 
@@ -137,6 +137,12 @@ def _check_ai_access(model, verb, user, request=None):
         model_name=model_label, request=request,
     )
     return {"error": f"{model_label} is not available to the assistant"}
+
+
+# Backward-compatible private name used by the model-tool handlers and their
+# focused tests. Context ingestion imports the public gate above so every path
+# applies exactly the same RestMeta policy.
+_check_ai_access = check_ai_access
 
 
 def _audit_user_log(user, kind, action, model_label, pk, request=None,
