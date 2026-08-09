@@ -7,6 +7,19 @@ import stat
 from ..detectors import detect_nginx
 
 
+def _reject_constant(value):
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
+def _strict_record(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate nginx field: {key}")
+        result[key] = value
+    return result
+
+
 class NginxCollector:
     name = "nginx"
 
@@ -46,19 +59,33 @@ class NginxCollector:
         lines = data.splitlines()
         if offset and data and not data.startswith(b"{"):
             lines = lines[1:]
+            malformed += 1
         if data and not data.endswith(b"\n"):
             last = lines.pop() if lines else b""
-            end -= len(last)
+            if len(data) >= self.config["max_bytes_per_poll"]:
+                malformed += 1
+            else:
+                end -= len(last)
         for line in lines:
             if len(line) > self.config["max_line_bytes"]:
                 malformed += 1
                 continue
             try:
-                record = json.loads(line.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
+                record = json.loads(
+                    line.decode("utf-8"), object_pairs_hook=_strict_record,
+                    parse_constant=_reject_constant,
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
                 malformed += 1
                 continue
-            detected = detect_nginx(record)
+            if not isinstance(record, dict):
+                malformed += 1
+                continue
+            try:
+                detected = detect_nginx(record)
+            except Exception:
+                malformed += 1
+                continue
             if detected:
                 observations.append(detected)
         next_cursor = {"device": current.st_dev, "inode": current.st_ino, "offset": end}

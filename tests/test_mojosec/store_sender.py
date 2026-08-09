@@ -6,7 +6,10 @@ import tempfile
 from testit import helpers as th
 
 
-AGGREGATION = {"window_seconds": 60, "flush_count": 2, "max_aggregates": 100}
+AGGREGATION = {
+    "window_seconds": 60, "flush_count": 2, "max_aggregates": 100,
+    "critical_reserve_aggregates": 10,
+}
 DELIVERY = {
     "batch_events": 100, "batch_bytes": 256 * 1024, "timeout_seconds": 10,
     "retry_min_seconds": 1, "retry_max_seconds": 30, "gzip": True,
@@ -68,6 +71,45 @@ def test_store_aggregates_durably_and_commits_cursor_with_evidence(opts):
                          "the queued event should preserve the aggregate occurrence count")
             th.assert_eq(store.get_meta("cursor:nginx"), {"offset": 20},
                          "the collector cursor must advance in the same transaction as evidence")
+        finally:
+            store.close()
+
+
+@th.django_unit_test()
+def test_aggregate_capacity_reserves_and_evicts_for_high_signals(opts):
+    from mojo.mojosec.events import observation
+    from mojo.mojosec.store import Store
+
+    aggregation = {
+        "window_seconds": 600, "flush_count": 100, "max_aggregates": 3,
+        "critical_reserve_aggregates": 1,
+    }
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        store = Store(root, "sensor-test", aggregation, DELIVERY)
+        try:
+            warnings = [observation(
+                "web.denied", "warning", "denied", {"path": f"/path-{index}"},
+                fingerprint_values=(f"warning-{index}",), aggregate=True,
+            ) for index in range(3)]
+            store.ingest(warnings)
+            th.assert_eq(store.stats()["pending_aggregates"], 2,
+                         "low-priority cardinality must not consume the high-signal aggregate reserve")
+            th.assert_eq(store.stats()["dropped_aggregate_capacity"], 1,
+                         "a low-priority aggregate beyond its partition must be counted as dropped")
+
+            high = [observation(
+                "web.probe", "high", "probe", {"path": f"/probe-{index}"},
+                fingerprint_values=(f"high-{index}",), aggregate=True,
+            ) for index in range(2)]
+            store.ingest(high)
+            stats = store.stats()
+            th.assert_eq(stats["pending_aggregates"], 3,
+                         "high signals should occupy the reserve without exceeding the hard cap")
+            th.assert_eq(stats["aggregate_evicted_for_priority"], 1,
+                         "a high signal at the hard cap should flush one low-priority victim")
+            th.assert_eq(stats["spooled_events"], 1,
+                         "the evicted low-priority aggregate should be preserved in the durable spool")
         finally:
             store.close()
 

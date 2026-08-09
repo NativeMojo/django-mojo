@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import selectors
 import subprocess
 import time
@@ -10,6 +11,7 @@ from ..detectors import detect_journal
 
 
 MAX_STDERR_BYTES = 4096
+_CURSOR_BYTES = re.compile(rb'"__CURSOR"\s*:\s*"([A-Za-z0-9=;:_+.-]{1,4096})"')
 
 
 def _reject_constant(value):
@@ -49,13 +51,17 @@ class JournalCollector:
         stdout_buffer = bytearray()
         stderr_buffer = bytearray()
         limited = False
+        byte_limited = False
         deadline = time.monotonic() + self.config["timeout_seconds"]
 
         def process_line(line):
             nonlocal next_cursor, malformed, records
             records += 1
+            raw_cursor = _CURSOR_BYTES.search(line)
             if len(line) > self.config["max_record_bytes"]:
                 malformed += 1
+                if raw_cursor:
+                    next_cursor = raw_cursor.group(1).decode("ascii", errors="strict")
                 return
             try:
                 record = json.loads(
@@ -64,6 +70,8 @@ class JournalCollector:
                 )
             except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
                 malformed += 1
+                if raw_cursor:
+                    next_cursor = raw_cursor.group(1).decode("ascii", errors="strict")
                 return
             if not isinstance(record, dict):
                 malformed += 1
@@ -107,12 +115,14 @@ class JournalCollector:
                     available = self.config["max_bytes_per_poll"] - bytes_read
                     if available <= 0:
                         limited = True
+                        byte_limited = True
                         break
                     accepted = chunk[:available]
                     stdout_buffer.extend(accepted)
                     bytes_read += len(accepted)
                     if len(accepted) < len(chunk):
                         limited = True
+                        byte_limited = True
                     while b"\n" in stdout_buffer and records < self.config["max_records"]:
                         line, _, remainder = stdout_buffer.partition(b"\n")
                         stdout_buffer = bytearray(remainder)
@@ -122,6 +132,11 @@ class JournalCollector:
                     if limited:
                         break
             if limited:
+                if byte_limited and len(stdout_buffer) > self.config["max_record_bytes"]:
+                    malformed += 1
+                    match = _CURSOR_BYTES.search(stdout_buffer)
+                    if match:
+                        next_cursor = match.group(1).decode("ascii", errors="strict")
                 process.terminate()
             else:
                 if stdout_buffer:

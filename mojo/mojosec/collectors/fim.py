@@ -23,19 +23,26 @@ class FimCollector:
         return any(fnmatch.fnmatch(relative, pattern) or fnmatch.fnmatch(path, pattern)
                    for pattern in target.get("exclude", []))
 
-    def _entry(self, path):
-        info = os.lstat(path)
+    def _descriptor_walk_supported(self):
+        return bool(
+            os.name == "posix" and hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY") and
+            os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd and
+            os.readlink in os.supports_dir_fd
+        )
+
+    def _metadata(self, info):
         entry = {
             "mode": stat.S_IMODE(info.st_mode), "uid": info.st_uid, "gid": info.st_gid,
             "size": info.st_size, "mtime_ns": info.st_mtime_ns,
         }
+        return entry
+
+    def _entry_at(self, parent_fd, name, info, path):
+        entry = self._metadata(info)
         if stat.S_ISREG(info.st_mode):
             entry["kind"] = "file"
             if info.st_size <= self.config["max_file_bytes"]:
-                flags = os.O_RDONLY
-                if hasattr(os, "O_NOFOLLOW"):
-                    flags |= os.O_NOFOLLOW
-                descriptor = os.open(path, flags)
+                descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
                 try:
                     opened = os.fstat(descriptor)
                     if opened.st_dev != info.st_dev or opened.st_ino != info.st_ino:
@@ -59,50 +66,104 @@ class FimCollector:
             entry["kind"] = "directory"
         elif stat.S_ISLNK(info.st_mode):
             entry["kind"] = "symlink"
-            entry["target_sha256"] = hashlib.sha256(os.readlink(path).encode("utf-8")).hexdigest()
+            target = os.readlink(name, dir_fd=parent_fd)
+            entry["target_sha256"] = hashlib.sha256(target.encode("utf-8")).hexdigest()
         else:
             entry["kind"] = "other"
         return entry
 
-    def _scan_target(self, target, snapshot, state):
-        root = target["path"]
-        pending = [root]
-        while pending:
-            path = pending.pop()
-            if self._excluded(target, path):
-                continue
-            if len(snapshot) >= self.config["max_entries"]:
-                state["complete"] = False
-                return
+    def _open_directory(self, path):
+        descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for component in [part for part in os.path.normpath(path).split(os.sep) if part]:
+                child = os.open(
+                    component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+                os.close(descriptor)
+                descriptor = child
+            return descriptor
+        except Exception:
+            os.close(descriptor)
+            raise
+
+    def _scan_node(self, parent_fd, name, path, target, snapshot, state, depth, is_root=False):
+        if len(snapshot) >= self.config["max_entries"]:
+            state["complete"] = False
+            return
+        if not is_root and self._excluded(target, path):
+            return
+        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        entry = self._entry_at(parent_fd, name, info, path)
+        snapshot[path] = entry
+        if entry["kind"] != "directory":
+            return
+        if not is_root and not target.get("recursive", False):
+            return
+        if depth >= self.config["max_depth"]:
+            state["complete"] = False
+            return
+        descriptor = os.open(
+            name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd,
+        )
+        try:
+            opened = os.fstat(descriptor)
+            if opened.st_dev != info.st_dev or opened.st_ino != info.st_ino:
+                raise OSError(f"directory changed while scanning: {path}")
             try:
-                entry = self._entry(path)
-            except FileNotFoundError:
-                continue
-            snapshot[path] = entry
-            if entry["kind"] != "directory" or (path != root and not target.get("recursive", False)):
-                continue
-            try:
-                with os.scandir(path) as iterator:
-                    children = []
-                    remaining = self.config["max_entries"] - len(snapshot)
+                with os.scandir(descriptor) as iterator:
                     for child in iterator:
-                        if len(children) >= remaining:
+                        if len(snapshot) >= self.config["max_entries"]:
                             state["complete"] = False
                             break
-                        children.append(child.path)
-            except (FileNotFoundError, NotADirectoryError, PermissionError):
+                        child_path = os.path.join(path, child.name)
+                        try:
+                            self._scan_node(
+                                descriptor, child.name, child_path, target,
+                                snapshot, state, depth + 1,
+                            )
+                        except OSError:
+                            state["complete"] = False
+            except OSError:
                 state["complete"] = False
-                continue
-            pending.extend(children)
+        finally:
+            os.close(descriptor)
+
+    def _scan_target(self, target, snapshot, state):
+        path = os.path.normpath(target["path"])
+        parent_path = os.path.dirname(path) or "/"
+        name = os.path.basename(path)
+        if path == "/":
+            parent_path = "/"
+            name = "."
+        try:
+            parent_fd = self._open_directory(parent_path)
+        except OSError:
+            state["complete"] = False
+            return
+        try:
+            self._scan_node(parent_fd, name, path, target, snapshot, state, 0, is_root=True)
+        except OSError:
+            state["complete"] = False
+        finally:
+            os.close(parent_fd)
 
     def scan(self):
         snapshot = {}
         state = {"complete": True}
+        if not self._descriptor_walk_supported():
+            return {
+                "profile": self.profile, "snapshot": snapshot,
+                "complete": False, "descriptor_safe": False,
+            }
         for target in self.config["targets"]:
             self._scan_target(target, snapshot, state)
             if not state["complete"] and len(snapshot) >= self.config["max_entries"]:
                 break
-        return {"profile": self.profile, "snapshot": snapshot, "complete": state["complete"]}
+        return {
+            "profile": self.profile, "snapshot": snapshot,
+            "complete": state["complete"], "descriptor_safe": True,
+        }
 
     def diff(self, baseline, scan):
         observations = []
@@ -130,6 +191,6 @@ class FimCollector:
             observations.append(observation(
                 "fim.overflow", "critical", "Filesystem integrity scan was incomplete",
                 attributes={"profile": self.profile, "entries": len(current)},
-                fingerprint_values=(self.profile,), aggregate=True, recommendation="review",
+                fingerprint_values=(self.profile,), aggregate=False, recommendation="review",
             ))
         return observations

@@ -75,6 +75,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS aggregates (
                 fingerprint TEXT PRIMARY KEY,
                 payload TEXT NOT NULL,
+                severity TEXT NOT NULL,
                 count INTEGER NOT NULL,
                 first_seen TEXT NOT NULL,
                 last_seen TEXT NOT NULL,
@@ -88,6 +89,25 @@ class Store:
                 PRIMARY KEY(profile, path)
             );
         """)
+        aggregate_columns = {
+            row["name"] for row in self.db.execute("PRAGMA table_info(aggregates)").fetchall()
+        }
+        if "severity" not in aggregate_columns:
+            self.db.execute(
+                "ALTER TABLE aggregates ADD COLUMN severity TEXT NOT NULL DEFAULT 'warning'"
+            )
+            rows = self.db.execute("SELECT fingerprint, payload FROM aggregates").fetchall()
+            for row in rows:
+                try:
+                    severity = json.loads(row["payload"]).get("severity", "warning")
+                except (AttributeError, json.JSONDecodeError):
+                    severity = "warning"
+                if severity not in ("info", "warning", "high", "critical"):
+                    severity = "warning"
+                self.db.execute(
+                    "UPDATE aggregates SET severity = ? WHERE fingerprint = ?",
+                    (severity, row["fingerprint"]),
+                )
         version = self.get_meta("schema_version")
         if version is None:
             self.set_meta("schema_version", SCHEMA_VERSION)
@@ -144,6 +164,7 @@ class Store:
         return {
             "fingerprint": row["fingerprint"],
             "observation": json.loads(row["payload"]),
+            "severity": row["severity"],
             "count": row["count"],
             "first_seen": row["first_seen"],
             "last_seen": row["last_seen"],
@@ -155,11 +176,13 @@ class Store:
         if flush_at is None:
             flush_at = now + self.aggregation_config["window_seconds"]
         self.db.execute(
-            "INSERT INTO aggregates(fingerprint, payload, count, first_seen, last_seen, flush_at) "
-            "VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(fingerprint) DO UPDATE SET "
-            "payload=excluded.payload, count=excluded.count, last_seen=excluded.last_seen",
+            "INSERT INTO aggregates(fingerprint, payload, severity, count, first_seen, last_seen, flush_at) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(fingerprint) DO UPDATE SET "
+            "payload=excluded.payload, severity=excluded.severity, count=excluded.count, "
+            "last_seen=excluded.last_seen",
             (aggregate["fingerprint"], canonical_json(aggregate["observation"]),
-             aggregate["count"], aggregate["first_seen"], aggregate["last_seen"], flush_at),
+             aggregate["observation"]["severity"], aggregate["count"],
+             aggregate["first_seen"], aggregate["last_seen"], flush_at),
         )
         aggregate["flush_at"] = flush_at
 
@@ -178,8 +201,23 @@ class Store:
         current = self._aggregate_row(observation["fingerprint"])
         if current is None:
             count = self.db.execute("SELECT COUNT(*) AS count FROM aggregates").fetchone()["count"]
-            if count >= self.aggregation_config["max_aggregates"]:
+            maximum = self.aggregation_config["max_aggregates"]
+            reserve = self.aggregation_config["critical_reserve_aggregates"]
+            high_priority = observation["severity"] in ("high", "critical")
+            limit = maximum if high_priority else maximum - reserve
+            if count >= limit and high_priority:
+                victim = self.db.execute(
+                    "SELECT fingerprint FROM aggregates WHERE severity IN ('info', 'warning') "
+                    "ORDER BY flush_at LIMIT 1"
+                ).fetchone()
+                if victim is not None:
+                    aggregate = self._aggregate_row(victim["fingerprint"])
+                    self._flush_aggregate(aggregate, now)
+                    self._increment("aggregate_evicted_for_priority")
+                    count -= 1
+            if count >= limit:
                 self._increment("dropped_aggregate_capacity")
+                self._increment(f"dropped_aggregate_capacity_{observation['severity']}")
                 return
         aggregate = merge(current, observation, self.aggregation_config["window_seconds"])
         self._save_aggregate(aggregate, now)
@@ -304,6 +342,7 @@ class Store:
             "pending_aggregates": aggregates,
             "dropped_capacity": int(self.get_meta("dropped_capacity", 0)),
             "dropped_aggregate_capacity": int(self.get_meta("dropped_aggregate_capacity", 0)),
+            "aggregate_evicted_for_priority": int(self.get_meta("aggregate_evicted_for_priority", 0)),
             "delivery_accepted": int(self.get_meta("delivery_accepted", 0)),
             "delivery_duplicate": int(self.get_meta("delivery_duplicate", 0)),
             "delivery_rejected": int(self.get_meta("delivery_rejected", 0)),

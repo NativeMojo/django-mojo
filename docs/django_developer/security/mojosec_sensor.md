@@ -22,6 +22,10 @@ python -I -m mojo.mojosec --config /opt/api/var/mojosec.json run
 | structured nginx log | known exploit-path probes, 401/403 denials, and 5xx responses | ordinary 2xx/3xx/404/499 traffic, User-Agent-only suspicion, query strings, referrers, and raw log lines |
 | targeted FIM | create/change/delete of explicit files or directory profiles; scan overflow | an implicit whole-disk watch, symlink traversal, file contents |
 
+Sudo evidence retains the actor, target user, executable path, and a command
+digest. Arguments are never persisted because command lines routinely contain
+passwords, tokens, and other credentials.
+
 This catches common automated reconnaissance for WordPress, PHP, ASP/JSP,
 `.env`, `.git`, phpMyAdmin, PHPUnit, actuator, Swagger/OpenAPI, CGI, and similar
 surfaces. Modern crawler or AI-bot identity strings are not trustworthy enough
@@ -39,6 +43,9 @@ The file is strict JSON: unknown fields, duplicate keys, non-finite numbers,
 invalid bounds, insecure endpoints, and unsupported versions fail closed. The
 config file and API-key credential must be regular files rather than symlinks,
 with mode `0600` (or stricter); a root service also requires root ownership.
+Config ownership/mode checks and the bounded JSON read use the same
+`O_NOFOLLOW` descriptor, so replacing the pathname between checks cannot change
+the bytes the root process parses.
 The endpoint must use HTTPS, have no credentials, query, or fragment, and use
 the `/api/incident/mojosec/batch` path (an optional trailing slash is accepted).
 Delivery deliberately ignores proxy environment variables and refuses
@@ -57,7 +64,9 @@ redirects so credentials cannot be forwarded to a different host.
   "collectors": {
     "journal": {
       "enabled": true,
-      "max_lines": 2000,
+      "max_records": 2000,
+      "max_bytes_per_poll": 8388608,
+      "max_record_bytes": 262144,
       "timeout_seconds": 10,
       "lookback_seconds": 300
     },
@@ -72,6 +81,7 @@ redirects so credentials cannot be forwarded to a different host.
       "interval_seconds": 60,
       "max_entries": 20000,
       "max_file_bytes": 16777216,
+      "max_depth": 64,
       "targets": [
         {"path": "/etc/nginx", "recursive": true, "exclude": ["*.swp"]},
         {"path": "/etc/systemd/system", "recursive": true},
@@ -82,7 +92,8 @@ redirects so credentials cannot be forwarded to a different host.
   "aggregation": {
     "window_seconds": 60,
     "flush_count": 25,
-    "max_aggregates": 10000
+    "max_aggregates": 10000,
+    "critical_reserve_aggregates": 1000
   },
   "delivery": {
     "batch_events": 100,
@@ -120,10 +131,28 @@ The detector recognizes these field names:
 | duration in seconds | `request_time` |
 
 The timestamp is optional but, when present, must be timezone-aware ISO-8601.
-Query strings are removed before an event is stored. Referrers, user agents,
-and unrecognized fields are ignored. Keep each JSON record on one complete
-line; oversized, malformed, and partial trailing lines are skipped or deferred
-without copying raw input into event evidence.
+Query strings are removed before an event is stored. High-entropy, UUID,
+long-numeric, email, and reset/verify-token path segments are replaced by a
+short digest in evidence and one shared token marker in aggregation keys.
+Referrers, user agents, and unrecognized fields are ignored. Keep each JSON
+record on one complete line; oversized and malformed lines are counted and the
+byte cursor advances past them so poison input cannot stall collection. A
+normal partial trailing line is deferred until it is complete.
+
+### Journald and FIM traversal
+
+Journald collection never uses `journalctl --lines` tail semantics. It streams
+forward from the committed `--after-cursor`, stopping at both a record and byte
+ceiling, and commits only the last cursor it processed. Per-record parse or
+detector failures increment the malformed count and do not abort the burst.
+
+On POSIX platforms FIM opens every path component relative to an already-open
+directory descriptor with `O_NOFOLLOW`; files are hashed through that same
+descriptor and checked again afterward. Enumeration is streaming and bounded
+by `max_entries` and `max_depth`. A symlink race, permission loss, unsupported
+descriptor-relative platform, or bound overflow makes the scan incomplete:
+the previous baseline remains authoritative and a critical overflow event is
+queued. There is no pathname-based fallback.
 
 ## Commands and health
 
@@ -160,16 +189,18 @@ and `synchronous=FULL`.
   transaction rather than retaining the rejected observation.
 - A complete FIM baseline advances in the same transaction as its change
   events. An incomplete/overflow scan leaves the baseline untouched and emits
-  one aggregatable overflow signal; the next complete scan reconciles it.
+  one immediate critical overflow signal; the next complete scan reconciles it.
 - Event IDs are deterministic for the sensor, detector fingerprint, and
   aggregation window. A retry sends the same IDs.
 - Events stay committed until the receiver acknowledges each ID as accepted,
   duplicate, or permanently rejected. Missing or retry acknowledgements receive
   bounded exponential backoff.
 - The spool and aggregation tables are capped. Low-priority events cannot use
-  the configured high/critical reserve. When even the reserve is exhausted,
-  the sensor records explicit capacity-drop counters rather than claiming
-  unconditional delivery.
+  the configured high/critical reserves. At the aggregate hard cap, a high
+  signal flushes the oldest low-priority aggregate to the spool before taking
+  its slot. Critical host/FIM signals bypass aggregation. When even those
+  controls are exhausted, the sensor records explicit capacity-drop counters
+  rather than claiming unconditional delivery.
 
 The wire format is `mojosec.batch` version 1, optionally gzip-compressed, over
 HTTPS with `Authorization: apikey <per-installation-token>`. The checked-in

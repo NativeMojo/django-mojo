@@ -38,12 +38,14 @@ DEFAULTS = {
             "interval_seconds": 60,
             "max_entries": 20000,
             "max_file_bytes": 16 * 1024 * 1024,
+            "max_depth": 64,
         },
     },
     "aggregation": {
         "window_seconds": 60,
         "flush_count": 25,
         "max_aggregates": 10000,
+        "critical_reserve_aggregates": 1000,
     },
     "delivery": {
         "batch_events": 100,
@@ -190,12 +192,17 @@ def validate_config(value):
     _integer(fim["interval_seconds"], "collectors.fim.interval_seconds", 5, 86400)
     _integer(fim["max_entries"], "collectors.fim.max_entries", 1, 1000000)
     _integer(fim["max_file_bytes"], "collectors.fim.max_file_bytes", 0, 1024 * 1024 * 1024)
+    _integer(fim["max_depth"], "collectors.fim.max_depth", 1, 256)
 
     aggregation = value["aggregation"]
     _reject_unknown(aggregation, DEFAULTS["aggregation"], "aggregation")
     _integer(aggregation["window_seconds"], "aggregation.window_seconds", 1, 86400)
     _integer(aggregation["flush_count"], "aggregation.flush_count", 1, 1000000)
     _integer(aggregation["max_aggregates"], "aggregation.max_aggregates", 100, 10000000)
+    _integer(aggregation["critical_reserve_aggregates"],
+             "aggregation.critical_reserve_aggregates", 0, 1000000)
+    if aggregation["critical_reserve_aggregates"] >= aggregation["max_aggregates"]:
+        raise ConfigError("aggregation.critical_reserve_aggregates must be less than max_aggregates")
 
     delivery = value["delivery"]
     _reject_unknown(delivery, DEFAULTS["delivery"], "delivery")
