@@ -161,13 +161,18 @@ aborted producer leaves its observed changes unexplained.
 
 The current root-owned 0600 envelope is
 `{"schema":"mojosec.expected_changes","version":2,"entries":[...]}`. Version
-2 adds bounded `operation_id`, `operation_kind`, and `completed_at` to the v1
-exact `path`, `change`, SHA-256, timezone-aware `expires_at`, and
+2 adds bounded `operation_id`, `operation_kind`, `started_at`, and `completed_at`
+to the v1 exact `path`, `change`, SHA-256, timezone-aware `expires_at`, and
 `deployment_id` fields. Existing unexpired v1 entries remain readable during
-rollout. Path, change, digest, and live expiry must all match. FIM events are
-committed immediately, held for at most 120 seconds for a late durable
-annotation, and then delivered whether or not one arrives. Malformed manifests
-emit a visible `fim.expected_change_error`; they never block expiry delivery.
+rollout. Path, change, type-bound comparison digest, operation window, and live
+expiry must all match. Content/link digests and comparison-only timestamps/file
+identity stay in the private spool and are removed from delivered and replayed
+events. FIM events are committed immediately and normally held for 120 seconds;
+an exact path in an active operation may extend that hold to the coherent
+20-minute ceiling (15-minute operation plus five-minute completion window).
+Events are then delivered whether or not an annotation arrives. Malformed
+manifests emit a visible `fim.expected_change_error`; they never block expiry
+delivery.
 
 Deploy the producer-capable package before activating `al2023-web-v1`. During
 that first stage the profile stays inactive while normal deploy, node setup,

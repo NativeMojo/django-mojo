@@ -12,7 +12,9 @@ from .protocol import canonical_json, make_event
 
 SCHEMA_VERSION = 1
 ANNOTATION_GRACE_SECONDS = 120
-ANNOTATION_MAX_GRACE_SECONDS = 300
+# The producer caps an active operation at 15 minutes. Retain exact active
+# paths for that ceiling plus the five-minute post-completion match window.
+ANNOTATION_MAX_GRACE_SECONDS = 20 * 60
 
 
 class StoreError(RuntimeError):
@@ -313,7 +315,8 @@ class Store:
                 if deadline <= now or not entries:
                     continue
                 evidence = {field: attributes.get(field) for field in (
-                    "kind", "mode", "uid", "gid", "size", "sha256", "target_sha256")}
+                    "kind", "mode", "uid", "gid", "size", "mtime_ns", "ctime_ns",
+                    "device", "inode", "sha256", "target_sha256")}
                 value = annotation(
                     entries, attributes.get("path"), attributes.get("change"),
                     evidence if attributes.get("change") == "deleted" else None,
@@ -346,8 +349,10 @@ class Store:
             event = json.loads(row["payload"])
             if event.get("kind") == "fim.change":
                 attributes = event.get("attributes", {})
-                attributes.pop("sha256", None)
-                attributes.pop("target_sha256", None)
+                for field in (
+                        "mtime_ns", "ctime_ns", "device", "inode",
+                        "sha256", "target_sha256"):
+                    attributes.pop(field, None)
             payload = canonical_json(event)
             size = len(payload.encode("utf-8")) + 1
             if events and used + size > max_bytes:

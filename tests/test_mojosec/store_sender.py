@@ -62,7 +62,8 @@ def test_fim_evidence_is_durable_before_v2_grace_annotation(opts):
         digest = "a" * 64
         evidence = {
             "kind": "file", "mode": 0o644, "uid": 0, "gid": 0,
-            "size": 12, "sha256": digest,
+            "size": 12, "mtime_ns": 100, "ctime_ns": 200,
+            "device": 300, "inode": 400, "sha256": digest,
         }
         found = observation(
             "fim.change", "high", "integrity change",
@@ -76,6 +77,7 @@ def test_fim_evidence_is_durable_before_v2_grace_annotation(opts):
 
         manifest_path = os.path.join(root, "expected.json")
         completed = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=1)
+        started = completed - datetime.timedelta(seconds=10)
         expiry = completed + datetime.timedelta(minutes=10)
         evidence_kind, evidence_sha256 = evidence_digest(evidence)
         manifest = {
@@ -85,6 +87,7 @@ def test_fim_evidence_is_durable_before_v2_grace_annotation(opts):
                 "evidence_kind": evidence_kind,
                 "expires_at": expiry.isoformat(), "deployment_id": "deploy-1",
                 "operation_id": "deploy-1-render", "operation_kind": "rendered-config",
+                "started_at": started.isoformat(),
                 "completed_at": completed.isoformat(),
             }],
         }
@@ -99,11 +102,16 @@ def test_fim_evidence_is_durable_before_v2_grace_annotation(opts):
                      "grace enrichment must preserve bounded operation identity")
         th.assert_true("sha256" not in pending[0]["attributes"],
                        "content digests must stay in the private spool, not the wire event")
+        th.assert_true(all(field not in pending[0]["attributes"] for field in (
+            "mtime_ns", "ctime_ns", "device", "inode")),
+            "comparison-only file identity must remain out of delivered/replay events")
         stored = json.loads(store.db.execute(
             "SELECT payload FROM events WHERE id = ?", (pending[0]["id"],)
         ).fetchone()["payload"])
         th.assert_eq(stored["attributes"]["sha256"], digest,
                      "wire scrubbing must retain private evidence for later local matching")
+        th.assert_eq(stored["attributes"]["inode"], 400,
+                     "private comparison metadata must remain available for local matching")
         store.close()
 
 
@@ -162,6 +170,7 @@ def test_fim_grace_only_reconciles_virgin_time_correlated_rows(opts):
                 "deployment_id": "deploy-eligibility",
                 "operation_id": "deploy-eligibility-render",
                 "operation_kind": "rendered-config",
+                "started_at": (now - datetime.timedelta(seconds=2)).isoformat(),
                 "completed_at": (now - datetime.timedelta(seconds=1)).isoformat(),
             })
         with open(manifest_path, "w", encoding="utf-8") as handle:
@@ -183,7 +192,15 @@ def test_fim_grace_only_reconciles_virgin_time_correlated_rows(opts):
 @th.django_unit_test()
 def test_active_exact_path_extends_only_the_bounded_local_grace(opts):
     from mojo.mojosec.events import observation
+    from mojo.deploy.mojosec_changes import MAX_TTL_SECONDS
+    from mojo.mojosec.expected_changes import MAX_OPERATION_CORRELATION_SECONDS
     from mojo.mojosec.store import ANNOTATION_MAX_GRACE_SECONDS, Store
+
+    th.assert_eq(
+        ANNOTATION_MAX_GRACE_SECONDS,
+        MAX_TTL_SECONDS + MAX_OPERATION_CORRELATION_SECONDS,
+        "the active hold must cover the supported operation and post-completion window",
+    )
 
     with tempfile.TemporaryDirectory() as root:
         store = Store(root, "grace-extension", AGGREGATION, DELIVERY)

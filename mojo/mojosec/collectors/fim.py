@@ -282,8 +282,9 @@ class FimCollector:
                 "path": path[:2048], "change": change,
                 "kind": entry.get("kind", "unknown"),
             }
-            for field in ("mode", "uid", "gid", "size", "sha256",
-                          "target_sha256", "anomaly"):
+            for field in (
+                    "mode", "uid", "gid", "size", "mtime_ns", "ctime_ns",
+                    "device", "inode", "sha256", "target_sha256", "anomaly"):
                 if field in entry:
                     attributes[field] = entry[field]
             expected_annotation = annotation(expected, path, change, before, after)

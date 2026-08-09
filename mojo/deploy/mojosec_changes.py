@@ -31,7 +31,10 @@ MANIFEST_PATH = "/etc/mojosec/expected_changes.json"
 MAX_BYTES = 256 * 1024
 MAX_OPERATIONS = 128
 MAX_PATHS = 4096
-MAX_TTL_SECONDS = 24 * 60 * 60
+# Active operations are held locally by the sensor for this whole ceiling,
+# plus its bounded post-completion correlation window. Keep producer TTLs
+# coherent with that delivery hold instead of promising day-long operations.
+MAX_TTL_SECONDS = 15 * 60
 _IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _GENERAL_ROOTS = (
     "/etc", "/usr/bin", "/usr/sbin", "/usr/local/bin", "/usr/local/sbin",
@@ -329,19 +332,25 @@ def _snapshot(path):
         return {
             "kind": "file", "mode": stat.S_IMODE(finished.st_mode),
             "uid": finished.st_uid, "gid": finished.st_gid,
-            "size": finished.st_size, "sha256": digest.hexdigest(),
+            "size": finished.st_size, "mtime_ns": finished.st_mtime_ns,
+            "ctime_ns": finished.st_ctime_ns, "device": finished.st_dev,
+            "inode": finished.st_ino, "sha256": digest.hexdigest(),
         }
     if stat.S_ISLNK(info.st_mode):
         target = os.readlink(path)
         return {
             "kind": "symlink", "mode": stat.S_IMODE(info.st_mode),
             "uid": info.st_uid, "gid": info.st_gid, "size": info.st_size,
+            "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns,
+            "device": info.st_dev, "inode": info.st_ino,
             "target_sha256": hashlib.sha256(target.encode("utf-8")).hexdigest(),
         }
     return {
         "kind": "directory" if stat.S_ISDIR(info.st_mode) else "other",
         "mode": stat.S_IMODE(info.st_mode), "uid": info.st_uid,
         "gid": info.st_gid, "size": info.st_size,
+        "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns,
+        "device": info.st_dev, "inode": info.st_ino,
     }
 
 
@@ -349,8 +358,10 @@ def _evidence_digest(value):
     kind = value.get("kind") if isinstance(value, dict) else None
     if kind not in ("file", "symlink", "directory", "other"):
         return None, None
-    material = {field: value.get(field)
-                for field in ("kind", "mode", "uid", "gid", "size")}
+    material = {field: value.get(field) for field in (
+        "kind", "mode", "uid", "gid", "size", "mtime_ns", "ctime_ns",
+        "device", "inode",
+    )}
     if kind == "file":
         material["content_sha256"] = value.get("sha256")
     elif kind == "symlink":
@@ -544,6 +555,7 @@ class ChangeJournal:
                     "deployment_id": operation["deployment_id"],
                     "operation_id": operation["operation_id"],
                     "operation_kind": operation["operation_kind"],
+                    "started_at": operation["started_at"],
                     "completed_at": _timestamp(completed),
                 })
             manifest = self._load_manifest()

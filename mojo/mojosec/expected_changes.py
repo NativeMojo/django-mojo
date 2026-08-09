@@ -47,7 +47,10 @@ def evidence_digest(value):
     if not isinstance(value, dict) or value.get("kind") not in _EVIDENCE_KINDS:
         return None, None
     kind = value["kind"]
-    fields = ("kind", "mode", "uid", "gid", "size")
+    fields = (
+        "kind", "mode", "uid", "gid", "size", "mtime_ns", "ctime_ns",
+        "device", "inode",
+    )
     material = {field: value.get(field) for field in fields}
     if kind == "file":
         digest = value.get("sha256")
@@ -106,7 +109,8 @@ def load_manifest(path, require_root=None):
     for entry in value["entries"]:
         v1_fields = {"path", "change", "sha256", "expires_at", "deployment_id"}
         v2_fields = v1_fields | {
-            "operation_id", "operation_kind", "completed_at", "evidence_kind",
+            "operation_id", "operation_kind", "started_at", "completed_at",
+            "evidence_kind",
         }
         allowed_fields = (v1_fields,) if value["version"] == 1 else (v1_fields, v2_fields)
         if not isinstance(entry, dict) or set(entry) not in allowed_fields:
@@ -130,7 +134,10 @@ def load_manifest(path, require_root=None):
             if (not isinstance(entry["operation_kind"], str) or
                     not _OPERATION_RE.fullmatch(entry["operation_kind"])):
                 raise ExpectedChangeError("expected-change operation_kind is invalid")
+            started = _timestamp(entry["started_at"])
             completed = _timestamp(entry["completed_at"])
+            if started > completed:
+                raise ExpectedChangeError("expected-change operation completed before it started")
             if completed > expiry:
                 raise ExpectedChangeError("expected-change operation completed after expiry")
         key = (entry["path"], entry["change"], entry["sha256"])
@@ -139,6 +146,7 @@ def load_manifest(path, require_root=None):
         seen.add(key)
         internal = {"_expiry": expiry}
         if set(entry) == v2_fields:
+            internal["_started"] = started
             internal["_completed"] = completed
         result.append({**entry, **internal})
     return result
@@ -163,9 +171,9 @@ def annotation(entries, path, change, before, after, now=None, observed_at=None)
             kind, digest = evidence_digest(evidence)
             if kind != entry["evidence_kind"] or digest != entry["sha256"]:
                 continue
-            completed = entry["_completed"]
-            age = (observed_at - completed).total_seconds()
-            if age < -5 or age > MAX_OPERATION_CORRELATION_SECONDS:
+            if (observed_at < entry["_started"] or
+                    observed_at > entry["_completed"] + datetime.timedelta(
+                        seconds=MAX_OPERATION_CORRELATION_SECONDS)):
                 continue
         else:
             digest = (evidence or {}).get("sha256")

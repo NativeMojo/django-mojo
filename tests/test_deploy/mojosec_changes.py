@@ -2,6 +2,7 @@ import datetime
 import importlib.util
 import json
 import os
+import stat
 import tempfile
 import zipfile
 from unittest import mock
@@ -86,6 +87,117 @@ def test_expected_change_evidence_matches_files_links_and_directories(opts):
             value = annotation(entries, path, "modified", None, _snapshot(path))
             th.assert_eq(value["operation_id"], "typed-evidence",
                          f"content/permissions/link evidence must agree for {path}")
+
+
+@th.django_unit_test()
+def test_snapshot_detects_timestamp_atomic_replace_and_parent_metadata(opts):
+    from mojo.deploy.mojosec_changes import ChangeJournal, _snapshot
+    from mojo.mojosec.expected_changes import annotation, load_manifest
+
+    with tempfile.TemporaryDirectory() as root:
+        timestamped = os.path.join(root, "timestamped")
+        replaced = os.path.join(root, "replaced")
+        parent = os.path.join(root, "parent")
+        for path in (timestamped, replaced):
+            with open(path, "wb") as handle:
+                handle.write(b"identical bytes\n")
+        os.mkdir(parent)
+        journal = ChangeJournal(
+            journal_path=os.path.join(root, "journal.json"),
+            lock_path=os.path.join(root, "journal.lock"),
+            manifest_path=os.path.join(root, "expected.json"),
+            allowed_roots=[root],
+        )
+        operation = journal.begin(
+            "comparison-metadata", "rendered-config",
+            [timestamped, replaced, parent], ttl_seconds=900)
+
+        prior = os.stat(timestamped, follow_symlinks=False)
+        os.utime(timestamped, ns=(prior.st_atime_ns, prior.st_mtime_ns + 1_000_000_000))
+
+        replacement = os.path.join(root, "replacement.tmp")
+        with open(replacement, "wb") as handle:
+            handle.write(b"identical bytes\n")
+        replaced_info = os.stat(replaced, follow_symlinks=False)
+        os.chmod(replacement, stat.S_IMODE(replaced_info.st_mode))
+        os.utime(replacement, ns=(replaced_info.st_atime_ns, replaced_info.st_mtime_ns))
+        os.replace(replacement, replaced)
+
+        parent_info = os.stat(parent, follow_symlinks=False)
+        os.utime(parent, ns=(
+            parent_info.st_atime_ns, parent_info.st_mtime_ns + 1_000_000_000))
+
+        completed = journal.complete("comparison-metadata")
+        th.assert_eq({entry["path"] for entry in completed},
+                     {timestamped, replaced, parent},
+                     "FIM comparison-only changes must all produce manifest entries")
+        replacement_before = operation["before"][replaced]
+        replacement_after = _snapshot(replaced)
+        th.assert_eq(replacement_before["sha256"], replacement_after["sha256"],
+                     "the atomic replacement regression must keep byte content identical")
+        th.assert_true(replacement_before["inode"] != replacement_after["inode"],
+                       "byte-identical atomic replacement must be detected by file identity")
+        entries = load_manifest(journal.manifest_path, require_root=False)
+        for path in (timestamped, replaced, parent):
+            value = annotation(entries, path, "modified", None, _snapshot(path))
+            th.assert_eq(value["operation_id"], "comparison-metadata",
+                         f"full comparison evidence must annotate {path}")
+
+
+@th.django_unit_test()
+def test_long_operation_correlates_from_start_through_post_completion(opts):
+    import mojo.deploy.mojosec_changes as changes
+    from mojo.mojosec.expected_changes import (
+        MAX_OPERATION_CORRELATION_SECONDS, ExpectedChangeError, annotation, load_manifest,
+    )
+
+    with tempfile.TemporaryDirectory() as root:
+        watched = os.path.join(root, "long-operation.conf")
+        journal = changes.ChangeJournal(
+            journal_path=os.path.join(root, "journal.json"),
+            lock_path=os.path.join(root, "journal.lock"),
+            manifest_path=os.path.join(root, "expected.json"),
+            allowed_roots=[root],
+        )
+        completed_at = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=1)
+        started_at = completed_at - datetime.timedelta(minutes=12)
+        observed_at = started_at + datetime.timedelta(minutes=6)
+        with mock.patch.object(changes, "_now", return_value=started_at):
+            journal.begin("long-operation", "system-pip", [watched], ttl_seconds=900)
+        with open(watched, "w", encoding="utf-8") as handle:
+            handle.write("event observed while child is still running\n")
+        with mock.patch.object(changes, "_now", return_value=completed_at):
+            journal.complete("long-operation")
+
+        entries = load_manifest(journal.manifest_path, require_root=False)
+        th.assert_eq(entries[0]["started_at"], changes._timestamp(started_at),
+                     "v2 evidence must retain the validated operation start")
+        value = annotation(
+            entries, watched, "created", None, changes._snapshot(watched),
+            now=completed_at + datetime.timedelta(seconds=1), observed_at=observed_at)
+        th.assert_eq(value["operation_id"], "long-operation",
+                     "an event observed during a long-running child must correlate")
+        th.assert_eq(annotation(
+            entries, watched, "created", None, changes._snapshot(watched),
+            now=completed_at + datetime.timedelta(seconds=1),
+            observed_at=started_at - datetime.timedelta(microseconds=1)), None,
+            "an observation before operation start must remain unexplained")
+        th.assert_eq(annotation(
+            entries, watched, "created", None, changes._snapshot(watched),
+            now=completed_at + datetime.timedelta(seconds=1),
+            observed_at=completed_at + datetime.timedelta(
+                seconds=MAX_OPERATION_CORRELATION_SECONDS + 1)), None,
+            "post-completion correlation must remain bounded")
+
+        with open(journal.manifest_path, encoding="utf-8") as handle:
+            invalid = json.load(handle)
+        invalid["entries"][0]["started_at"] = (
+            completed_at + datetime.timedelta(seconds=1)).isoformat()
+        with open(journal.manifest_path, "w", encoding="utf-8") as handle:
+            json.dump(invalid, handle)
+        os.chmod(journal.manifest_path, 0o600)
+        with th.assert_raises(ExpectedChangeError):
+            load_manifest(journal.manifest_path, require_root=False)
 
 
 @th.django_unit_test()
