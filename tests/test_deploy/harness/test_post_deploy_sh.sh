@@ -70,10 +70,10 @@ assert_lacks() { # file pattern label
 }
 
 setup_env() {
-    rm -rf "$PROJ" "$STUB" "$CTL" "$TMP/nginx_etc" "$TMP/systemd_etc" "$TMP/cron_etc"
+    rm -rf "$PROJ" "$STUB" "$CTL" "$TMP/nginx_etc" "$TMP/systemd_etc" "$TMP/cron_etc" "$TMP/logrotate_etc"
     mkdir -p "$PROJ/var/logs" "$PROJ/bin" "$PROJ/aws/nginx/systemd" "$PROJ/aws/nginx/sec.d" \
              "$PROJ/aws/nginx/conf.d" "$PROJ/aws/cron.d" \
-             "$STUB" "$CTL" "$TMP/nginx_etc" "$TMP/systemd_etc" "$TMP/cron_etc"
+             "$STUB" "$CTL" "$TMP/nginx_etc" "$TMP/systemd_etc" "$TMP/cron_etc" "$TMP/logrotate_etc"
     : > "$CALLLOG"
 
     # The shim contract executes the located packaged script; the harness
@@ -124,6 +124,12 @@ exit 0
 EOF
         chmod +x "$STUB/$cmd"
     done
+    cat > "$STUB/stat" <<'EOF'
+#!/bin/bash
+# Fallback ownership probe: the harness models root-owned /etc seams.
+echo 0
+EOF
+    chmod +x "$STUB/stat"
 
     # python3: `-m mojo.deploy*` passes through to the REAL interpreter with
     # PYTHONPATH=$REPO (render.exit forces the render step to fail instead);
@@ -132,6 +138,14 @@ EOF
 #!/bin/bash
 echo "CMD python3 \$*" >> "\$CALLLOG"
 case "\$*" in
+    *"find_spec(\"mojo.deploy.mojosec\")"*)
+        [ -f "\$STUBCTL/mojosec.preflight.exit" ] && exit "\$(cat "\$STUBCTL/mojosec.preflight.exit")"
+        exit 0
+        ;;
+    "-I -m mojo.deploy.mojosec converge"*)
+        [ -f "\$STUBCTL/mojosec.converge.exit" ] && exit "\$(cat "\$STUBCTL/mojosec.converge.exit")"
+        exit 0
+        ;;
     "-m mojo.deploy"*)
         if [ -f "\$STUBCTL/render.exit" ]; then exit "\$(cat "\$STUBCTL/render.exit")"; fi
         exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" "\$@"
@@ -146,7 +160,8 @@ EOF
 
 run_post_deploy() { # args...
     ( cd "$TMP" && PROJ_PATH="$PROJ" NGINX_ETC="$TMP/nginx_etc" \
-        SYSTEMD_ETC="$TMP/systemd_etc" CRON_ETC="$TMP/cron_etc" PATH="$STUB:$PATH" \
+        SYSTEMD_ETC="$TMP/systemd_etc" CRON_ETC="$TMP/cron_etc" \
+        LOGROTATE_ETC="$TMP/logrotate_etc" PATH="$STUB:$PATH" \
         bash "$PROJ/aws/post_deploy.sh" "$@" )
 }
 
@@ -155,7 +170,8 @@ run_post_deploy_env() { # VAR=val ... -- args...
     while [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
     ( cd "$TMP" && env "${envs[@]}" PROJ_PATH="$PROJ" NGINX_ETC="$TMP/nginx_etc" \
-        SYSTEMD_ETC="$TMP/systemd_etc" CRON_ETC="$TMP/cron_etc" PATH="$STUB:$PATH" \
+        SYSTEMD_ETC="$TMP/systemd_etc" CRON_ETC="$TMP/cron_etc" \
+        LOGROTATE_ETC="$TMP/logrotate_etc" PATH="$STUB:$PATH" \
         bash "$PROJ/aws/post_deploy.sh" "$@" )
 }
 
@@ -224,6 +240,8 @@ assert_has "$TMP/cron_etc/3_mojo_jobs" "ec2-user" "default APP_USER renders into
 assert_in_log "CMD systemctl enable --now config-sync.timer" "shipped timer enabled"
 assert_in_log "CMD systemctl enable --now project-extra.timer" "project extra timer enabled"
 assert_in_log "CMD chown -R ec2-user:www" "var/logs ownership pass uses the default users"
+assert_in_log "CMD python3 -I -m mojo.deploy.mojosec converge --mode enrolled --criticality enrolled" \
+    "ordinary deploys preserve the root-enrolled MojoSec lifecycle"
 assert_file "$PROJ/var/deploy/post_deploy.sh" "self-snapshot present after success"
 if cmp -s "$PROJ/aws/post_deploy.sh" "$PROJ/var/deploy/post_deploy.sh"; then
     ok "self-snapshot is byte-identical to the executing copy"
@@ -253,6 +271,61 @@ assert_in_log "CMD chown -R appu:webu" "chown argv carries APP_USER:WEB_USER"
 assert_has "$TMP/systemd_etc/mojo-asgi.service" "--workers 7" "ASGI_WORKERS renders into the unit"
 assert_has "$TMP/systemd_etc/mojo-asgi.service" "User=webu" "WEB_USER renders into the unit"
 assert_has "$TMP/cron_etc/3_mojo_jobs" "appu" "APP_USER renders into 3_mojo_jobs"
+
+echo "post_deploy.sh: MojoSec mode and criticality are explicit"
+setup_env
+run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" -- >/dev/null 2>&1
+assert_eq "$?" 0 "explicit MojoSec off run exits 0"
+assert_in_log "CMD python3 -I -m mojo.deploy.mojosec converge --mode off --criticality required" \
+    "off/required reaches the exact package lifecycle command"
+
+echo "post_deploy.sh: MojoSec absence is distinct from a converge safety failure"
+setup_env
+printf '# old graph\n# MojoSec exact receiver cap\ninclude /etc/nginx/snippets/mojosec_receiver.conf;\n' \
+    > "$TMP/nginx_etc/django.inc"
+cp "$TMP/nginx_etc/django.inc" "$TMP/prior-django.inc"
+echo "1" > "$CTL/mojosec.converge.exit"
+run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" -- \
+    > "$OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then ok "generic MojoSec converge failure exits non-zero"; else fail "generic MojoSec failure was masked"; fi
+if cmp -s "$TMP/prior-django.inc" "$TMP/nginx_etc/django.inc"; then
+    ok "generic failure restores exact pre-deploy django.inc bytes"
+else
+    fail "generic failure did not restore exact pre-deploy django.inc"
+fi
+assert_lacks "$OUT" "module absent" "generic failure never enters downgrade cleanup"
+
+setup_env
+echo "3" > "$CTL/mojosec.preflight.exit"
+run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" -- \
+    > "$OUT" 2>&1
+assert_eq "$?" 0 "true pre-feature module absence performs exact off cleanup"
+assert_has "$OUT" "module absent" "true absence is logged as downgrade cleanup"
+assert_not_in_log "CMD python3 -I -m mojo.deploy.mojosec converge" \
+    "absent module is never mistaken for a runnable converge"
+
+setup_env
+printf '# active old graph\n# MojoSec exact receiver cap\ninclude /etc/nginx/snippets/mojosec_receiver.conf;\n' \
+    > "$TMP/nginx_etc/django.inc"
+cp "$TMP/nginx_etc/django.inc" "$TMP/prior-django.inc"
+echo "old security log" > "$TMP/nginx_etc/conf.d/00_mojosec.conf"
+echo "old rotation" > "$TMP/logrotate_etc/mojosec"
+echo "3" > "$CTL/mojosec.preflight.exit"
+echo "1" > "$CTL/nginx.exit"
+run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" -- \
+    > "$OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then ok "failed downgrade cleanup exits non-zero"; else fail "failed downgrade cleanup claimed success"; fi
+assert_has "$TMP/nginx_etc/conf.d/00_mojosec.conf" "old security log" \
+    "failed downgrade cleanup restores prior security fragment"
+assert_has "$TMP/logrotate_etc/mojosec" "old rotation" \
+    "failed downgrade cleanup restores prior rotation file"
+if cmp -s "$TMP/prior-django.inc" "$TMP/nginx_etc/django.inc"; then
+    ok "failed downgrade cleanup restores exact prior django.inc"
+else
+    fail "failed downgrade cleanup lost prior django.inc"
+fi
 
 echo "post_deploy.sh: undeclared collision is inert; declared override applies"
 setup_env

@@ -62,6 +62,27 @@ def test_protocol_rejects_unknown_and_unbounded_event_data(opts):
 
 
 @th.django_unit_test()
+def test_receiver_projects_only_safe_expected_change_annotation(opts):
+    from mojo.apps.incident.services.mojosec import _expected_change_projection
+
+    attributes = {
+        "path": "/etc/nginx/nginx.conf", "change": "modified",
+        "expected_change": {
+            "deployment_id": "deploy-20260808.1",
+            "expires_at": "2026-08-08T12:30:00Z",
+        },
+        "untrusted": {"raw": "must-not-project"},
+    }
+    projected = _expected_change_projection("fim.change", attributes)
+    th.assert_eq(projected, attributes["expected_change"],
+                 "central projection may retain only the digest/expiry-bound annotation")
+    poisoned = dict(attributes)
+    poisoned["expected_change"] = {**attributes["expected_change"], "raw": "secret"}
+    th.assert_eq(_expected_change_projection("fim.change", poisoned), None,
+                 "extra sensor-controlled annotation fields must be dropped centrally")
+
+
+@th.django_unit_test()
 def test_config_is_strict_and_applies_safe_defaults(opts):
     from mojo.mojosec.config import ConfigError, load_config
 
@@ -76,11 +97,21 @@ def test_config_is_strict_and_applies_safe_defaults(opts):
                      "strict config loading should fill the bounded batch default")
         th.assert_eq(loaded["collectors"]["fim"]["targets"][0]["recursive"], True,
                      "explicit targeted FIM settings must survive default merging")
+        th.assert_eq(loaded["expected_changes_path"],
+                     "/etc/mojosec/expected_changes.json",
+                     "deployment annotations must have one root-owned default path")
 
         bad = _config(root)
         bad["surprise"] = True
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(bad, handle)
+        with th.assert_raises(ConfigError):
+            load_config(path)
+
+        trailing = _config(root)
+        trailing["endpoint"] += "/"
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(trailing, handle)
         with th.assert_raises(ConfigError):
             load_config(path)
 

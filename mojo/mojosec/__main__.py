@@ -13,7 +13,7 @@ def build_parser():
         prog="python -m mojo.mojosec",
         description="MojoSec host security sensor",
     )
-    parser.add_argument("--config", default="/opt/api/var/mojosec.json",
+    parser.add_argument("--config", default="/etc/mojosec/config.json",
                         help="strict JSON config (default: %(default)s)")
     parser.add_argument("command", nargs="?", default="run",
                         choices=("run", "once", "check", "status"))

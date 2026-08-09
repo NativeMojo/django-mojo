@@ -268,11 +268,47 @@ def test_api_knob_shapes(opts):
     assert "location /static/ {" in text, "serve_static rendered no alias"
     assert "alias " in text, "the static location is not an alias"
     # Every proxied location carries the upgrade pair (three here: two quiet
-    # paths plus the whole-host location).
+    # paths plus the whole-host location; MojoSec is off by default).
     assert text.count("proxy_set_header Upgrade $http_upgrade;") == 3, \
         "a proxied location is missing the websocket upgrade header"
     assert text.count("proxy_set_header Connection $connection_upgrade;") == 3, \
         "a proxied location is missing the Connection upgrade header"
+
+
+@th.django_unit_test("Edge MojoSec is opt-in and renders the same bounded stream")
+def test_edge_mojosec_mode_contract(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import render
+
+    knobs = render.http_knobs()
+    knobs["mojosec_mode"] = "off"
+    off_base = render.render_http_base(knobs, security=[])
+    assert "log_format mojosec_v1" not in off_base, \
+        "Edge mode=off produced the noisy MojoSec security stream"
+
+    knobs["mojosec_mode"] = "observe"
+    knobs["mojosec_trusted_proxy_cidrs"] = ["10.0.0.0/8"]
+    observed_base = render.render_http_base(knobs, security=[])
+    assert "log_format mojosec_v1 escape=json" in observed_base, \
+        "Edge observe mode omitted the structured security stream"
+    security_log = observed_base[observed_base.index("# MojoSec"):
+                                 observed_base.index("map $http_upgrade")]
+    assert '"uri":"$uri"' in security_log and "$request_uri" not in security_log, \
+        "Edge security logging must use the queryless URI"
+    assert "set_real_ip_from 10.0.0.0/8;" in observed_base, \
+        "Edge observe mode omitted its exact trusted-proxy boundary"
+
+    vhost = make_vhost(opts.domain, opts.certificate, label="mojosec",
+                       kind="api", upstream=opts.upstream)
+    with mock.patch.object(render, "mojosec_mode", return_value="observe"):
+        text = render.render_vhost(vhost, opts.generation)
+    assert "location = /api/incident/mojosec/batch {" in text, \
+        "Edge observe mode omitted the exact receiver route"
+    assert "location = /api/incident/mojosec/batch/ {" in text, \
+        "Edge observe mode omitted the capped trailing-slash alias"
+    assert text.count("client_max_body_size 512k;") == 2, \
+        "both Edge receiver spellings need the compressed wire-body cap"
 
 
 @th.django_unit_test("site_api renders one location per route, quiet paths on the longest prefix")

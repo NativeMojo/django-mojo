@@ -11,7 +11,7 @@ The Python package is `mojo.mojosec`. A deployed node invokes it as an installed
 package so isolated mode does not trust the current directory:
 
 ```bash
-python -I -m mojo.mojosec --config /opt/api/var/mojosec.json run
+python -I -m mojo.mojosec --config /etc/mojosec/config.json run
 ```
 
 ## Deliberately narrow v1 signal set
@@ -37,29 +37,55 @@ The v1 scope does not inventory processes, listening sockets, packages, or
 kernel policy. AWS-native findings and application-level authentication signals
 continue through their existing django-mojo paths.
 
-## Configuration
+## Configuration and enrollment boundary
 
-The file is strict JSON: unknown fields, duplicate keys, non-finite numbers,
-invalid bounds, insecure endpoints, and unsupported versions fail closed. The
-config file and API-key credential must be regular files rather than symlinks,
-with mode `0600` (or stricter); a root service also requires root ownership.
-Config ownership/mode checks and the bounded JSON read use the same
-`O_NOFOLLOW` descriptor, so replacing the pathname between checks cannot change
-the bytes the root process parses.
-The endpoint must use HTTPS, have no credentials, query, or fragment, and use
-the `/api/incident/mojosec/batch` path (an optional trailing slash is accepted).
-Delivery deliberately ignores proxy environment variables and refuses
-redirects so credentials cannot be forwarded to a different host.
+There are three separate inputs. `/opt/api/var/mojosec.json` is the nonsecret,
+fleet-managed desired policy. It may tune bounded collection, targeted FIM,
+aggregation, and batching, but it is never read by the service. It cannot set
+host identity, endpoint, credential/state/status/manifest paths, nginx path,
+trusted proxy boundary, lifecycle mode/criticality, or disable core
+journal/nginx monitoring. `/etc/mojosec/enrollment.json` is root:root 0600 and
+owns those protected host boundaries. Root convergence validates both, merges
+them with fixed paths, and atomically writes the only runtime file,
+`/etc/mojosec/config.json`, as root:root 0600.
+
+All JSON is strict: unknown/duplicate fields, non-finite numbers, invalid
+bounds, insecure endpoints, and unsupported versions fail before operational
+mutation. No-follow descriptor reads prevent pathname replacement. The endpoint
+must be HTTPS without credentials/query/fragment and exactly
+`/api/incident/mojosec/batch`; a trailing slash is rejected. Delivery ignores
+proxy environment variables and refuses redirects.
+
+Root enrollment for a standard EC2 nginx node:
 
 ```json
 {
   "version": 1,
   "sensor_id": "prod-web-i-0123456789abcdef0",
   "endpoint": "https://incident.example.com/api/incident/mojosec/batch",
+  "mode": "observe",
+  "criticality": "required",
+  "nginx_plane": "standard",
+  "trusted_proxy_cidrs": ["10.0.0.0/16"],
+  "fim_allowed_roots": [
+    "/opt/api",
+    "/etc/nginx",
+    "/etc/systemd/system",
+    "/usr/local/bin"
+  ]
+}
+```
+
+For Edge, set `"nginx_plane":"edge"` and optionally a root-enrolled
+`edge_log_dir`; it must match file-only `EDGE_LOG_DIR`, and the generated
+collector path is exactly `<edge_log_dir>/mojosec.json.log`.
+
+The app/fleet desired-policy source contains no endpoint, identity, or secret:
+
+```json
+{
+  "version": 1,
   "policy_revision": "prod-2026-08-08",
-  "state_dir": "/var/lib/mojosec",
-  "status_path": "/run/mojosec/status.json",
-  "credential_path": "/etc/mojosec/credential",
   "poll_seconds": 5,
   "collectors": {
     "journal": {
@@ -72,7 +98,6 @@ redirects so credentials cannot be forwarded to a different host.
     },
     "nginx": {
       "enabled": true,
-      "paths": ["/var/log/nginx/mojosec.json.log"],
       "max_bytes_per_poll": 2097152,
       "max_line_bytes": 16384
     },
@@ -108,12 +133,24 @@ redirects so credentials cannot be forwarded to a different host.
 }
 ```
 
-FIM targets are operational policy, not universal defaults. Keep the profile
+FIM targets are operational policy, not universal defaults, and must remain
+beneath a root-enrolled allowed root. `/home` is deliberately inaccessible
+under the unit's `ProtectHome=true`; private MojoSec state is always rejected.
+Keep the profile
 small enough that every change is meaningful. The deployment should generate
 the exact code/config/systemd/nginx paths for that project rather than copying
 the sample unchanged. An enabled FIM collector requires at least one target;
 set `collectors.fim.enabled` to `false` when the deployment has no approved
 profile. The public `status_path` must remain outside the private `state_dir`.
+
+An optional expected-change manifest annotates a reported `fim.change`; it
+never suppresses one. The root-owned 0600 JSON envelope is
+`{"schema":"mojosec.expected_changes","version":1,"entries":[...]}`. Each
+entry must name an exact absolute `path`, `change` (`created`, `modified`, or
+`deleted`), SHA-256 of the resulting file (the prior file for deletion),
+timezone-aware `expires_at`, and bounded `deployment_id`. Path, change, digest,
+and live expiry must all match. Missing, expired, or mismatched entries behave
+like no expectation; malformed/insecure manifests fail that FIM poll visibly.
 
 ### Structured nginx input
 
@@ -158,13 +195,14 @@ queued. There is no pathname-based fallback.
 
 ```bash
 # Parse all fields and audit the config file's type, ownership, and mode.
-python -I -m mojo.mojosec --config /opt/api/var/mojosec.json check
+sudo python -I -m mojo.mojosec --config /etc/mojosec/config.json check
 
 # One collection/delivery cycle; useful for a deployment canary.
-python -I -m mojo.mojosec --config /opt/api/var/mojosec.json once
+sudo python -I -m mojo.mojosec --config /etc/mojosec/config.json once
 
-# Read the public health snapshot without opening the private SQLite database.
-python -I -m mojo.mojosec --config /opt/api/var/mojosec.json status
+# Audit bounded status without opening config, credential, or SQLite content.
+sudo python -I -m mojo.deploy.check_node --section mojosec \
+  --mojosec-mode observe --mojosec-sensor-id prod-web-i-0123456789abcdef0
 ```
 
 `check` does not open the API-key credential; `once` and `run` validate it when
@@ -173,10 +211,57 @@ and the status snapshot, but does not make the command exit nonzero. Treat the
 `delivery` object in `status` as the canary result rather than relying only on
 the process exit code.
 
-`/run/mojosec/status.json` is atomically written as mode `0644` and contains
+An observe-only canary should exercise the actual nginx and authenticated
+receiver path without changing firewall policy. Set the persistent root
+enrollment to observe/required before allowing another deploy. Record an exact
+UTC start timestamp, then use the real canary vhost:
+
+```bash
+# Use the real canary vhost so the request traverses the active nginx graph.
+curl -sS -o /dev/null -H 'Host: canary.example.com' \
+  http://127.0.0.1/wp-login.php
+# Use a canary-only application route deliberately returning 503.
+curl -sS -o /dev/null -H 'Host: canary.example.com' \
+  http://127.0.0.1/__mojosec_canary_503
+sleep 12
+sudo python3 -I -m mojo.deploy.check_node --section mojosec \
+  --mojosec-mode observe --mojosec-sensor-id prod-web-i-0123456789abcdef0
+```
+
+Then verify centrally that a published receipt for that sensor was created
+after the request (not merely that the local spool accepted it):
+
+```python
+from mojo.apps.incident.models import MojoSecReceipt
+MojoSecReceipt.objects.filter(
+    sensor_id="prod-web-i-0123456789abcdef0",
+    publish_state="published",
+    created__gte=canary_started_at,
+).order_by("-created").values("wire_event_id", "created").first()
+```
+
+Also require a benign SSH login/logout, harmless sudo command, and controlled
+FIM create/modify/chmod/delete under the enrolled canary root. Force a receiver
+503 outage for only the canary key, prove durable spool growth and drain after
+recovery, restart the service and prove identity/cursor/baseline persistence,
+then run targeted `logrotate -f`, verify inode change/USR1 reopen and a new log
+line. `maxsize 50M` is evaluated by logrotate's timer/command, not continuously.
+Gate on zero capacity drops, no sustained error, explainable noise, bounded
+disk/FD/task growth, under 150 MiB memory/32 tasks, and under 5% of one CPU over
+five idle minutes. Roll back persistently by reinstalling enrollment with mode
+off, then run:
+
+```bash
+sudo python3 -I -m mojo.deploy.mojosec converge \
+  --mode enrolled --criticality enrolled
+```
+
+`/run/mojosec/status.json` is atomically written as root:root mode `0640` and contains
 only sensor identity, collector freshness/errors, delivery counts, spool depth,
-aggregation depth, and capacity-drop counters. It contains no API key, raw log
-record, database row, FIM digest, or file content.
+aggregation depth, capacity-drop counters, and desired/effective config hashes.
+It contains no API key, endpoint, raw log record, database row, FIM digest, or
+file content. `check_node` reads that projection with sudo; ordinary app users
+do not receive collector/backlog timing.
 
 ## Durability and batching
 
@@ -227,6 +312,45 @@ protected `mojosec_ingest` permission and a server-owned enrollment profile:
 }
 ```
 
+Create that key only from a trusted server-side provisioning shell (choose the
+platform's infrastructure authentication group; it is not a customer tenant):
+
+```python
+from mojo.apps.account.models import ApiKey, Group
+
+sensor_id = "prod-web-i-0123456789abcdef0"
+group = Group.objects.get(name="infrastructure")
+key, token = ApiKey.create_for_group(
+    group, f"mojosec:{sensor_id}", permissions={"mojosec_ingest": True})
+metadata = dict(key.metadata or {})
+protected = dict(metadata.get("protected") or {})
+protected["mojosec"] = {
+    "enabled": True, "sensor_id": sensor_id, "allowed_versions": [1],
+}
+metadata["protected"] = protected
+key.metadata = metadata
+key.save(update_fields=["metadata"])
+print(token)  # transfer once through the approved secret channel
+```
+
+On the host, place the nonsecret desired policy at
+`/opt/api/var/mojosec.json`, then provision protected inputs and converge:
+
+```bash
+sudo python3 -I -m mojo.deploy.mojosec install-enrollment < enrollment.json
+sudo python3 -I -m mojo.deploy.mojosec rotate-credential < credential.txt
+sudo python3 -I -m mojo.deploy.mojosec converge \
+  --mode enrolled --criticality enrolled
+sudo python3 -I -m mojo.deploy.check_node --section mojosec \
+  --mojosec-mode observe --mojosec-sensor-id prod-web-i-0123456789abcdef0
+```
+
+The key-install command never accepts the secret in argv. Delete the transfer
+file through the approved secret-handling process after provisioning. The
+canary is incomplete until a deliberately generated high-signal request is
+authenticated, accepted, and visible as a published `MojoSecReceipt` for this
+exact sensor; a successful local service start alone proves no receiver path.
+
 `mojosec_ingest` is in the framework's API-key protection floor. A tenant
 administrator cannot mint it; the platform provisioning path must create the
 credential. The receiver requires the authenticated key's enrolled sensor ID
@@ -262,7 +386,10 @@ REST create/update/delete are disabled.
 
 Wire attributes remain in the receipt's `replay_features`, which is denied to
 generic AI/model query tools. The central Event contains a fixed title/detail
-and validated scalar provenance only. A source IP is promoted only for a
+and validated scalar provenance only. For `fim.change`, the sole optional
+sensor annotation projected centrally is exact
+`expected_change.{deployment_id,expires_at}` after revalidation; raw FIM
+attributes never project and the annotation never suppresses publication. A source IP is promoted only for a
 server-owned per-kind registry after a minimum aggregate threshold. Successful
 login and web-error evidence never promotes a source IP. Host severity is
 preserved only as advisory evidence; the registry selects the effective level

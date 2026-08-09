@@ -28,7 +28,7 @@ def write_status(path, status):
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(temp_path, 0o644)
+        os.chmod(temp_path, 0o640)
         os.replace(temp_path, path)
     except Exception:
         try:

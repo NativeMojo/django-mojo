@@ -54,6 +54,11 @@ Event IDs are unique lowercase SHA-256 digests within a batch. A batch contains
 1–500 events and both its compressed wire body and decompressed JSON are capped
 at 512 KiB.
 
+On a MojoSec-enabled standard or Edge nginx deployment, the exact receiver
+location also enforces a 512 KiB request-body cap before Django. This is a
+defense in depth limit; clients must still obey the receiver's compressed and
+decompressed limits described below.
+
 The receiver streams at most 512 KiB plus one byte and never exposes this body
 to generic request parsing or request/DB logging. `Content-Length`, when sent,
 must match the bytes read. Broad request logging records only a fixed

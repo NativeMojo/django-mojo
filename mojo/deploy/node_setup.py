@@ -8,7 +8,7 @@ Three idempotent actions, each safe to re-run on every deploy:
 
     var dirs   create var/{logs,pids,keys}, chown --owner, 2775 on directories
                (INCLUDING var/ itself — the setgid bit there is the point) and
-               0664 on files
+               0664 on files; symlinks are rejected and never followed
     systemd    copy *.service AND *.timer whose bytes differ, daemon-reload only
                when something changed, then `enable --now` the TIMERS
     cron       write /etc/cron.d/3_mojo_jobs, whose user field is --cron-user
@@ -122,23 +122,88 @@ def read_bytes(path):
         return None
 
 
-def walk_tree(root):
-    """(path, is_dir) for `root` and everything beneath it, root first.
+def _directory_flags():
+    return os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 
-    Yields the root itself explicitly and every subdirectory through its
-    parent's dirnames, so each path appears exactly once. A chmod pass that
-    walked only `dirnames` would silently skip var/ itself — which is the one
-    directory whose setgid bit the whole scheme depends on.
-    """
-    if not os.path.isdir(root):
-        return []
-    entries = [(root, True)]
-    for dirpath, dirnames, filenames in os.walk(root):
-        for name in dirnames:
-            entries.append((os.path.join(dirpath, name), True))
-        for name in filenames:
-            entries.append((os.path.join(dirpath, name), False))
-    return entries
+
+def _open_real_directory(path):
+    descriptor = os.open(path, _directory_flags())
+    info = os.fstat(descriptor)
+    if not stat.S_ISDIR(info.st_mode):
+        os.close(descriptor)
+        raise OSError("not a real directory: %s" % path)
+    return descriptor
+
+
+def _mutate_descriptor(descriptor, info, wanted_mode, uid, gid, dry_run):
+    wrong_mode = stat.S_IMODE(info.st_mode) != wanted_mode
+    wrong_owner = uid is not None and (info.st_uid != uid or info.st_gid != gid)
+    if not dry_run:
+        if wrong_mode:
+            os.fchmod(descriptor, wanted_mode)
+        if wrong_owner:
+            os.fchown(descriptor, uid, gid)
+    return int(wrong_mode), int(wrong_owner)
+
+
+def _walk_pinned(directory_fd, display_path, uid, gid, dry_run):
+    """Mutate only fstat-verified, no-follow descriptors beneath one root."""
+    mode_count = owner_count = rejected = 0
+    info = os.fstat(directory_fd)
+    moved_mode, moved_owner = _mutate_descriptor(
+        directory_fd, info, DIR_MODE, uid, gid, dry_run)
+    mode_count += moved_mode
+    owner_count += moved_owner
+    with os.scandir(directory_fd) as entries:
+        for entry in entries:
+            child_path = os.path.join(display_path, entry.name)
+            try:
+                before = os.stat(
+                    entry.name, dir_fd=directory_fd, follow_symlinks=False)
+            except OSError as err:
+                log.warning("cannot lstat %s: %s", child_path, err)
+                rejected += 1
+                continue
+            if stat.S_ISLNK(before.st_mode):
+                log.warning("refusing symlink under var: %s", child_path)
+                rejected += 1
+                continue
+            if stat.S_ISDIR(before.st_mode):
+                flags = _directory_flags()
+                wanted = DIR_MODE
+            elif stat.S_ISREG(before.st_mode):
+                flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                wanted = FILE_MODE
+            else:
+                log.warning("refusing non-file under var: %s", child_path)
+                rejected += 1
+                continue
+            try:
+                child_fd = os.open(entry.name, flags, dir_fd=directory_fd)
+            except OSError as err:
+                log.warning("cannot safely open %s: %s", child_path, err)
+                rejected += 1
+                continue
+            try:
+                opened = os.fstat(child_fd)
+                if opened.st_dev != before.st_dev or opened.st_ino != before.st_ino:
+                    log.warning("refusing raced var entry: %s", child_path)
+                    rejected += 1
+                    continue
+                if stat.S_ISDIR(opened.st_mode):
+                    child_mode, child_owner, child_rejected = _walk_pinned(
+                        child_fd, child_path, uid, gid, dry_run)
+                    mode_count += child_mode
+                    owner_count += child_owner
+                    rejected += child_rejected
+                else:
+                    moved_mode, moved_owner = _mutate_descriptor(
+                        child_fd, opened, wanted, uid, gid, dry_run)
+                    mode_count += moved_mode
+                    owner_count += moved_owner
+            finally:
+                os.close(child_fd)
+    return mode_count, owner_count, rejected
 
 
 # ---------------------------------------------------------------------------
@@ -151,46 +216,51 @@ def sync_var_dirs(var_root, owner, dry_run):
     Returns the list of changes; an already-converged tree returns [].
     """
     changes = []
-    for path in [var_root] + [os.path.join(var_root, n) for n in VAR_SUBDIRS]:
-        if os.path.isdir(path):
-            continue
-        changes.append("create %s" % path)
-        if not dry_run:
-            os.makedirs(path, exist_ok=True)
-
-    uid, gid = resolve_owner(owner)
-    wrong_mode = 0
-    wrong_owner = 0
-    for path, is_dir in walk_tree(var_root):
+    try:
+        root_info = os.lstat(var_root)
+    except FileNotFoundError:
+        changes.append("create %s" % var_root)
+        if dry_run:
+            for name in VAR_SUBDIRS:
+                changes.append("create %s" % os.path.join(var_root, name))
+            return changes
+        parent = os.path.dirname(var_root) or "."
+        parent_fd = _open_real_directory(parent)
         try:
-            info = os.stat(path)
-        except OSError as err:
-            log.debug("cannot stat %s: %s", path, err)
-            continue
+            os.mkdir(os.path.basename(var_root), DIR_MODE, dir_fd=parent_fd)
+        finally:
+            os.close(parent_fd)
+    else:
+        if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+            raise RuntimeError("var root must be a real directory: %s" % var_root)
 
-        wanted = DIR_MODE if is_dir else FILE_MODE
-        if stat.S_IMODE(info.st_mode) != wanted:
-            wrong_mode += 1
-            if not dry_run:
-                try:
-                    os.chmod(path, wanted)
-                except OSError as err:
-                    log.warning("cannot chmod %s: %s", path, err)
+    root_fd = _open_real_directory(var_root)
+    try:
+        for name in VAR_SUBDIRS:
+            try:
+                info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                changes.append("create %s" % os.path.join(var_root, name))
+                if not dry_run:
+                    os.mkdir(name, DIR_MODE, dir_fd=root_fd)
+                continue
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise RuntimeError("required var subdirectory is unsafe: %s" % name)
 
-        if uid is not None and (info.st_uid != uid or info.st_gid != gid):
-            wrong_owner += 1
-            if not dry_run:
-                try:
-                    os.chown(path, uid, gid)
-                except OSError as err:
-                    log.warning("cannot chown %s: %s", path, err)
+        uid, gid = resolve_owner(owner)
+        wrong_mode, wrong_owner, rejected = _walk_pinned(
+            root_fd, var_root, uid, gid, dry_run)
+    finally:
+        os.close(root_fd)
 
     if wrong_mode:
         changes.append("chmod %d path(s) under %s (2775 dirs, 0664 files)"
                        % (wrong_mode, var_root))
     if wrong_owner:
-        changes.append("chown %s on %d path(s) under %s"
-                       % (owner, wrong_owner, var_root))
+        changes.append("chown standard ownership on %d path(s) under %s"
+                       % (wrong_owner, var_root))
+    if rejected:
+        changes.append("refused %d unsafe path(s) under %s" % (rejected, var_root))
     return changes
 
 

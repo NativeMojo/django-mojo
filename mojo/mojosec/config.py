@@ -16,6 +16,19 @@ DEFAULTS = {
     "state_dir": "/var/lib/mojosec",
     "status_path": "/run/mojosec/status.json",
     "credential_path": "/etc/mojosec/credential",
+    "expected_changes_path": "/etc/mojosec/expected_changes.json",
+    "config_provenance": {
+        "source_revision": "",
+        "source_sha256": "",
+        "canonical_revision": "",
+        "effective_sha256": "",
+        "nginx_plane": "standard",
+        "nginx_log_path": "/var/log/nginx/mojosec.json.log",
+        "edge_log_dir": "",
+        "trusted_proxy_cidrs": [],
+        "deployment_mode": "off",
+        "deployment_criticality": "best_effort",
+    },
     "poll_seconds": 5,
     "collectors": {
         "journal": {
@@ -134,12 +147,40 @@ def validate_config(value):
             parsed_endpoint.username or parsed_endpoint.password or parsed_endpoint.query or
             parsed_endpoint.fragment):
         raise ConfigError("endpoint must be an https URL without credentials or a fragment")
-    if parsed_endpoint.path.rstrip("/") != "/api/incident/mojosec/batch":
-        raise ConfigError("endpoint must target /api/incident/mojosec/batch")
+    if parsed_endpoint.path != "/api/incident/mojosec/batch":
+        raise ConfigError("endpoint must target exact /api/incident/mojosec/batch without a slash")
     if not isinstance(value["policy_revision"], str) or len(value["policy_revision"]) > 128:
         raise ConfigError("policy_revision must be a string up to 128 characters")
-    for field in ("state_dir", "status_path", "credential_path"):
+    for field in ("state_dir", "status_path", "credential_path", "expected_changes_path"):
         _absolute(value[field], field)
+    if value["expected_changes_path"] != "/etc/mojosec/expected_changes.json":
+        raise ConfigError("expected_changes_path is fixed by the privileged deployment")
+    provenance = value["config_provenance"]
+    _reject_unknown(provenance, DEFAULTS["config_provenance"], "config_provenance")
+    for field in ("source_revision", "source_sha256", "canonical_revision",
+                  "effective_sha256",
+                  "nginx_plane", "nginx_log_path"):
+        item = provenance[field]
+        if not isinstance(item, str) or len(item) > 128:
+            raise ConfigError(f"config_provenance.{field} must be a bounded string")
+    if provenance["nginx_plane"] not in ("standard", "edge"):
+        raise ConfigError("config_provenance.nginx_plane must be standard or edge")
+    if provenance["deployment_mode"] not in ("off", "observe"):
+        raise ConfigError("config_provenance.deployment_mode must be off or observe")
+    if provenance["deployment_criticality"] not in ("best_effort", "required"):
+        raise ConfigError("config_provenance.deployment_criticality is invalid")
+    _absolute(provenance["nginx_log_path"], "config_provenance.nginx_log_path")
+    if (not isinstance(provenance["edge_log_dir"], str) or
+            len(provenance["edge_log_dir"]) > 4096):
+        raise ConfigError("config_provenance.edge_log_dir must be a bounded string")
+    if provenance["nginx_plane"] == "edge":
+        _absolute(provenance["edge_log_dir"], "config_provenance.edge_log_dir")
+    elif provenance["edge_log_dir"]:
+        raise ConfigError("config_provenance.edge_log_dir is only valid for Edge")
+    cidrs = provenance["trusted_proxy_cidrs"]
+    if not isinstance(cidrs, list) or len(cidrs) > 64 or not all(
+            isinstance(item, str) and len(item) <= 64 for item in cidrs):
+        raise ConfigError("config_provenance.trusted_proxy_cidrs must be a bounded list")
     if value["status_path"].startswith(value["state_dir"].rstrip("/") + "/"):
         raise ConfigError("status_path must not expose the private state directory")
     _integer(value["poll_seconds"], "poll_seconds", 1, 3600)
@@ -224,6 +265,13 @@ def validate_config(value):
     return value
 
 
+def build_config(supplied):
+    """Merge one already-parsed object with defaults and validate it."""
+    if not isinstance(supplied, dict):
+        raise ConfigError("config must be a JSON object")
+    return validate_config(_merge(DEFAULTS, supplied))
+
+
 def _security_problems(info, require_root):
     problems = []
     if not stat.S_ISREG(info.st_mode):
@@ -272,7 +320,4 @@ def load_config(path, require_root=None):
     finally:
         if descriptor is not None:
             os.close(descriptor)
-    if not isinstance(supplied, dict):
-        raise ConfigError("config must be a JSON object")
-    merged = _merge(DEFAULTS, supplied)
-    return validate_config(merged)
+    return build_config(supplied)

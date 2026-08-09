@@ -25,6 +25,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 
 from testit import helpers as th
 
@@ -127,6 +128,61 @@ def test_var_dirs_fixes_file_modes_and_then_changes_nothing(opts):
         th.assert_eq(ns.sync_var_dirs(var_root, "", False), [],
                      "a converged var tree must report no changes at all — "
                      "this action runs on every deploy")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_var_dirs_refuses_symlinks_without_mutating_their_targets(opts):
+    from mojo.deploy import node_setup as ns
+
+    base = _tempdir()
+    try:
+        var_root = os.path.join(base, "var")
+        outside = _write(os.path.join(base, "outside-secret"), "secret\n")
+        os.chmod(outside, 0o600)
+        ns.sync_var_dirs(var_root, "", False)
+        os.symlink(outside, os.path.join(var_root, "logs", "linked"))
+
+        changes = ns.sync_var_dirs(var_root, "", False)
+
+        th.assert_eq(_mode(outside), 0o600,
+                     "var convergence must never chmod a symlink target")
+        th.assert_true(any("refused 1 unsafe" in change for change in changes),
+                       f"the symlink refusal must be visible: {changes}")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_var_dirs_refuses_file_to_symlink_race(opts):
+    from mojo.deploy import node_setup as ns
+
+    base = _tempdir()
+    try:
+        var_root = os.path.join(base, "var")
+        ns.sync_var_dirs(var_root, "", False)
+        victim = _write(os.path.join(var_root, "logs", "victim"), "safe\n")
+        outside = _write(os.path.join(base, "outside-race"), "secret\n")
+        os.chmod(outside, 0o600)
+        real_open = ns.os.open
+        swapped = {"done": False}
+
+        def swap_before_open(path, flags, *args, **kwargs):
+            if (path == "victim" and kwargs.get("dir_fd") is not None and
+                    not swapped["done"]):
+                os.unlink(victim)
+                os.symlink(outside, victim)
+                swapped["done"] = True
+            return real_open(path, flags, *args, **kwargs)
+
+        with mock.patch.object(ns.os, "open", side_effect=swap_before_open):
+            changes = ns.sync_var_dirs(var_root, "", False)
+
+        th.assert_eq(_mode(outside), 0o600,
+                     "a file-to-symlink race must not chmod the outside target")
+        th.assert_true(any("refused" in change for change in changes),
+                       f"the race refusal must be visible: {changes}")
     finally:
         shutil.rmtree(base, ignore_errors=True)
 
