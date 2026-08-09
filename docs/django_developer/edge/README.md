@@ -231,17 +231,21 @@ second convergence mechanism.
 |---|---|
 | `edge.install_generation` broadcast on the `edge` channel | Something changed and we were told |
 | `converge_edge` cron, every 10 minutes | A node that missed a broadcast, booted from an AMI, or had its runner stopped |
+| job-engine startup hook (`asyncjobs.on_engine_start`) | This node itself just started — every deploy restarts every engine, and a broadcast published in that window resolves its roster without the restarting node |
 | dnsman's `certificate_updated` | A renewal landed |
 
 The sweep is what makes convergence a property rather than a hope: every
-broadcast is best-effort, and nothing maintains a node inventory.
+broadcast is best-effort, and nothing maintains a node inventory. The startup
+hook closes the other end of the same gap: a node that boots — from a deploy,
+an AMI, a crash — reconciles itself immediately instead of waiting out the
+sweep, and publishes nothing to do it.
 
 `EDGE_CONVERGE_ENABLED = False` (settings-file-only, read with `get_static`)
-switches the sweep off for deployments that install this app **only** for the
-fleet-deploy plane ([deploy.md](deploy.md)) and manage nginx some other way —
-without it they would broadcast convergence onto an `edge` channel none of
-their runners consume, every 10 minutes, forever. Default True; existing edge
-deployments are unaffected.
+switches the sweep **and** the startup converge off for deployments that
+install this app **only** for the fleet-deploy plane ([deploy.md](deploy.md))
+and manage nginx some other way — without it they would broadcast convergence
+onto an `edge` channel none of their runners consume, every 10 minutes,
+forever. Default True; existing edge deployments are unaffected.
 
 ## Machine endpoints and the permission that gates them
 

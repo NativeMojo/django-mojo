@@ -37,6 +37,23 @@ def install_generation(job):
             f"www_pending={len(result.www_pending or {})}")
 
 
+def _converge_pools(pools, source):
+    """Install every pool, isolating failures — one pool's failure must not
+    stop convergence for the others; the install already reported its own
+    incident."""
+    from mojo.apps.edge.services import installer
+
+    converged = []
+    for pool in pools:
+        try:
+            result = installer.install(pool=pool)
+            if result.changed:
+                converged.append(pool)
+        except Exception as err:
+            logit.error(f"edge: {source} convergence failed for pool {pool}: {err}")
+    return f"completed:converged={','.join(converged) if converged else 'none'}"
+
+
 def converge(job):
     """Cron entry point — the same install, on a timer.
 
@@ -45,20 +62,28 @@ def converge(job):
     missed a broadcast, booted from an AMI, or had its runner stopped converges
     here.
     """
-    from mojo.apps.edge.services import installer
-
     pools = (job.payload or {}).get("pools") or ["default"]
-    converged = []
-    for pool in pools:
-        try:
-            result = installer.install(pool=pool)
-            if result.changed:
-                converged.append(pool)
-        except Exception as err:
-            # One pool's failure must not stop the sweep for the others — the
-            # install already reported its own incident.
-            logit.error(f"edge: convergence sweep failed for pool {pool}: {err}")
-    return f"completed:converged={','.join(converged) if converged else 'none'}"
+    return _converge_pools(pools, "sweep")
+
+
+def on_engine_start(engine):
+    """Reconcile this node because it started, not because it was told to.
+
+    Job-engine startup hook (maestro #1772). Fan-out resolves the runner
+    roster at publish time, so a broadcast sent while this node's engine was
+    restarting — which every deploy causes — quietly skips it. Rather than
+    catching pushes better, the node re-derives its own desired state on
+    boot: deliberately local, publishes nothing.
+
+    Runs on the engine's worker pool; a failure here is logged by the engine
+    and never prevents startup — the ten-minute sweep is still behind it.
+    """
+    from mojo.apps.edge import cronjobs
+
+    if not cronjobs.converge_enabled():
+        return "disabled"
+    logit.info(f"edge: startup convergence on {engine.runner_id}")
+    return _converge_pools(cronjobs.converge_pools(), "startup")
 
 
 # ----------------------------------------------------------------------

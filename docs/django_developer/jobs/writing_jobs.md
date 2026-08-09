@@ -282,3 +282,34 @@ jobs.publish("myapp.services.export.generate_report", {"report_id": 7})
 5. **Use `atomic_save()`** — For concurrent-safe metadata updates in long jobs.
 6. **Keep jobs focused** — One job = one unit of work. Chain jobs for multi-step workflows.
 7. **Handle expected errors gracefully** — Only `raise` for genuinely unexpected failures.
+
+## Startup Hooks
+
+To run code when a **runner daemon** starts — not on every `manage.py`
+invocation — register a dotted path from your app's `AppConfig.ready()`:
+
+```python
+# myapp/apps.py
+def ready(self):
+    from mojo.apps import jobs
+    jobs.register_startup_hook("myapp.services.boot.on_engine_start")
+```
+
+```python
+# myapp/services/boot.py
+def on_engine_start(engine):   # called with the JobEngine instance
+    ...
+    return "completed"         # logged by the engine
+```
+
+Registration happens in every Django process and is inert; hooks fire only
+from `JobEngine.start()`, the entry point unique to a real engine — never a
+shell, a management command, or the test runner. Each hook runs on the
+engine's worker pool: a hook that raises is logged and never stops the
+engine, and a slow one never delays job consumption.
+
+The canonical use is reconcile-on-boot (edge's `on_engine_start` converges
+the node's nginx generation): work addressed to "every runner" resolves the
+roster at publish time, so a broadcast sent while an engine restarts quietly
+skips it — a node that re-derives its own state on startup closes that
+window without depending on delivery.

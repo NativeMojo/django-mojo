@@ -232,6 +232,32 @@ def get_sched_channels():
     )
 
 
+# Dotted paths run when a runner daemon comes up — registered from an app's
+# AppConfig.ready(), so registration happens in EVERY Django process and stays
+# inert: hooks fire only from JobEngine.start(), the entry point unique to a
+# real engine (never a shell, a management command, or the test runner).
+ENGINE_STARTUP_HOOKS = []
+
+
+def register_startup_hook(func_path):
+    """
+    Register a dotted function path to run when a job engine starts.
+
+    The function is called with the JobEngine instance, on the engine's own
+    worker pool: a hook that raises is logged and never stops the engine, and
+    a slow one never delays job consumption. Exists so a node can reconcile
+    itself because it booted, rather than depending on a broadcast it may
+    have been down for (maestro #1772).
+    """
+    if func_path not in ENGINE_STARTUP_HOOKS:
+        ENGINE_STARTUP_HOOKS.append(func_path)
+
+
+def get_startup_hooks():
+    """Registered startup hook paths — see register_startup_hook()."""
+    return list(ENGINE_STARTUP_HOOKS)
+
+
 def publish(
     func: Union[str, Callable],
     payload: Dict[str, Any] = None,

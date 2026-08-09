@@ -269,3 +269,28 @@ def raises(func, *args, **kwargs):
     except Exception as err:
         return err
     return None
+
+
+_SENTINEL = object()
+
+
+def with_setting(name, value, func):
+    """Run `func` with a Django settings attribute overridden, then restore.
+
+    For `settings.get_static` reads (file-only posture flags like
+    EDGE_CONVERGE_ENABLED): the DM-015 pattern — a direct setattr on
+    `django.conf.settings` with a try/finally restore, because
+    `th.server_settings` would reload the wrong process for in-process
+    service tests.
+    """
+    from django.conf import settings as dj_settings
+
+    saved = getattr(dj_settings, name, _SENTINEL)
+    setattr(dj_settings, name, value)
+    try:
+        return func()
+    finally:
+        if saved is _SENTINEL:
+            delattr(dj_settings, name)
+        else:
+            setattr(dj_settings, name, saved)

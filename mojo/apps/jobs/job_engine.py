@@ -35,7 +35,12 @@ from mojo.helpers import dates
 logger = logit.get_logger("jobs", "jobs.log", debug=True)
 
 
-from . import DEFAULT_CHANNELS, ENGINE_CHANNEL_SUFFIX, register_sched_channel
+from . import (
+    DEFAULT_CHANNELS,
+    ENGINE_CHANNEL_SUFFIX,
+    get_startup_hooks,
+    register_sched_channel,
+)
 
 JOBS_ENGINE_CLAIM_BATCH = settings.get_static('JOBS_ENGINE_CLAIM_BATCH', 5)
 JOBS_CHANNELS = settings.get_static('JOBS_CHANNELS', DEFAULT_CHANNELS)
@@ -174,13 +179,15 @@ class JobEngine:
         """
         Start the job engine.
 
-        Sets up consumer groups, starts heartbeat, and begins processing.
+        Sets up consumer groups, starts heartbeat, runs registered startup
+        hooks, and begins processing.
         """
         if self.running:
             logger.warning("JobEngine already running")
             return
 
         self.initialize()
+        self._run_startup_hooks()
 
         # Main processing loop
         try:
@@ -192,6 +199,38 @@ class JobEngine:
             raise
         finally:
             self.stop()
+
+    def _run_startup_hooks(self, hooks=None):
+        """
+        Run registered startup hooks (see jobs.register_startup_hook).
+
+        Called from start() and ONLY start(), deliberately: initialize() is
+        also reachable from in-process tooling and tests, and hooks must fire
+        only when a real runner daemon comes up. Each hook runs on the worker
+        pool so a slow one never delays job consumption and a broken one
+        never stops the engine.
+
+        `hooks` overrides the registry — the injection seam for tests, which
+        must not touch the process-global list (test modules run in parallel
+        threads and the real registry carries other apps' hooks). Returns the
+        submitted futures so tests can wait on them; the daemon path ignores
+        them.
+        """
+        if hooks is None:
+            hooks = get_startup_hooks()
+        futures = []
+        for func_path in hooks:
+            futures.append(
+                self.executor.submit(self._run_startup_hook, func_path))
+        return futures
+
+    def _run_startup_hook(self, func_path):
+        try:
+            func = load_job_function(func_path)
+            result = func(self)
+            logger.info(f"startup hook {func_path}: {result}")
+        except Exception as e:
+            logger.error(f"startup hook {func_path} failed: {e}")
 
     def stop(self, timeout: float = 30.0):
         """

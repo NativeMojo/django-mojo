@@ -1,0 +1,112 @@
+"""
+Startup convergence (maestro #1772): a node reconciles itself because its
+engine started, not because a broadcast happened to arrive while it was
+listening. Fan-out resolves the roster at publish time, so a broadcast sent
+while an engine restarts — which every deploy causes — quietly skips it.
+
+The handler is deliberately local: it installs pools and publishes nothing.
+The hook-firing mechanics (start()-only, failure containment) are covered in
+`test_job_engine/test_startup_hooks.py`; this file covers the edge handler.
+"""
+from unittest import mock
+
+from testit import helpers as th
+
+from tests.test_edge._helpers import declare_pools, with_setting
+
+
+def _engine(runner_id="test-node-engine"):
+    return mock.Mock(runner_id=runner_id)
+
+
+@th.django_unit_test("the startup hook is registered by the edge app")
+def test_startup_hook_is_registered(opts):
+    """apps.EdgeConfig.ready() ran in this very process — the registration it
+    performed is what a real runner daemon fires on start."""
+    from mojo.apps import jobs
+
+    assert "mojo.apps.edge.asyncjobs.on_engine_start" in jobs.get_startup_hooks(), (
+        "the edge app did not register its converge hook — a restarting node "
+        f"would depend on the sweep again (registered: {jobs.get_startup_hooks()})")
+
+
+@th.django_unit_test("startup converge installs every pool, publishes nothing")
+def test_startup_converge_installs_pools(opts):
+    import mojo.apps.jobs as jobs_module
+    from mojo.apps.edge import asyncjobs
+
+    declare_pools(["alpha", "beta"])
+    installed = []
+    edge_broadcasts = []
+
+    # Wrap-and-forward rather than replace: test modules run in parallel
+    # threads, and swallowing jobs.publish here breaks any concurrent module
+    # publishing real jobs (the 15_deploy_orchestrate/test_jobs race).
+    real_publish = jobs_module.publish
+
+    def spying_publish(*args, **kw):
+        if kw.get("channel") == "edge" and kw.get("broadcast"):
+            edge_broadcasts.append(kw)
+        return real_publish(*args, **kw)
+
+    try:
+        with mock.patch(
+                "mojo.apps.edge.services.installer.install",
+                side_effect=lambda pool: installed.append(pool) or mock.Mock(changed=True)), \
+                mock.patch.object(jobs_module, "publish", spying_publish):
+            result = asyncjobs.on_engine_start(_engine())
+    finally:
+        declare_pools()
+
+    assert installed == ["alpha", "beta"], (
+        f"startup convergence must install each declared pool, got {installed}")
+    assert edge_broadcasts == [], (
+        "startup convergence is the node reconciling ITSELF — it must not "
+        f"broadcast to the fleet, got {edge_broadcasts}")
+    assert result == "completed:converged=alpha,beta", (
+        f"unexpected hook result: {result!r}")
+
+
+@th.django_unit_test("EDGE_CONVERGE_ENABLED=False disables startup converge")
+def test_startup_converge_honors_gate(opts):
+    """Deployments that install this app only for the fleet-deploy plane gate
+    the sweep off; the startup converge must honor the same gate."""
+    from mojo.apps.edge import asyncjobs
+
+    installed = []
+    with mock.patch("mojo.apps.edge.services.installer.install",
+                    side_effect=lambda pool: installed.append(pool)):
+        result = with_setting(
+            "EDGE_CONVERGE_ENABLED", False,
+            lambda: asyncjobs.on_engine_start(_engine()))
+
+    assert result == "disabled", (
+        f"the gated startup converge must say it was disabled, got {result!r}")
+    assert installed == [], (
+        f"a disabled startup converge must not install anything, got {installed}")
+
+
+@th.django_unit_test("one pool's failure does not stop the others")
+def test_startup_converge_isolates_pool_failure(opts):
+    from mojo.apps.edge import asyncjobs
+
+    declare_pools(["alpha", "beta"])
+    attempted = []
+
+    def install(pool):
+        attempted.append(pool)
+        if pool == "alpha":
+            raise RuntimeError("install blew up")
+        return mock.Mock(changed=True)
+
+    try:
+        with mock.patch("mojo.apps.edge.services.installer.install",
+                        side_effect=install):
+            result = asyncjobs.on_engine_start(_engine())
+    finally:
+        declare_pools()
+
+    assert attempted == ["alpha", "beta"], (
+        f"a failing pool must not stop convergence of the rest, got {attempted}")
+    assert result == "completed:converged=beta", (
+        f"the failed pool must not be reported converged, got {result!r}")
