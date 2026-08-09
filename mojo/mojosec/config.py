@@ -209,7 +209,21 @@ def validate_config(value):
     return value
 
 
-def load_config(path):
+def _security_problems(info, require_root):
+    problems = []
+    if not stat.S_ISREG(info.st_mode):
+        problems.append("not a regular file")
+    if info.st_mode & 0o077:
+        problems.append("permissions must be 0600 or stricter")
+    if require_root and info.st_uid != 0:
+        problems.append("must be owned by root")
+    return problems
+
+
+def load_config(path, require_root=None):
+    """Open, validate, and parse one immutable descriptor view of config."""
+    if require_root is None:
+        require_root = os.geteuid() == 0
     try:
         flags = os.O_RDONLY
         if hasattr(os, "O_NOFOLLOW"):
@@ -219,15 +233,25 @@ def load_config(path):
         raise ConfigError(f"cannot open config {path}: {err}") from err
     try:
         info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode):
-            raise ConfigError("config must be a regular file, not a symlink or device")
+        problems = _security_problems(info, require_root)
+        if problems:
+            raise ConfigError("config security check failed: " + "; ".join(problems))
         if info.st_size > MAX_CONFIG_BYTES:
             raise ConfigError("config file is too large")
-        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-            descriptor = None
-            supplied = json.load(
-                handle, object_pairs_hook=_strict_object, parse_constant=_reject_constant
-            )
+        chunks = []
+        total = 0
+        while total <= MAX_CONFIG_BYTES:
+            block = os.read(descriptor, min(65536, MAX_CONFIG_BYTES + 1 - total))
+            if not block:
+                break
+            chunks.append(block)
+            total += len(block)
+        if total > MAX_CONFIG_BYTES:
+            raise ConfigError("config file is too large")
+        supplied = json.loads(
+            b"".join(chunks).decode("utf-8"),
+            object_pairs_hook=_strict_object, parse_constant=_reject_constant,
+        )
     except (OSError, UnicodeError, json.JSONDecodeError) as err:
         raise ConfigError(f"cannot read config {path}: {err}") from err
     finally:
@@ -237,22 +261,3 @@ def load_config(path):
         raise ConfigError("config must be a JSON object")
     merged = _merge(DEFAULTS, supplied)
     return validate_config(merged)
-
-
-def check_file_security(path, require_root=False):
-    flags = os.O_RDONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags)
-    try:
-        info = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-    problems = []
-    if not stat.S_ISREG(info.st_mode):
-        problems.append("not a regular file")
-    if info.st_mode & 0o077:
-        problems.append("permissions must be 0600 or stricter")
-    if require_root and info.st_uid != 0:
-        problems.append("must be owned by root")
-    return problems

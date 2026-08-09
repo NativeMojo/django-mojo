@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 
 from testit import helpers as th
 
@@ -82,6 +83,47 @@ def test_config_is_strict_and_applies_safe_defaults(opts):
             json.dump(bad, handle)
         with th.assert_raises(ConfigError):
             load_config(path)
+
+
+@th.django_unit_test()
+def test_config_security_is_checked_on_the_descriptor_that_is_parsed(opts):
+    import mojo.mojosec.config as config_module
+    from mojo.mojosec.config import ConfigError, load_config
+
+    with tempfile.TemporaryDirectory() as root:
+        path = os.path.join(root, "mojosec.json")
+        replacement = os.path.join(root, "replacement.json")
+        original = _config(root)
+        swapped = _config(root)
+        swapped["sensor_id"] = "attacker-replacement"
+        for target, value in ((path, original), (replacement, swapped)):
+            with open(target, "w", encoding="utf-8") as handle:
+                json.dump(value, handle)
+            os.chmod(target, 0o600)
+
+        real_open = config_module.os.open
+        opened = []
+
+        def open_then_replace(open_path, flags):
+            descriptor = real_open(open_path, flags)
+            opened.append(descriptor)
+            if open_path == path:
+                os.replace(replacement, path)
+            return descriptor
+
+        with mock.patch.object(config_module.os, "open", side_effect=open_then_replace):
+            loaded = load_config(path, require_root=False)
+
+        th.assert_eq(len(opened), 1,
+                     "config loading must open the pathname exactly once")
+        th.assert_eq(loaded["sensor_id"], original["sensor_id"],
+                     "security checks and parsing must use the already-opened inode, not a replacement path")
+
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(original, handle)
+        os.chmod(path, 0o640)
+        with th.assert_raises(ConfigError):
+            load_config(path, require_root=False)
 
 
 @th.django_unit_test()

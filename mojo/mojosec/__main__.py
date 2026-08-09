@@ -2,10 +2,9 @@
 
 import argparse
 import json
-import os
 import sys
 
-from .config import ConfigError, check_file_security, load_config
+from .config import ConfigError, load_config
 from .output import read_status
 
 
@@ -29,9 +28,6 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         config = load_config(args.config)
-        problems = check_file_security(args.config, require_root=os.geteuid() == 0)
-        if problems:
-            raise ConfigError("config security check failed: " + "; ".join(problems))
         if args.command == "check":
             _print_json({"ok": True, "sensor_id": config["sensor_id"],
                          "version": config["version"]})
