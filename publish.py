@@ -318,16 +318,27 @@ def maestro_request(method, path, params=None, payload=None, timeout=20):
 
 
 def find_release_note(version, project):
-    """The ProjectRelease row for `version`, or None."""
-    data = maestro_request(
+    """The ProjectRelease row for `version`, or None.
+
+    `include_drafts` is not optional here and is the whole reason this
+    function exists rather than a one-line request: the list is
+    published-only by default, and the note we are gating on has NOT been
+    published yet — publishing it is the last thing a successful release
+    does. Without the flag this check can only ever see the PREVIOUS
+    release and refuses every time.
+
+    Matching is done here rather than with a `version=` query parameter:
+    that parameter is not a supported filter and silently returns nothing.
+    """
+    rows = maestro_request(
         "GET", "/api/maestro/project/release",
-        params={"group": project, "version": version, "graph": "list"})
-    rows = data.get("data") if isinstance(data, dict) else None
-    if rows is None and isinstance(data, list):
-        rows = data
+        params={"group": project, "graph": "list", "size": 100,
+                "include_drafts": 1})
+    if isinstance(rows, dict):
+        rows = rows.get("data") or []
+    wanted = str(version).lstrip("v")
     for row in rows or []:
-        # Filter client-side too: a search-style match could widen this.
-        if str(row.get("version", "")).lstrip("v") == str(version).lstrip("v"):
+        if str(row.get("version", "")).lstrip("v") == wanted:
             return row
     return None
 
