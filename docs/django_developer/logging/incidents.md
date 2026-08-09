@@ -1017,10 +1017,10 @@ only in `MojoSecReceipt.replay_features`; that field is sensitive, excluded
 from the default graph, and the receipt model is `DENY_AI`. The Event receives
 only the central per-kind projection: canonical source/peer IP, method, user,
 TTY, host, status/upstream numbers, token-normalized path, HTTP(S) referrer
-origin and structured UA family/major plus digest. Sudo projects only its
-executable, full-command digest, argument count/provenance, and one constant
-redaction marker—never generic arguments or per-token digests. Ambiguous sudo
-parsing falls back to executable plus digest.
+origin and structured UA family/major plus digest. Sudo command context projects
+only a strict server-owned command family (or `unknown`) and one constant
+redaction marker. Raw executable/path, command digest, argument count, generic
+arguments, and per-token digests remain receipt-only.
 Raw secrets never enter Event metadata/title/details or ordinary logs.
 
 Source-bearing SSH, reliably attributed sudo, and known web kinds populate

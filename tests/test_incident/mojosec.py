@@ -152,9 +152,12 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
                        hashlib.sha256(secret.encode()).hexdigest()[:12] not in sudo_visible,
                        "sudo secrets and per-token digests must not enter Event metadata")
     th.assert_eq(
-        sudo_projected.metadata["mojosec"]["evidence"]["command"]["sha256"],
-        hashlib.sha256(sudo_command.encode()).hexdigest(),
-        "Event evidence should retain only the sensor's full-command digest")
+        sudo_projected.metadata["mojosec"]["evidence"]["command"],
+        {"family": "network_client", "detail": "<redacted>"},
+        "Event evidence should retain only a server-owned command family")
+    th.assert_true(hashlib.sha256(sudo_command.encode()).hexdigest() not in sudo_visible and
+                   "/usr/bin/curl" not in sudo_visible and "/opt/api" not in sudo_visible,
+                   "command digest, executable, and working path must remain receipt-only")
     th.assert_eq(probe.metadata["mojosec"]["evidence"]["referrer_origin"],
                  "https://example.invalid",
                  "central projection should retain only the validated HTTP origin")

@@ -56,28 +56,46 @@ def test_mojosec_sudo_projection_redacts_adversarial_secret_classes(opts):
         th.assert_eq(event.source_ip, "192.0.2.30",
                      "reliably attributed sudo evidence should populate Event.source_ip")
         command = event.metadata["mojosec"]["evidence"]["command"]
-        th.assert_eq(command["executable"], "/usr/bin/curl",
-                     "scrubbed command context should retain the executable")
-        th.assert_eq(set(command), {
-            "executable", "sha256", "argument_count", "arguments",
-        }, "visible command evidence must expose only fixed shape and the full-command digest")
-        th.assert_eq(command["arguments"], "<redacted>",
-                     "all generic sudo arguments must collapse to one constant marker")
+        th.assert_eq(command, {"family": "network_client", "detail": "<redacted>"},
+                     "Event should expose only a server-owned family and constant marker")
+        th.assert_true("/usr/bin/curl" not in encoded and "0" * 64 not in encoded,
+                       "raw executable and command digest must remain receipt-only")
     finally:
         Event.objects.filter(pk=event.pk).delete()
 
 
 @th.django_unit_test()
-def test_mojosec_ambiguous_sudo_command_falls_back_to_executable_and_digest(opts):
+def test_mojosec_sudo_unknown_projection_has_constant_non_oracle_shape(opts):
     from mojo.apps.incident.services.mojosec_evidence import project
 
-    projected = project("auth.sudo_command", {
-        "actor": "deploy", "target_user": "root", "tty": "pts/1",
-        "command": "/usr/bin/curl 'unterminated --password secret",
-        "command_path": "/usr/bin/curl", "command_sha256": "a" * 64,
+    unknown_inputs = (
+        ("sudo short-positional-secret", "short-positional-secret"),
+        ("/opt/path-secret/curl --version", "/opt/path-secret/curl"),
+        ("'unterminated secret", "secret-executable"),
+    )
+    projections = []
+    for raw, command_path in unknown_inputs:
+        projected = project("auth.sudo_command", {
+            "actor": "deploy", "target_user": "root", "tty": "pts/1",
+            "command": raw, "command_path": command_path,
+            "command_sha256": hashlib.sha256(raw.encode()).hexdigest(),
+        })["evidence"]["command"]
+        projections.append(projected)
+        encoded = json.dumps(projected, sort_keys=True)
+        th.assert_true(raw not in encoded and command_path not in encoded and
+                       hashlib.sha256(raw.encode()).hexdigest() not in encoded,
+                       "unknown commands must expose no raw string, path, or digest oracle")
+    th.assert_eq(projections, [{"family": "unknown", "detail": "<redacted>"}] * 3,
+                 "all unknown command shapes must project identically")
+
+    mysql = project("auth.sudo_command", {
+        "command": "/usr/bin/mysql -pguessable-secret", "command_path": "/usr/bin/mysql",
+        "command_sha256": hashlib.sha256(b"guessable-secret").hexdigest(),
     })["evidence"]["command"]
-    th.assert_eq(set(projected), {"executable", "sha256"},
-                 "ambiguous shell parsing must expose only executable plus digest")
+    th.assert_eq(mysql, {"family": "database_client", "detail": "<redacted>"},
+                 "a known executable may map only to its server-owned command family")
+    th.assert_true("guessable-secret" not in json.dumps(mysql),
+                   "known-family projection must not leak inline mysql passwords")
 
 
 @th.django_unit_test()

@@ -12,7 +12,6 @@ _USER = re.compile(r"^[A-Za-z0-9_.@-]{1,128}$")
 _TTY = re.compile(r"^[A-Za-z0-9_.\-/]{1,96}$")
 _HOST = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
 _BOOT = re.compile(r"^[a-f0-9]{32}$")
-_DIGEST = re.compile(r"^[a-f0-9]{64}$")
 _PRODUCT = re.compile(r"(?P<family>[A-Za-z][A-Za-z0-9._-]{0,63})/(?P<major>\d{1,6})")
 _UUID_SEGMENT = re.compile(
     r"^[a-f0-9]{8}-[a-f0-9]{4}-[1-5a-f0-9][a-f0-9]{3}-"
@@ -29,6 +28,17 @@ _KNOWN_UA = {
     "safari": "Safari", "curl": "curl", "wget": "Wget",
     "python-requests": "python-requests", "go-http-client": "Go-http-client",
     "googlebot": "Googlebot", "bingbot": "bingbot",
+}
+_SUDO_COMMAND_FAMILIES = {
+    "/bin/bash": "shell", "/bin/sh": "shell", "/usr/bin/bash": "shell",
+    "/bin/systemctl": "service", "/usr/bin/systemctl": "service",
+    "/sbin/service": "service", "/usr/sbin/service": "service",
+    "/usr/bin/apt": "package", "/usr/bin/apt-get": "package",
+    "/usr/bin/dnf": "package", "/usr/bin/dpkg": "package",
+    "/usr/bin/rpm": "package", "/usr/bin/yum": "package",
+    "/usr/bin/curl": "network_client", "/usr/bin/wget": "network_client",
+    "/usr/bin/mysql": "database_client", "/usr/bin/psql": "database_client",
+    "/usr/bin/rsync": "file_transfer", "/usr/bin/scp": "file_transfer",
 }
 
 
@@ -166,41 +176,22 @@ def _numbers(value, minimum, maximum, scale=1):
     return values or None
 
 
-def _executable(words, fallback):
-    for word in words:
-        if "=" in word and not word.startswith("/"):
-            continue
-        if re.fullmatch(r"[A-Za-z0-9_./+-]{1,512}", word) and ".." not in word:
-            return word
-        break
-    value = _text(fallback, 512)
-    return value if re.fullmatch(r"[A-Za-z0-9_./+-]{1,512}", value) else "unknown"
-
-
 def _sudo_command(attributes):
     raw = _text(attributes.get("command"), 4096)
-    claimed_digest = _text(attributes.get("command_sha256"), 64).lower()
-    digest = claimed_digest if _DIGEST.fullmatch(claimed_digest) else _digest(raw)
-    if not _DIGEST.fullmatch(digest):
-        digest = _digest("")
     try:
         words = shlex.split(raw, posix=True) if raw else []
     except ValueError:
         words = []
-        ambiguous = True
-    else:
-        ambiguous = not words
-    executable = _executable(words, attributes.get("command_path"))
-    result = {"executable": executable, "sha256": digest}
-    if ambiguous:
-        return result
-    result["argument_count"] = max(0, min(len(words) - 1, 31))
-    if len(words) > 1:
-        # Arguments are an open-ended secret channel. Do not attempt a
-        # negative-list scrub or expose per-token digests: the protected
-        # receipt owns raw reconstruction, while Event gets only this shape.
-        result["arguments"] = "<redacted>"
-    return result
+    command_path = _text(attributes.get("command_path"), 512)
+    candidate = command_path if command_path in _SUDO_COMMAND_FAMILIES else ""
+    if not candidate and words and words[0] in _SUDO_COMMAND_FAMILIES:
+        candidate = words[0]
+    # The receipt owns the executable, digest, command, and arguments. Event
+    # exposes only a server-owned classification with a constant shape.
+    return {
+        "family": _SUDO_COMMAND_FAMILIES.get(candidate, "unknown"),
+        "detail": "<redacted>",
+    }
 
 
 def project(kind, attributes, count=1):
@@ -238,9 +229,6 @@ def project(kind, attributes, count=1):
             evidence["audit_session"] = audit_session
         if kind == "auth.sudo_command":
             evidence["command"] = _sudo_command(attributes)
-            cwd = _safe_path(attributes.get("cwd")) if attributes.get("cwd") else None
-            if cwd:
-                evidence["cwd"] = cwd
     elif kind in ("web.probe", "web.error", "web.denied"):
         source_ip = _ip(attributes.get("source_ip"))
         peer_ip = _ip(attributes.get("peer_ip"))

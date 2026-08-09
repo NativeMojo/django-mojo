@@ -26,10 +26,10 @@ Sudo evidence retains bounded raw command context only in the root-owned sensor
 spool and protected central receipt: actor, target user, TTY, audit context,
 working directory, executable path, and command digest accompany the command.
 The Event projection is closed rather than heuristically scrubbed: it exposes
-only executable, full-command digest, argument count/provenance, and one
-constant redaction marker; ambiguous syntax projects only executable and
-digest. Raw command text and per-token digests never enter Event metadata,
-titles, details, ordinary logs, or AI/default graphs.
+only a strict server-owned command family (or `unknown`) and one constant
+redaction marker. Raw command text, executable/path, command digest, argument
+count, and per-token digests never enter Event metadata, titles, details,
+ordinary logs, or AI/default graphs.
 
 This catches common automated reconnaissance for WordPress, PHP, ASP/JSP,
 `.env`, `.git`, phpMyAdmin, PHPUnit, actuator, Swagger/OpenAPI, CGI, and similar
@@ -504,11 +504,11 @@ canonical source IP. Web evidence canonicalizes method, host, peer, status,
 path, upstream status/timing, and retains only an HTTP(S) referrer origin plus
 structured UA family/major and its digest. Aggregated volatile samples are
 omitted instead of presenting the last request as the whole distribution.
-Sudo Event evidence exposes only executable, full-command digest, bounded
-argument count, attribution, and a constant `<redacted>` argument marker;
-ambiguous shell parsing falls back to executable plus digest. Raw command,
-request target, referrer, and UA strings never enter Event metadata, title,
-details, ordinary logs, or AI/default graphs. For `fim.change`, the sole optional
+Sudo Event command evidence exposes only a strict server-owned command family
+(or `unknown`) and a constant `<redacted>` marker; raw command, executable/path,
+command digest, argument count, request target, referrer, and UA strings never
+enter Event metadata, title, details, ordinary logs, or AI/default graphs. For
+`fim.change`, the sole optional
 sensor annotation projected centrally is exact
 `expected_change.{deployment_id,expires_at,operation_id,operation_kind,completed_at}`
 after revalidation; raw FIM

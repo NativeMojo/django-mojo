@@ -109,9 +109,9 @@ are retained only in the protected `MojoSecReceipt.replay_features` audit
 record (`DENY_AI`, excluded from the default graph). Event metadata contains a
 central allowlisted projection: queryless/token-normalized path, canonical
 method/host/status/upstream values, HTTP(S) referrer origin, structured UA
-family/major plus digest, and sudo executable/full-command digest/argument
-count plus one constant redaction marker. Generic arguments and per-token
-digests never project.
+family/major plus digest, and a strict server-owned sudo command family (or
+`unknown`) plus one constant redaction marker. Raw executable/path, command
+digest, argument count, generic arguments, and per-token digests never project.
 The native nginx stream never collects bodies, cookies, the Authorization
 header, or arbitrary headers. Bounded request targets, referrers, user agents,
 and sudo commands can still contain untrusted sensitive text, but those raw

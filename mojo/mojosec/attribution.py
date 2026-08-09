@@ -260,10 +260,14 @@ class AttributionResolver:
         tty = canonical_tty(tty)
         context = audit_context(record)
         key = (context["boot_id"], context["audit_session"])
-        session = self.sessions.get(key) if key[0] and key[1] is not None else None
-        if (session and not session.get("ambiguous") and session.get("actor") == actor and
-                (not tty or not session.get("tty") or session.get("tty") == tty)):
-            return session["source_ip"], "audit_session", context
+        if key[0] and key[1] is not None and key in self.sessions:
+            session = self.sessions[key]
+            if (not session.get("ambiguous") and session.get("actor") == actor and
+                    (not tty or not session.get("tty") or session.get("tty") == tty)):
+                return session["source_ip"], "audit_session", context
+            # An exact audit identity is authoritative even when unusable.
+            # Never let a looser TTY snapshot overwrite a conflict/mismatch.
+            return "", "none", context
 
         if not actor or not tty or record_time(record) is None:
             return "", "none", context

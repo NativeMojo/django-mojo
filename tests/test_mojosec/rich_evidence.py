@@ -60,6 +60,31 @@ def _v1_database(root, version=1):
     return path
 
 
+def _old_v2_database(root):
+    """Build the pre-ambiguity v2 shape that briefly existed in development."""
+    path = _v1_database(root)
+    db = sqlite3.connect(path)
+    db.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (json.dumps(2),))
+    db.executescript("""
+        CREATE TABLE ssh_sessions (
+            boot_id TEXT NOT NULL,
+            audit_session INTEGER NOT NULL,
+            actor TEXT NOT NULL,
+            tty TEXT NOT NULL DEFAULT '',
+            source_ip TEXT NOT NULL,
+            observed_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY(boot_id, audit_session));
+        CREATE INDEX ssh_sessions_observed ON ssh_sessions(observed_at);
+    """)
+    db.execute(
+        "INSERT INTO ssh_sessions VALUES(?, ?, ?, ?, ?, ?, ?)",
+        ("a" * 32, 71, "deploy", "pts/1", "192.0.2.71", time.time(), time.time()))
+    db.commit()
+    db.close()
+    return path
+
+
 @th.django_unit_test()
 def test_store_v1_to_v2_migration_is_atomic_retryable_and_future_safe(opts):
     from mojo.mojosec.store import Store, StoreError
@@ -108,6 +133,39 @@ def test_store_v1_to_v2_migration_is_atomic_retryable_and_future_safe(opts):
         after = open(path, "rb").read()
         th.assert_eq(after, before,
                      "a future schema must be rejected without mutating the database")
+
+
+@th.django_unit_test()
+def test_store_repairs_old_v2_ambiguity_column_atomically(opts):
+    from mojo.mojosec.store import Store
+
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        path = _old_v2_database(root)
+        with mock.patch.object(
+                Store, "_add_ssh_session_ambiguous_column",
+                side_effect=RuntimeError("injected")):
+            with th.assert_raises(RuntimeError):
+                Store(root, "sensor", AGGREGATION, DELIVERY)
+        db = sqlite3.connect(path)
+        columns = {row[1] for row in db.execute("PRAGMA table_info(ssh_sessions)")}
+        th.assert_true("ambiguous" not in columns,
+                       "failed v2 compatibility repair must roll back its ALTER")
+        th.assert_eq(json.loads(db.execute(
+            "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]), 2,
+            "failed compatibility repair must preserve the advertised v2 version")
+        db.close()
+
+        store = Store(root, "sensor", AGGREGATION, DELIVERY)
+        row = store.load_ssh_sessions()[0]
+        th.assert_eq((row["actor"], row["source_ip"], row["ambiguous"]),
+                     ("deploy", "192.0.2.71", 0),
+                     "retry must preserve old-v2 rows and default them unambiguous")
+        store.close()
+        reopened = Store(root, "sensor", AGGREGATION, DELIVERY)
+        th.assert_eq(reopened.load_ssh_sessions()[0]["audit_session"], 71,
+                     "the repaired v2 store must reopen idempotently")
+        reopened.close()
 
 
 @th.django_unit_test()
@@ -220,7 +278,10 @@ def test_ssh_session_conflict_is_sticky_across_overlay_and_restart(opts):
         "tty": "pts/1", "source_ip": "192.0.2.10", "observed_at": time.time(),
     }
     conflict = dict(first, source_ip="192.0.2.11")
-    resolver = AttributionResolver([first])
+    resolver = AttributionResolver([first], [{
+        "actor": "deploy", "tty": "pts/1", "source_ip": "198.51.100.50",
+        "observed_at": time.time(),
+    }])
     conflict_record = {
         "_BOOT_ID": first["boot_id"], "_AUDIT_SESSION": 91, "_TTY": "pts/1",
         "_TRANSPORT": "audit", "_AUDIT_TYPE_NAME": "USER_START", "_UID": "0",
@@ -236,7 +297,17 @@ def test_ssh_session_conflict_is_sticky_across_overlay_and_restart(opts):
         "_BOOT_ID": first["boot_id"], "_AUDIT_SESSION": 91,
         "__REALTIME_TIMESTAMP": str(int(time.time() * 1000000)),
     }, "deploy", "pts/1")[:2], ("", "none"),
-        "a conflicting audit identity must immediately become ambiguous")
+        "an exact conflicting identity must not be restored by who fallback")
+
+    mismatch = AttributionResolver([first], [{
+        "actor": "other", "tty": "pts/1", "source_ip": "198.51.100.51",
+        "observed_at": time.time(),
+    }])
+    th.assert_eq(mismatch.resolve({
+        "_BOOT_ID": first["boot_id"], "_AUDIT_SESSION": 91,
+        "__REALTIME_TIMESTAMP": str(int(time.time() * 1000000)),
+    }, "other", "pts/1")[:2], ("", "none"),
+        "an actor mismatch on an existing exact key must fail without who fallback")
 
     with tempfile.TemporaryDirectory() as root:
         os.chmod(root, 0o700)

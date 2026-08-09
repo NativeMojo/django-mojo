@@ -93,6 +93,7 @@ class Store:
         if not isinstance(version, int) or isinstance(version, bool):
             raise StoreError("state schema version is invalid")
         if version == SCHEMA_VERSION:
+            self._ensure_v2_schema()
             return
         if version != 1:
             raise StoreError(f"unsupported state schema version: {version}")
@@ -151,6 +152,31 @@ class Store:
         """)
         self.db.execute(
             "CREATE INDEX IF NOT EXISTS ssh_sessions_observed ON ssh_sessions(observed_at)")
+
+    def _add_ssh_session_ambiguous_column(self):
+        self.db.execute(
+            "ALTER TABLE ssh_sessions "
+            "ADD COLUMN ambiguous INTEGER NOT NULL DEFAULT 0")
+
+    def _ensure_v2_schema(self):
+        """Repair the brief pre-ambiguity v2 shape transactionally."""
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.db.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            if row is None or json.loads(row["value"]) != SCHEMA_VERSION:
+                raise StoreError("state schema changed during compatibility check")
+            self._create_ssh_session_schema()
+            columns = {
+                row["name"] for row in self.db.execute(
+                    "PRAGMA table_info(ssh_sessions)").fetchall()
+            }
+            if "ambiguous" not in columns:
+                self._add_ssh_session_ambiguous_column()
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
 
     def _migrate_v1_to_v2(self):
         self.db.execute("BEGIN IMMEDIATE")
