@@ -89,11 +89,19 @@ Hosted pages offer four layout presets: `minimal`, `compact`,
 or `system` (the default). Legacy stored values remain compatible: `card`
 maps to `compact`, while `fullscreen` maps to `branded-panel`.
 
-For a safe preview or one-off journey override, pass
+On a hosted auth page (`/auth`, `/register`, or `/passkey`), a safe preview or
+one-off journey override may pass
 `?auth_theme=<preset>&auth_appearance=<appearance>`. Only known enum values
 are accepted; arbitrary CSS, colors, copy, and image URLs cannot be supplied
 through the query string. Valid overrides are preserved across login,
 registration, passkey, and bouncer redirects.
+
+`hero_image_url` is the common artwork for both appearances.
+`hero_image_url_light` and `hero_image_url_dark` may replace it for their
+respective mode; each missing variant falls back to the common URL. Hero
+artwork is visible in `branded-panel` and `editorial`, not `minimal` or
+`compact`. The bouncer challenge also uses `app_title`, `logo_url`, and
+`accent_color`, and explains the account provider with `auth_provider_name`.
 
 `registration.extra_fields` is the list of non-canonical fields the group has
 configured (promo codes, referral tokens, etc.). An empty list means no extra

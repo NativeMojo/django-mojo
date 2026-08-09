@@ -74,6 +74,8 @@ disabled registration path.
 Theme and appearance overrides are safe enum selections only; the URL cannot
 inject custom copy, colors, images, or CSS. Valid values ride the same
 login/register/passkey and bouncer links as `group_uuid` and `redirect`.
+The split `branded-panel` and `editorial` layouts show hero artwork; `minimal`
+and `compact` intentionally do not.
 
 ### After Login
 
@@ -268,6 +270,12 @@ satisfies servers configured with `REQUIRE_GROUP_ON_REGISTRATION = True`.
 
 Fetch `GET /api/auth/config?group_uuid=<uuid>` to get the resolved config for
 a group — useful for custom front-ends. See [Auth Config](auth_config.md).
+
+The bouncer challenge uses the resolved group's `theme.app_title`, `logo_url`,
+and `accent_color`, then names `theme.auth_provider_name` in its "Secure
+sign-in via …" explanation. This tells visitors both which destination they
+are entering and whose account credentials they should use before the login
+form appears.
 
 ---
 

@@ -263,10 +263,12 @@ round-trip client-side). Use cases:
 | `registration_enabled` | `cfg.registration.enabled` |
 | `passkey_prompt` | `cfg.registration.passkey_prompt` |
 | `passkey_url` | `/{BOUNCER_PASSKEY_PATH}{group_qs}` |
-| `auth_layout` | `cfg.theme.layout` |
-| `auth_appearance`, `accent_color` | validated `cfg.theme.*` values |
+| `auth_layout` | normalized `cfg.theme.layout`, optionally overridden by the allowlisted `auth_theme` query value |
+| `auth_appearance` | normalized `cfg.theme.appearance`, optionally overridden by the allowlisted `auth_appearance` query value |
+| `accent_color` | validated `cfg.theme.accent_color` |
 | `brand_name` | `cfg.theme.app_title` |
-| `logo_url`, `favicon_url`, `hero_*`, etc. | `cfg.theme.*` |
+| `login_heading`, `login_supporting_copy` | `cfg.login.heading`, `cfg.login.supporting_copy` |
+| `logo_url`, `favicon_url`, `hero_*`, `back_to_website_*`, etc. | `cfg.theme.*` (appearance-specific hero URLs fall back to `hero_image_url`) |
 
 ---
 

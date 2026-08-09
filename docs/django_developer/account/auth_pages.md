@@ -266,7 +266,14 @@ per-file list to maintain — a new template is covered the moment it ships.
 Create `templates/account/auth_hero.html` in your project:
 
 ```html
-<div class="mat-hero" style="background-image:url('/static/hero.jpg')">
+<div class="mat-hero">
+    <div class="mat-hero-picture" aria-hidden="true">
+        <img class="mat-hero-image mat-hero-image-light"
+             src="/static/hero-light.jpg" alt="">
+        <img class="mat-hero-image mat-hero-image-dark"
+             src="/static/hero-dark.jpg" alt="">
+    </div>
+    <div class="mat-hero-shade"></div>
     <div class="mat-hero-top">
         <img class="mat-hero-logo" src="/static/logo-white.svg" alt="My App" />
         <a class="mat-hero-back" href="https://myapp.com">Back to website &rarr;</a>
@@ -279,7 +286,9 @@ Create `templates/account/auth_hero.html` in your project:
 ```
 
 Or set the appropriate keys in `AUTH_CONFIG.theme` and the default template
-handles it.
+handles it. The common `hero_image_url` supplies both appearances unless
+`hero_image_url_light` and/or `hero_image_url_dark` override it. Hero artwork
+is rendered only by the `branded-panel` and `editorial` layouts.
 
 ---
 
@@ -338,6 +347,11 @@ For QA and previews, `?auth_theme=<preset>&auth_appearance=<mode>` may override
 those two enum values for the current auth journey. Unknown values fall back to
 configuration, and the override is propagated across hosted auth pages.
 
+The bouncer challenge resolves the same group theme. It uses `app_title` and
+`logo_url` for the destination identity, `accent_color` for its progress and
+challenge controls, and `auth_provider_name` in the "Secure sign-in via …"
+explanation.
+
 ---
 
 ## URL Routes
@@ -355,7 +369,7 @@ configuration, and the override is propagated across hosted auth pages.
 | `/api/auth/config` | GET | `on_auth_config` | Public auth config for custom front-ends |
 | `/api/account/bouncer/assess` | POST | `on_bouncer_assess` | Bouncer signal assessment |
 | `/api/account/bouncer/event` | POST | `on_bouncer_event` | Client event reporting |
-| `/api/account/static/mojo-auth-theme.css` | GET | Static | Dark theme CSS |
+| `/api/account/static/mojo-auth-theme.css` | GET | Static | Responsive layout and appearance presets |
 | `/api/account/static/mojo-auth.js` | GET | Static | MojoAuth JS library |
 | `/api/account/static/mojo-auth.css` | GET | Static | Legacy light theme CSS |
 
