@@ -20,7 +20,7 @@ package from a root-owned working directory with safe-path mode:
 |---|---|---|
 | journald | accepted SSH logins, failed SSH authentication, sudo commands/failures, non-SSH PAM session opens, systemd/kernel failures and OOM activity | routine PAM close chatter and ordinary service notices |
 | structured nginx log | known exploit-path probes, 401/403 denials, and 5xx responses | ordinary 2xx/3xx/404/499 traffic, User-Agent-only suspicion, query strings, referrers, and raw log lines |
-| targeted FIM | create/change/delete of explicit files or directory profiles; scan overflow | an implicit whole-disk watch, symlink traversal, file contents |
+| immutable tiered integrity | 60-second host/config FIM, six-hour boot/system-binary FIM, RPM verification, and system-Python package integrity under the packaged `al2023-web-v1` profile | application release trees, MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
 
 Sudo evidence retains the actor, target user, executable path, and a command
 digest. Arguments are never persisted because command lines routinely contain
@@ -33,8 +33,11 @@ to create incidents by themselves. A crawler becomes interesting when its
 behavior hits a protected/probe path or produces denials/errors; otherwise its
 traffic stays in access analytics rather than the security feed.
 
-The v1 scope does not inventory processes, listening sockets, packages, or
-kernel policy. AWS-native findings and application-level authentication signals
+The v1 scope does not inventory processes, listening sockets, or kernel policy.
+Package coverage is deliberately limited to RPM verification and the isolated
+system interpreter's approved `/usr`, `/usr/lib64`, and `/usr/local`
+site-packages; project virtualenvs and application release trees are excluded.
+AWS-native findings and application-level authentication signals
 continue through their existing django-mojo paths.
 
 ## Configuration and enrollment boundary
@@ -94,6 +97,7 @@ The app/fleet desired-policy source contains no endpoint, identity, or secret:
 ```json
 {
   "version": 1,
+  "profile": "al2023-web-v1",
   "policy_revision": "prod-2026-08-08",
   "poll_seconds": 5,
   "collectors": {
@@ -109,18 +113,6 @@ The app/fleet desired-policy source contains no endpoint, identity, or secret:
       "enabled": true,
       "max_bytes_per_poll": 2097152,
       "max_line_bytes": 16384
-    },
-    "fim": {
-      "enabled": true,
-      "interval_seconds": 60,
-      "max_entries": 20000,
-      "max_file_bytes": 16777216,
-      "max_depth": 64,
-      "targets": [
-        {"path": "/etc/nginx", "recursive": true, "exclude": ["*.swp"]},
-        {"path": "/etc/systemd/system", "recursive": true},
-        {"path": "/opt/api/app", "recursive": true, "exclude": ["var/**"]}
-      ]
     }
   },
   "aggregation": {
@@ -142,24 +134,40 @@ The app/fleet desired-policy source contains no endpoint, identity, or secret:
 }
 ```
 
-FIM targets are operational policy, not universal defaults, and must remain
-beneath a root-enrolled allowed root. `/home` is deliberately inaccessible
-under the unit's `ProtectHome=true`; private MojoSec state is always rejected.
-Keep the profile
-small enough that every change is meaningful. The deployment should generate
-the exact code/config/systemd/nginx paths for that project rather than copying
-the sample unchanged. An enabled FIM collector requires at least one target;
-set `collectors.fim.enabled` to `false` when the deployment has no approved
-profile. The public `status_path` must remain outside the private `state_dir`.
+The recommended AL2023 policy selects the immutable `al2023-web-v1` profile by
+name. Its fast tier covers `/etc` (excluding `/etc/mojosec`), exact root and
+`ec2-user` persistence locations, cron/at/cloud-init scripts, local executables,
+and `/usr/local/lib` including system Python site-packages. Its slow tier covers
+`/boot`, `/usr/bin`, and `/usr/sbin`; RPM verification independently reports
+strictly parsed package drift. Profile paths and bounds cannot be overridden by
+desired policy: changing the graph requires a new packaged profile name and
+digest. Legacy custom FIM targets remain supported only when no profile is
+selected.
+
+The unit uses `ProtectHome=tmpfs` and exact read-only binds for the approved
+root and `ec2-user` SSH, user-systemd, local-bin, AWS config, and shell startup
+paths. Unrelated home content such as `/root/.cache` remains hidden; `check_node`
+probes the live mount namespace. Private MojoSec state is always rejected, and
+the public `status_path` must remain outside the private `state_dir`.
 
 An optional expected-change manifest annotates a reported `fim.change`; it
-never suppresses one. The root-owned 0600 JSON envelope is
-`{"schema":"mojosec.expected_changes","version":1,"entries":[...]}`. Each
-entry must name an exact absolute `path`, `change` (`created`, `modified`, or
-`deleted`), SHA-256 of the resulting file (the prior file for deletion),
-timezone-aware `expires_at`, and bounded `deployment_id`. Path, change, digest,
-and live expiry must all match. Missing, expired, or mismatched entries behave
-like no expectation; malformed/insecure manifests fail that FIM poll visibly.
+never suppresses one. Producers use the root-owned stable helper at
+`/usr/local/lib/mojosec/mojosec_changes.py`, declare exact destinations before
+starting one child mutation, and complete or abort from that child's result.
+System pip changes are derived from bounded installer output plus incoming and
+installed wheel `RECORD` paths; ordinary deploy, node setup, and certificate
+sync declare their exact systemd/cron/nginx/lineage destinations. A failed or
+aborted producer leaves its observed changes unexplained.
+
+The current root-owned 0600 envelope is
+`{"schema":"mojosec.expected_changes","version":2,"entries":[...]}`. Version
+2 adds bounded `operation_id`, `operation_kind`, and `completed_at` to the v1
+exact `path`, `change`, SHA-256, timezone-aware `expires_at`, and
+`deployment_id` fields. Existing unexpired v1 entries remain readable during
+rollout. Path, change, digest, and live expiry must all match. FIM events are
+committed immediately, held for at most 120 seconds for a late durable
+annotation, and then delivered whether or not one arrives. Malformed manifests
+emit a visible `fim.expected_change_error`; they never block expiry delivery.
 
 ### Structured nginx input
 
@@ -213,6 +221,23 @@ queued. There is no pathname-based fallback.
 (cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.check_node --section mojosec \
   --mojosec-mode observe --mojosec-sensor-id prod-web-i-0123456789abcdef0)
 ```
+
+An immutable profile never silently trusts its first scan. Preview all three
+tiers, then initialize only with the exact digest printed by that complete
+preview:
+
+```bash
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.mojosec \
+  --config /etc/mojosec/config.json baseline-preview)
+(cd / && sudo /usr/bin/python3 -E -P -m mojo.mojosec \
+  --config /etc/mojosec/config.json baseline-initialize \
+  --confirm-digest <exact-preview-digest> --reason initial-al2023-canary)
+```
+
+`check_node` requires the active profile digest plus initialized `fast`, `slow`,
+and `rpm` baselines. Rollback is explicit and digest-confirmed with
+`baseline-rollback --confirm-digest <retained-prior-digest>`; retained profile
+history is never removed merely because another profile is activated.
 
 `check` does not open the API-key credential; `once` and `run` validate it when
 there is a batch to send. A delivery failure during `once` is written to stderr
@@ -401,7 +426,8 @@ Wire attributes remain in the receipt's `replay_features`, which is denied to
 generic AI/model query tools. The central Event contains a fixed title/detail
 and validated scalar provenance only. For `fim.change`, the sole optional
 sensor annotation projected centrally is exact
-`expected_change.{deployment_id,expires_at}` after revalidation; raw FIM
+`expected_change.{deployment_id,expires_at,operation_id,operation_kind,completed_at}`
+after revalidation; raw FIM
 attributes never project and the annotation never suppresses publication. A source IP is promoted only for a
 server-owned per-kind registry after a minimum aggregate threshold. Successful
 login and web-error evidence never promotes a source IP. Host severity is
