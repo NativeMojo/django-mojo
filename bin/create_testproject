@@ -288,7 +288,7 @@ JOBS_ALLOWED_CHANNELS = ["sms", "exec_broadcast", "exec_retry",
                          "testit_run_jobs_helper", "t906_firewall", "t906_a",
                          "t906_b", "t906_sched", "t906_seed", "t906_orphan",
                          "t936_allowed", "testit_aws_version_drift",
-                         "testit_edge_deploy"]
+                         "testit_edge_deploy", "t1771_broadcast"]
 JOBS_DEFAULT_MAX_RETRIES = 0
 JOBS_ENGINE_MAX_WORKERS = 2
 JOBS_RUNNER_HEARTBEAT_SEC = 5
