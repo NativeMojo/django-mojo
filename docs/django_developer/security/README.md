@@ -783,7 +783,7 @@ OSSEC (IDS/HIDS) sends alerts via webhook to `/api/incident/ossec/alert` or `/ap
 ### Setup
 
 1. Set `OSSEC_SECRET` in Django settings
-2. Configure OSSEC to POST alerts to your server with the secret in the `Authorization` header
+2. Configure OSSEC to POST alerts with the secret in the `X-OSSEC-SECRET` header
 3. Default rules handle common OSSEC patterns (bot scanners, SSH brute force, web attacks)
 
 ### Alert Flow
@@ -832,6 +832,9 @@ Default health rules are auto-created on first health check run. They send notif
 
 | Job | Schedule | What it does |
 |-----|----------|--------------|
+| `prune_mojosec_receipts` | Daily 8:15 AM | Deletes published MojoSec receipts older than `MOJOSEC_RECEIPT_RETENTION_DAYS`; never deletes pending publication rows |
+| `replay_mojosec_handler_outbox` | Every 5 minutes | Replays published MojoSec receipts whose required exact-RuleSet handler dispatch is pending or failed |
+| `replay_mojosec_handler_outbox` | Every 5 minutes | Replays published MojoSec receipts whose required exact-RuleSet handler dispatch is pending or failed |
 | `prune_events` | Daily 9:45 AM | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` days with level < 6 |
 | `sweep_expired_blocks` | Every 5 minutes | Unblocks IPs where `blocked_until` has passed |
 | `sync_firewall` | Hourly | Restores all ipsets from DB truth; skips unchanged sets; startup recovery after reboot |
@@ -892,7 +895,8 @@ Single-server job functions follow the engine's calling convention: `func(job)` 
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `OSSEC_SECRET` | None | Shared secret for OSSEC webhook auth |
+| `OSSEC_SECRET` | None | Shared secret for legacy OSSEC webhook auth; unset/empty disables both endpoints |
+| `MOJOSEC_RECEIPT_RETENTION_DAYS` | `45` | Published receiver-idempotency retention; minimum 7 days |
 
 ### Health Monitoring Settings
 

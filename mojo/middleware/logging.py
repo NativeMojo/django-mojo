@@ -166,6 +166,20 @@ class LoggerMiddleware:
     def log_request(self, request):
         if not self.can_log(request):
             return
+        is_mojosec = getattr(request, "_mojosec_sensitive_body", False) or (
+            request.method == "POST"
+            and request.path in (
+                "/api/incident/mojosec/batch", "/api/incident/mojosec/batch/")
+        )
+        if is_mojosec:
+            # Evidence is DENY_AI and receipt-only. Request logs receive only a
+            # fixed server-owned marker, even when broad DB logging is enabled.
+            summary = json.dumps({"sensitive_body": "mojosec_batch"})
+            if LOGIT_DB_ALL:
+                self.queue_log("db", request, summary, "request")
+            if LOGIT_FILE_ALL:
+                self.queue_log("file", request, summary, "request")
+            return
         if LOGIT_DB_ALL:
             self.queue_log("db", request, request.DATA.to_json(as_string=True), "request")
         if LOGIT_FILE_ALL:

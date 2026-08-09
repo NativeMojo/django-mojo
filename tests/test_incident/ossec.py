@@ -372,7 +372,10 @@ Src IP: 1.2.3.4
         ]
     }
 
-    resp = opts.client.post("/api/incident/ossec/alert/batch", batch_payload)
+    with th.server_settings(OSSEC_SECRET="test-ossec-secret"):
+        resp = opts.client.post(
+            "/api/incident/ossec/alert/batch", batch_payload,
+            headers={"X-OSSEC-SECRET": "test-ossec-secret"})
     assert resp.status_code == 200, f"Expected status_code 200 but got {resp.status_code}"
 
     # Verify the valid alert was saved

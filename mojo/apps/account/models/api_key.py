@@ -31,6 +31,7 @@ APIKEY_PERMS_PROTECTION_DEFAULTS = {
     "geoip_sync": "sys.geoip_sync",
     "dnsman_acme_federation": "sys.dnsman_acme_federation",
     "edge_node": "sys.edge_node",
+    "mojosec_ingest": "sys.mojosec_ingest",
 }
 
 

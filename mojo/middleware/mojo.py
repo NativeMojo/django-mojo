@@ -61,11 +61,22 @@ class MojoMiddleware:
             and "/fileman/upload/" in request.path
             and not request.path.rstrip("/").endswith("/initiate")
         )
-        if settings.LOGIT_REQUEST_BODY and not is_raw_file_upload:
+        is_mojosec_batch = (
+            request.method == "POST"
+            and request.path in (
+                "/api/incident/mojosec/batch", "/api/incident/mojosec/batch/")
+        )
+        request._mojosec_sensitive_body = is_mojosec_batch
+        if settings.LOGIT_REQUEST_BODY and not is_raw_file_upload and not is_mojosec_batch:
             request._raw_body = str(request.body)
         else:
             request._raw_body = None
-        request.DATA = rhelper.parse_request_data(request)
+        if is_mojosec_batch:
+            # Authentication and the bounded receiver consume this stream.
+            # Generic middleware must never materialize or parse sensor evidence.
+            request.DATA = objict()
+        else:
+            request.DATA = rhelper.parse_request_data(request)
 
         # Tab session ID from client JS (sessionStorage, tab-scoped).
         # Only present when mojo-bouncer.js is active on the page.
