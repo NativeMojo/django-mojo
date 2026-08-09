@@ -49,6 +49,13 @@ def prune_mojosec_receipts(force=False, verbose=False, now=None):
         channel="cleanup", payload={})
 
 
+@schedule(minutes="*/5")
+def replay_mojosec_handler_outbox(force=False, verbose=False, now=None):
+    jobs.publish(
+        func="mojo.apps.incident.services.mojosec.replay_handler_outbox",
+        channel="cleanup", payload={})
+
+
 # Runs every 5 minutes — unblocks IPs whose blocked_until has passed
 @schedule(minutes="*/5")
 def sweep_expired_blocks(force=False, verbose=False, now=None):

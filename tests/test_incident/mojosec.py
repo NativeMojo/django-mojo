@@ -2,6 +2,7 @@ import copy
 import gzip
 import json
 import os
+from unittest import mock
 
 from testit import helpers as th
 
@@ -42,18 +43,24 @@ def setup_mojosec_receiver(opts):
         group, "mojosec_receiver_test_authorized",
         permissions={"mojosec_ingest": True})
     key.metadata = {
-        "mojosec": {
-            "enabled": True,
-            "sensor_id": SENSOR_ID,
-            "allowed_versions": [1],
+        "protected": {
+            "mojosec": {
+                "enabled": True,
+                "sensor_id": SENSOR_ID,
+                "allowed_versions": [1],
+            },
         },
     }
     key.save(update_fields=["metadata"])
     plain, plain_token = ApiKey.create_for_group(
         group, "mojosec_receiver_test_plain", permissions={"security": True})
+    manager, manager_token = ApiKey.create_for_group(
+        group, "mojosec_receiver_test_manager", permissions={"manage_group": True})
 
     opts.mojosec_token = token
     opts.mojosec_plain_token = plain_token
+    opts.mojosec_manager_token = manager_token
+    opts.mojosec_key_id = key.pk
 
 
 @th.django_unit_test()
@@ -98,6 +105,12 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
                    "the model holding raw replay features must be denied to generic AI queries")
     th.assert_true(probe.incident_id is None,
                    "host recommendations must not create incidents without an exact central RuleSet")
+    th.assert_eq(probe.metadata["mojosec"]["sensor_id"], SENSOR_ID,
+                 "central events must retain the server-validated host identity")
+    th.assert_eq(probe.metadata["mojosec"]["installation_key_id"], receipt.api_key_id,
+                 "central events must expose a non-secret installation identity")
+    th.assert_true(probe.group_id is None,
+                   "host identity must not be confused with customer tenant attribution")
 
 
 @th.django_unit_test()
@@ -140,6 +153,24 @@ def test_mojosec_requires_permission_and_enrolled_sensor_identity(opts):
 
 
 @th.django_unit_test()
+def test_manage_group_cannot_rewrite_server_owned_sensor_enrollment(opts):
+    from mojo.apps.account.models import ApiKey
+
+    _use_apikey(opts, opts.mojosec_manager_token)
+    response = opts.client.post(
+        f"/api/group/apikey/{opts.mojosec_key_id}",
+        {"metadata": {"protected": {"mojosec": {
+            "enabled": True, "sensor_id": "attacker-host", "allowed_versions": [1],
+        }}}},
+    )
+    th.assert_true(response.status_code in (401, 403),
+                   "manage_group must not mutate protected sensor enrollment")
+    key = ApiKey.objects.get(pk=opts.mojosec_key_id)
+    th.assert_eq(key.metadata["protected"]["mojosec"]["sensor_id"], SENSOR_ID,
+                 "a denied generic REST write must leave host identity unchanged")
+
+
+@th.django_unit_test()
 def test_mojosec_parser_rejects_duplicate_json_and_concatenated_gzip(opts):
     from django.test import RequestFactory
     from mojo.apps.incident.services import mojosec
@@ -150,6 +181,84 @@ def test_mojosec_parser_rejects_duplicate_json_and_concatenated_gzip(opts):
         content_type="application/json")
     with th.assert_raises(mojosec.MojoSecIngestError):
         mojosec.parse_request_batch(request)
+
+
+@th.django_unit_test()
+def test_mojosec_stream_parser_bounds_plain_gzip_and_content_length(opts):
+    from mojo.apps.incident.services import mojosec
+
+    class StreamRequest:
+        def __init__(self, body, length=None, encoding=""):
+            self.raw = body
+            self.META = {"CONTENT_TYPE": "application/json"}
+            if length is not None:
+                self.META["CONTENT_LENGTH"] = str(length)
+            if encoding:
+                self.META["HTTP_CONTENT_ENCODING"] = encoding
+
+        def read(self, size):
+            return self.raw[:size]
+
+        @property
+        def body(self):
+            raise AssertionError("bounded receiver must not materialize request.body")
+
+    raw = json.dumps(_golden_batch()).encode("utf-8")
+    parsed = mojosec.parse_request_batch(StreamRequest(raw))
+    th.assert_eq(parsed["sensor_id"], SENSOR_ID,
+                 "an absent Content-Length must still be safely bounded and accepted")
+    parsed = mojosec.parse_request_batch(StreamRequest(gzip.compress(raw), encoding="gzip"))
+    th.assert_eq(parsed["schema"], "mojosec.batch",
+                 "gzip streams must use the same bounded parser")
+    with th.assert_raises(mojosec.MojoSecIngestError):
+        mojosec.parse_request_batch(StreamRequest(raw, length=len(raw) - 1))
+
+
+@th.django_unit_test()
+def test_mojosec_middleware_never_parses_or_logs_sensitive_body(opts):
+    from django.http import HttpResponse
+    from django.test import RequestFactory
+    from mojo.middleware.mojo import MojoMiddleware
+    from mojo.middleware import logging as request_logging
+
+    raw = json.dumps(_golden_batch()).encode("utf-8")
+    request = RequestFactory().post(
+        "/api/incident/mojosec/batch/", data=raw, content_type="application/json")
+    observed = {}
+
+    def downstream(child):
+        observed["marked"] = child._mojosec_sensitive_body
+        observed["data"] = dict(child.DATA)
+        observed["body_cached"] = hasattr(child, "_body")
+        return HttpResponse(b"ok")
+
+    MojoMiddleware(downstream)(request)
+    th.assert_true(observed["marked"],
+                   "the exact batch route must be marked sensitive before generic parsing")
+    th.assert_eq(observed["data"], {},
+                 "generic request.DATA must remain empty for sensor evidence")
+    th.assert_true(not observed["body_cached"],
+                   "MojoMiddleware must leave the request stream unmaterialized")
+
+    queued = []
+    logger = request_logging.LoggerMiddleware(lambda child: HttpResponse(b"ok"))
+    logger.can_log = lambda child: True
+    logger.queue_log = lambda *args: queued.append(args)
+    old_db = request_logging.LOGIT_DB_ALL
+    old_file = request_logging.LOGIT_FILE_ALL
+    try:
+        request_logging.LOGIT_DB_ALL = True
+        request_logging.LOGIT_FILE_ALL = True
+        logger.log_request(request)
+    finally:
+        request_logging.LOGIT_DB_ALL = old_db
+        request_logging.LOGIT_FILE_ALL = old_file
+    th.assert_eq(len(queued), 2,
+                 "broad request logging may emit only fixed metadata summaries")
+    th.assert_true(all(SENSOR_ID not in item[2] for item in queued),
+                   "LOGIT_DB_ALL and file logging must never copy sensor evidence")
+    th.assert_true(all("mojosec_batch" in item[2] for item in queued),
+                   "sensitive log entries must be recognizable metadata-only summaries")
 
     raw = json.dumps(_golden_batch()).encode("utf-8")
     request = RequestFactory().post(
@@ -194,6 +303,110 @@ def test_mojosec_exact_policy_ignores_broad_scope_and_default_llm(opts):
 
 
 @th.django_unit_test()
+def test_mojosec_server_registry_ignores_host_escalation_and_victim_ip(opts):
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models import Event
+    from mojo.apps.incident.services import mojosec
+
+    key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+    batch = _golden_batch()
+    claimed = batch["events"][0]
+    claimed.update({
+        "id": "1" * 64, "kind": "web.error", "severity": "critical",
+        "recommendation": "block_ip", "count": 100,
+    })
+    claimed["attributes"]["source_ip"] = "192.0.2.55"
+    batch["events"] = [claimed]
+    ack = mojosec.ingest_batch(key, batch)
+    th.assert_eq(ack["results"][0]["status"], "accepted",
+                 "valid evidence remains reportable despite untrusted recommendations")
+    event = Event.objects.get(metadata__mojosec__event_id="1" * 64)
+    th.assert_eq(event.level, 5,
+                 "host critical severity cannot exceed the server-owned kind policy")
+    th.assert_true(event.source_ip is None,
+                   "web errors can never promote a caller-claimed address for action")
+    th.assert_eq(event.metadata["mojosec"]["sensor_severity"], "critical",
+                 "the raw severity claim remains advisory evidence")
+
+    probe = copy.deepcopy(claimed)
+    probe.update({"id": "2" * 64, "kind": "web.probe", "count": 1})
+    batch["events"] = [probe]
+    mojosec.ingest_batch(key, batch)
+    event = Event.objects.get(metadata__mojosec__event_id="2" * 64)
+    th.assert_true(event.source_ip is None,
+                   "one host-reported probe cannot promote an IP below the central threshold")
+
+
+@th.django_unit_test()
+def test_mojosec_idempotency_is_scoped_to_installation_key(opts):
+    from mojo.apps.account.models import ApiKey, Group
+    from mojo.apps.incident.models import MojoSecReceipt
+    from mojo.apps.incident.services import mojosec
+
+    group = Group.objects.get(name="mojosec_receiver_test_group")
+    second, token = ApiKey.create_for_group(
+        group, "mojosec_receiver_test_second", permissions={"mojosec_ingest": True})
+    second.metadata = copy.deepcopy(
+        ApiKey.objects.get(name="mojosec_receiver_test_authorized").metadata)
+    second.save(update_fields=["metadata"])
+    batch = _golden_batch()
+    batch["events"] = [batch["events"][0]]
+    batch["events"][0]["id"] = "3" * 64
+    first = mojosec.ingest_batch(
+        ApiKey.objects.get(name="mojosec_receiver_test_authorized"), batch)
+    other = mojosec.ingest_batch(second, batch)
+    th.assert_eq(first["results"][0]["status"], "accepted",
+                 "the first installation should claim its own wire id")
+    th.assert_eq(other["results"][0]["status"], "accepted",
+                 "another authenticated installation may use the same wire id")
+    th.assert_eq(MojoSecReceipt.objects.filter(wire_event_id="3" * 64).count(), 2,
+                 "deduplication identity must include the authenticated API key")
+
+
+@th.django_unit_test()
+def test_mojosec_handler_outbox_is_durable_and_retryable(opts):
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models import MojoSecReceipt, RuleSet
+    from mojo.apps.incident.services import mojosec
+
+    key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+    RuleSet.objects.create(
+        category="mojosec.auth.ssh_failure", name="Receiver test outbox",
+        handler="notify://security", priority=50)
+    batch = _golden_batch()
+    batch["events"] = [batch["events"][0]]
+    batch["events"][0].update({"id": "4" * 64, "kind": "auth.ssh_failure", "count": 8})
+
+    with mock.patch("mojo.apps.jobs.publish", side_effect=RuntimeError("queue unavailable")):
+        ack = mojosec.ingest_batch(key, batch)
+    th.assert_eq(ack["results"][0]["status"], "retry",
+                 "the receiver must not acknowledge required work before durable queueing")
+    receipt = MojoSecReceipt.objects.get(wire_event_id="4" * 64, api_key=key)
+    th.assert_eq(receipt.handler_state, MojoSecReceipt.HANDLER_FAILED,
+                 "a queue failure must remain visible and replayable")
+
+    calls = []
+    with mock.patch("mojo.apps.jobs.publish", side_effect=lambda *a, **kw: calls.append(kw) or "a" * 32):
+        replay = mojosec.ingest_batch(key, batch)
+    th.assert_eq(replay["results"][0]["status"], "duplicate",
+                 "request replay must recover an already-published receipt")
+    receipt.refresh_from_db()
+    th.assert_eq(receipt.handler_state, MojoSecReceipt.HANDLER_QUEUED,
+                 "successful durable queueing must advance the outbox")
+    th.assert_eq(calls[0]["idempotency_key"], f"mojosec-handler:{receipt.pk}",
+                 "outbox queue retries must use a stable receipt identity")
+
+    with mock.patch.object(RuleSet, "run_handler", return_value=True) as run:
+        mojosec._dispatch_receipt_handlers(receipt.pk)
+    receipt.refresh_from_db()
+    th.assert_eq(receipt.handler_state, MojoSecReceipt.HANDLER_DISPATCHED,
+                 "the dispatcher marks completion only after child jobs are published")
+    prefix = run.call_args.kwargs["idempotency_prefix"]
+    th.assert_true(prefix.startswith(f"mojosec:{receipt.pk}:") and len(prefix) < 64,
+                   "handler child jobs need one bounded stable idempotency prefix")
+
+
+@th.django_unit_test()
 def test_mojosec_receipt_pruning_keeps_pending_outbox_rows(opts):
     from datetime import timedelta
     from mojo.apps.incident.models import MojoSecReceipt
@@ -204,6 +417,7 @@ def test_mojosec_receipt_pruning_keeps_pending_outbox_rows(opts):
     th.assert_true(published is not None,
                    "the pruning test needs one published receipt from prior ingestion")
     pending = MojoSecReceipt.objects.create(
+        api_key=published.api_key,
         sensor_id=SENSOR_ID,
         wire_event_id="9" * 64,
         payload_digest="8" * 64,
