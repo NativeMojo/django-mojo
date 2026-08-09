@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 from unittest import mock
 
 from testit import helpers as th
@@ -72,6 +73,17 @@ def _popen_stream(payload, commands):
     return spawn
 
 
+def _patch_journal_popen(journal_module, payload, commands):
+    # Patch the collector's module reference, not subprocess.Popen on the
+    # shared stdlib module: testit may run selected modules concurrently.
+    proxy = types.SimpleNamespace(
+        Popen=mock.Mock(side_effect=_popen_stream(payload, commands)),
+        PIPE=subprocess.PIPE, DEVNULL=subprocess.DEVNULL,
+        TimeoutExpired=subprocess.TimeoutExpired,
+    )
+    return mock.patch.object(journal_module, "subprocess", proxy)
+
+
 @th.django_unit_test()
 def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
     from mojo.mojosec.detectors import detect_journal
@@ -112,8 +124,9 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
     })
     th.assert_eq(sudo["kind"], "auth.sudo_command",
                  "sudo commands attached to transient AL2023 scopes must be retained")
-    th.assert_true("command" not in sudo["attributes"],
-                   "sudo command arguments must never be persisted as incident evidence")
+    th.assert_eq(sudo["attributes"]["command"],
+                 "/usr/bin/systemctl restart api",
+                 "the protected sensor evidence must retain bounded command context")
 
     secret = "top-secret-password"
     sensitive_sudo = detect_journal({
@@ -121,8 +134,8 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
         "MESSAGE": f"deploy : USER=root ; COMMAND=/usr/bin/curl --password {secret} https://example.invalid",
     })
     encoded = json.dumps(sensitive_sudo)
-    th.assert_true(secret not in encoded and "--password" not in encoded,
-                   "sudo arguments and inline secrets must be replaced by an executable and digest")
+    th.assert_true(secret in encoded and "--password" in encoded,
+                   "raw bounded command evidence must reach only the protected receipt layer")
     th.assert_eq(sensitive_sudo["attributes"]["command_path"], "/usr/bin/curl",
                  "sudo evidence should retain only the invoked executable path")
 
@@ -135,8 +148,7 @@ def test_journal_collector_streams_forward_without_tail_skips(opts):
     payload = b"".join(json.dumps(record).encode("utf-8") + b"\n" for record in records)
     commands = []
     collector = journal_module.JournalCollector(_journal_config(max_records=2))
-    with mock.patch.object(
-            journal_module.subprocess, "Popen", side_effect=_popen_stream(payload, commands)):
+    with _patch_journal_popen(journal_module, payload, commands):
         result = collector.poll("cursor-0")
 
     th.assert_eq(len(result["observations"]), 2,
@@ -158,8 +170,7 @@ def test_journal_poison_record_is_counted_and_cursor_advances(opts):
     payload = b"".join(json.dumps(record).encode("utf-8") + b"\n" for record in records)
     commands = []
     collector = journal_module.JournalCollector(_journal_config())
-    with mock.patch.object(
-            journal_module.subprocess, "Popen", side_effect=_popen_stream(payload, commands)), \
+    with _patch_journal_popen(journal_module, payload, commands), \
             mock.patch.object(journal_module, "detect_journal", side_effect=(ValueError("poison"), None)):
         result = collector.poll()
 
@@ -180,8 +191,7 @@ def test_journal_byte_ceiling_keeps_last_fully_processed_cursor(opts):
     commands = []
     config = _journal_config(max_bytes=len(encoded[0]) + len(encoded[1]) // 2)
     collector = journal_module.JournalCollector(config)
-    with mock.patch.object(
-            journal_module.subprocess, "Popen", side_effect=_popen_stream(payload, commands)):
+    with _patch_journal_popen(journal_module, payload, commands):
         result = collector.poll()
 
     th.assert_eq(len(result["observations"]), 1,
@@ -214,8 +224,9 @@ def test_nginx_detector_is_behavioral_and_quiet(opts):
                  "known exploit probes should carry an advisory block recommendation")
     th.assert_eq(probe["attributes"]["path"], "/wp-login.php",
                  "query strings must never be copied into incident evidence")
-    th.assert_true("referer" not in probe["attributes"],
-                   "client-controlled referrers must never enter MojoSec evidence")
+    th.assert_eq(probe["attributes"]["referrer"],
+                 "https://example.invalid/private?token=secret",
+                 "bounded raw referrer evidence must be available for central scrubbing")
 
     server_error = detect_nginx({
         "status": 502, "method": "POST", "path": "/api/orders",
@@ -232,8 +243,10 @@ def test_nginx_detector_is_behavioral_and_quiet(opts):
     second_secret_path = detect_nginx({
         "status": 500, "method": "GET", "path": f"/api/reset/{second_token}",
     })
-    th.assert_true(first_token not in json.dumps(first_secret_path),
-                   "high-entropy URL segments must be hashed before persistence")
+    th.assert_true(first_token in first_secret_path["attributes"]["request_uri"],
+                   "bounded raw request evidence must remain available to the protected receipt")
+    th.assert_true(first_token not in first_secret_path["attributes"]["path"],
+                   "the aggregation path must hash high-entropy URL segments")
     th.assert_eq(first_secret_path["fingerprint"], second_secret_path["fingerprint"],
                  "different reset tokens must share one bounded aggregation key")
 

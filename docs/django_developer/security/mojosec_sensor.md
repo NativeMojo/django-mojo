@@ -191,19 +191,25 @@ The detector recognizes these field names:
 |---|---|
 | timestamp | `time`, `time_iso8601`, or `timestamp` |
 | method | `method` or `request_method` |
-| path | `uri`, `request_uri`, or `path` |
+| raw request target | `request_uri`, `uri`, or `path` |
 | client IP | `remote_addr` or `source_ip` |
 | direct peer IP | `peer_addr` or `realip_remote_addr` |
 | duration in seconds | `request_time` |
+| virtual host | `host` or `server_name` |
+| upstream result/timing | `upstream_status`, `upstream_response_time` |
+| approved diagnostic headers | `referrer`/`referer`, `user_agent` |
 
 The timestamp is optional but, when present, must be timezone-aware ISO-8601.
-Query strings are removed before an event is stored. High-entropy, UUID,
-long-numeric, email, and reset/verify-token path segments are replaced by a
-short digest in evidence and one shared token marker in aggregation keys.
-Referrers, user agents, and unrecognized fields are ignored. Keep each JSON
-record on one complete line; oversized and malformed lines are counted and the
-byte cursor advances past them so poison input cannot stall collection. A
-normal partial trailing line is deferred until it is complete.
+The dedicated root-only stream deliberately carries the bounded raw request
+target, referrer, and user agent so the protected central receipt can support
+incident reconstruction. It never logs bodies, cookies, authorization, or
+arbitrary headers. Every detector kind has an explicit field allowlist and
+priority order. UTF-8 byte caps, total encoded-attribute budget, truncation
+markers, and full-value SHA-256 digests are applied before SQLite persistence;
+escaped lone-surrogate or oversized Unicode input cannot stall the cursor.
+High-entropy path segments still use a shared token marker for aggregation.
+Every Event-visible IP, host, method, status, and path participates in the
+fingerprint, so interleaved identities do not collapse into a misleading row.
 
 ### Journald and FIM traversal
 
@@ -211,6 +217,15 @@ Journald collection never uses `journalctl --lines` tail semantics. It streams
 forward from the committed `--after-cursor`, stopping at both a record and byte
 ceiling, and commits only the last cursor it processed. Per-record parse or
 detector failures increment the malformed count and do not abort the burst.
+
+Accepted SSH records establish an exact `(boot_id, audit_session)` mapping.
+The entire poll is overlaid before detection, so sudo may correlate to an SSH
+record later in the same poll. Mappings persist in SQLite for at most 30 days
+and 4,096 rows. When audit identity is absent, `who` may attribute sudo only
+for one unique, fresh (five-minute) exact actor-plus-TTY row; stale, reused, or
+ambiguous rows produce no source attribution. Sudo evidence includes bounded
+actor, target, TTY, audit identity, working directory, raw command, executable,
+digest, and attribution provenance.
 
 On POSIX platforms FIM opens every path component relative to an already-open
 directory descriptor with `O_NOFOLLOW`; files are hashed through that same
@@ -324,6 +339,12 @@ do not receive collector/backlog timing.
 Private state lives in root-owned mode-`0700` `/var/lib/mojosec`; it must not be
 placed under the application-writable `/opt/api/var` tree. SQLite uses WAL mode
 and `synchronous=FULL`.
+
+State schema v2 adds only the `ssh_sessions` correlation table and expiry
+index. Startup inspects the stored version before mutation. The v1-to-v2
+migration is one exclusive transaction, creates the table/index, and writes
+the new version last; rollback is retryable and preserves events, aggregates,
+FIM baselines, metadata, and cursors. A future version is rejected unchanged.
 
 - A journal/nginx cursor advances in the same transaction that processes the
   observations preceding it. Capacity rejection records a drop counter in that
@@ -440,15 +461,23 @@ evidence. The default `RestMeta` graph omits
 sensitive, the whole model is denied to generic AI queries, and generic model
 REST create/update/delete are disabled.
 
-Wire attributes remain in the receipt's `replay_features`, which is denied to
-generic AI/model query tools. The central Event contains a fixed title/detail
-and validated scalar provenance only. For `fim.change`, the sole optional
+Wire attributes remain only in the receipt's protected `replay_features`, which
+is absent from the default graph and denied to generic AI/model query tools.
+The central Event contains a fixed title/detail plus a per-kind scrubbed
+projection. SSH, reliably attributed sudo, and known web kinds promote a
+canonical source IP. Web evidence canonicalizes method, host, peer, status,
+path, upstream status/timing, and retains only an HTTP(S) referrer origin plus
+structured UA family/major and its digest. Aggregated volatile samples are
+omitted instead of presenting the last request as the whole distribution.
+Sudo commands redact URL credentials/query strings, sensitive flags and their
+values, sensitive environment assignments, JWT/PEM/cloud/high-entropy tokens;
+ambiguous shell parsing falls back to executable plus digest. Raw command,
+request target, referrer, and UA strings never enter Event metadata, title,
+details, ordinary logs, or AI/default graphs. For `fim.change`, the sole optional
 sensor annotation projected centrally is exact
 `expected_change.{deployment_id,expires_at,operation_id,operation_kind,completed_at}`
 after revalidation; raw FIM
-attributes never project and the annotation never suppresses publication. A source IP is promoted only for a
-server-owned per-kind registry after a minimum aggregate threshold. Successful
-login and web-error evidence never promotes a source IP. Host severity is
+attributes never project and the annotation never suppresses publication. Host severity is
 preserved only as advisory evidence; the registry selects the effective level
 and category. Sensor summaries, paths,
 messages, commands, and other raw strings do not enter LLM-visible Event

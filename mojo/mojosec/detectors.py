@@ -1,13 +1,14 @@
 """High-signal detectors for journal and structured nginx records."""
 
 import datetime
-import hashlib
 import math
 import re
 import shlex
 import urllib.parse
 
 from .events import bounded_text, observation, valid_ip
+from .attribution import audit_context, canonical_tty
+from .evidence import build_evidence, digest_text, fingerprint_values as evidence_fingerprint
 
 
 _SSH_ACCEPTED = re.compile(
@@ -16,7 +17,9 @@ _SSH_FAILED = re.compile(
     r"Failed (?P<method>\S+) for (?:invalid user )?(?P<user>\S+) from (?P<ip>\S+) port \d+", re.I)
 _SSH_INVALID = re.compile(r"Invalid user (?P<user>\S+) from (?P<ip>\S+)", re.I)
 _SUDO_COMMAND = re.compile(
-    r"^(?P<actor>\S+)\s*:\s*.*?USER=(?P<target>\S+)\s*;\s*COMMAND=(?P<command>.*)$")
+    r"^(?P<actor>\S+)\s*:\s*(?P<context>.*?)USER=(?P<target>\S+)\s*;\s*COMMAND=(?P<command>.*)$")
+_SUDO_PWD = re.compile(r"(?:^|;)\s*PWD=(?P<pwd>[^;]+)")
+_SUDO_TTY = re.compile(r"(?:^|;)\s*TTY=(?P<tty>[^;]+)")
 _SESSION_OPEN = re.compile(
     r"pam_unix\((?P<service>[^:]+):session\): session opened for user (?P<user>[^ (]+)", re.I)
 
@@ -60,12 +63,12 @@ def _normalized_web_paths(path):
             pieces.append("~dot")
             keys.append("~dot")
         elif _secret_segment(segment, previous):
-            digest = hashlib.sha256(segment.encode("utf-8")).hexdigest()[:12]
+            digest = digest_text(segment)[:12]
             pieces.append("~" + digest)
             keys.append("~token")
         else:
             pieces.append(segment)
-            keys.append(lowered)
+            keys.append(segment)
         if segment:
             previous = lowered
     evidence = "/".join(pieces)
@@ -78,7 +81,7 @@ def _normalized_web_paths(path):
 
 def _sudo_command_identity(command):
     command = str(command or "")[:4096]
-    digest = hashlib.sha256(command.encode("utf-8")).hexdigest()
+    digest = digest_text(command)
     try:
         words = shlex.split(command, posix=True)
     except ValueError:
@@ -101,7 +104,7 @@ def _journal_time(record):
         return None
 
 
-def detect_journal(record):
+def detect_journal(record, attribution=None):
     """Return zero or one observation for a bounded journal JSON record."""
     message = bounded_text(record.get("MESSAGE"), 2048)
     if not message:
@@ -118,25 +121,30 @@ def detect_journal(record):
         match = _SSH_ACCEPTED.search(message)
         if match and valid_ip(match.group("ip")):
             values = match.groupdict()
+            context = audit_context(record)
+            attributes = build_evidence("auth.ssh_login", {
+                "source_ip": values["ip"], "user": values["user"],
+                "auth_method": values["method"], **context,
+            })
             return observation(
                 "auth.ssh_login", "high", "SSH login accepted",
-                attributes={
-                    "source_ip": values["ip"], "user": bounded_text(values["user"], 64),
-                    "auth_method": bounded_text(values["method"], 32),
-                },
+                attributes=attributes,
                 fingerprint_values=(values["ip"], values["user"], values["method"], observed_at or ""),
                 aggregate=False, recommendation="review", observed_at=observed_at,
             )
         match = _SSH_FAILED.search(message) or _SSH_INVALID.search(message)
         if match and valid_ip(match.group("ip")):
             values = match.groupdict()
+            context = audit_context(record)
+            attributes = build_evidence("auth.ssh_failure", {
+                "source_ip": values["ip"], "user": values.get("user"),
+                "auth_method": values.get("method", "unknown"), **context,
+            })
             return observation(
                 "auth.ssh_failure", "warning", "SSH authentication failed",
-                attributes={
-                    "source_ip": values["ip"], "user": bounded_text(values.get("user"), 64),
-                    "auth_method": bounded_text(values.get("method", "unknown"), 32),
-                },
-                fingerprint_values=(values["ip"], values.get("user", "")),
+                attributes=attributes,
+                fingerprint_values=(
+                    values["ip"], values.get("user", ""), values.get("method", "unknown")),
                 aggregate=True, recommendation="review", observed_at=observed_at,
             )
 
@@ -147,33 +155,52 @@ def detect_journal(record):
         if match:
             values = match.groupdict()
             command_path, command_digest = _sudo_command_identity(values["command"])
+            tty_match = _SUDO_TTY.search(values["context"])
+            pwd_match = _SUDO_PWD.search(values["context"])
+            tty = canonical_tty(tty_match.group("tty").strip()) if tty_match else ""
+            context = audit_context(record)
+            source_ip = ""
+            provenance = "none"
+            if attribution is not None:
+                source_ip, provenance, context = attribution.resolve(
+                    record, values["actor"], tty or context.get("tty"))
+            attributes = build_evidence("auth.sudo_command", {
+                "source_ip": source_ip,
+                "actor": values["actor"],
+                "target_user": values["target"],
+                "tty": tty or context.get("tty"),
+                "boot_id": context.get("boot_id"),
+                "audit_session": context.get("audit_session"),
+                "attribution_provenance": provenance,
+                "cwd": pwd_match.group("pwd").strip() if pwd_match else "",
+                "command_path": command_path,
+                "command_sha256": command_digest,
+                "command": values["command"],
+            })
             return observation(
                 "auth.sudo_command", "high", "Privileged sudo command executed",
-                attributes={
-                    "actor": bounded_text(values["actor"], 64),
-                    "target_user": bounded_text(values["target"], 64),
-                    "command_path": command_path,
-                    "command_sha256": command_digest,
-                },
+                attributes=attributes,
                 fingerprint_values=(values["actor"], values["target"], command_digest, observed_at or ""),
                 aggregate=False, recommendation="review", observed_at=observed_at,
             )
         if "authentication failure" in message.lower():
+            context = audit_context(record)
+            attributes = build_evidence("auth.sudo_failure", context)
             return observation(
                 "auth.sudo_failure", "high", "sudo authentication failed",
-                attributes={},
+                attributes=attributes,
                 fingerprint_values=(bounded_text(message, 256),),
                 aggregate=True, recommendation="review", observed_at=observed_at,
             )
 
     session = _SESSION_OPEN.search(message)
     if session and session.group("service").lower() not in ("sshd", "sudo"):
+        attributes = build_evidence("auth.session_open", {
+            "service": session.group("service"), "user": session.group("user"),
+        })
         return observation(
             "auth.session_open", "high", "Host login session opened",
-            attributes={
-                "service": bounded_text(session.group("service"), 64),
-                "user": bounded_text(session.group("user"), 64),
-            },
+            attributes=attributes,
             fingerprint_values=(session.group("service"), session.group("user"), observed_at or ""),
             aggregate=False, recommendation="review", observed_at=observed_at,
         )
@@ -193,14 +220,17 @@ def detect_journal(record):
         if "out of memory" in lowered or "oom-kill" in lowered or "killed process" in lowered:
             return observation(
                 "system.oom", "critical", "Kernel out-of-memory action detected",
-                attributes={"unit": unit, "message": bounded_text(message, 512)},
+                attributes=build_evidence(
+                    "system.oom", {"unit": unit, "message": message}),
                 fingerprint_values=(unit, bounded_text(message, 128)),
                 aggregate=False, recommendation="review", observed_at=observed_at,
             )
         if priority <= 3 or "failed with result" in lowered or "entered failed state" in lowered:
             return observation(
                 "system.service_error", "high", "System service reported a failure",
-                attributes={"unit": unit, "priority": priority, "message": bounded_text(message, 512)},
+                attributes=build_evidence("system.service_error", {
+                    "unit": unit, "priority": priority, "message": message,
+                }),
                 fingerprint_values=(unit, bounded_text(message, 128)),
                 aggregate=True, recommendation="review", observed_at=observed_at,
             )
@@ -254,11 +284,17 @@ def detect_nginx(record):
     if not path or status == 499:
         return None
     evidence_path, fingerprint_path = _normalized_web_paths(decoded_path)
-    attributes = {"method": method, "path": evidence_path, "status": status}
-    if source_ip:
-        attributes["source_ip"] = source_ip
-    if peer_ip and peer_ip != source_ip:
-        attributes["peer_ip"] = peer_ip
+    evidence_values = {
+        "method": method, "path": evidence_path, "status": status,
+        "request_uri": raw_path,
+        "source_ip": source_ip,
+        "peer_ip": peer_ip if peer_ip != source_ip else "",
+        "host": record.get("host") or record.get("server_name"),
+        "referrer": record.get("referrer") or record.get("referer") or record.get("http_referer"),
+        "user_agent": record.get("user_agent") or record.get("http_user_agent"),
+        "upstream_status": record.get("upstream_status"),
+        "upstream_response_time": record.get("upstream_response_time"),
+    }
     request_time = record.get("request_time")
     if request_time is not None and request_time != "":
         try:
@@ -269,31 +305,33 @@ def detect_nginx(record):
             raise DetectorError("nginx request_time must be a finite number") from err
         if not math.isfinite(seconds) or not 0 <= seconds <= 3600:
             raise DetectorError("nginx request_time must be from 0 to 3600 seconds")
-        attributes["request_time_ms"] = int(seconds * 1000)
+        evidence_values["request_time"] = str(request_time)
     observed_at = _nginx_time(record)
+
+    kind = None
 
     is_probe = any(marker in decoded for marker in _PROBE_MARKERS)
     is_probe = is_probe or any(decoded.endswith(suffix) for suffix in _PROBE_SUFFIXES)
     if is_probe:
-        return observation(
-            "web.probe", "high", "Known exploit path probe",
-            attributes=attributes,
-            fingerprint_values=(source_ip, method, fingerprint_path),
-            aggregate=True, recommendation="block_ip", observed_at=observed_at,
-        )
-    if status >= 500:
-        return observation(
+        kind, severity, summary, recommendation = (
+            "web.probe", "high", "Known exploit path probe", "block_ip")
+    elif status >= 500:
+        kind, severity, summary, recommendation = (
             "web.error", "high" if status >= 502 else "warning",
-            "Web request returned a server error",
-            attributes=attributes,
-            fingerprint_values=(status, method, fingerprint_path),
-            aggregate=True, recommendation="review", observed_at=observed_at,
-        )
-    if status in (401, 403):
-        return observation(
-            "web.denied", "warning", "Web request was denied",
-            attributes=attributes,
-            fingerprint_values=(source_ip, status, fingerprint_path),
-            aggregate=True, recommendation="none", observed_at=observed_at,
-        )
-    return None
+            "Web request returned a server error", "review")
+    elif status in (401, 403):
+        kind, severity, summary, recommendation = (
+            "web.denied", "warning", "Web request was denied", "none")
+    if kind is None:
+        return None
+    attributes = build_evidence(kind, evidence_values)
+    scalar_fields = (
+        "source_ip", "peer_ip", "method", "status", "host",
+        "upstream_status",
+    )
+    fingerprints = evidence_fingerprint(attributes, scalar_fields) + (fingerprint_path,)
+    return observation(
+        kind, severity, summary, attributes=attributes,
+        fingerprint_values=fingerprints, aggregate=True,
+        recommendation=recommendation, observed_at=observed_at,
+    )

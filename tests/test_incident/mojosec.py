@@ -71,6 +71,16 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
     batch = _golden_batch()
     batch["events"][0]["id"] = "d" * 64
     batch["events"][1]["id"] = "e" * 64
+    batch["events"][1]["count"] = 1
+    batch["events"][1]["attributes"].update({
+        "request_uri": "/wp-login.php?token=must-stay-protected",
+        "host": "EXAMPLE.invalid",
+        "referrer": "https://example.invalid/private?secret=must-not-project",
+        "user_agent": "curl/8.9 must-not-project",
+        "request_time": "1.250",
+        "upstream_status": "502, 200",
+        "upstream_response_time": "1.100, 0.100",
+    })
     body = gzip.compress(json.dumps(batch).encode("utf-8"))
     _use_apikey(opts, opts.mojosec_token)
     response = opts.client.post(
@@ -97,14 +107,26 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
     receipt = MojoSecReceipt.objects.get(wire_event_id="e" * 64)
     th.assert_eq(probe.source_ip, "198.51.100.7",
                  "an eligible detector kind should promote its validated source IP")
-    th.assert_true(login.source_ip is None,
-                   "a successful login source can never be promoted for IP action")
+    th.assert_eq(login.source_ip, "192.0.2.20",
+                 "a source-bearing SSH event should promote its validated source")
     th.assert_true("attributes" not in probe.metadata["mojosec"],
                    "untrusted sensor attributes must stay out of LLM-visible Event metadata")
     th.assert_true("sensor_policy_revision" not in probe.metadata["mojosec"],
                    "free-form sensor policy labels must be represented by digest in Event metadata")
     th.assert_eq(receipt.replay_features["event"]["attributes"]["path"], "/wp-login.php",
                  "bounded raw features should remain available for deterministic offline replay")
+    th.assert_in("must-stay-protected",
+                 receipt.replay_features["event"]["attributes"]["request_uri"],
+                 "raw bounded request evidence must remain in the DENY_AI receipt")
+    projected = json.dumps(probe.metadata, sort_keys=True)
+    th.assert_true("must-stay-protected" not in projected and
+                   "must-not-project" not in projected,
+                   "raw request secrets must never enter Event metadata")
+    th.assert_eq(probe.metadata["mojosec"]["evidence"]["referrer_origin"],
+                 "https://example.invalid",
+                 "central projection should retain only the validated HTTP origin")
+    th.assert_eq(probe.metadata["mojosec"]["evidence"]["user_agent"]["family"], "curl",
+                 "central projection should structure UA family without retaining raw text")
     th.assert_true(receipt.RestMeta.DENY_AI,
                    "the model holding raw replay features must be denied to generic AI queries")
     th.assert_true(
@@ -334,8 +356,8 @@ def test_mojosec_server_registry_ignores_host_escalation_and_victim_ip(opts):
     event = Event.objects.get(metadata__mojosec__event_id="1" * 64)
     th.assert_eq(event.level, 5,
                  "host critical severity cannot exceed the server-owned kind policy")
-    th.assert_true(event.source_ip is None,
-                   "web errors can never promote a caller-claimed address for action")
+    th.assert_eq(event.source_ip, "192.0.2.55",
+                 "known source-bearing web kinds should promote canonical IP evidence")
     th.assert_true(event.incident_id is None,
                    "an advisory block claim cannot action outside the exact central registry")
     th.assert_eq(event.metadata["mojosec"]["sensor_severity"], "critical",
@@ -346,8 +368,8 @@ def test_mojosec_server_registry_ignores_host_escalation_and_victim_ip(opts):
     batch["events"] = [probe]
     mojosec.ingest_batch(key, batch)
     event = Event.objects.get(metadata__mojosec__event_id="2" * 64)
-    th.assert_true(event.source_ip is None,
-                   "one host-reported probe cannot promote an IP below the central threshold")
+    th.assert_eq(event.source_ip, "192.0.2.55",
+                 "truthful fingerprinting permits even one canonical probe source")
 
 
 @th.django_unit_test()

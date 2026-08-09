@@ -12,8 +12,9 @@ from testit import helpers as th
 
 
 @th.django_unit_test()
-def test_nginx_security_log_is_queryless_bounded_json(opts):
+def test_nginx_security_log_is_rich_bounded_json(opts):
     from mojo.deploy.mojosec_nginx import render_http_log
+    from mojo.apps.edge.services import render as edge_render
 
     text = render_http_log(
         "/var/log/nginx/mojosec.json.log",
@@ -21,11 +22,14 @@ def test_nginx_security_log_is_queryless_bounded_json(opts):
     )
     th.assert_in("log_format mojosec_v1 escape=json", text,
                  "control characters must be JSON escaped by nginx")
-    th.assert_in('"uri":"$uri"', text,
-                 "$uri must be logged deliberately without a query string")
-    th.assert_true("$request_uri" not in text and "$args" not in text,
-                   "the security stream must never include query data")
-    for forbidden in ("http_referer", "http_cookie", "http_authorization", "request_body"):
+    for required in (
+            '"request_uri":"$request_uri"', '"referrer":"$http_referer"',
+            '"user_agent":"$http_user_agent"', '"host":"$host"',
+            '"upstream_status":"$upstream_status"',
+            '"upstream_response_time":"$upstream_response_time"'):
+        th.assert_in(required, text,
+                     f"the protected security stream omitted approved evidence {required}")
+    for forbidden in ("http_cookie", "http_authorization", "request_body"):
         th.assert_true(forbidden not in text,
                        f"the security stream leaked forbidden field {forbidden}")
     th.assert_in('"remote_addr":"$remote_addr"', text,
@@ -34,6 +38,8 @@ def test_nginx_security_log_is_queryless_bounded_json(opts):
                  "the direct peer must remain available after realip resolution")
     th.assert_in("set_real_ip_from 10.0.0.0/8;", text,
                  "only an exact configured proxy network may affect client identity")
+    th.assert_true(edge_render.render_mojosec_http_log is render_http_log,
+                   "standard and Edge nginx must use one shared evidence renderer")
 
 
 @th.django_unit_test()

@@ -57,10 +57,10 @@ def trusted_proxy_cidrs(value):
 def render_http_log(log_path=DEFAULT_LOG_PATH, proxy_cidrs=None):
     """Render http-context JSON logging and an exact trusted-proxy boundary.
 
-    `$uri` is intentional: unlike `$request_uri`, it never contains the query
-    string. `$realip_remote_addr` preserves the socket peer after realip has
-    resolved `$remote_addr`. No request headers, body, referrer, cookie, or
-    authorization value is logged.
+    The dedicated root-only stream retains a bounded request target and the two
+    specifically approved diagnostic headers. It never logs bodies, cookies,
+    authorization, or arbitrary headers. `$realip_remote_addr` preserves the
+    socket peer after realip has resolved `$remote_addr`.
     """
     path = safe_log_path(log_path)
     networks = trusted_proxy_cidrs(proxy_cidrs)
@@ -77,8 +77,12 @@ def render_http_log(log_path=DEFAULT_LOG_PATH, proxy_cidrs=None):
         "log_format mojosec_v1 escape=json",
         "    '{\"schema\":\"mojosec.nginx\",\"version\":1,'",
         "    '\"time\":\"$time_iso8601\",\"method\":\"$request_method\",'",
-        "    '\"uri\":\"$uri\",\"status\":$status,'",
-        "    '\"request_time\":$request_time,'",
+        "    '\"request_uri\":\"$request_uri\",\"status\":$status,'",
+        "    '\"host\":\"$host\",\"referrer\":\"$http_referer\",'",
+        "    '\"user_agent\":\"$http_user_agent\",'",
+        "    '\"request_time\":\"$request_time\",'",
+        "    '\"upstream_status\":\"$upstream_status\",'",
+        "    '\"upstream_response_time\":\"$upstream_response_time\",'",
         "    '\"remote_addr\":\"$remote_addr\",'",
         "    '\"peer_addr\":\"$realip_remote_addr\"}';",
         f"access_log {path} mojosec_v1;",

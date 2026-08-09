@@ -97,10 +97,21 @@ Missing result IDs, malformed acknowledgements, and non-2xx responses are also
 retryable. The receiver derives central categories and severity; a host
 `recommendation` never performs an action directly. Only an exact central
 RuleSet such as `mojosec.web.probe` may promote the Event to an Incident and
-run a handler. Host severity cannot raise the server-owned level. Source IP is
-eligible only for centrally registered attack kinds and only after their
-central aggregate threshold; successful login and web-error reports never
-promote an address for action.
+run a handler. Host severity cannot raise the server-owned level. Known
+source-bearing SSH, reliably attributed sudo, and web kinds populate the
+Event's canonical source IP; their sensor fingerprints include projected
+identity scalars so interleaved callers/hosts/methods/statuses do not collapse.
+The source alone still performs no action: only an exact active central
+RuleSet may create an Incident or run a handler.
+
+Raw bounded request targets, referrers, user agents, and sudo command context
+are retained only in the protected `MojoSecReceipt.replay_features` audit
+record (`DENY_AI`, excluded from the default graph). Event metadata contains a
+central allowlisted projection: queryless/token-normalized path, canonical
+method/host/status/upstream values, HTTP(S) referrer origin, structured UA
+family/major plus digest, and aggressively redacted sudo command context.
+Bodies, cookies, authorization, arbitrary headers, and raw sensitive strings
+are never part of this protocol evidence or Event projection.
 
 An `accepted` result also means any required RuleSet handler dispatch has a
 durable receipt outbox job. Queue failure returns `retry`. Request replay and a
