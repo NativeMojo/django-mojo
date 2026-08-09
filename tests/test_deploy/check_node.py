@@ -53,6 +53,24 @@ def _find(report, section, fragment):
     return None
 
 
+def _mojosec_systemd_show(dropins=""):
+    values = {
+        "User": "root", "Group": "root", "UMask": "0077",
+        "FragmentPath": "/etc/systemd/system/mojosec.service",
+        "DropInPaths": dropins, "NoNewPrivileges": "yes", "PrivateTmp": "yes",
+        "ProtectHome": "yes", "ProtectSystem": "strict",
+        "ProtectKernelTunables": "yes", "ProtectKernelModules": "yes",
+        "ProtectKernelLogs": "yes", "ProtectControlGroups": "yes",
+        "RestrictSUIDSGID": "yes", "LockPersonality": "yes",
+        "RestrictRealtime": "yes", "RestrictNamespaces": "yes",
+        "RestrictAddressFamilies": "AF_UNIX AF_INET AF_INET6",
+        "CapabilityBoundingSet": "cap_dac_read_search",
+        "AmbientCapabilities": "",
+        "ReadWritePaths": "/var/lib/mojosec /run/mojosec",
+    }
+    return "\n".join(f"{key}={value}" for key, value in values.items())
+
+
 # ---------------------------------------------------------------------------
 # compare-state grading
 # ---------------------------------------------------------------------------
@@ -149,6 +167,7 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
             "effective_sha256": "b" * 64, "nginx_plane": "standard",
             "nginx_log_path": "/var/log/nginx/mojosec.json.log",
             "trusted_proxy_cidrs": ["10.0.0.0/8"],
+            "deployment_mode": "observe", "deployment_criticality": "required",
         },
     })
     run = FakeRunner([
@@ -161,14 +180,16 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
         ("/etc/mojosec/expected_changes.json", (1, "", "")),
         ("is-active mojosec", (0, "active", "")),
         ("is-enabled mojosec", (0, "enabled", "")),
+        ("systemctl show mojosec.service", (0, _mojosec_systemd_show(), "")),
         ("python3 -c", (0, status, "")),
         ("/run/mojosec/status.json", (0, "root root 640", "")),
         ("nginx -T", (0, "log_format mojosec_v1 escape=json\n"
                        "access_log /var/log/nginx/mojosec.json.log mojosec_v1;\n"
                        "set_real_ip_from 10.0.0.0/8;\n"
                        "location = /api/incident/mojosec/batch {\n"
+                       "client_max_body_size 512k;\n}\n"
                        "location = /api/incident/mojosec/batch/ {\n"
-                       "client_max_body_size 512k;", "")),
+                       "client_max_body_size 512k;\n}\n", "")),
         ("/var/log/nginx/mojosec.json.log", (0, "root root 640", "")),
         ("grep -F 'maxsize 50M'", (0, "", "")),
     ])
@@ -204,6 +225,61 @@ def test_mojosec_auto_mode_keeps_legacy_nodes_informational(opts):
                  f"an upgraded legacy node with no enabled sensor must not fail: {failures}")
     th.assert_true(_find(report, "mojosec", "auto-derived mode: off") is not None,
                    "auto mode must explain that it derived the legacy node as off")
+
+
+@th.django_unit_test()
+def test_mojosec_unit_audit_rejects_byte_drift_and_dropins(opts):
+    from mojo.deploy import check_node as cn
+
+    run = FakeRunner([
+        ("python3 -I -c", (1, "", "")),
+        ("systemctl show mojosec.service",
+         (0, _mojosec_systemd_show("/etc/systemd/system/mojosec.service.d/override.conf"), "")),
+        ("systemd-analyze security", (0, "ok", "")),
+    ])
+    report = cn.Report()
+    cn._audit_mojosec_unit(report, run, "sudo -n ")
+    statuses = _statuses(report, "mojosec")
+    th.assert_eq(statuses.get("service unit byte drift"), cn.FAIL,
+                 f"package-owned unit drift must fail: {statuses}")
+    th.assert_eq(statuses.get("effective systemd sandbox drift"), cn.FAIL,
+                 f"any drop-in must fail the effective sandbox audit: {statuses}")
+
+
+@th.django_unit_test()
+def test_mojosec_managed_symlink_is_never_accepted_as_metadata(opts):
+    from mojo.deploy import check_node as cn
+
+    run = FakeRunner([("test ! -L /etc/mojosec/config.json", (1, "", ""))])
+    th.assert_eq(
+        cn._secure_metadata(run, "/etc/mojosec/config.json", "600", sudo="sudo -n "),
+        None, "a managed-file symlink must fail before stat/contents are trusted")
+
+
+@th.django_unit_test()
+def test_mojosec_exact_nginx_asset_drift_fails(opts):
+    from mojo.deploy import check_node as cn
+
+    report = cn.Report()
+    cn._audit_exact_mojosec_nginx_assets(
+        report, FakeRunner([("python3 -I -c", (1, "", ""))]),
+        "sudo -n ", ["10.0.0.0/8"])
+    th.assert_eq(_statuses(report, "mojosec").get("generated nginx asset drift"),
+                 cn.FAIL, "extra or changed generated nginx bytes must fail")
+
+
+@th.django_unit_test()
+def test_mojosec_edge_log_must_be_exactly_beneath_enrolled_root(opts):
+    from mojo.deploy import check_node as cn
+
+    root = "/opt/api/var/edge/log"
+    th.assert_true(cn._edge_log_contained(root + "/mojosec.json.log", root),
+                   "the exact enrolled Edge collector path should pass")
+    for escaped in ("/var/log/nginx/mojosec.json.log",
+                    root + "/../mojosec.json.log",
+                    root + "/nested/mojosec.json.log"):
+        th.assert_true(not cn._edge_log_contained(escaped, root),
+                       f"Edge collector path escaped its exact root contract: {escaped}")
 
 
 @th.django_unit_test()

@@ -41,12 +41,13 @@ PROBE_URL="${PROBE_URL:-http://127.0.0.1/api/version}"
 APP_USER="${APP_USER:-ec2-user}"
 WEB_USER="${WEB_USER:-www}"
 ASGI_WORKERS="${ASGI_WORKERS:-4}"
-MOJOSEC_MODE="${MOJOSEC_MODE:-off}"
-MOJOSEC_DEPLOY_CRITICALITY="${MOJOSEC_DEPLOY_CRITICALITY:-best_effort}"
+MOJOSEC_MODE="${MOJOSEC_MODE:-enrolled}"
+MOJOSEC_DEPLOY_CRITICALITY="${MOJOSEC_DEPLOY_CRITICALITY:-enrolled}"
 # Test seams: prod-identical defaults, overridable only by the shell harness.
 NGINX_ETC="${NGINX_ETC:-/etc/nginx}"
 SYSTEMD_ETC="${SYSTEMD_ETC:-/etc/systemd/system}"
 CRON_ETC="${CRON_ETC:-/etc/cron.d}"
+LOGROTATE_ETC="${LOGROTATE_ETC:-/etc/logrotate.d}"
 cd "$PROJ_PATH"
 
 DEPLOY_DIR="${PROJ_PATH}/var/deploy"
@@ -138,6 +139,16 @@ compgen -G "${DEPLOY_DIR}/systemd/*" > /dev/null \
 log "Updating nginx configs..."
 install_file "${PROJ_PATH}/aws/nginx/nginx.conf"  "${NGINX_ETC}/nginx.conf"
 install_file "${PROJ_PATH}/aws/nginx/asgi.inc"    "${NGINX_ETC}/asgi.inc"
+MOJOSEC_DJANGO_EXISTED=0
+MOJOSEC_DJANGO_BACKUP="$(mktemp "${NGINX_ETC}/.mojosec-django.XXXXXX")"
+if [ -e "${NGINX_ETC}/django.inc" ]; then
+    [ ! -L "${NGINX_ETC}/django.inc" ] \
+        || die "refusing symlink nginx django.inc"
+    [ -f "${NGINX_ETC}/django.inc" ] \
+        || die "nginx django.inc is not a regular file"
+    cp -p "${NGINX_ETC}/django.inc" "$MOJOSEC_DJANGO_BACKUP"
+    MOJOSEC_DJANGO_EXISTED=1
+fi
 install_file "${PROJ_PATH}/aws/nginx/django.inc"  "${NGINX_ETC}/django.inc"
 
 if compgen -G "${PROJ_PATH}/aws/nginx/sec.d/*.conf" > /dev/null; then
@@ -168,39 +179,100 @@ log "  converged ${VHOSTS} vhost(s) from aws/nginx/conf.d"
 # policy remains central. best_effort makes an unenrolled old node a warning,
 # while required makes a configured fleet fail closed at deploy time.
 log "Converging MojoSec (${MOJOSEC_MODE}, ${MOJOSEC_DEPLOY_CRITICALITY})..."
-if ! python3 -I -m mojo.deploy.mojosec converge \
-    --mode "$MOJOSEC_MODE" \
-    --criticality "$MOJOSEC_DEPLOY_CRITICALITY"; then
-    # A downgrade can replace the installed package while this script keeps
-    # running from its old inode. If that older package predates MojoSec, only
-    # exact mode=off cleanup is safe; observe must never be partially guessed.
-    [ "$MOJOSEC_MODE" = "off" ] || die "MojoSec observe deployment failed"
-    log "MojoSec module unavailable; applying exact pre-feature off cleanup"
-    if [ -e /etc/systemd/system/mojosec.service ] || \
-            systemctl is-active --quiet mojosec.service || \
-            systemctl is-enabled --quiet mojosec.service; then
-        systemctl disable --now mojosec.service \
-            || die "cannot stop pre-feature MojoSec service"
+restore_mojosec_django() {
+    if [ "$MOJOSEC_DJANGO_EXISTED" = "1" ]; then
+        cp -p "$MOJOSEC_DJANGO_BACKUP" "${NGINX_ETC}/django.inc"
+    else
+        rm -f -- "${NGINX_ETC}/django.inc"
     fi
-    if systemctl is-active --quiet mojosec.service || \
-            systemctl is-enabled --quiet mojosec.service; then
-        die "pre-feature MojoSec service remained active or enabled"
-    fi
-    # Preserve the spool, credential, and receiver include graph. Retire only
-    # exact logging assets here so off is quiet without risking a dangling
-    # include on a package version too old to transact the whole nginx graph.
-    for path in /etc/nginx/conf.d/00_mojosec.conf \
-                /etc/logrotate.d/mojosec; do
-        [ ! -L "$path" ] || die "refusing symlink during MojoSec cleanup: $path"
-        if [ -e "$path" ]; then
-            [ "$(stat -c %u "$path")" = "0" ] \
-                || die "refusing non-root MojoSec cleanup target: $path"
-            rm -f -- "$path"
-        fi
-    done
-    nginx -t || die "nginx rejected pre-feature MojoSec off cleanup"
-    systemctl reload nginx || die "cannot reload nginx after MojoSec off cleanup"
+    rm -f -- "$MOJOSEC_DJANGO_BACKUP"
+}
+
+# Distinguish an old package that truly lacks the module from any safety or
+# convergence failure inside a present module. Only exact exit 3 means absent.
+if python3 -I -c 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("mojo.deploy.mojosec") else 3)'; then
+    MOJOSEC_MODULE_AVAILABLE=1
+else
+    module_rc=$?
+    [ "$module_rc" = "3" ] || {
+        restore_mojosec_django
+        die "cannot preflight MojoSec deployment module"
+    }
+    MOJOSEC_MODULE_AVAILABLE=0
 fi
+
+if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ]; then
+    if ! python3 -I -m mojo.deploy.mojosec converge \
+        --mode "$MOJOSEC_MODE" \
+        --criticality "$MOJOSEC_DEPLOY_CRITICALITY"; then
+        restore_mojosec_django
+        nginx -t || die "MojoSec failed and the exact prior django.inc is invalid"
+        systemctl reload nginx \
+            || die "cannot reload exact prior nginx graph after MojoSec failure"
+        die "MojoSec deployment failed"
+    fi
+else
+    # A downgrade can replace the package while this script keeps running from
+    # its old inode. Enrolled lifecycle cannot be guessed when enrollment
+    # exists; only an explicitly off or genuinely unenrolled node is retired.
+    fallback_mode="$MOJOSEC_MODE"
+    if [ "$fallback_mode" = "enrolled" ]; then
+        [ ! -e /etc/mojosec/enrollment.json ] \
+            || { restore_mojosec_django; die "old package cannot resolve enrolled MojoSec lifecycle"; }
+        fallback_mode=off
+    fi
+    [ "$fallback_mode" = "off" ] \
+        || { restore_mojosec_django; die "old package cannot deploy MojoSec observe mode"; }
+    log "MojoSec module absent; applying transactional pre-feature off cleanup"
+    fallback_dir="$(mktemp -d "${NGINX_ETC}/.mojosec-off.XXXXXX")"
+    prior_active=0
+    prior_enabled=0
+    systemctl is-active --quiet mojosec.service && prior_active=1
+    systemctl is-enabled --quiet mojosec.service && prior_enabled=1
+    managed=("${NGINX_ETC}/conf.d/00_mojosec.conf" "${LOGROTATE_ETC}/mojosec")
+    index=0
+    for path in "${managed[@]}"; do
+        [ ! -L "$path" ] || { restore_mojosec_django; die "refusing symlink during MojoSec cleanup: $path"; }
+        if [ -e "$path" ]; then
+            [ -f "$path" ] && [ "$(stat -c %u "$path")" = "0" ] \
+                || { restore_mojosec_django; die "refusing unsafe MojoSec cleanup target: $path"; }
+            cp -p "$path" "$fallback_dir/$index"
+        else
+            : > "$fallback_dir/$index.absent"
+        fi
+        index=$((index+1))
+    done
+    if [ -e "${SYSTEMD_ETC}/mojosec.service" ] || \
+            [ "$prior_active" = "1" ] || [ "$prior_enabled" = "1" ]; then
+        systemctl disable --now mojosec.service \
+            || { restore_mojosec_django; die "cannot stop pre-feature MojoSec service"; }
+    fi
+    rm -f -- "${managed[@]}"
+    fallback_ok=1
+    nginx -t || fallback_ok=0
+    [ "$fallback_ok" = "0" ] || systemctl reload nginx || fallback_ok=0
+    if [ "$fallback_ok" = "0" ]; then
+        index=0
+        for path in "${managed[@]}"; do
+            if [ -f "$fallback_dir/$index" ]; then
+                cp -p "$fallback_dir/$index" "$path"
+            else
+                rm -f -- "$path"
+            fi
+            index=$((index+1))
+        done
+        restore_mojosec_django
+        nginx -t || die "pre-feature cleanup rollback restored an invalid graph"
+        systemctl reload nginx || die "cannot reload pre-feature cleanup rollback"
+        [ "$prior_enabled" = "0" ] || systemctl enable mojosec.service
+        [ "$prior_active" = "0" ] || systemctl start mojosec.service
+        die "pre-feature MojoSec off cleanup failed and was rolled back"
+    fi
+    rm -f -- "$fallback_dir/0" "$fallback_dir/0.absent" \
+              "$fallback_dir/1" "$fallback_dir/1.absent"
+    rmdir "$fallback_dir"
+fi
+rm -f -- "$MOJOSEC_DJANGO_BACKUP"
 
 # ── retired names ────────────────────────────────────────────────────────────
 #

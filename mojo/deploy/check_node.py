@@ -52,6 +52,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -523,6 +524,118 @@ def _secure_metadata(run, path, wanted_mode, kind="file", sudo=""):
     return parts, parts == ["root", "root", wanted_mode]
 
 
+def _audit_mojosec_unit(report, run, sudo):
+    exact = (
+        "import os,stat;from mojo.deploy.mojosec import UNIT_TEXT;"
+        "p='/etc/systemd/system/mojosec.service';"
+        "fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW);s=os.fstat(fd);"
+        "want=UNIT_TEXT.encode();got=os.read(fd,len(want)+1);os.close(fd);"
+        "raise SystemExit(0 if stat.S_ISREG(s.st_mode) and s.st_uid==0 and "
+        "s.st_gid==0 and s.st_size==len(want) and got==want else 1)"
+    )
+    if run(f"{sudo}python3 -I -c {q(exact)}")[0] == 0:
+        report.passed("mojosec", "service unit bytes",
+                      "installed unit matches the package exactly")
+    else:
+        report.fail("mojosec", "service unit byte drift",
+                    "installed root unit differs from the package contract")
+
+    properties = (
+        "User", "Group", "UMask", "FragmentPath", "DropInPaths",
+        "NoNewPrivileges", "PrivateTmp", "ProtectHome", "ProtectSystem",
+        "ProtectKernelTunables", "ProtectKernelModules", "ProtectKernelLogs",
+        "ProtectControlGroups", "RestrictSUIDSGID", "LockPersonality",
+        "RestrictRealtime", "RestrictNamespaces", "RestrictAddressFamilies",
+        "CapabilityBoundingSet", "AmbientCapabilities", "ReadWritePaths",
+    )
+    command = "systemctl show mojosec.service " + " ".join(
+        f"--property={name}" for name in properties)
+    rc, out, _ = run(command)
+    if rc != 0 or len(out) > 16384:
+        report.fail("mojosec", "effective systemd sandbox unavailable",
+                    "bounded systemctl show failed")
+        return
+    found = {}
+    for line in out.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            found[key] = value.strip()
+    scalar = {
+        "User": "root", "Group": "root", "UMask": "0077",
+        "FragmentPath": "/etc/systemd/system/mojosec.service",
+        "DropInPaths": "", "NoNewPrivileges": "yes", "PrivateTmp": "yes",
+        "ProtectHome": "yes", "ProtectSystem": "strict",
+        "ProtectKernelTunables": "yes", "ProtectKernelModules": "yes",
+        "ProtectKernelLogs": "yes", "ProtectControlGroups": "yes",
+        "RestrictSUIDSGID": "yes", "LockPersonality": "yes",
+        "RestrictRealtime": "yes", "RestrictNamespaces": "yes",
+        "AmbientCapabilities": "",
+    }
+    drift = [f"{key}={found.get(key, '<missing>')}" for key, value in scalar.items()
+             if found.get(key) != value]
+    if set(found.get("RestrictAddressFamilies", "").split()) != {
+            "AF_UNIX", "AF_INET", "AF_INET6"}:
+        drift.append("RestrictAddressFamilies=" + found.get(
+            "RestrictAddressFamilies", "<missing>"))
+    if set(found.get("CapabilityBoundingSet", "").lower().split()) != {
+            "cap_dac_read_search"}:
+        drift.append("CapabilityBoundingSet=" + found.get(
+            "CapabilityBoundingSet", "<missing>"))
+    if set(found.get("ReadWritePaths", "").split()) != {
+            "/var/lib/mojosec", "/run/mojosec"}:
+        drift.append("ReadWritePaths=" + found.get("ReadWritePaths", "<missing>"))
+    if drift:
+        report.fail("mojosec", "effective systemd sandbox drift",
+                    ", ".join(drift[:12]))
+    else:
+        report.passed("mojosec", "effective systemd sandbox",
+                      "no drop-ins; exact identity, filesystem, capability, and namespace limits")
+
+    analyze_rc, analyze_out, _ = run(
+        "systemd-analyze security --no-pager mojosec.service 2>&1")
+    if analyze_rc == 0 and len(analyze_out) <= 65536:
+        report.passed("mojosec", "systemd security analysis",
+                      "systemd-analyze accepted the effective unit")
+    else:
+        report.fail("mojosec", "systemd security analysis failed",
+                    "systemd-analyze could not evaluate the effective unit")
+
+
+def _audit_exact_mojosec_nginx_assets(report, run, sudo, proxy_cidrs):
+    render_check = (
+        "import json,pathlib,sys;"
+        "from mojo.deploy.mojosec import LOGROTATE_TEXT;"
+        "from mojo.deploy.mojosec_nginx import "
+        "render_http_log,render_receiver_location;"
+        "cidrs=json.loads(sys.argv[1]);"
+        "pairs=((pathlib.Path('/etc/nginx/conf.d/00_mojosec.conf'),"
+        "render_http_log('/var/log/nginx/mojosec.json.log',cidrs)),"
+        "(pathlib.Path('/etc/nginx/snippets/mojosec_receiver.conf'),"
+        "render_receiver_location()+'\\n'),"
+        "(pathlib.Path('/etc/logrotate.d/mojosec'),LOGROTATE_TEXT));"
+        "raise SystemExit(0 if all(p.read_text()==want for p,want in pairs) else 1)"
+    )
+    cidr_json = json.dumps(proxy_cidrs, separators=(",", ":"))
+    if run(f"{sudo}python3 -I -c {q(render_check)} {q(cidr_json)}")[0] == 0:
+        report.passed("mojosec", "generated nginx assets",
+                      "installed bytes match the package render exactly")
+    else:
+        report.fail("mojosec", "generated nginx asset drift",
+                    "fragment, receiver, or rotation bytes differ from package")
+
+
+def _edge_log_contained(log_path, edge_root):
+    try:
+        return (
+            isinstance(log_path, str) and isinstance(edge_root, str) and
+            os.path.isabs(edge_root) and os.path.isabs(log_path) and
+            os.path.commonpath((log_path, edge_root)) == edge_root and
+            log_path == edge_root.rstrip("/") + "/mojosec.json.log"
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
     active = run("systemctl is-active mojosec.service 2>&1")[1]
     enabled = run("systemctl is-enabled mojosec.service 2>&1")[1]
@@ -552,6 +665,9 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
             report.fail("mojosec", f"{name} metadata drift",
                         f"{path} is {' '.join(result[0])}; want root root {wanted}",
                         "sudo bash aws/post_deploy.sh")
+
+    if present.get("service unit"):
+        _audit_mojosec_unit(report, run, sudo)
 
     desired_rc = run(
         "test ! -L /opt/api/var/mojosec.json && "
@@ -674,6 +790,15 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
             else:
                 report.fail("mojosec", "config provenance missing",
                             "status lacks desired/effective configuration hashes")
+            if (provenance.get("deployment_mode") == mode and
+                    provenance.get("deployment_criticality") in
+                    ("best_effort", "required")):
+                report.passed("mojosec", "persistent lifecycle source",
+                              f"root enrollment persists {mode}/"
+                              f"{provenance['deployment_criticality']}")
+            else:
+                report.fail("mojosec", "persistent lifecycle source drift",
+                            "runtime status does not match root-enrolled mode/criticality")
 
             nginx_rc, nginx_text, nginx_err = run(f"{sudo}nginx -T 2>&1")
             active_nginx = nginx_text or nginx_err
@@ -681,11 +806,20 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
             required = (
                 "log_format mojosec_v1 escape=json",
                 f"access_log {log_path} mojosec_v1;",
-                "location = /api/incident/mojosec/batch {",
-                "location = /api/incident/mojosec/batch/ {",
-                "client_max_body_size 512k;",
             )
             missing = [item for item in required if not item or item not in active_nginx]
+            route_counts = []
+            for route in ("/api/incident/mojosec/batch",
+                          "/api/incident/mojosec/batch/"):
+                bodies = re.findall(
+                    r"location\s*=\s*" + re.escape(route) + r"\s*\{([^{}]*)\}",
+                    active_nginx)
+                route_counts.append(len(bodies))
+                if not bodies or any(
+                        "client_max_body_size 512k;" not in body for body in bodies):
+                    missing.append(f"512k cap inside every exact {route} block")
+            if route_counts[0] != route_counts[1]:
+                missing.append("matching slash/unslashed receiver blocks")
             missing.extend(
                 f"set_real_ip_from {network};"
                 for network in provenance.get("trusted_proxy_cidrs", [])
@@ -709,27 +843,8 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                     else:
                         report.fail("mojosec", f"{asset_name} metadata drift",
                                     f"{asset_path} must be root:root 0644")
-                render_check = (
-                    "import json,pathlib,sys;"
-                    "from mojo.deploy.mojosec import LOGROTATE_TEXT;"
-                    "from mojo.deploy.mojosec_nginx import "
-                    "render_http_log,render_receiver_location;"
-                    "cidrs=json.loads(sys.argv[1]);"
-                    "pairs=((pathlib.Path('/etc/nginx/conf.d/00_mojosec.conf'),"
-                    "render_http_log('/var/log/nginx/mojosec.json.log',cidrs)),"
-                    "(pathlib.Path('/etc/nginx/snippets/mojosec_receiver.conf'),"
-                    "render_receiver_location()+'\\n'),"
-                    "(pathlib.Path('/etc/logrotate.d/mojosec'),LOGROTATE_TEXT));"
-                    "raise SystemExit(0 if all(p.read_text()==want for p,want in pairs) else 1)"
-                )
-                cidr_json = json.dumps(
-                    provenance.get("trusted_proxy_cidrs", []), separators=(",", ":"))
-                if run(f"{sudo}python3 -I -c {q(render_check)} {q(cidr_json)}")[0] == 0:
-                    report.passed("mojosec", "generated nginx assets",
-                                  "installed bytes match the package render exactly")
-                else:
-                    report.fail("mojosec", "generated nginx asset drift",
-                                "fragment, receiver, or rotation bytes differ from package")
+                _audit_exact_mojosec_nginx_assets(
+                    report, run, sudo, provenance.get("trusted_proxy_cidrs", []))
                 log_meta = _secure_metadata(
                     run, "/var/log/nginx/mojosec.json.log", "640", sudo=sudo)
                 if log_meta is not None and log_meta[1]:
@@ -748,6 +863,8 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                     report.fail("mojosec", "bounded log retention drift",
                                 "/etc/logrotate.d/mojosec lacks size/metadata contract")
             elif provenance.get("nginx_plane") == "edge":
+                edge_root = provenance.get("edge_log_dir", "")
+                contained = _edge_log_contained(log_path, edge_root)
                 rc, mode_text, _ = run(
                     f"{sudo}test ! -L {q(log_path)} && {sudo}test -f {q(log_path)} && "
                     f"{sudo}stat -c %a {q(log_path)}")
@@ -755,7 +872,7 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                     unsafe = int(mode_text, 8) & 0o002
                 except (TypeError, ValueError):
                     unsafe = 1
-                if rc == 0 and not unsafe:
+                if contained and rc == 0 and not unsafe:
                     report.passed("mojosec", "Edge security log metadata",
                                   "collector path is a non-world-writable regular file")
                 else:

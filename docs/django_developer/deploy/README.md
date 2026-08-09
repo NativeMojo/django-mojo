@@ -641,11 +641,15 @@ group-writable project tree or `var/deploy`:
 
 ```bash
 sudo python3 -I -m mojo.deploy.mojosec converge \
-  --mode observe --criticality required
+  --mode enrolled --criticality enrolled
 ```
 
-`MOJOSEC_MODE` is exactly `off` or `observe` and defaults to `off`, so upgrading
-the framework does not enroll legacy nodes or add a noisy log. `required`
+The packaged script passes `--mode enrolled --criticality enrolled`: root-only
+`/etc/mojosec/enrollment.json` persistently selects `off`/`observe` and
+`best_effort`/`required` across every ordinary deploy. With no enrollment it
+resolves to off/best-effort, so upgrading a legacy node adds no noisy log.
+`MOJOSEC_MODE` and `MOJOSEC_DEPLOY_CRITICALITY` remain explicit emergency/test
+overrides, not a persistent fleet source. `required`
 means local convergence (config, nginx validation/reload, and service
 lifecycle) must succeed; it does not require the receiver to be reachable,
 because delivery failures spool durably. `best_effort` returns a visible
@@ -702,7 +706,8 @@ inactive+disabled. Off removes the standard security logging graph but
 preserves spool and credentials. OSSEC/Wazuh is never removed.
 
 Logrotate keeps 14 compressed daily files, opens replacements root:root 0640,
-and uses `maxsize 50M` plus nginx `USR1`. `check_node --section mojosec
+and uses `maxsize 50M` plus nginx `USR1`. `maxsize` is evaluated when the
+system logrotate timer runs; it is not a continuous hard cap. `check_node --section mojosec
 --mojosec-mode observe --mojosec-sensor-id <host-id>` uses sudo to inspect only
 bounded status/enrollment projections and metadata; it never opens or prints
 the credential, canonical config, SQLite spool, or FIM manifest. It audits
@@ -713,26 +718,51 @@ legacy disabled nodes informational.
 ## Canary and cleanup
 
 Before enabling observe, create a separate protected `mojosec_ingest` API key,
-install its exact sensor identity in enrollment, place desired policy at
-`/opt/api/var/mojosec.json`, install the credential through stdin, then run
-`converge --mode observe --criticality required`. Observe never bans locally.
+install desired policy and a root enrollment containing
+`"mode":"observe","criticality":"required"`, then install the credential and
+run ordinary `post_deploy`. Do not run another deploy during a disposable
+canary started with a temporary CLI/environment override; the next deploy
+correctly returns to the enrolled lifecycle. Observe never bans locally.
 
-For a canary, make one harmless request to a known probe path through the real
-nginx vhost, wait for two poll intervals, and require all of these:
+Record a UTC `CANARY_STARTED_AT`, baseline status/log inode+size and
+`systemctl show mojosec.service -p MemoryCurrent -p CPUUsageNSec -p TasksCurrent`,
+then exercise every collector:
 
-- `check_node` has no MojoSec FAIL, service is active+enabled, and journal/nginx
-  collectors are healthy;
-- the status `delivery_accepted` counter advances and a central
-  `MojoSecReceipt` for the exact infrastructure sensor is published;
-- spool backlog drains, capacity-drop counters stay zero, and there is no
-  sustained retry error;
-- security-log growth stays below the 50 MiB rotation bound and sampled event
-  volume is explainable (probe/denial/5xx/login/FIM), not routine 2xx/404 noise.
+1. Perform a benign SSH login/logout with the normal canary account and one
+   harmless `sudo -n /usr/bin/true`; require the corresponding login/session
+   and sudo evidence without command arguments.
+2. Under an explicitly enrolled canary FIM root, create a file, modify it,
+   `chmod` it, and delete it. Require create/modify/delete evidence and no
+   traversal outside that root.
+3. Through the real nginx vhost request `/wp-login.php` and a canary-only route
+   deliberately returning 503. Require a probe and a web-error event; routine
+   2xx/ordinary 404 traffic must remain absent.
+4. Make the central canary receiver return 503 for this installation key,
+   generate another signal, and require `spooled_events` to rise without data
+   loss. Restore the receiver, require authenticated acknowledgements and the
+   spool to drain to baseline. `required` deployment itself does not test this.
+5. Restart `mojosec.service`; require the same sensor identity, config hashes,
+   durable cursor/FIM baseline, and backlog/delivery counters afterward.
+6. Run `logrotate -f /etc/logrotate.d/mojosec`, require the log inode to change,
+   nginx to reopen it via `USR1`, and a subsequent probe line to appear in the
+   new root:root 0640 file. Also confirm the system logrotate timer is enabled;
+   `maxsize 50M` is only checked when that timer/command runs.
 
-Stop a canary with `converge --mode off --criticality required`. This preserves
-evidence and enrollment for diagnosis. Only on a host being destroyed should
-an operator separately remove `/var/lib/mojosec` and `/etc/mojosec`; MojoSec
-cleanup never touches legacy OSSEC.
+The release gate is: no MojoSec FAIL from `check_node`; zero capacity-drop
+counters; backlog returns to baseline; no sustained delivery/collector error;
+strictly post-`CANARY_STARTED_AT` published `MojoSecReceipt` rows for the exact
+sensor prove the probe, controlled 5xx, auth/sudo and FIM signals; no unrelated
+tenant stamp; explainable event volume; log/spool disk growth within the
+measured test volume; no FD/task leak; and after the burst the sensor stays
+below the agreed canary budget (initial fleet gate: 150 MiB memory, 32 tasks,
+and under 5% of one CPU over a five-minute idle window).
+
+Rollback persistently by reinstalling enrollment with `"mode":"off"` and
+running ordinary `post_deploy` (or an enrolled converge). Confirm
+inactive+disabled, nginx security logging absent, and legacy OSSEC still
+present. Preserve `/var/lib/mojosec` and protected enrollment for diagnosis;
+revoke the canary API key centrally. Only on a host explicitly being destroyed
+may an operator remove `/var/lib/mojosec` and `/etc/mojosec` separately.
 
 # `node_setup`
 

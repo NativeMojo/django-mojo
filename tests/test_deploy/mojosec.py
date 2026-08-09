@@ -55,6 +55,22 @@ def test_nginx_rejects_ambiguous_proxy_ranges_and_paths(opts):
 
 
 @th.django_unit_test()
+def test_active_nginx_audit_requires_cap_inside_both_exact_routes(opts):
+    from mojo.deploy import mojosec as deploy
+
+    misleading = """
+log_format mojosec_v1 escape=json '{}';
+access_log /var/log/nginx/mojosec.json.log mojosec_v1;
+client_max_body_size 512k;
+location = /api/incident/mojosec/batch { proxy_pass http://asgi_upstream; }
+location = /api/incident/mojosec/batch/ { proxy_pass http://asgi_upstream; }
+"""
+    with mock.patch.object(deploy, "_run", return_value=misleading):
+        with th.assert_raises(deploy.DeployError):
+            deploy._audit_active_nginx(deploy.DEFAULT_LOG_PATH, [])
+
+
+@th.django_unit_test()
 def test_standard_receiver_is_automatically_wired_and_off_removes_only_marker(opts):
     from mojo.deploy import mojosec as deploy
 
@@ -377,6 +393,18 @@ def test_enrollment_installs_protected_host_identity_from_stdin(opts):
                  "installed identity is an infrastructure host, not a tenant")
     th.assert_true("credential" not in captured["text"].lower(),
                    "enrollment JSON must never carry the bearer secret")
+
+
+@th.django_unit_test()
+def test_enrolled_lifecycle_persists_observe_across_ordinary_deploys(opts):
+    from mojo.deploy import mojosec as deploy
+
+    with mock.patch.object(deploy.os, "lstat"), \
+            mock.patch.object(deploy, "_load_enrollment", return_value={
+                "mode": "observe", "criticality": "required"}):
+        th.assert_eq(deploy.resolve_lifecycle("enrolled", "enrolled"),
+                     ("observe", "required"),
+                     "post_deploy must resolve the protected persistent lifecycle")
 
 
 @th.django_unit_test()

@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -481,7 +482,8 @@ def _normal_root(path, label):
 def _validate_enrollment(enrollment):
     enrollment = json.loads(json.dumps(enrollment))
     allowed = {"version", "sensor_id", "endpoint", "trusted_proxy_cidrs",
-               "fim_allowed_roots", "nginx_plane", "edge_log_dir"}
+               "fim_allowed_roots", "nginx_plane", "edge_log_dir",
+               "mode", "criticality"}
     unknown = set(enrollment) - allowed
     if unknown:
         raise DeployError("enrollment has unknown fields: " + ", ".join(sorted(unknown)))
@@ -495,6 +497,12 @@ def _validate_enrollment(enrollment):
     ]
     enrollment["trusted_proxy_cidrs"] = trusted_proxy_cidrs(
         enrollment.get("trusted_proxy_cidrs", []))
+    if enrollment.get("mode", "off") not in MODES:
+        raise DeployError("enrollment mode must be off or observe")
+    if enrollment.get("criticality", "best_effort") not in CRITICALITIES:
+        raise DeployError("enrollment criticality must be best_effort or required")
+    enrollment["mode"] = enrollment.get("mode", "off")
+    enrollment["criticality"] = enrollment.get("criticality", "best_effort")
     plane = enrollment.get("nginx_plane", "standard")
     if plane not in ("standard", "edge"):
         raise DeployError("enrollment nginx_plane must be standard or edge")
@@ -572,7 +580,10 @@ def _prepare_effective_config():
         "effective_sha256": "",
         "nginx_plane": enrollment["nginx_plane"],
         "nginx_log_path": enrollment["nginx_log_path"],
+        "edge_log_dir": enrollment.get("edge_log_dir", ""),
         "trusted_proxy_cidrs": enrollment["trusted_proxy_cidrs"],
+        "deployment_mode": enrollment["mode"],
+        "deployment_criticality": enrollment["criticality"],
     }
     from mojo.mojosec.config import build_config
     config = build_config(supplied)
@@ -605,11 +616,17 @@ def _audit_active_nginx(log_path, proxy_cidrs):
     required = (
         "log_format mojosec_v1 escape=json",
         f"access_log {log_path} mojosec_v1;",
-        f"location = /api/incident/mojosec/batch {{",
-        f"location = /api/incident/mojosec/batch/ {{",
-        "client_max_body_size 512k;",
     )
     missing = [item for item in required if item not in active]
+    route_counts = []
+    for route in ("/api/incident/mojosec/batch", "/api/incident/mojosec/batch/"):
+        bodies = re.findall(
+            r"location\s*=\s*" + re.escape(route) + r"\s*\{([^{}]*)\}", active)
+        route_counts.append(len(bodies))
+        if not bodies or any("client_max_body_size 512k;" not in body for body in bodies):
+            missing.append(f"512k cap inside every exact {route} block")
+    if route_counts[0] != route_counts[1]:
+        missing.append("matching slash/unslashed exact receiver blocks")
     for network in trusted_proxy_cidrs(proxy_cidrs):
         directive = f"set_real_ip_from {network};"
         if directive not in active:
@@ -875,12 +892,29 @@ def rotate_credential(stream, restart=True):
             raise DeployError(f"credential rotation failed; old credential restored: {err}") from err
 
 
+def resolve_lifecycle(mode, criticality):
+    """Resolve persistent root enrollment, defaulting an unenrolled node off."""
+    if mode != "enrolled" and criticality != "enrolled":
+        return mode, criticality
+    try:
+        os.lstat(ENROLLMENT_PATH)
+    except FileNotFoundError:
+        enrollment = {"mode": "off", "criticality": "best_effort"}
+    else:
+        enrollment = _load_enrollment()
+    return (
+        enrollment["mode"] if mode == "enrolled" else mode,
+        enrollment["criticality"] if criticality == "enrolled" else criticality,
+    )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python3 -I -m mojo.deploy.mojosec")
     sub = parser.add_subparsers(dest="command", required=True)
     install = sub.add_parser("converge")
-    install.add_argument("--mode", choices=MODES, default="off")
-    install.add_argument("--criticality", choices=CRITICALITIES, default="best_effort")
+    install.add_argument("--mode", choices=("enrolled",) + MODES, default="enrolled")
+    install.add_argument("--criticality", choices=("enrolled",) + CRITICALITIES,
+                         default="enrolled")
     rotate = sub.add_parser("rotate-credential")
     rotate.add_argument("--no-restart", action="store_true")
     sub.add_parser("install-enrollment")
@@ -894,7 +928,8 @@ def main(argv=None):
             result = {"ok": True, "enrollment": "installed",
                       "sensor_id": enrollment["sensor_id"]}
         else:
-            result = converge(args.mode, args.criticality)
+            mode, criticality = resolve_lifecycle(args.mode, args.criticality)
+            result = converge(mode, criticality)
             result.setdefault("ok", True)
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0

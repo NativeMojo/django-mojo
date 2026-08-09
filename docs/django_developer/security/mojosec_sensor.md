@@ -63,6 +63,8 @@ Root enrollment for a standard EC2 nginx node:
   "version": 1,
   "sensor_id": "prod-web-i-0123456789abcdef0",
   "endpoint": "https://incident.example.com/api/incident/mojosec/batch",
+  "mode": "observe",
+  "criticality": "required",
   "nginx_plane": "standard",
   "trusted_proxy_cidrs": ["10.0.0.0/16"],
   "fim_allowed_roots": [
@@ -210,12 +212,17 @@ and the status snapshot, but does not make the command exit nonzero. Treat the
 the process exit code.
 
 An observe-only canary should exercise the actual nginx and authenticated
-receiver path without changing firewall policy:
+receiver path without changing firewall policy. Set the persistent root
+enrollment to observe/required before allowing another deploy. Record an exact
+UTC start timestamp, then use the real canary vhost:
 
 ```bash
 # Use the real canary vhost so the request traverses the active nginx graph.
 curl -sS -o /dev/null -H 'Host: canary.example.com' \
   http://127.0.0.1/wp-login.php
+# Use a canary-only application route deliberately returning 503.
+curl -sS -o /dev/null -H 'Host: canary.example.com' \
+  http://127.0.0.1/__mojosec_canary_503
 sleep 12
 sudo python3 -I -m mojo.deploy.check_node --section mojosec \
   --mojosec-mode observe --mojosec-sensor-id prod-web-i-0123456789abcdef0
@@ -229,17 +236,24 @@ from mojo.apps.incident.models import MojoSecReceipt
 MojoSecReceipt.objects.filter(
     sensor_id="prod-web-i-0123456789abcdef0",
     publish_state="published",
+    created__gte=canary_started_at,
 ).order_by("-created").values("wire_event_id", "created").first()
 ```
 
-Require zero capacity drops, a draining backlog, no sustained delivery error,
-and explainable event volume over the canary window. Confirm the dedicated log
-remains beneath its 50 MiB `maxsize` bound. Stop/rollback without destroying
-evidence using:
+Also require a benign SSH login/logout, harmless sudo command, and controlled
+FIM create/modify/chmod/delete under the enrolled canary root. Force a receiver
+503 outage for only the canary key, prove durable spool growth and drain after
+recovery, restart the service and prove identity/cursor/baseline persistence,
+then run targeted `logrotate -f`, verify inode change/USR1 reopen and a new log
+line. `maxsize 50M` is evaluated by logrotate's timer/command, not continuously.
+Gate on zero capacity drops, no sustained error, explainable noise, bounded
+disk/FD/task growth, under 150 MiB memory/32 tasks, and under 5% of one CPU over
+five idle minutes. Roll back persistently by reinstalling enrollment with mode
+off, then run:
 
 ```bash
 sudo python3 -I -m mojo.deploy.mojosec converge \
-  --mode off --criticality required
+  --mode enrolled --criticality enrolled
 ```
 
 `/run/mojosec/status.json` is atomically written as root:root mode `0640` and contains
@@ -326,7 +340,7 @@ On the host, place the nonsecret desired policy at
 sudo python3 -I -m mojo.deploy.mojosec install-enrollment < enrollment.json
 sudo python3 -I -m mojo.deploy.mojosec rotate-credential < credential.txt
 sudo python3 -I -m mojo.deploy.mojosec converge \
-  --mode observe --criticality required
+  --mode enrolled --criticality enrolled
 sudo python3 -I -m mojo.deploy.check_node --section mojosec \
   --mojosec-mode observe --mojosec-sensor-id prod-web-i-0123456789abcdef0
 ```

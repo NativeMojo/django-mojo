@@ -24,7 +24,10 @@ DEFAULTS = {
         "effective_sha256": "",
         "nginx_plane": "standard",
         "nginx_log_path": "/var/log/nginx/mojosec.json.log",
+        "edge_log_dir": "",
         "trusted_proxy_cidrs": [],
+        "deployment_mode": "off",
+        "deployment_criticality": "best_effort",
     },
     "poll_seconds": 5,
     "collectors": {
@@ -162,7 +165,18 @@ def validate_config(value):
             raise ConfigError(f"config_provenance.{field} must be a bounded string")
     if provenance["nginx_plane"] not in ("standard", "edge"):
         raise ConfigError("config_provenance.nginx_plane must be standard or edge")
+    if provenance["deployment_mode"] not in ("off", "observe"):
+        raise ConfigError("config_provenance.deployment_mode must be off or observe")
+    if provenance["deployment_criticality"] not in ("best_effort", "required"):
+        raise ConfigError("config_provenance.deployment_criticality is invalid")
     _absolute(provenance["nginx_log_path"], "config_provenance.nginx_log_path")
+    if (not isinstance(provenance["edge_log_dir"], str) or
+            len(provenance["edge_log_dir"]) > 4096):
+        raise ConfigError("config_provenance.edge_log_dir must be a bounded string")
+    if provenance["nginx_plane"] == "edge":
+        _absolute(provenance["edge_log_dir"], "config_provenance.edge_log_dir")
+    elif provenance["edge_log_dir"]:
+        raise ConfigError("config_provenance.edge_log_dir is only valid for Edge")
     cidrs = provenance["trusted_proxy_cidrs"]
     if not isinstance(cidrs, list) or len(cidrs) > 64 or not all(
             isinstance(item, str) and len(item) <= 64 for item in cidrs):
