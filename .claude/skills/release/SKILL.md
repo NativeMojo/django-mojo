@@ -26,26 +26,37 @@ Do not reimplement the script's steps here, and do not let the script grow this
 skill's judgement. A PyPI version can never be reused, so the irreversible half
 stays a script that behaves identically every time.
 
-## The version is an OUTPUT, not an input
+## The version is an OUTPUT, not an input — and the output is almost always a patch
 
 The instinct is to bump the version first and then describe it. Do it the other
 way round.
 
 Writing the note means reading everything since the last release — and that
-same reading is what tells you whether this is a patch or a minor. A new
-installable app, a new module, or a changed contract makes it a minor. You
-cannot know that without looking, and you have to look anyway.
+same reading is what tells you whether this is a patch or a minor. You cannot
+know that without looking, and you have to look anyway.
 
 So: **read, then decide, then bump.** If the user named a version in the
 arguments, that wins — say so and use it.
 
-- **patch** (`x.y.Z`) — fixes, hardening, docs, tests. Nothing a consumer must
-  change for.
-- **minor** (`x.Y.0`) — a new app or module, a new public API, or anything a
-  consumer must change for (a renamed field, a rejected value that used to be
-  accepted). **Breaking-for-consumers is a minor here, and the note must say so
-  in its own section**, not in a closing bullet.
-- **major** — never without the user asking for it outright.
+- **patch** (`x.y.Z`) — **the default, and the answer nearly every release.**
+  Fixes, hardening, docs, tests, refactors — and ordinary additive work too: a
+  new helper, a new setting, a new endpoint, field or action on an existing
+  app. Surface a consumer can ignore does not change their world; it is a
+  patch no matter how much of it there is.
+- **minor** (`x.Y.0`) — rare. Exactly two things clear the bar: a **new
+  installable app or subsystem** (something that earns its own docs section),
+  or a change a **consumer must act on** before upgrading — a renamed field, a
+  value that used to be accepted and now 400s. **Breaking-for-consumers is a
+  minor here, and the note must say so in its own section**, not in a closing
+  bullet.
+- **major** — the user's alone. Never propose one, never cut one unless they
+  name it outright.
+
+**Proposing a minor? Name the single change that clears the bar** when you
+state the version — "a lot shipped" never does. Volume is patch-shaped: twenty
+fixes are a patch, the same as one. This repo's history is the cautionary tale
+— a run of fix-only releases each minted as a minor. When in doubt, it is a
+patch.
 
 ## The flow
 
