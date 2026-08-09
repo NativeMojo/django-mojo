@@ -13,6 +13,11 @@ Backend reference:
   named exactly **`MOJO_DEPLOY_KEY`**. Authenticate with
   `Authorization: apikey <token>`.
 
+For the first deployment—before the WebApp admin UI is available—a platform
+operator runs `python manage.py webapp_bootstrap --webapp <id> --token-only`
+on the Django platform and pipes stdout directly to `gh secret set
+MOJO_DEPLOY_KEY`. Later rotation is available from web-mojo admin.
+
 Developers do not receive deploy keys. A merge or push to the configured branch
 starts the repository's workflow; the WebApp-linked service key can release
 only that one WebApp. Verified completion always starts deployment; there is no
