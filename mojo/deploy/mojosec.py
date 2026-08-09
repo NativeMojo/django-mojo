@@ -6,6 +6,7 @@ copies root-executed content from the project tree or ``var/deploy``.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import stat
@@ -15,12 +16,15 @@ import tempfile
 
 from mojo.deploy.mojosec_nginx import (
     DEFAULT_LOG_PATH, render_http_log, render_receiver_location,
+    trusted_proxy_cidrs,
 )
 
 
 SERVICE = "mojosec.service"
 SERVICE_PATH = "/etc/systemd/system/mojosec.service"
 CONFIG_PATH = "/etc/mojosec/config.json"
+DESIRED_CONFIG_PATH = "/opt/api/var/mojosec.json"
+ENROLLMENT_PATH = "/etc/mojosec/enrollment.json"
 STATE_DIR = "/var/lib/mojosec"
 ETC_DIR = "/etc/mojosec"
 CREDENTIAL_PATH = "/etc/mojosec/credential"
@@ -31,9 +35,20 @@ NGINX_FRAGMENT_PATH = "/etc/nginx/conf.d/00_mojosec.conf"
 RECEIVER_SNIPPET_PATH = "/etc/nginx/snippets/mojosec_receiver.conf"
 LOGROTATE_PATH = "/etc/logrotate.d/mojosec"
 DEPLOY_STATE_PATH = "/etc/mojosec/deploy.json"
+DJANGO_INCLUDE_PATH = "/etc/nginx/django.inc"
+DJANGO_RECEIVER_INCLUDE = "include /etc/nginx/snippets/mojosec_receiver.conf;"
+DJANGO_RECEIVER_COMMENT = "# MojoSec exact receiver cap"
 
 MODES = ("off", "observe")
 CRITICALITIES = ("best_effort", "required")
+DESIRED_KEYS = {
+    "version", "policy_revision", "poll_seconds", "collectors",
+    "aggregation", "delivery",
+}
+DEFAULT_FIM_ROOTS = (
+    "/opt/api", "/etc/nginx", "/etc/systemd/system", "/usr/local/bin",
+)
+EDGE_LOG_DIR = "/opt/api/var/edge/log"
 # Exact historical prerelease name only. Legacy OSSEC/Wazuh units are not on
 # this list and are intentionally left alone.
 RETIRED_UNITS = ("mojosec-agent.service",)
@@ -73,7 +88,6 @@ RestrictNamespaces=true
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH
-AmbientCapabilities=CAP_DAC_READ_SEARCH
 ReadWritePaths=/var/lib/mojosec /run/mojosec
 RuntimeDirectory=mojosec
 RuntimeDirectoryMode=0755
@@ -86,6 +100,7 @@ WantedBy=multi-user.target
 
 LOGROTATE_TEXT = """/var/log/nginx/mojosec.json.log {
     daily
+    maxsize 50M
     rotate 14
     missingok
     notifempty
@@ -102,6 +117,52 @@ LOGROTATE_TEXT = """/var/log/nginx/mojosec.json.log {
 
 class DeployError(RuntimeError):
     pass
+
+
+def _strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise DeployError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _read_json_file(path, require_root=False, required_mode=None):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as err:
+        raise DeployError(f"cannot safely open {path}: {err}") from err
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise DeployError(f"{path} must be a regular file")
+        if require_root and info.st_uid != 0:
+            raise DeployError(f"{path} must be owned by root")
+        if required_mode is not None and stat.S_IMODE(info.st_mode) != required_mode:
+            raise DeployError(f"{path} must have mode {required_mode:04o}")
+        if info.st_size > 256 * 1024:
+            raise DeployError(f"{path} is too large")
+        payload = b""
+        while len(payload) <= 256 * 1024:
+            block = os.read(descriptor, min(65536, 256 * 1024 + 1 - len(payload)))
+            if not block:
+                break
+            payload += block
+        if len(payload) > 256 * 1024:
+            raise DeployError(f"{path} is too large")
+    finally:
+        os.close(descriptor)
+    try:
+        value = json.loads(payload.decode("utf-8"), object_pairs_hook=_strict_object,
+                           parse_constant=lambda item: (_ for _ in ()).throw(
+                               DeployError(f"non-finite JSON number: {item}")))
+    except (UnicodeError, json.JSONDecodeError) as err:
+        raise DeployError(f"cannot parse {path}: {err}") from err
+    if not isinstance(value, dict):
+        raise DeployError(f"{path} must contain a JSON object")
+    return value, payload
 
 
 def _run(argv):
@@ -254,38 +315,132 @@ def _restore_snapshot(path, snapshot):
     _atomic_write(path, snapshot[0], snapshot[1])
 
 
+def _security_log_snapshot(path):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError as err:
+        raise DeployError(f"cannot inspect security log {path}: {err}") from err
+    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise DeployError(f"security log must be a regular file: {path}")
+    return info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)
+
+
+def _ensure_security_log(path):
+    if path != DEFAULT_LOG_PATH:
+        raise DeployError(f"standard MojoSec log path must be {DEFAULT_LOG_PATH}")
+    _require_root_install_dir(os.path.dirname(path))
+    prior = _security_log_snapshot(path)
+    flags = (os.O_WRONLY | os.O_APPEND | os.O_CREAT |
+             getattr(os, "O_NOFOLLOW", 0))
+    try:
+        descriptor = os.open(path, flags, 0o640)
+    except OSError as err:
+        raise DeployError(f"cannot securely create security log {path}: {err}") from err
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise DeployError(f"security log must be a regular file: {path}")
+        os.fchown(descriptor, 0, 0)
+        os.fchmod(descriptor, 0o640)
+    finally:
+        os.close(descriptor)
+    return prior != (0, 0, 0o640)
+
+
+def _restore_security_log(path, snapshot):
+    if snapshot is None:
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            return
+        if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+            raise DeployError(f"refusing to remove unsafe security log {path}")
+        os.unlink(path)
+        return
+    flags = os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise DeployError(f"security log changed type during rollback: {path}")
+        os.fchown(descriptor, snapshot[0], snapshot[1])
+        os.fchmod(descriptor, snapshot[2])
+    finally:
+        os.close(descriptor)
+
+
+def _render_django_include(current, enabled):
+    try:
+        text = current.decode("utf-8")
+    except UnicodeDecodeError as err:
+        raise DeployError(f"{DJANGO_INCLUDE_PATH} must be UTF-8") from err
+    lines = [line for line in text.splitlines()
+             if line.strip() not in (DJANGO_RECEIVER_INCLUDE, DJANGO_RECEIVER_COMMENT)]
+    rendered = "\n".join(lines).rstrip()
+    if enabled:
+        rendered += "\n\n" + DJANGO_RECEIVER_COMMENT + "\n" + DJANGO_RECEIVER_INCLUDE
+    return (rendered + "\n").encode("utf-8")
+
+
+def _nginx_snapshot(paths, log_path, inspect_log=True):
+    return {
+        "files": {path: _owned_snapshot(path) for path in paths},
+        "log": _security_log_snapshot(log_path) if inspect_log else None,
+        "log_managed": inspect_log,
+    }
+
+
+def _restore_nginx(snapshot, log_path):
+    for path, prior in snapshot["files"].items():
+        _restore_snapshot(path, prior)
+    if snapshot["log_managed"]:
+        _restore_security_log(log_path, snapshot["log"])
+    _run(["nginx", "-t"])
+    _systemctl("reload", "nginx")
+
+
 def _converge_nginx(enabled, log_path, proxy_cidrs, nginx_path,
-                    receiver_snippet_path, logrotate_path=LOGROTATE_PATH):
-    """Install/remove the two owned fragments as one validated transaction."""
-    paths = (nginx_path, receiver_snippet_path, logrotate_path)
-    snapshots = {path: _owned_snapshot(path) for path in paths}
+                    receiver_snippet_path, logrotate_path=LOGROTATE_PATH,
+                    django_include_path=DJANGO_INCLUDE_PATH, snapshot=None):
+    """Install/remove the owned nginx graph as one validated transaction."""
+    if log_path != DEFAULT_LOG_PATH:
+        raise DeployError(f"standard MojoSec log path must be {DEFAULT_LOG_PATH}")
+    paths = (nginx_path, receiver_snippet_path, logrotate_path,
+             django_include_path)
+    snapshot = snapshot or _nginx_snapshot(paths, log_path, inspect_log=enabled)
     changed = False
     try:
         if enabled:
+            changed |= _ensure_security_log(log_path)
             changed |= _write_if_changed(
                 nginx_path, render_http_log(log_path, proxy_cidrs), 0o644)
             changed |= _write_if_changed(
                 receiver_snippet_path, render_receiver_location() + "\n", 0o644)
-            rotate_text = LOGROTATE_TEXT.replace(
-                "/var/log/nginx/mojosec.json.log", log_path)
-            changed |= _write_if_changed(logrotate_path, rotate_text, 0o644)
+            changed |= _write_if_changed(logrotate_path, LOGROTATE_TEXT, 0o644)
         else:
-            for path in paths:
+            for path in (nginx_path, receiver_snippet_path, logrotate_path):
                 changed |= _remove_owned(path)
+        django_snapshot = snapshot["files"][django_include_path]
+        if django_snapshot is None:
+            if enabled:
+                raise DeployError(f"standard nginx include is absent: {django_include_path}")
+        else:
+            rendered = _render_django_include(django_snapshot[0], enabled)
+            if rendered != django_snapshot[0]:
+                _atomic_write(django_include_path, rendered, django_snapshot[1])
+                changed = True
         if not changed:
             return False
         _run(["nginx", "-t"])
         _systemctl("reload", "nginx")
         return True
     except Exception:
-        for path in paths:
-            _restore_snapshot(path, snapshots[path])
-        # Confirm the restored graph before returning the original failure.
-        # Reloading is unnecessary: nginx never accepted the rejected graph.
         try:
-            _run(["nginx", "-t"])
-        except DeployError:
-            pass
+            _restore_nginx(snapshot, log_path)
+        except (DeployError, OSError) as rollback_error:
+            raise DeployError(f"nginx rollback failed: {rollback_error}")
         raise
 
 
@@ -303,6 +458,128 @@ def _audit_config(path=None):
     return config
 
 
+def _normal_root(path, label):
+    if not isinstance(path, str) or not os.path.isabs(path) or "\x00" in path:
+        raise DeployError(f"{label} must be an absolute path")
+    normalized = os.path.normpath(path)
+    if normalized != path or path == "/":
+        raise DeployError(f"{label} must be normalized and narrower than /")
+    if path == "/home" or path.startswith("/home/"):
+        raise DeployError("/home FIM is inaccessible under ProtectHome=true")
+    if path == "/etc/mojosec" or path.startswith("/etc/mojosec/"):
+        raise DeployError("MojoSec private state cannot be a FIM target")
+    if path == "/var/lib/mojosec" or path.startswith("/var/lib/mojosec/"):
+        raise DeployError("MojoSec private state cannot be a FIM target")
+    return path
+
+
+def _validate_enrollment(enrollment):
+    enrollment = json.loads(json.dumps(enrollment))
+    allowed = {"version", "sensor_id", "endpoint", "trusted_proxy_cidrs",
+               "fim_allowed_roots", "nginx_plane", "edge_log_dir"}
+    unknown = set(enrollment) - allowed
+    if unknown:
+        raise DeployError("enrollment has unknown fields: " + ", ".join(sorted(unknown)))
+    if enrollment.get("version") != 1:
+        raise DeployError("enrollment version must be 1")
+    roots = enrollment.get("fim_allowed_roots", list(DEFAULT_FIM_ROOTS))
+    if not isinstance(roots, list) or not roots or len(roots) > 32:
+        raise DeployError("enrollment fim_allowed_roots must contain 1-32 paths")
+    enrollment["fim_allowed_roots"] = [
+        _normal_root(path, "enrollment fim_allowed_roots[]") for path in roots
+    ]
+    enrollment["trusted_proxy_cidrs"] = trusted_proxy_cidrs(
+        enrollment.get("trusted_proxy_cidrs", []))
+    plane = enrollment.get("nginx_plane", "standard")
+    if plane not in ("standard", "edge"):
+        raise DeployError("enrollment nginx_plane must be standard or edge")
+    enrollment["nginx_plane"] = plane
+    if plane == "standard":
+        if "edge_log_dir" in enrollment:
+            raise DeployError("edge_log_dir is only valid for nginx_plane=edge")
+        enrollment["nginx_log_path"] = DEFAULT_LOG_PATH
+    else:
+        edge_root = _normal_root(enrollment.get("edge_log_dir", EDGE_LOG_DIR),
+                                 "enrollment edge_log_dir")
+        enrollment["edge_log_dir"] = edge_root
+        enrollment["nginx_log_path"] = edge_root + "/mojosec.json.log"
+    return enrollment
+
+
+def _load_enrollment():
+    enrollment, _ = _read_json_file(
+        ENROLLMENT_PATH, require_root=True, required_mode=0o600)
+    return _validate_enrollment(enrollment)
+
+
+def _target_allowed(path, roots):
+    return any(os.path.commonpath((path, root)) == root for root in roots)
+
+
+def _prepare_effective_config():
+    """Validate desired policy and merge only root-protected enrollment fields."""
+    desired, source_payload = _read_json_file(DESIRED_CONFIG_PATH)
+    unknown = set(desired) - DESIRED_KEYS
+    if unknown:
+        raise DeployError(
+            "desired config may not set protected fields: " + ", ".join(sorted(unknown)))
+    if desired.get("version", 1) != 1:
+        raise DeployError("desired config version must be 1")
+    enrollment = _load_enrollment()
+    supplied = json.loads(json.dumps(desired))
+    supplied["version"] = 1
+    collectors = supplied.setdefault("collectors", {})
+    if not isinstance(collectors, dict):
+        raise DeployError("desired collectors must be an object")
+    for core_name in ("journal", "nginx"):
+        core = collectors.setdefault(core_name, {})
+        if not isinstance(core, dict):
+            raise DeployError(f"desired collectors.{core_name} must be an object")
+        if core.get("enabled") is False:
+            raise DeployError(f"desired config cannot disable core {core_name} monitoring")
+        core["enabled"] = True
+    nginx = collectors["nginx"]
+    if "paths" in nginx and nginx["paths"] != [enrollment["nginx_log_path"]]:
+        raise DeployError("desired config cannot override the dedicated nginx log path")
+    nginx["paths"] = [enrollment["nginx_log_path"]]
+    fim = collectors.setdefault("fim", {"enabled": False})
+    if not isinstance(fim, dict):
+        raise DeployError("desired collectors.fim must be an object")
+    for target in fim.get("targets", []):
+        if not isinstance(target, dict):
+            raise DeployError("desired FIM targets must be objects")
+        path = _normal_root(target.get("path"), "desired FIM target")
+        if not _target_allowed(path, enrollment["fim_allowed_roots"]):
+            raise DeployError(f"desired FIM target is outside enrolled roots: {path}")
+    supplied.update({
+        "sensor_id": enrollment.get("sensor_id"),
+        "endpoint": enrollment.get("endpoint"),
+        "state_dir": STATE_DIR,
+        "status_path": STATUS_PATH,
+        "credential_path": CREDENTIAL_PATH,
+        "expected_changes_path": EXPECTED_CHANGES_PATH,
+    })
+    source_sha = hashlib.sha256(source_payload).hexdigest()
+    supplied["config_provenance"] = {
+        "source_revision": str(desired.get("policy_revision", ""))[:128],
+        "source_sha256": source_sha,
+        "effective_sha256": "",
+        "nginx_plane": enrollment["nginx_plane"],
+        "nginx_log_path": enrollment["nginx_log_path"],
+        "trusted_proxy_cidrs": enrollment["trusted_proxy_cidrs"],
+    }
+    from mojo.mojosec.config import build_config
+    config = build_config(supplied)
+    effective_payload = json.dumps(
+        config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    config["config_provenance"]["effective_sha256"] = hashlib.sha256(
+        effective_payload).hexdigest()
+    config = build_config(config)
+    payload = (json.dumps(config, sort_keys=True, separators=(",", ":")) + "\n").encode(
+        "utf-8")
+    return config, payload, enrollment
+
+
 def _systemctl(*args):
     return _run(["systemctl"] + list(args))
 
@@ -317,32 +594,100 @@ def _systemctl_is(verb, unit):
     return done.returncode == 0
 
 
-def _retire_stale_units():
+def _audit_active_nginx(log_path, proxy_cidrs):
+    active = _run(["nginx", "-T"])
+    required = (
+        "log_format mojosec_v1 escape=json",
+        f"access_log {log_path} mojosec_v1;",
+        f"location = /api/incident/mojosec/batch {{",
+        "client_max_body_size 512k;",
+    )
+    missing = [item for item in required if item not in active]
+    for network in trusted_proxy_cidrs(proxy_cidrs):
+        directive = f"set_real_ip_from {network};"
+        if directive not in active:
+            missing.append(directive)
+    if missing:
+        raise DeployError("active nginx graph is missing MojoSec contract: " +
+                          ", ".join(missing))
+
+
+def _retired_unit_snapshot():
+    result = {}
     for name in RETIRED_UNITS:
-        try:
-            _systemctl("disable", "--now", name)
-        except DeployError:
-            pass
         path = os.path.join(os.path.dirname(SERVICE_PATH), name)
-        try:
-            info = os.lstat(path)
-        except FileNotFoundError:
+        result[name] = {
+            "path": path,
+            "file": _owned_snapshot(path),
+            "enabled": _systemctl_is("is-enabled", name),
+            "active": _systemctl_is("is-active", name),
+        }
+        result[name]["present"] = bool(
+            result[name]["file"] is not None or result[name]["enabled"] or
+            result[name]["active"])
+    return result
+
+
+def _retire_stale_units(snapshot):
+    for name, prior in snapshot.items():
+        if prior["enabled"] or prior["active"]:
+            _systemctl("disable", "--now", name)
+            if (_systemctl_is("is-enabled", name) or
+                    _systemctl_is("is-active", name)):
+                raise DeployError(f"retired unit did not stop and disable: {name}")
+        if prior["file"] is not None:
+            os.unlink(prior["path"])
+
+
+def _restore_unit_set(service_path, unit_snapshot, service_state,
+                      retired_snapshot):
+    current_present = _owned_snapshot(service_path) is not None
+    current_enabled = _systemctl_is("is-enabled", SERVICE)
+    current_active = _systemctl_is("is-active", SERVICE)
+    if current_present or current_enabled or current_active:
+        _systemctl("disable", "--now", SERVICE)
+    _restore_snapshot(service_path, unit_snapshot)
+    for prior in (retired_snapshot or {}).values():
+        _restore_snapshot(prior["path"], prior["file"])
+    _systemctl("daemon-reload")
+    if service_state is not None and service_state["present"]:
+        if service_state["enabled"]:
+            _systemctl("enable", SERVICE)
+        else:
+            _systemctl("disable", SERVICE)
+        if service_state["active"]:
+            _systemctl("start", SERVICE)
+        else:
+            _systemctl("stop", SERVICE)
+    for name, prior in (retired_snapshot or {}).items():
+        if not prior["present"]:
             continue
-        if stat.S_ISREG(info.st_mode) and info.st_uid == 0:
-            os.unlink(path)
+        if prior["enabled"]:
+            _systemctl("enable", name)
+        else:
+            _systemctl("disable", name)
+        if prior["active"]:
+            _systemctl("start", name)
+        else:
+            _systemctl("stop", name)
 
 
 def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
              service_path=SERVICE_PATH, nginx_path=NGINX_FRAGMENT_PATH,
-             receiver_snippet_path=RECEIVER_SNIPPET_PATH):
+             receiver_snippet_path=RECEIVER_SNIPPET_PATH,
+             django_include_path=DJANGO_INCLUDE_PATH):
     """Converge one exact service. `off` preserves spool and credentials."""
     if mode not in MODES or criticality not in CRITICALITIES:
         raise DeployError("unsupported MojoSec deployment mode or criticality")
-    unit_snapshot = None
-    unit_changed = False
-    lifecycle_started = False
-    previous_enabled = False
-    previous_active = False
+    if log_path != DEFAULT_LOG_PATH:
+        raise DeployError("nginx log path is protected by root enrollment")
+    if proxy_cidrs:
+        raise DeployError("trusted proxy CIDRs are protected by root enrollment")
+    unit_snapshot = service_state = retired_snapshot = None
+    nginx_snapshot = deploy_state_snapshot = config_snapshot = None
+    unit_changed = nginx_changed = config_changed = False
+    mutation_started = False
+    prepared = None
     try:
         if os.geteuid() != 0:
             raise DeployError("MojoSec deployment must run as root")
@@ -350,8 +695,9 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         # has already started producing a new log. best_effort failure must
         # leave an unenrolled legacy node operationally unchanged.
         if mode == "observe":
-            _audit_config()
+            prepared = _prepare_effective_config()
             _lstat_regular(CREDENTIAL_PATH, mode=0o600)
+            proxy_cidrs = prepared[2]["trusted_proxy_cidrs"]
         _ensure_dir(STATE_DIR, 0o700)
         _ensure_dir(ETC_DIR, 0o700)
         _ensure_dir(STATUS_DIR, 0o755)
@@ -359,82 +705,162 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         _require_root_install_dir(os.path.dirname(nginx_path))
         _require_root_install_dir(os.path.dirname(receiver_snippet_path), create=True)
         _require_root_install_dir(os.path.dirname(LOGROTATE_PATH))
-        _retire_stale_units()
+        _require_root_install_dir(os.path.dirname(django_include_path))
         unit_snapshot = _owned_snapshot(service_path)
-        previous_enabled = _systemctl_is("is-enabled", SERVICE)
-        previous_active = _systemctl_is("is-active", SERVICE)
+        deploy_state_snapshot = _owned_snapshot(DEPLOY_STATE_PATH)
+        config_snapshot = _owned_snapshot(CONFIG_PATH)
+        service_state = {
+            "enabled": _systemctl_is("is-enabled", SERVICE),
+            "active": _systemctl_is("is-active", SERVICE),
+        }
+        service_state["present"] = bool(
+            unit_snapshot is not None or service_state["enabled"] or
+            service_state["active"])
+        retired_snapshot = _retired_unit_snapshot()
+        nginx_paths = (nginx_path, receiver_snippet_path, LOGROTATE_PATH,
+                       django_include_path)
+        nginx_plane = prepared[2]["nginx_plane"] if prepared is not None else "standard"
+        runtime_log_path = (prepared[2]["nginx_log_path"] if prepared is not None
+                            else DEFAULT_LOG_PATH)
+        standard_observe = mode == "observe" and nginx_plane == "standard"
+        nginx_snapshot = _nginx_snapshot(
+            nginx_paths, DEFAULT_LOG_PATH, inspect_log=standard_observe)
+        mutation_started = True
+        _retire_stale_units(retired_snapshot)
+        if prepared is not None:
+            config_changed = _write_if_changed(
+                CONFIG_PATH, prepared[1].decode("utf-8"), 0o600)
+            _audit_config()
         unit_changed = _write_if_changed(service_path, UNIT_TEXT, 0o644)
         nginx_changed = _converge_nginx(
-            mode == "observe", log_path, proxy_cidrs,
-            nginx_path, receiver_snippet_path)
+            standard_observe, DEFAULT_LOG_PATH, proxy_cidrs,
+            nginx_path, receiver_snippet_path,
+            django_include_path=django_include_path, snapshot=nginx_snapshot)
+        if mode == "observe":
+            _audit_active_nginx(runtime_log_path, proxy_cidrs)
         if unit_changed:
             _systemctl("daemon-reload")
-        lifecycle_started = True
         if mode == "off":
-            try:
-                _systemctl("disable", "--now", SERVICE)
-            except DeployError:
-                # An absent/not-loaded unit is already off. Verify below.
-                pass
+            _systemctl("disable", "--now", SERVICE)
+            if (_systemctl_is("is-enabled", SERVICE) or
+                    _systemctl_is("is-active", SERVICE)):
+                raise DeployError("MojoSec off convergence left service enabled or active")
         else:
             _systemctl("enable", "--now", SERVICE)
-            if unit_changed:
+            if unit_changed or config_changed:
                 _systemctl("restart", SERVICE)
+            if (not _systemctl_is("is-enabled", SERVICE) or
+                    not _systemctl_is("is-active", SERVICE)):
+                raise DeployError("MojoSec observe convergence did not enable and start service")
         state = {
             "schema": "mojosec.deploy", "version": 1,
             "mode": mode, "criticality": criticality,
             "service": SERVICE, "spool_preserved": True,
         }
+        if prepared is not None:
+            state["sensor_id"] = prepared[0]["sensor_id"]
+            state["config"] = prepared[0]["config_provenance"]
+            state["nginx_plane"] = nginx_plane
         _write_if_changed(DEPLOY_STATE_PATH,
                           json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
                           0o600)
-        return {"changed": unit_changed or nginx_changed, **state}
+        return {"changed": unit_changed or nginx_changed or config_changed, **state}
     except (DeployError, OSError, ValueError) as err:
-        if unit_changed:
+        rollback_errors = []
+        if mutation_started:
             try:
-                _restore_snapshot(service_path, unit_snapshot)
-                _systemctl("daemon-reload")
-            except (DeployError, OSError):
-                pass
-        if lifecycle_started:
+                _restore_snapshot(CONFIG_PATH, config_snapshot)
+            except (DeployError, OSError) as rollback_error:
+                rollback_errors.append(f"runtime config: {rollback_error}")
             try:
-                if previous_enabled:
-                    _systemctl("enable", SERVICE)
-                else:
-                    _systemctl("disable", SERVICE)
-                if previous_active:
-                    _systemctl("start", SERVICE)
-                else:
-                    _systemctl("stop", SERVICE)
-            except DeployError:
-                pass
+                _restore_snapshot(DEPLOY_STATE_PATH, deploy_state_snapshot)
+            except (DeployError, OSError) as rollback_error:
+                rollback_errors.append(f"deploy state: {rollback_error}")
+            try:
+                _restore_nginx(nginx_snapshot, DEFAULT_LOG_PATH)
+            except (DeployError, OSError) as rollback_error:
+                rollback_errors.append(f"nginx: {rollback_error}")
+            try:
+                _restore_unit_set(service_path, unit_snapshot, service_state,
+                                  retired_snapshot)
+            except (DeployError, OSError) as rollback_error:
+                rollback_errors.append(f"systemd: {rollback_error}")
+        message = str(err)
+        if rollback_errors:
+            message += "; rollback incomplete: " + "; ".join(rollback_errors)
         if criticality == "best_effort":
             return {"schema": "mojosec.deploy", "version": 1,
                     "mode": mode, "criticality": criticality,
-                    "ok": False, "warning": str(err)[:500]}
+                    "ok": False, "warning": message[:500]}
+        if rollback_errors:
+            raise DeployError(message) from err
         raise
 
 
-def rotate_credential(stream, restart=True):
-    """Read a bearer secret from stdin, never argv, and atomically rotate it."""
-    if os.geteuid() != 0:
-        raise DeployError("credential rotation must run as root")
-    payload = stream.buffer.read(16385) if hasattr(stream, "buffer") else stream.read(16385)
+def _read_stdin(stream, maximum, label):
+    payload = stream.buffer.read(maximum + 1) if hasattr(stream, "buffer") else stream.read(
+        maximum + 1)
     if isinstance(payload, str):
         payload = payload.encode("utf-8")
-    if len(payload) > 16384:
-        raise DeployError("credential input is too large")
+    if len(payload) > maximum:
+        raise DeployError(f"{label} input is too large")
+    return payload
+
+
+def install_enrollment(stream):
+    """Install nonsecret, root-protected host identity and receiver enrollment."""
+    if os.geteuid() != 0:
+        raise DeployError("enrollment installation must run as root")
+    payload = _read_stdin(stream, 256 * 1024, "enrollment")
+    try:
+        value = json.loads(payload.decode("utf-8"), object_pairs_hook=_strict_object)
+    except (UnicodeError, json.JSONDecodeError) as err:
+        raise DeployError(f"cannot parse enrollment: {err}") from err
+    if not isinstance(value, dict):
+        raise DeployError("enrollment must be a JSON object")
+    enrollment = _validate_enrollment(value)
+    from mojo.mojosec.config import build_config
+    build_config({
+        "version": 1,
+        "sensor_id": enrollment.get("sensor_id"),
+        "endpoint": enrollment.get("endpoint"),
+        "collectors": {"fim": {"enabled": False}},
+    })
+    _ensure_dir(ETC_DIR, 0o700)
+    rendered = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+    _write_if_changed(ENROLLMENT_PATH, rendered, 0o600)
+    return enrollment
+
+
+def rotate_credential(stream, restart=True):
+    """Read a bearer secret from stdin and roll back a failed live rotation."""
+    if os.geteuid() != 0:
+        raise DeployError("credential rotation must run as root")
+    payload = _read_stdin(stream, 16384, "credential")
     token = payload.decode("utf-8").strip()
     if (not token or len(token) > 8192 or
             any(ord(character) < 33 or ord(character) == 127 for character in token)):
         raise DeployError("credential must be one non-empty API key")
+    _ensure_dir(ETC_DIR, 0o700)
+    prior = _owned_snapshot(CREDENTIAL_PATH)
+    was_active = restart and _systemctl_is("is-active", SERVICE)
     _atomic_write(CREDENTIAL_PATH, (token + "\n").encode("utf-8"), 0o600)
-    if restart:
+    if was_active:
         try:
-            if _run(["systemctl", "is-active", "--quiet", SERVICE]) == "":
+            _systemctl("restart", SERVICE)
+            if not _systemctl_is("is-active", SERVICE):
+                raise DeployError("service is not active after credential rotation")
+        except DeployError as err:
+            try:
+                _restore_snapshot(CREDENTIAL_PATH, prior)
                 _systemctl("restart", SERVICE)
-        except DeployError:
-            pass
+                if not _systemctl_is("is-active", SERVICE):
+                    raise DeployError("service is not active after restoring old credential")
+            except (DeployError, OSError) as rollback_error:
+                raise DeployError(
+                    f"credential rotation failed ({err}); rollback failed ({rollback_error})"
+                ) from err
+            raise DeployError(f"credential rotation failed; old credential restored: {err}") from err
 
 
 def main(argv=None):
@@ -443,18 +869,20 @@ def main(argv=None):
     install = sub.add_parser("converge")
     install.add_argument("--mode", choices=MODES, default="off")
     install.add_argument("--criticality", choices=CRITICALITIES, default="best_effort")
-    install.add_argument("--trusted-proxy-cidrs", default="")
-    install.add_argument("--nginx-log-path", default=DEFAULT_LOG_PATH)
     rotate = sub.add_parser("rotate-credential")
     rotate.add_argument("--no-restart", action="store_true")
+    sub.add_parser("install-enrollment")
     args = parser.parse_args(argv)
     try:
         if args.command == "rotate-credential":
             rotate_credential(sys.stdin, restart=not args.no_restart)
             result = {"ok": True, "credential": "rotated"}
+        elif args.command == "install-enrollment":
+            enrollment = install_enrollment(sys.stdin)
+            result = {"ok": True, "enrollment": "installed",
+                      "sensor_id": enrollment["sensor_id"]}
         else:
-            result = converge(args.mode, args.criticality,
-                              args.trusted_proxy_cidrs, args.nginx_log_path)
+            result = converge(args.mode, args.criticality)
             result.setdefault("ok", True)
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0

@@ -41,10 +41,8 @@ PROBE_URL="${PROBE_URL:-http://127.0.0.1/api/version}"
 APP_USER="${APP_USER:-ec2-user}"
 WEB_USER="${WEB_USER:-www}"
 ASGI_WORKERS="${ASGI_WORKERS:-4}"
-MOJOSEC_MODE="${MOJOSEC_MODE:-observe}"
+MOJOSEC_MODE="${MOJOSEC_MODE:-off}"
 MOJOSEC_DEPLOY_CRITICALITY="${MOJOSEC_DEPLOY_CRITICALITY:-best_effort}"
-MOJOSEC_TRUSTED_PROXY_CIDRS="${MOJOSEC_TRUSTED_PROXY_CIDRS:-}"
-MOJOSEC_NGINX_LOG_PATH="${MOJOSEC_NGINX_LOG_PATH:-/var/log/nginx/mojosec.json.log}"
 # Test seams: prod-identical defaults, overridable only by the shell harness.
 NGINX_ETC="${NGINX_ETC:-/etc/nginx}"
 SYSTEMD_ETC="${SYSTEMD_ETC:-/etc/systemd/system}"
@@ -170,12 +168,39 @@ log "  converged ${VHOSTS} vhost(s) from aws/nginx/conf.d"
 # policy remains central. best_effort makes an unenrolled old node a warning,
 # while required makes a configured fleet fail closed at deploy time.
 log "Converging MojoSec (${MOJOSEC_MODE}, ${MOJOSEC_DEPLOY_CRITICALITY})..."
-python3 -I -m mojo.deploy.mojosec converge \
+if ! python3 -I -m mojo.deploy.mojosec converge \
     --mode "$MOJOSEC_MODE" \
-    --criticality "$MOJOSEC_DEPLOY_CRITICALITY" \
-    --trusted-proxy-cidrs "$MOJOSEC_TRUSTED_PROXY_CIDRS" \
-    --nginx-log-path "$MOJOSEC_NGINX_LOG_PATH" \
-    || die "MojoSec required deployment failed"
+    --criticality "$MOJOSEC_DEPLOY_CRITICALITY"; then
+    # A downgrade can replace the installed package while this script keeps
+    # running from its old inode. If that older package predates MojoSec, only
+    # exact mode=off cleanup is safe; observe must never be partially guessed.
+    [ "$MOJOSEC_MODE" = "off" ] || die "MojoSec observe deployment failed"
+    log "MojoSec module unavailable; applying exact pre-feature off cleanup"
+    if [ -e /etc/systemd/system/mojosec.service ] || \
+            systemctl is-active --quiet mojosec.service || \
+            systemctl is-enabled --quiet mojosec.service; then
+        systemctl disable --now mojosec.service \
+            || die "cannot stop pre-feature MojoSec service"
+    fi
+    if systemctl is-active --quiet mojosec.service || \
+            systemctl is-enabled --quiet mojosec.service; then
+        die "pre-feature MojoSec service remained active or enabled"
+    fi
+    # Preserve the spool, credential, and receiver include graph. Retire only
+    # exact logging assets here so off is quiet without risking a dangling
+    # include on a package version too old to transact the whole nginx graph.
+    for path in /etc/nginx/conf.d/00_mojosec.conf \
+                /etc/logrotate.d/mojosec; do
+        [ ! -L "$path" ] || die "refusing symlink during MojoSec cleanup: $path"
+        if [ -e "$path" ]; then
+            [ "$(stat -c %u "$path")" = "0" ] \
+                || die "refusing non-root MojoSec cleanup target: $path"
+            rm -f -- "$path"
+        fi
+    done
+    nginx -t || die "nginx rejected pre-feature MojoSec off cleanup"
+    systemctl reload nginx || die "cannot reload nginx after MojoSec off cleanup"
+fi
 
 # ── retired names ────────────────────────────────────────────────────────────
 #

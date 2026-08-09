@@ -30,14 +30,15 @@ pin moves with it: the assertion is now *exactly two* `server {` per vhost.
 import hashlib
 import ipaddress
 import json
+import os
 
 from mojo import errors as me
 from mojo.helpers.settings import settings
 from mojo.deploy.mojosec_nginx import (
-    DEFAULT_LOG_PATH as MOJOSEC_LOG_PATH,
     RECEIVER_BODY_LIMIT as MOJOSEC_BODY_LIMIT,
     RECEIVER_PATH as MOJOSEC_RECEIVER_PATH,
     render_http_log as render_mojosec_http_log,
+    safe_log_path,
     trusted_proxy_cidrs,
 )
 
@@ -119,7 +120,13 @@ def default_server_enabled():
 
 
 def mojosec_log_path():
-    return settings.get_static("MOJOSEC_NGINX_LOG_PATH", MOJOSEC_LOG_PATH)
+    root = safe_log_path(log_dir())
+    value = safe_log_path(settings.get_static(
+        "MOJOSEC_NGINX_LOG_PATH", f"{root}/mojosec.json.log"))
+    if os.path.commonpath((value, root)) != root:
+        raise me.ValueException(
+            f"Edge MojoSec log must stay beneath EDGE_LOG_DIR: {value}")
+    return value
 
 
 def mojosec_mode():

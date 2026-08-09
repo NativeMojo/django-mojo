@@ -523,7 +523,7 @@ def _secure_metadata(run, path, wanted_mode, kind="file", sudo=""):
     return parts, parts == ["root", "root", wanted_mode]
 
 
-def check_mojosec(report, run, mode, sudo):
+def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
     active = run("systemctl is-active mojosec.service 2>&1")[1]
     enabled = run("systemctl is-enabled mojosec.service 2>&1")[1]
     if mode == "auto":
@@ -532,7 +532,8 @@ def check_mojosec(report, run, mode, sudo):
                     "derived from systemctl is-enabled; pass --mojosec-mode "
                     "to audit a not-yet-converged desired state")
     paths = (
-        ("config", "/opt/api/var/mojosec.json", "600", "file"),
+        ("runtime config", "/etc/mojosec/config.json", "600", "file"),
+        ("enrollment", "/etc/mojosec/enrollment.json", "600", "file"),
         ("credential", "/etc/mojosec/credential", "600", "file"),
         ("private state", "/var/lib/mojosec", "700", "directory"),
         ("service unit", "/etc/systemd/system/mojosec.service", "644", "file"),
@@ -551,6 +552,20 @@ def check_mojosec(report, run, mode, sudo):
             report.fail("mojosec", f"{name} metadata drift",
                         f"{path} is {' '.join(result[0])}; want root root {wanted}",
                         "sudo bash aws/post_deploy.sh")
+
+    desired_rc = run(
+        "test ! -L /opt/api/var/mojosec.json && "
+        "test -f /opt/api/var/mojosec.json && "
+        "test $(stat -c %s /opt/api/var/mojosec.json) -le 262144")[0]
+    if desired_rc == 0:
+        report.passed("mojosec", "desired policy source",
+                      "/opt/api/var/mojosec.json is regular, nonsecret, and bounded")
+    elif mode == "observe":
+        report.fail("mojosec", "desired policy source absent or unsafe",
+                    "observe requires the fleet-managed nonsecret desired policy")
+    else:
+        report.info("mojosec", "desired policy source absent",
+                    "expected on a legacy node while mode is off")
 
     expected = _secure_metadata(
         run, "/etc/mojosec/expected_changes.json", "600", sudo=sudo)
@@ -578,26 +593,155 @@ def check_mojosec(report, run, mode, sudo):
                     f"service is active={active or '?'} enabled={enabled or '?'}",
                     "sudo python3 -I -m mojo.deploy.mojosec converge --mode off")
 
-    status_meta = _secure_metadata(run, "/run/mojosec/status.json", "644", sudo=sudo)
-    if mode == "observe" and status_meta is None:
+    status_meta = _secure_metadata(run, "/run/mojosec/status.json", "640", sudo=sudo)
+    if mode == "off":
+        report.info("mojosec", "status not graded while off",
+                    "a preserved last status is evidence, not an active-health signal")
+    elif status_meta is None:
         report.fail("mojosec", "public status absent or unsafe",
                     "/run/mojosec/status.json is not a root-owned regular file",
                     "journalctl -u mojosec -n 50")
     elif status_meta is not None and status_meta[1]:
-        # Read only four bounded, non-secret health fields. The credential,
-        # config, SQLite spool and FIM manifest are never opened here.
-        command = (
-            "python3 -c \"import json; p=json.load(open('/run/mojosec/status.json')); "
-            "print(p.get('schema',''),p.get('version',''),p.get('state',''),"
-            "p.get('spool_events',''))\"")
+        # Read one bounded status projection with sudo. The credential,
+        # canonical config, SQLite spool and FIM manifest are never opened.
+        projection = (
+            "import json,os;path='/run/mojosec/status.json';"
+            "assert os.path.getsize(path)<=32768;"
+            "p=json.load(open(path));"
+            "keys=('schema','version','sensor_id','state','updated_at',"
+            "'spooled_events','delivery_accepted','collectors','delivery','config');"
+            "print(json.dumps({k:p.get(k) for k in keys},separators=(',',':')))"
+        )
+        command = f"{sudo}python3 -c {q(projection)}"
         rc, out, _ = run(command)
-        if rc == 0 and out.startswith("mojosec.status 1 "):
-            report.passed("mojosec", "public status", out[:200])
-        else:
+        try:
+            status = json.loads(out) if rc == 0 else None
+        except (TypeError, json.JSONDecodeError):
+            status = None
+        if (not isinstance(status, dict) or status.get("schema") != "mojosec.status" or
+                status.get("version") != 1 or status.get("state") != "running"):
             report.fail("mojosec", "public status malformed",
-                        "bounded status JSON could not be parsed")
-    elif status_meta is None:
-        report.info("mojosec", "public status absent", "expected while mode is off")
+                        "bounded status JSON is absent, stale-schema, or not running")
+        else:
+            report.passed("mojosec", "public status", "schema v1, running")
+            sensor = status.get("sensor_id", "")
+            if expected_sensor_id and sensor != expected_sensor_id:
+                report.fail("mojosec", "sensor identity mismatch",
+                            f"status reports {sensor!r}; expected {expected_sensor_id!r}")
+            elif sensor:
+                report.passed("mojosec", "sensor identity", sensor)
+            try:
+                updated = datetime.datetime.fromisoformat(
+                    str(status.get("updated_at", "")).replace("Z", "+00:00"))
+                age = (datetime.datetime.now(datetime.timezone.utc) - updated).total_seconds()
+            except (TypeError, ValueError):
+                age = 10 ** 9
+            if 0 <= age <= 600:
+                report.passed("mojosec", "status freshness", f"updated {int(age)}s ago")
+            else:
+                report.fail("mojosec", "status stale", f"last update age is {int(age)}s")
+            collectors = status.get("collectors") or {}
+            unhealthy = [name for name in ("journal", "nginx")
+                         if not isinstance(collectors.get(name), dict) or
+                         collectors[name].get("ok") is not True]
+            if unhealthy:
+                report.fail("mojosec", "collector health",
+                            "missing or unhealthy core collectors: " + ", ".join(unhealthy))
+            else:
+                report.passed("mojosec", "collector health", "journal and nginx are healthy")
+            spooled = status.get("spooled_events")
+            if isinstance(spooled, int) and 0 <= spooled <= 10000:
+                report.passed("mojosec", "spool backlog", f"{spooled} pending event(s)")
+            else:
+                report.warn("mojosec", "spool backlog",
+                            f"unexpected or high pending count: {spooled!r}")
+            delivery = status.get("delivery") or {}
+            if delivery.get("error"):
+                report.warn("mojosec", "delivery retrying", str(delivery["error"])[:200])
+            elif int(status.get("delivery_accepted") or 0) > 0:
+                report.passed("mojosec", "authenticated delivery",
+                              f"{status['delivery_accepted']} accepted event(s)")
+            else:
+                report.info("mojosec", "authenticated delivery unproven",
+                            "canary must generate and confirm one centrally accepted event")
+
+            provenance = status.get("config") or {}
+            hashes_ok = all(len(str(provenance.get(key, ""))) == 64
+                            for key in ("source_sha256", "effective_sha256"))
+            if hashes_ok:
+                report.passed("mojosec", "config provenance",
+                              f"source revision {provenance.get('source_revision') or '(none)'}")
+            else:
+                report.fail("mojosec", "config provenance missing",
+                            "status lacks desired/effective configuration hashes")
+
+            nginx_rc, nginx_text, nginx_err = run(f"{sudo}nginx -T 2>&1")
+            active_nginx = nginx_text or nginx_err
+            log_path = provenance.get("nginx_log_path", "")
+            required = (
+                "log_format mojosec_v1 escape=json",
+                f"access_log {log_path} mojosec_v1;",
+                "location = /api/incident/mojosec/batch {",
+                "client_max_body_size 512k;",
+            )
+            missing = [item for item in required if not item or item not in active_nginx]
+            missing.extend(
+                f"set_real_ip_from {network};"
+                for network in provenance.get("trusted_proxy_cidrs", [])
+                if f"set_real_ip_from {network};" not in active_nginx)
+            if nginx_rc == 0 and not missing:
+                report.passed("mojosec", "active nginx contract",
+                              "queryless JSON log, exact receiver cap, and proxy boundary active")
+            else:
+                report.fail("mojosec", "active nginx contract drift",
+                            "missing: " + ", ".join(missing[:8]))
+            if provenance.get("nginx_plane") == "standard":
+                for asset_name, asset_path in (
+                        ("nginx log fragment", "/etc/nginx/conf.d/00_mojosec.conf"),
+                        ("nginx receiver snippet",
+                         "/etc/nginx/snippets/mojosec_receiver.conf"),
+                        ("log rotation", "/etc/logrotate.d/mojosec")):
+                    asset = _secure_metadata(run, asset_path, "644", sudo=sudo)
+                    if asset is not None and asset[1]:
+                        report.passed("mojosec", asset_name,
+                                      f"{asset_path} is root:root 0644")
+                    else:
+                        report.fail("mojosec", f"{asset_name} metadata drift",
+                                    f"{asset_path} must be root:root 0644")
+                log_meta = _secure_metadata(
+                    run, "/var/log/nginx/mojosec.json.log", "640", sudo=sudo)
+                if log_meta is not None and log_meta[1]:
+                    report.passed("mojosec", "security log metadata",
+                                  "dedicated log is root:root 0640")
+                else:
+                    report.fail("mojosec", "security log metadata drift",
+                                "standard dedicated log must be root:root 0640")
+                rotation = run(
+                    f"{sudo}grep -F 'maxsize 50M' /etc/logrotate.d/mojosec >/dev/null && "
+                    f"{sudo}grep -F 'create 0640 root root' /etc/logrotate.d/mojosec >/dev/null")[0]
+                if rotation == 0:
+                    report.passed("mojosec", "bounded log retention",
+                                  "50M maxsize and root-only rotation active")
+                else:
+                    report.fail("mojosec", "bounded log retention drift",
+                                "/etc/logrotate.d/mojosec lacks size/metadata contract")
+            elif provenance.get("nginx_plane") == "edge":
+                rc, mode_text, _ = run(
+                    f"{sudo}test ! -L {q(log_path)} && {sudo}test -f {q(log_path)} && "
+                    f"{sudo}stat -c %a {q(log_path)}")
+                try:
+                    unsafe = int(mode_text, 8) & 0o002
+                except (TypeError, ValueError):
+                    unsafe = 1
+                if rc == 0 and not unsafe:
+                    report.passed("mojosec", "Edge security log metadata",
+                                  "collector path is a non-world-writable regular file")
+                else:
+                    report.fail("mojosec", "Edge security log unsafe",
+                                "enrolled Edge log must be regular, contained, and not world-writable")
+    else:
+        report.fail("mojosec", "public status metadata drift",
+                    "/run/mojosec/status.json must be root:root 0640")
 
 
 # ---------------------------------------------------------------------------
@@ -1184,6 +1328,8 @@ def main(argv):
                         help="desired MojoSec lifecycle; auto derives it from "
                              "the enabled state so legacy nodes remain INFO "
                              "(default: auto)")
+    parser.add_argument("--mojosec-sensor-id", default="",
+                        help="expected infrastructure host sensor id (optional)")
     parser.add_argument("--require-shims", action="store_true",
                         help="grade a forked aws/ script or an undeclared "
                              "template collision FAIL instead of WARN")
@@ -1232,7 +1378,8 @@ def main(argv):
     if "systemd" in wanted:
         check_systemd(report, run, proj)
     if "mojosec" in wanted:
-        check_mojosec(report, run, args.mojosec_mode, sudo)
+        check_mojosec(report, run, args.mojosec_mode, sudo,
+                      args.mojosec_sensor_id)
     if "nginx" in wanted:
         check_nginx(report, run, repo, sudo, args.probe_url, retired_confd)
     if "certs" in wanted:

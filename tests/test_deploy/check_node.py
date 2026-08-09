@@ -9,6 +9,8 @@ filesystem, so it gets a real rendered tmp tree instead.
 """
 
 import os
+import datetime
+import json
 import shutil
 import subprocess
 import sys
@@ -134,16 +136,39 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
     from mojo.deploy import check_node as cn
 
     metadata = "root root 600"
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    status = json.dumps({
+        "schema": "mojosec.status", "version": 1, "state": "running",
+        "sensor_id": "i-test", "updated_at": now, "spooled_events": 3,
+        "delivery_accepted": 2,
+        "collectors": {"journal": {"ok": True}, "nginx": {"ok": True}},
+        "delivery": {"sent": 1, "accepted": 1, "retry": 0},
+        "config": {
+            "source_revision": "r1", "source_sha256": "a" * 64,
+            "effective_sha256": "b" * 64, "nginx_plane": "standard",
+            "nginx_log_path": "/var/log/nginx/mojosec.json.log",
+            "trusted_proxy_cidrs": ["10.0.0.0/8"],
+        },
+    })
     run = FakeRunner([
-        ("/opt/api/var/mojosec.json", (0, metadata, "")),
+        ("test ! -L /opt/api/var/mojosec.json", (0, "", "")),
+        ("/etc/mojosec/config.json", (0, metadata, "")),
+        ("/etc/mojosec/enrollment.json", (0, metadata, "")),
         ("/etc/mojosec/credential", (0, metadata, "")),
         ("/var/lib/mojosec", (0, "root root 700", "")),
         ("/etc/systemd/system/mojosec.service", (0, "root root 644", "")),
         ("/etc/mojosec/expected_changes.json", (1, "", "")),
         ("is-active mojosec", (0, "active", "")),
         ("is-enabled mojosec", (0, "enabled", "")),
-        ("python3 -c", (0, "mojosec.status 1 running 3", "")),
-        ("/run/mojosec/status.json", (0, "root root 644", "")),
+        ("python3 -c", (0, status, "")),
+        ("/run/mojosec/status.json", (0, "root root 640", "")),
+        ("nginx -T", (0, "log_format mojosec_v1 escape=json\n"
+                       "access_log /var/log/nginx/mojosec.json.log mojosec_v1;\n"
+                       "set_real_ip_from 10.0.0.0/8;\n"
+                       "location = /api/incident/mojosec/batch {\n"
+                       "client_max_body_size 512k;", "")),
+        ("/var/log/nginx/mojosec.json.log", (0, "root root 640", "")),
+        ("grep -F 'maxsize 50M'", (0, "", "")),
     ])
     report = cn.Report()
     cn.check_mojosec(report, run, "observe", "")

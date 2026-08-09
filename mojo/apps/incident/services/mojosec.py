@@ -3,7 +3,9 @@
 import hashlib
 import ipaddress
 import json
+import re
 import zlib
+import datetime
 
 from django.db import IntegrityError, transaction
 from django.db.models import F
@@ -32,6 +34,7 @@ KIND_POLICY = {
     "fim.overflow": {"level": 12},
 }
 UNKNOWN_KIND_POLICY = {"category": "mojosec.unrecognized", "level": 2}
+_DEPLOYMENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 
 class MojoSecIngestError(ValueError):
@@ -138,6 +141,27 @@ def _payload_digest(event):
     return hashlib.sha256(protocol.canonical_json(event).encode("utf-8")).hexdigest()
 
 
+def _expected_change_projection(kind, attributes):
+    """Project only the exact safe annotation; never raw FIM attributes."""
+    if kind != "fim.change" or not isinstance(attributes, dict):
+        return None
+    value = attributes.get("expected_change")
+    if not isinstance(value, dict) or set(value) != {"deployment_id", "expires_at"}:
+        return None
+    deployment_id = value.get("deployment_id")
+    expires_at = value.get("expires_at")
+    if (not isinstance(deployment_id, str) or not _DEPLOYMENT_ID.fullmatch(deployment_id) or
+            not isinstance(expires_at, str) or len(expires_at) > 40):
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return {"deployment_id": deployment_id, "expires_at": expires_at}
+
+
 def _event_projection(batch, sensor_event):
     from mojo.apps.incident.models import Event
 
@@ -154,6 +178,24 @@ def _event_projection(batch, sensor_event):
                 source_ip = str(ipaddress.ip_address(candidate))
             except ValueError:
                 source_ip = None
+    expected_change = _expected_change_projection(kind, attributes)
+    projected_metadata = {
+        "sensor_id": batch["sensor_id"],
+        "installation_key_id": batch["installation_key_id"],
+        "event_id": sensor_event["id"],
+        "protocol_version": batch["version"],
+        "sensor_policy_revision_sha256": hashlib.sha256(
+            batch["policy_revision"].encode("utf-8")).hexdigest(),
+        "kind": kind,
+        "sensor_severity": sensor_event["severity"],
+        "effective_level": policy["level"],
+        "recommendation": sensor_event["recommendation"],
+        "count": sensor_event["count"],
+        "first_seen": sensor_event["first_seen"],
+        "last_seen": sensor_event["last_seen"],
+    }
+    if expected_change is not None:
+        projected_metadata["expected_change"] = expected_change
     event = Event(
         category=category,
         scope="mojosec",
@@ -167,21 +209,7 @@ def _event_projection(batch, sensor_event):
         ),
         model_name="mojosec_sensor",
         metadata={
-            "mojosec": {
-                "sensor_id": batch["sensor_id"],
-                "installation_key_id": batch["installation_key_id"],
-                "event_id": sensor_event["id"],
-                "protocol_version": batch["version"],
-                "sensor_policy_revision_sha256": hashlib.sha256(
-                    batch["policy_revision"].encode("utf-8")).hexdigest(),
-                "kind": kind,
-                "sensor_severity": sensor_event["severity"],
-                "effective_level": policy["level"],
-                "recommendation": sensor_event["recommendation"],
-                "count": sensor_event["count"],
-                "first_seen": sensor_event["first_seen"],
-                "last_seen": sensor_event["last_seen"],
-            },
+            "mojosec": projected_metadata,
         },
     )
     # Do not call Event.sync_metadata() here: it performs GeoIP enrichment for

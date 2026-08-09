@@ -224,8 +224,8 @@ assert_has "$TMP/cron_etc/3_mojo_jobs" "ec2-user" "default APP_USER renders into
 assert_in_log "CMD systemctl enable --now config-sync.timer" "shipped timer enabled"
 assert_in_log "CMD systemctl enable --now project-extra.timer" "project extra timer enabled"
 assert_in_log "CMD chown -R ec2-user:www" "var/logs ownership pass uses the default users"
-assert_in_log "CMD python3 -I -m mojo.deploy.mojosec converge --mode observe --criticality best_effort" \
-    "MojoSec defaults to observe-only and does not block unenrolled legacy nodes"
+assert_in_log "CMD python3 -I -m mojo.deploy.mojosec converge --mode off --criticality best_effort" \
+    "MojoSec defaults off so framework upgrades do not enroll legacy nodes"
 assert_file "$PROJ/var/deploy/post_deploy.sh" "self-snapshot present after success"
 if cmp -s "$PROJ/aws/post_deploy.sh" "$PROJ/var/deploy/post_deploy.sh"; then
     ok "self-snapshot is byte-identical to the executing copy"

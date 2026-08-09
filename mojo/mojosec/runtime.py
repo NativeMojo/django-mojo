@@ -83,6 +83,7 @@ class Runtime:
             "schema": "mojosec.status", "version": 1,
             "sensor_id": self.config["sensor_id"],
             "state": "running" if self.running else "stopping",
+            "config": self.config["config_provenance"],
             "collectors": self.collector_status,
             "delivery": self.last_delivery,
         }
