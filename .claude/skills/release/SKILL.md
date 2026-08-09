@@ -89,9 +89,42 @@ State the version and the one-line reason. Then, before writing anything:
 
 ### 4. Write the note and get the one yes
 
-Delegate to `/maestro-release-note` — it owns the voice, the shape and the
-`create_release` call, and it already knows this is a mode-B repo. Pass it the
-version you decided.
+Delegate to `/maestro-release-note` for the mechanics — it owns the
+`create_release` call and already knows this is a mode-B repo. Pass it the
+version you decided **and the house format below**, which overrides that
+skill's generic voice.
+
+#### House format — this is a CHANGELOG, not a "what's new"
+
+These notes replaced `CHANGELOG.md`. The audience is a developer who pins this
+package as a dependency and wants to know, in ten seconds, what breaks and what
+is new. Not a feature announcement.
+
+Sectioned bullets. Include only the sections that have content, in this order:
+
+```
+### Breaking      what a consumer must change before upgrading
+### Added         new capability
+### Changed       different behaviour that is not breaking
+### Fixed         bugs
+### Security      only when the fix IS the security story
+### Upgrade notes ordering, migrations, anything that bites on the way in
+```
+
+Rules that matter more than the headings:
+
+- **`Breaking` goes first and is never a closing bullet.** A renamed field, a
+  value that used to be accepted and now 400s, a moved path — those are the
+  reason someone reads a changelog at all. In this repo, breaking-for-consumers
+  makes it a minor.
+- **One bullet, one change.** A bullet that needs three sentences is two
+  bullets, or it belongs in `Upgrade notes`.
+- **No prose sections, no `##` essays.** If you are explaining *why* the change
+  is interesting, you are writing a what's-new. Say what changed.
+- **Silent failure modes are worth a sentence** even when nothing is technically
+  breaking — "a bootstrap missing the includes converges successfully and serves
+  nothing" is the kind of line that saves an outage.
+- No file paths, no commit shas, no item numbers.
 
 Then **show the user the note and wait.** This is the skill's only blocking
 question, and it is the right one: a published note is frozen, and a correction
