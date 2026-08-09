@@ -304,3 +304,40 @@ def test_staged_variant_fail_closed(opts):
     assert err is not None, (
         "an unknown listen line was silently accepted — a new listen shape "
         "would reach the staged check with a privileged or unmapped bind")
+
+    # Whitespace spelling must not dodge the refusal: the guard matches the
+    # first TOKEN, so a tab-separated listen still refuses rather than
+    # passing through unremapped (and binding 443 where the OS allows it).
+    err = raises(render.render_staged_variant,
+                 "server {\n    listen\t443 ssl;\n}\n")
+    assert err is not None, \
+        "a tab-spelled listen line slipped past the staged remap unrenamed"
+
+
+@th.django_unit_test("staged ports: bad settings are refused by name")
+def test_staged_ports_refused(opts):
+    """A privileged, equal, or non-numeric staged port is an operator error
+    the render refuses outright — ≤1023 silently reintroduces the EACCES
+    bind failure the staged tree exists to avoid."""
+    from unittest import mock
+
+    from mojo import errors as me
+    from mojo.apps.edge.services import render
+
+    cases = [
+        ("privileged", {"EDGE_STAGED_HTTP_PORT": 80}),
+        ("out-of-range", {"EDGE_STAGED_HTTPS_PORT": 70000}),
+        ("equal", {"EDGE_STAGED_HTTP_PORT": 61443}),
+        ("non-numeric", {"EDGE_STAGED_HTTPS_PORT": "junk"}),
+    ]
+    for label, overrides in cases:
+        def fake_static(name, default=None, kind=None, _o=overrides):
+            return _o.get(name, default)
+
+        with mock.patch.object(render.settings, "get_static",
+                               side_effect=fake_static):
+            err = raises(render.staged_http_port)
+        assert err is not None, f"a {label} staged port was accepted"
+        assert isinstance(err, me.ValueException), (
+            f"a {label} staged port raised {type(err).__name__}, not the "
+            "named ValueException refusal")

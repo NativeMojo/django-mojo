@@ -149,7 +149,12 @@ app writes:
 - **The bootstrap includes.** `/etc/nginx/nginx.conf` must include
   `current/http.d/*.conf` then `current/conf.d/*.conf` (the ~12-line form
   above). Without them the node converges silently and serves nothing — the
-  failure mode described under "Notes that bite".
+  failure mode described under "Notes that bite". **Keep both globs exactly
+  this shape — non-recursive.** `staging/` lives inside the directory
+  `current` points at; a broadened glob (`current/*/*.conf`) would make the
+  root nginx serve a full duplicate of every vhost on the staged ports, and
+  nothing would flag it — a different addr:port raises no
+  `conflicting server name` warning.
 - **The app user owns `EDGE_ROOT` and `EDGE_LOG_DIR`**, and everything the
   installer writes lives under them: generations (including `staging/`),
   certificate material, `installed.json`, the access/watch logs. Release
@@ -158,6 +163,10 @@ app writes:
   to `/var/log/nginx`, and the ability to bind 443/80. The staged check
   binds only the two staged ports; the harness keeps every scratch path
   inside the generation.
+- **Keep the staged ports unreachable from outside the node.** 61080/61443
+  are validation scratch, not a serving contract: the staged `-t` briefly
+  listens on them (never accepting a connection, gone in milliseconds).
+  No security-group or firewall rule should expose them.
 - **The two sudoers commands**, exactly and only: the argument-free root
   `nginx -t` and `systemctl reload nginx` — the exact text and the reasoning
   (including why the staged check must never get a sudo rule) are in
@@ -274,4 +283,5 @@ the fleet goes quiet in the places dashboards watch. nginx's own
 See README's settings table for the full list; the template-plane knobs are
 `EDGE_ACME_WEBROOT`, `EDGE_LOG_DIR`, `EDGE_MIME_TYPES`,
 `EDGE_DJANGO_STATIC_ROOT`, `EDGE_PROXY_READ_TIMEOUT`,
-`EDGE_HTTP_KEEPALIVE_TIMEOUT`, `EDGE_HTTP_DEFAULT_SERVER`.
+`EDGE_HTTP_KEEPALIVE_TIMEOUT`, `EDGE_HTTP_DEFAULT_SERVER`,
+`EDGE_STAGED_HTTP_PORT`, `EDGE_STAGED_HTTPS_PORT`.

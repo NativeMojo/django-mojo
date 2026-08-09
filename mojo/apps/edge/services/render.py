@@ -111,6 +111,17 @@ def default_server_enabled():
     return bool(settings.get_static("EDGE_HTTP_DEFAULT_SERVER", False))
 
 
+def _staged_port_value(name, default):
+    raw = settings.get_static(name, default)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        # The same named-refusal style as every other bad input here — a bare
+        # int() traceback would not say which setting to fix.
+        raise me.ValueException(
+            f"edge staged listen port is not an integer: {name}={raw!r}")
+
+
 def _staged_ports():
     """The (http, https) ports the STAGED copies listen on.
 
@@ -123,8 +134,8 @@ def _staged_ports():
     ephemeral ceiling (60999), though a collision could not fail the check
     anyway — `nginx -t` tolerates EADDRINUSE.
     """
-    http = int(settings.get_static("EDGE_STAGED_HTTP_PORT", 61080))
-    https = int(settings.get_static("EDGE_STAGED_HTTPS_PORT", 61443))
+    http = _staged_port_value("EDGE_STAGED_HTTP_PORT", 61080)
+    https = _staged_port_value("EDGE_STAGED_HTTPS_PORT", 61443)
     for port in (http, https):
         if not 1024 <= port <= 65535:
             raise me.ValueException(
@@ -856,7 +867,10 @@ def render_staged_variant(text):
     out = []
     for line in text.split("\n"):
         body = line.strip()
-        if not (body.startswith("listen ") or body == "listen"):
+        # First-token match, not startswith: `listen\t443;` must reach the
+        # refusal below, not slip through as a non-listen line.
+        tokens = body.split()
+        if not tokens or tokens[0] != "listen":
             out.append(line)
             continue
         replacement = remap.get(body)
