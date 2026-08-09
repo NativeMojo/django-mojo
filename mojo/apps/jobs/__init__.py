@@ -264,7 +264,13 @@ def publish(
             jobs:rejected_channel incident.
         delay: Delay in seconds from now
         run_at: Specific time to run the job (overrides delay)
-        broadcast: If True, all runners on the channel will execute
+        broadcast: If True, EVERY live runner consuming `channel` executes the
+            job. Implemented as a fan-out at publish time: one ordinary job per
+            runner, addressed to that runner's box-direct channel. The return
+            value is therefore a LIST of job ids, one per runner — not a single
+            id. With no live runner on the channel it degrades to one queued
+            job on the shared queue and returns a plain id. A DELAYED broadcast
+            (`delay`/`run_at`) is NOT fanned out and warns.
         max_retries: Maximum retry attempts (default from settings or 3)
         backoff_base: Base for exponential backoff (default 2.0)
         backoff_max: Maximum backoff in seconds (default 3600)
@@ -274,7 +280,8 @@ def publish(
         idempotency_key: Optional key for exactly-once semantics
 
     Returns:
-        Job ID (UUID string without dashes)
+        Job ID (UUID string without dashes) — or, for an immediate broadcast
+        with at least one live runner, a list of such ids (one per runner).
 
     Raises:
         ValueError: If func is not registered or arguments are invalid
@@ -322,6 +329,71 @@ def publish(
     max_bytes = JOBS_PAYLOAD_MAX_BYTES
     if len(payload_json.encode('utf-8')) > max_bytes:
         raise ValueError(f"Payload exceeds maximum size of {max_bytes} bytes")
+
+    # BROADCAST FAN-OUT.
+    #
+    # Under Plan B every runner BRPOPs the one per-channel List, so a single
+    # job_id on that List is consumed by exactly ONE runner — competing
+    # consumers, the opposite of broadcast. Before this, `broadcast=True` was
+    # recorded on the row and printed in the log line while delivering a
+    # unicast; six broadcasts across two runners landed 3/3 instead of 6/6.
+    # Fleet-wide work (edge convergence, dnsman certificate-updated) therefore
+    # reached one box per publish and the rest drifted until some later sweep
+    # happened to pick them.
+    #
+    # The mechanism to do it properly already existed and was unused: every
+    # runner_id ends in ENGINE_CHANNEL_SUFFIX precisely so the box-direct
+    # channel named after it is publishable (see JobEngine._generate_runner_id),
+    # and each engine consumes that channel. So fan out into one ordinary job
+    # per live runner, addressed to that runner's own channel.
+    #
+    # One job ROW per runner, not one row on N queues: the row carries status,
+    # runner_id, attempt and its events, and N runners writing one row would
+    # race to last-writer-wins and destroy job accounting.
+    #
+    # Only the immediate path fans out. A DELAYED broadcast still lands in
+    # sched_broadcast and is promoted to the shared queue by the scheduler,
+    # which cannot be fixed here — the roster at publish time is not the roster
+    # at fire time. No caller in this codebase publishes a delayed broadcast;
+    # the warning below fires if one appears.
+    if broadcast:
+        if run_at or delay:
+            logit.warning(
+                f"jobs.publish: delayed broadcast on {channel!r} is NOT fanned "
+                f"out — it promotes to the shared queue and one runner wins. "
+                f"func={func_path}")
+        else:
+            targets = [
+                r.get("runner_id") for r in (get_runners(channel) or [])
+                if r.get("alive") and r.get("runner_id")
+            ]
+            if targets:
+                fan = dict(
+                    payload=payload, delay=None, run_at=None, broadcast=False,
+                    max_retries=max_retries, backoff_base=backoff_base,
+                    backoff_max=backoff_max, expires_in=expires_in,
+                    expires_at=expires_at, max_exec_seconds=max_exec_seconds,
+                )
+                job_ids = []
+                for runner_id in sorted(targets):
+                    # idempotency_key is deliberately NOT forwarded: it is
+                    # unique per row, so reusing it would collapse the fan-out
+                    # back to a single job. Suffix it per runner instead.
+                    job_ids.append(publish(
+                        func_path, channel=runner_id,
+                        idempotency_key=(f"{idempotency_key}:{runner_id}"
+                                         if idempotency_key else None),
+                        **fan))
+                logit.info(
+                    f"Broadcast {func_path} on {channel} fanned out to "
+                    f"{len(job_ids)} runner(s): {sorted(targets)}")
+                return job_ids
+            # No live runner consumes this channel. Fall through to the normal
+            # enqueue so the job waits on the shared queue for one to appear —
+            # the pre-existing behaviour, and better than dropping it.
+            logit.warning(
+                f"Broadcast {func_path} on {channel}: no live runners; queued "
+                f"on the shared channel queue for whichever runner arrives")
 
     # From here the channel is used verbatim — never rerouted. An allowed
     # channel this box does not consume is a supported target (that is how work
