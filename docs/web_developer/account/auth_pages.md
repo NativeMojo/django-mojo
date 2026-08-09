@@ -66,7 +66,7 @@ disabled registration path.
 | `?token=pr:...` | Password reset token — opens "Set New Password" view |
 | `?code=...&state=...` | OAuth callback — auto-completes the OAuth flow |
 | `?redirect=<url>` | Custom redirect after login (also `?next=` or `?returnTo=`). Preserved through the bouncer challenge **and** the OAuth provider round-trip. Only `http`/`https` URLs and same-origin relative paths are accepted — see below. |
-| `?back=<url>` | Override the "Back to website" hero link |
+| `?back=<url>` | Override the destination back link. Relative and absolute HTTP(S) values are accepted; script/data schemes are ignored. |
 | `?group_uuid=<uuid>` | Load per-group branding and restrict to the group's enabled methods. Must be `group_uuid` — the framework reserves `?group=` for integer IDs. |
 | `?auth_theme=<preset>` | Preview/use `minimal`, `compact`, `branded-panel`, or `editorial`. Unknown values are ignored. |
 | `?auth_appearance=<mode>` | Preview/use `light`, `dark`, or `system`. Unknown values are ignored. |

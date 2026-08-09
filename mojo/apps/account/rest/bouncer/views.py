@@ -365,7 +365,8 @@ def _auth_context(request, group=None):
             theme.hero_image_position
             if theme.hero_image_position in auth_config.HERO_IMAGE_POSITIONS
             else 'center'),
-        'back_to_website_url': theme.back_to_website_url or '',
+        'back_to_website_url': auth_config.normalize_navigation_url(
+            theme.back_to_website_url),
         'back_to_website_label': theme.back_to_website_label or 'Back to website',
         'login_heading': cfg.login.heading or 'Sign In',
         'login_supporting_copy': cfg.login.supporting_copy or '',

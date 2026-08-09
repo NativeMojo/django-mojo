@@ -117,6 +117,25 @@ def test_login_renders_contextual_theme(opts):
         opts.group.save(update_fields=['metadata'])
 
 
+@th.django_unit_test("stored back URL is scheme-guarded and query override targets every layout link")
+def test_back_links_share_scheme_guard(opts):
+    opts.group.metadata = {"auth_config": {"theme": {
+        "back_to_website_url": "javascript:alert(1)",
+    }}}
+    # Direct model save intentionally mirrors a deployment AUTH_CONFIG value,
+    # which can bypass the REST validation gate.
+    opts.group.save(update_fields=['metadata'])
+    try:
+        html = _render('account/login.html', group=opts.group)
+        assert_true('href="javascript:' not in html,
+                    "unsafe stored back URL must be removed before template rendering")
+        assert_true('document.querySelectorAll(".mat-back-to-website")' in html,
+                    "the sanitized ?back= override must update hero and inline links")
+    finally:
+        opts.group.metadata = {}
+        opts.group.save(update_fields=['metadata'])
+
+
 @th.django_unit_test("bouncer challenge renders the resolved destination brand")
 def test_bouncer_challenge_uses_group_brand(opts):
     import objict

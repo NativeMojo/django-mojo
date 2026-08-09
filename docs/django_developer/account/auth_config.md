@@ -45,7 +45,7 @@ rather than appending to it.
 | `hero_headline` | string | `"Welcome back"` | Text over the hero image |
 | `hero_subheadline` | string | `"Admin Portal"` | Supporting text below headline |
 | `hero_image_position` | string | `"center"` | Image crop: `center`, `top`, `bottom`, `left`, or `right` |
-| `back_to_website_url` | string | `""` | "Back to website" link in hero (overridable via `?back=` URL param) |
+| `back_to_website_url` | string | `""` | Back link in hero or compact header (overridable via `?back=`); must be relative or absolute HTTP(S) |
 | `back_to_website_label` | string | `"Back to website"` | Destination-aware back-link label |
 | `terms_url` | string | `""` | Terms & Conditions link on register page |
 | `layout` | string | `"minimal"` | `minimal`, `compact`, `branded-panel`, or `editorial`; legacy `card` and `fullscreen` map to `compact` and `branded-panel` |
@@ -144,6 +144,7 @@ time. Validated constraints:
 - `theme.appearance` must be `"light"`, `"dark"`, or `"system"`
 - `theme.accent_color` must be a six-digit hex color
 - `theme.hero_image_position` must be a known crop token
+- `theme.back_to_website_url` must be a relative or absolute HTTP(S) URL
 - `theme.back_to_website_label`, `theme.auth_provider_name`, and
   `login.heading` must be non-empty strings; `login.supporting_copy` must be a
   string and may be empty

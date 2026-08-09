@@ -238,6 +238,23 @@ def test_validate_destination_copy(opts):
     ac.validate_auth_config({"login": {"supporting_copy": ""}})
 
 
+@th.django_unit_test("auth back URL rejects script schemes and keeps web/relative destinations")
+def test_back_url_scheme_guard(opts):
+    from mojo.apps.account.services import auth_config as ac
+    from mojo import errors as merrors
+    for unsafe in ("javascript:alert(1)", "data:text/html,boom", "https:\\evil.test"):
+        assert_eq(ac.normalize_navigation_url(unsafe), "",
+                  f"unsafe navigation URL must normalize to empty: {unsafe!r}")
+        try:
+            ac.validate_auth_config({"theme": {"back_to_website_url": unsafe}})
+            assert False, f"validator must reject unsafe back URL {unsafe!r}"
+        except merrors.ValueException:
+            pass
+    for safe in ("/", "/private/site?tab=one", "https://example.com/site"):
+        assert_eq(ac.normalize_navigation_url(safe), safe,
+                  f"safe navigation URL must survive normalization: {safe!r}")
+
+
 @th.django_unit_test("public auth config exposes only whitelisted theme keys")
 def test_public_theme_is_whitelisted(opts):
     from mojo.apps.account.services import auth_config as ac

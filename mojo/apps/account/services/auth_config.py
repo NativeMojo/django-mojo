@@ -27,6 +27,7 @@ request. See `assert_login_method`.
 import copy
 import json
 import re
+from urllib.parse import urlsplit
 
 from objict import objict
 
@@ -224,6 +225,23 @@ def normalize_accent_color(value, fallback="#6384ff"):
     return fallback
 
 
+def normalize_navigation_url(value):
+    """Return a browser-safe http(s) or relative navigation URL, else empty."""
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    if not value or "\\" in value:
+        return ""
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return ""
+    if parts.scheme:
+        if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+            return ""
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Validation — run on Group save so a bad metadata.auth_config is rejected at
 # write time, not discovered at render time.
@@ -302,6 +320,10 @@ def validate_auth_config(cfg):
         if "back_to_website_label" in theme:
             _validate_text(theme["back_to_website_label"],
                            "auth_config.theme.back_to_website_label")
+        if theme.get("back_to_website_url") and not normalize_navigation_url(
+                theme["back_to_website_url"]):
+            raise merrors.ValueException(
+                "auth_config.theme.back_to_website_url must be a relative or http(s) URL")
         if "auth_provider_name" in theme:
             _validate_text(theme["auth_provider_name"],
                            "auth_config.theme.auth_provider_name")

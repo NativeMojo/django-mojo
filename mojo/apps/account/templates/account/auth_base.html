@@ -45,7 +45,7 @@
 
             <div class="mat-main">
                 <div class="mat-header">
-                    <a class="mat-inline-back" href="{{ back_to_website_url }}"{% if not back_to_website_url %} style="display:none"{% endif %}>&larr; {{ back_to_website_label|default:"Back to website" }}</a>
+                    <a class="mat-inline-back mat-back-to-website" href="{{ back_to_website_url }}"{% if not back_to_website_url %} style="display:none"{% endif %}>&larr; {{ back_to_website_label|default:"Back to website" }}</a>
                     {% if logo_url %}
                     <img class="mat-header-logo" src="{{ logo_url }}" alt="{{ brand_name|default:'App' }}" />
                     {% elif brand_name %}
@@ -260,8 +260,13 @@
         // Override "Back to website" link when ?back= param is present.
         if (paramBack) {
             var backHref = safeNavUrl(paramBack);
-            var backEl = $("mat-hero-back");
-            if (backEl && backHref) { backEl.href = backHref; backEl.style.display = ""; }
+            if (backHref) {
+                var backEls = document.querySelectorAll(".mat-back-to-website");
+                for (var i = 0; i < backEls.length; i++) {
+                    backEls[i].href = backHref;
+                    backEls[i].style.display = "";
+                }
+            }
         }
 
         // Init MojoAuth — API_BASE defaults to current origin (same-server API)
