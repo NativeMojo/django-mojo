@@ -156,9 +156,7 @@ def deploy(args, client, sleep=time.sleep, clock=time.monotonic):
     completed = client.json("POST", "edge/release/complete", {"release": release_id})
     deployment_id = completed.get("deployment")
     if not deployment_id:
-        raise DeployError(
-            "release verified but no deployment started; this WebApp is on "
-            "explicit manual hold (auto_promote=False)")
+        raise DeployError("release verified but the platform did not start a deployment")
     write_output("deployment", deployment_id)
 
     deadline = clock() + float(args.timeout_seconds)

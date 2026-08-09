@@ -102,15 +102,15 @@ def on_release_complete(request):
     web_app = _authorized_webapp(request, release.webapp_id)
 
     releases.complete(release)
-    deployment = releases.maybe_auto_promote(release)
+    deployment = releases.deploy_verified(release)
     release.refresh_from_db()
     return dict(
         release=release.pk,
         version=release.version,
         status=release.status,
-        promoted=bool(deployment),
-        deployment=deployment.pk if deployment else None,
-        deployment_status=deployment.status if deployment else None,
+        promoted=True,
+        deployment=deployment.pk,
+        deployment_status=deployment.status,
         webapp=web_app.pk,
     )
 

@@ -126,7 +126,7 @@ class DeployTests(unittest.TestCase):
                     args(temporary), client, sleep=lambda _: None,
                     clock=lambda: next(moments))
 
-    def test_manual_hold_is_not_reported_as_success(self):
+    def test_missing_platform_deployment_is_not_reported_as_success(self):
         with tempfile.TemporaryDirectory() as temporary:
             self._artifact(temporary)
             client = FakeClient([], uploads=False)
@@ -138,7 +138,7 @@ class DeployTests(unittest.TestCase):
                 return original(method, path, body)
 
             client.json = no_deployment
-            with self.assertRaisesRegex(deploy_action.DeployError, "manual hold"):
+            with self.assertRaisesRegex(deploy_action.DeployError, "did not start"):
                 deploy_action.deploy(args(temporary), client)
 
 

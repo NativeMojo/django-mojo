@@ -31,7 +31,6 @@ WebApp
   bucket           from EDGE_RELEASE_BUCKETS
   prefix           DERIVED: webapps/<group>/<id>
   api_key          the CI credential, one per site (OneToOne)
-  auto_promote     per-site policy
   current_release  what nodes should serve
 
 WebAppRelease
@@ -147,16 +146,13 @@ Three things that will bite an implementer:
   is absent no matter what is stored, and the previous bullet turns every
   verification into an unconditional failure.
 
-## Promotion and rollback are the same call
+## GitHub completion is the deployment control plane
 
-```
-POST /api/edge/webapp/promote  {webapp, release}   requires manage_webapp
-```
-
-It sets desired state under a row lock, creates a durable deployment, and then
-targets every runner that is alive on the `edge` channel. A node proves the
-specific vhost was neither excluded nor left in `www_pending`. Only after all
-targets complete does the deployment become `live`.
+Verified release completion sets desired state under a row lock, creates a
+durable deployment, and then targets every runner that is alive on the `edge`
+channel. A node proves the specific vhost was neither excluded nor left in
+`www_pending`. Only after all targets complete does the deployment become
+`live`.
 
 Any target failure or timeout restores the prior release under the same row
 lock and converges that rollback across the same runner snapshot. The rollback
@@ -164,16 +160,17 @@ checks that the failed release is still current, so an old deployment can
 never overwrite a newer one. Periodic and startup convergence remain the
 backstop for nodes that were offline during the snapshot.
 
-`auto_promote` defaults on and the migration enables it for existing WebApps.
-Turning it off is an explicit manual-hold exception. Manual promotion and
-rollback use the same deployment coordinator.
+There is no manual hold or promotion endpoint. The protected GitHub branch is
+the human control plane. Intentional rollback means rerunning the workflow for
+an older commit; its immutable manifest is reused and the same deployment
+coordinator converges it.
 
 ## Permissions
 
 | Permission | Who | Reaches |
 |---|---|---|
 | `release_webapp` | the site's CI key | register, verify, automatic deploy, and that WebApp's deployment status |
-| `manage_webapp` | an administrator | key rotation and exceptional manual promote/rollback |
+| `manage_webapp` | an administrator | one-time key linkage and rotation |
 | `manage_dns` | a site administrator | the `WebApp` row itself |
 
 `POST /api/edge/webapp/link_key` mints the CI credential and returns the token
