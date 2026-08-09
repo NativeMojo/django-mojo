@@ -28,6 +28,7 @@ import re
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -193,6 +194,172 @@ def require_unreleased(version):
         say(f"warning: could not reach PyPI to pre-check {version} ({err.reason})")
 
 
+# ----------------------------------------------------------------------
+# maestro release notes
+#
+# The note itself is written by the `/maestro-release-note` skill BEFORE this
+# script runs — an agent writes prose, a release script cannot. What this file
+# owns is the two mechanical halves the skill must not be trusted to remember:
+# refusing to publish a version that has no note, and flipping that note live
+# once the release actually shipped.
+#
+# Stdlib only, and no import from `testit.maestro` even though it solves the
+# same discovery problem: that module pulls in `requests`, `objict` and
+# `mojo.helpers`, none of which exist before the build. The duplication is the
+# price of this script standing alone, which the module docstring requires.
+# ----------------------------------------------------------------------
+
+MCP_CONFIG_PATHS = ("~/.claude.json", "~/.claude/settings.json")
+REPO_CONFIG = Path(".claude") / "maestro.json"
+CONNECTOR_MARKER = "/mcp/k/"
+
+
+def _load_json(path):
+    try:
+        with open(os.path.expanduser(str(path))) as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
+def _split_connector_url(url):
+    """(base, key) — a connector url carries its own credential."""
+    if CONNECTOR_MARKER in url:
+        base, _, key = url.partition(CONNECTOR_MARKER)
+        return base.rstrip("/"), (key.strip("/") or None)
+    base = url.rstrip("/")
+    if base.endswith("/mcp"):
+        base = base[:-len("/mcp")]
+    return base.rstrip("/"), None
+
+
+def _auth_scheme(key, declared=None):
+    """mojo routes on the Authorization SCHEME, and the wrong one is a flat 401.
+
+    maestro issues its api key as a JWT, so it authenticates as `Bearer` even
+    though everyone calls it an api key. Same reasoning as testit/maestro.py.
+    """
+    if declared:
+        return declared
+    if key and key.count(".") == 2 and key.startswith("eyJ"):
+        return "Bearer"
+    return "apikey"
+
+
+def maestro_credentials():
+    """(url, key, scheme, project) from the MCP server this machine already has.
+
+    Read, never asked for: anyone releasing this package already has the
+    maestro MCP installed, and the repo already records its project id.
+    """
+    project = (_load_json(REPO_CONFIG) or {}).get("project")
+
+    for path in MCP_CONFIG_PATHS:
+        data = _load_json(path)
+        if not data:
+            continue
+        blocks = [data.get("mcpServers")]
+        projects = data.get("projects")
+        if isinstance(projects, dict):
+            blocks.extend(entry.get("mcpServers") for entry in projects.values()
+                          if isinstance(entry, dict))
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            for name, cfg in block.items():
+                if "maestro" not in str(name).lower() or not isinstance(cfg, dict):
+                    continue
+                url, key, scheme = None, None, None
+                raw = cfg.get("url")
+                if isinstance(raw, str) and raw:
+                    url, key = _split_connector_url(raw)
+                headers = cfg.get("headers")
+                if key is None and isinstance(headers, dict):
+                    for header, value in headers.items():
+                        if str(header).lower() != "authorization":
+                            continue
+                        if not isinstance(value, str):
+                            continue
+                        parts = value.split(None, 1)
+                        if len(parts) == 2:
+                            scheme, key = parts[0].strip(), parts[1].strip()
+                        else:
+                            key = parts[0].strip()
+                        break
+                if url and key:
+                    return url, key, _auth_scheme(key, scheme), project
+    return None, None, None, project
+
+
+def maestro_request(method, path, params=None, payload=None, timeout=20):
+    """One authenticated call. Returns the decoded `data`, or raises."""
+    url, key, scheme, _project = maestro_credentials()
+    if not url or not key:
+        raise PublishError(
+            "no maestro credential found — install the maestro MCP server, or "
+            "pass --skip-notes to release without a note")
+
+    target = f"{url}{path}"
+    if params:
+        target = f"{target}?{urllib.parse.urlencode(params)}"
+    body = json.dumps(payload).encode() if payload is not None else None
+    request = urllib.request.Request(target, data=body, method=method)
+    request.add_header("Authorization", f"{scheme} {key}")
+    request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            decoded = json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as err:
+        detail = (err.read().decode() or "")[:200]
+        raise PublishError(f"maestro {method} {path} failed: HTTP {err.code} {detail}".rstrip())
+    except urllib.error.URLError as err:
+        raise PublishError(f"maestro is unreachable ({err.reason})")
+    return decoded.get("data", decoded)
+
+
+def find_release_note(version, project):
+    """The ProjectRelease row for `version`, or None."""
+    data = maestro_request(
+        "GET", "/api/maestro/project/release",
+        params={"group": project, "version": version, "graph": "list"})
+    rows = data.get("data") if isinstance(data, dict) else None
+    if rows is None and isinstance(data, list):
+        rows = data
+    for row in rows or []:
+        # Filter client-side too: a search-style match could widen this.
+        if str(row.get("version", "")).lstrip("v") == str(version).lstrip("v"):
+            return row
+    return None
+
+
+def require_release_note(version, project, skip=False):
+    """Refuse to release a version nobody wrote a note for.
+
+    A precondition, NOT a closing step, and that ordering is the whole point: a
+    PyPI version can never be reused, so a note check that runs after the
+    upload has nothing left to protect. Draft is what we require — publishing
+    it is what `post_release_notes` does once the release actually shipped.
+    """
+    if skip:
+        say("release note check skipped (--skip-notes)")
+        return None
+    if not project:
+        raise PublishError(
+            ".claude/maestro.json names no project — cannot check for a "
+            "release note (or pass --skip-notes)")
+
+    note = find_release_note(version, project)
+    if note is None:
+        raise PublishError(
+            f"no maestro release note for {version} — run "
+            f"/maestro-release-note first, or pass --skip-notes")
+    if note.get("status") == "published":
+        say(f"release note for {version} is already published")
+    else:
+        say(f"release note for {version} found (draft)")
+    return note
+
+
 def current_branch():
     branch = git("rev-parse", "--abbrev-ref", "HEAD")
     if branch == "HEAD":
@@ -234,20 +401,42 @@ def tag_release(version, branch, dry_run=False):
     run(["git", "push", "origin", tag], dry_run=dry_run, capture=False)
 
 
-def post_release_notes(version, dry_run=False):
-    """Publish release notes for this version to maestro.
+def post_release_notes(version, note, dry_run=False):
+    """Flip this version's maestro note from draft to published.
 
-    NOT IMPLEMENTED — the API does not exist yet. Maestro epic #1494 ("Release
-    notes for any project") is what supplies it: `ProjectRelease` (#1496), the
-    MCP write path (#1497) and the two-mode `maestro-release-note` skill (#1498)
-    are all still at stage `inbox`.
+    Runs LAST, after the tag, because publishing a note for a release that
+    then failed to ship is the one direction that lies. `require_release_note`
+    already proved the note exists — the release is not gated on this call.
 
-    This is the single seam where that lands. When those ship, this function
-    posts the note for `version` and nothing else in the file changes — which is
-    why the release flow deliberately carries no notes of its own today rather
-    than growing a stopgap that would have to be unpicked.
+    A failure here is reported, not raised: PyPI has the package and the tag is
+    pushed, so aborting would misreport a release that happened. Publishing the
+    note by hand afterwards is a two-second fix; un-publishing a package is not
+    possible at all.
     """
-    say(f"release notes for {version}: skipped — pending maestro #1494")
+    if note is None:
+        say(f"release notes for {version}: nothing to publish")
+        return
+    if note.get("status") == "published":
+        say(f"release notes for {version}: already published")
+        return
+    if dry_run:
+        say(f"[dry-run] would publish release note {note.get('id')} for {version}")
+        return
+
+    payload = {"status": "published"}
+    # Anchors the note to what shipped, and becomes the `git log` span start
+    # for the NEXT release's note.
+    commit = git("rev-parse", "HEAD")
+    if commit:
+        payload["commit_ref"] = commit
+    try:
+        maestro_request(
+            "POST", f"/api/maestro/project/release/{note.get('id')}",
+            payload=payload)
+        say(f"published release note for {version}")
+    except PublishError as err:
+        say(f"warning: {version} shipped but its release note is still a draft "
+            f"({err}) — publish it from the board")
 
 
 def parse_arguments():
@@ -261,6 +450,10 @@ def parse_arguments():
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Run every check for real, but execute nothing that changes anything")
+    parser.add_argument(
+        "--skip-notes", action="store_true",
+        help=("Release without a maestro release note. The gate is fail-closed "
+              "on purpose — reach for this only when maestro is down"))
     return parser.parse_args()
 
 
@@ -281,6 +474,10 @@ def main():
 
         require_version_consistency(version)
         require_unreleased(version)
+        # Before the build, and well before PyPI: a version can never be
+        # reused, so every precondition has to fail while failing is still free.
+        _url, _key, _scheme, project = maestro_credentials()
+        note = require_release_note(version, project, skip=args.skip_notes)
 
         branch = current_branch()
 
@@ -293,7 +490,7 @@ def main():
             publish_to_pypi(dry_run=args.dry_run)
 
         tag_release(version, branch, dry_run=args.dry_run)
-        post_release_notes(version, dry_run=args.dry_run)
+        post_release_notes(version, note, dry_run=args.dry_run)
 
         say(f"released {version}" if not args.dry_run else f"dry run complete for {version}")
 
