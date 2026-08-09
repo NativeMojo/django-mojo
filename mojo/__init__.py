@@ -1,4 +1,4 @@
-__version__ = "1.8.0"
+__version__ = "1.7.1"
 
 # THIS LINE IS ON THE NODE-BOOTSTRAP PATH AND MUST STAY SETTINGS-FREE.
 # `python3 -m mojo.deploy.config_sync` imports this package before it can parse
