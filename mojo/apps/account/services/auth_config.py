@@ -27,6 +27,7 @@ request. See `assert_login_method`.
 import copy
 import json
 import re
+from urllib.parse import urlsplit
 
 from objict import objict
 
@@ -41,7 +42,18 @@ LOGIN_METHODS = ("password", "sms", "passkey", "magic", "google", "apple", "gith
 # SMS-verified phone signup is the `password` method with a phone identity.
 REGISTRATION_METHODS = ("password", "google", "apple", "github")
 PASSKEY_PROMPTS = ("off", "optional", "required")
-LAYOUTS = ("card", "fullscreen")
+LAYOUTS = ("minimal", "compact", "branded-panel", "editorial")
+LAYOUT_ALIASES = {"card": "compact", "fullscreen": "branded-panel"}
+APPEARANCES = ("light", "dark", "system")
+HERO_IMAGE_POSITIONS = ("center", "top", "bottom", "left", "right")
+THEME_PUBLIC_KEYS = (
+    "app_title", "auth_provider_name", "logo_url", "favicon_url", "hero_image_url",
+    "hero_image_url_light", "hero_image_url_dark", "hero_headline",
+    "hero_subheadline", "hero_image_position", "back_to_website_url",
+    "back_to_website_label", "terms_url", "layout", "appearance",
+    "accent_color", "api_base", "success_redirect", "custom_css",
+    "custom_css_url",
+)
 
 
 # Code defaults — reproduce today's behavior when nothing is customized:
@@ -49,14 +61,21 @@ LAYOUTS = ("card", "fullscreen")
 DEFAULT_AUTH_CONFIG = {
     "theme": {
         "app_title": "DJANGO MOJO",
+        "auth_provider_name": "DJANGO MOJO",
         "logo_url": "",
         "favicon_url": "",
         "hero_image_url": "",
+        "hero_image_url_light": "",
+        "hero_image_url_dark": "",
         "hero_headline": "Welcome back",
         "hero_subheadline": "Admin Portal",
+        "hero_image_position": "center",
         "back_to_website_url": "",
+        "back_to_website_label": "Back to website",
         "terms_url": "",
-        "layout": "card",
+        "layout": "minimal",
+        "appearance": "system",
+        "accent_color": "#6384ff",
         "api_base": "",
         "success_redirect": "/",
         "custom_css": "",
@@ -77,6 +96,8 @@ DEFAULT_AUTH_CONFIG = {
     },
     "login": {
         "methods": list(LOGIN_METHODS),
+        "heading": "Sign In",
+        "supporting_copy": "",
     },
 }
 
@@ -170,7 +191,7 @@ def public_auth_config(cfg):
     registration = cfg.get("registration") or {}
     login = cfg.get("login") or {}
     return objict.from_dict({
-        "theme": dict(theme),
+        "theme": {key: theme.get(key) for key in THEME_PUBLIC_KEYS},
         "registration": {
             "enabled": registration.get("enabled", True),
             "fields": registration.get("fields"),
@@ -182,8 +203,43 @@ def public_auth_config(cfg):
         },
         "login": {
             "methods": list(login.get("methods") or []),
+            "heading": login.get("heading", "Sign In"),
+            "supporting_copy": login.get("supporting_copy", ""),
         },
     })
+
+
+def normalize_layout(value, fallback="minimal"):
+    """Return a canonical layout token, including legacy aliases."""
+    value = LAYOUT_ALIASES.get(value, value)
+    return value if value in LAYOUTS else fallback
+
+
+def normalize_appearance(value, fallback="system"):
+    return value if value in APPEARANCES else fallback
+
+
+def normalize_accent_color(value, fallback="#6384ff"):
+    if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        return value
+    return fallback
+
+
+def normalize_navigation_url(value):
+    """Return a browser-safe http(s) or relative navigation URL, else empty."""
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    if not value or "\\" in value:
+        return ""
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return ""
+    if parts.scheme:
+        if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+            return ""
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +260,13 @@ def _validate_methods(methods, allowed, label):
 def _validate_https_url(url, label):
     if not isinstance(url, str) or not url.startswith("https://"):
         raise merrors.ValueException(f"{label} must be an https:// URL")
+
+
+def _validate_text(value, label, allow_empty=False):
+    if not isinstance(value, str):
+        raise merrors.ValueException(f"{label} must be a string")
+    if not allow_empty and not value.strip():
+        raise merrors.ValueException(f"{label} cannot be empty")
 
 
 def validate_custom_css(css):
@@ -237,9 +300,33 @@ def validate_auth_config(cfg):
         if not isinstance(theme, dict):
             raise merrors.ValueException("auth_config.theme must be an object")
         layout = theme.get("layout")
-        if layout is not None and layout not in LAYOUTS:
+        if layout is not None and layout not in LAYOUTS and layout not in LAYOUT_ALIASES:
             raise merrors.ValueException(
-                f"auth_config.theme.layout must be one of: {', '.join(LAYOUTS)}")
+                f"auth_config.theme.layout must be one of: "
+                f"{', '.join(LAYOUTS + tuple(LAYOUT_ALIASES))}")
+        appearance = theme.get("appearance")
+        if appearance is not None and appearance not in APPEARANCES:
+            raise merrors.ValueException(
+                f"auth_config.theme.appearance must be one of: {', '.join(APPEARANCES)}")
+        accent_color = theme.get("accent_color")
+        if accent_color is not None and normalize_accent_color(accent_color, "") == "":
+            raise merrors.ValueException(
+                "auth_config.theme.accent_color must be a six-digit hex color")
+        image_position = theme.get("hero_image_position")
+        if image_position is not None and image_position not in HERO_IMAGE_POSITIONS:
+            raise merrors.ValueException(
+                "auth_config.theme.hero_image_position must be one of: "
+                f"{', '.join(HERO_IMAGE_POSITIONS)}")
+        if "back_to_website_label" in theme:
+            _validate_text(theme["back_to_website_label"],
+                           "auth_config.theme.back_to_website_label")
+        if theme.get("back_to_website_url") and not normalize_navigation_url(
+                theme["back_to_website_url"]):
+            raise merrors.ValueException(
+                "auth_config.theme.back_to_website_url must be a relative or http(s) URL")
+        if "auth_provider_name" in theme:
+            _validate_text(theme["auth_provider_name"],
+                           "auth_config.theme.auth_provider_name")
         if theme.get("custom_css"):
             validate_custom_css(theme["custom_css"])
         if theme.get("custom_css_url"):
@@ -255,6 +342,11 @@ def validate_auth_config(cfg):
             if len(methods) == 0:
                 raise merrors.ValueException(
                     "auth_config.login.methods cannot be empty — no way to log in")
+        if "heading" in login:
+            _validate_text(login["heading"], "auth_config.login.heading")
+        if "supporting_copy" in login:
+            _validate_text(login["supporting_copy"],
+                           "auth_config.login.supporting_copy", allow_empty=True)
 
     registration = cfg.get("registration")
     if registration is not None:

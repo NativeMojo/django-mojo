@@ -1,5 +1,5 @@
 {% comment %}
-Left hero panel — inside the card, with the image as background.
+Brand/destination panel shared by the branded-panel and editorial layouts.
 Override in your project's templates/account/auth_hero.html to swap
 imagery and messaging.
 
@@ -11,7 +11,14 @@ Variables from the view context (populated from settings):
   hero_subheadline    — optional supporting text
   back_to_website_url — pill link (top-right)
 {% endcomment %}
-<div class="mat-hero"{% if hero_image_url %} style="background-image:url('{{ hero_image_url }}')"{% endif %}>
+<div class="mat-hero">
+    {% if hero_image_url_light or hero_image_url_dark %}
+    <div class="mat-hero-picture" aria-hidden="true">
+        {% if hero_image_url_light %}<img class="mat-hero-image mat-hero-image-light" src="{{ hero_image_url_light }}" alt="">{% endif %}
+        {% if hero_image_url_dark %}<img class="mat-hero-image mat-hero-image-dark" src="{{ hero_image_url_dark }}" alt="">{% endif %}
+    </div>
+    {% endif %}
+    <div class="mat-hero-shade"></div>
     <div class="mat-hero-top">
         {% if logo_url %}
         <img class="mat-hero-logo" src="{{ logo_url }}" alt="{{ brand_name|default:'' }}" />
@@ -20,7 +27,7 @@ Variables from the view context (populated from settings):
         {% else %}
         <span></span>
         {% endif %}
-        <a class="mat-hero-back" id="mat-hero-back" href="{{ back_to_website_url }}"{% if not back_to_website_url %} style="display:none"{% endif %}>Back to website &rarr;</a>
+        <a class="mat-hero-back mat-back-to-website" id="mat-hero-back" href="{{ back_to_website_url }}"{% if not back_to_website_url %} style="display:none"{% endif %}>{{ back_to_website_label|default:"Back to website" }} &rarr;</a>
     </div>
     <div class="mat-hero-bottom">
         {% if hero_headline %}

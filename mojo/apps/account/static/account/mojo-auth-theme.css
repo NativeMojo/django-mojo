@@ -1,29 +1,51 @@
 /* ============================================================================
-   mojo-auth-theme.css — Dark premium auth theme for django-mojo
+   mojo-auth-theme.css — reusable hosted-auth layouts for django-mojo
 
-   Single unified card: hero image left, auth form right.
-   One large rounded rectangle against the page background.
+   Layout and appearance are independent axes. Every preset uses the same
+   semantic form DOM; these selectors only art-direct it.
    ============================================================================ */
 
 :root {
-    --mat-page-bg: #686278;
-    --mat-card-bg: #2c2638;
-    --mat-deep: #1e1a28;
-    --mat-accent: #7c5cbf;
-    --mat-accent-hover: #6b4eae;
-    --mat-input-bg: #353042;
-    --mat-border: #433d52;
-    --mat-text: #f2eff7;
-    --mat-muted: #9e96ad;
+    --mat-page-bg: #f2efe8;
+    --mat-card-bg: #fffdf9;
+    --mat-deep: #e8e3da;
+    --mat-accent: #6384ff;
+    --mat-accent-hover: color-mix(in srgb, var(--mat-accent) 84%, #000);
+    --mat-input-bg: #f7f4ee;
+    --mat-border: #d9d4ca;
+    --mat-text: #171923;
+    --mat-muted: #696b73;
     --mat-danger: #e57373;
     --mat-danger-bg: rgba(229, 115, 115, 0.1);
     --mat-success: #81c784;
     --mat-success-bg: rgba(129, 199, 132, 0.1);
     --mat-info: #90caf9;
     --mat-info-bg: rgba(144, 202, 249, 0.1);
-    --mat-radius: 20px;
-    --mat-field-radius: 10px;
+    --mat-radius: 24px;
+    --mat-field-radius: 12px;
     --mat-transition: 0.2s ease;
+}
+
+body.mat-appearance-dark {
+    --mat-page-bg: #090e16;
+    --mat-card-bg: #121925;
+    --mat-deep: #0a101a;
+    --mat-input-bg: #182131;
+    --mat-border: #263246;
+    --mat-text: #f5f7fb;
+    --mat-muted: #9ca7ba;
+}
+
+@media (prefers-color-scheme: dark) {
+    body.mat-appearance-system {
+        --mat-page-bg: #090e16;
+        --mat-card-bg: #121925;
+        --mat-deep: #0a101a;
+        --mat-input-bg: #182131;
+        --mat-border: #263246;
+        --mat-text: #f5f7fb;
+        --mat-muted: #9ca7ba;
+    }
 }
 
 *,
@@ -52,36 +74,97 @@ body {
     align-items: center;
     justify-content: center;
     min-height: 100vh;
-    padding: 2rem;
+    padding: clamp(1rem, 4vw, 3rem);
 }
 
 /* ---- The card — one unified rectangle ---- */
 
 .mat-card {
-    display: flex;
+    display: block;
     width: 100%;
-    max-width: 960px;
-    min-height: 580px;
+    max-width: 430px;
     background: var(--mat-card-bg);
     border-radius: var(--mat-radius);
     overflow: hidden;
     box-shadow:
-        0 20px 60px rgba(0, 0, 0, 0.35),
-        0 0 0 1px rgba(255, 255, 255, 0.04);
+        0 24px 70px rgba(22, 24, 31, 0.12),
+        0 0 0 1px var(--mat-border);
+}
+
+.mat-layout-compact .mat-card {
+    max-width: 540px;
+}
+
+.mat-layout-branded-panel .mat-card,
+.mat-layout-editorial .mat-card {
+    display: flex;
+    max-width: 1120px;
+    min-height: 680px;
+}
+
+.mat-layout-editorial .mat-card {
+    max-width: 1220px;
+    min-height: min(760px, calc(100vh - 4rem));
 }
 
 /* ---- Left hero ---- */
 
 .mat-hero {
     display: none;
-    margin: 14px;
-    border-radius: 10px;
     position: relative;
-    width: 45%;
+    isolation: isolate;
+    width: 46%;
     flex-shrink: 0;
-    background-size: cover;
-    background-position: center;
     background-color: var(--mat-deep);
+    overflow: hidden;
+}
+
+.mat-layout-branded-panel .mat-hero,
+.mat-layout-editorial .mat-hero {
+    display: block;
+}
+
+.mat-layout-branded-panel .mat-hero {
+    margin: 14px;
+    border-radius: 14px;
+}
+
+.mat-layout-editorial .mat-hero {
+    width: 54%;
+}
+
+.mat-hero-picture,
+.mat-hero-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.mat-hero-image {
+    object-fit: cover;
+    object-position: center;
+}
+
+.mat-hero-image-dark { display: none; }
+.mat-appearance-dark .mat-hero-image-light { display: none; }
+.mat-appearance-dark .mat-hero-image-dark { display: block; }
+
+@media (prefers-color-scheme: dark) {
+    .mat-appearance-system .mat-hero-image-light { display: none; }
+    .mat-appearance-system .mat-hero-image-dark { display: block; }
+}
+
+.mat-hero-position-top .mat-hero-image { object-position: top; }
+.mat-hero-position-bottom .mat-hero-image { object-position: bottom; }
+.mat-hero-position-left .mat-hero-image { object-position: left; }
+.mat-hero-position-right .mat-hero-image { object-position: right; }
+
+.mat-hero-shade {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background: linear-gradient(180deg, rgba(6, 10, 18, .08) 36%, rgba(6, 10, 18, .82) 100%);
 }
 
 .mat-hero-top {
@@ -92,25 +175,25 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 1.5rem;
+    padding: clamp(1.25rem, 3vw, 2rem);
     z-index: 2;
 }
 .mat-hero-logo {
-    height: 28px;
+    height: 32px;
     width: auto;
 }
 .mat-hero-back {
     display: inline-flex;
     align-items: center;
     gap: 0.375rem;
-    padding: 0.4rem 0.875rem;
-    background: rgba(255, 255, 255, 0.12);
-    backdrop-filter: blur(8px);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 20px;
+    padding: 0.55rem 0.95rem;
+    background: rgba(10, 14, 22, 0.38);
+    backdrop-filter: blur(14px);
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    border-radius: 999px;
     color: rgba(255, 255, 255, 0.9);
-    font-size: 0.75rem;
-    font-weight: 500;
+    font-size: 0.78rem;
+    font-weight: 600;
     text-decoration: none;
     transition: background var(--mat-transition);
 }
@@ -122,39 +205,31 @@ body {
     bottom: 0;
     left: 0;
     right: 0;
-    padding: 2rem 1.5rem;
-    background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
+    padding: clamp(1.5rem, 4vw, 3rem);
     z-index: 2;
-    border-radius: 10px;
 }
 .mat-hero-headline {
-    font-size: 1.5rem;
-    font-weight: 700;
-    line-height: 1.3;
+    max-width: 17ch;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: clamp(1.8rem, 3.2vw, 3.4rem);
+    font-weight: 500;
+    line-height: 1.02;
+    letter-spacing: -.035em;
     color: #fff;
 }
 .mat-hero-sub {
-    font-size: 0.8125rem;
-    color: rgba(255, 255, 255, 0.6);
-    margin-top: 0.375rem;
-}
-
-@media (min-width: 768px) {
-    .mat-hero {
-        display: block;
-        width: 38%;
-    }
-}
-@media (min-width: 1024px) {
-    .mat-hero {
-        width: 45%;
-    }
+    max-width: 44ch;
+    font-size: 0.9rem;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.72);
+    margin-top: 0.75rem;
 }
 
 /* ---- Right form panel ---- */
 
 .mat-main {
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -162,8 +237,9 @@ body {
 }
 
 @media (min-width: 768px) {
-    .mat-main {
-        padding: 3rem 3rem 2.5rem;
+    .mat-layout-branded-panel .mat-main,
+    .mat-layout-editorial .mat-main {
+        padding: clamp(3rem, 5vw, 5rem);
     }
 }
 
@@ -172,12 +248,23 @@ body {
 .mat-header {
     margin-bottom: 1.75rem;
 }
+.mat-inline-back {
+    display: inline-block;
+    margin-bottom: 1.5rem;
+    color: var(--mat-muted);
+    font-size: .8rem;
+    font-weight: 600;
+    text-decoration: none;
+}
+.mat-inline-back:hover { color: var(--mat-accent); }
+.mat-layout-branded-panel .mat-inline-back,
+.mat-layout-editorial .mat-inline-back { display: none !important; }
 .mat-header-logo {
-    display: none;
+    display: block;
     height: 32px;
     width: auto;
     margin-bottom: 1.5rem;
-    opacity: 0.4;
+    opacity: 1;
 }
 .mat-brand-icon {
     width: 36px;
@@ -199,15 +286,16 @@ body {
     margin-bottom: 0.5rem;
 }
 .mat-title {
-    font-size: 1.75rem;
+    font-size: clamp(1.75rem, 3vw, 2.35rem);
     font-weight: 700;
     line-height: 1.2;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.035em;
 }
 .mat-subtitle {
     font-size: 0.875rem;
     color: var(--mat-muted);
     margin-top: 0.5rem;
+    line-height: 1.55;
 }
 .mat-subtitle a {
     color: var(--mat-text);
@@ -676,27 +764,6 @@ body {
     color: var(--mat-accent);
 }
 
-/* ---- Fullscreen layout ---- */
-/* Add class="mat-fullscreen" to <body> or set AUTH_LAYOUT=fullscreen */
-
-.mat-fullscreen .mat-page {
-    padding: 0;
-}
-.mat-fullscreen .mat-card {
-    max-width: none;
-    min-height: 100vh;
-    border-radius: 0;
-    box-shadow: none;
-}
-.mat-fullscreen .mat-hero {
-    width: 50%;
-    margin: 0;
-    border-radius: 0;
-}
-.mat-fullscreen .mat-main {
-    width: 50%;
-}
-
 /* ---- Mobile ---- */
 
 @media (max-width: 767px) {
@@ -708,6 +775,26 @@ body {
         min-height: 100vh;
         border-radius: 0;
         flex-direction: column;
+    }
+    .mat-layout-branded-panel .mat-hero,
+    .mat-layout-editorial .mat-hero {
+        width: 100%;
+        height: 250px;
+        min-height: 250px;
+        margin: 0;
+        border-radius: 0;
+    }
+    .mat-hero-top {
+        padding: 1rem;
+    }
+    .mat-hero-bottom {
+        padding: 1.25rem;
+    }
+    .mat-hero-headline {
+        font-size: 1.9rem;
+    }
+    .mat-hero-sub {
+        display: none;
     }
     .mat-main {
         padding: 2rem 1.5rem;

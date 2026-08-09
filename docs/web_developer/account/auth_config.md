@@ -41,14 +41,21 @@ methods.
   "data": {
     "theme": {
       "app_title": "Acme Platform",
+      "auth_provider_name": "DJANGO MOJO",
       "logo_url": "https://cdn.acme.com/logo.svg",
       "favicon_url": "",
       "hero_image_url": "",
+      "hero_image_url_light": "",
+      "hero_image_url_dark": "",
       "hero_headline": "Welcome back",
       "hero_subheadline": "Admin Portal",
+      "hero_image_position": "center",
       "back_to_website_url": "",
+      "back_to_website_label": "Back to website",
       "terms_url": "",
-      "layout": "card",
+      "layout": "minimal",
+      "appearance": "system",
+      "accent_color": "#6384ff",
       "api_base": "",
       "success_redirect": "/dashboard",
       "custom_css": "",
@@ -64,7 +71,9 @@ methods.
       "passkey_prompt": "optional"
     },
     "login": {
-      "methods": ["password", "google", "passkey"]
+      "methods": ["password", "google", "passkey"],
+      "heading": "Sign In",
+      "supporting_copy": ""
     }
   }
 }
@@ -74,6 +83,25 @@ Use `login.methods` and `registration.methods` to decide which buttons to
 render. Available login tokens: `password`, `sms`, `passkey`, `magic`,
 `google`, `apple`, `github`; registration tokens: `password`, `google`,
 `apple`, `github`. Use `theme` to apply branding.
+
+Hosted pages offer four layout presets: `minimal`, `compact`,
+`branded-panel`, and `editorial`. Appearance is independent: `light`, `dark`,
+or `system` (the default). Legacy stored values remain compatible: `card`
+maps to `compact`, while `fullscreen` maps to `branded-panel`.
+
+On a hosted auth page (`/auth`, `/register`, or `/passkey`), a safe preview or
+one-off journey override may pass
+`?auth_theme=<preset>&auth_appearance=<appearance>`. Only known enum values
+are accepted; arbitrary CSS, colors, copy, and image URLs cannot be supplied
+through the query string. Valid overrides are preserved across login,
+registration, passkey, and bouncer redirects.
+
+`hero_image_url` is the common artwork for both appearances.
+`hero_image_url_light` and `hero_image_url_dark` may replace it for their
+respective mode; each missing variant falls back to the common URL. Hero
+artwork is visible in `branded-panel` and `editorial`, not `minimal` or
+`compact`. The bouncer challenge also uses `app_title`, `logo_url`, and
+`accent_color`, and explains the account provider with `auth_provider_name`.
 
 `registration.extra_fields` is the list of non-canonical fields the group has
 configured (promo codes, referral tokens, etc.). An empty list means no extra

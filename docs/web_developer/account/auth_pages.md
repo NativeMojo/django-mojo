@@ -66,8 +66,16 @@ disabled registration path.
 | `?token=pr:...` | Password reset token — opens "Set New Password" view |
 | `?code=...&state=...` | OAuth callback — auto-completes the OAuth flow |
 | `?redirect=<url>` | Custom redirect after login (also `?next=` or `?returnTo=`). Preserved through the bouncer challenge **and** the OAuth provider round-trip. Only `http`/`https` URLs and same-origin relative paths are accepted — see below. |
-| `?back=<url>` | Override the "Back to website" hero link |
+| `?back=<url>` | Override the destination back link. Relative and absolute HTTP(S) values are accepted; script/data schemes are ignored. |
 | `?group_uuid=<uuid>` | Load per-group branding and restrict to the group's enabled methods. Must be `group_uuid` — the framework reserves `?group=` for integer IDs. |
+| `?auth_theme=<preset>` | Preview/use `minimal`, `compact`, `branded-panel`, or `editorial`. Unknown values are ignored. |
+| `?auth_appearance=<mode>` | Preview/use `light`, `dark`, or `system`. Unknown values are ignored. |
+
+Theme and appearance overrides are safe enum selections only; the URL cannot
+inject custom copy, colors, images, or CSS. Valid values ride the same
+login/register/passkey and bouncer links as `group_uuid` and `redirect`.
+The split `branded-panel` and `editorial` layouts show hero artwork; `minimal`
+and `compact` intentionally do not.
 
 ### After Login
 
@@ -263,6 +271,12 @@ satisfies servers configured with `REQUIRE_GROUP_ON_REGISTRATION = True`.
 Fetch `GET /api/auth/config?group_uuid=<uuid>` to get the resolved config for
 a group — useful for custom front-ends. See [Auth Config](auth_config.md).
 
+The bouncer challenge uses the resolved group's `theme.app_title`, `logo_url`,
+and `accent_color`, then names `theme.auth_provider_name` in its "Secure
+sign-in via …" explanation. This tells visitors both which destination they
+are entering and whose account credentials they should use before the login
+form appears.
+
 ---
 
 ## Cross-Origin Redirect Handoff
@@ -383,7 +397,7 @@ token.
 ## Static Assets
 
 ```
-GET /api/account/static/mojo-auth-theme.css   → dark premium theme
+GET /api/account/static/mojo-auth-theme.css   → responsive layout + appearance presets
 GET /api/account/static/mojo-auth.js          → MojoAuth library
 ```
 

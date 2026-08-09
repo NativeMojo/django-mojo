@@ -42,7 +42,8 @@ AUTH_CONFIG = {
     "theme": {
         "app_title": "My App",
         "logo_url": "https://cdn.example.com/logo.svg",
-        "layout": "card",
+        "layout": "editorial",
+        "appearance": "system",
         "success_redirect": "/",
     },
     "login": {
@@ -63,7 +64,7 @@ See [Auth Config](auth_config.md) for the full schema and migration table.
 The auth pages load CSS and JS from API endpoints (no Django static files):
 
 ```
-GET /api/account/static/mojo-auth-theme.css   → dark premium theme
+GET /api/account/static/mojo-auth-theme.css   → responsive layout + appearance presets
 GET /api/account/static/mojo-auth.js          → MojoAuth library
 GET /api/account/static/mojo-auth.css         → legacy light theme (if needed)
 ```
@@ -265,7 +266,14 @@ per-file list to maintain — a new template is covered the moment it ships.
 Create `templates/account/auth_hero.html` in your project:
 
 ```html
-<div class="mat-hero" style="background-image:url('/static/hero.jpg')">
+<div class="mat-hero">
+    <div class="mat-hero-picture" aria-hidden="true">
+        <img class="mat-hero-image mat-hero-image-light"
+             src="/static/hero-light.jpg" alt="">
+        <img class="mat-hero-image mat-hero-image-dark"
+             src="/static/hero-dark.jpg" alt="">
+    </div>
+    <div class="mat-hero-shade"></div>
     <div class="mat-hero-top">
         <img class="mat-hero-logo" src="/static/logo-white.svg" alt="My App" />
         <a class="mat-hero-back" href="https://myapp.com">Back to website &rarr;</a>
@@ -278,27 +286,27 @@ Create `templates/account/auth_hero.html` in your project:
 ```
 
 Or set the appropriate keys in `AUTH_CONFIG.theme` and the default template
-handles it.
+handles it. The common `hero_image_url` supplies both appearances unless
+`hero_image_url_light` and/or `hero_image_url_dark` override it. Hero artwork
+is rendered only by the `branded-panel` and `editorial` layouts.
 
 ---
 
 ## CSS Theme
 
-The dark premium theme is in `mojo-auth-theme.css` using CSS custom properties:
+The hosted theme in `mojo-auth-theme.css` separates layout from appearance.
+`light`, `dark`, and `system` swap design tokens while every layout shares the
+same semantic form markup:
 
 ```css
 :root {
-    --mat-page-bg: #686278;       /* page background */
-    --mat-card-bg: #2c2638;       /* card background */
-    --mat-deep: #1e1a28;          /* overlay / deep contrast */
-    --mat-accent: #7c5cbf;        /* primary accent (buttons, focus) */
-    --mat-accent-hover: #6b4eae;  /* accent hover state */
-    --mat-input-bg: #353042;      /* input field background */
-    --mat-border: #433d52;        /* subtle borders */
-    --mat-text: #f2eff7;          /* primary text */
-    --mat-muted: #9e96ad;         /* secondary/muted text */
-    --mat-radius: 20px;           /* card border radius */
-    --mat-field-radius: 10px;     /* input/button radius */
+    --mat-page-bg: #f2efe8;
+    --mat-card-bg: #fffdf9;
+    --mat-accent: #6384ff;
+    --mat-input-bg: #f7f4ee;
+    --mat-border: #d9d4ca;
+    --mat-text: #171923;
+    --mat-muted: #696b73;
 }
 ```
 
@@ -326,8 +334,23 @@ time on Group REST writes and recommended to enforce on `AUTH_CONFIG` too
 
 | `theme.layout` | Behavior |
 |----------------|----------|
-| `card` (default) | Centered card with rounded corners on the page background |
-| `fullscreen` | Edge-to-edge, no border radius, hero 50% / form 50% |
+| `minimal` (default) | Quiet centered form with no hero artwork |
+| `compact` | Roomier centered panel for more login methods |
+| `branded-panel` | Split card with a contained brand/art panel |
+| `editorial` | Wide art-directed split treatment for premium site branding |
+
+`card` and `fullscreen` remain accepted aliases for `compact` and
+`branded-panel`. `theme.appearance` is independently `light`, `dark`, or
+`system`; `system` uses `prefers-color-scheme` without JavaScript.
+
+For QA and previews, `?auth_theme=<preset>&auth_appearance=<mode>` may override
+those two enum values for the current auth journey. Unknown values fall back to
+configuration, and the override is propagated across hosted auth pages.
+
+The bouncer challenge resolves the same group theme. It uses `app_title` and
+`logo_url` for the destination identity, `accent_color` for its progress and
+challenge controls, and `auth_provider_name` in the "Secure sign-in via …"
+explanation.
 
 ---
 
@@ -346,7 +369,7 @@ time on Group REST writes and recommended to enforce on `AUTH_CONFIG` too
 | `/api/auth/config` | GET | `on_auth_config` | Public auth config for custom front-ends |
 | `/api/account/bouncer/assess` | POST | `on_bouncer_assess` | Bouncer signal assessment |
 | `/api/account/bouncer/event` | POST | `on_bouncer_event` | Client event reporting |
-| `/api/account/static/mojo-auth-theme.css` | GET | Static | Dark theme CSS |
+| `/api/account/static/mojo-auth-theme.css` | GET | Static | Responsive layout and appearance presets |
 | `/api/account/static/mojo-auth.js` | GET | Static | MojoAuth JS library |
 | `/api/account/static/mojo-auth.css` | GET | Static | Legacy light theme CSS |
 
