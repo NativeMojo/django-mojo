@@ -534,12 +534,17 @@ def _audit_config(path=None):
     return config
 
 
-def _normal_root(path, label):
+def _normal_path(path, label):
     if not isinstance(path, str) or not os.path.isabs(path) or "\x00" in path:
         raise DeployError(f"{label} must be an absolute path")
     normalized = os.path.normpath(path)
     if normalized != path or path == "/":
         raise DeployError(f"{label} must be normalized and narrower than /")
+    return path
+
+
+def _normal_root(path, label):
+    path = _normal_path(path, label)
     if path == "/home" or (path.startswith("/home/") and
                             not _target_allowed(path, HOME_BIND_PATHS)):
         raise DeployError("only exact standard home persistence paths are selectable")
@@ -591,7 +596,7 @@ def _validate_enrollment(enrollment):
             raise DeployError("edge_log_dir is only valid for nginx_plane=edge")
         enrollment["nginx_log_path"] = DEFAULT_LOG_PATH
     else:
-        edge_root = _normal_root(enrollment.get("edge_log_dir", EDGE_LOG_DIR),
+        edge_root = _normal_path(enrollment.get("edge_log_dir", EDGE_LOG_DIR),
                                  "enrollment edge_log_dir")
         enrollment["edge_log_dir"] = edge_root
         enrollment["nginx_log_path"] = edge_root + "/mojosec.json.log"

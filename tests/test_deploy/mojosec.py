@@ -490,6 +490,32 @@ def test_enrollment_installs_protected_host_identity_from_stdin(opts):
 
 
 @th.django_unit_test()
+def test_edge_enrollment_accepts_app_owned_security_log_directory(opts):
+    from mojo.deploy import mojosec as deploy
+
+    enrollment = {
+        "version": 1,
+        "sensor_id": "prod-web-i-0123456789abcdef0",
+        "endpoint": "https://incident.example/api/incident/mojosec/batch",
+        "nginx_plane": "edge",
+        "edge_log_dir": deploy.EDGE_LOG_DIR,
+        "trusted_proxy_cidrs": [],
+    }
+    stream = io.TextIOWrapper(
+        io.BytesIO(json.dumps(enrollment).encode()), encoding="utf-8")
+    with mock.patch.object(deploy.os, "geteuid", return_value=0), \
+            mock.patch.object(deploy, "_ensure_dir"), \
+            mock.patch.object(deploy, "_write_if_changed"):
+        result = deploy.install_enrollment(stream)
+
+    th.assert_eq(result["edge_log_dir"], deploy.EDGE_LOG_DIR,
+                 "Edge enrollment must accept its documented app-owned log root")
+    th.assert_eq(result["nginx_log_path"],
+                 deploy.EDGE_LOG_DIR + "/mojosec.json.log",
+                 "the protected collector path must derive from the Edge log root")
+
+
+@th.django_unit_test()
 def test_enrolled_lifecycle_persists_observe_across_ordinary_deploys(opts):
     from mojo.deploy import mojosec as deploy
 
