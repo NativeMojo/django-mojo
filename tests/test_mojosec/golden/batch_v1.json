@@ -1,0 +1,42 @@
+{
+  "schema": "mojosec.batch",
+  "version": 1,
+  "sensor_id": "web-prod-i-0123456789",
+  "sent_at": "2026-08-08T12:00:10Z",
+  "policy_revision": "baseline-1",
+  "events": [
+    {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kind": "auth.ssh_login",
+      "observed_at": "2026-08-08T12:00:00Z",
+      "first_seen": "2026-08-08T12:00:00Z",
+      "last_seen": "2026-08-08T12:00:00Z",
+      "severity": "high",
+      "summary": "SSH login accepted",
+      "count": 1,
+      "attributes": {
+        "source_ip": "192.0.2.20",
+        "user": "deploy",
+        "auth_method": "publickey"
+      },
+      "recommendation": "review"
+    },
+    {
+      "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "kind": "web.probe",
+      "observed_at": "2026-08-08T12:00:09Z",
+      "first_seen": "2026-08-08T12:00:01Z",
+      "last_seen": "2026-08-08T12:00:09Z",
+      "severity": "high",
+      "summary": "Known exploit path probe",
+      "count": 12,
+      "attributes": {
+        "source_ip": "198.51.100.7",
+        "method": "GET",
+        "path": "/wp-login.php",
+        "status": 404
+      },
+      "recommendation": "block_ip"
+    }
+  ]
+}

@@ -5,7 +5,7 @@ The security system is a multi-layered defense pipeline that detects, correlates
 ```
                            ┌─────────────────────────┐
                            │     Event Sources        │
-                           │  OSSEC · Bouncer · Auth  │
+                           │ MojoSec · OSSEC · Auth   │
                            │  Health · App Code       │
                            └────────────┬─────────────┘
                                         │ report_event()
@@ -47,6 +47,10 @@ The security system is a multi-layered defense pipeline that detects, correlates
 ```
 
 ## 1. Events
+
+Dedicated EC2 web nodes can feed this pipeline through the settings-free
+[MojoSec host sensor](mojosec_sensor.md). MojoSec keeps host collection,
+aggregation, and retry local while leaving policy and blocking authority here.
 
 Events are the raw signals that enter the security pipeline. Every security-relevant action produces an Event.
 
