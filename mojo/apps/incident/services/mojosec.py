@@ -1,6 +1,7 @@
 """Bounded, idempotent ingestion for the MojoSec host sensor."""
 
 import hashlib
+import ipaddress
 import json
 import zlib
 
@@ -147,7 +148,12 @@ def _event_projection(batch, sensor_event):
     source_ip = None
     source_ip_min_count = policy.get("source_ip_min_count")
     if source_ip_min_count is not None and sensor_event["count"] >= source_ip_min_count:
-        source_ip = attributes.get("source_ip") or None
+        candidate = attributes.get("source_ip")
+        if isinstance(candidate, str):
+            try:
+                source_ip = str(ipaddress.ip_address(candidate))
+            except ValueError:
+                source_ip = None
     event = Event(
         category=category,
         scope="mojosec",

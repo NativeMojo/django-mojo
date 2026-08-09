@@ -107,6 +107,13 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
                  "bounded raw features should remain available for deterministic offline replay")
     th.assert_true(receipt.RestMeta.DENY_AI,
                    "the model holding raw replay features must be denied to generic AI queries")
+    th.assert_true(
+        not receipt.RestMeta.CAN_CREATE
+        and not receipt.RestMeta.CAN_UPDATE
+        and not receipt.RestMeta.CAN_DELETE,
+        "generic receipt REST routes must be read-only regardless of caller permissions")
+    th.assert_eq(receipt.handler_state, MojoSecReceipt.HANDLER_NONE,
+                 "a publication without a selected handler needs no outbox job")
     th.assert_true(probe.incident_id is None,
                    "host recommendations must not create incidents without an exact central RuleSet")
     th.assert_eq(probe.metadata["mojosec"]["sensor_id"], SENSOR_ID,
@@ -183,6 +190,15 @@ def test_mojosec_parser_rejects_duplicate_json_and_concatenated_gzip(opts):
         "/api/incident/mojosec/batch",
         data=b'{"schema":"mojosec.batch","schema":"duplicate"}',
         content_type="application/json")
+    with th.assert_raises(mojosec.MojoSecIngestError):
+        mojosec.parse_request_batch(request)
+
+    raw = json.dumps(_golden_batch()).encode("utf-8")
+    request = RequestFactory().post(
+        "/api/incident/mojosec/batch",
+        data=gzip.compress(raw) + gzip.compress(raw),
+        content_type="application/json",
+        HTTP_CONTENT_ENCODING="gzip")
     with th.assert_raises(mojosec.MojoSecIngestError):
         mojosec.parse_request_batch(request)
 
@@ -264,15 +280,6 @@ def test_mojosec_middleware_never_parses_or_logs_sensitive_body(opts):
     th.assert_true(all("mojosec_batch" in item[2] for item in queued),
                    "sensitive log entries must be recognizable metadata-only summaries")
 
-    raw = json.dumps(_golden_batch()).encode("utf-8")
-    request = RequestFactory().post(
-        "/api/incident/mojosec/batch",
-        data=gzip.compress(raw) + gzip.compress(raw),
-        content_type="application/json",
-        HTTP_CONTENT_ENCODING="gzip")
-    with th.assert_raises(mojosec.MojoSecIngestError):
-        mojosec.parse_request_batch(request)
-
 
 @th.django_unit_test()
 def test_mojosec_exact_policy_ignores_broad_scope_and_default_llm(opts):
@@ -329,6 +336,8 @@ def test_mojosec_server_registry_ignores_host_escalation_and_victim_ip(opts):
                  "host critical severity cannot exceed the server-owned kind policy")
     th.assert_true(event.source_ip is None,
                    "web errors can never promote a caller-claimed address for action")
+    th.assert_true(event.incident_id is None,
+                   "an advisory block claim cannot action outside the exact central registry")
     th.assert_eq(event.metadata["mojosec"]["sensor_severity"], "critical",
                  "the raw severity claim remains advisory evidence")
 
@@ -435,10 +444,13 @@ def test_mojosec_handler_outbox_is_durable_and_retryable(opts):
 
     with mock.patch.object(RuleSet, "run_handler", return_value=True) as run:
         mojosec._dispatch_receipt_handlers(receipt.pk)
+        mojosec._dispatch_receipt_handlers(receipt.pk)
     receipt.refresh_from_db()
     th.assert_eq(receipt.handler_state, MojoSecReceipt.HANDLER_DISPATCHED,
                  "the dispatcher marks completion only after child jobs are published")
     prefix = run.call_args.kwargs["idempotency_prefix"]
+    th.assert_eq(run.call_count, 1,
+                 "a crash/retry after the dispatched mark must not republish child jobs")
     th.assert_true(prefix.startswith(f"mojosec:{receipt.pk}:") and len(prefix) < 64,
                    "handler child jobs need one bounded stable idempotency prefix")
 
@@ -460,9 +472,21 @@ def test_mojosec_receipt_pruning_keeps_pending_outbox_rows(opts):
         payload_digest="8" * 64,
         replay_features={"event": {}},
     )
+    queued = MojoSecReceipt.objects.create(
+        api_key=published.api_key,
+        sensor_id=SENSOR_ID,
+        wire_event_id="7" * 64,
+        payload_digest="6" * 64,
+        publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
+        published_at=published.published_at,
+        handler_state=MojoSecReceipt.HANDLER_QUEUED,
+        replay_features={"event": {}},
+    )
     future = published.published_at + timedelta(days=46)
     mojosec.prune_receipts(now=future)
     th.assert_true(not MojoSecReceipt.objects.filter(pk=published.pk).exists(),
                    "published receipts older than the retry margin should be pruned")
     th.assert_true(MojoSecReceipt.objects.filter(pk=pending.pk).exists(),
                    "pending outbox rows must never be removed by age retention")
+    th.assert_true(MojoSecReceipt.objects.filter(pk=queued.pk).exists(),
+                   "queued handler work must never be removed by age retention")

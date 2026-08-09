@@ -63,7 +63,8 @@ class MojoMiddleware:
         )
         is_mojosec_batch = (
             request.method == "POST"
-            and request.path.rstrip("/") == "/api/incident/mojosec/batch"
+            and request.path in (
+                "/api/incident/mojosec/batch", "/api/incident/mojosec/batch/")
         )
         request._mojosec_sensitive_body = is_mojosec_batch
         if settings.LOGIT_REQUEST_BODY and not is_raw_file_upload and not is_mojosec_batch:
