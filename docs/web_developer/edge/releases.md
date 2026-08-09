@@ -18,6 +18,12 @@ starts the repository's workflow; the WebApp-linked service key can release
 only that one WebApp. Automatic deployment is the default. `auto_promote=False`
 is reserved for an explicit manual-hold exception.
 
+Use the canonical copyable action at
+[`examples/github/actions/deploy-webapp`](../../../examples/github/actions/deploy-webapp).
+It is intentionally an example path, not django-mojo's own `.github/actions`
+directory: application repositories reference the released framework action
+and keep only their build-and-trigger workflow locally.
+
 ## The flow
 
 ### 1. Register the release and get upload URLs
