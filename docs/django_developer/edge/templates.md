@@ -47,11 +47,15 @@ vhost**, asserted in `tests/test_edge/3_render_injection.py`.
 
 - **MojoSec** — file-only `MOJOSEC_MODE` is `off` (default) or `observe`.
   Observe adds the shared queryless JSON security log and an exact
-  `/api/incident/mojosec/batch` proxy location capped at 512 KiB on API
+  `/api/incident/mojosec/batch` proxy location (and its slash alias) capped at 512 KiB on API
   vhosts (and `site_api` only when a route covers it). File-only
   `MOJOSEC_TRUSTED_PROXY_CIDRS` is a comma-separated list of canonical CIDRs;
   only those networks may change the resolved client IP. Off emits neither
   the log nor receiver location, so upgrading Edge does not create noise.
+  The MojoSec log defaults to `<EDGE_LOG_DIR>/mojosec.json.log`; an override is
+  rejected unless it remains beneath that app-owned staging log directory.
+  Root sensor enrollment must use `nginx_plane=edge` and the same
+  `edge_log_dir`, so its protected collector path matches the rendered graph.
 
 - **`quiet_paths`** (`api`, `site_api`) — exact-match locations whose hits
   stay out of the *main* access log. They are never blind: the location

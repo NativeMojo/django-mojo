@@ -452,12 +452,15 @@ def _quiet_location(path, upstream):
 
 def _mojosec_receiver_location(upstream):
     """The exact machine receiver has a wire cap below a vhost's normal cap."""
-    return "\n".join([
-        f"    location = {MOJOSEC_RECEIVER_PATH} {{",
-        f"        client_max_body_size {MOJOSEC_BODY_LIMIT};",
-        _proxy_location_body(upstream),
-        "    }",
-    ])
+    blocks = []
+    for path in (MOJOSEC_RECEIVER_PATH, MOJOSEC_RECEIVER_PATH + "/"):
+        blocks.append("\n".join([
+            f"    location = {path} {{",
+            f"        client_max_body_size {MOJOSEC_BODY_LIMIT};",
+            _proxy_location_body(upstream),
+            "    }",
+        ]))
+    return "\n".join(blocks)
 
 
 # Hashed build assets — safe to cache forever because their names change when

@@ -145,6 +145,7 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
         "delivery": {"sent": 1, "accepted": 1, "retry": 0},
         "config": {
             "source_revision": "r1", "source_sha256": "a" * 64,
+            "canonical_revision": "v1:r1",
             "effective_sha256": "b" * 64, "nginx_plane": "standard",
             "nginx_log_path": "/var/log/nginx/mojosec.json.log",
             "trusted_proxy_cidrs": ["10.0.0.0/8"],
@@ -166,6 +167,7 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
                        "access_log /var/log/nginx/mojosec.json.log mojosec_v1;\n"
                        "set_real_ip_from 10.0.0.0/8;\n"
                        "location = /api/incident/mojosec/batch {\n"
+                       "location = /api/incident/mojosec/batch/ {\n"
                        "client_max_body_size 512k;", "")),
         ("/var/log/nginx/mojosec.json.log", (0, "root root 640", "")),
         ("grep -F 'maxsize 50M'", (0, "", "")),

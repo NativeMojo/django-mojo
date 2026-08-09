@@ -668,7 +668,7 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
             provenance = status.get("config") or {}
             hashes_ok = all(len(str(provenance.get(key, ""))) == 64
                             for key in ("source_sha256", "effective_sha256"))
-            if hashes_ok:
+            if hashes_ok and provenance.get("canonical_revision"):
                 report.passed("mojosec", "config provenance",
                               f"source revision {provenance.get('source_revision') or '(none)'}")
             else:
@@ -682,6 +682,7 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                 "log_format mojosec_v1 escape=json",
                 f"access_log {log_path} mojosec_v1;",
                 "location = /api/incident/mojosec/batch {",
+                "location = /api/incident/mojosec/batch/ {",
                 "client_max_body_size 512k;",
             )
             missing = [item for item in required if not item or item not in active_nginx]
@@ -768,6 +769,23 @@ def check_nginx(report, run, repo, sudo, probe_url, retired_confd):
         pairs.append((f"conf.d/{name}", f"/etc/nginx/conf.d/{name}"))
     for rel, dst in pairs:
         state = compare(run, f"{repo}/aws/nginx/{rel}", dst)
+        if rel == "django.inc" and state == "DIFF":
+            # Observe mode appends one exact root-owned include marker after
+            # post_deploy copies the repo file. Compare the underlying graph
+            # after removing only those two package-owned lines.
+            source = f"{repo}/aws/nginx/{rel}"
+            code = (
+                "import pathlib,sys;"
+                "s=pathlib.Path(sys.argv[1]).read_bytes();"
+                "d=pathlib.Path(sys.argv[2]).read_text();"
+                "drop={'# MojoSec exact receiver cap',"
+                "'include /etc/nginx/snippets/mojosec_receiver.conf;'};"
+                "n=('\\n'.join(x for x in d.splitlines() if x.strip() not in drop)"
+                ".rstrip()+'\\n').encode();"
+                "raise SystemExit(0 if n==s else 1)"
+            )
+            if run(f"python3 -c {q(code)} {q(source)} {q(dst)}")[0] == 0:
+                state = "SAME"
         if state == "SAME":
             report.passed("nginx", rel, f"{dst} matches the repo")
         elif state in ("NODST", "DIFF"):

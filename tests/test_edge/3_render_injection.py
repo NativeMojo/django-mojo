@@ -305,8 +305,10 @@ def test_edge_mojosec_mode_contract(opts):
         text = render.render_vhost(vhost, opts.generation)
     assert "location = /api/incident/mojosec/batch {" in text, \
         "Edge observe mode omitted the exact receiver route"
-    assert "client_max_body_size 512k;" in text, \
-        "Edge receiver route omitted the compressed wire-body cap"
+    assert "location = /api/incident/mojosec/batch/ {" in text, \
+        "Edge observe mode omitted the capped trailing-slash alias"
+    assert text.count("client_max_body_size 512k;") == 2, \
+        "both Edge receiver spellings need the compressed wire-body cap"
 
 
 @th.django_unit_test("site_api renders one location per route, quiet paths on the longest prefix")

@@ -20,6 +20,7 @@ DEFAULTS = {
     "config_provenance": {
         "source_revision": "",
         "source_sha256": "",
+        "canonical_revision": "",
         "effective_sha256": "",
         "nginx_plane": "standard",
         "nginx_log_path": "/var/log/nginx/mojosec.json.log",
@@ -153,7 +154,8 @@ def validate_config(value):
         raise ConfigError("expected_changes_path is fixed by the privileged deployment")
     provenance = value["config_provenance"]
     _reject_unknown(provenance, DEFAULTS["config_provenance"], "config_provenance")
-    for field in ("source_revision", "source_sha256", "effective_sha256",
+    for field in ("source_revision", "source_sha256", "canonical_revision",
+                  "effective_sha256",
                   "nginx_plane", "nginx_log_path"):
         item = provenance[field]
         if not isinstance(item, str) or len(item) > 128:

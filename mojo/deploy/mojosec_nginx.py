@@ -91,10 +91,13 @@ def render_receiver_location(proxy_include="/etc/nginx/asgi.inc", indent="    ")
     include = str(proxy_include or "")
     if not _PATH_RE.fullmatch(include):
         raise NginxConfigError("receiver proxy include must be a simple absolute path")
-    return "\n".join([
-        f"{indent}location = {RECEIVER_PATH} {{",
-        f"{indent}    client_max_body_size {RECEIVER_BODY_LIMIT};",
-        f"{indent}    include {include};",
-        f"{indent}    proxy_pass http://asgi_upstream;",
-        f"{indent}}}",
-    ])
+    blocks = []
+    for path in (RECEIVER_PATH, RECEIVER_PATH + "/"):
+        blocks.append("\n".join([
+            f"{indent}location = {path} {{",
+            f"{indent}    client_max_body_size {RECEIVER_BODY_LIMIT};",
+            f"{indent}    include {include};",
+            f"{indent}    proxy_pass http://asgi_upstream;",
+            f"{indent}}}",
+        ]))
+    return "\n".join(blocks)

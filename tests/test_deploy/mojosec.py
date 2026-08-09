@@ -48,6 +48,8 @@ def test_nginx_rejects_ambiguous_proxy_ranges_and_paths(opts):
                  "the exact receiver must use the location-safe proxy include")
     th.assert_in("proxy_pass http://asgi_upstream;", receiver,
                  "the standard receiver must target the deployed ASGI upstream")
+    th.assert_in("location = /api/incident/mojosec/batch/ {", receiver,
+                 "the trailing-slash alias must receive the same wire cap")
     th.assert_true("django.inc" not in receiver,
                    "django.inc declares locations and cannot be nested here")
 
@@ -346,6 +348,35 @@ def test_credential_rotation_accepts_secret_only_on_stdin(opts):
     th.assert_eq(captured["mode"], 0o600, "rotated credentials must be mode 0600")
     th.assert_eq(captured["payload"], b"secret-api-key\n",
                  "stdin token should be atomically normalized with one newline")
+
+
+@th.django_unit_test()
+def test_enrollment_installs_protected_host_identity_from_stdin(opts):
+    from mojo.deploy import mojosec as deploy
+
+    enrollment = {
+        "version": 1, "sensor_id": "i-012345.us-west-2",
+        "endpoint": "https://incident.example/api/incident/mojosec/batch",
+        "nginx_plane": "standard", "trusted_proxy_cidrs": ["10.0.0.0/8"],
+        "fim_allowed_roots": ["/opt/api"],
+    }
+    captured = {}
+    stream = io.TextIOWrapper(
+        io.BytesIO(json.dumps(enrollment).encode()), encoding="utf-8")
+    with mock.patch.object(deploy.os, "geteuid", return_value=0), \
+            mock.patch.object(deploy, "_ensure_dir"), \
+            mock.patch.object(deploy, "_write_if_changed",
+                              side_effect=lambda path, text, mode: captured.update(
+                                  path=path, text=text, mode=mode)):
+        result = deploy.install_enrollment(stream)
+
+    th.assert_eq(captured["path"], deploy.ENROLLMENT_PATH,
+                 "host identity must land only in the root enrollment file")
+    th.assert_eq(captured["mode"], 0o600, "enrollment must be root-only 0600")
+    th.assert_eq(result["sensor_id"], enrollment["sensor_id"],
+                 "installed identity is an infrastructure host, not a tenant")
+    th.assert_true("credential" not in captured["text"].lower(),
+                   "enrollment JSON must never carry the bearer secret")
 
 
 @th.django_unit_test()

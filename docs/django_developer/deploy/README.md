@@ -635,63 +635,104 @@ healthy start every minute while nothing ran.
 
 # MojoSec node deployment
 
-`post_deploy.sh` invokes the installed package directly; it never installs a
-root unit from the group-writable project tree or `var/deploy`:
+`post_deploy.sh` invokes the just-installed package directly (after `pip`, even
+on the first framework upgrade). It never installs a root unit from the
+group-writable project tree or `var/deploy`:
 
 ```bash
 sudo python3 -I -m mojo.deploy.mojosec converge \
-  --mode observe --criticality best_effort \
-  --trusted-proxy-cidrs 10.0.0.0/16
+  --mode observe --criticality required
 ```
 
-`MOJOSEC_MODE` is exactly `off` or `observe`. The packaged deploy defaults to
-`observe`, but enrollment/config/credential validation happens before any unit
-or nginx mutation; an old unenrolled node therefore stays unchanged under the
-default `best_effort` criticality. Use `required` only after provisioning is
-complete. `off` stops/disables only `mojosec.service`, removes its owned nginx
-logging/snippet files, and preserves config, credential, and spool evidence.
-It never discovers/enables a `*.service` glob and never removes OSSEC/Wazuh.
+`MOJOSEC_MODE` is exactly `off` or `observe` and defaults to `off`, so upgrading
+the framework does not enroll legacy nodes or add a noisy log. `required`
+means local convergence (config, nginx validation/reload, and service
+lifecycle) must succeed; it does not require the receiver to be reachable,
+because delivery failures spool durably. `best_effort` returns a visible
+warning and leaves an unenrolled/invalid node operationally unchanged.
+
+The app-managed file is desired policy, not privileged runtime authority. Root
+convergence reads it with `O_NOFOLLOW`, rejects protected fields, merges the
+root-only host enrollment, validates all bounds, and atomically materializes
+the only service-readable config. A changed effective hash restarts the active
+sensor; invalid policy keeps the prior canonical file and service.
 
 | Material | Contract |
 |---|---|
-| `/opt/api/var/mojosec.json` | root:root 0600 strict, non-secret JSON; `node_setup` has one exact recursive exception for this file |
+| `/opt/api/var/mojosec.json` | app-managed, nonsecret desired collectors/FIM/batching policy; never read by the root service |
+| `/etc/mojosec/enrollment.json` | root:root 0600 host identity, exact HTTPS receiver, nginx plane/trusted proxies, and allowed FIM roots |
+| `/etc/mojosec/config.json` | root:root 0600 generated canonical runtime config; never hand-edit |
 | `/etc/mojosec/credential` | root:root 0600 per-installation API key |
 | `/var/lib/mojosec` | root:root 0700 durable SQLite spool; retained across off/rollback |
-| `/run/mojosec/status.json` | root:root 0644 bounded, non-secret health snapshot |
+| `/run/mojosec/status.json` | root:root 0640 bounded health/provenance snapshot; inspect through `sudo check_node` |
 | `/etc/mojosec/expected_changes.json` | optional root:root 0600 exact FIM annotations |
 | `/etc/systemd/system/mojosec.service` | root-owned packaged unit, `python3 -I`, runs as root with systemd hardening |
 
-Rotate a key without exposing it in argv, process listings, config, or logs:
+Install root enrollment and credentials only through stdin:
 
 ```bash
-printf '%s\n' "$NEW_INSTALLATION_API_KEY" | \
-  sudo python3 -I -m mojo.deploy.mojosec rotate-credential
+sudo python3 -I -m mojo.deploy.mojosec install-enrollment < enrollment.json
+sudo python3 -I -m mojo.deploy.mojosec rotate-credential < credential.txt
 ```
 
-Rotate the bearer on the existing protected API-key enrollment row first; the
-stable row/sensor identity preserves receipt history. The node command writes
-atomically and restarts the service only when it is active.
+Neither command prints the secret. For rotation, rotate the bearer centrally
+with an overlap window first, install it on the host, then verify an accepted
+delivery before revoking the old bearer. A failed live restart restores the old
+credential and restarts it; it never prints `ok:true` after a failed restart.
 
 MojoSec's nginx JSON log uses `escape=json`, `$uri` (never query-bearing
 `$request_uri`), no body/referrer/cookie/auth/user-agent fields, and preserves
 both the direct peer (`$realip_remote_addr`) and resolved client
 (`$remote_addr`). Only exact file-configured CIDRs render `set_real_ip_from`.
-The standard EC2 path installs
-`/etc/nginx/snippets/mojosec_receiver.conf`; each API server block must include
-that root-owned snippet. It sets an exact receiver location with a 512 KiB body
-cap using the standard `/etc/nginx/asgi.inc` and `asgi_upstream` contract (not
-`django.inc`, which declares locations and cannot be nested). Edge renders the
-same log and location only when its file-only
-`MOJOSEC_MODE=observe`; Edge defaults off for backward-compatible upgrades.
+The standard EC2 path securely precreates the fixed root:root 0640
+`/var/log/nginx/mojosec.json.log`, installs the generated fragment/snippet, and
+automatically wires the snippet into `/etc/nginx/django.inc`. Sensor endpoints
+must use unslashed `/api/incident/mojosec/batch`; nginx caps both exact slash
+spellings at 512 KiB so a framework redirect/alias cannot bypass the wire cap.
+Edge enrollment uses `nginx_plane=edge`; the log must be beneath
+the file-only `EDGE_LOG_DIR` (default
+`/opt/api/var/edge/log/mojosec.json.log`) so the unprivileged Edge staging
+contract can open it. Edge `MOJOSEC_MODE=off` emits neither log nor route.
 
-The two nginx fragments are transactional: the deploy snapshots their exact
-prior bytes/modes, validates the candidate with `nginx -t`, restores the prior
-graph on failure, and reloads only after validation. Logrotate keeps 14 daily
-files and signals the nginx master with `USR1`. `check_node --section mojosec`
-audits only ownership/mode, lifecycle, and the public bounded status; it never
-opens the credential, spool, or config. Its default `--mojosec-mode auto`
-derives off/observe from the enabled service so legacy nodes remain
-informational.
+Canonical config, managed nginx files, the standard include, log metadata,
+current/retired exact units, deploy state, and lifecycle form one transaction.
+Every failed candidate restores the prior bytes/modes, runs `nginx -t`, and
+reloads the restored graph. Observe must finish active+enabled; off must finish
+inactive+disabled. Off removes the standard security logging graph but
+preserves spool and credentials. OSSEC/Wazuh is never removed.
+
+Logrotate keeps 14 compressed daily files, opens replacements root:root 0640,
+and uses `maxsize 50M` plus nginx `USR1`. `check_node --section mojosec
+--mojosec-mode observe --mojosec-sensor-id <host-id>` uses sudo to inspect only
+bounded status/enrollment projections and metadata; it never opens or prints
+the credential, canonical config, SQLite spool, or FIM manifest. It audits
+status freshness, core collectors, backlog/delivery, generated and active nginx
+contracts, proxy CIDRs, log metadata, and config hashes. Default `auto` keeps
+legacy disabled nodes informational.
+
+## Canary and cleanup
+
+Before enabling observe, create a separate protected `mojosec_ingest` API key,
+install its exact sensor identity in enrollment, place desired policy at
+`/opt/api/var/mojosec.json`, install the credential through stdin, then run
+`converge --mode observe --criticality required`. Observe never bans locally.
+
+For a canary, make one harmless request to a known probe path through the real
+nginx vhost, wait for two poll intervals, and require all of these:
+
+- `check_node` has no MojoSec FAIL, service is active+enabled, and journal/nginx
+  collectors are healthy;
+- the status `delivery_accepted` counter advances and a central
+  `MojoSecReceipt` for the exact infrastructure sensor is published;
+- spool backlog drains, capacity-drop counters stay zero, and there is no
+  sustained retry error;
+- security-log growth stays below the 50 MiB rotation bound and sampled event
+  volume is explainable (probe/denial/5xx/login/FIM), not routine 2xx/404 noise.
+
+Stop a canary with `converge --mode off --criticality required`. This preserves
+evidence and enrollment for diagnosis. Only on a host being destroyed should
+an operator separately remove `/var/lib/mojosec` and `/etc/mojosec`; MojoSec
+cleanup never touches legacy OSSEC.
 
 # `node_setup`
 
@@ -705,7 +746,7 @@ python3 -m mojo.deploy.node_setup --dry-run          # plan only, no root
 
 | Action | What it does |
 |---|---|
-| var dirs | create `var/{logs,pids,keys}`, chown `--owner`, `2775` on directories **including `var/` itself**, `0664` on files; preserve exact `var/mojosec.json` as root:root 0600 |
+| var dirs | create `var/{logs,pids,keys}`, chown `--owner`, `2775` on directories **including `var/` itself**, `0664` on regular files; reject every symlink/non-file and mutate only pinned `O_NOFOLLOW` descriptors |
 | systemd | copy `*.service` **and** `*.timer` whose bytes differ, `daemon-reload` only when something changed, then `enable --now` the **timers** |
 | cron | write `/etc/cron.d/3_mojo_jobs` (0644), whose user field is `--cron-user` |
 

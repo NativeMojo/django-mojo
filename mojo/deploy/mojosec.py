@@ -376,7 +376,12 @@ def _render_django_include(current, enabled):
         text = current.decode("utf-8")
     except UnicodeDecodeError as err:
         raise DeployError(f"{DJANGO_INCLUDE_PATH} must be UTF-8") from err
-    lines = [line for line in text.splitlines()
+    source_lines = text.splitlines()
+    has_marker = any(line.strip() in (DJANGO_RECEIVER_INCLUDE, DJANGO_RECEIVER_COMMENT)
+                     for line in source_lines)
+    if not enabled and not has_marker:
+        return current
+    lines = [line for line in source_lines
              if line.strip() not in (DJANGO_RECEIVER_INCLUDE, DJANGO_RECEIVER_COMMENT)]
     rendered = "\n".join(lines).rstrip()
     if enabled:
@@ -563,6 +568,7 @@ def _prepare_effective_config():
     supplied["config_provenance"] = {
         "source_revision": str(desired.get("policy_revision", ""))[:128],
         "source_sha256": source_sha,
+        "canonical_revision": "v1:" + str(desired.get("policy_revision", ""))[:125],
         "effective_sha256": "",
         "nginx_plane": enrollment["nginx_plane"],
         "nginx_log_path": enrollment["nginx_log_path"],
@@ -600,6 +606,7 @@ def _audit_active_nginx(log_path, proxy_cidrs):
         "log_format mojosec_v1 escape=json",
         f"access_log {log_path} mojosec_v1;",
         f"location = /api/incident/mojosec/batch {{",
+        f"location = /api/incident/mojosec/batch/ {{",
         "client_max_body_size 512k;",
     )
     missing = [item for item in required if item not in active]
@@ -629,14 +636,18 @@ def _retired_unit_snapshot():
 
 
 def _retire_stale_units(snapshot):
+    changed = False
     for name, prior in snapshot.items():
         if prior["enabled"] or prior["active"]:
             _systemctl("disable", "--now", name)
+            changed = True
             if (_systemctl_is("is-enabled", name) or
                     _systemctl_is("is-active", name)):
                 raise DeployError(f"retired unit did not stop and disable: {name}")
         if prior["file"] is not None:
             os.unlink(prior["path"])
+            changed = True
+    return changed
 
 
 def _restore_unit_set(service_path, unit_snapshot, service_state,
@@ -685,7 +696,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         raise DeployError("trusted proxy CIDRs are protected by root enrollment")
     unit_snapshot = service_state = retired_snapshot = None
     nginx_snapshot = deploy_state_snapshot = config_snapshot = None
-    unit_changed = nginx_changed = config_changed = False
+    unit_changed = nginx_changed = config_changed = retired_changed = False
     mutation_started = False
     prepared = None
     try:
@@ -726,7 +737,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         nginx_snapshot = _nginx_snapshot(
             nginx_paths, DEFAULT_LOG_PATH, inspect_log=standard_observe)
         mutation_started = True
-        _retire_stale_units(retired_snapshot)
+        retired_changed = _retire_stale_units(retired_snapshot)
         if prepared is not None:
             config_changed = _write_if_changed(
                 CONFIG_PATH, prepared[1].decode("utf-8"), 0o600)
@@ -738,7 +749,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             django_include_path=django_include_path, snapshot=nginx_snapshot)
         if mode == "observe":
             _audit_active_nginx(runtime_log_path, proxy_cidrs)
-        if unit_changed:
+        if unit_changed or retired_changed:
             _systemctl("daemon-reload")
         if mode == "off":
             _systemctl("disable", "--now", SERVICE)
@@ -764,7 +775,8 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         _write_if_changed(DEPLOY_STATE_PATH,
                           json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
                           0o600)
-        return {"changed": unit_changed or nginx_changed or config_changed, **state}
+        return {"changed": unit_changed or nginx_changed or config_changed or retired_changed,
+                **state}
     except (DeployError, OSError, ValueError) as err:
         rollback_errors = []
         if mutation_started:
