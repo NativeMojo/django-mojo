@@ -193,6 +193,38 @@ The standard GitHub secret name is **`MOJO_DEPLOY_KEY`**. The token belongs to
 the repository's Actions secret store, not to developers' laptops. Merge/push
 to the configured deployment branch is the authorization event.
 
+### First-deploy bootstrap
+
+The WebApp admin UI cannot mint its own key before its first deployment. Run
+the management command against the already-deployed Django platform instead.
+For an existing WebApp (for example MojoVerify Portal, id 1), pipe the token
+straight into GitHub so it never lands in shell history or a file:
+
+```bash
+ssh api-host '/opt/api/.venv/bin/python /opt/api/manage.py webapp_bootstrap \
+  --webapp 1 --token-only' \
+  | gh secret set MOJO_DEPLOY_KEY --repo YOUR_ORG/YOUR_WEBAPP
+
+gh variable set MOJO_API_URL --body 'https://api.example.com' \
+  --repo YOUR_ORG/YOUR_WEBAPP
+gh variable set MOJO_WEBAPP_ID --body '1' \
+  --repo YOUR_ORG/YOUR_WEBAPP
+```
+
+If the WebApp row does not exist yet, the vhost must already exist and the
+release bucket must be in `EDGE_RELEASE_BUCKETS`:
+
+```bash
+python manage.py webapp_bootstrap \
+  --group 123 --slug portal --vhost 456 --bucket edge-releases --token-only
+```
+
+Pipe that stdout into `gh secret set` in the same way. The command writes the
+created `MOJO_WEBAPP_ID` to stderr so it remains visible while stdout carries
+only the token. It refuses to replace an existing key unless `--rotate` is
+explicit. Normal later rotation belongs in **System → DNS → WebApps → Link new
+CI key** in web-mojo admin.
+
 ## Node-side
 
 The desired-state payload gains a `webapps` key — **no second endpoint** — and

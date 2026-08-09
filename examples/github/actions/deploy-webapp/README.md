@@ -9,6 +9,19 @@ Keep the WebApp's linked service credential in the repository or environment
 secret named exactly `MOJO_DEPLOY_KEY`. Developers do not receive the key. The
 credential is exposed only to this deploy step and is never a workflow input.
 
+For the first deployment, bootstrap the credential from the already-running
+Django platform:
+
+```bash
+ssh api-host '/opt/api/.venv/bin/python /opt/api/manage.py webapp_bootstrap \
+  --webapp 42 --token-only' \
+  | gh secret set MOJO_DEPLOY_KEY --repo YOUR_ORG/YOUR_WEBAPP
+```
+
+The management command refuses to rotate an existing key unless `--rotate` is
+explicit. After the first deployment, web-mojo admin provides **Link new CI
+key** on the WebApp detail screen.
+
 ```yaml
 - name: Deploy WebApp
   uses: NativeMojo/django-mojo/examples/github/actions/deploy-webapp@v1

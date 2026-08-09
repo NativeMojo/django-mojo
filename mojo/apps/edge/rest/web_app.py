@@ -39,28 +39,13 @@ def on_webapp_link_key(request):
     fetches by pk and `uses_model_security` does not gate custom actions, so
     without it `manage_webapp` in any group would reach any site.
     """
-    from mojo.apps.account.models import ApiKey
+    from mojo.apps.edge.services import webapp_keys
 
     web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
     WebApp.rest_check_permission_or_raise(
         request, ["SAVE_PERMS", "VIEW_PERMS"], web_app)
 
-    previous = web_app.api_key
-    api_key, token = ApiKey.create_for_group(
-        web_app.group,
-        f"webapp:{web_app.slug}",
-        permissions={"release_webapp": True})
-
-    web_app.api_key = api_key
-    web_app.save()
-
-    if previous is not None:
-        # Hard cutover, no grace window: two live credentials for one site is
-        # exactly the state that makes revocation unprovable. Updating CI is
-        # cheap; an un-revocable second key is not.
-        previous.is_active = False
-        previous.save()
-
-    web_app.log(f"Release key minted for '{web_app.slug}'", "edge:webapp_key")
+    web_app, api_key, token, rotated = webapp_keys.link(
+        web_app, rotate=True)
     return dict(webapp=web_app.pk, api_key=api_key.pk, token=token,
-                revoked_previous=bool(previous))
+                revoked_previous=rotated)
