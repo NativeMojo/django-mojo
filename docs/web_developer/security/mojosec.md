@@ -113,6 +113,33 @@ family/major plus digest, and aggressively redacted sudo command context.
 Bodies, cookies, authorization, arbitrary headers, and raw sensitive strings
 are never part of this protocol evidence or Event projection.
 
+### Native sensor evidence limits and attribution
+
+The protocol rejects an event whose encoded `attributes` exceed 8 KiB. The
+built-in sensor uses a closed per-kind allowlist and reserves 512 bytes, so it
+emits at most 7,680 bytes before spooling or sending. Its raw nginx request
+target is bounded to 2,048 bytes and the raw referrer and user agent to 1,536
+bytes each; a raw sudo command is capped at 2,048 bytes, with 512-byte working
+directory and executable-path caps. Truncated retained values carry
+`<field>_truncated: true` and a full-value `<field>_sha256`; lower-priority
+fields may be absent once the total budget is full.
+
+For nginx observations, the native sender supplies `request_uri`, `host`,
+`referrer`, `user_agent`, `request_time`, `upstream_status`,
+`upstream_response_time`, `remote_addr`, and `peer_addr`, plus timestamp,
+method, and status. The raw request target/referrer/user-agent values stay in
+the protected receipt; the Event receives only the projection described above.
+User-agent text alone is never a detector signal.
+
+Accepted SSH logins establish a `(boot_id, audit_session)` source mapping.
+Sudo uses it only when actor and TTY are compatible; the mapping is retained
+for 30 days with a 4,096-row cap. Without an exact audit-session mapping,
+source attribution is allowed only for one fresh (five-minute), exact
+actor-plus-TTY `who` row.
+`attribution_provenance` is `audit_session`, `who`, or `none`; only the first
+two allow sudo's address to populate `Event.source_ip`. Stale, reused, or
+ambiguous rows therefore remain unattributed.
+
 An `accepted` result also means any required RuleSet handler dispatch has a
 durable receipt outbox job. Queue failure returns `retry`. Request replay and a
 five-minute central replayer recover pending/failed dispatch without duplicate

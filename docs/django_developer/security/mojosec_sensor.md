@@ -19,12 +19,17 @@ package from a root-owned working directory with safe-path mode:
 | Collector | Retained | Intentionally omitted |
 |---|---|---|
 | journald | accepted SSH logins, failed SSH authentication, sudo commands/failures, non-SSH PAM session opens, systemd/kernel failures and OOM activity | routine PAM close chatter and ordinary service notices |
-| structured nginx log | known exploit-path probes, 401/403 denials, and 5xx responses | ordinary 2xx/3xx/404/499 traffic, User-Agent-only suspicion, query strings, referrers, and raw log lines |
+| structured nginx log | known exploit-path probes, 401/403 denials, and 5xx responses; bounded raw request target, referrer, and user agent in root-only sensor state and the protected central receipt | ordinary 2xx/3xx/404/499 traffic, User-Agent-only suspicion, bodies, cookies, authorization, arbitrary headers, and raw log lines |
 | immutable tiered integrity | 60-second host/config FIM, six-hour boot/system-binary FIM, RPM verification, and system-Python package integrity under the packaged `al2023-web-v1` profile | application release trees, MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
 
-Sudo evidence retains the actor, target user, executable path, and a command
-digest. Arguments are never persisted because command lines routinely contain
-passwords, tokens, and other credentials.
+Sudo evidence retains bounded raw command context only in the root-owned sensor
+spool and protected central receipt: actor, target user, TTY, audit context,
+working directory, executable path, and command digest accompany the command.
+The Event projection is separately scrubbed: credentials, sensitive flags and
+environment assignments, JWT/PEM/cloud/high-entropy tokens, URL credentials,
+and query strings are redacted; ambiguous shell syntax projects only an
+executable and digest. Raw command text never enters Event metadata, titles,
+details, ordinary logs, or AI/default graphs.
 
 This catches common automated reconnaissance for WordPress, PHP, ASP/JSP,
 `.env`, `.git`, phpMyAdmin, PHPUnit, actuator, Swagger/OpenAPI, CGI, and similar
@@ -207,6 +212,17 @@ arbitrary headers. Every detector kind has an explicit field allowlist and
 priority order. UTF-8 byte caps, total encoded-attribute budget, truncation
 markers, and full-value SHA-256 digests are applied before SQLite persistence;
 escaped lone-surrogate or oversized Unicode input cannot stall the cursor.
+The wire protocol permits at most 8 KiB of encoded attributes; the native
+sensor reserves 512 bytes and emits at most 7,680 bytes. For web evidence the
+raw request target is capped at 2,048 bytes and raw referrer/user-agent values
+at 1,536 bytes each; a raw sudo command has the same 2,048-byte cap (its
+working directory and executable path are each capped at 512 bytes). A
+retained truncated value gains
+`<field>_truncated: true` and `<field>_sha256`; lower-priority fields may be
+omitted once the total budget is full. The generated nginx stream writes
+`request_uri`, `host`, `referrer`, `user_agent`, `request_time`,
+`upstream_status`, `upstream_response_time`, `remote_addr`, and `peer_addr`
+(along with the timestamp, method, and status).
 High-entropy path segments still use a shared token marker for aggregation.
 Every Event-visible IP, host, method, status, and path participates in the
 fingerprint, so interleaved identities do not collapse into a misleading row.
@@ -220,12 +236,16 @@ detector failures increment the malformed count and do not abort the burst.
 
 Accepted SSH records establish an exact `(boot_id, audit_session)` mapping.
 The entire poll is overlaid before detection, so sudo may correlate to an SSH
-record later in the same poll. Mappings persist in SQLite for at most 30 days
-and 4,096 rows. When audit identity is absent, `who` may attribute sudo only
-for one unique, fresh (five-minute) exact actor-plus-TTY row; stale, reused, or
-ambiguous rows produce no source attribution. Sudo evidence includes bounded
-actor, target, TTY, audit identity, working directory, raw command, executable,
-digest, and attribution provenance.
+record later in the same poll. A match also requires the same actor and a
+compatible TTY. Mappings persist in SQLite for at most 30 days and 4,096 rows.
+When no exact audit-session mapping is available, `who` may attribute sudo
+only for one unique, fresh (five-minute) exact actor-plus-TTY row; stale,
+reused, or ambiguous rows produce no source attribution. Sudo evidence records
+`attribution_provenance` as `audit_session`, `who`, or `none`; only the first
+two may promote the correlated address to `Event.source_ip`. SSH and valid web
+source addresses also populate that canonical Event field. Sudo evidence
+includes bounded actor, target, TTY, audit identity, working directory, raw
+command, executable, digest, and attribution provenance.
 
 On POSIX platforms FIM opens every path component relative to an already-open
 directory descriptor with `O_NOFOLLOW`; files are hashed through that same
