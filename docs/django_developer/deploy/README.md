@@ -727,19 +727,20 @@ with an overlap window first, install it on the host, then verify an accepted
 delivery before revoking the old bearer. A failed live restart restores the old
 credential and restarts it; it never prints `ok:true` after a failed restart.
 
-MojoSec's nginx JSON log uses `escape=json`, `$uri` (never query-bearing
-`$request_uri`), no body/referrer/cookie/auth/user-agent fields, and preserves
-both the direct peer (`$realip_remote_addr`) and resolved client
-(`$remote_addr`). Only exact file-configured CIDRs render `set_real_ip_from`.
-The standard EC2 path securely precreates the fixed root:root 0640
-`/var/log/nginx/mojosec.json.log`, installs the generated fragment/snippet, and
-automatically wires the snippet into `/etc/nginx/django.inc`. Sensor endpoints
+MojoSec's nginx JSON log uses `escape=json` and retains bounded raw request URI,
+referrer, user agent, host, method/status, upstream status/timing, request
+timing, direct peer (`$realip_remote_addr`), and resolved client
+(`$remote_addr`). It never includes bodies, cookies, authorization, or
+arbitrary headers. Only exact file-configured CIDRs render `set_real_ip_from`.
+Both standard and Edge planes securely use the fixed root:root 0600
+`/var/log/nginx/mojosec.json.log`; the standard plane installs the generated
+fragment/snippet and wires it into `/etc/nginx/django.inc`, while Edge renders
+the same shared format in its owned configuration. Sensor endpoints
 must use unslashed `/api/incident/mojosec/batch`; nginx caps both exact slash
 spellings at 512 KiB so a framework redirect/alias cannot bypass the wire cap.
-Edge enrollment uses `nginx_plane=edge`; the log must be beneath
-the file-only `EDGE_LOG_DIR` (default
-`/opt/api/var/edge/log/mojosec.json.log`) so the unprivileged Edge staging
-contract can open it. Edge `MOJOSEC_MODE=off` emits neither log nor route.
+Edge enrollment uses `nginx_plane=edge`. Its unprivileged staged `nginx -t`
+copy disables access logs; the authoritative root validation checks the real
+protected path. Edge `MOJOSEC_MODE=off` emits neither log nor route.
 
 Canonical config, managed nginx files, the standard include, log metadata,
 current/retired exact units, deploy state, and lifecycle form one transaction.
@@ -749,8 +750,8 @@ inactive+disabled. Off removes the standard security logging graph but
 preserves spool and credentials. OSSEC/Wazuh is never removed.
 
 Logrotate keeps 14 compressed daily files and uses `copytruncate` so nginx
-continues writing the securely precreated root:root 0640 inode. Rotated copies
-stay root:root and non-world-accessible; there is no nginx `USR1` reopen that
+continues writing the securely precreated root:root 0600 inode. Rotated copies
+stay root:root 0600; there is no nginx `USR1` reopen that
 would chown the active file to its worker. `copytruncate` has an unavoidable
 narrow copy/truncate race in which a line written by nginx can be absent from
 both files; this is preferred to making the web worker owner of security
@@ -801,7 +802,7 @@ then exercise every collector:
 5. Restart `mojosec.service`; require the same sensor identity, config hashes,
    durable cursor/FIM baseline, and backlog/delivery counters afterward.
 6. Run `logrotate -f /etc/logrotate.d/mojosec`; require the active inode and
-   root:root 0640 metadata to remain unchanged, its size to reset, and a
+   root:root 0600 metadata to remain unchanged, its size to reset, and a
    subsequent probe line to appear without restarting/reopening nginx. Require
    every archive to be regular root:root with no world access, and require the
    collector cursor to reset and continue without a sustained error, malformed

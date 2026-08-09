@@ -20,6 +20,7 @@ from mojo.deploy.mojosec_nginx import (
     DEFAULT_LOG_PATH, render_http_log, render_receiver_location,
     trusted_proxy_cidrs,
 )
+from mojo.mojosec.collectors.nginx import MAX_STRUCTURED_LINE_BYTES
 
 
 SERVICE = "mojosec.service"
@@ -126,6 +127,7 @@ LOGROTATE_TEXT = """/var/log/nginx/mojosec.json.log {
     delaycompress
     copytruncate
     su root root
+    create 0600 root root
 }
 """
 
@@ -406,7 +408,7 @@ def _ensure_security_log(path):
     flags = (os.O_WRONLY | os.O_APPEND | os.O_CREAT |
              getattr(os, "O_NOFOLLOW", 0))
     try:
-        descriptor = os.open(path, flags, 0o640)
+        descriptor = os.open(path, flags, 0o600)
     except OSError as err:
         raise DeployError(f"cannot securely create security log {path}: {err}") from err
     try:
@@ -414,10 +416,10 @@ def _ensure_security_log(path):
         if not stat.S_ISREG(info.st_mode):
             raise DeployError(f"security log must be a regular file: {path}")
         os.fchown(descriptor, 0, 0)
-        os.fchmod(descriptor, 0o640)
+        os.fchmod(descriptor, 0o600)
     finally:
         os.close(descriptor)
-    return prior != (0, 0, 0o640)
+    return prior != (0, 0, 0o600)
 
 
 def _restore_security_log(path, snapshot):
@@ -479,13 +481,15 @@ def _restore_nginx(snapshot, log_path):
 
 def _converge_nginx(enabled, log_path, proxy_cidrs, nginx_path,
                     receiver_snippet_path, logrotate_path=LOGROTATE_PATH,
-                    django_include_path=DJANGO_INCLUDE_PATH, snapshot=None):
+                    django_include_path=DJANGO_INCLUDE_PATH, snapshot=None,
+                    rotation_enabled=None):
     """Install/remove the owned nginx graph as one validated transaction."""
     if log_path != DEFAULT_LOG_PATH:
         raise DeployError(f"standard MojoSec log path must be {DEFAULT_LOG_PATH}")
     paths = (nginx_path, receiver_snippet_path, logrotate_path,
              django_include_path)
     snapshot = snapshot or _nginx_snapshot(paths, log_path, inspect_log=enabled)
+    rotation_enabled = enabled if rotation_enabled is None else rotation_enabled
     changed = False
     try:
         if enabled:
@@ -494,10 +498,13 @@ def _converge_nginx(enabled, log_path, proxy_cidrs, nginx_path,
                 nginx_path, render_http_log(log_path, proxy_cidrs), 0o644)
             changed |= _write_if_changed(
                 receiver_snippet_path, render_receiver_location() + "\n", 0o644)
+        else:
+            for path in (nginx_path, receiver_snippet_path):
+                changed |= _remove_owned(path)
+        if rotation_enabled:
             changed |= _write_if_changed(logrotate_path, LOGROTATE_TEXT, 0o644)
         else:
-            for path in (nginx_path, receiver_snippet_path, logrotate_path):
-                changed |= _remove_owned(path)
+            changed |= _remove_owned(logrotate_path)
         django_snapshot = snapshot["files"][django_include_path]
         if django_snapshot is None:
             if enabled:
@@ -599,7 +606,9 @@ def _validate_enrollment(enrollment):
         edge_root = _normal_path(enrollment.get("edge_log_dir", EDGE_LOG_DIR),
                                  "enrollment edge_log_dir")
         enrollment["edge_log_dir"] = edge_root
-        enrollment["nginx_log_path"] = edge_root + "/mojosec.json.log"
+        # Edge's ordinary logs remain app-owned, but raw MojoSec ingress must
+        # use the same root-owned master-opened file as the standard plane.
+        enrollment["nginx_log_path"] = DEFAULT_LOG_PATH
     return enrollment
 
 
@@ -639,6 +648,7 @@ def _prepare_effective_config():
     if "paths" in nginx and nginx["paths"] != [enrollment["nginx_log_path"]]:
         raise DeployError("desired config cannot override the dedicated nginx log path")
     nginx["paths"] = [enrollment["nginx_log_path"]]
+    nginx["max_line_bytes"] = MAX_STRUCTURED_LINE_BYTES
     fim = collectors.setdefault("fim", {"enabled": False})
     if not isinstance(fim, dict):
         raise DeployError("desired collectors.fim must be an object")
@@ -841,7 +851,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                             else DEFAULT_LOG_PATH)
         standard_observe = mode == "observe" and nginx_plane == "standard"
         nginx_snapshot = _nginx_snapshot(
-            nginx_paths, DEFAULT_LOG_PATH, inspect_log=standard_observe)
+            nginx_paths, DEFAULT_LOG_PATH, inspect_log=mode == "observe")
         mutation_started = True
         retired_changed = _retire_stale_units(retired_snapshot)
         if prepared is not None:
@@ -849,10 +859,15 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 CONFIG_PATH, prepared[1].decode("utf-8"), 0o600)
             _audit_config()
         unit_changed = _write_if_changed(service_path, UNIT_TEXT, 0o644)
+        edge_log_changed = False
+        if mode == "observe" and nginx_plane == "edge":
+            edge_log_changed = _ensure_security_log(DEFAULT_LOG_PATH)
         nginx_changed = _converge_nginx(
             standard_observe, DEFAULT_LOG_PATH, proxy_cidrs,
             nginx_path, receiver_snippet_path,
-            django_include_path=django_include_path, snapshot=nginx_snapshot)
+            django_include_path=django_include_path, snapshot=nginx_snapshot,
+            rotation_enabled=mode == "observe")
+        nginx_changed |= edge_log_changed
         if mode == "observe":
             _audit_active_nginx(runtime_log_path, proxy_cidrs)
         if unit_changed or retired_changed:

@@ -1,7 +1,9 @@
 """Strict SSH-session attribution for journal evidence."""
 
 import datetime
+import os
 import re
+import selectors
 import subprocess
 import time
 
@@ -9,15 +11,22 @@ from .events import valid_ip
 
 
 WHO_FRESH_SECONDS = 5 * 60
+WHO_MAX_BYTES = 128 * 1024
+WHO_MAX_LINES = 4096
+WHO_TIMEOUT_SECONDS = 2
 _BOOT_ID = re.compile(r"^[a-f0-9]{32}$")
 _USER = re.compile(r"^[A-Za-z0-9_.@-]{1,128}$")
 _TTY = re.compile(r"^[A-Za-z0-9_.\-/]{1,96}$")
-_SSH_ACCEPTED = re.compile(
-    r"Accepted (?P<method>\S+) for (?P<user>\S+) from (?P<ip>\S+) port \d+", re.I)
 _MESSAGE_TTY = re.compile(r"(?:^|;)\s*TTY=(?P<tty>[^ ;]+)")
 _WHO_LINE = re.compile(
     r"^(?P<user>\S+)\s+(?P<tty>\S+)\s+(?P<date>\d{4}-\d{2}-\d{2})\s+"
     r"(?P<time>\d{2}:\d{2})(?:\s+(?:\([^)]*\)|\S+))?\s*$")
+_AUDIT_TYPES = {"USER_START", "USER_LOGIN"}
+_AUDIT_TYPE_NUMBERS = {"1105", "1112"}
+_TRUSTED_EXES = {
+    "sshd": {"/usr/sbin/sshd", "/usr/bin/sshd"},
+    "sudo": {"/usr/bin/sudo", "/usr/sbin/sudo"},
+}
 
 
 def canonical_user(value):
@@ -61,35 +70,121 @@ def record_time(record):
         return None
 
 
+def _audit_value(message, name):
+    match = re.search(
+        rf"(?:^|\s){re.escape(name)}=(?:\"([^\"]*)\"|'([^']*)'|([^\s']+))",
+        message)
+    if not match:
+        return ""
+    return next((value for value in match.groups() if value is not None), "")
+
+
+def trusted_journal_source(record, service):
+    """Require kernel/journald-owned identity fields for auth text parsing."""
+    if service not in _TRUSTED_EXES or str(record.get("_UID", "")) != "0":
+        return False
+    exe = str(record.get("_EXE") or "")
+    comm = str(record.get("_COMM") or "")
+    unit = str(record.get("_SYSTEMD_UNIT") or "")
+    return bool(
+        exe in _TRUSTED_EXES[service] or
+        comm == service and unit in ("", service + ".service")
+    )
+
+
 def ssh_session(record):
-    match = _SSH_ACCEPTED.search(str(record.get("MESSAGE") or ""))
+    if str(record.get("_TRANSPORT") or "") != "audit":
+        return None
+    audit_type = str(record.get("_AUDIT_TYPE_NAME") or
+                     record.get("AUDIT_TYPE_NAME") or "").upper()
+    audit_number = str(record.get("_AUDIT_TYPE") or record.get("AUDIT_TYPE") or "")
+    if audit_type not in _AUDIT_TYPES and audit_number not in _AUDIT_TYPE_NUMBERS:
+        return None
+    if str(record.get("_UID", "")) != "0":
+        return None
+    message = str(record.get("MESSAGE") or "")
+    if (_audit_value(message, "res").lower() != "success" or
+            _audit_value(message, "terminal").lower() != "ssh" or
+            _audit_value(message, "exe") not in _TRUSTED_EXES["sshd"]):
+        return None
     context = audit_context(record)
-    if (not match or not context["boot_id"] or context["audit_session"] is None or
-            not valid_ip(match.group("ip")) or not canonical_user(match.group("user"))):
+    actor = canonical_user(_audit_value(message, "acct"))
+    source_ip = valid_ip(_audit_value(message, "addr"))
+    if (not context["boot_id"] or context["audit_session"] is None or
+            not source_ip or not actor):
         return None
     return {
         "boot_id": context["boot_id"],
         "audit_session": context["audit_session"],
-        "actor": canonical_user(match.group("user")),
+        "actor": actor,
         "tty": context["tty"],
-        "source_ip": valid_ip(match.group("ip")),
+        "source_ip": source_ip,
         "observed_at": record_time(record) or time.time(),
+        "ambiguous": False,
     }
 
 
-def load_who_sessions(now=None):
-    """Return strict `who` candidates; failures merely disable fallback."""
+def _who_output(command):
     try:
-        done = subprocess.run(
-            ["/usr/bin/who", "--ips", "--time-format=iso"], capture_output=True,
-            text=True, timeout=2, check=False)
-    except (OSError, subprocess.SubprocessError):
+        process = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, env={
+                "LC_ALL": "C", "LANG": "C", "PATH": "/usr/bin:/bin",
+            }, bufsize=0)
+    except OSError:
+        return None
+    selector = selectors.DefaultSelector()
+    output = bytearray()
+    deadline = time.monotonic() + WHO_TIMEOUT_SECONDS
+    selector.register(process.stdout, selectors.EVENT_READ)
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                process.wait()
+                return None
+            ready = selector.select(min(remaining, 0.1))
+            if not ready:
+                continue
+            chunk = os.read(process.stdout.fileno(), 8192)
+            if not chunk:
+                selector.unregister(process.stdout)
+                continue
+            if (len(output) + len(chunk) > WHO_MAX_BYTES or
+                    output.count(b"\n") + chunk.count(b"\n") > WHO_MAX_LINES):
+                process.kill()
+                process.wait()
+                return None
+            output.extend(chunk)
+        try:
+            returncode = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            return None
+    finally:
+        selector.close()
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    return bytes(output) if returncode == 0 else None
+
+
+def load_who_sessions(now=None, command=None):
+    """Return strict `who` candidates; failures merely disable fallback."""
+    payload = _who_output(command or [
+        "/usr/bin/who", "--ips", "--time-format=iso",
+    ])
+    if payload is None:
         return []
-    if done.returncode:
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
         return []
     local_tz = datetime.datetime.now().astimezone().tzinfo
     rows = []
-    for line in done.stdout.splitlines()[:4096]:
+    for line in text.splitlines():
         match = _WHO_LINE.fullmatch(line.strip())
         if not match:
             continue
@@ -111,13 +206,41 @@ def load_who_sessions(now=None):
     return rows
 
 
+def merge_session(existing, incoming):
+    """Merge one audit identity; every conflict is a sticky tombstone."""
+    incoming = dict(incoming)
+    if existing is None:
+        incoming["ambiguous"] = bool(incoming.get("ambiguous"))
+        return incoming
+    existing = dict(existing)
+    observed_at = max(float(existing.get("observed_at", 0)),
+                      float(incoming.get("observed_at", 0)))
+    conflict = bool(existing.get("ambiguous") or incoming.get("ambiguous"))
+    conflict = conflict or existing.get("actor") != incoming.get("actor")
+    conflict = conflict or existing.get("source_ip") != incoming.get("source_ip")
+    old_tty = existing.get("tty") or ""
+    new_tty = incoming.get("tty") or ""
+    conflict = conflict or bool(old_tty and new_tty and old_tty != new_tty)
+    if conflict:
+        return {
+            "boot_id": incoming.get("boot_id") or existing.get("boot_id"),
+            "audit_session": incoming.get("audit_session", existing.get("audit_session")),
+            "actor": "", "tty": "", "source_ip": "",
+            "observed_at": observed_at, "ambiguous": True,
+        }
+    existing["tty"] = old_tty or new_tty
+    existing["observed_at"] = observed_at
+    existing["ambiguous"] = False
+    return existing
+
+
 class AttributionResolver:
     def __init__(self, persisted=None, who_sessions=None):
         self.sessions = {}
         for row in persisted or ():
             key = (row.get("boot_id"), row.get("audit_session"))
             if key[0] and key[1] is not None:
-                self.sessions[key] = dict(row)
+                self.sessions[key] = merge_session(self.sessions.get(key), row)
         self.who_sessions = who_sessions
         self.new_sessions = []
 
@@ -126,8 +249,10 @@ class AttributionResolver:
             found = ssh_session(record)
             if found is None:
                 continue
-            self.sessions[(found["boot_id"], found["audit_session"])] = found
-            self.new_sessions.append(found)
+            key = (found["boot_id"], found["audit_session"])
+            merged = merge_session(self.sessions.get(key), found)
+            self.sessions[key] = merged
+            self.new_sessions.append(merged)
         return self.new_sessions
 
     def resolve(self, record, actor, tty):
@@ -136,7 +261,7 @@ class AttributionResolver:
         context = audit_context(record)
         key = (context["boot_id"], context["audit_session"])
         session = self.sessions.get(key) if key[0] and key[1] is not None else None
-        if (session and session.get("actor") == actor and
+        if (session and not session.get("ambiguous") and session.get("actor") == actor and
                 (not tty or not session.get("tty") or session.get("tty") == tty)):
             return session["source_ip"], "audit_session", context
 

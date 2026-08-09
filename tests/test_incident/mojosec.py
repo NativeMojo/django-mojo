@@ -1,6 +1,7 @@
 import copy
 from concurrent.futures import ThreadPoolExecutor
 import gzip
+import hashlib
 import json
 import os
 from unittest import mock
@@ -81,6 +82,25 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
         "upstream_status": "502, 200",
         "upstream_response_time": "1.100, 0.100",
     })
+    sudo_secret = "receipt-only-short-secret"
+    sudo_command = (
+        "/usr/bin/curl -H 'Authorization: Bearer auth-secret' "
+        f"mysql -pdb-secret {sudo_secret}")
+    sudo_event = copy.deepcopy(batch["events"][0])
+    sudo_event.update({
+        "id": "0" * 64, "kind": "auth.sudo_command", "severity": "high",
+        "summary": "Privileged sudo command executed", "count": 1,
+        "recommendation": "review",
+        "attributes": {
+            "source_ip": "192.0.2.44", "actor": "deploy", "target_user": "root",
+            "tty": "pts/3", "boot_id": "a" * 32, "audit_session": 93,
+            "attribution_provenance": "audit_session", "cwd": "/opt/api",
+            "command_path": "/usr/bin/curl",
+            "command_sha256": hashlib.sha256(sudo_command.encode()).hexdigest(),
+            "command": sudo_command,
+        },
+    })
+    batch["events"].append(sudo_event)
     body = gzip.compress(json.dumps(batch).encode("utf-8"))
     _use_apikey(opts, opts.mojosec_token)
     response = opts.client.post(
@@ -93,18 +113,20 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
                  f"an enrolled MojoSec key should ingest a gzip batch: {response.response}")
     th.assert_eq(response.response.schema, "mojosec.ack",
                  "the receiver must return the shared acknowledgement schema without wrappers")
-    th.assert_eq(len(response.response.results), 2,
+    th.assert_eq(len(response.response.results), 3,
                  "the receiver must acknowledge every event in the batch")
     th.assert_eq(
-        MojoSecReceipt.objects.filter(sensor_id=SENSOR_ID, publish_state="published").count(), 2,
+        MojoSecReceipt.objects.filter(sensor_id=SENSOR_ID, publish_state="published").count(), 3,
         "accepted acknowledgements must have durable published receipts")
     th.assert_eq(
-        Event.objects.filter(metadata__mojosec__sensor_id=SENSOR_ID).count(), 2,
+        Event.objects.filter(metadata__mojosec__sensor_id=SENSOR_ID).count(), 3,
         "the batch should create one bounded central Event projection per wire event")
 
     probe = Event.objects.get(metadata__mojosec__event_id="e" * 64)
     login = Event.objects.get(metadata__mojosec__event_id="d" * 64)
     receipt = MojoSecReceipt.objects.get(wire_event_id="e" * 64)
+    sudo_receipt = MojoSecReceipt.objects.get(wire_event_id="0" * 64)
+    sudo_projected = Event.objects.get(metadata__mojosec__event_id="0" * 64)
     th.assert_eq(probe.source_ip, "198.51.100.7",
                  "an eligible detector kind should promote its validated source IP")
     th.assert_eq(login.source_ip, "192.0.2.20",
@@ -122,6 +144,17 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
     th.assert_true("must-stay-protected" not in projected and
                    "must-not-project" not in projected,
                    "raw request secrets must never enter Event metadata")
+    th.assert_in(sudo_secret, sudo_receipt.replay_features["event"]["attributes"]["command"],
+                 "bounded raw sudo context must remain only in the protected receipt")
+    sudo_visible = json.dumps(sudo_projected.metadata, sort_keys=True)
+    for secret in (sudo_secret, "auth-secret", "db-secret"):
+        th.assert_true(secret not in sudo_visible and
+                       hashlib.sha256(secret.encode()).hexdigest()[:12] not in sudo_visible,
+                       "sudo secrets and per-token digests must not enter Event metadata")
+    th.assert_eq(
+        sudo_projected.metadata["mojosec"]["evidence"]["command"]["sha256"],
+        hashlib.sha256(sudo_command.encode()).hexdigest(),
+        "Event evidence should retain only the sensor's full-command digest")
     th.assert_eq(probe.metadata["mojosec"]["evidence"]["referrer_origin"],
                  "https://example.invalid",
                  "central projection should retain only the validated HTTP origin")

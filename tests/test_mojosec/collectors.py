@@ -55,6 +55,7 @@ def _journal_config(max_records=10, max_bytes=65536):
 def _journal_record(cursor, source_ip):
     return {
         "__CURSOR": cursor, "SYSLOG_IDENTIFIER": "sshd",
+        "_UID": "0", "_COMM": "sshd", "_EXE": "/usr/sbin/sshd",
         "MESSAGE": f"Accepted publickey for deploy from {source_ip} port 50221 ssh2",
     }
 
@@ -90,6 +91,7 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
 
     accepted = detect_journal({
         "SYSLOG_IDENTIFIER": "sshd",
+        "_UID": "0", "_COMM": "sshd", "_EXE": "/usr/sbin/sshd",
         "MESSAGE": "Accepted publickey for deploy from 192.0.2.8 port 50221 ssh2",
         "__REALTIME_TIMESTAMP": "1786190400000000",
     })
@@ -102,6 +104,7 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
 
     failed = detect_journal({
         "SYSLOG_IDENTIFIER": "sshd",
+        "_UID": "0", "_COMM": "sshd", "_EXE": "/usr/sbin/sshd",
         "_SYSTEMD_UNIT": "session-187.scope",
         "MESSAGE": "Failed password for invalid user admin from 198.51.100.9 port 43812 ssh2",
     })
@@ -111,7 +114,8 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
                  "repeated SSH failures should be aggregated before delivery")
 
     facility_only = detect_journal({
-        "SYSLOG_FACILITY": "10", "_SYSTEMD_UNIT": "session-201.scope",
+        "SYSLOG_FACILITY": "10", "_SYSTEMD_UNIT": "sshd.service",
+        "_UID": "0", "_COMM": "sshd", "_EXE": "/usr/sbin/sshd",
         "MESSAGE": "Accepted publickey for deploy from 203.0.113.8 port 50221 ssh2",
     })
     th.assert_eq(facility_only["kind"], "auth.ssh_login",
@@ -120,6 +124,7 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
     sudo = detect_journal({
         "SYSLOG_IDENTIFIER": "sudo", "SYSLOG_FACILITY": "10",
         "_SYSTEMD_UNIT": "session-202.scope",
+        "_UID": "0", "_COMM": "sudo", "_EXE": "/usr/bin/sudo",
         "MESSAGE": "deploy : TTY=pts/0 ; PWD=/opt/api ; USER=root ; COMMAND=/usr/bin/systemctl restart api",
     })
     th.assert_eq(sudo["kind"], "auth.sudo_command",
@@ -131,6 +136,7 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
     secret = "top-secret-password"
     sensitive_sudo = detect_journal({
         "SYSLOG_IDENTIFIER": "sudo", "SYSLOG_FACILITY": "10",
+        "_UID": "0", "_COMM": "sudo", "_EXE": "/usr/bin/sudo",
         "MESSAGE": f"deploy : USER=root ; COMMAND=/usr/bin/curl --password {secret} https://example.invalid",
     })
     encoded = json.dumps(sensitive_sudo)
@@ -138,6 +144,14 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
                    "raw bounded command evidence must reach only the protected receipt layer")
     th.assert_eq(sensitive_sudo["attributes"]["command_path"], "/usr/bin/curl",
                  "sudo evidence should retain only the invoked executable path")
+
+    for forged in (
+            {"SYSLOG_IDENTIFIER": "sshd", "_UID": "1000", "_COMM": "python3",
+             "MESSAGE": "Accepted publickey for deploy from 192.0.2.99 port 1 ssh2"},
+            {"SYSLOG_IDENTIFIER": "sudo", "_UID": "1000", "_COMM": "python3",
+             "MESSAGE": "deploy : TTY=pts/0 ; USER=root ; COMMAND=/usr/bin/id"}):
+        th.assert_eq(detect_journal(forged), None,
+                     "user-controlled journal identifiers/messages must not forge auth events")
 
 
 @th.django_unit_test()
@@ -336,6 +350,45 @@ def test_nginx_poison_numeric_is_counted_without_stalling_cursor(opts):
                      "a poison nginx record must not suppress the following valid event")
         th.assert_eq(result["cursor"][path]["offset"], os.path.getsize(path),
                      "the nginx cursor must advance past rejected records so they cannot stall collection")
+
+
+@th.django_unit_test()
+def test_nginx_rich_line_cap_accepts_header_limits_and_rejects_overflow(opts):
+    from mojo.mojosec.collectors.nginx import MAX_STRUCTURED_LINE_BYTES, NginxCollector
+
+    with tempfile.TemporaryDirectory() as root:
+        path = os.path.join(root, "security.json.log")
+        rich = {
+            "status": 500, "method": "GET",
+            "request_uri": "/wp-login.php?" + "q" * 8192,
+            "referrer": "https://example.invalid/" + "r" * 8192,
+            "user_agent": "Agent/1 " + "u" * 8192,
+            "host": "example.invalid",
+        }
+        encoded = json.dumps(rich).encode() + b"\n"
+        th.assert_true(len(encoded) > 16 * 1024,
+                       "regression input must exceed the retired 16 KiB ceiling")
+        with open(path, "wb") as handle:
+            handle.write(encoded)
+        collector = NginxCollector({
+            "paths": [path], "max_bytes_per_poll": 2 * MAX_STRUCTURED_LINE_BYTES,
+            "max_line_bytes": MAX_STRUCTURED_LINE_BYTES,
+        })
+        result = collector.poll()
+        th.assert_eq(len(result["observations"]), 1,
+                     "valid nginx-header-limit evidence must reach the per-kind byte builder")
+        th.assert_true(result["observations"][0]["attributes"].get("request_uri_truncated"),
+                       "the evidence builder, not ingress, must bound a rich request target")
+
+        overflow = b'{"padding":"' + b"x" * MAX_STRUCTURED_LINE_BYTES + b'"}\n'
+        valid = json.dumps({
+            "status": 502, "method": "GET", "request_uri": "/after-overflow",
+        }).encode() + b"\n"
+        with open(path, "wb") as handle:
+            handle.write(overflow + valid)
+        result = collector.poll()
+        th.assert_eq((result["malformed"], len(result["observations"])), (1, 1),
+                     "derived-cap overflow must fail closed without wedging the next record")
 
 
 @th.django_unit_test()

@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import sys
 import tempfile
 import time
 from unittest import mock
@@ -116,11 +117,14 @@ def test_ssh_session_overlay_fallback_freshness_and_ambiguity(opts):
     timestamp = 1786190400000000
     ssh = {
         "_BOOT_ID": "a" * 32, "_AUDIT_SESSION": "77", "_TTY": "pts/4",
+        "_TRANSPORT": "audit", "_AUDIT_TYPE_NAME": "USER_LOGIN", "_UID": "0",
         "__REALTIME_TIMESTAMP": str(timestamp),
-        "MESSAGE": "Accepted publickey for deploy from 192.0.2.8 port 5000 ssh2",
+        "MESSAGE": ('op=login acct="deploy" exe="/usr/sbin/sshd" '
+                    'addr=192.0.2.8 terminal=ssh res=success'),
     }
     sudo = {
         "_BOOT_ID": "a" * 32, "_AUDIT_SESSION": "77",
+        "_UID": "0", "_COMM": "sudo", "_EXE": "/usr/bin/sudo",
         "__REALTIME_TIMESTAMP": str(timestamp + 10 * 1000000),
         "MESSAGE": "deploy : TTY=pts/4 ; USER=root ; COMMAND=/usr/bin/id",
     }
@@ -146,6 +150,32 @@ def test_ssh_session_overlay_fallback_freshness_and_ambiguity(opts):
     th.assert_eq(AttributionResolver([], [fresh, dict(fresh)]).resolve(
         fallback, "deploy", "pts/4")[:2], ("", "none"),
         "ambiguous who rows must never attribute a source")
+
+    forged = dict(ssh, _TRANSPORT="journal")
+    th.assert_eq(AttributionResolver([], []).overlay([forged]), [],
+                 "an accepted-looking user journal message must not establish audit identity")
+
+
+@th.django_unit_test()
+def test_who_fallback_is_stream_bounded_and_times_out_closed(opts):
+    import mojo.mojosec.attribution as attribution
+
+    valid = attribution.load_who_sessions(command=[
+        sys.executable, "-c",
+        "print('deploy pts/4 2026-08-09 12:00 (198.51.100.9)')",
+    ])
+    th.assert_eq(valid[0]["source_ip"], "198.51.100.9",
+                 "one bounded C-locale who row should parse")
+    overflow = attribution.load_who_sessions(command=[
+        sys.executable, "-c",
+        f"import sys;sys.stdout.write('x'*{attribution.WHO_MAX_BYTES + 1})",
+    ])
+    th.assert_eq(overflow, [], "who byte overflow must kill capture and fail closed")
+    with mock.patch.object(attribution, "WHO_TIMEOUT_SECONDS", 0.05):
+        timed_out = attribution.load_who_sessions(command=[
+            sys.executable, "-c", "import time;time.sleep(1)",
+        ])
+    th.assert_eq(timed_out, [], "a stalled who process must be killed and fail closed")
 
 
 @th.django_unit_test()
@@ -177,6 +207,55 @@ def test_ssh_session_store_is_atomic_persistent_ttl_and_capped(opts):
                      "cursor and session overlay must survive one atomic restart")
         th.assert_eq(len(restarted.load_ssh_sessions(now=now)), SSH_SESSION_CAP,
                      "bounded session correlation must survive restart")
+        restarted.close()
+
+
+@th.django_unit_test()
+def test_ssh_session_conflict_is_sticky_across_overlay_and_restart(opts):
+    from mojo.mojosec.attribution import AttributionResolver
+    from mojo.mojosec.store import Store
+
+    first = {
+        "boot_id": "a" * 32, "audit_session": 91, "actor": "deploy",
+        "tty": "pts/1", "source_ip": "192.0.2.10", "observed_at": time.time(),
+    }
+    conflict = dict(first, source_ip="192.0.2.11")
+    resolver = AttributionResolver([first])
+    conflict_record = {
+        "_BOOT_ID": first["boot_id"], "_AUDIT_SESSION": 91, "_TTY": "pts/1",
+        "_TRANSPORT": "audit", "_AUDIT_TYPE_NAME": "USER_START", "_UID": "0",
+        "__REALTIME_TIMESTAMP": str(int(time.time() * 1000000)),
+        "MESSAGE": ('acct="deploy" exe="/usr/sbin/sshd" addr=192.0.2.11 '
+                    'terminal=ssh res=success'),
+    }
+    resolver.overlay([conflict_record, dict(
+        conflict_record,
+        MESSAGE=('acct="deploy" exe="/usr/sbin/sshd" addr=192.0.2.10 '
+                 'terminal=ssh res=success'))])
+    th.assert_eq(resolver.resolve({
+        "_BOOT_ID": first["boot_id"], "_AUDIT_SESSION": 91,
+        "__REALTIME_TIMESTAMP": str(int(time.time() * 1000000)),
+    }, "deploy", "pts/1")[:2], ("", "none"),
+        "a conflicting audit identity must immediately become ambiguous")
+
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        store = Store(root, "sensor", AGGREGATION, DELIVERY)
+        store.ingest([], ssh_sessions=[first, conflict])
+        row = store.load_ssh_sessions()[0]
+        th.assert_true(bool(row["ambiguous"]),
+                       "SQLite must persist a conflicting key as an ambiguous tombstone")
+        store.ingest([], ssh_sessions=[first])
+        store.close()
+        restarted = Store(root, "sensor", AGGREGATION, DELIVERY)
+        row = restarted.load_ssh_sessions()[0]
+        th.assert_true(bool(row["ambiguous"]),
+                       "later matching rows and restart must never restabilize a tombstone")
+        th.assert_eq(AttributionResolver([row]).resolve({
+            "_BOOT_ID": first["boot_id"], "_AUDIT_SESSION": 91,
+            "__REALTIME_TIMESTAMP": str(int(time.time() * 1000000)),
+        }, "deploy", "pts/1")[:2], ("", "none"),
+            "a restarted ambiguous identity must remain unusable")
         restarted.close()
 
 

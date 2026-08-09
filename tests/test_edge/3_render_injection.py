@@ -297,6 +297,8 @@ def test_edge_mojosec_mode_contract(opts):
         "Edge security logging must use the shared bounded raw request target"
     assert '"user_agent":"$http_user_agent"' in security_log, \
         "Edge security logging must match the standard rich evidence renderer"
+    assert "access_log /var/log/nginx/mojosec.json.log mojosec_v1;" in security_log, \
+        "Edge raw evidence must use the root-owned nginx master-opened path"
     assert "set_real_ip_from 10.0.0.0/8;" in observed_base, \
         "Edge observe mode omitted its exact trusted-proxy boundary"
 

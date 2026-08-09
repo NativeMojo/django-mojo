@@ -1,4 +1,5 @@
 import json
+import hashlib
 
 from testit import helpers as th
 
@@ -12,13 +13,16 @@ def test_mojosec_sudo_projection_redacts_adversarial_secret_classes(opts):
         "hunter2", "eyJhbGciOiJIUzI1NiJ9.abcdefghijk.signature123",
         "AKIAABCDEFGHIJKLMNOP", "ghp_abcdefghijklmnopqrstuvwxyz123456",
         "VeryLongHighEntropyValue_0123456789_ABCDEFG", "-----BEGIN_PRIVATE_KEY-----",
+        "Bearer short-authorization-secret", "mysql-short-secret", "positional-secret",
     )
     raw_command = (
         "/usr/bin/curl --password hunter2 "
         "TOKEN=eyJhbGciOiJIUzI1NiJ9.abcdefghijk.signature123 "
         "https://user:pass@example.invalid/private?token=AKIAABCDEFGHIJKLMNOP "
         "ghp_abcdefghijklmnopqrstuvwxyz123456 "
-        "VeryLongHighEntropyValue_0123456789_ABCDEFG -----BEGIN_PRIVATE_KEY-----"
+        "VeryLongHighEntropyValue_0123456789_ABCDEFG -----BEGIN_PRIVATE_KEY----- "
+        "-H 'Authorization: Bearer short-authorization-secret' "
+        "mysql -pmysql-short-secret positional-secret"
     )
     sensor_event = {
         "id": "b" * 64, "kind": "auth.sudo_command",
@@ -47,13 +51,18 @@ def test_mojosec_sudo_projection_redacts_adversarial_secret_classes(opts):
         for secret in secret_values:
             th.assert_true(secret not in encoded,
                            f"Event projection leaked adversarial secret class {secret[:12]}")
+            th.assert_true(hashlib.sha256(secret.encode()).hexdigest()[:12] not in encoded,
+                           "Event projection must not expose per-token secret digests")
         th.assert_eq(event.source_ip, "192.0.2.30",
                      "reliably attributed sudo evidence should populate Event.source_ip")
         command = event.metadata["mojosec"]["evidence"]["command"]
         th.assert_eq(command["executable"], "/usr/bin/curl",
                      "scrubbed command context should retain the executable")
-        th.assert_true("sha256" in command and "redacted" in command,
-                       "scrubbed command context should retain digest and safe shape")
+        th.assert_eq(set(command), {
+            "executable", "sha256", "argument_count", "arguments",
+        }, "visible command evidence must expose only fixed shape and the full-command digest")
+        th.assert_eq(command["arguments"], "<redacted>",
+                     "all generic sudo arguments must collapse to one constant marker")
     finally:
         Event.objects.filter(pk=event.pk).delete()
 

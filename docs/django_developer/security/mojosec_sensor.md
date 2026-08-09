@@ -25,11 +25,11 @@ package from a root-owned working directory with safe-path mode:
 Sudo evidence retains bounded raw command context only in the root-owned sensor
 spool and protected central receipt: actor, target user, TTY, audit context,
 working directory, executable path, and command digest accompany the command.
-The Event projection is separately scrubbed: credentials, sensitive flags and
-environment assignments, JWT/PEM/cloud/high-entropy tokens, URL credentials,
-and query strings are redacted; ambiguous shell syntax projects only an
-executable and digest. Raw command text never enters Event metadata, titles,
-details, ordinary logs, or AI/default graphs.
+The Event projection is closed rather than heuristically scrubbed: it exposes
+only executable, full-command digest, argument count/provenance, and one
+constant redaction marker; ambiguous syntax projects only executable and
+digest. Raw command text and per-token digests never enter Event metadata,
+titles, details, ordinary logs, or AI/default graphs.
 
 This catches common automated reconnaissance for WordPress, PHP, ASP/JSP,
 `.env`, `.git`, phpMyAdmin, PHPUnit, actuator, Swagger/OpenAPI, CGI, and similar
@@ -117,7 +117,7 @@ The app/fleet desired-policy source contains no endpoint, identity, or secret:
     "nginx": {
       "enabled": true,
       "max_bytes_per_poll": 2097152,
-      "max_line_bytes": 16384
+      "max_line_bytes": 262144
     }
   },
   "aggregation": {
@@ -223,6 +223,15 @@ omitted once the total budget is full. The generated nginx stream writes
 `request_uri`, `host`, `referrer`, `user_agent`, `request_time`,
 `upstream_status`, `upstream_response_time`, `remote_addr`, and `peer_addr`
 (along with the timestamp, method, and status).
+Both standard and Edge nginx write this protected ingress stream to the
+root-precreated `/var/log/nginx/mojosec.json.log` at mode `0600`; nginx's root
+master opens the descriptor before workers drop privilege. The Edge staged
+unprivileged `nginx -t` copy disables access logs and the authoritative root
+check validates the real path. Copytruncate rotations remain root:root `0600`.
+The collector accepts lines up to a fixed 256 KiB derived from four default
+8 KiB nginx request/header buffers, worst-case JSON escaping, and envelope
+overhead. Larger lines fail closed; accepted fields still pass through the
+smaller per-kind evidence budget before persistence/transmission.
 High-entropy path segments still use a shared token marker for aggregation.
 Every Event-visible IP, host, method, status, and path participates in the
 fingerprint, so interleaved identities do not collapse into a misleading row.
@@ -234,10 +243,14 @@ forward from the committed `--after-cursor`, stopping at both a record and byte
 ceiling, and commits only the last cursor it processed. Per-record parse or
 detector failures increment the malformed count and do not abort the burst.
 
-Accepted SSH records establish an exact `(boot_id, audit_session)` mapping.
+Only successful Linux audit-transport `USER_START`/`USER_LOGIN` records for
+the trusted sshd executable, root UID, and `terminal=ssh` establish an exact
+`(boot_id, audit_session)` mapping. Accepted-looking user journal text cannot.
 The entire poll is overlaid before detection, so sudo may correlate to an SSH
 record later in the same poll. A match also requires the same actor and a
 compatible TTY. Mappings persist in SQLite for at most 30 days and 4,096 rows.
+Conflicting actor, TTY, or address for one key creates a sticky ambiguous
+tombstone that cannot restabilize, including after restart.
 When no exact audit-session mapping is available, `who` may attribute sudo
 only for one unique, fresh (five-minute) exact actor-plus-TTY row; stale,
 reused, or ambiguous rows produce no source attribution. Sudo evidence records
@@ -246,6 +259,8 @@ two may promote the correlated address to `Event.source_ip`. SSH and valid web
 source addresses also populate that canonical Event field. Sudo evidence
 includes bounded actor, target, TTY, audit identity, working directory, raw
 command, executable, digest, and attribution provenance.
+The `who` subprocess runs in a fixed C locale with a two-second timeout and
+strict 128 KiB/4,096-line streaming caps; timeout or overflow fails closed.
 
 On POSIX platforms FIM opens every path component relative to an already-open
 directory descriptor with `O_NOFOLLOW`; files are hashed through that same
@@ -326,7 +341,7 @@ FIM create/modify/chmod/delete under the enrolled canary root. Force a receiver
 503 outage for only the canary key, prove durable spool growth and drain after
 recovery, restart the service and prove identity/cursor/baseline persistence,
 then run targeted `logrotate -f`. Verify `copytruncate` preserves the active
-root:root 0640 inode, archives remain root-only, and a new line is collected
+root:root 0600 inode, archives remain root-only, and a new line is collected
 without nginx reopen or a stalled cursor. Copy/truncate has a narrow inherent
 writer race, so compare generated probe IDs/counts across the forced rotation
 and investigate any unexplained gap. `maxsize 50M` is evaluated by logrotate's
@@ -489,8 +504,8 @@ canonical source IP. Web evidence canonicalizes method, host, peer, status,
 path, upstream status/timing, and retains only an HTTP(S) referrer origin plus
 structured UA family/major and its digest. Aggregated volatile samples are
 omitted instead of presenting the last request as the whole distribution.
-Sudo commands redact URL credentials/query strings, sensitive flags and their
-values, sensitive environment assignments, JWT/PEM/cloud/high-entropy tokens;
+Sudo Event evidence exposes only executable, full-command digest, bounded
+argument count, attribution, and a constant `<redacted>` argument marker;
 ambiguous shell parsing falls back to executable plus digest. Raw command,
 request target, referrer, and UA strings never enter Event metadata, title,
 details, ordinary logs, or AI/default graphs. For `fim.change`, the sole optional

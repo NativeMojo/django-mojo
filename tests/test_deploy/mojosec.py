@@ -163,12 +163,28 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
                    "AL2023 root-pip packages disappear under -I/-s")
     rotation = deploy.LOGROTATE_TEXT
     for expected in ("daily", "maxsize 50M", "rotate 14", "copytruncate",
-                     "su root root"):
+                     "su root root", "create 0600 root root"):
         th.assert_in(expected, rotation,
                      f"nginx security-log rotation is missing {expected!r}")
-    for forbidden in ("create ", "postrotate", "USR1"):
+    for forbidden in ("postrotate", "USR1"):
         th.assert_true(forbidden not in rotation,
                        f"rotation must preserve the root-owned active inode: {forbidden}")
+
+
+@th.django_unit_test()
+def test_security_log_is_precreated_master_opened_and_root_only(opts):
+    from mojo.deploy import mojosec as deploy
+
+    with tempfile.TemporaryDirectory() as root:
+        path = os.path.join(root, "mojosec.json.log")
+        with mock.patch.object(deploy, "DEFAULT_LOG_PATH", path), \
+                mock.patch.object(deploy, "_require_root_install_dir"), \
+                mock.patch.object(deploy.os, "fchown") as chown:
+            th.assert_true(deploy._ensure_security_log(path),
+                           "first convergence must securely precreate the evidence inode")
+        th.assert_eq(os.stat(path).st_mode & 0o777, 0o600,
+                     "nginx master-opened raw evidence must be inaccessible to group/other")
+        chown.assert_called_once_with(mock.ANY, 0, 0)
 
 
 @th.django_unit_test()
@@ -517,8 +533,8 @@ def test_edge_enrollment_accepts_app_owned_security_log_directory(opts):
     th.assert_eq(result["edge_log_dir"], deploy.EDGE_LOG_DIR,
                  "Edge enrollment must accept its documented app-owned log root")
     th.assert_eq(result["nginx_log_path"],
-                 deploy.EDGE_LOG_DIR + "/mojosec.json.log",
-                 "the protected collector path must derive from the Edge log root")
+                 deploy.DEFAULT_LOG_PATH,
+                 "Edge raw evidence must use the root-owned nginx master-opened path")
 
 
 @th.django_unit_test()

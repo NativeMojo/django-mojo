@@ -7,7 +7,7 @@ import shlex
 import urllib.parse
 
 from .events import bounded_text, observation, valid_ip
-from .attribution import audit_context, canonical_tty
+from .attribution import audit_context, canonical_tty, trusted_journal_source
 from .evidence import build_evidence, digest_text, fingerprint_values as evidence_fingerprint
 
 
@@ -112,12 +112,11 @@ def detect_journal(record, attribution=None):
     identifier = bounded_text(
         record.get("SYSLOG_IDENTIFIER") or record.get("_COMM") or record.get("_SYSTEMD_UNIT"), 96
     ).lower()
-    auth_facility = str(record.get("SYSLOG_FACILITY", "")) == "10"
     observed_at = _journal_time(record)
 
-    if (identifier in ("sshd", "sshd.service") or "sshd" in identifier or
-            (auth_facility and (_SSH_ACCEPTED.search(message) or _SSH_FAILED.search(message) or
-                                _SSH_INVALID.search(message)))):
+    if (trusted_journal_source(record, "sshd") and
+            (_SSH_ACCEPTED.search(message) or _SSH_FAILED.search(message) or
+             _SSH_INVALID.search(message))):
         match = _SSH_ACCEPTED.search(message)
         if match and valid_ip(match.group("ip")):
             values = match.groupdict()
@@ -148,9 +147,8 @@ def detect_journal(record, attribution=None):
                 aggregate=True, recommendation="review", observed_at=observed_at,
             )
 
-    if (identifier in ("sudo", "sudo.service") or
-            (auth_facility and (_SUDO_COMMAND.search(message) or
-                                "sudo" in message.lower()))):
+    if (trusted_journal_source(record, "sudo") and
+            (_SUDO_COMMAND.search(message) or "authentication failure" in message.lower())):
         match = _SUDO_COMMAND.search(message)
         if match:
             values = match.groupdict()
@@ -261,7 +259,7 @@ def detect_nginx(record):
         return None
     method = bounded_text(record.get("method") or record.get("request_method"), 16).upper()
     raw_path = bounded_text(
-        record.get("uri") or record.get("request_uri") or record.get("path"), 2048
+        record.get("uri") or record.get("request_uri") or record.get("path"), 32768
     )
     path = raw_path.split("?", 1)[0][:2048]
     try:

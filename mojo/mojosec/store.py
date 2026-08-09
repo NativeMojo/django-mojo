@@ -7,6 +7,7 @@ import stat
 import time
 
 from .aggregation import merge, should_flush
+from .attribution import merge_session
 from .protocol import canonical_json, make_event
 
 
@@ -144,6 +145,7 @@ class Store:
                 source_ip TEXT NOT NULL,
                 observed_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
+                ambiguous INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY(boot_id, audit_session)
             )
         """)
@@ -191,7 +193,7 @@ class Store:
     def load_ssh_sessions(self, now=None):
         cutoff = (now if now is not None else time.time()) - SSH_SESSION_TTL_SECONDS
         rows = self.db.execute(
-            "SELECT boot_id, audit_session, actor, tty, source_ip, observed_at "
+            "SELECT boot_id, audit_session, actor, tty, source_ip, observed_at, ambiguous "
             "FROM ssh_sessions WHERE observed_at >= ? ORDER BY observed_at DESC LIMIT ?",
             (cutoff, SSH_SESSION_CAP),
         ).fetchall()
@@ -203,15 +205,22 @@ class Store:
         for session in sessions or ():
             if float(session["observed_at"]) < cutoff:
                 continue
+            existing = self.db.execute(
+                "SELECT boot_id, audit_session, actor, tty, source_ip, observed_at, ambiguous "
+                "FROM ssh_sessions WHERE boot_id = ? AND audit_session = ?",
+                (session["boot_id"], session["audit_session"]),
+            ).fetchone()
+            session = merge_session(dict(existing) if existing is not None else None, session)
             self.db.execute(
                 "INSERT INTO ssh_sessions(boot_id, audit_session, actor, tty, source_ip, "
-                "observed_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?) "
+                "observed_at, updated_at, ambiguous) VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(boot_id, audit_session) DO UPDATE SET "
                 "actor=excluded.actor, tty=excluded.tty, source_ip=excluded.source_ip, "
-                "observed_at=excluded.observed_at, updated_at=excluded.updated_at",
+                "observed_at=excluded.observed_at, updated_at=excluded.updated_at, "
+                "ambiguous=excluded.ambiguous",
                 (session["boot_id"], session["audit_session"], session["actor"],
                  session.get("tty", ""), session["source_ip"],
-                 float(session["observed_at"]), now),
+                 float(session["observed_at"]), now, int(bool(session.get("ambiguous")))),
             )
         self.db.execute(
             "DELETE FROM ssh_sessions WHERE rowid IN ("

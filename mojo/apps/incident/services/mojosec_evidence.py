@@ -30,17 +30,6 @@ _KNOWN_UA = {
     "python-requests": "python-requests", "go-http-client": "Go-http-client",
     "googlebot": "Googlebot", "bingbot": "bingbot",
 }
-_SENSITIVE_NAME = re.compile(
-    r"(?:pass(?:word)?|secret|token|credential|authorization|cookie|api[_-]?key|"
-    r"private[_-]?key|access[_-]?key|session)", re.I)
-_SENSITIVE_FLAGS = {
-    "-p", "--password", "--passwd", "--token", "--secret", "--api-key",
-    "--apikey", "--authorization", "--cookie", "--private-key",
-    "--access-key", "--secret-key", "--client-secret",
-}
-_CLOUD_TOKEN = re.compile(
-    r"^(?:AKIA|ASIA)[A-Z0-9]{16}$|^(?:gh[pousr]_|github_pat_|xox[baprs]-|sk_live_)", re.I)
-_JWT = re.compile(r"^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$")
 
 
 def _text(value, limit=2048):
@@ -177,41 +166,6 @@ def _numbers(value, minimum, maximum, scale=1):
     return values or None
 
 
-def _looks_secret(value):
-    if not value:
-        return False
-    if "-----BEGIN" in value or _JWT.fullmatch(value) or _CLOUD_TOKEN.search(value):
-        return True
-    if len(value) >= 20 and re.fullmatch(r"[A-Za-z0-9+/=_-]+", value):
-        return len(set(value)) >= 10
-    return False
-
-
-def _redacted_token(value):
-    return f"<redacted:{_digest(value)[:12]}>"
-
-
-def _safe_url(value):
-    try:
-        parsed = urllib.parse.urlsplit(value)
-    except ValueError:
-        return None
-    if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
-        return None
-    host = _host(parsed.hostname)
-    if host is None:
-        return None
-    authority = f"[{host}]" if ":" in host else host
-    try:
-        port = parsed.port
-    except ValueError:
-        return None
-    if port:
-        authority += f":{port}"
-    suffix = "/<redacted-path>" if parsed.path not in ("", "/") else ""
-    return f"{parsed.scheme.lower()}://{authority}{suffix}"
-
-
 def _executable(words, fallback):
     for word in words:
         if "=" in word and not word.startswith("/"):
@@ -226,7 +180,7 @@ def _executable(words, fallback):
 def _sudo_command(attributes):
     raw = _text(attributes.get("command"), 4096)
     claimed_digest = _text(attributes.get("command_sha256"), 64).lower()
-    digest = _digest(raw) if raw else claimed_digest
+    digest = claimed_digest if _DIGEST.fullmatch(claimed_digest) else _digest(raw)
     if not _DIGEST.fullmatch(digest):
         digest = _digest("")
     try:
@@ -240,36 +194,12 @@ def _sudo_command(attributes):
     result = {"executable": executable, "sha256": digest}
     if ambiguous:
         return result
-    redacted = []
-    redact_next = False
-    for word in words[:32]:
-        if redact_next:
-            redacted.append(_redacted_token(word))
-            redact_next = False
-            continue
-        lowered = word.lower()
-        if lowered in _SENSITIVE_FLAGS:
-            redacted.append(word[:64])
-            redact_next = True
-            continue
-        if lowered.startswith("--") and "=" in word:
-            name, value = word.split("=", 1)
-            if _SENSITIVE_NAME.search(name):
-                redacted.append(name[:64] + "=" + _redacted_token(value))
-                continue
-        if "=" in word and not word.startswith(("http://", "https://")):
-            name, value = word.split("=", 1)
-            if _SENSITIVE_NAME.search(name):
-                redacted.append(name[:64] + "=" + _redacted_token(value))
-                continue
-        if word.startswith(("http://", "https://")):
-            safe = _safe_url(word)
-            redacted.append(safe or _redacted_token(word))
-        elif _looks_secret(word):
-            redacted.append(_redacted_token(word))
-        else:
-            redacted.append(_text(word, 256))
-    result["redacted"] = " ".join(redacted)[:1024]
+    result["argument_count"] = max(0, min(len(words) - 1, 31))
+    if len(words) > 1:
+        # Arguments are an open-ended secret channel. Do not attempt a
+        # negative-list scrub or expose per-token digests: the protected
+        # receipt owns raw reconstruction, while Event gets only this shape.
+        result["arguments"] = "<redacted>"
     return result
 
 

@@ -109,7 +109,9 @@ are retained only in the protected `MojoSecReceipt.replay_features` audit
 record (`DENY_AI`, excluded from the default graph). Event metadata contains a
 central allowlisted projection: queryless/token-normalized path, canonical
 method/host/status/upstream values, HTTP(S) referrer origin, structured UA
-family/major plus digest, and aggressively redacted sudo command context.
+family/major plus digest, and sudo executable/full-command digest/argument
+count plus one constant redaction marker. Generic arguments and per-token
+digests never project.
 Bodies, cookies, authorization, arbitrary headers, and raw sensitive strings
 are never part of this protocol evidence or Event projection.
 
@@ -132,10 +134,15 @@ the protected receipt; the Event receives only the projection described above.
 User-agent text alone is never a detector signal.
 
 Accepted SSH logins establish a `(boot_id, audit_session)` source mapping.
+The mapping source must be a successful trusted Linux audit-transport
+`USER_START`/`USER_LOGIN` record for root-owned sshd with `terminal=ssh`;
+message text and a caller-chosen syslog identifier are insufficient.
 Sudo uses it only when actor and TTY are compatible; the mapping is retained
 for 30 days with a 4,096-row cap. Without an exact audit-session mapping,
 source attribution is allowed only for one fresh (five-minute), exact
 actor-plus-TTY `who` row.
+Conflicting identity for one audit key becomes a sticky ambiguous tombstone.
+`who` itself is streamed under fixed locale, timeout, byte, and line caps.
 `attribution_provenance` is `audit_session`, `who`, or `none`; only the first
 two allow sudo's address to populate `Event.source_ip`. Stale, reused, or
 ambiguous rows therefore remain unattributed.

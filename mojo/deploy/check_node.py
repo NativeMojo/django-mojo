@@ -692,16 +692,8 @@ def _audit_exact_mojosec_nginx_assets(report, run, sudo, proxy_cidrs):
                     "fragment, receiver, or rotation bytes differ from package")
 
 
-def _edge_log_contained(log_path, edge_root):
-    try:
-        return (
-            isinstance(log_path, str) and isinstance(edge_root, str) and
-            os.path.isabs(edge_root) and os.path.isabs(log_path) and
-            os.path.commonpath((log_path, edge_root)) == edge_root and
-            log_path == edge_root.rstrip("/") + "/mojosec.json.log"
-        )
-    except (TypeError, ValueError):
-        return False
+def _protected_mojosec_log_path(log_path):
+    return log_path == "/var/log/nginx/mojosec.json.log"
 
 
 def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
@@ -918,7 +910,7 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                 if f"set_real_ip_from {network};" not in active_nginx)
             if nginx_rc == 0 and not missing:
                 report.passed("mojosec", "active nginx contract",
-                              "queryless JSON log, exact receiver cap, and proxy boundary active")
+                              "protected JSON evidence, exact receiver cap, and proxy boundary active")
             else:
                 report.fail("mojosec", "active nginx contract drift",
                             "missing: " + ", ".join(missing[:8]))
@@ -938,19 +930,19 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                 _audit_exact_mojosec_nginx_assets(
                     report, run, sudo, provenance.get("trusted_proxy_cidrs", []))
                 log_meta = _secure_metadata(
-                    run, "/var/log/nginx/mojosec.json.log", "640", sudo=sudo)
+                    run, "/var/log/nginx/mojosec.json.log", "600", sudo=sudo)
                 if log_meta is not None and log_meta[1]:
                     report.passed("mojosec", "security log metadata",
-                                  "dedicated log is root:root 0640")
+                                  "dedicated log is root:root 0600")
                 else:
                     report.fail("mojosec", "security log metadata drift",
-                                "standard dedicated log must be root:root 0640")
+                                "standard dedicated log must be root:root 0600")
                 archive_check = (
                     "import glob,os,stat;"
                     "ps=glob.glob('/var/log/nginx/mojosec.json.log.*');"
                     "ok=len(ps)<=32 and all(stat.S_ISREG(os.lstat(p).st_mode) and "
                     "os.lstat(p).st_uid==0 and os.lstat(p).st_gid==0 and "
-                    "not(os.lstat(p).st_mode&0o037) for p in ps);"
+                    "not(os.lstat(p).st_mode&0o077) for p in ps);"
                     "raise SystemExit(0 if ok else 1)"
                 )
                 if run(_mojosec_python(
@@ -971,21 +963,18 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                     report.fail("mojosec", "bounded log retention drift",
                                 "/etc/logrotate.d/mojosec lacks size/metadata contract")
             elif provenance.get("nginx_plane") == "edge":
-                edge_root = provenance.get("edge_log_dir", "")
-                contained = _edge_log_contained(log_path, edge_root)
-                rc, mode_text, _ = run(
-                    f"{sudo}test ! -L {q(log_path)} && {sudo}test -f {q(log_path)} && "
-                    f"{sudo}stat -c %a {q(log_path)}")
-                try:
-                    unsafe = int(mode_text, 8) & 0o002
-                except (TypeError, ValueError):
-                    unsafe = 1
-                if contained and rc == 0 and not unsafe:
+                log_meta = _secure_metadata(
+                    run, "/var/log/nginx/mojosec.json.log", "600", sudo=sudo)
+                rotation_meta = _secure_metadata(
+                    run, "/etc/logrotate.d/mojosec", "644", sudo=sudo)
+                if (_protected_mojosec_log_path(log_path) and
+                        log_meta is not None and log_meta[1] and
+                        rotation_meta is not None and rotation_meta[1]):
                     report.passed("mojosec", "Edge security log metadata",
-                                  "collector path is a non-world-writable regular file")
+                                  "root master-opened log is root:root 0600 with rotation")
                 else:
                     report.fail("mojosec", "Edge security log unsafe",
-                                "enrolled Edge log must be regular, contained, and not world-writable")
+                                "Edge evidence must use the root-owned log and rotation contract")
     else:
         report.fail("mojosec", "public status metadata drift",
                     "/run/mojosec/status.json must be root:root 0640")
