@@ -85,10 +85,17 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
         "the batch should create one bounded central Event projection per wire event")
 
     probe = Event.objects.get(metadata__mojosec__event_id="e" * 64)
+    receipt = MojoSecReceipt.objects.get(wire_event_id="e" * 64)
     th.assert_eq(probe.source_ip, "198.51.100.7",
                  "an eligible detector kind should promote its validated source IP")
     th.assert_true("attributes" not in probe.metadata["mojosec"],
                    "untrusted sensor attributes must stay out of LLM-visible Event metadata")
+    th.assert_true("sensor_policy_revision" not in probe.metadata["mojosec"],
+                   "free-form sensor policy labels must be represented by digest in Event metadata")
+    th.assert_eq(receipt.replay_features["event"]["attributes"]["path"], "/wp-login.php",
+                 "bounded raw features should remain available for deterministic offline replay")
+    th.assert_true(receipt.RestMeta.DENY_AI,
+                   "the model holding raw replay features must be denied to generic AI queries")
     th.assert_true(probe.incident_id is None,
                    "host recommendations must not create incidents without an exact central RuleSet")
 
@@ -184,3 +191,27 @@ def test_mojosec_exact_policy_ignores_broad_scope_and_default_llm(opts):
     th.assert_true(
         Incident.objects.filter(events__metadata__mojosec__event_id="g" * 64).exists(),
         "only the exact central category policy should promote evidence to an incident")
+
+
+@th.django_unit_test()
+def test_mojosec_receipt_pruning_keeps_pending_outbox_rows(opts):
+    from datetime import timedelta
+    from mojo.apps.incident.models import MojoSecReceipt
+    from mojo.apps.incident.services import mojosec
+
+    published = MojoSecReceipt.objects.filter(
+        sensor_id=SENSOR_ID, publish_state="published").first()
+    th.assert_true(published is not None,
+                   "the pruning test needs one published receipt from prior ingestion")
+    pending = MojoSecReceipt.objects.create(
+        sensor_id=SENSOR_ID,
+        wire_event_id="9" * 64,
+        payload_digest="8" * 64,
+        replay_features={"event": {}},
+    )
+    future = published.published_at + timedelta(days=46)
+    mojosec.prune_receipts(now=future)
+    th.assert_true(not MojoSecReceipt.objects.filter(pk=published.pk).exists(),
+                   "published receipts older than the retry margin should be pruned")
+    th.assert_true(MojoSecReceipt.objects.filter(pk=pending.pk).exists(),
+                   "pending outbox rows must never be removed by age retention")

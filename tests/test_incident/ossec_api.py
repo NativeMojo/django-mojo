@@ -21,7 +21,10 @@ def test_ossec_batch_post(opts):
         event["alert_id"] = alert_id
         data["batch"].append(event)
 
-    resp = opts.client.post(f"/api/incident/ossec/alert/batch", data)
+    with th.server_settings(OSSEC_SECRET="test-ossec-secret"):
+        resp = opts.client.post(
+            "/api/incident/ossec/alert/batch", data,
+            headers={"X-OSSEC-SECRET": "test-ossec-secret"})
     assert resp.status_code == 200, f"Expected status_code is 200 but got {resp.status_code}"
 
 

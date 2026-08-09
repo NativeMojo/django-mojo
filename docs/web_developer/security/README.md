@@ -68,6 +68,8 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | Maestro Item Links | `/api/incident/maestro/item-link` | Remote Maestro items linked to local Tickets or Incidents |
 
 See individual API docs for full details:
+- [MojoSec Sensor Ingestion](mojosec.md) — per-installation authentication,
+  strict batch contract, acknowledgement semantics, and central-policy boundary
 - [Rate Limits & Client Backoff](rate_limits.md) — the 429/`Retry-After` contract every client must honor
 - [Maestro Reporting](maestro_board.md) — deployment-configured workspace reporting, Ticket/Incident actions, item links and signed callbacks
 - [Incidents](../logging/incidents.md)
@@ -695,7 +697,8 @@ See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-ana
 | `HEALTH_CPU_CRIT` | `90` | CPU % threshold |
 | `HEALTH_MEM_CRIT` | `90` | Memory % threshold |
 | `HEALTH_DISK_CRIT` | `85` | Disk % threshold |
-| `OSSEC_SECRET` | `None` | Optional secret for OSSEC endpoints |
+| `OSSEC_SECRET` | `None` | Legacy OSSEC shared secret; unset/empty disables the endpoints |
+| `MOJOSEC_RECEIPT_RETENTION_DAYS` | `45` | Published MojoSec receipt retention; minimum 7 days |
 | `LLM_HANDLER_API_KEY` | `None` | Claude API key (enables LLM agent) |
 | `LLM_HANDLER_MODEL` | (auto-detect) | Claude model for LLM agent. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
 | `INCIDENT_EMAIL_FROM` | `None` | SES mailbox for incident emails |

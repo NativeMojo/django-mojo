@@ -189,8 +189,8 @@ def test_handler_split_regex_preserves_targets(opts):
 # ---------------------------------------------------------------------------
 
 @th.django_unit_test()
-def test_ossec_check_secret_none_passes(opts):
-    """When OSSEC_SECRET is None, all requests should pass."""
+def test_ossec_check_secret_none_rejects(opts):
+    """An unset legacy OSSEC secret must disable ingestion fail-closed."""
     import sys
     import mojo.apps.incident.rest.ossec
     rest_ossec = sys.modules['mojo.apps.incident.rest.ossec']
@@ -201,7 +201,8 @@ def test_ossec_check_secret_none_passes(opts):
 
     request = objict(META={}, ip="10.0.0.1")
     result = rest_ossec._check_ossec_secret(request)
-    assert result is None, "No secret configured should pass all requests"
+    assert result is not None, "No secret configured must reject legacy OSSEC requests"
+    assert result.status_code == 403, f"Unset secret should return 403, got {result.status_code}"
 
     rest_ossec.OSSEC_SECRET = original
 

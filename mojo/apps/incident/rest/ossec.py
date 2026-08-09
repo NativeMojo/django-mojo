@@ -1,3 +1,5 @@
+import hmac
+
 from mojo import decorators as md
 from mojo.apps.incident.parsers import ossec
 from mojo import JsonResponse
@@ -22,13 +24,14 @@ def _ensure_defaults():
 
 def _check_ossec_secret(request):
     """
-    Validate OSSEC_SECRET if configured. Returns None on success,
-    or a JsonResponse to return on failure.
+    Validate OSSEC_SECRET. An unset/empty secret disables this legacy public
+    endpoint. Returns None on success or a JsonResponse on failure.
     """
-    if OSSEC_SECRET is None:
-        return None
+    if not isinstance(OSSEC_SECRET, str) or not OSSEC_SECRET:
+        logger.warning("OSSEC request rejected: endpoint secret is not configured")
+        return JsonResponse({"error": "unauthorized"}, status=403)
     header = request.META.get("HTTP_X_OSSEC_SECRET", "")
-    if header != OSSEC_SECRET:
+    if not isinstance(header, str) or not hmac.compare_digest(header, OSSEC_SECRET):
         logger.warning("OSSEC request rejected: invalid secret from %s", request.ip)
         return JsonResponse({"error": "unauthorized"}, status=403)
     return None

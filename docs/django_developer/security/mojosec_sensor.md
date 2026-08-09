@@ -207,6 +207,55 @@ HTTPS with `Authorization: apikey <per-installation-token>`. The checked-in
 golden fixture under `tests/test_mojosec/golden/` is the request compatibility
 contract for sensor and receiver implementations.
 
+### Receiver enrollment and publication
+
+Provision a separate API key for each installation. The key must carry the
+protected `mojosec_ingest` permission and a server-owned enrollment profile:
+
+```json
+{
+  "permissions": {"mojosec_ingest": true},
+  "metadata": {
+    "mojosec": {
+      "enabled": true,
+      "sensor_id": "prod-web-i-0123456789abcdef0",
+      "allowed_versions": [1]
+    }
+  }
+}
+```
+
+`mojosec_ingest` is in the framework's API-key protection floor. A tenant
+administrator cannot mint it; the platform provisioning path must create the
+credential. The receiver requires the authenticated key's enrolled sensor ID
+and version to match every batch. A key is not an enrollment wildcard.
+
+The receiver validates compressed and decompressed sizes, strict UTF-8/JSON,
+duplicate fields, the shared protocol schema, and every event before writing.
+It persists a unique receipt for `(sensor_id, event_id)` and the canonical
+payload digest. Identical replay returns `duplicate`; reusing an ID for changed
+evidence returns `rejected`. A receipt is acknowledged `accepted` only after
+its bounded Event projection has completed central publication. Incomplete
+publication remains `pending` and returns `retry`.
+
+Wire attributes remain in the receipt's `replay_features`, which is denied to
+generic AI/model query tools. The central Event contains a fixed title/detail
+and validated scalar provenance only. A source IP is promoted only for an
+explicit allowlist of source-bearing detector kinds. Sensor summaries, paths,
+messages, commands, and other raw strings do not enter LLM-visible Event
+metadata.
+
+Events use exact categories such as `mojosec.web.probe` and
+`mojosec.auth.ssh_login`. Only an active RuleSet for that exact category can
+create an incident or dispatch a handler. Scope rules, catch-all rules, the
+level threshold, and the default LLM fallback are disabled on this trusted
+publication mode. This is why the sensor's `block_ip` recommendation remains
+advisory: action exists only when an operator installs an exact central rule.
+
+Published receipt rows are retained for `MOJOSEC_RECEIPT_RETENTION_DAYS`
+(default 45, minimum 7) and pruned daily. Pending receipts are never removed by
+that retention job.
+
 The receiver should return one result per event using the strict acknowledgement
 schema (a `reason` string is optional):
 
@@ -233,3 +282,6 @@ central receiver must authenticate the installation, revalidate every bounded
 field, deduplicate IDs, map event kinds to server-owned severity/category
 policy, and allow action only through explicit central rules. No MojoSec host
 code invokes the firewall or incident database directly.
+
+The legacy public OSSEC endpoints are disabled when `OSSEC_SECRET` is unset or
+empty. When enabled, the header is checked with a constant-time comparison.

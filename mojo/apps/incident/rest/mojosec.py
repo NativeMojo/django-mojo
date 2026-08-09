@@ -16,6 +16,7 @@ def _json_response(payload, status=200):
 def on_mojosec_batch(request):
     api_key = getattr(request, "api_key", None)
     if (request.bearer != "apikey" or not isinstance(api_key, ApiKey) or
+            not api_key.group.is_effectively_active() or
             not api_key.has_permission("mojosec_ingest")):
         return _json_response({"error": "unauthorized"}, status=403)
     try:

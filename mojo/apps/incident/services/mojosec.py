@@ -6,6 +6,7 @@ import zlib
 
 from django.db import IntegrityError, transaction
 from django.db.models import F
+from django.core.exceptions import RequestDataTooBig
 
 from mojo.helpers import dates, logit
 from mojo.helpers.settings import settings
@@ -68,7 +69,20 @@ def parse_request_batch(request):
     if content_type != "application/json":
         raise MojoSecIngestError("Content-Type must be application/json", 415)
 
-    raw = request.body or b""
+    content_length = request.META.get("CONTENT_LENGTH")
+    if content_length:
+        try:
+            content_length = int(content_length)
+        except (TypeError, ValueError) as err:
+            raise MojoSecIngestError("invalid Content-Length") from err
+        if content_length < 0:
+            raise MojoSecIngestError("invalid Content-Length")
+        if content_length > MAX_COMPRESSED_BYTES:
+            raise MojoSecIngestError("compressed MojoSec batch is too large", 413)
+    try:
+        raw = request.body or b""
+    except RequestDataTooBig as err:
+        raise MojoSecIngestError("compressed MojoSec batch is too large", 413) from err
     if not raw:
         raise MojoSecIngestError("MojoSec batch body is empty")
     if len(raw) > MAX_COMPRESSED_BYTES:
@@ -119,7 +133,7 @@ def _event_projection(batch, sensor_event):
 
     kind = sensor_event["kind"]
     attributes = sensor_event["attributes"]
-    source_ip = attributes.get("source_ip") if kind in SOURCE_IP_KINDS else None
+    source_ip = (attributes.get("source_ip") or None) if kind in SOURCE_IP_KINDS else None
     event = Event(
         category=f"mojosec.{kind}",
         scope="mojosec",
@@ -137,7 +151,8 @@ def _event_projection(batch, sensor_event):
                 "sensor_id": batch["sensor_id"],
                 "event_id": sensor_event["id"],
                 "protocol_version": batch["version"],
-                "sensor_policy_revision": batch["policy_revision"],
+                "sensor_policy_revision_sha256": hashlib.sha256(
+                    batch["policy_revision"].encode("utf-8")).hexdigest(),
                 "kind": kind,
                 "severity": sensor_event["severity"],
                 "recommendation": sensor_event["recommendation"],
@@ -147,7 +162,20 @@ def _event_projection(batch, sensor_event):
             },
         },
     )
-    event.sync_metadata()
+    # Do not call Event.sync_metadata() here: it performs GeoIP enrichment for
+    # source-bearing events, which would turn one bounded batch into hundreds
+    # of synchronous external lookups. The receiver needs only this fixed,
+    # server-derived projection; background/incident policy may enrich later.
+    event.metadata.update({
+        "level": event.level,
+        "scope": event.scope,
+        "category": event.category,
+        "source_ip": event.source_ip,
+        "title": event.title,
+        "details": event.details,
+        "model_name": event.model_name,
+        "model_id": event.model_id,
+    })
     event.save()
     return event
 
@@ -188,8 +216,10 @@ def _publish_receipt(receipt):
 
     try:
         with transaction.atomic():
-            locked = MojoSecReceipt.objects.select_for_update().select_related("event").get(
-                pk=receipt.pk)
+            # Lock only the receipt row. ``event`` is nullable for retained
+            # audit receipts, and PostgreSQL refuses FOR UPDATE on that outer
+            # joined side when select_related() is used here.
+            locked = MojoSecReceipt.objects.select_for_update().get(pk=receipt.pk)
             if locked.publish_state == MojoSecReceipt.PUBLISH_PUBLISHED:
                 return "duplicate", ""
             if locked.event_id is None:
