@@ -247,29 +247,22 @@ safely: the variable names differ (`$bad_bot`/`$is_blocked_ip` vs
 only *enforce* if the old server blocks still reference their variables;
 retire the include with the conf.d glob at the last step.
 
-## Reserved names and the house override
+## Colliding with a hand-written server block
 
-`validate_not_reserved` refuses every enabled vhost whose name is in the
-reserved set (`EDGE_RESERVED_SERVER_NAMES` ∪ concrete `ALLOWED_HOSTS`), and
-refuses ALL enables when the set is undeclared. That is what stops a tenant
-shadowing the API — and it also stops the platform serving its own hostname
-through the edge.
+Any name a `Domain`'s owner holds may be served through the edge — there is no
+reserved list. What the edge cannot see is nginx configuration it did not
+generate: a server block written by hand in the bootstrap or `conf.d` claims a
+name without any row existing for it.
 
-`claims_reserved` is the override: settable ONLY via
-`POST edge/vhost/claim_reserved` (platform superuser, interactive session —
-key-backed sessions refused), only on a house-domain vhost, and only while
-the reserved set is declared. It is in `NO_SAVE_FIELDS`; plain REST writes
-cannot move it.
-
-**The cutover is sequenced, and the conflicting-server-name scan is the
+**So the cutover is sequenced, and the conflicting-server-name scan is the
 reason.** While the file-managed server block for a name still exists,
-enabling a claimed vhost for the same name makes every converge fail: the
+enabling an edge vhost for the same name makes every converge fail: the
 real `nginx -t` reports `conflicting server name`, the installer treats
 that as fatal (nginx would silently drop one block otherwise), reverts
 `current`, and raises an incident — on every node, every sweep, until the
 file block is gone. So: **retire the file-managed server block and enable
-the claimed row in the same maintenance window.** Order inside the window:
-claim + enable the row (converges now fail loudly — expected), delete the
+the edge row in the same maintenance window.** Order inside the window:
+enable the row (converges now fail loudly — expected), delete the
 file-managed block, reload once by hand or let the next sweep converge.
 
 ## Migrating a node off the hand-managed config
@@ -281,8 +274,8 @@ One step at a time, each independently verifiable:
    vhosts; the edge includes match nothing until a generation lands).
 2. **Converge** (`install_generation` broadcast or the 10-minute sweep) and
    verify `installed.json` and that `current/` is populated.
-3. **Per domain**: delete the file-managed server block, create/enable the
-   edge vhost row (house names: the claim sequence above, same window).
+3. **Per domain**: delete the file-managed server block and create/enable the
+   edge vhost row — same window, per the sequence above.
 4. **Flip `EDGE_HTTP_DEFAULT_SERVER`** once no file-managed default server
    remains (and remove any day-0 probe server) — the rendered catch-alls
    take over unmatched names: 443 rejects the TLS handshake without a

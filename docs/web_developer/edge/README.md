@@ -44,7 +44,6 @@ GET    /api/edge/vhost/<id>           detail
 POST   /api/edge/vhost                create
 POST   /api/edge/vhost/<id>           update
 DELETE /api/edge/vhost/<id>           delete
-POST   /api/edge/vhost/claim_reserved PLATFORM ADMIN ONLY — see below
 ```
 
 **Permissions:** `view_dns` to read; `manage_dns` (or `security`) to write.
@@ -64,7 +63,6 @@ POST   /api/edge/vhost/claim_reserved PLATFORM ADMIN ONLY — see below
 | `quiet_paths` | yes | `api`/`site_api` only: exact request paths kept out of the main access log (health checks). Charset `[A-Za-z0-9._/-]`, must start `/`. On `site_api` each must sit under a declared route prefix. |
 | `serve_static` | yes | `api`/`site_api` only: serve the platform's Django static files at `/static/` instead of proxying it. On `site_api`, nginx renders this as a `^~` prefix so the site's asset-suffix matching cannot capture it. |
 | `redirect_to` | yes | `redirect` only (**required** there): the target hostname. A 301 preserving the request path is rendered. |
-| `claims_reserved` | **no** | Read-only over plain REST; moves only through `claim_reserved`. |
 | `is_enabled` | yes | Only enabled vhosts are served. |
 
 `server_name` is returned on every graph as a read-only extra.
@@ -80,11 +78,10 @@ POST   /api/edge/vhost/claim_reserved PLATFORM ADMIN ONLY — see below
 | A knob on a kind it does not apply to (`spa` on `api`, `quiet_paths` on `site`, …) | 400 |
 | A `site_api` quiet path not under any declared route prefix | 400 — the message names the declared prefixes |
 | `label` containing a dot, uppercase, or any punctuation | 400 |
-| The name is reserved by the deployment (it is the API's own hostname) | 400 |
 
 A vhost may be created **disabled** with a certificate that does not yet cover
-it — useful while a certificate is being reissued. The coverage and
-reserved-name checks apply at enable time.
+it — useful while a certificate is being reissued. The coverage check applies
+at enable time.
 
 ## Routes (`site_api` prefixes)
 
@@ -159,21 +156,6 @@ edge protects every tenant behind it), so there is no group scoping and a
 **Log-first:** create rules in `log`, watch the edge watch log (each line
 names the matching rule's id), then flip to `enforce`. Changes converge to
 the fleet within the normal convergence window (~10 minutes).
-
-## Reserved names (`claim_reserved`)
-
-```
-POST /api/edge/vhost/claim_reserved   {vhost, release?: true}
-```
-
-**Platform superusers only, interactive sessions only** — API keys are
-refused even when linked to a superuser. Portals should not surface this
-outside a platform-operations view.
-
-Grants one house-domain vhost an exemption from the reserved-name check, so
-the platform can serve its OWN hostnames through the edge. `release: true`
-clears it. Tenant vhosts are always refused, and the flag is not writable as
-a plain field.
 
 ## Machine endpoints
 

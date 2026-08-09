@@ -424,10 +424,6 @@ reasoning: [edge README](../edge/README.md#settings),
   `["default"]`. Both the pools the convergence sweep broadcasts to and the
   allowlist `Vhost.pool` is validated against; an empty list falls back to
   `["default"]` rather than declaring none.
-- `EDGE_RESERVED_SERVER_NAMES` — **DB-backed** (`settings.get`, `kind="list"`),
-  default `[]`. Names no vhost may claim, unioned with Django's concrete
-  `ALLOWED_HOSTS` entries; **fails closed** — when that union is empty (a `["*"]`
-  or empty `ALLOWED_HOSTS` and this unset) no vhost can be enabled at all.
 - `EDGE_CONVERGE_ENABLED` — **file-only** (`settings.get_static`), bool,
   default `True`. `False` stops the ten-minute convergence sweep entirely —
   nothing is published to the `edge` channel — for deployments that install this

@@ -60,7 +60,7 @@ mojo/apps/edge/
     installer.py    Node-side: stage, validate, swap, reload, revert
   rest/
     upstream.py     Read + the platform-admin `declare`/`retire` actions
-    vhost.py        CRUD, the house-vhost guard, `claim_reserved`
+    vhost.py        CRUD and the house-vhost guard
     route.py        CRUD for site_api prefixes, same house guards
     blocklist.py    CRUD for the fleet blocklist (global security perms)
     node.py         desired_state + material — machine endpoints
@@ -350,7 +350,6 @@ installer can be unit-tested but cannot be exercised on a node.
 | `EDGE_ROOT` | `/opt/api/var/edge` | Generations, `current`, `installed.json` |
 | `EDGE_WWW_BASE` | `/opt/www` | Where installed releases live |
 | `EDGE_SOCKET_BASE` | `/run/mojo` | Unix upstream sockets must resolve under this |
-| `EDGE_RESERVED_SERVER_NAMES` | — | Names no vhost may claim. **See below.** |
 | `EDGE_TLS_PROTOCOLS` | `TLSv1.2 TLSv1.3` | The TLS floor (whitelist re-asserted at render) |
 | `EDGE_TLS_CIPHERS` | modern suite | The TLS floor (same re-assertion) |
 | `EDGE_ACME_WEBROOT` | `/var/www/certbot` | Port-80 ACME challenge root (static) |
@@ -376,11 +375,13 @@ installer can be unit-tested but cannot be exercised on a node.
 cannot move. The clamped knobs are DB-settable tuning; their resolved values
 join the desired-state payload so changes converge.)
 
-**`EDGE_RESERVED_SERVER_NAMES` fails closed.** The reserved set is Django's
-`ALLOWED_HOSTS` (concrete entries only) plus this setting. If `ALLOWED_HOSTS`
-is `["*"]` or empty *and* this setting is unset, **no vhost can be enabled** —
-a deployment that cannot name its own hostname cannot protect it, and silently
-allowing every name is the shadowing attack. Declare it.
+**There is no reserved-name list.** Naming a vhost is owning the `Domain` it
+sits under plus holding `manage_dns` — an admin decision, not something the
+framework second-guesses. A name collision is caught in the two places it can
+actually happen: the enabled-row uniqueness constraint refuses a second enabled
+vhost on the same name (row vs row), and the installer's converge-time
+`conflicting server name` scan refuses a generation that collides with a
+hand-written nginx block (row vs conf).
 
 ## Testing
 
