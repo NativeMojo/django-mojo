@@ -4,8 +4,9 @@ import signal
 import threading
 import time
 
-from .collectors import FimCollector, JournalCollector, NginxCollector
+from .collectors import FimCollector, JournalCollector, NginxCollector, RpmCollector
 from .output import emit, write_status
+from .profiles import profile_identity, resolve_profile
 from .sender import Sender
 from .store import Store
 
@@ -20,12 +21,25 @@ class Runtime:
         collectors = config["collectors"]
         self.journal = JournalCollector(collectors["journal"]) if collectors["journal"]["enabled"] else None
         self.nginx = NginxCollector(collectors["nginx"]) if collectors["nginx"]["enabled"] else None
-        self.fim = (FimCollector(collectors["fim"], config["expected_changes_path"])
-                    if collectors["fim"]["enabled"] else None)
+        self.profile = resolve_profile(config.get("profile"))
+        self.profile_identity = profile_identity(self.profile) if self.profile else None
+        self.integrity_collectors = {}
+        if self.profile:
+            for tier, tier_config in collectors["fim"]["tiers"].items():
+                self.integrity_collectors[tier] = FimCollector(
+                    tier_config, config["expected_changes_path"], self.profile_identity, tier)
+            self.integrity_collectors["rpm"] = RpmCollector(
+                collectors["rpm"], self.profile_identity, config["expected_changes_path"])
+            self.fim = None
+        else:
+            self.fim = (FimCollector(collectors["fim"], config["expected_changes_path"])
+                        if collectors["fim"]["enabled"] else None)
         self.sender = sender or Sender(config, self.store)
         self.collector_status = {}
         self.last_delivery = {}
         self.last_fim = 0
+        self.last_integrity = {}
+        self.integrity_scans = {}
         self.running = True
         self.stop_event = threading.Event()
 
@@ -78,6 +92,91 @@ class Runtime:
         except Exception as err:
             self._collector_error("fim", err)
 
+    def preview_integrity(self):
+        """Scan every immutable tier without changing authoritative state."""
+        if not self.profile:
+            raise ValueError("legacy custom FIM has no profile activation ceremony")
+        scans = {}
+        fast_snapshot = None
+        for tier in ("fast", "slow", "rpm"):
+            collector = self.integrity_collectors[tier]
+            started = time.monotonic()
+            previous = self.store.load_fim_baseline(collector.baseline_key)
+            if tier == "rpm":
+                scan = collector.scan(previous, shared_snapshot=fast_snapshot)
+            else:
+                scan = collector.scan(previous)
+                if tier == "fast":
+                    fast_snapshot = scan["snapshot"]
+            scan["duration"] = round(time.monotonic() - started, 6)
+            config = collector.config
+            scan["bounds"] = {
+                key: config[key] for key in (
+                    "max_entries", "max_file_bytes", "max_depth") if key in config
+            }
+            scans[tier] = scan
+        return scans
+
+    def initialize_integrity(self, scans, reason="initialize"):
+        if not self.profile:
+            raise ValueError("legacy custom FIM initializes on its historical first scan")
+        self.store.activate_fim_profile(self.profile_identity, scans, reason=reason)
+
+    def _poll_integrity(self):
+        if not self.integrity_collectors:
+            return
+        active = self.store.active_fim_profile()
+        if active != self.profile_identity:
+            self._collector_error(
+                "integrity", "profile baseline is not explicitly initialized or digest drifted")
+            return
+        now = time.monotonic()
+        fast_snapshot = None
+        for tier in ("fast", "slow", "rpm"):
+            collector = self.integrity_collectors[tier]
+            interval = collector.config["interval_seconds"]
+            if self.last_integrity.get(tier) and now - self.last_integrity[tier] < interval:
+                continue
+            self.last_integrity[tier] = now
+            try:
+                baseline = self.store.load_fim_baseline(collector.baseline_key)
+                started = time.monotonic()
+                if tier == "rpm":
+                    if fast_snapshot is None:
+                        fast = self.integrity_collectors["fast"]
+                        fast_snapshot = self.store.load_fim_baseline(fast.baseline_key)
+                    scan = collector.scan(baseline, shared_snapshot=fast_snapshot)
+                else:
+                    scan = collector.scan(baseline)
+                    if tier == "fast":
+                        fast_snapshot = scan["snapshot"]
+                scan["duration"] = round(time.monotonic() - started, 6)
+                observations = collector.diff(baseline, scan)
+                self.store.record_fim_scan(
+                    collector.baseline_key, scan["snapshot"], observations, scan["complete"])
+                self.integrity_scans[tier] = {
+                    "ok": scan["complete"], "last_success": time.time(),
+                    "complete": scan["complete"], "entries": len(scan["snapshot"]),
+                    "duration": scan["duration"],
+                    "packages": scan.get("packages", 0),
+                    "anomalies": scan.get("anomalies", 0),
+                }
+                if not scan["complete"]:
+                    raise RuntimeError(f"{tier} integrity scan was incomplete")
+            except Exception as err:
+                previous = self.integrity_scans.get(tier, {})
+                self.integrity_scans[tier] = {
+                    "ok": False, "complete": False,
+                    "last_success": previous.get("last_success"),
+                    "error": str(err)[:256],
+                }
+                self._collector_error(f"integrity_{tier}", err)
+        self.collector_status["integrity"] = {
+            "ok": all(item.get("ok") for item in self.integrity_scans.values()) and
+                  set(self.integrity_scans) == set(self.integrity_collectors),
+            "tiers": self.integrity_scans,
+        }
+
     def _publish_status(self):
         status = {
             "schema": "mojosec.status", "version": 1,
@@ -87,6 +186,17 @@ class Runtime:
             "collectors": self.collector_status,
             "delivery": self.last_delivery,
         }
+        if self.profile_identity:
+            keys = {tier: collector.baseline_key
+                    for tier, collector in self.integrity_collectors.items()}
+            status["integrity"] = self.store.fim_profile_health(
+                self.profile_identity, keys)
+            status["integrity"]["runtime"] = self.integrity_scans
+        try:
+            from mojo.deploy.mojosec_changes import ChangeJournal
+            status["expected_changes"] = ChangeJournal().status()
+        except Exception as err:
+            status["expected_changes"] = {"ok": False, "error": str(err)[:256]}
         status.update(self.store.stats())
         write_status(self.config["status_path"], status)
 
@@ -94,6 +204,7 @@ class Runtime:
         self._poll_stream(self.journal)
         self._poll_stream(self.nginx)
         self._poll_fim()
+        self._poll_integrity()
         try:
             self.last_delivery = self.sender.send_once()
         except Exception as err:

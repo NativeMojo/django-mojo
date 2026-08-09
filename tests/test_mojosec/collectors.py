@@ -418,3 +418,123 @@ def test_fim_symlink_swap_fails_closed_and_pending_work_is_bounded(opts):
                      "platforms without descriptor-relative no-follow traversal must fail closed")
         th.assert_eq(unsupported["snapshot"], {},
                      "the fail-closed platform path must not use an unsafe pathname fallback")
+
+
+@th.django_unit_test()
+def test_standard_profile_is_immutable_bounded_and_covers_system_python(opts):
+    from mojo.mojosec.config import build_config
+    from mojo.mojosec.profiles import PRIVATE_TREES, resolve_profile
+
+    profile = resolve_profile("al2023-web-v1")
+    th.assert_eq(len(profile["digest"]), 64,
+                 "the immutable profile must carry one deterministic SHA-256 identity")
+    th.assert_eq(profile["tiers"]["fast"]["interval_seconds"], 60,
+                 "the standard persistence graph must run every minute")
+    th.assert_eq(profile["tiers"]["slow"]["interval_seconds"], 21600,
+                 "the binary integrity graph must run every six hours")
+    fast_paths = [item["path"] for item in profile["tiers"]["fast"]["targets"]]
+    th.assert_eq(fast_paths.count("/usr/local/lib"), 1,
+                 "the root-pip system site tree must have exactly one traversal owner")
+    etc = next(item for item in profile["tiers"]["fast"]["targets"]
+               if item["path"] == "/etc")
+    th.assert_true("mojosec/**" in etc["exclude"],
+                   "the expanded broad /etc graph must subtract MojoSec private state")
+    th.assert_true(all(not any(path.startswith(private + "/") or path == private
+                               for private in PRIVATE_TREES)
+                       for path in fast_paths),
+                   "no final submitted target may directly enter private MojoSec state")
+
+    config = build_config({
+        "sensor_id": "profile-test",
+        "endpoint": "https://example.invalid/api/incident/mojosec/batch",
+        "profile": "al2023-web-v1",
+    })
+    th.assert_eq(set(config["collectors"]["fim"]["tiers"]), {"fast", "slow"},
+                 "selecting the profile name must resolve the packaged graph")
+    th.assert_true(config["collectors"]["rpm"]["enabled"],
+                   "the standard profile must monitor the imported system Python environment")
+
+
+@th.django_unit_test()
+def test_fim_reuses_strict_metadata_and_retains_alias_anomalies(opts):
+    from mojo.mojosec.collectors.fim import FimCollector
+
+    with tempfile.TemporaryDirectory() as root:
+        root = os.path.realpath(root)
+        watched = os.path.join(root, "site-packages")
+        outside = os.path.join(root, "outside")
+        os.mkdir(watched)
+        os.mkdir(outside)
+        module = os.path.join(watched, "module.py")
+        alias = os.path.join(watched, "module-alias.py")
+        pth = os.path.join(watched, "startup.pth")
+        escape = os.path.join(watched, "escape")
+        with open(module, "w", encoding="utf-8") as handle:
+            handle.write("VALUE = 1\n")
+        os.link(module, alias)
+        with open(pth, "w", encoding="utf-8") as handle:
+            handle.write("import attacker_startup\n")
+        os.symlink(outside, escape)
+        collector = FimCollector({
+            "targets": [{"path": watched, "recursive": True}],
+            "max_entries": 100, "max_file_bytes": 1024 * 1024, "max_depth": 16,
+        })
+        first = collector.scan()
+        th.assert_eq(first["snapshot"][alias]["sha256"], first["snapshot"][module]["sha256"],
+                     "hardlink aliases must retain logical observations while sharing content")
+        th.assert_true(first["snapshot"][alias].get("digest_reused") is True or
+                       first["snapshot"][module].get("digest_reused") is True,
+                       "one stable device/inode content read must serve both hardlink aliases")
+        th.assert_eq(first["snapshot"][pth]["anomaly"], "pth_executable",
+                     "an executable .pth directive must be explicit integrity evidence")
+        th.assert_eq(first["snapshot"][escape]["anomaly"], "symlink_escape",
+                     "a symlink escaping the approved site root must be an anomaly")
+
+        second = collector.scan(first["snapshot"])
+        th.assert_true(second["snapshot"][module].get("digest_reused") is True,
+                       "digest reuse requires the full stable metadata identity")
+
+
+@th.django_unit_test()
+def test_rpm_parser_is_strict_and_system_site_roots_are_constrained(opts):
+    from mojo.mojosec.collectors.rpm import RpmCollector, RpmError, parse_verify_output
+
+    parsed = parse_verify_output(
+        "S.5....T.  c /usr/lib/python3.11/site-packages/mojo/__init__.py\n",
+        ["/usr/lib/python3.11/site-packages"],
+    )
+    th.assert_eq(parsed["/usr/lib/python3.11/site-packages/mojo/__init__.py"]["status"],
+                 "S.5....T.",
+                 "all nine documented RPM verification columns must be retained")
+    with th.assert_raises(RpmError):
+        parse_verify_output(
+            "X........ /usr/lib/python3.11/site-packages/mojo/__init__.py\n",
+            ["/usr/lib/python3.11/site-packages"],
+        )
+
+    calls = []
+
+    def runner(argv, accepted=(0,)):
+        calls.append(argv)
+        return 0, json.dumps([
+            "/usr/lib/python3.11/site-packages",
+            "/usr/lib64/python3.11/site-packages",
+            "/usr/local/lib/python3.11/site-packages",
+            "/opt/api/.venv/lib/python3.11/site-packages",
+            "/tmp/attacker/site-packages",
+        ]), ""
+
+    collector = RpmCollector({
+        "interpreter": "/usr/bin/python3", "interval_seconds": 21600,
+        "max_entries": 100, "max_packages": 10, "max_owner_queries": 100,
+        "max_output_bytes": 65536, "timeout_seconds": 5,
+        "max_file_bytes": 1024, "max_depth": 16,
+    }, {"name": "al2023-web-v1", "version": 1, "digest": "a" * 64}, runner=runner)
+    roots = collector.discover_site_roots()
+    th.assert_eq(roots, [
+        "/usr/lib/python3.11/site-packages",
+        "/usr/lib64/python3.11/site-packages",
+        "/usr/local/lib/python3.11/site-packages",
+    ], "system interpreter discovery must reject project and temporary environments")
+    th.assert_eq(calls[0][:2], ["/usr/bin/python3", "-I"],
+                 "site discovery must use the trusted isolated system interpreter")

@@ -321,18 +321,113 @@ class Store:
             for found in observations:
                 self._ingest_one(found, now)
             if complete:
-                self.db.execute("DELETE FROM fim_baseline WHERE profile <> ?", (profile,))
                 self.db.execute("DELETE FROM fim_baseline WHERE profile = ?", (profile,))
                 self.db.executemany(
                     "INSERT INTO fim_baseline(profile, path, entry) VALUES(?, ?, ?)",
                     ((profile, path, canonical_json(entry)) for path, entry in snapshot.items()),
                 )
                 self.set_meta(f"fim_initialized:{profile}", True)
+                self.set_meta(f"fim_scan:{profile}", {
+                    "at": now, "complete": True, "entries": len(snapshot),
+                })
             self._flush_due(now)
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
             raise
+
+    def activate_fim_profile(self, identity, scans, reason="initialize"):
+        """Atomically commit every complete tier and select one immutable profile."""
+        if (not isinstance(identity, dict) or
+                set(identity) != {"name", "version", "digest"}):
+            raise StoreError("profile activation identity is invalid")
+        if not isinstance(scans, dict) or not scans:
+            raise StoreError("profile activation requires complete tier scans")
+        for tier, scan in scans.items():
+            if (not isinstance(tier, str) or not isinstance(scan, dict) or
+                    scan.get("tier") != tier or scan.get("complete") is not True or
+                    not isinstance(scan.get("snapshot"), dict)):
+                raise StoreError("profile activation refuses an incomplete tier")
+        now = time.time()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            for tier, scan in sorted(scans.items()):
+                key = scan["baseline_key"]
+                self.db.execute("DELETE FROM fim_baseline WHERE profile = ?", (key,))
+                self.db.executemany(
+                    "INSERT INTO fim_baseline(profile, path, entry) VALUES(?, ?, ?)",
+                    ((key, path, canonical_json(entry))
+                     for path, entry in scan["snapshot"].items()),
+                )
+                self.set_meta(f"fim_initialized:{key}", True)
+                self.set_meta(f"fim_scan:{key}", {
+                    "at": now, "complete": True,
+                    "entries": len(scan["snapshot"]),
+                    "duration": scan.get("duration", 0),
+                    "bounds": scan.get("bounds", {}),
+                })
+            prior = self.get_meta("fim_active_profile")
+            history = self.get_meta("fim_profile_history", [])
+            if prior and prior != identity:
+                history = [prior] + [item for item in history if item != prior]
+                history = history[:8]
+            self.set_meta("fim_profile_history", history)
+            self.set_meta("fim_active_profile", identity)
+            self.set_meta("fim_baseline_reason", str(reason)[:128])
+            self.set_meta("fim_baseline_at", now)
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def active_fim_profile(self):
+        return self.get_meta("fim_active_profile")
+
+    def rollback_fim_profile(self, digest):
+        history = self.get_meta("fim_profile_history", [])
+        identity = next((item for item in history if item.get("digest") == digest), None)
+        if identity is None:
+            raise StoreError("requested profile digest is not in intact rollback history")
+        keys = [f"{identity['name']}:{identity['digest']}:{tier}"
+                for tier in ("fast", "slow", "rpm")]
+        if not all(self.fim_initialized(key) for key in keys):
+            raise StoreError("requested rollback profile has an incomplete baseline")
+        current = self.active_fim_profile()
+        now = time.time()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.set_meta("fim_active_profile", identity)
+            self.set_meta("fim_profile_history", [current] + [
+                item for item in history if item != identity and item != current
+            ][:7])
+            self.set_meta("fim_baseline_reason", "rollback")
+            self.set_meta("fim_baseline_at", now)
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+        return identity
+
+    def fim_profile_health(self, identity, tier_keys):
+        active = self.active_fim_profile()
+        tiers = {}
+        for tier, key in tier_keys.items():
+            meta = self.get_meta(f"fim_scan:{key}", {})
+            tiers[tier] = {
+                "initialized": self.fim_initialized(key),
+                "last_complete": meta.get("at"),
+                "entries": meta.get("entries", 0),
+                "duration": meta.get("duration", 0),
+                "bounds": meta.get("bounds", {}),
+            }
+        return {
+            "active": active == identity,
+            "digest_drift": bool(active and active != identity),
+            "identity": identity,
+            "baseline_at": self.get_meta("fim_baseline_at"),
+            "baseline_reason": self.get_meta("fim_baseline_reason", ""),
+            "tiers": tiers,
+        }
 
     def stats(self):
         events = self.db.execute("SELECT COUNT(*) AS count FROM events").fetchone()["count"]

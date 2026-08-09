@@ -6,6 +6,47 @@ import tempfile
 from testit import helpers as th
 
 
+@th.django_unit_test()
+def test_profile_activation_is_all_tier_atomic_and_keeps_rollback_state(opts):
+    from mojo.mojosec.store import Store, StoreError
+
+    with tempfile.TemporaryDirectory() as root:
+        store = Store(
+            root, "activation-test",
+            {"window_seconds": 60, "flush_count": 25, "max_aggregates": 100,
+             "critical_reserve_aggregates": 10},
+            {"max_spool_events": 100, "critical_reserve_events": 10,
+             "retry_min_seconds": 1, "retry_max_seconds": 2},
+        )
+        first = {"name": "al2023-web-v1", "version": 1, "digest": "a" * 64}
+        scans = {
+            tier: {"tier": tier, "baseline_key": f"al2023-web-v1:{'a' * 64}:{tier}",
+                   "complete": True, "snapshot": {f"/{tier}": {"kind": "file"}}}
+            for tier in ("fast", "slow", "rpm")
+        }
+        broken = dict(scans)
+        broken["rpm"] = dict(broken["rpm"], complete=False)
+        with th.assert_raises(StoreError):
+            store.activate_fim_profile(first, broken)
+        th.assert_eq(store.active_fim_profile(), None,
+                     "one incomplete tier must make initialization a complete no-op")
+        store.activate_fim_profile(first, scans)
+        th.assert_eq(store.active_fim_profile(), first,
+                     "one exclusive transaction must select only a complete profile generation")
+
+        second = {"name": "al2023-web-v2", "version": 2, "digest": "b" * 64}
+        second_scans = {
+            tier: {"tier": tier, "baseline_key": f"al2023-web-v2:{'b' * 64}:{tier}",
+                   "complete": True, "snapshot": {f"/{tier}-2": {"kind": "file"}}}
+            for tier in ("fast", "slow", "rpm")
+        }
+        store.activate_fim_profile(second, second_scans, reason="upgrade")
+        rolled_back = store.rollback_fim_profile("a" * 64)
+        th.assert_eq(rolled_back, first,
+                     "rollback must select an intact retained name+digest generation")
+        store.close()
+
+
 AGGREGATION = {
     "window_seconds": 60, "flush_count": 2, "max_aggregates": 100,
     "critical_reserve_aggregates": 10,

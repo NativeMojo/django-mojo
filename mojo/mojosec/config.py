@@ -12,6 +12,7 @@ MAX_CONFIG_BYTES = 256 * 1024
 
 DEFAULTS = {
     "version": CONFIG_VERSION,
+    "profile": "",
     "policy_revision": "",
     "state_dir": "/var/lib/mojosec",
     "status_path": "/run/mojosec/status.json",
@@ -52,6 +53,19 @@ DEFAULTS = {
             "max_entries": 20000,
             "max_file_bytes": 16 * 1024 * 1024,
             "max_depth": 64,
+            "tiers": {},
+        },
+        "rpm": {
+            "enabled": False,
+            "interval_seconds": 6 * 60 * 60,
+            "interpreter": "/usr/bin/python3",
+            "max_entries": 250000,
+            "max_packages": 10000,
+            "max_owner_queries": 250000,
+            "max_output_bytes": 8 * 1024 * 1024,
+            "timeout_seconds": 300,
+            "max_file_bytes": 64 * 1024 * 1024,
+            "max_depth": 64,
         },
     },
     "aggregation": {
@@ -74,7 +88,7 @@ DEFAULTS = {
 
 _TOP_KEYS = set(DEFAULTS) | {"sensor_id", "endpoint"}
 _COLLECTOR_KEYS = set(DEFAULTS["collectors"])
-_TARGET_KEYS = {"path", "recursive", "exclude"}
+_TARGET_KEYS = {"path", "recursive", "exclude", "optional"}
 _SENSOR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 
@@ -131,11 +145,42 @@ def _absolute(value, label):
         raise ConfigError(f"{label} must be an absolute path")
 
 
+def validate_config_target_list(targets, label):
+    if not isinstance(targets, list) or len(targets) > 128:
+        raise ConfigError(f"{label} must be a list with at most 128 entries")
+    seen = set()
+    for target in targets:
+        _reject_unknown(target, _TARGET_KEYS, f"{label}[]")
+        _absolute(target.get("path"), f"{label}[].path")
+        if target["path"] in seen:
+            raise ConfigError(f"duplicate FIM target: {target['path']}")
+        seen.add(target["path"])
+        if "recursive" in target and not isinstance(target["recursive"], bool):
+            raise ConfigError("FIM target recursive must be a boolean")
+        if "optional" in target and not isinstance(target["optional"], bool):
+            raise ConfigError("FIM target optional must be a boolean")
+        excludes = target.get("exclude", [])
+        if not isinstance(excludes, list) or len(excludes) > 64:
+            raise ConfigError("FIM target exclude must be a list with at most 64 entries")
+        for pattern in excludes:
+            if not isinstance(pattern, str) or not pattern or len(pattern) > 256:
+                raise ConfigError("FIM excludes must be non-empty strings up to 256 characters")
+
+
 def validate_config(value):
     _reject_unknown(value, _TOP_KEYS, "config")
     if (not isinstance(value.get("version"), int) or isinstance(value.get("version"), bool) or
             value.get("version") != CONFIG_VERSION):
         raise ConfigError(f"config version must be {CONFIG_VERSION}")
+    if not isinstance(value["profile"], str) or len(value["profile"]) > 128:
+        raise ConfigError("profile must be a bounded string")
+    if value["profile"]:
+        from .profiles import resolve_profile
+        profile = resolve_profile(value["profile"])
+        if not value["collectors"]["fim"]["tiers"]:
+            raise ConfigError("selected profile is missing its immutable FIM tiers")
+        if value["collectors"]["rpm"]["enabled"] is not True:
+            raise ConfigError("selected profile requires RPM/Python integrity")
     sensor_id = value.get("sensor_id")
     if not isinstance(sensor_id, str) or not _SENSOR_RE.fullmatch(sensor_id):
         raise ConfigError("sensor_id is required and may contain letters, numbers, . _ : -")
@@ -211,29 +256,44 @@ def validate_config(value):
     _integer(nginx["max_line_bytes"], "collectors.nginx.max_line_bytes", 512, 1024 * 1024)
 
     fim = collectors["fim"]
-    if not isinstance(fim["targets"], list) or len(fim["targets"]) > 128:
-        raise ConfigError("collectors.fim.targets must be a list with at most 128 entries")
-    if fim["enabled"] and not fim["targets"]:
+    validate_config_target_list(fim["targets"], "collectors.fim.targets")
+    if fim["enabled"] and not fim["targets"] and not fim["tiers"]:
         raise ConfigError("enabled FIM requires at least one explicit target")
-    seen = set()
-    for target in fim["targets"]:
-        _reject_unknown(target, _TARGET_KEYS, "collectors.fim.targets[]")
-        _absolute(target.get("path"), "collectors.fim.targets[].path")
-        if target["path"] in seen:
-            raise ConfigError(f"duplicate FIM target: {target['path']}")
-        seen.add(target["path"])
-        if "recursive" in target and not isinstance(target["recursive"], bool):
-            raise ConfigError("FIM target recursive must be a boolean")
-        excludes = target.get("exclude", [])
-        if not isinstance(excludes, list) or len(excludes) > 64:
-            raise ConfigError("FIM target exclude must be a list with at most 64 entries")
-        for pattern in excludes:
-            if not isinstance(pattern, str) or not pattern or len(pattern) > 256:
-                raise ConfigError("FIM excludes must be non-empty strings up to 256 characters")
     _integer(fim["interval_seconds"], "collectors.fim.interval_seconds", 5, 86400)
     _integer(fim["max_entries"], "collectors.fim.max_entries", 1, 1000000)
     _integer(fim["max_file_bytes"], "collectors.fim.max_file_bytes", 0, 1024 * 1024 * 1024)
     _integer(fim["max_depth"], "collectors.fim.max_depth", 1, 256)
+    if not isinstance(fim["tiers"], dict) or len(fim["tiers"]) > 8:
+        raise ConfigError("collectors.fim.tiers must be a bounded object")
+    for tier, tier_config in fim["tiers"].items():
+        if not isinstance(tier, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", tier):
+            raise ConfigError("collectors.fim.tiers has an invalid tier name")
+        expected = {"targets", "interval_seconds", "max_entries", "max_file_bytes", "max_depth"}
+        _reject_unknown(tier_config, expected, f"collectors.fim.tiers.{tier}")
+        if set(tier_config) != expected:
+            raise ConfigError(f"collectors.fim.tiers.{tier} is incomplete")
+        validate_config_target_list(tier_config["targets"], f"collectors.fim.tiers.{tier}.targets")
+        _integer(tier_config["interval_seconds"],
+                 f"collectors.fim.tiers.{tier}.interval_seconds", 5, 86400)
+        _integer(tier_config["max_entries"],
+                 f"collectors.fim.tiers.{tier}.max_entries", 1, 1000000)
+        _integer(tier_config["max_file_bytes"],
+                 f"collectors.fim.tiers.{tier}.max_file_bytes", 0, 1024 * 1024 * 1024)
+        _integer(tier_config["max_depth"],
+                 f"collectors.fim.tiers.{tier}.max_depth", 1, 256)
+
+    rpm = collectors["rpm"]
+    _absolute(rpm["interpreter"], "collectors.rpm.interpreter")
+    _integer(rpm["interval_seconds"], "collectors.rpm.interval_seconds", 5, 86400)
+    _integer(rpm["max_entries"], "collectors.rpm.max_entries", 1, 1000000)
+    _integer(rpm["max_packages"], "collectors.rpm.max_packages", 1, 100000)
+    _integer(rpm["max_owner_queries"], "collectors.rpm.max_owner_queries", 1, 1000000)
+    _integer(rpm["max_output_bytes"], "collectors.rpm.max_output_bytes", 4096,
+             64 * 1024 * 1024)
+    _integer(rpm["timeout_seconds"], "collectors.rpm.timeout_seconds", 1, 3600)
+    _integer(rpm["max_file_bytes"], "collectors.rpm.max_file_bytes", 0,
+             1024 * 1024 * 1024)
+    _integer(rpm["max_depth"], "collectors.rpm.max_depth", 1, 256)
 
     aggregation = value["aggregation"]
     _reject_unknown(aggregation, DEFAULTS["aggregation"], "aggregation")
@@ -269,7 +329,25 @@ def build_config(supplied):
     """Merge one already-parsed object with defaults and validate it."""
     if not isinstance(supplied, dict):
         raise ConfigError("config must be a JSON object")
-    return validate_config(_merge(DEFAULTS, supplied))
+    expanded = _copy(supplied)
+    profile_name = expanded.get("profile", "")
+    if profile_name:
+        from .profiles import resolve_profile
+        try:
+            profile = resolve_profile(profile_name)
+        except ValueError as err:
+            raise ConfigError(str(err)) from err
+        collectors = expanded.setdefault("collectors", {})
+        fim = collectors.setdefault("fim", {})
+        if "targets" in fim or "tiers" in fim:
+            raise ConfigError("profile policies cannot override the immutable FIM graph")
+        rpm = collectors.setdefault("rpm", {})
+        if any(key != "enabled" for key in rpm):
+            raise ConfigError("profile policies cannot override immutable RPM bounds")
+        fim.update({"enabled": True, "targets": [], "tiers": profile["tiers"]})
+        rpm.update(profile["rpm"])
+        rpm["enabled"] = True
+    return validate_config(_merge(DEFAULTS, expanded))
 
 
 def _security_problems(info, require_root):
