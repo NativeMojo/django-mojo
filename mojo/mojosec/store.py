@@ -7,10 +7,13 @@ import stat
 import time
 
 from .aggregation import merge, should_flush
+from .attribution import merge_session
 from .protocol import canonical_json, make_event
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SSH_SESSION_CAP = 4096
+SSH_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 ANNOTATION_GRACE_SECONDS = 120
 # The producer caps an active operation at 15 minutes. Retain exact active
 # paths for that ceiling plus the five-minute post-completion match window.
@@ -44,11 +47,15 @@ class Store:
         self.path = os.path.join(state_dir, "state.sqlite3")
         self.db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         self.db.row_factory = sqlite3.Row
+        try:
+            self._create_schema()
+        except Exception:
+            self.db.close()
+            raise
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=30000")
-        self._create_schema()
         os.chmod(self.path, 0o600)
         stored_sensor_id = self.get_meta("sensor_id")
         if stored_sensor_id is None:
@@ -60,12 +67,45 @@ class Store:
             )
 
     def _create_schema(self):
-        self.db.executescript("""
-            CREATE TABLE IF NOT EXISTS meta (
+        tables = {row["name"] for row in self.db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if not tables:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                self._create_base_schema()
+                self._create_ssh_session_schema()
+                self.set_meta("schema_version", SCHEMA_VERSION)
+                self.db.execute("COMMIT")
+            except Exception:
+                self.db.execute("ROLLBACK")
+                raise
+            return
+        if "meta" not in tables:
+            raise StoreError("state schema has no version metadata")
+        row = self.db.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        if row is None:
+            raise StoreError("state schema version is missing")
+        try:
+            version = json.loads(row["value"])
+        except json.JSONDecodeError as err:
+            raise StoreError("state schema version is corrupt") from err
+        if not isinstance(version, int) or isinstance(version, bool):
+            raise StoreError("state schema version is invalid")
+        if version == SCHEMA_VERSION:
+            self._ensure_v2_schema()
+            return
+        if version != 1:
+            raise StoreError(f"unsupported state schema version: {version}")
+        self._migrate_v1_to_v2()
+
+    def _create_base_schema(self):
+        statements = (
+            """CREATE TABLE meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS events (
+            )""",
+            """CREATE TABLE events (
                 id TEXT PRIMARY KEY,
                 payload TEXT NOT NULL,
                 severity TEXT NOT NULL,
@@ -74,10 +114,9 @@ class Store:
                 next_attempt REAL NOT NULL DEFAULT 0,
                 annotation_deadline REAL NOT NULL DEFAULT 0,
                 last_error TEXT NOT NULL DEFAULT ''
-            );
-            CREATE INDEX IF NOT EXISTS events_delivery
-                ON events(next_attempt, created);
-            CREATE TABLE IF NOT EXISTS aggregates (
+            )""",
+            "CREATE INDEX events_delivery ON events(next_attempt, created)",
+            """CREATE TABLE aggregates (
                 fingerprint TEXT PRIMARY KEY,
                 payload TEXT NOT NULL,
                 severity TEXT NOT NULL,
@@ -85,45 +124,75 @@ class Store:
                 first_seen TEXT NOT NULL,
                 last_seen TEXT NOT NULL,
                 flush_at REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS aggregates_due ON aggregates(flush_at);
-            CREATE TABLE IF NOT EXISTS fim_baseline (
+            )""",
+            "CREATE INDEX aggregates_due ON aggregates(flush_at)",
+            """CREATE TABLE fim_baseline (
                 profile TEXT NOT NULL,
                 path TEXT NOT NULL,
                 entry TEXT NOT NULL,
                 PRIMARY KEY(profile, path)
-            );
-        """)
-        aggregate_columns = {
-            row["name"] for row in self.db.execute("PRAGMA table_info(aggregates)").fetchall()
-        }
-        if "severity" not in aggregate_columns:
-            self.db.execute(
-                "ALTER TABLE aggregates ADD COLUMN severity TEXT NOT NULL DEFAULT 'warning'"
+            )""",
+        )
+        for statement in statements:
+            self.db.execute(statement)
+
+    def _create_ssh_session_schema(self):
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS ssh_sessions (
+                boot_id TEXT NOT NULL,
+                audit_session INTEGER NOT NULL,
+                actor TEXT NOT NULL,
+                tty TEXT NOT NULL DEFAULT '',
+                source_ip TEXT NOT NULL,
+                observed_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                ambiguous INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(boot_id, audit_session)
             )
-            rows = self.db.execute("SELECT fingerprint, payload FROM aggregates").fetchall()
-            for row in rows:
-                try:
-                    severity = json.loads(row["payload"]).get("severity", "warning")
-                except (AttributeError, json.JSONDecodeError):
-                    severity = "warning"
-                if severity not in ("info", "warning", "high", "critical"):
-                    severity = "warning"
-                self.db.execute(
-                    "UPDATE aggregates SET severity = ? WHERE fingerprint = ?",
-                    (severity, row["fingerprint"]),
-                )
-        event_columns = {
-            row["name"] for row in self.db.execute("PRAGMA table_info(events)").fetchall()
-        }
-        if "annotation_deadline" not in event_columns:
-            self.db.execute(
-                "ALTER TABLE events ADD COLUMN annotation_deadline REAL NOT NULL DEFAULT 0")
-        version = self.get_meta("schema_version")
-        if version is None:
+        """)
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS ssh_sessions_observed ON ssh_sessions(observed_at)")
+
+    def _add_ssh_session_ambiguous_column(self):
+        self.db.execute(
+            "ALTER TABLE ssh_sessions "
+            "ADD COLUMN ambiguous INTEGER NOT NULL DEFAULT 0")
+
+    def _ensure_v2_schema(self):
+        """Repair the brief pre-ambiguity v2 shape transactionally."""
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.db.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            if row is None or json.loads(row["value"]) != SCHEMA_VERSION:
+                raise StoreError("state schema changed during compatibility check")
+            self._create_ssh_session_schema()
+            columns = {
+                row["name"] for row in self.db.execute(
+                    "PRAGMA table_info(ssh_sessions)").fetchall()
+            }
+            if "ambiguous" not in columns:
+                self._add_ssh_session_ambiguous_column()
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def _migrate_v1_to_v2(self):
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.db.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            if row is None or json.loads(row["value"]) != 1:
+                raise StoreError("state schema changed during migration")
+            self._create_ssh_session_schema()
+            # Version is deliberately last: rollback/retry can never advertise
+            # v2 before every v2 object exists.
             self.set_meta("schema_version", SCHEMA_VERSION)
-        elif version != SCHEMA_VERSION:
-            raise StoreError(f"unsupported state schema version: {version}")
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
 
     def close(self):
         self.db.close()
@@ -146,6 +215,43 @@ class Store:
 
     def _increment(self, key, amount=1):
         self.set_meta(key, int(self.get_meta(key, 0)) + amount)
+
+    def load_ssh_sessions(self, now=None):
+        cutoff = (now if now is not None else time.time()) - SSH_SESSION_TTL_SECONDS
+        rows = self.db.execute(
+            "SELECT boot_id, audit_session, actor, tty, source_ip, observed_at, ambiguous "
+            "FROM ssh_sessions WHERE observed_at >= ? ORDER BY observed_at DESC LIMIT ?",
+            (cutoff, SSH_SESSION_CAP),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _record_ssh_sessions(self, sessions, now):
+        cutoff = now - SSH_SESSION_TTL_SECONDS
+        self.db.execute("DELETE FROM ssh_sessions WHERE observed_at < ?", (cutoff,))
+        for session in sessions or ():
+            if float(session["observed_at"]) < cutoff:
+                continue
+            existing = self.db.execute(
+                "SELECT boot_id, audit_session, actor, tty, source_ip, observed_at, ambiguous "
+                "FROM ssh_sessions WHERE boot_id = ? AND audit_session = ?",
+                (session["boot_id"], session["audit_session"]),
+            ).fetchone()
+            session = merge_session(dict(existing) if existing is not None else None, session)
+            self.db.execute(
+                "INSERT INTO ssh_sessions(boot_id, audit_session, actor, tty, source_ip, "
+                "observed_at, updated_at, ambiguous) VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(boot_id, audit_session) DO UPDATE SET "
+                "actor=excluded.actor, tty=excluded.tty, source_ip=excluded.source_ip, "
+                "observed_at=excluded.observed_at, updated_at=excluded.updated_at, "
+                "ambiguous=excluded.ambiguous",
+                (session["boot_id"], session["audit_session"], session["actor"],
+                 session.get("tty", ""), session["source_ip"],
+                 float(session["observed_at"]), now, int(bool(session.get("ambiguous")))),
+            )
+        self.db.execute(
+            "DELETE FROM ssh_sessions WHERE rowid IN ("
+            "SELECT rowid FROM ssh_sessions ORDER BY observed_at DESC, rowid DESC "
+            "LIMIT -1 OFFSET ?)", (SSH_SESSION_CAP,))
 
     def _enqueue(self, event, now=None):
         now = now if now is not None else time.time()
@@ -253,13 +359,15 @@ class Store:
             if aggregate and should_flush(aggregate, self.aggregation_config["flush_count"], due=True):
                 self._flush_aggregate(aggregate, now)
 
-    def ingest(self, observations, cursor_key=None, cursor=None):
+    def ingest(self, observations, cursor_key=None, cursor=None, ssh_sessions=None):
         """Durably queue observations and advance their collector cursor atomically."""
         now = time.time()
         self.db.execute("BEGIN IMMEDIATE")
         try:
             for found in observations:
                 self._ingest_one(found, now)
+            if ssh_sessions is not None:
+                self._record_ssh_sessions(ssh_sessions, now)
             self._flush_due(now)
             if cursor_key is not None:
                 self.set_meta(f"cursor:{cursor_key}", cursor)

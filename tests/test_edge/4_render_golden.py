@@ -264,6 +264,10 @@ def test_staged_variant_remaps_only_listens(opts):
             "the staged variant added or dropped lines"
         listens = 0
         for before, after in zip(before_lines, after_lines):
+            if before.strip().startswith("access_log"):
+                assert after.strip() == "access_log off;", \
+                    "the unprivileged staged check must not open protected production logs"
+                continue
             if not before.strip().startswith("listen"):
                 assert before == after, (
                     f"a non-listen line moved in the staged variant:\n"

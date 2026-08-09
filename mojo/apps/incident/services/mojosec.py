@@ -1,7 +1,6 @@
 """Bounded, idempotent ingestion for the MojoSec host sensor."""
 
 import hashlib
-import ipaddress
 import json
 import re
 import zlib
@@ -13,6 +12,7 @@ from django.db.models import F
 from mojo.helpers import dates, logit
 from mojo.helpers.settings import settings
 from mojo.mojosec import protocol
+from . import mojosec_evidence
 
 
 logger = logit.get_logger(__name__, "incident.log")
@@ -21,13 +21,13 @@ MAX_COMPRESSED_BYTES = protocol.MAX_BATCH_BYTES
 MAX_ERROR = 256
 KIND_POLICY = {
     "auth.ssh_login": {"level": 8},
-    "auth.ssh_failure": {"level": 5, "source_ip_min_count": 5},
+    "auth.ssh_failure": {"level": 5},
     "auth.sudo_command": {"level": 8},
     "auth.sudo_failure": {"level": 8},
     "auth.session_open": {"level": 8},
     "system.oom": {"level": 12},
     "system.service_error": {"level": 8},
-    "web.probe": {"level": 8, "source_ip_min_count": 3},
+    "web.probe": {"level": 8},
     "web.error": {"level": 5},
     "web.denied": {"level": 5},
     "fim.change": {"level": 8},
@@ -193,15 +193,8 @@ def _event_projection(batch, sensor_event):
     attributes = sensor_event["attributes"]
     policy = KIND_POLICY.get(kind, UNKNOWN_KIND_POLICY)
     category = policy.get("category", f"mojosec.{kind}")
-    source_ip = None
-    source_ip_min_count = policy.get("source_ip_min_count")
-    if source_ip_min_count is not None and sensor_event["count"] >= source_ip_min_count:
-        candidate = attributes.get("source_ip")
-        if isinstance(candidate, str):
-            try:
-                source_ip = str(ipaddress.ip_address(candidate))
-            except ValueError:
-                source_ip = None
+    projection = mojosec_evidence.project(kind, attributes, sensor_event["count"])
+    source_ip = projection["source_ip"]
     expected_change = _expected_change_projection(kind, attributes)
     projected_metadata = {
         "sensor_id": batch["sensor_id"],
@@ -220,6 +213,8 @@ def _event_projection(batch, sensor_event):
     }
     if expected_change is not None:
         projected_metadata["expected_change"] = expected_change
+    if projection["evidence"]:
+        projected_metadata["evidence"] = projection["evidence"]
     event = Event(
         category=category,
         scope="mojosec",

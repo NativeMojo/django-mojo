@@ -61,9 +61,14 @@ class Runtime:
             return
         try:
             cursor = self.store.get_meta(f"cursor:{collector.name}")
-            result = collector.poll(cursor)
+            if collector.name == "journal":
+                result = collector.poll(
+                    cursor, ssh_sessions=self.store.load_ssh_sessions())
+            else:
+                result = collector.poll(cursor)
             self.store.ingest(
-                result["observations"], cursor_key=collector.name, cursor=result["cursor"]
+                result["observations"], cursor_key=collector.name, cursor=result["cursor"],
+                ssh_sessions=result.get("ssh_sessions"),
             )
             self._collector_ok(collector.name, result.get("malformed", 0))
         except Exception as err:

@@ -46,16 +46,16 @@ vhost**, asserted in `tests/test_edge/3_render_injection.py`.
 ### Knob semantics
 
 - **MojoSec** — file-only `MOJOSEC_MODE` is `off` (default) or `observe`.
-  Observe adds the shared queryless JSON security log and an exact
+  Observe adds the shared protected raw-evidence JSON security log and an exact
   `/api/incident/mojosec/batch` proxy location (and its slash alias) capped at 512 KiB on API
   vhosts (and `site_api` only when a route covers it). File-only
   `MOJOSEC_TRUSTED_PROXY_CIDRS` is a comma-separated list of canonical CIDRs;
   only those networks may change the resolved client IP. Off emits neither
   the log nor receiver location, so upgrading Edge does not create noise.
-  The MojoSec log defaults to `<EDGE_LOG_DIR>/mojosec.json.log`; an override is
-  rejected unless it remains beneath that app-owned staging log directory.
-  Root sensor enrollment must use `nginx_plane=edge` and the same
-  `edge_log_dir`, so its protected collector path matches the rendered graph.
+  The MojoSec log is fixed at root:root mode-`0600`
+  `/var/log/nginx/mojosec.json.log`; unlike ordinary Edge logs it may not live
+  beneath the app-owned staging directory. Root sensor enrollment uses
+  `nginx_plane=edge` and the same fixed protected collector path.
 
 - **`quiet_paths`** (`api`, `site_api`) — exact-match locations whose hits
   stay out of the *main* access log. They are never blind: the location
@@ -286,6 +286,9 @@ One step at a time, each independently verifiable:
 **Logs move.** The rendered base writes the main access log and the watch
 log under **`EDGE_LOG_DIR`** (default `<EDGE_ROOT>/log`), app-owned so the
 unprivileged staged `nginx -t` can open them — NOT `/var/log/nginx`.
+The MojoSec raw-evidence log is the deliberate exception: staged variants
+disable access logs, while the authoritative root check opens its fixed
+root-only `/var/log/nginx/mojosec.json.log` descriptor.
 Repoint logrotate and OSSEC/file-integrity watches when a node migrates, or
 the fleet goes quiet in the places dashboards watch. nginx's own
 `error_log` stays wherever the bootstrap points it.

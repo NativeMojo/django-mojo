@@ -8,6 +8,7 @@ import subprocess
 import time
 
 from ..detectors import detect_journal
+from ..attribution import AttributionResolver
 
 
 MAX_STDERR_BYTES = 4096
@@ -33,7 +34,7 @@ class JournalCollector:
     def __init__(self, config):
         self.config = config
 
-    def poll(self, cursor=None):
+    def poll(self, cursor=None, ssh_sessions=None, who_sessions=None):
         command = ["/usr/bin/journalctl", "--output=json", "--no-pager"]
         if cursor:
             command.append(f"--after-cursor={cursor}")
@@ -52,6 +53,7 @@ class JournalCollector:
         stderr_buffer = bytearray()
         limited = False
         byte_limited = False
+        parsed_records = []
         deadline = time.monotonic() + self.config["timeout_seconds"]
 
         def process_line(line):
@@ -81,13 +83,7 @@ class JournalCollector:
                 malformed += 1
                 return
             next_cursor = record_cursor
-            try:
-                detected = detect_journal(record)
-            except Exception:
-                malformed += 1
-                return
-            if detected:
-                observations.append(detected)
+            parsed_records.append(record)
 
         selector = selectors.DefaultSelector()
         selector.register(process.stdout, selectors.EVENT_READ, "stdout")
@@ -155,4 +151,17 @@ class JournalCollector:
         if not limited and returncode:
             error = stderr_buffer.decode("utf-8", errors="replace").strip()[:512]
             raise RuntimeError(error or f"journalctl exited {returncode}")
-        return {"observations": observations, "cursor": next_cursor, "malformed": malformed}
+        resolver = AttributionResolver(ssh_sessions, who_sessions=who_sessions)
+        sessions = resolver.overlay(parsed_records)
+        for record in parsed_records:
+            try:
+                detected = detect_journal(record, resolver)
+            except Exception:
+                malformed += 1
+                continue
+            if detected:
+                observations.append(detected)
+        return {
+            "observations": observations, "cursor": next_cursor,
+            "malformed": malformed, "ssh_sessions": sessions,
+        }

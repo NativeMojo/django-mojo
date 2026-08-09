@@ -9,6 +9,9 @@ from ..detectors import detect_nginx
 
 
 _CURSOR_ANCHOR_BYTES = 256
+# Four nginx-default 8 KiB client buffers (request target, host, referrer, UA),
+# worst-case six-byte JSON escaping, and a bounded envelope fit below 256 KiB.
+MAX_STRUCTURED_LINE_BYTES = 256 * 1024
 
 
 def _anchor(descriptor, offset):
@@ -96,7 +99,7 @@ class NginxCollector:
             else:
                 end -= len(last)
         for line in lines:
-            if len(line) > self.config["max_line_bytes"]:
+            if len(line) > min(self.config["max_line_bytes"], MAX_STRUCTURED_LINE_BYTES):
                 malformed += 1
                 continue
             try:

@@ -279,14 +279,14 @@ def test_mojosec_exact_nginx_asset_drift_fails(opts):
 def test_mojosec_edge_log_must_be_exactly_beneath_enrolled_root(opts):
     from mojo.deploy import check_node as cn
 
-    root = "/opt/api/var/edge/log"
-    th.assert_true(cn._edge_log_contained(root + "/mojosec.json.log", root),
-                   "the exact enrolled Edge collector path should pass")
-    for escaped in ("/var/log/nginx/mojosec.json.log",
-                    root + "/../mojosec.json.log",
-                    root + "/nested/mojosec.json.log"):
-        th.assert_true(not cn._edge_log_contained(escaped, root),
-                       f"Edge collector path escaped its exact root contract: {escaped}")
+    protected = "/var/log/nginx/mojosec.json.log"
+    th.assert_true(cn._protected_mojosec_log_path(protected),
+                   "both nginx planes must use the root-owned evidence path")
+    for unsafe in ("/opt/api/var/edge/log/mojosec.json.log",
+                   "/var/log/nginx/../mojosec.json.log",
+                   "/var/log/nginx/nested/mojosec.json.log"):
+        th.assert_true(not cn._protected_mojosec_log_path(unsafe),
+                       f"an app-owned or non-exact evidence path was accepted: {unsafe}")
 
 
 @th.django_unit_test()

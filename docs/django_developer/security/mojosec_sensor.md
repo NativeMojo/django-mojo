@@ -19,12 +19,17 @@ package from a root-owned working directory with safe-path mode:
 | Collector | Retained | Intentionally omitted |
 |---|---|---|
 | journald | accepted SSH logins, failed SSH authentication, sudo commands/failures, non-SSH PAM session opens, systemd/kernel failures and OOM activity | routine PAM close chatter and ordinary service notices |
-| structured nginx log | known exploit-path probes, 401/403 denials, and 5xx responses | ordinary 2xx/3xx/404/499 traffic, User-Agent-only suspicion, query strings, referrers, and raw log lines |
+| structured nginx log | known exploit-path probes, 401/403 denials, and 5xx responses; bounded raw request target, referrer, and user agent in root-only sensor state and the protected central receipt | ordinary 2xx/3xx/404/499 traffic, User-Agent-only suspicion, bodies, cookies, authorization, arbitrary headers, and raw log lines |
 | immutable tiered integrity | 60-second host/config FIM, six-hour boot/system-binary FIM, RPM verification, and system-Python package integrity under the packaged `al2023-web-v1` profile | application release trees, MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
 
-Sudo evidence retains the actor, target user, executable path, and a command
-digest. Arguments are never persisted because command lines routinely contain
-passwords, tokens, and other credentials.
+Sudo evidence retains bounded raw command context only in the root-owned sensor
+spool and protected central receipt: actor, target user, TTY, audit context,
+working directory, executable path, and command digest accompany the command.
+The Event projection is closed rather than heuristically scrubbed: it exposes
+only a strict server-owned command family (or `unknown`) and one constant
+redaction marker. Raw command text, executable/path, command digest, argument
+count, and per-token digests never enter Event metadata, titles, details,
+ordinary logs, or AI/default graphs.
 
 This catches common automated reconnaissance for WordPress, PHP, ASP/JSP,
 `.env`, `.git`, phpMyAdmin, PHPUnit, actuator, Swagger/OpenAPI, CGI, and similar
@@ -112,7 +117,7 @@ The app/fleet desired-policy source contains no endpoint, identity, or secret:
     "nginx": {
       "enabled": true,
       "max_bytes_per_poll": 2097152,
-      "max_line_bytes": 16384
+      "max_line_bytes": 262144
     }
   },
   "aggregation": {
@@ -191,19 +196,45 @@ The detector recognizes these field names:
 |---|---|
 | timestamp | `time`, `time_iso8601`, or `timestamp` |
 | method | `method` or `request_method` |
-| path | `uri`, `request_uri`, or `path` |
+| raw request target | `request_uri`, `uri`, or `path` |
 | client IP | `remote_addr` or `source_ip` |
 | direct peer IP | `peer_addr` or `realip_remote_addr` |
 | duration in seconds | `request_time` |
+| virtual host | `host` or `server_name` |
+| upstream result/timing | `upstream_status`, `upstream_response_time` |
+| approved diagnostic headers | `referrer`/`referer`, `user_agent` |
 
 The timestamp is optional but, when present, must be timezone-aware ISO-8601.
-Query strings are removed before an event is stored. High-entropy, UUID,
-long-numeric, email, and reset/verify-token path segments are replaced by a
-short digest in evidence and one shared token marker in aggregation keys.
-Referrers, user agents, and unrecognized fields are ignored. Keep each JSON
-record on one complete line; oversized and malformed lines are counted and the
-byte cursor advances past them so poison input cannot stall collection. A
-normal partial trailing line is deferred until it is complete.
+The dedicated root-only stream deliberately carries the bounded raw request
+target, referrer, and user agent so the protected central receipt can support
+incident reconstruction. It never logs bodies, cookies, authorization, or
+arbitrary headers. Every detector kind has an explicit field allowlist and
+priority order. UTF-8 byte caps, total encoded-attribute budget, truncation
+markers, and full-value SHA-256 digests are applied before SQLite persistence;
+escaped lone-surrogate or oversized Unicode input cannot stall the cursor.
+The wire protocol permits at most 8 KiB of encoded attributes; the native
+sensor reserves 512 bytes and emits at most 7,680 bytes. For web evidence the
+raw request target is capped at 2,048 bytes and raw referrer/user-agent values
+at 1,536 bytes each; a raw sudo command has the same 2,048-byte cap (its
+working directory and executable path are each capped at 512 bytes). A
+retained truncated value gains
+`<field>_truncated: true` and `<field>_sha256`; lower-priority fields may be
+omitted once the total budget is full. The generated nginx stream writes
+`request_uri`, `host`, `referrer`, `user_agent`, `request_time`,
+`upstream_status`, `upstream_response_time`, `remote_addr`, and `peer_addr`
+(along with the timestamp, method, and status).
+Both standard and Edge nginx write this protected ingress stream to the
+root-precreated `/var/log/nginx/mojosec.json.log` at mode `0600`; nginx's root
+master opens the descriptor before workers drop privilege. The Edge staged
+unprivileged `nginx -t` copy disables access logs and the authoritative root
+check validates the real path. Copytruncate rotations remain root:root `0600`.
+The collector accepts lines up to a fixed 256 KiB derived from four default
+8 KiB nginx request/header buffers, worst-case JSON escaping, and envelope
+overhead. Larger lines fail closed; accepted fields still pass through the
+smaller per-kind evidence budget before persistence/transmission.
+High-entropy path segments still use a shared token marker for aggregation.
+Every Event-visible IP, host, method, status, and path participates in the
+fingerprint, so interleaved identities do not collapse into a misleading row.
 
 ### Journald and FIM traversal
 
@@ -211,6 +242,25 @@ Journald collection never uses `journalctl --lines` tail semantics. It streams
 forward from the committed `--after-cursor`, stopping at both a record and byte
 ceiling, and commits only the last cursor it processed. Per-record parse or
 detector failures increment the malformed count and do not abort the burst.
+
+Only successful Linux audit-transport `USER_START`/`USER_LOGIN` records for
+the trusted sshd executable, root UID, and `terminal=ssh` establish an exact
+`(boot_id, audit_session)` mapping. Accepted-looking user journal text cannot.
+The entire poll is overlaid before detection, so sudo may correlate to an SSH
+record later in the same poll. A match also requires the same actor and a
+compatible TTY. Mappings persist in SQLite for at most 30 days and 4,096 rows.
+Conflicting actor, TTY, or address for one key creates a sticky ambiguous
+tombstone that cannot restabilize, including after restart.
+When no exact audit-session mapping is available, `who` may attribute sudo
+only for one unique, fresh (five-minute) exact actor-plus-TTY row; stale,
+reused, or ambiguous rows produce no source attribution. Sudo evidence records
+`attribution_provenance` as `audit_session`, `who`, or `none`; only the first
+two may promote the correlated address to `Event.source_ip`. SSH and valid web
+source addresses also populate that canonical Event field. Sudo evidence
+includes bounded actor, target, TTY, audit identity, working directory, raw
+command, executable, digest, and attribution provenance.
+The `who` subprocess runs in a fixed C locale with a two-second timeout and
+strict 128 KiB/4,096-line streaming caps; timeout or overflow fails closed.
 
 On POSIX platforms FIM opens every path component relative to an already-open
 directory descriptor with `O_NOFOLLOW`; files are hashed through that same
@@ -291,7 +341,7 @@ FIM create/modify/chmod/delete under the enrolled canary root. Force a receiver
 503 outage for only the canary key, prove durable spool growth and drain after
 recovery, restart the service and prove identity/cursor/baseline persistence,
 then run targeted `logrotate -f`. Verify `copytruncate` preserves the active
-root:root 0640 inode, archives remain root-only, and a new line is collected
+root:root 0600 inode, archives remain root-only, and a new line is collected
 without nginx reopen or a stalled cursor. Copy/truncate has a narrow inherent
 writer race, so compare generated probe IDs/counts across the forced rotation
 and investigate any unexplained gap. `maxsize 50M` is evaluated by logrotate's
@@ -324,6 +374,12 @@ do not receive collector/backlog timing.
 Private state lives in root-owned mode-`0700` `/var/lib/mojosec`; it must not be
 placed under the application-writable `/opt/api/var` tree. SQLite uses WAL mode
 and `synchronous=FULL`.
+
+State schema v2 adds only the `ssh_sessions` correlation table and expiry
+index. Startup inspects the stored version before mutation. The v1-to-v2
+migration is one exclusive transaction, creates the table/index, and writes
+the new version last; rollback is retryable and preserves events, aggregates,
+FIM baselines, metadata, and cursors. A future version is rejected unchanged.
 
 - A journal/nginx cursor advances in the same transaction that processes the
   observations preceding it. Capacity rejection records a drop counter in that
@@ -440,15 +496,23 @@ evidence. The default `RestMeta` graph omits
 sensitive, the whole model is denied to generic AI queries, and generic model
 REST create/update/delete are disabled.
 
-Wire attributes remain in the receipt's `replay_features`, which is denied to
-generic AI/model query tools. The central Event contains a fixed title/detail
-and validated scalar provenance only. For `fim.change`, the sole optional
+Wire attributes remain only in the receipt's protected `replay_features`, which
+is absent from the default graph and denied to generic AI/model query tools.
+The central Event contains a fixed title/detail plus a per-kind scrubbed
+projection. SSH, reliably attributed sudo, and known web kinds promote a
+canonical source IP. Web evidence canonicalizes method, host, peer, status,
+path, upstream status/timing, and retains only an HTTP(S) referrer origin plus
+structured UA family/major and its digest. Aggregated volatile samples are
+omitted instead of presenting the last request as the whole distribution.
+Sudo Event command evidence exposes only a strict server-owned command family
+(or `unknown`) and a constant `<redacted>` marker; raw command, executable/path,
+command digest, argument count, request target, referrer, and UA strings never
+enter Event metadata, title, details, ordinary logs, or AI/default graphs. For
+`fim.change`, the sole optional
 sensor annotation projected centrally is exact
 `expected_change.{deployment_id,expires_at,operation_id,operation_kind,completed_at}`
 after revalidation; raw FIM
-attributes never project and the annotation never suppresses publication. A source IP is promoted only for a
-server-owned per-kind registry after a minimum aggregate threshold. Successful
-login and web-error evidence never promotes a source IP. Host severity is
+attributes never project and the annotation never suppresses publication. Host severity is
 preserved only as advisory evidence; the registry selects the effective level
 and category. Sensor summaries, paths,
 messages, commands, and other raw strings do not enter LLM-visible Event

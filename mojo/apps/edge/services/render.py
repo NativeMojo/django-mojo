@@ -35,6 +35,7 @@ import os
 from mojo import errors as me
 from mojo.helpers.settings import settings
 from mojo.deploy.mojosec_nginx import (
+    DEFAULT_LOG_PATH as MOJOSEC_LOG_PATH,
     RECEIVER_BODY_LIMIT as MOJOSEC_BODY_LIMIT,
     RECEIVER_PATH as MOJOSEC_RECEIVER_PATH,
     render_http_log as render_mojosec_http_log,
@@ -120,12 +121,11 @@ def default_server_enabled():
 
 
 def mojosec_log_path():
-    root = safe_log_path(log_dir())
     value = safe_log_path(settings.get_static(
-        "MOJOSEC_NGINX_LOG_PATH", f"{root}/mojosec.json.log"))
-    if os.path.commonpath((value, root)) != root:
+        "MOJOSEC_NGINX_LOG_PATH", MOJOSEC_LOG_PATH))
+    if value != MOJOSEC_LOG_PATH:
         raise me.ValueException(
-            f"Edge MojoSec log must stay beneath EDGE_LOG_DIR: {value}")
+            f"Edge MojoSec log must use the root-owned path {MOJOSEC_LOG_PATH}")
     return value
 
 
@@ -940,6 +940,10 @@ def render_staged_variant(text):
         # First-token match, not startswith: `listen\t443;` must reach the
         # refusal below, not slip through as a non-listen line.
         tokens = body.split()
+        if tokens and tokens[0] == "access_log":
+            indent = line[:len(line) - len(line.lstrip())]
+            out.append(indent + "access_log off;")
+            continue
         if not tokens or tokens[0] != "listen":
             out.append(line)
             continue

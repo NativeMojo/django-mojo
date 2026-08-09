@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 from unittest import mock
 
 from testit import helpers as th
@@ -54,6 +55,7 @@ def _journal_config(max_records=10, max_bytes=65536):
 def _journal_record(cursor, source_ip):
     return {
         "__CURSOR": cursor, "SYSLOG_IDENTIFIER": "sshd",
+        "_UID": "0", "_COMM": "sshd", "_EXE": "/usr/sbin/sshd",
         "MESSAGE": f"Accepted publickey for deploy from {source_ip} port 50221 ssh2",
     }
 
@@ -72,12 +74,24 @@ def _popen_stream(payload, commands):
     return spawn
 
 
+def _patch_journal_popen(journal_module, payload, commands):
+    # Patch the collector's module reference, not subprocess.Popen on the
+    # shared stdlib module: testit may run selected modules concurrently.
+    proxy = types.SimpleNamespace(
+        Popen=mock.Mock(side_effect=_popen_stream(payload, commands)),
+        PIPE=subprocess.PIPE, DEVNULL=subprocess.DEVNULL,
+        TimeoutExpired=subprocess.TimeoutExpired,
+    )
+    return mock.patch.object(journal_module, "subprocess", proxy)
+
+
 @th.django_unit_test()
 def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
     from mojo.mojosec.detectors import detect_journal
 
     accepted = detect_journal({
         "SYSLOG_IDENTIFIER": "sshd",
+        "_UID": "0", "_COMM": "sshd", "_EXE": "/usr/sbin/sshd",
         "MESSAGE": "Accepted publickey for deploy from 192.0.2.8 port 50221 ssh2",
         "__REALTIME_TIMESTAMP": "1786190400000000",
     })
@@ -90,6 +104,7 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
 
     failed = detect_journal({
         "SYSLOG_IDENTIFIER": "sshd",
+        "_UID": "0", "_COMM": "sshd", "_EXE": "/usr/sbin/sshd",
         "_SYSTEMD_UNIT": "session-187.scope",
         "MESSAGE": "Failed password for invalid user admin from 198.51.100.9 port 43812 ssh2",
     })
@@ -99,7 +114,8 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
                  "repeated SSH failures should be aggregated before delivery")
 
     facility_only = detect_journal({
-        "SYSLOG_FACILITY": "10", "_SYSTEMD_UNIT": "session-201.scope",
+        "SYSLOG_FACILITY": "10", "_SYSTEMD_UNIT": "sshd.service",
+        "_UID": "0", "_COMM": "sshd", "_EXE": "/usr/sbin/sshd",
         "MESSAGE": "Accepted publickey for deploy from 203.0.113.8 port 50221 ssh2",
     })
     th.assert_eq(facility_only["kind"], "auth.ssh_login",
@@ -108,23 +124,34 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
     sudo = detect_journal({
         "SYSLOG_IDENTIFIER": "sudo", "SYSLOG_FACILITY": "10",
         "_SYSTEMD_UNIT": "session-202.scope",
+        "_UID": "0", "_COMM": "sudo", "_EXE": "/usr/bin/sudo",
         "MESSAGE": "deploy : TTY=pts/0 ; PWD=/opt/api ; USER=root ; COMMAND=/usr/bin/systemctl restart api",
     })
     th.assert_eq(sudo["kind"], "auth.sudo_command",
                  "sudo commands attached to transient AL2023 scopes must be retained")
-    th.assert_true("command" not in sudo["attributes"],
-                   "sudo command arguments must never be persisted as incident evidence")
+    th.assert_eq(sudo["attributes"]["command"],
+                 "/usr/bin/systemctl restart api",
+                 "the protected sensor evidence must retain bounded command context")
 
     secret = "top-secret-password"
     sensitive_sudo = detect_journal({
         "SYSLOG_IDENTIFIER": "sudo", "SYSLOG_FACILITY": "10",
+        "_UID": "0", "_COMM": "sudo", "_EXE": "/usr/bin/sudo",
         "MESSAGE": f"deploy : USER=root ; COMMAND=/usr/bin/curl --password {secret} https://example.invalid",
     })
     encoded = json.dumps(sensitive_sudo)
-    th.assert_true(secret not in encoded and "--password" not in encoded,
-                   "sudo arguments and inline secrets must be replaced by an executable and digest")
+    th.assert_true(secret in encoded and "--password" in encoded,
+                   "raw bounded command evidence must reach only the protected receipt layer")
     th.assert_eq(sensitive_sudo["attributes"]["command_path"], "/usr/bin/curl",
                  "sudo evidence should retain only the invoked executable path")
+
+    for forged in (
+            {"SYSLOG_IDENTIFIER": "sshd", "_UID": "1000", "_COMM": "python3",
+             "MESSAGE": "Accepted publickey for deploy from 192.0.2.99 port 1 ssh2"},
+            {"SYSLOG_IDENTIFIER": "sudo", "_UID": "1000", "_COMM": "python3",
+             "MESSAGE": "deploy : TTY=pts/0 ; USER=root ; COMMAND=/usr/bin/id"}):
+        th.assert_eq(detect_journal(forged), None,
+                     "user-controlled journal identifiers/messages must not forge auth events")
 
 
 @th.django_unit_test()
@@ -135,8 +162,7 @@ def test_journal_collector_streams_forward_without_tail_skips(opts):
     payload = b"".join(json.dumps(record).encode("utf-8") + b"\n" for record in records)
     commands = []
     collector = journal_module.JournalCollector(_journal_config(max_records=2))
-    with mock.patch.object(
-            journal_module.subprocess, "Popen", side_effect=_popen_stream(payload, commands)):
+    with _patch_journal_popen(journal_module, payload, commands):
         result = collector.poll("cursor-0")
 
     th.assert_eq(len(result["observations"]), 2,
@@ -158,8 +184,7 @@ def test_journal_poison_record_is_counted_and_cursor_advances(opts):
     payload = b"".join(json.dumps(record).encode("utf-8") + b"\n" for record in records)
     commands = []
     collector = journal_module.JournalCollector(_journal_config())
-    with mock.patch.object(
-            journal_module.subprocess, "Popen", side_effect=_popen_stream(payload, commands)), \
+    with _patch_journal_popen(journal_module, payload, commands), \
             mock.patch.object(journal_module, "detect_journal", side_effect=(ValueError("poison"), None)):
         result = collector.poll()
 
@@ -180,8 +205,7 @@ def test_journal_byte_ceiling_keeps_last_fully_processed_cursor(opts):
     commands = []
     config = _journal_config(max_bytes=len(encoded[0]) + len(encoded[1]) // 2)
     collector = journal_module.JournalCollector(config)
-    with mock.patch.object(
-            journal_module.subprocess, "Popen", side_effect=_popen_stream(payload, commands)):
+    with _patch_journal_popen(journal_module, payload, commands):
         result = collector.poll()
 
     th.assert_eq(len(result["observations"]), 1,
@@ -214,8 +238,9 @@ def test_nginx_detector_is_behavioral_and_quiet(opts):
                  "known exploit probes should carry an advisory block recommendation")
     th.assert_eq(probe["attributes"]["path"], "/wp-login.php",
                  "query strings must never be copied into incident evidence")
-    th.assert_true("referer" not in probe["attributes"],
-                   "client-controlled referrers must never enter MojoSec evidence")
+    th.assert_eq(probe["attributes"]["referrer"],
+                 "https://example.invalid/private?token=secret",
+                 "bounded raw referrer evidence must be available for central scrubbing")
 
     server_error = detect_nginx({
         "status": 502, "method": "POST", "path": "/api/orders",
@@ -232,8 +257,10 @@ def test_nginx_detector_is_behavioral_and_quiet(opts):
     second_secret_path = detect_nginx({
         "status": 500, "method": "GET", "path": f"/api/reset/{second_token}",
     })
-    th.assert_true(first_token not in json.dumps(first_secret_path),
-                   "high-entropy URL segments must be hashed before persistence")
+    th.assert_true(first_token in first_secret_path["attributes"]["request_uri"],
+                   "bounded raw request evidence must remain available to the protected receipt")
+    th.assert_true(first_token not in first_secret_path["attributes"]["path"],
+                   "the aggregation path must hash high-entropy URL segments")
     th.assert_eq(first_secret_path["fingerprint"], second_secret_path["fingerprint"],
                  "different reset tokens must share one bounded aggregation key")
 
@@ -323,6 +350,45 @@ def test_nginx_poison_numeric_is_counted_without_stalling_cursor(opts):
                      "a poison nginx record must not suppress the following valid event")
         th.assert_eq(result["cursor"][path]["offset"], os.path.getsize(path),
                      "the nginx cursor must advance past rejected records so they cannot stall collection")
+
+
+@th.django_unit_test()
+def test_nginx_rich_line_cap_accepts_header_limits_and_rejects_overflow(opts):
+    from mojo.mojosec.collectors.nginx import MAX_STRUCTURED_LINE_BYTES, NginxCollector
+
+    with tempfile.TemporaryDirectory() as root:
+        path = os.path.join(root, "security.json.log")
+        rich = {
+            "status": 500, "method": "GET",
+            "request_uri": "/wp-login.php?" + "q" * 8192,
+            "referrer": "https://example.invalid/" + "r" * 8192,
+            "user_agent": "Agent/1 " + "u" * 8192,
+            "host": "example.invalid",
+        }
+        encoded = json.dumps(rich).encode() + b"\n"
+        th.assert_true(len(encoded) > 16 * 1024,
+                       "regression input must exceed the retired 16 KiB ceiling")
+        with open(path, "wb") as handle:
+            handle.write(encoded)
+        collector = NginxCollector({
+            "paths": [path], "max_bytes_per_poll": 2 * MAX_STRUCTURED_LINE_BYTES,
+            "max_line_bytes": MAX_STRUCTURED_LINE_BYTES,
+        })
+        result = collector.poll()
+        th.assert_eq(len(result["observations"]), 1,
+                     "valid nginx-header-limit evidence must reach the per-kind byte builder")
+        th.assert_true(result["observations"][0]["attributes"].get("request_uri_truncated"),
+                       "the evidence builder, not ingress, must bound a rich request target")
+
+        overflow = b'{"padding":"' + b"x" * MAX_STRUCTURED_LINE_BYTES + b'"}\n'
+        valid = json.dumps({
+            "status": 502, "method": "GET", "request_uri": "/after-overflow",
+        }).encode() + b"\n"
+        with open(path, "wb") as handle:
+            handle.write(overflow + valid)
+        result = collector.poll()
+        th.assert_eq((result["malformed"], len(result["observations"])), (1, 1),
+                     "derived-cap overflow must fail closed without wedging the next record")
 
 
 @th.django_unit_test()

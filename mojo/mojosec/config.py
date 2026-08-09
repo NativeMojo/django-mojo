@@ -6,6 +6,8 @@ import re
 import stat
 import urllib.parse
 
+from .collectors.nginx import MAX_STRUCTURED_LINE_BYTES
+
 
 CONFIG_VERSION = 1
 MAX_CONFIG_BYTES = 256 * 1024
@@ -44,7 +46,7 @@ DEFAULTS = {
             "enabled": True,
             "paths": ["/var/log/nginx/mojosec.json.log"],
             "max_bytes_per_poll": 2 * 1024 * 1024,
-            "max_line_bytes": 16 * 1024,
+            "max_line_bytes": MAX_STRUCTURED_LINE_BYTES,
         },
         "fim": {
             "enabled": True,
@@ -254,6 +256,9 @@ def validate_config(value):
         _absolute(path, "collectors.nginx.paths[]")
     _integer(nginx["max_bytes_per_poll"], "collectors.nginx.max_bytes_per_poll", 4096, 64 * 1024 * 1024)
     _integer(nginx["max_line_bytes"], "collectors.nginx.max_line_bytes", 512, 1024 * 1024)
+    if nginx["max_line_bytes"] != MAX_STRUCTURED_LINE_BYTES:
+        raise ConfigError(
+            f"collectors.nginx.max_line_bytes must be {MAX_STRUCTURED_LINE_BYTES}")
 
     fim = collectors["fim"]
     validate_config_target_list(fim["targets"], "collectors.fim.targets")

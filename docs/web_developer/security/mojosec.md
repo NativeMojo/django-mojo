@@ -97,10 +97,57 @@ Missing result IDs, malformed acknowledgements, and non-2xx responses are also
 retryable. The receiver derives central categories and severity; a host
 `recommendation` never performs an action directly. Only an exact central
 RuleSet such as `mojosec.web.probe` may promote the Event to an Incident and
-run a handler. Host severity cannot raise the server-owned level. Source IP is
-eligible only for centrally registered attack kinds and only after their
-central aggregate threshold; successful login and web-error reports never
-promote an address for action.
+run a handler. Host severity cannot raise the server-owned level. Known
+source-bearing SSH, reliably attributed sudo, and web kinds populate the
+Event's canonical source IP; their sensor fingerprints include projected
+identity scalars so interleaved callers/hosts/methods/statuses do not collapse.
+The source alone still performs no action: only an exact active central
+RuleSet may create an Incident or run a handler.
+
+Raw bounded request targets, referrers, user agents, and sudo command context
+are retained only in the protected `MojoSecReceipt.replay_features` audit
+record (`DENY_AI`, excluded from the default graph). Event metadata contains a
+central allowlisted projection: queryless/token-normalized path, canonical
+method/host/status/upstream values, HTTP(S) referrer origin, structured UA
+family/major plus digest, and a strict server-owned sudo command family (or
+`unknown`) plus one constant redaction marker. Raw executable/path, command
+digest, argument count, generic arguments, and per-token digests never project.
+The native nginx stream never collects bodies, cookies, the Authorization
+header, or arbitrary headers. Bounded request targets, referrers, user agents,
+and sudo commands can still contain untrusted sensitive text, but those raw
+values remain in the protected receipt and never project verbatim to Event.
+
+### Native sensor evidence limits and attribution
+
+The protocol rejects an event whose encoded `attributes` exceed 8 KiB. The
+built-in sensor uses a closed per-kind allowlist and reserves 512 bytes, so it
+emits at most 7,680 bytes before spooling or sending. Its raw nginx request
+target is bounded to 2,048 bytes and the raw referrer and user agent to 1,536
+bytes each; a raw sudo command is capped at 2,048 bytes, with 512-byte working
+directory and executable-path caps. Truncated retained values carry
+`<field>_truncated: true` and a full-value `<field>_sha256`; lower-priority
+fields may be absent once the total budget is full.
+
+For nginx observations, the native sender supplies `request_uri`, `host`,
+`referrer`, `user_agent`, `request_time`, `upstream_status`,
+`upstream_response_time`, `remote_addr`, and `peer_addr`, plus timestamp,
+method, and status. The raw request target/referrer/user-agent values stay in
+the protected receipt; the Event receives only the projection described above.
+User-agent text alone is never a detector signal.
+
+Accepted SSH logins establish a `(boot_id, audit_session)` source mapping.
+The mapping source must be a successful trusted Linux audit-transport
+`USER_START`/`USER_LOGIN` record for root-UID sshd with `terminal=ssh`;
+message text and a caller-chosen syslog identifier are insufficient.
+Sudo uses it only when actor and TTY are compatible; the mapping is retained
+for 30 days with a 4,096-row cap. Without an exact audit-session mapping,
+source attribution is allowed only for one fresh (five-minute), exact
+actor-plus-TTY `who` row.
+Conflicting identity for one audit key becomes a sticky ambiguous tombstone.
+`who` itself is streamed under fixed locale, timeout, byte, and line caps.
+`attribution_provenance` is `audit_session`, `who`, or `none`; only the first
+two allow sudo's address to populate `Event.source_ip`. Stale, reused, or
+ambiguous rows therefore remain unattributed.
 
 An `accepted` result also means any required RuleSet handler dispatch has a
 durable receipt outbox job. Queue failure returns `retry`. Request replay and a
