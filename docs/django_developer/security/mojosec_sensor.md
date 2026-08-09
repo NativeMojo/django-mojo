@@ -60,6 +60,7 @@ redirects so credentials cannot be forwarded to a different host.
   "state_dir": "/var/lib/mojosec",
   "status_path": "/run/mojosec/status.json",
   "credential_path": "/etc/mojosec/credential",
+  "expected_changes_path": "/etc/mojosec/expected_changes.json",
   "poll_seconds": 5,
   "collectors": {
     "journal": {
@@ -114,6 +115,15 @@ the exact code/config/systemd/nginx paths for that project rather than copying
 the sample unchanged. An enabled FIM collector requires at least one target;
 set `collectors.fim.enabled` to `false` when the deployment has no approved
 profile. The public `status_path` must remain outside the private `state_dir`.
+
+An optional expected-change manifest annotates a reported `fim.change`; it
+never suppresses one. The root-owned 0600 JSON envelope is
+`{"schema":"mojosec.expected_changes","version":1,"entries":[...]}`. Each
+entry must name an exact absolute `path`, `change` (`created`, `modified`, or
+`deleted`), SHA-256 of the resulting file (the prior file for deletion),
+timezone-aware `expires_at`, and bounded `deployment_id`. Path, change, digest,
+and live expiry must all match. Missing, expired, or mismatched entries behave
+like no expectation; malformed/insecure manifests fail that FIM poll visibly.
 
 ### Structured nginx input
 

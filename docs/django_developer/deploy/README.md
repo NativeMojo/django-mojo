@@ -11,6 +11,7 @@ run on the node itself, outside Django:
 | `mojo.deploy.check_node` | Read-only audit of ONE node against the on-node deploy contract |
 | `mojo.deploy.jobman` | Starts, stops and reports the node's **foreground** job engine and scheduler |
 | `mojo.deploy.node_setup` | Converges `var/` ownership, systemd units, and the jobs cron |
+| `mojo.deploy.mojosec` | Safely installs and operates the privileged, observe-only MojoSec sensor |
 | `python3 -m mojo.deploy locate <name>` | Prints the absolute packaged path of `update.sh` / `post_deploy.sh` for the project shims |
 | `python3 -m mojo.deploy render --dest …` | Materializes the packaged cron/systemd templates into `${PROJ_PATH}/var/deploy` |
 | `mojo/deploy/scripts/update.sh` | The fleet update entry (deploy / manual modes) — packaged bash, run through a project shim |
@@ -25,6 +26,7 @@ python3 -m mojo.deploy.certbot_sync --renew
 python3 -m mojo.deploy.check_node --require-shims
 python3 -m mojo.deploy.jobman status
 python3 -m mojo.deploy.node_setup --dry-run
+sudo python3 -I -m mojo.deploy.mojosec converge --mode observe
 python3 -m mojo.deploy locate update.sh
 ```
 
@@ -631,6 +633,64 @@ healthy start every minute while nothing ran.
 
 ---
 
+# MojoSec node deployment
+
+`post_deploy.sh` invokes the installed package directly; it never installs a
+root unit from the group-writable project tree or `var/deploy`:
+
+```bash
+sudo python3 -I -m mojo.deploy.mojosec converge \
+  --mode observe --criticality best_effort \
+  --trusted-proxy-cidrs 10.0.0.0/16
+```
+
+`MOJOSEC_MODE` is exactly `off` or `observe`. The packaged deploy defaults to
+`observe`, but enrollment/config/credential validation happens before any unit
+or nginx mutation; an old unenrolled node therefore stays unchanged under the
+default `best_effort` criticality. Use `required` only after provisioning is
+complete. `off` stops/disables only `mojosec.service`, removes its owned nginx
+logging/snippet files, and preserves config, credential, and spool evidence.
+It never discovers/enables a `*.service` glob and never removes OSSEC/Wazuh.
+
+| Material | Contract |
+|---|---|
+| `/opt/api/var/mojosec.json` | root:root 0600 strict, non-secret JSON; `node_setup` has one exact recursive exception for this file |
+| `/etc/mojosec/credential` | root:root 0600 per-installation API key |
+| `/var/lib/mojosec` | root:root 0700 durable SQLite spool; retained across off/rollback |
+| `/run/mojosec/status.json` | root:root 0644 bounded, non-secret health snapshot |
+| `/etc/mojosec/expected_changes.json` | optional root:root 0600 exact FIM annotations |
+| `/etc/systemd/system/mojosec.service` | root-owned packaged unit, `python3 -I`, runs as root with systemd hardening |
+
+Rotate a key without exposing it in argv, process listings, config, or logs:
+
+```bash
+printf '%s\n' "$NEW_INSTALLATION_API_KEY" | \
+  sudo python3 -I -m mojo.deploy.mojosec rotate-credential
+```
+
+Rotate the bearer on the existing protected API-key enrollment row first; the
+stable row/sensor identity preserves receipt history. The node command writes
+atomically and restarts the service only when it is active.
+
+MojoSec's nginx JSON log uses `escape=json`, `$uri` (never query-bearing
+`$request_uri`), no body/referrer/cookie/auth/user-agent fields, and preserves
+both the direct peer (`$realip_remote_addr`) and resolved client
+(`$remote_addr`). Only exact file-configured CIDRs render `set_real_ip_from`.
+The standard EC2 path installs
+`/etc/nginx/snippets/mojosec_receiver.conf`; each API server block must include
+that root-owned snippet. It sets an exact receiver location with a 512 KiB body
+cap. Edge renders the same log and location only when its file-only
+`MOJOSEC_MODE=observe`; Edge defaults off for backward-compatible upgrades.
+
+The two nginx fragments are transactional: the deploy snapshots their exact
+prior bytes/modes, validates the candidate with `nginx -t`, restores the prior
+graph on failure, and reloads only after validation. Logrotate keeps 14 daily
+files and signals the nginx master with `USR1`. `check_node --section mojosec`
+audits only ownership/mode, lifecycle, and the public bounded status; it never
+opens the credential, spool, or config. Its default `--mojosec-mode auto`
+derives off/observe from the enabled service so legacy nodes remain
+informational.
+
 # `node_setup`
 
 The reusable, non-cert third of a project's `ec2_deploy.sh`: three idempotent
@@ -643,7 +703,7 @@ python3 -m mojo.deploy.node_setup --dry-run          # plan only, no root
 
 | Action | What it does |
 |---|---|
-| var dirs | create `var/{logs,pids,keys}`, chown `--owner`, `2775` on directories **including `var/` itself**, `0664` on files |
+| var dirs | create `var/{logs,pids,keys}`, chown `--owner`, `2775` on directories **including `var/` itself**, `0664` on files; preserve exact `var/mojosec.json` as root:root 0600 |
 | systemd | copy `*.service` **and** `*.timer` whose bytes differ, `daemon-reload` only when something changed, then `enable --now` the **timers** |
 | cron | write `/etc/cron.d/3_mojo_jobs` (0644), whose user field is `--cron-user` |
 
