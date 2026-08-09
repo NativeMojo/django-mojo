@@ -9,17 +9,30 @@ changing it.
 
 ```
 fetch desired state (from the DB — see below)
-if generation == installed: return                      idempotent no-op
+if generation == installed AND nothing is www_pending: return   idempotent no-op
+fetch promoted release bytes from S3, verified per file (www_sync)
+    unfetchable: degrade THAT vhost only (below), never the pool
 render generations/<new>/, write certificate material 0600
     material unfetchable:  house vhost  -> abort
                            tenant vhost -> exclude it, report an incident
-stage www/<vhost-id> links                              (#1435 fills these)
+stage www/<vhost-id> links                              release, or the fallback
 nginx -t -c generations/<new>/nginx.conf                cheap pre-filter
 os.replace(current -> generations/<new>)                nothing has reloaded yet
 nginx -t                                                against the REAL config
     fail, or "conflicting server name" on stderr -> revert current, incident, raise
     ok -> systemctl reload nginx, write installed.json, prune
 ```
+
+**An unfetchable release degrades one vhost, and heals itself.** If the bytes
+cannot be pulled, a vhost that was already serving keeps serving the EXACT
+release it served before the promote (`current`'s own `www/<id>` target), and
+one that never served is excluded — dark beats a live vhost pointing at
+nothing. Either way the vhost and its desired version are recorded in
+`installed.json` as `www_pending`, which **defeats the generation
+short-circuit**: the next converge re-runs the fetch, and the one after a
+transient S3 failure clears re-points the symlink at the real release with no
+operator action. The incident is reported once, when the failure is new — not
+every ten minutes for as long as it lasts.
 
 **Validation happens after the swap, not only before.** A harness `nginx.conf`
 only approximates the real one — a `map`, `upstream` or `limit_req_zone`
@@ -65,7 +78,7 @@ import subprocess
 from mojo.helpers import logit
 from mojo.helpers.settings import settings
 
-from mojo.apps.edge.services import render
+from mojo.apps.edge.services import render, www_sync
 
 
 class InstallError(Exception):
@@ -193,8 +206,33 @@ def read_installed():
         return {}
 
 
-def write_installed(generation, excluded=None):
+def pending_releases(installed=None):
+    """{vhost id (str): desired version} the last install could not fetch.
+
+    Named apart from `write_installed`'s `www_pending` argument so the reader
+    and the JSON key are never confused for each other.
+    """
+    if installed is None:
+        installed = read_installed()
+    rows = installed.get("www_pending") or {}
+    return {str(key): value for key, value in rows.items()}
+
+
+def write_installed(generation, excluded=None, www_pending=None):
+    """Record what this node installed.
+
+    `www_pending` is {vhost id: desired version} for vhosts whose release
+    bytes could not be fetched. It is written only when non-empty, so a
+    healthy node's installed.json keeps exactly the shape it always had — and
+    its presence is what makes the next converge retry instead of
+    short-circuiting.
+    """
     payload = dict(generation=generation, excluded=sorted(excluded or []))
+    if www_pending:
+        # JSON object keys are strings either way; normalise here so a reader
+        # never has to guess which side of a round-trip it is holding.
+        payload["www_pending"] = {
+            str(key): value for key, value in www_pending.items()}
     tmp = f"{installed_path()}.tmp"
     with open(tmp, "w") as handle:
         json.dump(payload, handle)
@@ -272,36 +310,84 @@ def _disabled_upstreams(vhost):
     return rows
 
 
-def _exclude_or_abort(vhost, message, excluded):
+def _report_incident(message, title):
+    """Best-effort incident. An outage in the reporter never decides a converge."""
+    from mojo.apps.incident import reporter
+
+    try:
+        reporter.report_event(
+            message, title=title, category="edge_install", level=6)
+    except Exception:
+        # An incident-reporting failure must not decide whether a fleet
+        # converges. The exclusion is already in installed.json.
+        logit.exception("edge: failed to report a vhost incident")
+
+
+def _exclude_or_abort(vhost, message, excluded, report=True):
     """The one fork for a vhost that cannot be staged.
 
     House vhost -> abort the install (the platform's own serving path;
     converging without it is not a partial success). Tenant vhost -> exclude
     it and report an incident, so one tenant's broken row cannot freeze the
     fleet.
-    """
-    from mojo.apps.incident import reporter
 
+    `report=False` is for a failure the previous install already reported —
+    a fetch that is still pending is retried every converge, and one incident
+    per ten minutes for one broken release is noise, not signal. The exclusion
+    itself is unconditional.
+    """
     if vhost.domain.group_id is None:
         raise InstallError(f"{message} — it serves a platform vhost")
-    logit.error(message)
-    try:
-        reporter.report_event(
-            message, title="Vhost excluded from an edge generation",
-            category="edge_install", level=6)
-    except Exception:
-        # An incident-reporting failure must not decide whether a fleet
-        # converges. The exclusion is already in installed.json.
-        logit.exception("edge: failed to report a vhost exclusion")
+    if report:
+        logit.error(message)
+        _report_incident(message, "Vhost excluded from an edge generation")
+    else:
+        logit.info(f"{message} (already reported; still retrying)")
     excluded.append(vhost.pk)
 
 
-def stage_generation(vhosts, generation, webapps=None):
+def _previous_web_root(previous, vhost_id):
+    """The release directory this vhost is serving RIGHT NOW, or None.
+
+    Read off the live generation's own `www/<id>` symlink rather than
+    recomputed from the desired state, because those are different answers
+    precisely when it matters: after a promote whose bytes did not arrive, the
+    desired version has no directory and the served one does. Containment
+    under the vhost's `releases/` tree is re-checked here — this value becomes
+    a symlink target in the next generation.
+    """
+    from mojo.apps.edge import validators
+
+    if not previous:
+        return None
+    link = os.path.join(previous, "www", str(int(vhost_id)))
+    if not os.path.islink(link):
+        return None
+    try:
+        resolved = os.path.realpath(link)
+    except OSError:
+        return None
+    if not os.path.isdir(resolved):
+        return None
+    base = os.path.join(
+        validators.www_base(), str(int(vhost_id)), "releases")
+    if not validators.contained_under(base, resolved):
+        return None
+    return resolved
+
+
+def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
+                     previous=None):
     """Build `generations/<generation>/` completely. Returns excluded vhost ids.
 
     Raises InstallError when a HOUSE vhost cannot be staged: that is the
     platform's own serving path, and converging without it is not a partial
     success.
+
+    `fetch_failures` is {vhost id: message} from `www_sync.fetch_webapps`, and
+    `previous` is what `current` pointed at before this install. Together they
+    decide the degrade: a vhost that was already serving keeps its bytes, one
+    that never served is excluded.
     """
     gen_dir = render.generation_dir(generation)
     os.makedirs(os.path.join(gen_dir, "conf.d"), exist_ok=True)
@@ -315,8 +401,15 @@ def stage_generation(vhosts, generation, webapps=None):
     # exist before the staged check runs.
     os.makedirs(render.log_dir(), exist_ok=True)
 
+    fetch_failures = fetch_failures or {}
+    by_vhost = {row["vhost"]: row for row in (webapps or [])}
+    # What the LAST install already reported as unfetchable. A retry that is
+    # still failing logs; only a new failure raises an incident.
+    reported = pending_releases()
+
     installable = []
     excluded = []
+    fallbacks = {}
     for vhost in vhosts:
         disabled = _disabled_upstreams(vhost)
         if disabled:
@@ -326,6 +419,29 @@ def stage_generation(vhosts, generation, webapps=None):
                 f"edge: {vhost.server_name} proxies to retired upstream(s) "
                 f"{names}", excluded)
             continue
+
+        failure = fetch_failures.get(vhost.pk)
+        if failure:
+            row = by_vhost.get(vhost.pk) or {}
+            version = (row.get("release") or {}).get("version")
+            is_new = reported.get(str(vhost.pk)) != version
+            fallback = _previous_web_root(previous, vhost.pk)
+            if fallback is None:
+                # It has never served anything, so there is nothing to keep
+                # serving. Dark beats a live vhost pointing at nothing.
+                _exclude_or_abort(
+                    vhost, f"edge: {failure}", excluded, report=is_new)
+                continue
+            fallbacks[vhost.pk] = fallback
+            message = (f"edge: {failure} — {vhost.server_name} is serving its "
+                       f"previous release from {fallback}")
+            if is_new:
+                logit.error(message)
+                _report_incident(
+                    message, "Edge release fetch failed; serving the previous "
+                             "release")
+            else:
+                logit.info(f"{message} (already reported; still retrying)")
 
         if _write_material(generation, vhost.certificate):
             installable.append(vhost)
@@ -352,7 +468,7 @@ def stage_generation(vhosts, generation, webapps=None):
     with open(os.path.join(gen_dir, "nginx.conf"), "w") as handle:
         handle.write(render.render_nginx_harness(generation))
 
-    stage_web_roots(generation, installable, webapps or [])
+    stage_web_roots(generation, installable, webapps or [], fallbacks)
     return excluded
 
 
@@ -369,7 +485,7 @@ def release_dir(vhost_id, version):
                         "releases", version)
 
 
-def stage_web_roots(generation, vhosts, webapps):
+def stage_web_roots(generation, vhosts, webapps, fallbacks=None):
     """Point every file-serving vhost's web root at its installed release.
 
     **The pointer lives INSIDE the generation.** An earlier design put a
@@ -378,14 +494,27 @@ def stage_web_roots(generation, vhosts, webapps):
     moved, and the node served a new bundle under old config: a state neither
     generation describes. Staging it here means one `os.replace` of `current`
     swaps configuration and content together, and a rollback reverts both.
+
+    `fallbacks` names the vhosts whose desired release could not be fetched
+    but which were already serving something — they get their PREVIOUS release
+    directory, not the desired one.
     """
     by_vhost = {row["vhost"]: row for row in webapps}
+    fallbacks = fallbacks or {}
 
     for vhost in vhosts:
         if vhost.kind not in ("site", "site_api"):
             continue
 
         link = render.www_dir(generation, vhost.pk)
+        fallback = fallbacks.get(vhost.pk)
+        if fallback:
+            # Deliberately NOT the desired release: those bytes are not on
+            # disk, and this vhost keeps serving exactly what it served before
+            # the promote until a later converge fetches them.
+            _symlink_swap(link, fallback)
+            continue
+
         row = by_vhost.get(vhost.pk)
         if row is None:
             # No release yet. An empty directory makes nginx answer 404 rather
@@ -395,6 +524,12 @@ def stage_web_roots(generation, vhosts, webapps):
 
         target = release_dir(vhost.pk, row["release"]["version"])
         if not os.path.isdir(target):
+            # The safety net BEHIND the fetch, not the fetch's error path —
+            # www_sync already degraded anything it could not pull, so
+            # reaching here means the directory went missing some other way
+            # (a hand-deleted release, a full disk mid-install). Retained
+            # deliberately: a live vhost pointing at nothing is worse than a
+            # refused generation.
             raise InstallError(
                 f"release {row['release']['version']} for vhost {vhost.pk} "
                 f"is not on disk at {target}")
@@ -454,13 +589,26 @@ def install(pool="default", force=False):
     generation = payload["generation"]
 
     installed = read_installed()
-    if not force and installed.get("generation") == generation:
+    pending = pending_releases(installed)
+    # `www_pending` DEFEATS the short-circuit on purpose: a node that could not
+    # fetch a release is degraded, and the only thing that heals it is running
+    # the fetch again. A healthy node still does zero S3 work on an unchanged
+    # generation, which is what keeps the ten-minute sweep cheap. Certificate
+    # exclusions keep their sticky semantics — this is fetch-only.
+    if not force and installed.get("generation") == generation and not pending:
         return objict(changed=False, generation=generation, reason="unchanged")
 
     os.makedirs(os.path.join(render.edge_root(), "generations"), exist_ok=True)
     previous = current_target()
 
-    excluded = stage_generation(vhosts, generation, webapps)
+    # Pull the promoted bytes BEFORE staging, so the web-root links point at
+    # releases that are verified on disk. Never raises: one unfetchable
+    # release degrades its own vhost and nothing else.
+    fetch_failures = www_sync.fetch_webapps(webapps)
+
+    excluded = stage_generation(vhosts, generation, webapps,
+                                fetch_failures=fetch_failures,
+                                previous=previous)
 
     gen_dir = render.generation_dir(generation)
     ok, output = _nginx_check(os.path.join(gen_dir, "nginx.conf"))
@@ -500,13 +648,21 @@ def install(pool="default", force=False):
         _fail(generation, f"nginx reload failed: {reload_output}",
               reverted_to=None, revert_note="current left at the new generation")
 
-    write_installed(generation, excluded)
+    # Every fetch-failed vhost, whether it is serving stale bytes or is dark.
+    # This is what makes the next converge retry rather than short-circuit.
+    still_pending = {
+        str(row["vhost"]): row["release"]["version"]
+        for row in webapps if row["vhost"] in fetch_failures
+    }
+    write_installed(generation, excluded, www_pending=still_pending)
     prune_generations()
+    www_sync.prune_releases(webapps)
     logit.info(
         f"edge: installed generation {generation} for pool {pool} "
-        f"({len(vhosts) - len(excluded)} vhosts, {len(excluded)} excluded)")
+        f"({len(vhosts) - len(excluded)} vhosts, {len(excluded)} excluded, "
+        f"{len(still_pending)} awaiting release bytes)")
     return objict(changed=True, generation=generation, excluded=excluded,
-                  previous=previous)
+                  previous=previous, www_pending=still_pending)
 
 
 def _fail(generation, message, reverted_to=None, revert_note=None):

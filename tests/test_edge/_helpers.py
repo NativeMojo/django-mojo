@@ -164,7 +164,7 @@ RELEASE_BUCKET = "edge-test-releases"
 # DECLARED pools (a tenant must not be able to invent one and land their
 # certificate on an isolated node), so every pool a test uses has to be here.
 TEST_POOLS = [
-    "default", "staging", "nginxreal", "reltest",
+    "default", "staging", "nginxreal", "reltest", "wwwsync",
     "itesthappy", "itestexclude", "itesthouse",
     "itestgraph", "itestretired", "itesthouseup",
 ]

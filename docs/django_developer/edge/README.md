@@ -158,7 +158,7 @@ EDGE_ROOT (default /opt/api/var/edge)
       www/<vhost-id>/                the web root (a release symlink later)
   current -> generations/<generation>
   log/                               access.log + edge_watch.log (EDGE_LOG_DIR)
-  installed.json                     {generation, excluded[]}
+  installed.json                     {generation, excluded[], www_pending{}}
 ```
 
 `/etc/nginx/nginx.conf` on a node is a ~12-line provision-time **bootstrap**
@@ -348,6 +348,9 @@ installer can be unit-tested but cannot be exercised on a node.
 | `EDGE_HTTP_KEEPALIVE_TIMEOUT` | `65` | http base; clamped 5–300 |
 | `EDGE_HTTP_DEFAULT_SERVER` | `False` | Flag-gates the rendered catch-alls (static; a cutover step, see templates.md) |
 | `EDGE_KEEP_GENERATIONS` | `5` | Retained generations (rollback depth) |
+| `EDGE_KEEP_RELEASES` | `5` | Retained releases per vhost; never prunes the promoted one or one a retained generation links (static — see [webapps.md](webapps.md)) |
+| `EDGE_RELEASE_FETCH_TIMEOUT` | `60` | Per-attempt connect/read timeout for a node's release GET (static) |
+| `EDGE_RELEASE_FETCH_BUDGET` | `300` | Wall-clock ceiling for one release's fetch; the rest resumes next converge (static) |
 | `EDGE_POOLS` | `["default"]` | Pools the convergence sweep covers |
 | `EDGE_NGINX_TEST_CMD` | `["sudo","-n","nginx","-t"]` | Root check, no arguments |
 | `EDGE_NGINX_STAGED_TEST_CMD` | `["nginx","-e","stderr","-t","-c"]` | Staged check, **unprivileged** (`-e stderr` suppresses the default-error-log alert) |
