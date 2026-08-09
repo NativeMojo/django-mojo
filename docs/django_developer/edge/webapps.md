@@ -128,7 +128,7 @@ itself rejects a body that does not hash to the declared value**. `complete`
 reads the stored checksum back with `HeadObject` — it never pulls the bytes
 through this process, and it never trusts the client's word.
 
-Two things that will bite an implementer:
+Three things that will bite an implementer:
 
 - **`ChecksumSHA256` is base64 of the raw digest; a manifest carries hex.**
   `releases.hex_to_b64` does the conversion. Passing hex through produces a
@@ -136,6 +136,10 @@ Two things that will bite an implementer:
 - **An object with NO stored checksum is a failure, not a pass.** It means the
   upload bypassed the bound URL, and treating absent as "fine" removes the
   verification entirely.
+- **HeadObject returns `ChecksumSHA256` only when asked.** The request must
+  pass `ChecksumMode="ENABLED"` (`s3.head_object` does); without it the field
+  is absent no matter what is stored, and the previous bullet turns every
+  verification into an unconditional failure.
 
 ## Promotion and rollback are the same call
 

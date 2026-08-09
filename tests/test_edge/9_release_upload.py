@@ -1,10 +1,18 @@
 """
 The upload flow: register -> presigned PUT -> complete.
 
-S3 is faked at the `mojo.helpers.aws.s3.S3Item` boundary. These are in-process
-service-level tests, so `mock.patch` reaches them (the rule about patches not
-reaching the server applies to `opts.client` calls, which this file does not
-make — `10_promote_rollback.py` covers the wire).
+Presigning is faked at the module boundary (`s3.presigned_put_url`) — it is
+pure local signing with no request contract to honour. HeadObject is faked one
+level DOWN, at the boto client (`s3.S3._client`), so the REAL `s3.head_object`
+helper runs: its request parameters are the regression surface for #1770.
+Real S3 returns `ChecksumSHA256` from HeadObject only when the request passes
+`ChecksumMode="ENABLED"`; a double that returns the checksum unconditionally
+cannot catch the helper forgetting to ask, which is exactly how the release
+plane shipped unable to verify anything.
+
+These are in-process service-level tests, so `mock.patch` reaches them (the
+rule about patches not reaching the server applies to `opts.client` calls,
+which this file does not make — `10_promote_rollback.py` covers the wire).
 
 The property that matters most here: **`complete` verifies, it does not trust.**
 A CI job that half-failed can still call it, and the client asserting "I am
@@ -13,6 +21,7 @@ done" is not evidence.
 
 from unittest import mock
 
+from botocore.exceptions import ClientError
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
@@ -25,9 +34,9 @@ from tests.test_edge._helpers import (
 class FakeS3:
     """A fake S3 keyspace, shared by a test through `store`.
 
-    Patches the MODULE functions rather than `S3Item`, matching the real seam:
-    presigning deliberately does not go through `S3Item`, whose constructor
-    would issue a HeadObject per file.
+    Presigning is patched as the MODULE function rather than `S3Item`,
+    matching the real seam: presigning deliberately does not go through
+    `S3Item`, whose constructor would issue a HeadObject per file.
     """
 
     store = {}
@@ -38,9 +47,24 @@ class FakeS3:
         return (f"https://{bucket}.s3.example/{key}"
                 f"?sig=1&len={content_length}&ck={sha256_b64}")
 
-    @staticmethod
-    def head_object(bucket, key):
-        return FakeS3.store.get(key)
+
+class FakeS3Client:
+    """The HeadObject half of real S3's contract, at the boto-client seam.
+
+    `ChecksumSHA256` appears in the response ONLY when the request passes
+    `ChecksumMode="ENABLED"` — like real S3, and unlike the module-level fake
+    this replaced, which returned the stored checksum no matter what was
+    asked and so could never catch #1770.
+    """
+
+    def head_object(self, Bucket=None, Key=None, **kwargs):
+        entry = FakeS3.store.get(Key)
+        if entry is None:
+            raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
+        head = {k: v for k, v in entry.items() if k != "ChecksumSHA256"}
+        if kwargs.get("ChecksumMode") == "ENABLED" and "ChecksumSHA256" in entry:
+            head["ChecksumSHA256"] = entry["ChecksumSHA256"]
+        return head
 
 
 def _put(key, sha256_hex=None, size=None, checksum=True):
@@ -66,13 +90,13 @@ def setup_release_upload(opts):
 def _fake_s3():
     from contextlib import ExitStack
 
+    from mojo.helpers.aws import s3
+
     stack = ExitStack()
     stack.enter_context(mock.patch(
         "mojo.apps.edge.services.releases.s3.presigned_put_url",
         FakeS3.presigned_put_url))
-    stack.enter_context(mock.patch(
-        "mojo.apps.edge.services.releases.s3.head_object",
-        FakeS3.head_object))
+    stack.enter_context(mock.patch.object(s3.S3, "_client", FakeS3Client()))
     return stack
 
 
@@ -178,6 +202,31 @@ def test_complete_rejects_missing_checksum(opts):
 
     assert err is not None, \
         "complete accepted an object with no stored checksum"
+
+
+@th.django_unit_test("head_object asks S3 for the checksum complete verifies")
+def test_head_object_requests_checksum_mode(opts):
+    """The regression for #1770: S3 omits `ChecksumSHA256` from HeadObject
+    unless the request passes `ChecksumMode="ENABLED"`. A helper that forgets
+    the parameter reads back None for every object, so `complete` rejects
+    every correctly-uploaded release — the check cannot pass by construction.
+    """
+    from mojo.helpers.aws import s3
+
+    seen = {}
+
+    class RecordingClient:
+        def head_object(self, **kwargs):
+            seen.update(kwargs)
+            return {"ContentLength": 1}
+
+    with mock.patch.object(s3.S3, "_client", RecordingClient()):
+        s3.head_object("bucket", "key")
+
+    assert seen.get("ChecksumMode") == "ENABLED", (
+        f"head_object sent ChecksumMode={seen.get('ChecksumMode')!r} — "
+        "without ChecksumMode=ENABLED, S3 omits ChecksumSHA256 and no "
+        "release can ever verify")
 
 
 @th.django_unit_test("complete FAILS on a size mismatch")

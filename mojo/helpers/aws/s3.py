@@ -542,10 +542,15 @@ class S3Item:
         an upload that bypassed the presigned URL's bound checksum will not
         have it, and a caller treating "absent" as "matches" would undo the
         entire verification step.
+
+        `ChecksumMode="ENABLED"` is not optional: S3 omits `ChecksumSHA256`
+        from HeadObject unless the request asks for it, no matter what is
+        stored on the object.
         """
         try:
             return S3.client.head_object(
-                Bucket=self.bucket_name, Key=self.key)
+                Bucket=self.bucket_name, Key=self.key,
+                ChecksumMode="ENABLED")
         except botocore.exceptions.ClientError as err:
             code = err.response.get("Error", {}).get("Code")
             if code in ("404", "NoSuchKey", "NotFound"):
@@ -632,9 +637,15 @@ def head_object(bucket: str, key: str) -> Optional[Dict]:
     through this process. `ChecksumSHA256` is present only when the object was
     written with one; treating its absence as a match would undo the whole
     verification.
+
+    `ChecksumMode="ENABLED"` is not optional: S3 omits `ChecksumSHA256` from
+    HeadObject unless the request asks for it, no matter what is stored on the
+    object. On a checksum-less object the parameter is harmless — the field is
+    simply absent, which is the case callers are written to catch.
     """
     try:
-        return S3.client.head_object(Bucket=bucket, Key=key)
+        return S3.client.head_object(
+            Bucket=bucket, Key=key, ChecksumMode="ENABLED")
     except botocore.exceptions.ClientError as err:
         code = err.response.get("Error", {}).get("Code")
         if code in ("404", "NoSuchKey", "NotFound"):
