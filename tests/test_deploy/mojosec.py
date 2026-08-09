@@ -166,6 +166,49 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
 
 
 @th.django_unit_test()
+def test_home_binds_create_aws_parent_and_reject_unsafe_parents(opts):
+    from mojo.deploy import mojosec as deploy
+
+    with tempfile.TemporaryDirectory() as root:
+        home = os.path.join(root, "home")
+        os.mkdir(home, 0o700)
+        owner = (os.getuid(), os.getgid())
+        paths = (
+            os.path.join(home, ".aws", "config"),
+            os.path.join(home, ".aws", "credentials"),
+            os.path.join(home, ".ssh"),
+        )
+        deploy._prepare_home_binds(paths=paths, users={home: owner})
+        th.assert_true(os.path.isdir(os.path.join(home, ".aws")),
+                       "a clean home must get its required .aws parent")
+        th.assert_true(all(os.path.isfile(path) for path in paths[:2]),
+                       "exact AWS leaf binds must exist before service activation")
+
+    with tempfile.TemporaryDirectory() as root:
+        home = os.path.join(root, "home")
+        outside = os.path.join(root, "outside")
+        os.mkdir(home, 0o700)
+        os.mkdir(outside, 0o700)
+        os.symlink(outside, os.path.join(home, ".aws"))
+        with th.assert_raises(deploy.DeployError):
+            deploy._prepare_home_binds(
+                paths=(os.path.join(home, ".aws", "credentials"),),
+                users={home: (os.getuid(), os.getgid())})
+        th.assert_true(not os.path.exists(os.path.join(outside, "credentials")),
+                       "a parent symlink must be rejected before leaf creation")
+
+    with tempfile.TemporaryDirectory() as root:
+        home = os.path.join(root, "home")
+        os.mkdir(home, 0o700)
+        os.mkdir(os.path.join(home, ".aws"), 0o777)
+        os.chmod(os.path.join(home, ".aws"), 0o777)
+        with th.assert_raises(deploy.DeployError):
+            deploy._prepare_home_binds(
+                paths=(os.path.join(home, ".aws", "config"),),
+                users={home: (os.getuid(), os.getgid())})
+
+
+@th.django_unit_test()
 def test_safe_path_launcher_retains_system_site_without_env_or_cwd(opts):
     """Model the AL2023 root-pip layout that `-I`/`-s` incorrectly hide."""
     script = (

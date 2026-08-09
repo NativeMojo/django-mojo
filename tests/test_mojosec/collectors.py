@@ -482,17 +482,19 @@ def test_fim_reuses_strict_metadata_and_retains_alias_anomalies(opts):
         first = collector.scan()
         th.assert_eq(first["snapshot"][alias]["sha256"], first["snapshot"][module]["sha256"],
                      "hardlink aliases must retain logical observations while sharing content")
-        th.assert_true(first["snapshot"][alias].get("digest_reused") is True or
-                       first["snapshot"][module].get("digest_reused") is True,
-                       "one stable device/inode content read must serve both hardlink aliases")
+        th.assert_true(all("digest_reused" not in entry
+                           for entry in first["snapshot"].values()),
+                       "digest reuse is transient scan state, never baseline evidence")
         th.assert_eq(first["snapshot"][pth]["anomaly"], "pth_executable",
                      "an executable .pth directive must be explicit integrity evidence")
         th.assert_eq(first["snapshot"][escape]["anomaly"], "symlink_escape",
                      "a symlink escaping the approved site root must be an anomaly")
 
         second = collector.scan(first["snapshot"])
-        th.assert_true(second["snapshot"][module].get("digest_reused") is True,
-                       "digest reuse requires the full stable metadata identity")
+        th.assert_eq(collector.diff(first["snapshot"], second), [],
+                     "an unchanged second scan, including hardlinks, must diff empty")
+        th.assert_eq(second["snapshot"], first["snapshot"],
+                     "digest reuse must not alter persisted comparison state")
 
 
 @th.django_unit_test()
@@ -538,3 +540,41 @@ def test_rpm_parser_is_strict_and_system_site_roots_are_constrained(opts):
     ], "system interpreter discovery must reject project and temporary environments")
     th.assert_eq(calls[0][:2], ["/usr/bin/python3", "-I"],
                  "site discovery must use the trusted isolated system interpreter")
+
+
+@th.django_unit_test()
+def test_rpm_ownership_is_rebuilt_for_every_slow_scan(opts):
+    from mojo.mojosec.collectors.rpm import RpmCollector
+
+    root = "/usr/local/lib/python3.11/site-packages"
+    path = root + "/example.py"
+    owners = iter(("example-1-1.x86_64", "example-2-1.x86_64"))
+    calls = []
+
+    def runner(argv, accepted=(0,)):
+        calls.append(argv)
+        return 0, next(owners) + "\n", ""
+
+    collector = RpmCollector({
+        "interpreter": "/usr/bin/python3", "interval_seconds": 21600,
+        "max_entries": 100, "max_packages": 10, "max_owner_queries": 100,
+        "max_output_bytes": 65536, "timeout_seconds": 5,
+        "max_file_bytes": 1024, "max_depth": 16,
+    }, {"name": "al2023-web-v1", "version": 1, "digest": "a" * 64}, runner=runner)
+    shared = {
+        path: {
+            "kind": "file", "mode": 0o644, "uid": 0, "gid": 0,
+            "size": 4, "sha256": "b" * 64,
+        },
+    }
+    with mock.patch.object(collector, "discover_site_roots", return_value=[root]), \
+            mock.patch.object(collector, "_verify_packages", return_value={}):
+        first = collector.scan(shared_snapshot=shared)
+        second = collector.scan(shared_snapshot=shared)
+
+    th.assert_eq(first["snapshot"][path]["rpm_owner"], "example-1-1.x86_64",
+                 "the first slow scan must record its current RPM owner")
+    th.assert_eq(second["snapshot"][path]["rpm_owner"], "example-2-1.x86_64",
+                 "the next slow scan must query ownership again after package changes")
+    th.assert_eq(len(calls), 2,
+                 "RPM ownership cache and its query budget must be scan-local")

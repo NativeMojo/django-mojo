@@ -206,7 +206,12 @@ class Runtime:
         self._poll_fim()
         self._poll_integrity()
         try:
-            self.store.annotate_pending_fim(self.config.get("expected_changes_path", ""))
+            expected_path = self.config.get("expected_changes_path", "")
+            active_paths = ()
+            if expected_path == "/etc/mojosec/expected_changes.json":
+                from mojo.deploy.mojosec_changes import ChangeJournal
+                active_paths = ChangeJournal().active_paths()
+            self.store.annotate_pending_fim(expected_path, active_paths=active_paths)
         except Exception as err:
             self._collector_error("expected_changes", err)
         try:

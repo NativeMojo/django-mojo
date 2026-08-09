@@ -12,6 +12,7 @@ from .protocol import canonical_json, make_event
 
 SCHEMA_VERSION = 1
 ANNOTATION_GRACE_SECONDS = 120
+ANNOTATION_MAX_GRACE_SECONDS = 300
 
 
 class StoreError(RuntimeError):
@@ -69,6 +70,7 @@ class Store:
                 created REAL NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 next_attempt REAL NOT NULL DEFAULT 0,
+                annotation_deadline REAL NOT NULL DEFAULT 0,
                 last_error TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS events_delivery
@@ -109,6 +111,12 @@ class Store:
                     "UPDATE aggregates SET severity = ? WHERE fingerprint = ?",
                     (severity, row["fingerprint"]),
                 )
+        event_columns = {
+            row["name"] for row in self.db.execute("PRAGMA table_info(events)").fetchall()
+        }
+        if "annotation_deadline" not in event_columns:
+            self.db.execute(
+                "ALTER TABLE events ADD COLUMN annotation_deadline REAL NOT NULL DEFAULT 0")
         version = self.get_meta("schema_version")
         if version is None:
             self.set_meta("schema_version", SCHEMA_VERSION)
@@ -156,9 +164,11 @@ class Store:
             not event.get("attributes", {}).get("expected_change") else 0
         )
         cursor = self.db.execute(
-            "INSERT OR IGNORE INTO events(id, payload, severity, created, next_attempt) "
-            "VALUES(?, ?, ?, ?, ?)",
-            (event["id"], canonical_json(event), event["severity"], now, now + grace),
+            "INSERT OR IGNORE INTO events("
+            "id, payload, severity, created, next_attempt, annotation_deadline) "
+            "VALUES(?, ?, ?, ?, ?, ?)",
+            (event["id"], canonical_json(event), event["severity"], now,
+             now + grace, now + grace if grace else 0),
         )
         return cursor.rowcount == 1
 
@@ -265,41 +275,57 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
 
-    def annotate_pending_fim(self, expected_changes_path, now=None):
+    def annotate_pending_fim(self, expected_changes_path, active_paths=None, now=None):
         """Enrich already-durable FIM evidence during its bounded delivery grace."""
         from .expected_changes import ExpectedChangeError, annotation, load_manifest
 
         try:
             entries = load_manifest(expected_changes_path)
         except ExpectedChangeError:
-            return 0
-        if not entries:
-            return 0
+            entries = []
         now = now if now is not None else time.time()
-        rows = self.db.execute(
-            "SELECT id, payload FROM events WHERE next_attempt > ? ORDER BY created LIMIT 4096",
-            (now,),
-        ).fetchall()
+        active_paths = set(active_paths or ())
         changed = 0
         self.db.execute("BEGIN IMMEDIATE")
         try:
+            rows = self.db.execute(
+                "SELECT id, payload, created, next_attempt, annotation_deadline "
+                "FROM events WHERE annotation_deadline > 0 AND attempts = 0 "
+                "AND last_error = '' ORDER BY created LIMIT 4096",
+            ).fetchall()
             for row in rows:
                 event = json.loads(row["payload"])
                 if (event.get("kind") != "fim.change" or
                         event.get("attributes", {}).get("expected_change")):
                     continue
                 attributes = event["attributes"]
-                evidence = {"sha256": attributes.get("sha256")}
+                deadline = row["annotation_deadline"]
+                if (attributes.get("path") in active_paths and
+                        now < row["created"] + ANNOTATION_MAX_GRACE_SECONDS):
+                    deadline = min(
+                        row["created"] + ANNOTATION_MAX_GRACE_SECONDS,
+                        max(deadline, now + ANNOTATION_GRACE_SECONDS),
+                    )
+                    if deadline > row["annotation_deadline"]:
+                        self.db.execute(
+                            "UPDATE events SET next_attempt = ?, annotation_deadline = ? "
+                            "WHERE id = ?", (deadline, deadline, row["id"]))
+                if deadline <= now or not entries:
+                    continue
+                evidence = {field: attributes.get(field) for field in (
+                    "kind", "mode", "uid", "gid", "size", "sha256", "target_sha256")}
                 value = annotation(
                     entries, attributes.get("path"), attributes.get("change"),
                     evidence if attributes.get("change") == "deleted" else None,
                     evidence if attributes.get("change") != "deleted" else None,
+                    now=now, observed_at=row["created"],
                 )
                 if value is None:
                     continue
                 attributes["expected_change"] = value
                 self.db.execute(
-                    "UPDATE events SET payload = ?, next_attempt = ? WHERE id = ?",
+                    "UPDATE events SET payload = ?, next_attempt = ?, "
+                    "annotation_deadline = 0 WHERE id = ?",
                     (canonical_json(event), now, row["id"]),
                 )
                 changed += 1
@@ -317,10 +343,16 @@ class Store:
         events = []
         used = 1024
         for row in rows:
-            size = len(row["payload"].encode("utf-8")) + 1
+            event = json.loads(row["payload"])
+            if event.get("kind") == "fim.change":
+                attributes = event.get("attributes", {})
+                attributes.pop("sha256", None)
+                attributes.pop("target_sha256", None)
+            payload = canonical_json(event)
+            size = len(payload.encode("utf-8")) + 1
             if events and used + size > max_bytes:
                 break
-            events.append(json.loads(row["payload"]))
+            events.append(event)
             used += size
         return events
 
@@ -346,7 +378,8 @@ class Store:
                 )
                 reason = str(result.get("reason") or error or "retry")[:256]
                 self.db.execute(
-                    "UPDATE events SET attempts=?, next_attempt=?, last_error=? WHERE id=?",
+                    "UPDATE events SET attempts=?, next_attempt=?, annotation_deadline=0, "
+                    "last_error=? WHERE id=?",
                     (attempts, now + delay, reason, event_id),
                 )
                 self._increment("delivery_retry")

@@ -64,6 +64,16 @@ def _timestamp(value):
     return value.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _parse_timestamp(value):
+    try:
+        parsed = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as err:
+        raise ChangeError("trusted-change operation timestamp is invalid") from err
+    if parsed.tzinfo is None:
+        raise ChangeError("trusted-change operation timestamp lacks a timezone")
+    return parsed.astimezone(datetime.timezone.utc)
+
+
 def _canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
@@ -316,17 +326,36 @@ def _snapshot(path):
                 raise ChangeError(f"trusted-change path raced while hashing: {path}")
         finally:
             os.close(descriptor)
-        return {"kind": "file", "sha256": digest.hexdigest()}
+        return {
+            "kind": "file", "mode": stat.S_IMODE(finished.st_mode),
+            "uid": finished.st_uid, "gid": finished.st_gid,
+            "size": finished.st_size, "sha256": digest.hexdigest(),
+        }
     if stat.S_ISLNK(info.st_mode):
         target = os.readlink(path)
-        return {"kind": "symlink", "sha256": hashlib.sha256(
-            target.encode("utf-8")).hexdigest()}
-    material = _canonical({
+        return {
+            "kind": "symlink", "mode": stat.S_IMODE(info.st_mode),
+            "uid": info.st_uid, "gid": info.st_gid, "size": info.st_size,
+            "target_sha256": hashlib.sha256(target.encode("utf-8")).hexdigest(),
+        }
+    return {
         "kind": "directory" if stat.S_ISDIR(info.st_mode) else "other",
-        "mode": stat.S_IMODE(info.st_mode), "uid": info.st_uid, "gid": info.st_gid,
-    })
-    return {"kind": "metadata", "sha256": hashlib.sha256(
-        material.encode("utf-8")).hexdigest()}
+        "mode": stat.S_IMODE(info.st_mode), "uid": info.st_uid,
+        "gid": info.st_gid, "size": info.st_size,
+    }
+
+
+def _evidence_digest(value):
+    kind = value.get("kind") if isinstance(value, dict) else None
+    if kind not in ("file", "symlink", "directory", "other"):
+        return None, None
+    material = {field: value.get(field)
+                for field in ("kind", "mode", "uid", "gid", "size")}
+    if kind == "file":
+        material["content_sha256"] = value.get("sha256")
+    elif kind == "symlink":
+        material["target_sha256"] = value.get("target_sha256")
+    return kind, hashlib.sha256(_canonical(material).encode("utf-8")).hexdigest()
 
 
 def _read(path, empty):
@@ -427,6 +456,22 @@ class ChangeJournal:
         value["version"] = 2
         return value
 
+    def _reap_expired(self, journal, now=None):
+        now = now or _now()
+        expired = []
+        for operation_id, operation in journal["operations"].items():
+            if not isinstance(operation, dict):
+                raise ChangeError("trusted-change journal operation is invalid")
+            ttl = operation.get("ttl_seconds")
+            if not isinstance(ttl, int) or isinstance(ttl, bool):
+                raise ChangeError("trusted-change journal TTL is invalid")
+            if _parse_timestamp(operation.get("started_at")) + \
+                    datetime.timedelta(seconds=ttl) <= now:
+                expired.append(operation_id)
+        for operation_id in expired:
+            del journal["operations"][operation_id]
+        return len(expired)
+
     def begin(self, operation_id, operation_kind, paths, deployment_id=None,
               ttl_seconds=900):
         if (not isinstance(operation_id, str) or not _IDENTITY.fullmatch(operation_id) or
@@ -443,6 +488,7 @@ class ChangeJournal:
         descriptor = self._locked()
         try:
             journal = self._load_journal()
+            reaped = self._reap_expired(journal)
             existing = journal["operations"].get(operation_id)
             requested = {
                 "operation_id": operation_id, "operation_kind": operation_kind,
@@ -456,6 +502,8 @@ class ChangeJournal:
                 compare.pop("started_at", None)
                 if stable != compare:
                     raise ChangeError("operation id is already active with different scope")
+                if reaped:
+                    _atomic_write(self.journal_path, journal)
                 return existing
             if len(journal["operations"]) >= MAX_OPERATIONS:
                 raise ChangeError("trusted-change operation bound was exceeded")
@@ -486,10 +534,12 @@ class ChangeJournal:
                     change, evidence = "deleted", before
                 else:
                     change, evidence = "modified", after
-                if not evidence or not evidence.get("sha256"):
+                evidence_kind, evidence_sha256 = _evidence_digest(evidence)
+                if not evidence_kind or not evidence_sha256:
                     raise ChangeError(f"trusted-change path lacks bounded digest evidence: {path}")
                 entries.append({
-                    "path": path, "change": change, "sha256": evidence["sha256"],
+                    "path": path, "change": change, "sha256": evidence_sha256,
+                    "evidence_kind": evidence_kind,
                     "expires_at": _timestamp(expiry),
                     "deployment_id": operation["deployment_id"],
                     "operation_id": operation["operation_id"],
@@ -528,11 +578,38 @@ class ChangeJournal:
         descriptor = self._locked()
         try:
             journal = self._load_journal()
+            reaped = self._reap_expired(journal)
+            if reaped:
+                _atomic_write(self.journal_path, journal)
             manifest = self._load_manifest()
             return {
                 "ok": True, "active_operations": len(journal["operations"]),
                 "manifest_entries": len(manifest["entries"]), "version": 2,
+                "reaped_operations": reaped,
             }
+        finally:
+            os.close(descriptor)
+
+    def active_paths(self):
+        descriptor = self._locked()
+        try:
+            journal = self._load_journal()
+            reaped = self._reap_expired(journal)
+            if reaped:
+                _atomic_write(self.journal_path, journal)
+            return sorted({path for operation in journal["operations"].values()
+                           for path in operation.get("paths", [])})
+        finally:
+            os.close(descriptor)
+
+    def reap(self):
+        descriptor = self._locked()
+        try:
+            journal = self._load_journal()
+            reaped = self._reap_expired(journal)
+            if reaped:
+                _atomic_write(self.journal_path, journal)
+            return reaped
         finally:
             os.close(descriptor)
 
@@ -569,11 +646,15 @@ def main(argv=None):
     pip_run.add_argument("--ttl", type=int, default=900)
     pip_run.add_argument("child", nargs=argparse.REMAINDER)
     sub.add_parser("status")
+    sub.add_parser("reap")
     args = parser.parse_args(argv)
     journal = ChangeJournal()
     try:
         if args.command == "status":
             print(_canonical(journal.status()))
+            return 0
+        if args.command == "reap":
+            print(_canonical({"ok": True, "reaped_operations": journal.reap()}))
             return 0
         child = list(args.child)
         if child and child[0] == "--":

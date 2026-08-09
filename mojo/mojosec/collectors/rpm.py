@@ -186,6 +186,10 @@ class RpmCollector:
         return result
 
     def scan(self, previous=None, shared_snapshot=None):
+        # Package ownership is mutable across slow scans. Never carry a prior
+        # scan's `rpm -qf` result or query budget into the next generation.
+        self.owners = {}
+        self.owner_queries = 0
         roots = self.discover_site_roots()
         local = [root for root in roots if root.startswith(("/usr/local/lib/", "/usr/local/lib64/"))]
         system = [root for root in roots if root not in local]

@@ -216,39 +216,47 @@ def _ensure_dir(path, mode):
     os.chmod(path, mode)
 
 
-def _prepare_home_binds():
+def _prepare_home_binds(paths=None, users=None):
     """Precreate the exact non-optional paths exposed through ProtectHome=tmpfs."""
-    users = {"/root": (0, 0)}
-    try:
-        account = pwd.getpwnam("ec2-user")
-    except KeyError as err:
-        raise DeployError("ec2-user is required for the standard MojoSec profile") from err
-    users["/home/ec2-user"] = (account.pw_uid, account.pw_gid)
+    paths = tuple(paths or HOME_BIND_PATHS)
+    if users is None:
+        users = {"/root": (0, 0)}
+        try:
+            account = pwd.getpwnam("ec2-user")
+        except KeyError as err:
+            raise DeployError("ec2-user is required for the standard MojoSec profile") from err
+        users["/home/ec2-user"] = (account.pw_uid, account.pw_gid)
     # Bind AWS credentials and shell startup files exactly; every other target
     # is a directory subtree approved by the immutable profile.
-    files = {path for path in HOME_BIND_PATHS
+    files = {path for path in paths
              if os.path.basename(path) in (
                  ".bashrc", ".bash_profile", ".profile", "config", "credentials")}
-    directories = set(HOME_BIND_PATHS) - files
+    directories = set(paths) - files
+
+    def prepare_directory(home, path, owner):
+        current = home
+        for component in os.path.relpath(path, home).split(os.sep):
+            current = os.path.join(current, component)
+            try:
+                child = os.lstat(current)
+            except FileNotFoundError:
+                os.mkdir(current, 0o700)
+                os.chown(current, *owner)
+                child = os.lstat(current)
+            if not stat.S_ISDIR(child.st_mode) or stat.S_ISLNK(child.st_mode):
+                raise DeployError(f"home bind ancestor is not a real directory: {current}")
+            if child.st_uid != owner[0] or child.st_mode & 0o022:
+                raise DeployError(f"home bind ancestor has unsafe ownership/mode: {current}")
+
     for home, owner in users.items():
         info = os.lstat(home)
-        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
-            raise DeployError(f"standard home is not a real directory: {home}")
+        if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or
+                info.st_uid != owner[0] or info.st_mode & 0o022):
+            raise DeployError(f"standard home has unsafe ownership, mode, or type: {home}")
         for path in sorted(item for item in directories if item.startswith(home + "/")):
-            current = home
-            for component in os.path.relpath(path, home).split(os.sep):
-                current = os.path.join(current, component)
-                try:
-                    child = os.lstat(current)
-                except FileNotFoundError:
-                    os.mkdir(current, 0o700)
-                    os.chown(current, *owner)
-                    child = os.lstat(current)
-                if not stat.S_ISDIR(child.st_mode) or stat.S_ISLNK(child.st_mode):
-                    raise DeployError(f"home bind ancestor is not a real directory: {current}")
-                if child.st_uid != owner[0] or child.st_mode & 0o022:
-                    raise DeployError(f"home bind ancestor has unsafe ownership/mode: {current}")
+            prepare_directory(home, path, owner)
         for path in sorted(item for item in files if item.startswith(home + "/")):
+            prepare_directory(home, os.path.dirname(path), owner)
             try:
                 info = os.lstat(path)
             except FileNotFoundError:

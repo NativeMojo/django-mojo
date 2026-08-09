@@ -93,7 +93,6 @@ class FimCollector:
                     entry["sha256"] = previous["sha256"]
                     if previous.get("anomaly"):
                         entry["anomaly"] = previous["anomaly"]
-                    entry["digest_reused"] = True
                     return entry
                 inode_key = (
                     info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
@@ -102,7 +101,6 @@ class FimCollector:
                 cached = state["digests"].get(inode_key)
                 if cached is not None:
                     entry.update(cached)
-                    entry["digest_reused"] = True
                     return entry
                 descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
                 try:

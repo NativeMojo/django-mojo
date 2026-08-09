@@ -1,3 +1,4 @@
+import datetime
 import gzip
 import json
 import os
@@ -52,16 +53,20 @@ def test_fim_evidence_is_durable_before_v2_grace_annotation(opts):
     import json
 
     from mojo.mojosec.events import observation
+    from mojo.mojosec.expected_changes import evidence_digest
     from mojo.mojosec.store import Store
 
     with tempfile.TemporaryDirectory() as root:
         store = Store(root, "grace-test", AGGREGATION, DELIVERY)
         path = "/etc/example.conf"
         digest = "a" * 64
+        evidence = {
+            "kind": "file", "mode": 0o644, "uid": 0, "gid": 0,
+            "size": 12, "sha256": digest,
+        }
         found = observation(
             "fim.change", "high", "integrity change",
-            attributes={"path": path, "change": "modified", "kind": "file",
-                        "sha256": digest},
+            attributes={"path": path, "change": "modified", **evidence},
             fingerprint_values=(path, digest), aggregate=False, recommendation="review")
         store.ingest([found])
         th.assert_eq(store.stats()["spooled_events"], 1,
@@ -70,13 +75,17 @@ def test_fim_evidence_is_durable_before_v2_grace_annotation(opts):
                      "unmatched FIM delivery should wait only for the short bounded grace")
 
         manifest_path = os.path.join(root, "expected.json")
+        completed = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=1)
+        expiry = completed + datetime.timedelta(minutes=10)
+        evidence_kind, evidence_sha256 = evidence_digest(evidence)
         manifest = {
             "schema": "mojosec.expected_changes", "version": 2,
             "entries": [{
-                "path": path, "change": "modified", "sha256": digest,
-                "expires_at": "2099-01-01T00:10:00Z", "deployment_id": "deploy-1",
+                "path": path, "change": "modified", "sha256": evidence_sha256,
+                "evidence_kind": evidence_kind,
+                "expires_at": expiry.isoformat(), "deployment_id": "deploy-1",
                 "operation_id": "deploy-1-render", "operation_kind": "rendered-config",
-                "completed_at": "2099-01-01T00:00:00Z",
+                "completed_at": completed.isoformat(),
             }],
         }
         with open(manifest_path, "w", encoding="utf-8") as handle:
@@ -88,6 +97,151 @@ def test_fim_evidence_is_durable_before_v2_grace_annotation(opts):
         th.assert_eq(pending[0]["attributes"]["expected_change"]["operation_id"],
                      "deploy-1-render",
                      "grace enrichment must preserve bounded operation identity")
+        th.assert_true("sha256" not in pending[0]["attributes"],
+                       "content digests must stay in the private spool, not the wire event")
+        stored = json.loads(store.db.execute(
+            "SELECT payload FROM events WHERE id = ?", (pending[0]["id"],)
+        ).fetchone()["payload"])
+        th.assert_eq(stored["attributes"]["sha256"], digest,
+                     "wire scrubbing must retain private evidence for later local matching")
+        store.close()
+
+
+@th.django_unit_test()
+def test_fim_grace_only_reconciles_virgin_time_correlated_rows(opts):
+    from mojo.mojosec.events import observation
+    from mojo.mojosec.expected_changes import evidence_digest
+    from mojo.mojosec.store import Store
+
+    def found(path, digest):
+        return observation(
+            "fim.change", "high", "integrity change",
+            attributes={
+                "path": path, "change": "modified", "kind": "file",
+                "mode": 0o644, "uid": 0, "gid": 0, "size": 12,
+                "sha256": digest,
+            },
+            fingerprint_values=(path, digest), aggregate=False,
+            recommendation="review",
+        )
+
+    with tempfile.TemporaryDirectory() as root:
+        store = Store(root, "grace-eligibility", AGGREGATION, DELIVERY)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        retry_path = "/etc/retry.conf"
+        old_path = "/etc/old.conf"
+        retry_digest = "b" * 64
+        old_digest = "c" * 64
+        store.ingest([found(retry_path, retry_digest), found(old_path, old_digest)])
+        rows = store.db.execute("SELECT id, payload FROM events ORDER BY created").fetchall()
+        ids = {json.loads(row["payload"])["attributes"]["path"]: row["id"] for row in rows}
+
+        # Simulate a previously attempted event even if a later bug or migration
+        # were to restore a grace deadline. It must never be relabelled.
+        store.db.execute(
+            "UPDATE events SET attempts=1, last_error='offline', annotation_deadline=? "
+            "WHERE id=?", (now.timestamp() + 60, ids[retry_path]))
+        # A row observed well before this operation must not match merely because
+        # the exact path and resulting bytes happen to agree.
+        store.db.execute(
+            "UPDATE events SET created=?, annotation_deadline=? WHERE id=?",
+            (now.timestamp() - 600, now.timestamp() + 60, ids[old_path]))
+
+        manifest_path = os.path.join(root, "expected.json")
+        entries = []
+        for path, digest in ((retry_path, retry_digest), (old_path, old_digest)):
+            evidence = {
+                "kind": "file", "mode": 0o644, "uid": 0, "gid": 0,
+                "size": 12, "sha256": digest,
+            }
+            kind, evidence_sha256 = evidence_digest(evidence)
+            entries.append({
+                "path": path, "change": "modified", "sha256": evidence_sha256,
+                "evidence_kind": kind,
+                "expires_at": (now + datetime.timedelta(minutes=10)).isoformat(),
+                "deployment_id": "deploy-eligibility",
+                "operation_id": "deploy-eligibility-render",
+                "operation_kind": "rendered-config",
+                "completed_at": (now - datetime.timedelta(seconds=1)).isoformat(),
+            })
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump({
+                "schema": "mojosec.expected_changes", "version": 2,
+                "entries": entries,
+            }, handle)
+        os.chmod(manifest_path, 0o600)
+
+        th.assert_eq(store.annotate_pending_fim(manifest_path, now=now.timestamp()), 0,
+                     "retry-delayed and pre-operation rows must remain unexplained")
+        payloads = [json.loads(row["payload"]) for row in store.db.execute(
+            "SELECT payload FROM events").fetchall()]
+        th.assert_true(all("expected_change" not in event["attributes"] for event in payloads),
+                       "ineligible rows must not acquire expected-change annotations")
+        store.close()
+
+
+@th.django_unit_test()
+def test_active_exact_path_extends_only_the_bounded_local_grace(opts):
+    from mojo.mojosec.events import observation
+    from mojo.mojosec.store import ANNOTATION_MAX_GRACE_SECONDS, Store
+
+    with tempfile.TemporaryDirectory() as root:
+        store = Store(root, "grace-extension", AGGREGATION, DELIVERY)
+        path = "/etc/active.conf"
+        digest = "d" * 64
+        store.ingest([observation(
+            "fim.change", "high", "integrity change",
+            attributes={
+                "path": path, "change": "modified", "kind": "file",
+                "mode": 0o644, "uid": 0, "gid": 0, "size": 12,
+                "sha256": digest,
+            },
+            fingerprint_values=(path, digest), aggregate=False,
+            recommendation="review",
+        )])
+        row = store.db.execute(
+            "SELECT id, created, annotation_deadline FROM events").fetchone()
+        original = row["annotation_deadline"]
+        observed = row["created"]
+
+        th.assert_eq(store.annotate_pending_fim(
+            "", active_paths=[path], now=observed + 110), 0,
+            "an active operation may extend grace without fabricating an annotation")
+        extended = store.db.execute(
+            "SELECT annotation_deadline FROM events WHERE id=?", (row["id"],)
+        ).fetchone()["annotation_deadline"]
+        th.assert_true(extended > original,
+                       "only an exact active path should keep its virgin event local longer")
+        th.assert_true(extended <= observed + ANNOTATION_MAX_GRACE_SECONDS,
+                       "active-operation grace must remain bounded from original observation time")
+        store.close()
+
+
+@th.django_unit_test()
+def test_symlink_target_digest_is_private_to_the_local_spool(opts):
+    from mojo.mojosec.events import observation
+    from mojo.mojosec.store import Store
+
+    with tempfile.TemporaryDirectory() as root:
+        store = Store(root, "link-privacy", AGGREGATION, DELIVERY)
+        target_digest = "e" * 64
+        store.ingest([observation(
+            "fim.change", "high", "integrity change",
+            attributes={
+                "path": "/etc/current", "change": "modified", "kind": "symlink",
+                "mode": 0o777, "uid": 0, "gid": 0, "size": 6,
+                "target_sha256": target_digest,
+            },
+            fingerprint_values=("/etc/current", target_digest), aggregate=False,
+            recommendation="review",
+        )])
+        store.db.execute("UPDATE events SET next_attempt=0, annotation_deadline=0")
+        pending = store.pending_batch(10, 65536)
+        th.assert_true("target_sha256" not in pending[0]["attributes"],
+                       "symlink target digests must not be delivered or replayed")
+        stored = json.loads(store.db.execute("SELECT payload FROM events").fetchone()["payload"])
+        th.assert_eq(stored["attributes"]["target_sha256"], target_digest,
+                     "private symlink evidence must remain available for local matching")
         store.close()
 
 

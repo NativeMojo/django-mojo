@@ -1,5 +1,4 @@
 import datetime
-import hashlib
 import importlib.util
 import json
 import os
@@ -12,7 +11,7 @@ from testit import helpers as th
 
 @th.django_unit_test()
 def test_exact_change_journal_completes_v2_and_abort_never_annotates(opts):
-    from mojo.deploy.mojosec_changes import ChangeJournal, run_trusted_change
+    from mojo.deploy.mojosec_changes import ChangeJournal, _snapshot, run_trusted_change
     from mojo.mojosec.expected_changes import annotation, load_manifest
 
     with tempfile.TemporaryDirectory() as root:
@@ -30,8 +29,7 @@ def test_exact_change_journal_completes_v2_and_abort_never_annotates(opts):
         th.assert_eq(len(completed), 1,
                      "a completed exact mutation should produce one v2 annotation")
         entries = load_manifest(os.path.join(root, "expected.json"), require_root=False)
-        digest = hashlib.sha256(b"trusted bytes\n").hexdigest()
-        expected = annotation(entries, watched, "created", None, {"sha256": digest})
+        expected = annotation(entries, watched, "created", None, _snapshot(watched))
         th.assert_eq(expected["operation_id"], "deploy-1",
                      "v2 annotations must retain bounded operation identity")
         th.assert_eq(expected["operation_kind"], "rendered-config",
@@ -53,6 +51,68 @@ def test_exact_change_journal_completes_v2_and_abort_never_annotates(opts):
                        "failed/aborted operations must leave their mutation unexplained")
         th.assert_eq(journal.status()["active_operations"], 0,
                      "abort must remove the active operation without a blind window")
+
+
+@th.django_unit_test()
+def test_expected_change_evidence_matches_files_links_and_directories(opts):
+    from mojo.deploy.mojosec_changes import ChangeJournal, _snapshot
+    from mojo.mojosec.expected_changes import annotation, load_manifest
+
+    with tempfile.TemporaryDirectory() as root:
+        regular = os.path.join(root, "regular")
+        link = os.path.join(root, "link")
+        directory = os.path.join(root, "directory")
+        journal = ChangeJournal(
+            journal_path=os.path.join(root, "journal.json"),
+            lock_path=os.path.join(root, "journal.lock"),
+            manifest_path=os.path.join(root, "expected.json"),
+            allowed_roots=[root],
+        )
+        paths = [regular, link, directory]
+        with open(regular, "w", encoding="utf-8") as handle:
+            handle.write("old\n")
+        os.symlink("regular", link)
+        os.mkdir(directory)
+        journal.begin("typed-evidence", "rendered-config", paths)
+        with open(regular, "w", encoding="utf-8") as handle:
+            handle.write("new content\n")
+        os.chmod(regular, 0o600)
+        os.unlink(link)
+        os.symlink("new-target", link)
+        os.chmod(directory, 0o700)
+        journal.complete("typed-evidence")
+        entries = load_manifest(journal.manifest_path, require_root=False)
+        for path in paths:
+            value = annotation(entries, path, "modified", None, _snapshot(path))
+            th.assert_eq(value["operation_id"], "typed-evidence",
+                         f"content/permissions/link evidence must agree for {path}")
+
+
+@th.django_unit_test()
+def test_expired_active_operations_are_reaped_before_status_and_begin(opts):
+    from mojo.deploy.mojosec_changes import ChangeJournal
+
+    with tempfile.TemporaryDirectory() as root:
+        journal = ChangeJournal(
+            journal_path=os.path.join(root, "journal.json"),
+            lock_path=os.path.join(root, "journal.lock"),
+            manifest_path=os.path.join(root, "expected.json"),
+            allowed_roots=[root],
+        )
+        path = os.path.join(root, "host.conf")
+        journal.begin("crashed", "rendered-config", [path], ttl_seconds=1)
+        with open(journal.journal_path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        payload["operations"]["crashed"]["started_at"] = "2000-01-01T00:00:00Z"
+        with open(journal.journal_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        os.chmod(journal.journal_path, 0o600)
+        status = journal.status()
+        th.assert_eq(status["reaped_operations"], 1,
+                     "status must atomically reap a crashed expired operation")
+        journal.begin("replacement", "rendered-config", [path], ttl_seconds=60)
+        th.assert_eq(journal.active_paths(), [path],
+                     "reaped capacity must be immediately reusable by a new operation")
 
 
 @th.django_unit_test()
