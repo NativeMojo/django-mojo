@@ -151,7 +151,7 @@ def _make_servable_dir(path):
         pass
 
 
-def _safe_mtime(path):
+def safe_mtime(path):
     try:
         return os.path.getmtime(path)
     except OSError:
@@ -418,7 +418,7 @@ def prune_releases(webapps, keep=None):
         # Guarded: prune runs AFTER the reload and after installed.json is
         # written, so a directory vanishing under us here would fail a job
         # whose install actually succeeded.
-        entries.sort(key=_safe_mtime, reverse=True)
+        entries.sort(key=safe_mtime, reverse=True)
         for path in entries[max(keep - 1, 0):]:
             shutil.rmtree(path, ignore_errors=True)
             removed.append(path)

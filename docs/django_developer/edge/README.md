@@ -158,7 +158,8 @@ EDGE_ROOT (default /opt/api/var/edge)
       www/<vhost-id>/                the web root (a release symlink later)
   current -> generations/<generation>
   log/                               access.log + edge_watch.log (EDGE_LOG_DIR)
-  installed.json                     {generation, excluded[], www_pending{}}
+  installed.json                     {generation, excluded[], www_pending{},
+                                      cert_pending[]}
 ```
 
 `/etc/nginx/nginx.conf` on a node is a ~12-line provision-time **bootstrap**
@@ -178,17 +179,20 @@ generation whose own files are still on disk.
 
 ```
 fetch desired state (from the DB, via render.desired_state)
-if generation == installed AND no www_pending: return       idempotent no-op
+if generation == installed AND nothing pending: return      idempotent no-op
 fetch promoted release bytes from S3, verified per file (www_sync.py)
     unfetchable: degrade THAT vhost only, never the pool — see webapps.md
+                 (degrade forks on the REASON, so a house vhost degrades too)
 render generations/<new>/, write certificate material 0600
     material unfetchable:  house vhost  -> abort
                            tenant vhost -> exclude it, report an incident
+                           either way   -> recorded cert_pending, retried next
+                                           converge (KMS recovers on its own)
 nginx -t -c generations/<new>/nginx.conf                    cheap pre-filter
 os.replace(current -> generations/<new>)                    nothing has reloaded
 nginx -t                                                    against the REAL config
     fail, or "conflicting server name" on stderr -> revert current, incident, raise
-    ok -> systemctl reload nginx, write installed.json (+ www_pending), prune
+    ok -> systemctl reload nginx, write installed.json (+ pending), prune
 ```
 
 Three properties this buys, each with its own test:

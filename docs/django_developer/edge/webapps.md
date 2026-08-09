@@ -48,6 +48,34 @@ have allowed.
 tenant squat another's intended slug, and the duplicate error leaks that it
 exists.
 
+**A web app's vhost must sit on a domain owned by its group, or by a group
+above it.** The ancestor half is what lets one domain carry several teams:
+
+```
+  MojoVerify          owns mojoverify.com  +  its wildcard certificate
+   ├── api team       owns the api web app
+   └── portal team    owns the portal web app
+```
+
+Both teams publish under the one domain, with one certificate to renew and the
+private key in one place. **Siblings stay isolated** — neither is above the
+other, so the portal team cannot attach a web app to the api team's vhost, and
+`get_member_for_user` does not grant a child's members anything in a sibling.
+Only ancestors, never descendants and never siblings.
+
+Two refusals this deliberately keeps. An **unrelated** group still cannot
+attach a web app to another group's vhost. And a **house** domain (`group` is
+null) is nobody's ancestor, so it is still refused outright — that is the
+finding this check was written for: a global `manage_dns` holder could
+otherwise attach the platform's own vhost to a web app in a group they control
+and serve their content on the platform's hostname.
+
+> Consequence worth planning around: a domain has exactly **one** owner, so
+> per-team groups only isolate teams that publish under *different* domains, or
+> that sit under a shared parent as above. Creating a site's vhost the first
+> time needs access to the owning domain, so an admin does that once per site;
+> day-to-day publishing then runs on the web app's own API key.
+
 **`bucket` and `prefix` are not caller-controllable, and this is load-bearing.**
 The API mints presigned uploads signed with the platform's *static* AWS
 credentials (`mojo/helpers/aws/s3.py` holds one global `S3Config`, shared with
@@ -236,6 +264,7 @@ change; a delivery-mode enum would be a speculative second code path.
 |---|---|---|
 | `EDGE_RELEASE_BUCKETS` | — | **Fails closed.** No declared buckets, no sites — and no fetches. DB-backed, both when signing an upload and when a node reads. |
 | `EDGE_RELEASE_MAX_FILES` | `5000` | Manifest entry cap |
+| `EDGE_RELEASE_MAX_BYTES` | `1073741824` | Manifest total-size cap. A count cap does not bound bytes, and every node fetches the release onto its own disk |
 | `EDGE_RELEASE_UPLOAD_TTL` | `3600` | Presigned PUT lifetime, seconds |
 | `EDGE_RELEASE_FETCH_TIMEOUT` | `60` | Per-attempt connect/read timeout for a node's S3 GET (static) |
 | `EDGE_RELEASE_FETCH_BUDGET` | `300` | Wall-clock ceiling for one release's fetch; the remainder resumes next converge (static) |

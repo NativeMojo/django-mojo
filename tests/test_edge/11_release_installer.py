@@ -205,6 +205,108 @@ def test_unfetchable_release_excludes_one_vhost(opts):
         _exit(patches, root, www)
 
 
+@th.django_unit_test("an unfetchable release degrades a HOUSE vhost too, never the pool")
+def test_unfetchable_release_on_a_house_vhost_degrades(opts):
+    """The degrade forks on the REASON, not on who owns the vhost.
+
+    Point web apps at house-owned vhosts — one domain, house-owned, teams
+    below it — and the ownership fork would send every first-promote fetch
+    failure down the abort branch: the fleet-wide freeze the fetch degrade
+    exists to remove, reintroduced for every web app.
+    """
+    from mojo.apps.edge.services import installer, render
+
+    root = tempfile.mkdtemp(prefix="edge-rel-")
+    www = tempfile.mkdtemp(prefix="edge-www-")
+    patches = _patches(root, www)
+    _enter(patches)
+    house = None
+    try:
+        _seed_cert(opts)
+        house_domain = make_domain(group=None)
+        house_cert = make_certificate(house_domain)
+        _seed_cert(opts, house_cert)
+        house = make_vhost(house_domain, house_cert, label="app", kind="site",
+                           pool=POOL)
+
+        recorder = Recorder()
+        failures = {house.pk: "houseapp release h1 could not be fetched: "
+                              "index.html: no such object"}
+        with mock.patch("mojo.apps.edge.services.www_sync.fetch_webapps",
+                        return_value=failures):
+            with mock.patch.object(installer, "_run", recorder):
+                result = installer.install(pool=POOL)
+
+        assert result.changed, \
+            ("a house vhost's missing release aborted the whole install — the "
+             "pool-wide freeze the degrade path exists to prevent")
+        assert house.pk in result.excluded, \
+            "the house vhost whose release could not be fetched was not excluded"
+        assert opts.vhost.pk not in result.excluded, \
+            "a healthy vhost was excluded over the house vhost's release"
+        assert os.path.islink(render.current_link()), \
+            "current was not swapped — the rest of the pool never went live"
+    finally:
+        from mojo.apps.edge.models import Vhost
+        if house is not None:
+            Vhost.objects.filter(pk=house.pk).delete()
+        _exit(patches, root, www)
+
+
+@th.django_unit_test("a vhost whose key material will not read is retried, not left excluded")
+def test_cert_failure_is_retried_next_converge(opts):
+    """KMS comes back. Nothing about the desired state changes when it does,
+    so without a recorded pending marker the generation short-circuits and the
+    vhost stays excluded until something unrelated moves it."""
+    from mojo.apps.edge.services import installer
+
+    root = tempfile.mkdtemp(prefix="edge-rel-")
+    www = tempfile.mkdtemp(prefix="edge-www-")
+    patches = _patches(root, www)
+    _enter(patches)
+    broken = None
+    try:
+        _seed_cert(opts)
+        # A second vhost whose certificate has NO material: _write_material
+        # fails for it and it is excluded.
+        broken_domain = make_domain(group=opts.group)
+        broken_cert = make_certificate(broken_domain)
+        broken = make_vhost(broken_domain, broken_cert, label="nokey",
+                            kind="site", pool=POOL)
+
+        with mock.patch.object(installer, "_run", Recorder()):
+            first = installer.install(pool=POOL)
+
+        assert broken.pk in first.excluded, \
+            "a vhost with unreadable key material was not excluded"
+        installed = installer.read_installed()
+        assert installed.get("cert_pending") == [broken.pk], \
+            (f"the certificate failure was not recorded, so the next converge "
+             f"would short-circuit: {installed.get('cert_pending')}")
+
+        # Same desired state, same generation: the retry must still run.
+        with mock.patch.object(installer, "_run", Recorder()):
+            second = installer.install(pool=POOL)
+        assert second.changed, \
+            ("the converge short-circuited on an unchanged generation, so the "
+             "excluded vhost would never retry once KMS recovered")
+
+        # Now the material reads, and the vhost installs without anything else
+        # about the desired state changing.
+        _seed_cert(opts, broken_cert)
+        with mock.patch.object(installer, "_run", Recorder()):
+            third = installer.install(pool=POOL)
+        assert broken.pk not in third.excluded, \
+            "the vhost stayed excluded after its key material became readable"
+        assert not installer.read_installed().get("cert_pending"), \
+            "a healed node still reports a pending certificate"
+    finally:
+        from mojo.apps.edge.models import Vhost
+        if broken is not None:
+            Vhost.objects.filter(pk=broken.pk).delete()
+        _exit(patches, root, www)
+
+
 @th.django_unit_test("stage_web_roots still refuses a release that is not on disk")
 def test_stage_web_roots_requires_the_release_on_disk(opts):
     """The safety net BEHIND the fetch. www_sync degrades what it cannot pull,
