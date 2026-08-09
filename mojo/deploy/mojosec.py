@@ -301,6 +301,16 @@ def _systemctl(*args):
     return _run(["systemctl"] + list(args))
 
 
+def _systemctl_is(verb, unit):
+    try:
+        done = subprocess.run(
+            ["systemctl", verb, "--quiet", unit],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return False
+    return done.returncode == 0
+
+
 def _retire_stale_units():
     for name in RETIRED_UNITS:
         try:
@@ -322,6 +332,11 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
     """Converge one exact service. `off` preserves spool and credentials."""
     if mode not in MODES or criticality not in CRITICALITIES:
         raise DeployError("unsupported MojoSec deployment mode or criticality")
+    unit_snapshot = None
+    unit_changed = False
+    lifecycle_started = False
+    previous_enabled = False
+    previous_active = False
     try:
         if os.geteuid() != 0:
             raise DeployError("MojoSec deployment must run as root")
@@ -339,12 +354,16 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         _require_root_install_dir(os.path.dirname(receiver_snippet_path), create=True)
         _require_root_install_dir(os.path.dirname(LOGROTATE_PATH))
         _retire_stale_units()
+        unit_snapshot = _owned_snapshot(service_path)
+        previous_enabled = _systemctl_is("is-enabled", SERVICE)
+        previous_active = _systemctl_is("is-active", SERVICE)
         unit_changed = _write_if_changed(service_path, UNIT_TEXT, 0o644)
         nginx_changed = _converge_nginx(
             mode == "observe", log_path, proxy_cidrs,
             nginx_path, receiver_snippet_path)
         if unit_changed:
             _systemctl("daemon-reload")
+        lifecycle_started = True
         if mode == "off":
             try:
                 _systemctl("disable", "--now", SERVICE)
@@ -365,6 +384,24 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                           0o600)
         return {"changed": unit_changed or nginx_changed, **state}
     except (DeployError, OSError, ValueError) as err:
+        if unit_changed:
+            try:
+                _restore_snapshot(service_path, unit_snapshot)
+                _systemctl("daemon-reload")
+            except (DeployError, OSError):
+                pass
+        if lifecycle_started:
+            try:
+                if previous_enabled:
+                    _systemctl("enable", SERVICE)
+                else:
+                    _systemctl("disable", SERVICE)
+                if previous_active:
+                    _systemctl("start", SERVICE)
+                else:
+                    _systemctl("stop", SERVICE)
+            except DeployError:
+                pass
         if criticality == "best_effort":
             return {"schema": "mojosec.deploy", "version": 1,
                     "mode": mode, "criticality": criticality,

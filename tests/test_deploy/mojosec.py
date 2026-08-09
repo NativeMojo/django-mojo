@@ -74,6 +74,7 @@ def test_converge_lifecycle_is_an_exact_allowlist(opts):
             mock.patch.object(deploy, "_converge_nginx", return_value=False), \
             mock.patch.object(deploy, "_audit_config", return_value={}), \
             mock.patch.object(deploy, "_lstat_regular"), \
+            mock.patch.object(deploy, "_systemctl_is", return_value=False), \
             mock.patch.object(deploy, "_systemctl", side_effect=lambda *a: calls.append(a)), \
             mock.patch.object(deploy.os, "geteuid", return_value=0):
         result = deploy.converge("observe", "required")
@@ -99,6 +100,7 @@ def test_off_and_best_effort_preserve_evidence(opts):
             mock.patch.object(deploy, "_retire_stale_units"), \
             mock.patch.object(deploy, "_write_if_changed", side_effect=[False, True]), \
             mock.patch.object(deploy, "_converge_nginx", return_value=True), \
+            mock.patch.object(deploy, "_systemctl_is", return_value=False), \
             mock.patch.object(deploy, "_systemctl", side_effect=lambda *a: calls.append(a)), \
             mock.patch.object(deploy.os, "geteuid", return_value=0):
         result = deploy.converge("off", "required")
