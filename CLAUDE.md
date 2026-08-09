@@ -38,6 +38,11 @@ Django-mojo is a Django backend framework providing models, REST, auth, jobs, me
   `nativemojo-board-conventions`) instead. Local fallback (maestro
   down/unauthenticated only): `/request`, `/scope`, `/build`. Always
   available: `/memory`.
+- **Cutting a release** is `/release` — it reads what shipped, derives the
+  version from the changes, delegates the note to `/maestro-release-note`,
+  bumps the three version files and runs `publish.py`. Do not run `publish.py`
+  by hand: it refuses to publish a version that has no release note, and the
+  skill is what writes one.
 - **Agents** are in `.claude/agents/` — spawned automatically by
   `/maestro-build` (and by the fallback `/build`).
 - See `AI_DEV.md` for the full developer workflow.
