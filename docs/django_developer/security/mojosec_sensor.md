@@ -169,6 +169,13 @@ committed immediately, held for at most 120 seconds for a late durable
 annotation, and then delivered whether or not one arrives. Malformed manifests
 emit a visible `fim.expected_change_error`; they never block expiry delivery.
 
+Deploy the producer-capable package before activating `al2023-web-v1`. During
+that first stage the profile stays inactive while normal deploy, node setup,
+and certificate operations prove the stable helper path. Then preview every
+integrity tier and initialize only its exact digest. Rollback selects a
+retained initialized digest with `baseline-rollback`; it never substitutes a
+new first-scan baseline.
+
 ### Structured nginx input
 
 Each configured nginx path is a newline-delimited JSON log, not the ordinary
@@ -284,6 +291,12 @@ without nginx reopen or a stalled cursor. Copy/truncate has a narrow inherent
 writer race, so compare generated probe IDs/counts across the forced rotation
 and investigate any unexplained gap. `maxsize 50M` is evaluated by logrotate's
 timer/command, not continuously.
+For `al2023-web-v1`, perform this on a disposable AL2023 node after its
+producer-first rollout. Confirm the initialized `fast`, `slow`, and `rpm`
+tiers, their 60-second/six-hour schedules, the system Python RPM/non-RPM
+partition, and the `ProtectHome=tmpfs` exact-bind mount probe. Also create,
+delete, and recreate one monitored home path across a service restart while
+confirming unrelated home content remains unavailable to the sensor.
 Gate on zero capacity drops, no sustained error, explainable noise, bounded
 disk/FD/task growth, under 150 MiB memory/32 tasks, and under 5% of one CPU over
 five idle minutes. Roll back persistently by reinstalling enrollment with mode
