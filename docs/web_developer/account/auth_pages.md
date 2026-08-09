@@ -68,6 +68,12 @@ disabled registration path.
 | `?redirect=<url>` | Custom redirect after login (also `?next=` or `?returnTo=`). Preserved through the bouncer challenge **and** the OAuth provider round-trip. Only `http`/`https` URLs and same-origin relative paths are accepted — see below. |
 | `?back=<url>` | Override the "Back to website" hero link |
 | `?group_uuid=<uuid>` | Load per-group branding and restrict to the group's enabled methods. Must be `group_uuid` — the framework reserves `?group=` for integer IDs. |
+| `?auth_theme=<preset>` | Preview/use `minimal`, `compact`, `branded-panel`, or `editorial`. Unknown values are ignored. |
+| `?auth_appearance=<mode>` | Preview/use `light`, `dark`, or `system`. Unknown values are ignored. |
+
+Theme and appearance overrides are safe enum selections only; the URL cannot
+inject custom copy, colors, images, or CSS. Valid values ride the same
+login/register/passkey and bouncer links as `group_uuid` and `redirect`.
 
 ### After Login
 
@@ -383,7 +389,7 @@ token.
 ## Static Assets
 
 ```
-GET /api/account/static/mojo-auth-theme.css   → dark premium theme
+GET /api/account/static/mojo-auth-theme.css   → responsive layout + appearance presets
 GET /api/account/static/mojo-auth.js          → MojoAuth library
 ```
 

@@ -58,7 +58,7 @@ def on_mojo_auth_css(request):
 
 
 @md.GET('account/static/mojo-auth-theme.css')
-@md.public_endpoint("Serves mojo-auth-theme.css — dark premium auth theme")
+@md.public_endpoint("Serves mojo-auth-theme.css — responsive hosted-auth presets")
 def on_mojo_auth_theme_css(request):
     return _serve_static('mojo-auth-theme.css')
 

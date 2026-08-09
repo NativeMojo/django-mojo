@@ -29,7 +29,7 @@
     {% if custom_css %}<style>{{ custom_css|safe }}</style>{% endif %}
     {% block extra_css %}{% endblock %}
 </head>
-<body{% if auth_layout == "fullscreen" %} class="mat-fullscreen"{% endif %}>
+<body class="mat-layout-{{ auth_layout }} mat-appearance-{{ auth_appearance }} mat-hero-position-{{ hero_image_position }}" style="--mat-accent:{{ accent_color }}">
     <!-- Overlay — session check + post-auth redirect -->
     <div class="mat-overlay" id="mat-overlay">
         <div class="mat-overlay-card">
@@ -45,6 +45,7 @@
 
             <div class="mat-main">
                 <div class="mat-header">
+                    <a class="mat-inline-back" href="{{ back_to_website_url }}"{% if not back_to_website_url %} style="display:none"{% endif %}>&larr; {{ back_to_website_label|default:"Back to website" }}</a>
                     {% if logo_url %}
                     <img class="mat-header-logo" src="{{ logo_url }}" alt="{{ brand_name|default:'App' }}" />
                     {% elif brand_name %}

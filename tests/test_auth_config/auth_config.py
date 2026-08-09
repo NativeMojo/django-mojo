@@ -76,6 +76,10 @@ def test_resolve_defaults(opts):
         "registration must be enabled by default"
     assert_eq(sorted(cfg.login.methods), sorted(ALL_LOGIN_METHODS),
               f"default login.methods must be every LOGIN_METHODS token, got {cfg.login.methods}")
+    assert_eq(cfg.theme.layout, "minimal",
+              f"the framework default must be the quiet minimal layout, got {cfg.theme.layout!r}")
+    assert_eq(cfg.theme.appearance, "system",
+              f"the framework default must follow system appearance, got {cfg.theme.appearance!r}")
 
 
 @th.django_unit_test("resolve_auth_config: group metadata.auth_config overrides defaults")
@@ -93,7 +97,7 @@ def test_resolve_group_override(opts):
         assert_eq(list(cfg.login.methods), ["passkey", "sms"],
                   f"login.methods list must replace wholesale, got {cfg.login.methods}")
         # dict-merge: theme keys not overridden keep their defaults
-        assert_eq(cfg.theme.layout, "card",
+        assert_eq(cfg.theme.layout, "minimal",
                   f"un-overridden theme keys keep defaults (dict merge), got {cfg.theme.layout!r}")
     finally:
         _reset_metadata(opts.group)
@@ -184,7 +188,13 @@ def test_validate_ok(opts):
     from mojo.apps.account.services import auth_config as ac
     # Must not raise.
     ac.validate_auth_config({
-        "theme": {"custom_css": "body{color:#222}", "layout": "fullscreen"},
+        "theme": {
+            "custom_css": "body{color:#222}",
+            "layout": "editorial",
+            "appearance": "system",
+            "accent_color": "#315efb",
+            "hero_image_position": "center",
+        },
         "login": {"methods": ["passkey", "sms"]},
         "registration": {
             "passkey_prompt": "required",
@@ -195,6 +205,49 @@ def test_validate_ok(opts):
             ],
         },
     })
+
+
+@th.django_unit_test("validate_auth_config rejects unknown theme appearance and unsafe accent values")
+def test_validate_theme_tokens(opts):
+    from mojo.apps.account.services import auth_config as ac
+    from mojo import errors as merrors
+    for theme in ({"appearance": "sepia"}, {"accent_color": "red;display:none"}):
+        try:
+            ac.validate_auth_config({"theme": theme})
+            assert False, f"validator must reject unsafe theme config {theme!r}"
+        except merrors.ValueException:
+            pass
+
+
+@th.django_unit_test("validate_auth_config enforces destination-copy string contracts")
+def test_validate_destination_copy(opts):
+    from mojo.apps.account.services import auth_config as ac
+    from mojo import errors as merrors
+    invalid = (
+        {"theme": {"back_to_website_label": "  "}},
+        {"theme": {"auth_provider_name": 12}},
+        {"login": {"heading": ""}},
+        {"login": {"supporting_copy": ["not", "text"]}},
+    )
+    for config in invalid:
+        try:
+            ac.validate_auth_config(config)
+            assert False, f"validator must reject invalid destination copy {config!r}"
+        except merrors.ValueException:
+            pass
+    ac.validate_auth_config({"login": {"supporting_copy": ""}})
+
+
+@th.django_unit_test("public auth config exposes only whitelisted theme keys")
+def test_public_theme_is_whitelisted(opts):
+    from mojo.apps.account.services import auth_config as ac
+    cfg = ac.resolve_auth_config(group=None)
+    cfg.theme["private_note"] = "must-never-leak"
+    public = ac.public_auth_config(cfg)
+    assert_true("private_note" not in public.theme,
+                "public_auth_config must use an explicit theme whitelist")
+    assert_eq(public.theme.layout, "minimal",
+              f"the public theme must retain safe keys, got {public.theme!r}")
 
 
 # ---------------------------------------------------------------------------

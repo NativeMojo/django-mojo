@@ -36,14 +36,21 @@ rather than appending to it.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `app_title` | string | `"DJANGO MOJO"` | Brand name in card header |
+| `auth_provider_name` | string | `"DJANGO MOJO"` | Account provider named on the bouncer challenge (for example, `"Maestro"`) |
 | `logo_url` | string | `""` | Logo image URL (header + hero panel) |
 | `favicon_url` | string | `""` | Favicon URL or path. When set it is the **only** icon declared on the hosted auth pages — the deployment's own `/favicon/*` links and web manifest are suppressed. Not constrained to `https://` (a relative path is valid). |
 | `hero_image_url` | string | `""` | Left panel background image |
+| `hero_image_url_light` | string | `""` | Optional light-appearance hero image; falls back to `hero_image_url` |
+| `hero_image_url_dark` | string | `""` | Optional dark-appearance hero image; falls back to `hero_image_url` |
 | `hero_headline` | string | `"Welcome back"` | Text over the hero image |
 | `hero_subheadline` | string | `"Admin Portal"` | Supporting text below headline |
+| `hero_image_position` | string | `"center"` | Image crop: `center`, `top`, `bottom`, `left`, or `right` |
 | `back_to_website_url` | string | `""` | "Back to website" link in hero (overridable via `?back=` URL param) |
+| `back_to_website_label` | string | `"Back to website"` | Destination-aware back-link label |
 | `terms_url` | string | `""` | Terms & Conditions link on register page |
-| `layout` | string | `"card"` | `"card"` or `"fullscreen"` |
+| `layout` | string | `"minimal"` | `minimal`, `compact`, `branded-panel`, or `editorial`; legacy `card` and `fullscreen` map to `compact` and `branded-panel` |
+| `appearance` | string | `"system"` | `light`, `dark`, or `system` (`prefers-color-scheme`) |
+| `accent_color` | string | `"#6384ff"` | Six-digit hex accent shared by auth controls and the bouncer challenge |
 | `api_base` | string | `""` | API host (empty = same origin) |
 | `success_redirect` | string | `"/"` | Redirect target after login. Must resolve to `http`/`https` (a relative path is fine) — the auth page scheme-guards this value on its way to the browser, so a custom app scheme such as `myapp://home` is refused and sign-in dead-ends on **every** attempt. Point it at an `https` universal/app link instead. Not validated on write (`validate_auth_config` does not check it), so the failure surfaces at login, not at save |
 | `custom_css` | string | `""` | Inline CSS block injected after the theme stylesheet |
@@ -66,6 +73,8 @@ rather than appending to it.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `methods` | list | `["password","sms","passkey","magic","google","apple","github"]` | Offered login methods |
+| `heading` | string | `"Sign In"` | Destination-aware page heading |
+| `supporting_copy` | string | `""` | Explanation below the heading, e.g. which account to use |
 
 Valid login method tokens: `password`, `sms`, `passkey`, `magic`, `google`, `apple`, `github`.
 Valid registration method tokens: `password`, `google`, `apple`, `github`.
@@ -83,7 +92,8 @@ AUTH_CONFIG = {
     "theme": {
         "app_title": "Acme Platform",
         "logo_url": "https://cdn.acme.com/logo.svg",
-        "layout": "fullscreen",
+        "layout": "editorial",
+        "appearance": "system",
         "success_redirect": "/dashboard",
     },
     "login": {
@@ -130,7 +140,13 @@ Validation runs in `Group.on_rest_pre_save` — a bad `metadata.auth_config` on 
 REST PATCH returns 400 immediately rather than breaking the auth page at render
 time. Validated constraints:
 
-- `theme.layout` must be `"card"` or `"fullscreen"` (if present)
+- `theme.layout` must be a known preset or the `card`/`fullscreen` legacy alias
+- `theme.appearance` must be `"light"`, `"dark"`, or `"system"`
+- `theme.accent_color` must be a six-digit hex color
+- `theme.hero_image_position` must be a known crop token
+- `theme.back_to_website_label`, `theme.auth_provider_name`, and
+  `login.heading` must be non-empty strings; `login.supporting_copy` must be a
+  string and may be empty
 - `theme.custom_css` must not contain `<` (XSS break-out) or `@import` or
   external URLs (`://`, `url(//)`)
 - `theme.custom_css_url` must start with `https://`
@@ -248,6 +264,7 @@ round-trip client-side). Use cases:
 | `passkey_prompt` | `cfg.registration.passkey_prompt` |
 | `passkey_url` | `/{BOUNCER_PASSKEY_PATH}{group_qs}` |
 | `auth_layout` | `cfg.theme.layout` |
+| `auth_appearance`, `accent_color` | validated `cfg.theme.*` values |
 | `brand_name` | `cfg.theme.app_title` |
 | `logo_url`, `favicon_url`, `hero_*`, etc. | `cfg.theme.*` |
 

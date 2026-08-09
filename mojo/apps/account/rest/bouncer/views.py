@@ -289,6 +289,15 @@ def _auth_context(request, group=None):
     theme = cfg.theme
     login_methods = list(cfg.login.methods or [])
     registration_methods = list(cfg.registration.methods or [])
+    request_data = request.DATA if hasattr(request, 'DATA') else request.GET
+    configured_layout = auth_config.normalize_layout(theme.layout or 'minimal')
+    configured_appearance = auth_config.normalize_appearance(
+        theme.appearance or 'system')
+    requested_layout = request_data.get('auth_theme') or ''
+    requested_appearance = request_data.get('auth_appearance') or ''
+    auth_layout = auth_config.normalize_layout(requested_layout, configured_layout)
+    auth_appearance = auth_config.normalize_appearance(
+        requested_appearance, configured_appearance)
 
     login_path = settings.get_static('BOUNCER_LOGIN_PATH', 'auth')
     register_path = settings.get_static('BOUNCER_REGISTER_PATH', 'register')
@@ -304,9 +313,13 @@ def _auth_context(request, group=None):
     if group_uuid:
         fwd_params['group_uuid'] = group_uuid
     for key in ('redirect', 'next', 'returnTo', 'back'):
-        val = request.DATA.get(key) if hasattr(request, 'DATA') else request.GET.get(key)
+        val = request_data.get(key)
         if val:
             fwd_params[key] = val
+    if requested_layout and auth_config.normalize_layout(requested_layout, ''):
+        fwd_params['auth_theme'] = auth_layout
+    if requested_appearance and auth_config.normalize_appearance(requested_appearance, ''):
+        fwd_params['auth_appearance'] = auth_appearance
     group_qs = f'?{urlencode(fwd_params)}' if fwd_params else ''
 
     # Schema-driven register form. The same schema drives the server-side
@@ -344,9 +357,18 @@ def _auth_context(request, group=None):
         'favicon_url': theme.favicon_url or '',
         'brand_name': theme.app_title or 'DJANGO MOJO',
         'hero_image_url': theme.hero_image_url or '',
+        'hero_image_url_light': theme.hero_image_url_light or theme.hero_image_url or '',
+        'hero_image_url_dark': theme.hero_image_url_dark or theme.hero_image_url or '',
         'hero_headline': theme.hero_headline or 'Welcome back',
         'hero_subheadline': theme.hero_subheadline or 'Admin Portal',
+        'hero_image_position': (
+            theme.hero_image_position
+            if theme.hero_image_position in auth_config.HERO_IMAGE_POSITIONS
+            else 'center'),
         'back_to_website_url': theme.back_to_website_url or '',
+        'back_to_website_label': theme.back_to_website_label or 'Back to website',
+        'login_heading': cfg.login.heading or 'Sign In',
+        'login_supporting_copy': cfg.login.supporting_copy or '',
         'login_methods': login_methods,
         # Which view the login page opens on: the SMS phone-entry form when
         # there is no password method (passwordless), else the sign-in form.
@@ -359,7 +381,9 @@ def _auth_context(request, group=None):
         'auth_url': f'/{login_path}{group_qs}',
         'register_url': f'/{register_path}{group_qs}',
         'passkey_url': f'/{passkey_path}{group_qs}',
-        'auth_layout': theme.layout or 'card',
+        'auth_layout': auth_layout,
+        'auth_appearance': auth_appearance,
+        'accent_color': auth_config.normalize_accent_color(theme.accent_color),
         'terms_url': theme.terms_url or '',
         'custom_css_url': theme.custom_css_url or '',
         'custom_css': theme.custom_css or '',
@@ -382,12 +406,14 @@ def _serve_login(request, page_mode='login', group=None):
         ctx['page_title'] = 'Create Account'
         ctx['subtitle'] = 'Create your account'
         return _render_with_csp(request, 'account/register.html', ctx)
-    ctx['page_title'] = 'Sign In'
-    ctx['subtitle'] = 'Sign in to your account'
+    ctx['page_title'] = ctx['login_heading']
+    ctx['subtitle'] = ctx['login_supporting_copy']
     return _render_with_csp(request, 'account/login.html', ctx)
 
 
 def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
+    from mojo.apps.account.services import auth_config
+
     render_ctx = {
         'css_nonce': secrets.token_hex(6),
         'hp_field': secrets.token_hex(6),
@@ -409,16 +435,27 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
     fwd_params = {}
     if group_uuid:
         fwd_params['group_uuid'] = group_uuid
-    redirect_val = request.DATA.get('redirect') or request.DATA.get('next') or request.DATA.get('returnTo') or ''
+    request_data = request.DATA if hasattr(request, 'DATA') else request.GET
+    redirect_val = request_data.get('redirect') or request_data.get('next') or request_data.get('returnTo') or ''
     if redirect_val:
         fwd_params['redirect'] = redirect_val
-    back_val = request.DATA.get('back') or ''
+    back_val = request_data.get('back') or ''
     if back_val:
         fwd_params['back'] = back_val
+    requested_layout = request_data.get('auth_theme') or ''
+    requested_appearance = request_data.get('auth_appearance') or ''
+    if auth_config.normalize_layout(requested_layout, ''):
+        fwd_params['auth_theme'] = auth_config.normalize_layout(requested_layout)
+    if auth_config.normalize_appearance(requested_appearance, ''):
+        fwd_params['auth_appearance'] = requested_appearance
     group_qs = f'?{urlencode(fwd_params)}' if fwd_params else ''
     # Challenge page: default branding from settings, opt-in override per group
-    logo_url = settings.get('BOUNCER_CHALLENGE_LOGO_URL', _DEFAULT_CHALLENGE_LOGO, group=group)
-    brand_name = settings.get('BOUNCER_CHALLENGE_BRAND', _DEFAULT_CHALLENGE_BRAND, group=group)
+    cfg = auth_config.resolve_auth_config(group=group, request=request)
+    theme = cfg.theme
+    logo_url = theme.logo_url or settings.get(
+        'BOUNCER_CHALLENGE_LOGO_URL', _DEFAULT_CHALLENGE_LOGO, group=group)
+    brand_name = theme.app_title or settings.get(
+        'BOUNCER_CHALLENGE_BRAND', _DEFAULT_CHALLENGE_BRAND, group=group)
     return render(request, 'account/bouncer_challenge.html', {
         'render_ctx': render_ctx,
         'api_base': api_base,
@@ -426,6 +463,8 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
         'page_type': page_type,
         'logo_url': logo_url,
         'brand_name': brand_name,
+        'auth_provider_name': theme.auth_provider_name or 'DJANGO MOJO',
+        'accent_color': auth_config.normalize_accent_color(theme.accent_color),
         'group_uuid': group_uuid,
     })
 

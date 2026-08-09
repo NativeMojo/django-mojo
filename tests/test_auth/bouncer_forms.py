@@ -49,9 +49,99 @@ def _render(template_name, group=None):
     request = factory.get('/auth' if 'login' in template_name else '/register')
     ctx = _auth_context(request, group=group)
     ctx['page_mode'] = 'login' if 'login' in template_name else 'register'
-    ctx['page_title'] = 'Sign In' if 'login' in template_name else 'Create Account'
+    ctx['page_title'] = ctx['login_heading'] if 'login' in template_name else 'Create Account'
     response = render(request, template_name, ctx)
     return response.content.decode('utf-8')
+
+
+@th.django_unit_test("auth theme query overrides are allowlisted and forwarded across the journey")
+def test_auth_theme_query_overrides(opts):
+    import objict
+    from django.test import RequestFactory
+    from mojo.apps.account.rest.bouncer.views import _auth_context
+
+    request = RequestFactory().get('/auth', {
+        'auth_theme': 'editorial',
+        'auth_appearance': 'light',
+        'redirect': '/private/report?tab=one',
+    })
+    request.DATA = objict.objict(request.GET.dict())
+    ctx = _auth_context(request, group=opts.group)
+    assert_eq(ctx['auth_layout'], 'editorial',
+              f"known query layout must win, got {ctx['auth_layout']!r}")
+    assert_eq(ctx['auth_appearance'], 'light',
+              f"known query appearance must win, got {ctx['auth_appearance']!r}")
+    assert_true('auth_theme=editorial' in ctx['register_url'],
+                f"layout override must survive page switching: {ctx['register_url']!r}")
+    assert_true('auth_appearance=light' in ctx['register_url'],
+                f"appearance override must survive page switching: {ctx['register_url']!r}")
+
+    bad = RequestFactory().get('/auth', {
+        'auth_theme': 'editorial body{display:none}',
+        'auth_appearance': 'neon',
+    })
+    bad.DATA = objict.objict(bad.GET.dict())
+    bad_ctx = _auth_context(bad, group=opts.group)
+    assert_eq(bad_ctx['auth_layout'], 'minimal',
+              f"unknown query layout must fall back safely, got {bad_ctx['auth_layout']!r}")
+    assert_eq(bad_ctx['auth_appearance'], 'system',
+              f"unknown query appearance must fall back safely, got {bad_ctx['auth_appearance']!r}")
+
+
+@th.django_unit_test("login renders contextual copy, layout classes, and branded back label")
+def test_login_renders_contextual_theme(opts):
+    opts.group.metadata = {"auth_config": {
+        "theme": {
+            "layout": "branded-panel",
+            "appearance": "dark",
+            "back_to_website_label": "Back to NativeMojo BizDev",
+        },
+        "login": {
+            "heading": "Continue to NativeMojo BizDev",
+            "supporting_copy": "Use your Maestro account to continue.",
+        },
+    }}
+    opts.group.save(update_fields=['metadata'])
+    try:
+        html = _render('account/login.html', group=opts.group)
+        assert_true('mat-layout-branded-panel' in html and 'mat-appearance-dark' in html,
+                    "rendered body must expose independent layout and appearance classes")
+        assert_true('Continue to NativeMojo BizDev' in html,
+                    "the configured destination-aware login heading must render")
+        assert_true('Use your Maestro account to continue.' in html,
+                    "the configured account-provider explanation must render")
+        assert_true('Back to NativeMojo BizDev' in html,
+                    "the branded back label must replace the generic copy")
+    finally:
+        opts.group.metadata = {}
+        opts.group.save(update_fields=['metadata'])
+
+
+@th.django_unit_test("bouncer challenge renders the resolved destination brand")
+def test_bouncer_challenge_uses_group_brand(opts):
+    import objict
+    from django.test import RequestFactory
+    from mojo.apps.account.rest.bouncer.views import _serve_challenge
+
+    opts.group.metadata = {"auth_config": {"theme": {
+        "app_title": "NativeMojo BizDev",
+        "auth_provider_name": "Maestro",
+        "accent_color": "#e44d2e",
+    }}}
+    opts.group.save(update_fields=['metadata'])
+    try:
+        request = RequestFactory().get('/auth')
+        request.DATA = objict.objict()
+        html = _serve_challenge(request, group=opts.group).content.decode('utf-8')
+        assert_true('NativeMojo BizDev' in html,
+                    "challenge page must name the destination brand instead of hardcoding MOJO VERIFY")
+        assert_true('#e44d2e' in html,
+                    "challenge page must receive the group's validated accent color")
+        assert_true('Secure sign-in via Maestro' in html,
+                    "challenge page must explain which account provider protects the destination")
+    finally:
+        opts.group.metadata = {}
+        opts.group.save(update_fields=['metadata'])
 
 
 # ---------------------------------------------------------------------------
