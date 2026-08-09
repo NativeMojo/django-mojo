@@ -219,6 +219,7 @@ def _create_receipt(api_key, batch, sensor_event, digest):
                 protocol_version=batch["version"],
                 sensor_policy_revision=batch["policy_revision"],
                 replay_features={
+                    "feature_schema": "replay_features_v1",
                     "schema": batch["schema"],
                     "version": batch["version"],
                     "sensor_id": batch["sensor_id"],
