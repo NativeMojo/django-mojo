@@ -482,6 +482,11 @@ Methods absent from `login.methods` / `registration.methods` are excluded from
 the rendered HTML server-side. When all OAuth providers and passkeys are
 absent, the "or continue with" divider is excluded entirely.
 
+When `registration.enabled` is `false`, the hosted login page also omits every
+registration link, including the main switcher and the SMS view's "Create an
+account" escape path. This keeps invite-only and externally provisioned groups
+from advertising a registration flow they do not allow.
+
 ---
 
 ## Configurable Registration Form

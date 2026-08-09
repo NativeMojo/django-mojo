@@ -193,6 +193,33 @@ def test_login_sms_offers_signup_link(opts):
         "link so an account-less user isn't stranded on the code screen.")
 
 
+@th.django_unit_test("login.html hides every signup link when group registration is disabled")
+def test_login_hides_signup_links_when_registration_disabled(opts):
+    """Invite-only and externally provisioned groups must not offer registration
+    paths that their auth config explicitly disables."""
+    opts.group.metadata = {"auth_config": {
+        "registration": {"enabled": False},
+    }}
+    opts.group.save(update_fields=["metadata"])
+    try:
+        html = _render('account/login.html', group=opts.group)
+        assert_true(
+            'Create an account' not in html,
+            "login.html SMS view must hide its registration link when the "
+            "resolved group auth config sets registration.enabled=false.")
+        assert_true(
+            'Create one' not in html,
+            "login.html main switcher must hide its registration link when the "
+            "resolved group auth config sets registration.enabled=false.")
+        assert_true(
+            'href="/register' not in html,
+            "login.html must not render any /register link when registration is "
+            "disabled for the resolved group.")
+    finally:
+        opts.group.metadata = {}
+        opts.group.save(update_fields=["metadata"])
+
+
 @th.django_unit_test("login.html SMS submit message does not falsely claim a code was sent")
 def test_login_sms_post_submit_message_is_honest(opts):
     """After submitting a phone, the page must not assert a code was definitely

@@ -53,7 +53,10 @@ front that a code arrives *only if the number is already linked to an account*,
 and surfaces a "New here? Create an account" link in the SMS view. A person with
 no account is no longer dead-ended on a code screen waiting for a text that never
 comes — they are pointed to sign-up — while a snooping third party still learns
-nothing about whether the number has an account.
+nothing about whether the number has an account. When the resolved auth config
+sets `registration.enabled` to `false`, both this SMS sign-up link and the main
+"Create one" switcher are omitted so invite-only groups do not advertise a
+disabled registration path.
 
 ### URL Parameters
 

@@ -157,9 +157,11 @@
         </div>
         <button class="mat-btn mat-btn-primary" type="submit" id="btn-sms"><span class="mat-btn-text">Send Code</span><span class="mat-spinner"></span></button>
     </form>
+    {% if registration_enabled %}
     <div class="mat-footer-links">
         <span class="mat-footer-link">New here? <a href="{{ register_url|default:'/register' }}">Create an account</a></span>
     </div>
+    {% endif %}
     {% if login_primary == 'sms' %}
     {% if 'passkey' in login_methods or 'google' in login_methods or 'apple' in login_methods or 'github' in login_methods %}
     <div class="mat-divider">or</div>
@@ -194,9 +196,11 @@
 {% endblock %}
 
 {% block switcher %}
+{% if registration_enabled %}
 <div class="mat-switcher">
     Don't have an account? <a href="{{ register_url|default:'/register' }}">Create one</a>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block page_script %}
