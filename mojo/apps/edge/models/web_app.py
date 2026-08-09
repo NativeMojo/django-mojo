@@ -60,8 +60,9 @@ class WebApp(models.Model, MojoModel):
                   "site. One key per site, enforced by the schema.")
 
     auto_promote = models.BooleanField(
-        default=False,
-        help_text="Whether a verified upload goes live without a human.")
+        default=True,
+        help_text="Deploy a verified upload automatically. Disable only for "
+                  "an explicit manual-hold workflow.")
 
     current_release = models.ForeignKey(
         "edge.WebAppRelease",

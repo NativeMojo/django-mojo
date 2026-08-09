@@ -1,18 +1,17 @@
 """
 The CI-facing release endpoints.
 
-`release_webapp` is the only permission CI ever holds. It reaches `pending` and
-`uploaded`; it can never reach `live`. That split is the reason this work moved
-into django-mojo at all — with CI writing a `current` pointer in S3, the
-credential a web developer's pipeline holds could make any build live.
+`release_webapp` is the only permission CI holds. It is linked to exactly one
+WebApp; verified completion follows that WebApp's automatic-deploy policy and
+the deployment status endpoint exposes only that same WebApp.
 """
 
 import mojo.decorators as md
 from mojo import errors as me
 from mojo.models.rest import _resolve_stamp_actor
 
-from mojo.apps.edge.models import WebApp, WebAppRelease
-from mojo.apps.edge.services import releases
+from mojo.apps.edge.models import WebApp, WebAppDeployment, WebAppRelease
+from mojo.apps.edge.services import releases, webapp_deploy
 
 
 def _authorized_webapp(request, pk):
@@ -93,12 +92,7 @@ def on_release_register(request):
 @md.requires_params("release")
 @md.custom_security("site ApiKey identity, or manage_dns on the WebApp, in body")
 def on_release_complete(request):
-    """Verify the declared files actually landed, then mark it uploaded.
-
-    Never trusts the caller: every entry is checked against S3's own stored
-    checksum. `uploaded` is still not `live` — that needs `manage_webapp`,
-    unless the site has opted into `auto_promote`.
-    """
+    """Verify the upload and start fleet deployment when automatic is on."""
     release = WebAppRelease.objects.filter(
         pk=request.DATA.get("release")).select_related("webapp").first()
     if release is None:
@@ -108,11 +102,26 @@ def on_release_complete(request):
     web_app = _authorized_webapp(request, release.webapp_id)
 
     releases.complete(release)
-    promoted = releases.maybe_auto_promote(release)
+    deployment = releases.maybe_auto_promote(release)
+    release.refresh_from_db()
     return dict(
         release=release.pk,
         version=release.version,
         status=release.status,
-        promoted=bool(promoted),
+        promoted=bool(deployment),
+        deployment=deployment.pk if deployment else None,
+        deployment_status=deployment.status if deployment else None,
         webapp=web_app.pk,
     )
+
+
+@md.GET('release/deployment/<int:pk>')
+@md.custom_security("owning site's linked ApiKey identity, or WebApp viewer")
+def on_release_deployment(request, pk):
+    """Return CI-safe fleet status for one WebApp deployment."""
+    deployment = WebAppDeployment.objects.filter(pk=pk).select_related(
+        "webapp", "release").first()
+    if deployment is None:
+        raise me.ValueException("Deployment not found", code=404, status=404)
+    _authorized_webapp(request, deployment.webapp_id)
+    return webapp_deploy.payload(deployment)

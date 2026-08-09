@@ -5,10 +5,10 @@ this decides *what* is being served.
 
 Two problems it exists to solve.
 
-**Upload and promote were the same permission.** With CI writing both the
-release files and a `current` pointer in S3, the credential a web developer's
-pipeline holds could make any build live. Here CI reaches `uploaded` and can
-never reach `live`.
+**Upload and desired state used to be two unrelated mechanisms.** With CI
+writing a `current` pointer in S3 there was no fleet proof or safe rollback.
+Here the linked key is scoped to one WebApp, S3 verifies immutable bytes, and
+django-mojo owns deployment, convergence status, and rollback.
 
 **There was no answer to "what is deployed right now?"** It was a symlink on N
 nodes; you would SSH to each to be certain, and rollback meant rewriting an S3
@@ -37,6 +37,11 @@ WebApp
 WebAppRelease
   webapp, version (unique together), manifest, status, created_by
   status: pending -> uploaded -> live -> superseded
+
+WebAppDeployment
+  release, previous_release, status, targets, rollback_targets, detail
+  status: queued -> deploying -> live
+                       \-> rolling_back -> rolled_back / failed
 ```
 
 **`slug` is a label.** Nothing on disk is named after it — a vhost's web root
@@ -101,8 +106,9 @@ Rows are neither editable nor deletable.
 2. CI:  PUT <url>                        straight to S3
 3. CI:  POST /api/edge/release/complete  {release}
         -> HeadObject per entry; compare checksum and size
-        -> status=uploaded               (NOT live)
-4. promote                               auto_promote, or a human
+        -> status=uploaded
+4. django-mojo creates WebAppDeployment and targets every active edge runner
+5. CI:  GET /api/edge/release/deployment/<id> until live or terminal failure
 ```
 
 ### Why presigned PUTs rather than STS session credentials
@@ -147,19 +153,27 @@ Three things that will bite an implementer:
 POST /api/edge/webapp/promote  {webapp, release}   requires manage_webapp
 ```
 
-It sets `current_release`, marks the target `live` and the previous
-`superseded`, under a row lock so two concurrent promotes cannot interleave.
-Rolling back is the same call with an older release id.
+It sets desired state under a row lock, creates a durable deployment, and then
+targets every runner that is alive on the `edge` channel. A node proves the
+specific vhost was neither excluded nor left in `www_pending`. Only after all
+targets complete does the deployment become `live`.
 
-`auto_promote` is per-site rather than a global posture: a marketing site goes
-live on push, an admin portal waits for a human, from the same pipeline.
+Any target failure or timeout restores the prior release under the same row
+lock and converges that rollback across the same runner snapshot. The rollback
+checks that the failed release is still current, so an old deployment can
+never overwrite a newer one. Periodic and startup convergence remain the
+backstop for nodes that were offline during the snapshot.
+
+`auto_promote` defaults on and the migration enables it for existing WebApps.
+Turning it off is an explicit manual-hold exception. Manual promotion and
+rollback use the same deployment coordinator.
 
 ## Permissions
 
 | Permission | Who | Reaches |
 |---|---|---|
-| `release_webapp` | the site's CI key | `pending`, `uploaded` |
-| `manage_webapp` | a human | `live` (promote and rollback) |
+| `release_webapp` | the site's CI key | register, verify, automatic deploy, and that WebApp's deployment status |
+| `manage_webapp` | an administrator | key rotation and exceptional manual promote/rollback |
 | `manage_dns` | a site administrator | the `WebApp` row itself |
 
 `POST /api/edge/webapp/link_key` mints the CI credential and returns the token
@@ -175,6 +189,10 @@ a site with no linked key refuses every key rather than accepting any.
 Desired state is driven by `current_release`, which has no dependency on the
 key, so a compromised web-dev credential is contained by disabling one key with
 no site going down and no emergency deploy. There is a test for it.
+
+The standard GitHub secret name is **`MOJO_DEPLOY_KEY`**. The token belongs to
+the repository's Actions secret store, not to developers' laptops. Merge/push
+to the configured deployment branch is the authorization event.
 
 ## Node-side
 

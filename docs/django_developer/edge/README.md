@@ -229,6 +229,7 @@ second convergence mechanism.
 
 | Trigger | What it is for |
 |---|---|
+| WebApp deployment direct jobs | A verified WebApp release must converge on every currently active edge runner before CI succeeds |
 | `edge.install_generation` broadcast on the `edge` channel | Something changed and we were told |
 | `converge_edge` cron, every 10 minutes | A node that missed a broadcast, booted from an AMI, or had its runner stopped |
 | job-engine startup hook (`asyncjobs.on_engine_start`) | This node itself just started — every deploy restarts every engine, and a broadcast published in that window resolves its roster without the restarting node |
