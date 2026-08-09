@@ -253,8 +253,12 @@ Also require a benign SSH login/logout, harmless sudo command, and controlled
 FIM create/modify/chmod/delete under the enrolled canary root. Force a receiver
 503 outage for only the canary key, prove durable spool growth and drain after
 recovery, restart the service and prove identity/cursor/baseline persistence,
-then run targeted `logrotate -f`, verify inode change/USR1 reopen and a new log
-line. `maxsize 50M` is evaluated by logrotate's timer/command, not continuously.
+then run targeted `logrotate -f`. Verify `copytruncate` preserves the active
+root:root 0640 inode, archives remain root-only, and a new line is collected
+without nginx reopen or a stalled cursor. Copy/truncate has a narrow inherent
+writer race, so compare generated probe IDs/counts across the forced rotation
+and investigate any unexplained gap. `maxsize 50M` is evaluated by logrotate's
+timer/command, not continuously.
 Gate on zero capacity drops, no sustained error, explainable noise, bounded
 disk/FD/task growth, under 150 MiB memory/32 tasks, and under 5% of one CPU over
 five idle minutes. Roll back persistently by reinstalling enrollment with mode

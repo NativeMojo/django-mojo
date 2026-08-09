@@ -154,10 +154,13 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
     th.assert_true(" -I " not in unit and " -s " not in unit,
                    "AL2023 root-pip packages disappear under -I/-s")
     rotation = deploy.LOGROTATE_TEXT
-    for expected in ("daily", "maxsize 50M", "rotate 14", "create 0640 root root",
-                     "systemctl kill -s USR1 nginx.service"):
+    for expected in ("daily", "maxsize 50M", "rotate 14", "copytruncate",
+                     "su root root"):
         th.assert_in(expected, rotation,
                      f"nginx security-log rotation is missing {expected!r}")
+    for forbidden in ("create ", "postrotate", "USR1"):
+        th.assert_true(forbidden not in rotation,
+                       f"rotation must preserve the root-owned active inode: {forbidden}")
 
 
 @th.django_unit_test()

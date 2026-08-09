@@ -1,10 +1,20 @@
 """Tail newline-delimited structured nginx security logs safely."""
 
+import hashlib
 import json
 import os
 import stat
 
 from ..detectors import detect_nginx
+
+
+_CURSOR_ANCHOR_BYTES = 256
+
+
+def _anchor(descriptor, offset):
+    start = max(0, offset - _CURSOR_ANCHOR_BYTES)
+    payload = os.pread(descriptor, offset - start, start)
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _reject_constant(value):
@@ -46,11 +56,30 @@ class NginxCollector:
                     cursor.get("inode") == current.st_ino):
                 saved_offset = max(0, int(cursor.get("offset", 0)))
                 offset = saved_offset if saved_offset <= current.st_size else 0
+                saved_anchor = cursor.get("anchor_sha256")
+                if offset and saved_anchor:
+                    if (not isinstance(saved_anchor, str) or len(saved_anchor) != 64 or
+                            _anchor(descriptor, offset) != saved_anchor):
+                        offset = 0
             elif current.st_size > self.config["max_bytes_per_poll"]:
                 offset = current.st_size - self.config["max_bytes_per_poll"]
             os.lseek(descriptor, offset, os.SEEK_SET)
             data = os.read(descriptor, self.config["max_bytes_per_poll"])
+            # copytruncate preserves the inode. Recheck the committed anchor
+            # after the read so a truncate racing this poll cannot make us
+            # continue at an offset in unrelated, newly-written content.
+            if (offset and cursor and cursor.get("anchor_sha256") and
+                    _anchor(descriptor, offset) != cursor["anchor_sha256"]):
+                offset = 0
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                data = os.read(descriptor, self.config["max_bytes_per_poll"])
             end = offset + len(data)
+            anchor_end = end
+            if (data and not data.endswith(b"\n") and
+                    len(data) < self.config["max_bytes_per_poll"]):
+                newline = data.rfind(b"\n")
+                anchor_end = offset + (newline + 1 if newline >= 0 else 0)
+            next_anchor = _anchor(descriptor, anchor_end)
         finally:
             os.close(descriptor)
 
@@ -88,7 +117,10 @@ class NginxCollector:
                 continue
             if detected:
                 observations.append(detected)
-        next_cursor = {"device": current.st_dev, "inode": current.st_ino, "offset": end}
+        next_cursor = {
+            "device": current.st_dev, "inode": current.st_ino, "offset": end,
+            "anchor_sha256": next_anchor,
+        }
         return observations, next_cursor, malformed
 
     def poll(self, cursors=None):

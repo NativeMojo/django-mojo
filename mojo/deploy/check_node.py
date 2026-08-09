@@ -900,12 +900,28 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                 else:
                     report.fail("mojosec", "security log metadata drift",
                                 "standard dedicated log must be root:root 0640")
+                archive_check = (
+                    "import glob,os,stat;"
+                    "ps=glob.glob('/var/log/nginx/mojosec.json.log.*');"
+                    "ok=len(ps)<=32 and all(stat.S_ISREG(os.lstat(p).st_mode) and "
+                    "os.lstat(p).st_uid==0 and os.lstat(p).st_gid==0 and "
+                    "not(os.lstat(p).st_mode&0o037) for p in ps);"
+                    "raise SystemExit(0 if ok else 1)"
+                )
+                if run(_mojosec_python(
+                        sudo, f"-c {q(archive_check)}"))[0] == 0:
+                    report.passed("mojosec", "security log archives",
+                                  "rotated evidence is bounded and root-only")
+                else:
+                    report.fail("mojosec", "security log archive metadata drift",
+                                "rotated evidence must be regular root:root and non-world-accessible")
                 rotation = run(
                     f"{sudo}grep -F 'maxsize 50M' /etc/logrotate.d/mojosec >/dev/null && "
-                    f"{sudo}grep -F 'create 0640 root root' /etc/logrotate.d/mojosec >/dev/null")[0]
+                    f"{sudo}grep -F 'copytruncate' /etc/logrotate.d/mojosec >/dev/null && "
+                    f"{sudo}grep -F 'su root root' /etc/logrotate.d/mojosec >/dev/null")[0]
                 if rotation == 0:
                     report.passed("mojosec", "bounded log retention",
-                                  "50M maxsize and root-only rotation active")
+                                  "50M maxsize and root-owned copytruncate active")
                 else:
                     report.fail("mojosec", "bounded log retention drift",
                                 "/etc/logrotate.d/mojosec lacks size/metadata contract")

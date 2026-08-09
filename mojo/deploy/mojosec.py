@@ -112,11 +112,8 @@ LOGROTATE_TEXT = """/var/log/nginx/mojosec.json.log {
     notifempty
     compress
     delaycompress
-    create 0640 root root
-    sharedscripts
-    postrotate
-        /bin/systemctl kill -s USR1 nginx.service >/dev/null 2>&1 || true
-    endscript
+    copytruncate
+    su root root
 }
 """
 

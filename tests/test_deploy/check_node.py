@@ -204,6 +204,10 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
                  f"active+enabled observe service must pass: {statuses}")
     th.assert_eq(statuses.get("public status"), cn.PASS,
                  f"bounded public status must be inspectable: {statuses}")
+    th.assert_eq(statuses.get("security log archives"), cn.PASS,
+                 f"root-only rotated evidence must pass: {statuses}")
+    th.assert_true(any("mojosec.json.log.*" in command for command in run.commands),
+                   "check_node must audit every bounded security-log archive")
     secret_commands = [command for command in run.commands
                        if ("cat /etc/mojosec/credential" in command or
                            "open('/etc/mojosec/credential" in command)]

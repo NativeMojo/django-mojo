@@ -716,8 +716,13 @@ reloads the restored graph. Observe must finish active+enabled; off must finish
 inactive+disabled. Off removes the standard security logging graph but
 preserves spool and credentials. OSSEC/Wazuh is never removed.
 
-Logrotate keeps 14 compressed daily files, opens replacements root:root 0640,
-and uses `maxsize 50M` plus nginx `USR1`. `maxsize` is evaluated when the
+Logrotate keeps 14 compressed daily files and uses `copytruncate` so nginx
+continues writing the securely precreated root:root 0640 inode. Rotated copies
+stay root:root and non-world-accessible; there is no nginx `USR1` reopen that
+would chown the active file to its worker. `copytruncate` has an unavoidable
+narrow copy/truncate race in which a line written by nginx can be absent from
+both files; this is preferred to making the web worker owner of security
+evidence, and the canary measures the gap under load. `maxsize 50M` is evaluated when the
 system logrotate timer runs; it is not a continuous hard cap. `check_node --section mojosec
 --mojosec-mode observe --mojosec-sensor-id <host-id>` uses sudo to inspect only
 bounded status/enrollment projections and metadata; it never opens or prints
@@ -754,10 +759,13 @@ then exercise every collector:
    spool to drain to baseline. `required` deployment itself does not test this.
 5. Restart `mojosec.service`; require the same sensor identity, config hashes,
    durable cursor/FIM baseline, and backlog/delivery counters afterward.
-6. Run `logrotate -f /etc/logrotate.d/mojosec`, require the log inode to change,
-   nginx to reopen it via `USR1`, and a subsequent probe line to appear in the
-   new root:root 0640 file. Also confirm the system logrotate timer is enabled;
-   `maxsize 50M` is only checked when that timer/command runs.
+6. Run `logrotate -f /etc/logrotate.d/mojosec`; require the active inode and
+   root:root 0640 metadata to remain unchanged, its size to reset, and a
+   subsequent probe line to appear without restarting/reopening nginx. Require
+   every archive to be regular root:root with no world access, and require the
+   collector cursor to reset and continue without a sustained error, malformed
+   burst, or unexplained sequence gap. Also confirm the system logrotate timer
+   is enabled; `maxsize 50M` is only checked when that timer/command runs.
 
 The release gate is: no MojoSec FAIL from `check_node`; zero capacity-drop
 counters; backlog returns to baseline; no sustained delivery/collector error;

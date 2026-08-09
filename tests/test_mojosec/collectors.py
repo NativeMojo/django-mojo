@@ -282,6 +282,25 @@ def test_nginx_collector_resumes_at_a_durable_byte_cursor(opts):
                      "/after-rotate",
                      "the first complete record after rotation must be collected")
 
+        # logrotate copytruncate preserves the inode. Regrow beyond the old
+        # offset before the next poll to exercise the case a size-only cursor
+        # would mistake for an ordinary append and silently skip.
+        same_inode = os.stat(path).st_ino
+        after_truncate = "/after-copytruncate"
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({
+                "status": 504, "method": "GET", "path": after_truncate,
+                "padding": "x" * 400,
+            }) + "\n")
+        th.assert_eq(os.stat(path).st_ino, same_inode,
+                     "the regression must model copytruncate on the active inode")
+        truncated = collector.poll(rotated["cursor"])
+        th.assert_eq(len(truncated["observations"]), 1,
+                     "copytruncate/regrow must reset the durable cursor without stalling")
+        th.assert_eq(truncated["observations"][0]["attributes"]["path"],
+                     after_truncate,
+                     "the first complete record after copytruncate must be collected")
+
 
 @th.django_unit_test()
 def test_nginx_poison_numeric_is_counted_without_stalling_cursor(opts):
