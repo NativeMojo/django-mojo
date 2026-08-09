@@ -4,6 +4,7 @@ import json
 import os
 import re
 import stat
+import urllib.parse
 
 
 CONFIG_VERSION = 1
@@ -21,6 +22,7 @@ DEFAULTS = {
             "enabled": True,
             "max_lines": 2000,
             "timeout_seconds": 10,
+            "lookback_seconds": 300,
         },
         "nginx": {
             "enabled": True,
@@ -39,6 +41,7 @@ DEFAULTS = {
     "aggregation": {
         "window_seconds": 60,
         "flush_count": 25,
+        "max_aggregates": 10000,
     },
     "delivery": {
         "batch_events": 100,
@@ -88,6 +91,19 @@ def _merge(defaults, supplied):
     return result
 
 
+def _strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ConfigError(f"config contains duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_constant(value):
+    raise ConfigError(f"config contains non-finite number: {value}")
+
+
 def _integer(value, label, minimum, maximum):
     if not isinstance(value, int) or isinstance(value, bool) or not minimum <= value <= maximum:
         raise ConfigError(f"{label} must be an integer from {minimum} to {maximum}")
@@ -106,9 +122,13 @@ def validate_config(value):
     if not isinstance(sensor_id, str) or not _SENSOR_RE.fullmatch(sensor_id):
         raise ConfigError("sensor_id is required and may contain letters, numbers, . _ : -")
     endpoint = value.get("endpoint")
-    if not isinstance(endpoint, str) or not endpoint.startswith("https://") or len(endpoint) > 2048:
+    if not isinstance(endpoint, str) or len(endpoint) > 2048:
         raise ConfigError("endpoint must be an https URL")
-    if "#" in endpoint or not endpoint.rstrip("/").endswith("/api/incident/mojosec/batch"):
+    parsed_endpoint = urllib.parse.urlsplit(endpoint)
+    if (parsed_endpoint.scheme != "https" or not parsed_endpoint.hostname or
+            parsed_endpoint.username or parsed_endpoint.password or parsed_endpoint.fragment):
+        raise ConfigError("endpoint must be an https URL without credentials or a fragment")
+    if parsed_endpoint.path.rstrip("/") != "/api/incident/mojosec/batch":
         raise ConfigError("endpoint must target /api/incident/mojosec/batch")
     for field in ("state_dir", "status_path", "credential_path"):
         _absolute(value[field], field)
@@ -126,6 +146,7 @@ def validate_config(value):
             raise ConfigError(f"collectors.{name}.enabled must be a boolean")
     _integer(collectors["journal"]["max_lines"], "collectors.journal.max_lines", 1, 20000)
     _integer(collectors["journal"]["timeout_seconds"], "collectors.journal.timeout_seconds", 1, 120)
+    _integer(collectors["journal"]["lookback_seconds"], "collectors.journal.lookback_seconds", 1, 86400)
     nginx = collectors["nginx"]
     if not isinstance(nginx["paths"], list) or not nginx["paths"] or len(nginx["paths"]) > 32:
         raise ConfigError("collectors.nginx.paths must contain 1-32 paths")
@@ -160,13 +181,14 @@ def validate_config(value):
     _reject_unknown(aggregation, DEFAULTS["aggregation"], "aggregation")
     _integer(aggregation["window_seconds"], "aggregation.window_seconds", 1, 86400)
     _integer(aggregation["flush_count"], "aggregation.flush_count", 1, 1000000)
+    _integer(aggregation["max_aggregates"], "aggregation.max_aggregates", 100, 10000000)
 
     delivery = value["delivery"]
     _reject_unknown(delivery, DEFAULTS["delivery"], "delivery")
     for name in ("batch_events", "batch_bytes", "timeout_seconds", "retry_min_seconds",
                  "retry_max_seconds", "max_spool_events", "critical_reserve_events"):
         limits = {
-            "batch_events": (1, 500), "batch_bytes": (4096, 512 * 1024),
+            "batch_events": (1, 500), "batch_bytes": (16 * 1024, 512 * 1024),
             "timeout_seconds": (1, 120), "retry_min_seconds": (1, 3600),
             "retry_max_seconds": (1, 86400), "max_spool_events": (100, 10000000),
             "critical_reserve_events": (0, 1000000),
@@ -183,18 +205,28 @@ def validate_config(value):
 
 def load_config(path):
     try:
-        info = os.lstat(path)
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags)
     except OSError as err:
-        raise ConfigError(f"cannot stat config {path}: {err}") from err
-    if not stat.S_ISREG(info.st_mode):
-        raise ConfigError("config must be a regular file, not a symlink or device")
-    if info.st_size > MAX_CONFIG_BYTES:
-        raise ConfigError("config file is too large")
+        raise ConfigError(f"cannot open config {path}: {err}") from err
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            supplied = json.load(handle)
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ConfigError("config must be a regular file, not a symlink or device")
+        if info.st_size > MAX_CONFIG_BYTES:
+            raise ConfigError("config file is too large")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = None
+            supplied = json.load(
+                handle, object_pairs_hook=_strict_object, parse_constant=_reject_constant
+            )
     except (OSError, UnicodeError, json.JSONDecodeError) as err:
         raise ConfigError(f"cannot read config {path}: {err}") from err
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     if not isinstance(supplied, dict):
         raise ConfigError("config must be a JSON object")
     merged = _merge(DEFAULTS, supplied)
@@ -202,7 +234,14 @@ def load_config(path):
 
 
 def check_file_security(path, require_root=False):
-    info = os.lstat(path)
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        info = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
     problems = []
     if not stat.S_ISREG(info.st_mode):
         problems.append("not a regular file")
@@ -211,4 +250,3 @@ def check_file_security(path, require_root=False):
     if require_root and info.st_uid != 0:
         problems.append("must be owned by root")
     return problems
-

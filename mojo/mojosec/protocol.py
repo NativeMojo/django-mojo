@@ -9,6 +9,7 @@ import datetime
 import hashlib
 import ipaddress
 import json
+import math
 import re
 
 
@@ -71,6 +72,7 @@ def _require_timestamp(value, label):
         raise ProtocolError(f"{label} must be an ISO-8601 timestamp") from err
     if parsed.tzinfo is None:
         raise ProtocolError(f"{label} must include a timezone")
+    return parsed
 
 
 def _validate_attributes(value, depth=0):
@@ -90,7 +92,9 @@ def _validate_attributes(value, depth=0):
         for child in value:
             _validate_attributes(child, depth + 1)
         return
-    if value is None or isinstance(value, (bool, int, float)):
+    if value is None or isinstance(value, (bool, int)):
+        return
+    if isinstance(value, float) and math.isfinite(value):
         return
     if isinstance(value, str) and len(value) <= 2048:
         return
@@ -109,14 +113,18 @@ def validate_event(value):
         raise ProtocolError("event id must be a lowercase SHA-256 digest")
     if not isinstance(value["kind"], str) or not _KIND_RE.fullmatch(value["kind"]):
         raise ProtocolError("event kind is invalid")
-    for field in ("observed_at", "first_seen", "last_seen"):
-        _require_timestamp(value[field], f"event {field}")
+    observed = _require_timestamp(value["observed_at"], "event observed_at")
+    first = _require_timestamp(value["first_seen"], "event first_seen")
+    last = _require_timestamp(value["last_seen"], "event last_seen")
+    if first > last or observed != last:
+        raise ProtocolError("event timestamps must satisfy first_seen <= last_seen == observed_at")
     if value["severity"] not in SEVERITIES:
         raise ProtocolError("event severity is invalid")
     if not isinstance(value["summary"], str) or not value["summary"] or len(value["summary"]) > MAX_SUMMARY:
         raise ProtocolError(f"event summary must be 1-{MAX_SUMMARY} characters")
-    if not isinstance(value["count"], int) or isinstance(value["count"], bool) or value["count"] < 1:
-        raise ProtocolError("event count must be a positive integer")
+    if (not isinstance(value["count"], int) or isinstance(value["count"], bool) or
+            not 1 <= value["count"] <= 1000000000):
+        raise ProtocolError("event count must be an integer from 1 to 1000000000")
     if value["recommendation"] not in RECOMMENDATIONS:
         raise ProtocolError("event recommendation is invalid")
     _validate_attributes(value["attributes"])
@@ -215,4 +223,3 @@ def validate_ack(value, expected_ids=None):
             raise ProtocolError("ack result reason is invalid")
         seen.add(result["id"])
     return value
-

@@ -29,10 +29,10 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         config = load_config(args.config)
+        problems = check_file_security(args.config, require_root=os.geteuid() == 0)
+        if problems:
+            raise ConfigError("config security check failed: " + "; ".join(problems))
         if args.command == "check":
-            problems = check_file_security(args.config, require_root=os.geteuid() == 0)
-            if problems:
-                raise ConfigError("config security check failed: " + "; ".join(problems))
             _print_json({"ok": True, "sensor_id": config["sensor_id"],
                          "version": config["version"]})
             return 0
@@ -54,4 +54,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
