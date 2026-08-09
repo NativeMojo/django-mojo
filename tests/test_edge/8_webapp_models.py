@@ -181,6 +181,78 @@ def test_manifest_cap(opts):
     assert err is not None, "manifest accepted more files than the cap allows"
 
 
+@th.django_unit_test("a manifest over the byte cap is refused")
+def test_manifest_byte_cap(opts):
+    """A file COUNT cap does not bound bytes. Every node fetches a promoted
+    release onto its own disk, so an unbounded release is a fleet-wide disk
+    exhaustion — a build that accidentally packs node_modules, not an attack."""
+    from mojo.apps.edge import validators
+
+    good = "a" * 64
+    over = [dict(path=f"f{i}.js", sha256=good, size=200 * 1024 * 1024)
+            for i in range(6)]
+    err = raises(validators.validate_manifest, over)
+    assert err is not None, \
+        "manifest accepted more bytes than the cap allows"
+    assert "bytes" in str(err), \
+        f"the refusal does not name the byte cap: {err}"
+
+    under = [dict(path="index.html", sha256=good, size=1024)]
+    assert validators.validate_manifest(under), \
+        "an ordinary release was refused by the byte cap"
+
+
+@th.django_unit_test("a child group's web app may sit on its parent's domain")
+def test_vhost_group_accepts_a_parent(opts):
+    """One domain, one wildcard certificate, a team per child group. Siblings
+    stay isolated because neither is above the other — that is the whole
+    reason this is an ancestor check and not a subtree one."""
+    from mojo.apps.edge.models import WebApp
+
+    parent = make_group("edgeparent")
+    child = make_group("edgechild")
+    child.parent = parent
+    child.save()
+    sibling = make_group("edgesibling")
+    sibling.parent = parent
+    sibling.save()
+
+    # The domain (and its certificate) belong to the PARENT.
+    domain = make_domain(group=parent)
+    cert = make_certificate(domain)
+    vhost = make_vhost(domain, cert, label="portal", kind="site")
+
+    web_app = make_webapp(child, slug="childapp", vhost=vhost)
+    assert web_app.pk, \
+        "a child group's web app was refused on its parent's domain"
+
+    # A sibling is NOT above the child's domain owner... but the domain owner
+    # IS the sibling's parent too, so this one is allowed on purpose: both
+    # teams publish under the shared domain.
+    other = make_webapp(sibling, slug="siblingapp")
+    other.vhost = make_vhost(domain, cert, label="api", kind="site")
+    other.save()
+    assert other.pk, "a second child group was refused on the shared domain"
+
+    # An unrelated group is still refused — the check did not become "anyone".
+    stranger = make_group("edgestranger")
+    err = raises(make_webapp, stranger, slug="strangerapp", vhost=vhost)
+    assert err is not None, \
+        "an unrelated group attached a web app to another group's domain"
+
+    # And a HOUSE domain is nobody's ancestor: the platform-vhost hijack the
+    # original check was written for stays refused.
+    house_domain = make_domain(group=None)
+    house_cert = make_certificate(house_domain)
+    house_vhost = make_vhost(house_domain, house_cert, label="www",
+                             kind="site")
+    err = raises(make_webapp, child, slug="houseapp", vhost=house_vhost)
+    assert err is not None, \
+        "a web app attached to a HOUSE vhost — the hijack this check exists for"
+
+    WebApp.objects.filter(pk__in=[web_app.pk, other.pk]).delete()
+
+
 @th.django_unit_test("a site with no vhost is registerable but never installed")
 def test_vhost_is_optional(opts):
     """D2: the whole CloudFront answer is a nullable FK, not a mode enum."""

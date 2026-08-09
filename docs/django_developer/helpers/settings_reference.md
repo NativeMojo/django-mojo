@@ -384,6 +384,99 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 - `DUID_HEADER`
 
+### EDGE
+
+Paths, the privileged argv and the whole `EDGE_DEPLOY_*` family are
+**file-only** deliberately: `settings.get` resolves a DB-backed `Setting` row
+first, and `Setting` is REST-writable by any holder of a global
+`manage_settings` grant — a containment boundary, or a root subprocess argv,
+that a `Setting` row can move is not one. Full tables with the surrounding
+reasoning: [edge README](../edge/README.md#settings),
+[web apps and releases](../edge/webapps.md#settings),
+[fleet code deploy](../edge/deploy.md#settings).
+
+- `EDGE_ROOT` — **file-only** (`settings.get_static`), default
+  `/opt/api/var/edge`. Root of the generation tree (`generations/`, `current`,
+  `installed.json`) and of the certificate material the installer writes.
+- `EDGE_WWW_BASE` — **file-only** (`settings.get_static`), default `/opt/www`.
+  The containment boundary every served file root must resolve under.
+- `EDGE_SOCKET_BASE` — **file-only** (`settings.get_static`), default
+  `/run/mojo`. The containment boundary every `kind=unix` upstream socket path
+  must resolve under.
+- `EDGE_LOG_DIR` — **file-only** (`settings.get_static`), default
+  `<EDGE_ROOT>/log`. App-owned log directory for the rendered base; it must
+  stay writable by the app user or the unprivileged staged `nginx -t` cannot
+  open it.
+- `EDGE_ACME_WEBROOT` — **file-only** (`settings.get_static`), default
+  `/var/www/certbot`. Filesystem root the per-name port-80 blocks serve the
+  HTTP-01 challenge path from.
+- `EDGE_MIME_TYPES` — **file-only** (`settings.get_static`), default
+  `/etc/nginx/mime.types`. The mime include in the rendered http base.
+- `EDGE_HTTP_DEFAULT_SERVER` — **file-only** (`settings.get_static`), bool,
+  default `False`. Flag-gates the rendered catch-all servers — it changes which
+  server answers every unmatched name on the node, so it is a cutover step
+  rather than a tuning knob. See [templates.md](../edge/templates.md).
+- `EDGE_TLS_PROTOCOLS` — **DB-backed** (`settings.get`), default
+  `TLSv1.2 TLSv1.3`. The TLS floor in the rendered http base, re-asserted
+  against the render-time whitelist; the resolved value is part of the hashed
+  desired state, so a change converges the fleet on the next sweep.
+- `EDGE_POOLS` — **DB-backed** (`settings.get`, `kind="list"`), default
+  `["default"]`. Both the pools the convergence sweep broadcasts to and the
+  allowlist `Vhost.pool` is validated against; an empty list falls back to
+  `["default"]` rather than declaring none.
+- `EDGE_RESERVED_SERVER_NAMES` — **DB-backed** (`settings.get`, `kind="list"`),
+  default `[]`. Names no vhost may claim, unioned with Django's concrete
+  `ALLOWED_HOSTS` entries; **fails closed** — when that union is empty (a `["*"]`
+  or empty `ALLOWED_HOSTS` and this unset) no vhost can be enabled at all.
+- `EDGE_CONVERGE_ENABLED` — **file-only** (`settings.get_static`), bool,
+  default `True`. `False` stops the ten-minute convergence sweep entirely —
+  nothing is published to the `edge` channel — for deployments that install this
+  app only for the fleet-deploy plane.
+- `EDGE_COMMAND_TIMEOUT` — **file-only** (`settings.get_static`), int seconds,
+  default `60`. Ceiling on each `nginx -t` / reload subprocess the installer
+  runs.
+- `EDGE_KEEP_GENERATIONS` — **file-only** (`settings.get_static`), int, default
+  `5`. Generations retained on disk, i.e. the nginx-config rollback depth; the
+  live `current` generation is never pruned.
+- `EDGE_KEEP_RELEASES` — **file-only** (`settings.get_static`), int, default
+  `5`. Release directories retained per vhost, i.e. the web-app rollback depth;
+  the promoted release and anything a retained generation still symlinks are
+  exempt, so even `0` cannot delete what is being served.
+- `EDGE_RELEASE_BUCKETS` — **DB-backed** (`settings.get`, `kind="list"`),
+  default `[]`. The S3 buckets a web app may use; **fails closed** — with none
+  declared no web app can be registered, no upload URL signed, and no node
+  fetch performed, since the API signs uploads with the platform's own AWS
+  credentials.
+- `EDGE_RELEASE_MAX_FILES` — **DB-backed** (`settings.get`), int, default
+  `5000`. Cap on manifest entries, checked before a single presigned URL is
+  minted.
+- `EDGE_RELEASE_MAX_BYTES` — **DB-backed** (`settings.get`), int bytes, default
+  `1073741824` (1 GiB). Cap on the manifest's total declared size, checked
+  alongside the file cap. A count cap does not bound bytes, and every node in
+  the pool fetches a promoted release onto its own disk — so this is what stops
+  one oversized build (a bundle that accidentally ships `node_modules`) filling
+  the fleet.
+- `EDGE_RELEASE_UPLOAD_TTL` — **DB-backed** (`settings.get`), int seconds,
+  default `3600`. Lifetime of each presigned release PUT.
+- `EDGE_RELEASE_FETCH_TIMEOUT` — **file-only** (`settings.get_static`), int
+  seconds, default `60`. Per-attempt connect/read timeout on a node's S3
+  release GET.
+- `EDGE_RELEASE_FETCH_BUDGET` — **file-only** (`settings.get_static`), int
+  seconds, default `300`. Wall-clock ceiling for one release's fetch; the
+  remainder is left for the next converge, which resumes by hash.
+- `EDGE_DEPLOY_SCRIPT` — **file-only** (`settings.get_static`, `kind="list"`),
+  **no default**. The update-script argv, e.g.
+  `["sudo", "-n", "/opt/api/aws/update.sh"]`; unset means this node refuses to
+  deploy rather than sudo-run a path the framework guessed.
+- `EDGE_DEPLOY_BRANCH` — **file-only** (`settings.get_static`), default `main`.
+  Only pushes to `refs/heads/<this>` start a deploy.
+- `EDGE_DEPLOY_CANARY_TIMEOUT` — **file-only** (`settings.get_static`), int
+  seconds, default `600`. How long the orchestrator waits for the canary node,
+  and the expiry on deploy jobs; keep it below `EDGE_DEPLOY_STATUS_TTL`.
+- `EDGE_DEPLOY_STATUS_TTL` — **file-only** (`settings.get_static`), int
+  seconds, default `900`. Expiry on the Redis deploy target/status keys — the
+  backstop that stops a canary dying hard from wedging every future deploy.
+
 ### EMAIL
 
 - `EMAIL_CHANGE_CODE_TTL`

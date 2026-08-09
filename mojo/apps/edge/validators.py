@@ -413,20 +413,50 @@ def validate_web_app(web_app):
     if not web_app.group_id:
         raise me.ValueException("a web app requires a group")
 
-    # The linked vhost must belong to the SAME tenant. Found by the post-build
-    # security review: `vhost` is caller-writable, and the framework's FK-attach
-    # gate resolves a HOUSE vhost (group-less domain) against the caller's
-    # global permissions — so a global manage_dns holder could attach the
-    # platform's own vhost to a web app in a group they control, promote a
-    # release, and serve their own content on the platform's hostname. The
-    # same check also stops an admin of two tenants serving group A's build
-    # output on group B's name.
+    # The linked vhost must belong to this web app's group, or to a group
+    # ABOVE it. Found by the post-build security review: `vhost` is
+    # caller-writable, and the framework's FK-attach gate resolves a HOUSE
+    # vhost (group-less domain) against the caller's global permissions — so a
+    # global manage_dns holder could attach the platform's own vhost to a web
+    # app in a group they control, promote a release, and serve their own
+    # content on the platform's hostname. The same check stops one group
+    # serving its build output on an unrelated group's name.
+    #
+    # The ancestor allowance is what lets one domain carry several teams: a
+    # parent group owns `example.com` and its wildcard certificate, and each
+    # team's web app sits in its own child group. Siblings still cannot reach
+    # each other — neither is above the other — so teams stay isolated without
+    # a domain record and a certificate per team. A house domain is nobody's
+    # ancestor (group_id is None matches nothing), so the hijack above stays
+    # refused.
     if web_app.vhost_id:
         vhost_group_id = web_app.vhost.domain.group_id
-        if vhost_group_id != web_app.group_id:
+        if not _group_at_or_below(web_app.group, vhost_group_id):
             raise me.ValueException(
-                "the vhost must belong to this web app's group")
+                "the vhost must belong to this web app's group or a parent "
+                "of it")
     return web_app
+
+
+def _group_at_or_below(group, owner_group_id):
+    """True when `owner_group_id` is `group` itself or one of its ancestors.
+
+    Walks the chain here, depth-capped, rather than calling
+    `Group.get_parents()`: that helper has no cycle guard, and this runs on
+    every WebApp save. The cap matches `get_member_for_user`'s.
+    """
+    if owner_group_id is None or group is None:
+        return False
+    if owner_group_id == group.pk:
+        return True
+    current = group.parent
+    depth = 0
+    while current is not None and depth < 8:
+        if current.pk == owner_group_id:
+            return True
+        current = current.parent
+        depth += 1
+    return False
 
 
 def validate_manifest(manifest):
@@ -436,6 +466,7 @@ def validate_manifest(manifest):
     `path` is a write primitive pointed at the platform's own credentials.
     """
     max_files = int(settings.get("EDGE_RELEASE_MAX_FILES", 5000))
+    max_bytes = int(settings.get("EDGE_RELEASE_MAX_BYTES", 1073741824))
 
     if not isinstance(manifest, list) or not manifest:
         raise me.ValueException("manifest must be a non-empty list")
@@ -471,6 +502,16 @@ def validate_manifest(manifest):
                 f"manifest entry {path!r} needs a non-negative integer size")
 
         cleaned.append(dict(path=path, sha256=sha256, size=size))
+
+    # A file count cap does not bound bytes: 5000 entries can still declare a
+    # terabyte. Every node in the pool fetches a promoted release onto its own
+    # disk, so an unbounded release is a fleet-wide disk exhaustion — checked
+    # here rather than only at fetch time so CI learns at register, and so a
+    # node re-validating a row it did not mint gets the same answer.
+    total = sum(entry["size"] for entry in cleaned)
+    if total > max_bytes:
+        raise me.ValueException(
+            f"manifest declares {total} bytes; the limit is {max_bytes}")
     return cleaned
 
 

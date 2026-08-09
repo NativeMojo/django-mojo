@@ -218,13 +218,27 @@ def pending_releases(installed=None):
     return {str(key): value for key, value in rows.items()}
 
 
-def write_installed(generation, excluded=None, www_pending=None):
+def pending_certs(installed=None):
+    """Vhost ids the last install excluded for unreadable key material.
+
+    Same retry contract as `pending_releases`, for the other transient
+    failure: KMS comes back, and nothing else about the desired state has to
+    change for that vhost to install.
+    """
+    if installed is None:
+        installed = read_installed()
+    return [int(pk) for pk in (installed.get("cert_pending") or [])]
+
+
+def write_installed(generation, excluded=None, www_pending=None,
+                    cert_pending=None):
     """Record what this node installed.
 
     `www_pending` is {vhost id: desired version} for vhosts whose release
-    bytes could not be fetched. It is written only when non-empty, so a
+    bytes could not be fetched; `cert_pending` is the vhost ids whose key
+    material would not read. Both are written only when non-empty, so a
     healthy node's installed.json keeps exactly the shape it always had — and
-    its presence is what makes the next converge retry instead of
+    either one's presence is what makes the next converge retry instead of
     short-circuiting.
     """
     payload = dict(generation=generation, excluded=sorted(excluded or []))
@@ -233,6 +247,8 @@ def write_installed(generation, excluded=None, www_pending=None):
         # never has to guess which side of a round-trip it is holding.
         payload["www_pending"] = {
             str(key): value for key, value in www_pending.items()}
+    if cert_pending:
+        payload["cert_pending"] = sorted(cert_pending)
     tmp = f"{installed_path()}.tmp"
     with open(tmp, "w") as handle:
         json.dump(payload, handle)
@@ -337,13 +353,25 @@ def _report_incident(message, title, key=None):
         logit.exception("edge: failed to report a vhost incident")
 
 
-def _exclude_or_abort(vhost, message, excluded, report=True, key=None):
+def _exclude_or_abort(vhost, message, excluded, report=True, key=None,
+                      allow_house=False):
     """The one fork for a vhost that cannot be staged.
 
     House vhost -> abort the install (the platform's own serving path;
     converging without it is not a partial success). Tenant vhost -> exclude
     it and report an incident, so one tenant's broken row cannot freeze the
     fleet.
+
+    **`allow_house=True` degrades a house vhost instead of aborting**, and the
+    REASON is what earns it, not the owner. A missing release is one vhost's
+    content problem however that vhost is owned; a house vhost carrying a
+    webapp is ordinary (a portal served by the platform's own group), not a
+    statement that the platform cannot serve. Without this the ownership fork
+    silently decides a content failure: point webapps at house-owned vhosts and
+    every first-promote fetch failure aborts the pool — the fleet-wide freeze
+    the fetch degrade exists to remove, reintroduced for every webapp. Genuine
+    platform config errors (unreadable certificate material, a retired
+    upstream) keep the abort.
 
     `report=False` is for a failure the previous install already reported —
     a fetch that is still pending is retried every converge, and one incident
@@ -352,7 +380,7 @@ def _exclude_or_abort(vhost, message, excluded, report=True, key=None):
     suppressed reporter, which re-notifies hourly rather than never. The
     exclusion itself is unconditional.
     """
-    if vhost.domain.group_id is None:
+    if vhost.domain.group_id is None and not allow_house:
         raise InstallError(f"{message} — it serves a platform vhost")
     if report:
         logit.error(message)
@@ -396,17 +424,26 @@ def _previous_web_root(previous, vhost_id):
 
 def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
                      previous=None):
-    """Build `generations/<generation>/` completely. Returns excluded vhost ids.
+    """Build `generations/<generation>/` completely.
 
-    Raises InstallError when a HOUSE vhost cannot be staged: that is the
-    platform's own serving path, and converging without it is not a partial
-    success.
+    Returns `objict(excluded, cert_excluded)`: every vhost left out of the
+    generation, and the subset left out because its key material would not
+    read. The second list is what makes a certificate failure retryable —
+    `install()` records it so the next converge re-stages instead of
+    short-circuiting on an unchanged generation.
+
+    Raises InstallError when a HOUSE vhost cannot be staged for a PLATFORM
+    reason (unreadable material, a retired upstream): that is the platform's
+    own serving path, and converging without it is not a partial success. A
+    missing release is not such a reason — see `_exclude_or_abort`.
 
     `fetch_failures` is {vhost id: message} from `www_sync.fetch_webapps`, and
     `previous` is what `current` pointed at before this install. Together they
     decide the degrade: a vhost that was already serving keeps its bytes, one
     that never served is excluded.
     """
+    from objict import objict
+
     gen_dir = render.generation_dir(generation)
     os.makedirs(os.path.join(gen_dir, "conf.d"), exist_ok=True)
     os.makedirs(os.path.join(gen_dir, "http.d"), exist_ok=True)
@@ -423,10 +460,13 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
     by_vhost = {row["vhost"]: row for row in (webapps or [])}
     # What the LAST install already reported as unfetchable. A retry that is
     # still failing logs; only a new failure raises an incident.
-    reported = pending_releases()
+    installed = read_installed()
+    reported = pending_releases(installed)
+    reported_certs = set(pending_certs(installed))
 
     installable = []
     excluded = []
+    cert_excluded = []
     fallbacks = {}
     for vhost in vhosts:
         disabled = _disabled_upstreams(vhost)
@@ -450,10 +490,13 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
             fallback = _previous_web_root(previous, vhost.pk)
             if fallback is None:
                 # It has never served anything, so there is nothing to keep
-                # serving. Dark beats a live vhost pointing at nothing.
+                # serving. Dark beats a live vhost pointing at nothing —
+                # `allow_house` because that is true of a house-owned vhost
+                # too, and aborting the pool over one vhost's missing content
+                # is the freeze this whole path exists to prevent.
                 _exclude_or_abort(
                     vhost, f"edge: {failure}", excluded, report=is_new,
-                    key=key)
+                    key=key, allow_house=True)
                 continue
             fallbacks[vhost.pk] = fallback
             message = (f"edge: {failure} — {vhost.server_name} is serving its "
@@ -471,10 +514,17 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
             installable.append(vhost)
             continue
 
+        # Unreadable key material is usually transient (KMS), so this vhost is
+        # recorded as retryable the same way an unfetched release is: the next
+        # converge tries again instead of leaving it excluded until something
+        # unrelated moves the generation.
+        cert_excluded.append(vhost.pk)
         _exclude_or_abort(
             vhost,
             f"edge: certificate {vhost.certificate_id} for "
-            f"{vhost.server_name} has no readable material (KMS?)", excluded)
+            f"{vhost.server_name} has no readable material (KMS?)", excluded,
+            report=vhost.pk not in reported_certs,
+            key=f"cert-material:{vhost.pk}:{vhost.certificate_id}")
 
     files = render.render_generation(installable, generation)
     for name, text in files.items():
@@ -493,7 +543,7 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
         handle.write(render.render_nginx_harness(generation))
 
     stage_web_roots(generation, installable, webapps or [], fallbacks)
-    return excluded
+    return objict(excluded=excluded, cert_excluded=cert_excluded)
 
 
 def release_dir(vhost_id, version):
@@ -579,7 +629,10 @@ def prune_generations(keep=None):
         p for p in entries
         if os.path.isdir(p) and os.path.realpath(p) != live
     ]
-    entries.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    # Guarded: prune runs after the reload and after installed.json is
+    # written, so a directory vanishing under us here would fail a job whose
+    # install actually succeeded.
+    entries.sort(key=www_sync.safe_mtime, reverse=True)
     removed = []
     # `keep` counts the LIVE generation too, so one slot is already spoken for.
     for path in entries[max(keep - 1, 0):]:
@@ -614,12 +667,16 @@ def install(pool="default", force=False):
 
     installed = read_installed()
     pending = pending_releases(installed)
-    # `www_pending` DEFEATS the short-circuit on purpose: a node that could not
-    # fetch a release is degraded, and the only thing that heals it is running
-    # the fetch again. A healthy node still does zero S3 work on an unchanged
-    # generation, which is what keeps the ten-minute sweep cheap. Certificate
-    # exclusions keep their sticky semantics — this is fetch-only.
-    if not force and installed.get("generation") == generation and not pending:
+    cert_pending = pending_certs(installed)
+    # A recorded failure DEFEATS the short-circuit on purpose: a node that
+    # could not fetch a release, or could not read key material, is degraded,
+    # and the only thing that heals either is running the install again. Both
+    # causes are transient (S3, KMS) and neither changes the desired state, so
+    # without this a vhost stays degraded until something unrelated moves the
+    # generation. A healthy node still does zero S3 work on an unchanged
+    # generation, which is what keeps the ten-minute sweep cheap.
+    if (not force and installed.get("generation") == generation
+            and not pending and not cert_pending):
         return objict(changed=False, generation=generation, reason="unchanged")
 
     os.makedirs(os.path.join(render.edge_root(), "generations"), exist_ok=True)
@@ -630,9 +687,10 @@ def install(pool="default", force=False):
     # release degrades its own vhost and nothing else.
     fetch_failures = www_sync.fetch_webapps(webapps)
 
-    excluded = stage_generation(vhosts, generation, webapps,
-                                fetch_failures=fetch_failures,
-                                previous=previous)
+    staged = stage_generation(vhosts, generation, webapps,
+                              fetch_failures=fetch_failures,
+                              previous=previous)
+    excluded = staged.excluded
 
     gen_dir = render.generation_dir(generation)
     ok, output = _nginx_check(os.path.join(gen_dir, "nginx.conf"))
@@ -678,15 +736,18 @@ def install(pool="default", force=False):
         str(row["vhost"]): row["release"]["version"]
         for row in webapps if row["vhost"] in fetch_failures
     }
-    write_installed(generation, excluded, www_pending=still_pending)
+    write_installed(generation, excluded, www_pending=still_pending,
+                    cert_pending=staged.cert_excluded)
     prune_generations()
     www_sync.prune_releases(webapps)
     logit.info(
         f"edge: installed generation {generation} for pool {pool} "
         f"({len(vhosts) - len(excluded)} vhosts, {len(excluded)} excluded, "
-        f"{len(still_pending)} awaiting release bytes)")
+        f"{len(still_pending)} awaiting release bytes, "
+        f"{len(staged.cert_excluded)} awaiting key material)")
     return objict(changed=True, generation=generation, excluded=excluded,
-                  previous=previous, www_pending=still_pending)
+                  previous=previous, www_pending=still_pending,
+                  cert_pending=staged.cert_excluded)
 
 
 def _fail(generation, message, reverted_to=None, revert_note=None):
