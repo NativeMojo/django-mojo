@@ -62,7 +62,7 @@ POST   /api/edge/vhost/claim_reserved PLATFORM ADMIN ONLY — see below
 | `spa` | yes | `site`/`site_api` only: history-fallback to `index.html` instead of a 404. |
 | `body_size_mb` | yes | Upload cap in MB, 1–4096, default 50. Always applied. |
 | `quiet_paths` | yes | `api`/`site_api` only: exact request paths kept out of the main access log (health checks). Charset `[A-Za-z0-9._/-]`, must start `/`. On `site_api` each must sit under a declared route prefix. |
-| `serve_static` | yes | `api`/`site_api` only: serve the platform's Django static files at `/static/` instead of proxying it. |
+| `serve_static` | yes | `api`/`site_api` only: serve the platform's Django static files at `/static/` instead of proxying it. On `site_api`, nginx renders this as a `^~` prefix so the site's asset-suffix matching cannot capture it. |
 | `redirect_to` | yes | `redirect` only (**required** there): the target hostname. A 301 preserving the request path is rendered. |
 | `claims_reserved` | **no** | Read-only over plain REST; moves only through `claim_reserved`. |
 | `is_enabled` | yes | Only enabled vhosts are served. |
@@ -103,8 +103,9 @@ resolved through the owning vhost's domain.
 - `path_prefix` starts with `/`, same charset as quiet paths; a bare `/` is
   rejected (that is what `kind: api` is for). Longest prefix wins at
   request time, so `/api` and `/api/ws` can coexist pointing at different
-  upstreams. Declared prefixes take precedence over the site's asset-cache
-  matching, so asset-shaped paths such as `/api/app.js` still reach the route.
+  upstreams. Each route renders as an nginx `^~` prefix, taking precedence
+  over the site's asset-cache matching so asset-shaped paths such as
+  `/api/app.js` still reach the route.
 - `upstream` must be a shared (house) upstream or one belonging to your
   group — another tenant's upstream is a 400.
 - Deleting an upstream that routes still reference is refused; retire the
@@ -187,5 +188,8 @@ grant it to an API key, and a member-scoped grant plus `?group=` does not open
 them. Nothing in a portal should call these.
 
 Each `desired_state` vhost carries non-secret certificate identity and revision
-metadata (`certificate` and `certificate_serial`) so nodes notice an in-place
-renewal. It never carries certificate PEM, chain, or private-key material.
+metadata (`certificate` and `certificate_serial`). Changing the serial during
+an in-place renewal changes the desired-state generation, so nodes follow the
+ordinary staged install path, fetch the new material through `material`,
+validate it, and reload nginx. `desired_state` itself never carries certificate
+PEM, chain, or private-key material.
