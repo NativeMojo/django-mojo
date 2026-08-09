@@ -175,7 +175,10 @@ app writes:
   bootstrap's `user`; web roots resolve through
   `EDGE_ROOT → generations/<gen>/www/<pk> → EDGE_WWW_BASE` releases, so that
   chain must be traversable (`o+x`) and the release files readable by that
-  user. Certificate material does not need this: the root master process
+  user. The fetcher lands every release file `0644` for exactly this reason
+  (it downloads through a `0600` temp file, so the mode is set deliberately,
+  not inherited); the directories are yours to keep traversable.
+  Certificate material does not need this: the root master process
   reads keys at load time.
 
 ## Blocklists — data, log-first
