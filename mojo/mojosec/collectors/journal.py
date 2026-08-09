@@ -1,9 +1,28 @@
 """Bounded journald collector with a durable cursor owned by the store."""
 
 import json
+import os
+import selectors
 import subprocess
+import time
 
 from ..detectors import detect_journal
+
+
+MAX_STDERR_BYTES = 4096
+
+
+def _reject_constant(value):
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
+def _strict_record(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate journal field: {key}")
+        result[key] = value
+    return result
 
 
 class JournalCollector:
@@ -13,37 +32,112 @@ class JournalCollector:
         self.config = config
 
     def poll(self, cursor=None):
-        command = ["/usr/bin/journalctl", "--output=json", "--no-pager",
-                   f"--lines={self.config['max_lines']}"]
+        command = ["/usr/bin/journalctl", "--output=json", "--no-pager"]
         if cursor:
             command.append(f"--after-cursor={cursor}")
         else:
             command.append(f"--since=-{self.config['lookback_seconds']} seconds")
-        done = subprocess.run(
-            command, capture_output=True, text=True,
-            timeout=self.config["timeout_seconds"], check=False,
+        process = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL, bufsize=0,
         )
-        if done.returncode:
-            error = done.stderr.strip()[:512] or f"journalctl exited {done.returncode}"
-            raise RuntimeError(error)
         observations = []
         next_cursor = cursor
         malformed = 0
-        for line in done.stdout.splitlines()[:self.config["max_lines"]]:
-            if len(line) > 256 * 1024:
+        records = 0
+        bytes_read = 0
+        stdout_buffer = bytearray()
+        stderr_buffer = bytearray()
+        limited = False
+        deadline = time.monotonic() + self.config["timeout_seconds"]
+
+        def process_line(line):
+            nonlocal next_cursor, malformed, records
+            records += 1
+            if len(line) > self.config["max_record_bytes"]:
                 malformed += 1
-                continue
+                return
             try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
+                record = json.loads(
+                    line.decode("utf-8"), object_pairs_hook=_strict_record,
+                    parse_constant=_reject_constant,
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
                 malformed += 1
-                continue
+                return
             if not isinstance(record, dict):
                 malformed += 1
-                continue
-            if isinstance(record.get("__CURSOR"), str):
-                next_cursor = record["__CURSOR"][:4096]
-            detected = detect_journal(record)
+                return
+            record_cursor = record.get("__CURSOR")
+            if not isinstance(record_cursor, str) or not record_cursor or len(record_cursor) > 4096:
+                malformed += 1
+                return
+            next_cursor = record_cursor
+            try:
+                detected = detect_journal(record)
+            except Exception:
+                malformed += 1
+                return
             if detected:
                 observations.append(detected)
+
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        try:
+            while selector.get_map() and not limited:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    process.kill()
+                    process.wait()
+                    raise RuntimeError("journalctl timed out")
+                ready = selector.select(min(remaining, 0.25))
+                if not ready:
+                    continue
+                for key, mask in ready:
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    if key.data == "stderr":
+                        available = MAX_STDERR_BYTES - len(stderr_buffer)
+                        if available > 0:
+                            stderr_buffer.extend(chunk[:available])
+                        continue
+                    available = self.config["max_bytes_per_poll"] - bytes_read
+                    if available <= 0:
+                        limited = True
+                        break
+                    accepted = chunk[:available]
+                    stdout_buffer.extend(accepted)
+                    bytes_read += len(accepted)
+                    if len(accepted) < len(chunk):
+                        limited = True
+                    while b"\n" in stdout_buffer and records < self.config["max_records"]:
+                        line, _, remainder = stdout_buffer.partition(b"\n")
+                        stdout_buffer = bytearray(remainder)
+                        process_line(line)
+                    if records >= self.config["max_records"]:
+                        limited = True
+                    if limited:
+                        break
+            if limited:
+                process.terminate()
+            else:
+                if stdout_buffer:
+                    process_line(bytes(stdout_buffer))
+            try:
+                returncode = process.wait(timeout=max(0.1, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired as err:
+                process.kill()
+                process.wait()
+                raise RuntimeError("journalctl timed out") from err
+        finally:
+            selector.close()
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+        if not limited and returncode:
+            error = stderr_buffer.decode("utf-8", errors="replace").strip()[:512]
+            raise RuntimeError(error or f"journalctl exited {returncode}")
         return {"observations": observations, "cursor": next_cursor, "malformed": malformed}

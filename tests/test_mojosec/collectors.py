@@ -1,8 +1,39 @@
 import json
 import os
+import subprocess
+import sys
 import tempfile
+from unittest import mock
 
 from testit import helpers as th
+
+
+def _journal_config(max_records=10, max_bytes=65536):
+    return {
+        "max_records": max_records, "max_bytes_per_poll": max_bytes,
+        "max_record_bytes": 16384, "timeout_seconds": 5, "lookback_seconds": 300,
+    }
+
+
+def _journal_record(cursor, source_ip):
+    return {
+        "__CURSOR": cursor, "SYSLOG_IDENTIFIER": "sshd",
+        "MESSAGE": f"Accepted publickey for deploy from {source_ip} port 50221 ssh2",
+    }
+
+
+def _popen_stream(payload, commands):
+    real_popen = subprocess.Popen
+
+    def spawn(command, **kwargs):
+        commands.append(command)
+        script = "import sys; sys.stdout.buffer.write(" + repr(payload) + ")"
+        return real_popen(
+            [sys.executable, "-c", script], stdout=kwargs["stdout"],
+            stderr=kwargs["stderr"], stdin=kwargs["stdin"], bufsize=kwargs["bufsize"],
+        )
+
+    return spawn
 
 
 @th.django_unit_test()
@@ -45,6 +76,48 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
     })
     th.assert_eq(sudo["kind"], "auth.sudo_command",
                  "sudo commands attached to transient AL2023 scopes must be retained")
+
+
+@th.django_unit_test()
+def test_journal_collector_streams_forward_without_tail_skips(opts):
+    import mojo.mojosec.collectors.journal as journal_module
+
+    records = [_journal_record(f"cursor-{index}", f"192.0.2.{index}") for index in range(1, 4)]
+    payload = b"".join(json.dumps(record).encode("utf-8") + b"\n" for record in records)
+    commands = []
+    collector = journal_module.JournalCollector(_journal_config(max_records=2))
+    with mock.patch.object(
+            journal_module.subprocess, "Popen", side_effect=_popen_stream(payload, commands)):
+        result = collector.poll("cursor-0")
+
+    th.assert_eq(len(result["observations"]), 2,
+                 "the record ceiling should return the first two records after the cursor")
+    th.assert_eq(result["cursor"], "cursor-2",
+                 "the durable cursor must stop at the last processed record, preserving the burst remainder")
+    th.assert_true(not any(argument.startswith("--lines") for argument in commands[0]),
+                   "journalctl tail semantics must never skip the beginning of a post-cursor burst")
+    th.assert_in("--after-cursor=cursor-0", commands[0],
+                 "journal collection must stream forward from the committed cursor")
+
+
+@th.django_unit_test()
+def test_journal_poison_record_is_counted_and_cursor_advances(opts):
+    import mojo.mojosec.collectors.journal as journal_module
+
+    records = [_journal_record("cursor-1", "192.0.2.1"),
+               _journal_record("cursor-2", "192.0.2.2")]
+    payload = b"".join(json.dumps(record).encode("utf-8") + b"\n" for record in records)
+    commands = []
+    collector = journal_module.JournalCollector(_journal_config())
+    with mock.patch.object(
+            journal_module.subprocess, "Popen", side_effect=_popen_stream(payload, commands)), \
+            mock.patch.object(journal_module, "detect_journal", side_effect=(ValueError("poison"), None)):
+        result = collector.poll()
+
+    th.assert_eq(result["malformed"], 1,
+                 "a detector failure must be counted as one malformed journal record")
+    th.assert_eq(result["cursor"], "cursor-2",
+                 "a poison record must not prevent progress to the next valid journal cursor")
 
 
 @th.django_unit_test()

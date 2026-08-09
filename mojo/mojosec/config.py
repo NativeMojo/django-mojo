@@ -20,7 +20,9 @@ DEFAULTS = {
     "collectors": {
         "journal": {
             "enabled": True,
-            "max_lines": 2000,
+            "max_records": 2000,
+            "max_bytes_per_poll": 8 * 1024 * 1024,
+            "max_record_bytes": 256 * 1024,
             "timeout_seconds": 10,
             "lookback_seconds": 300,
         },
@@ -148,7 +150,13 @@ def validate_config(value):
         _reject_unknown(collectors[name], DEFAULTS["collectors"][name], f"collectors.{name}")
         if not isinstance(collectors[name]["enabled"], bool):
             raise ConfigError(f"collectors.{name}.enabled must be a boolean")
-    _integer(collectors["journal"]["max_lines"], "collectors.journal.max_lines", 1, 20000)
+    _integer(collectors["journal"]["max_records"], "collectors.journal.max_records", 1, 20000)
+    _integer(collectors["journal"]["max_bytes_per_poll"],
+             "collectors.journal.max_bytes_per_poll", 4096, 64 * 1024 * 1024)
+    _integer(collectors["journal"]["max_record_bytes"],
+             "collectors.journal.max_record_bytes", 512, 8 * 1024 * 1024)
+    if collectors["journal"]["max_record_bytes"] > collectors["journal"]["max_bytes_per_poll"]:
+        raise ConfigError("collectors.journal.max_record_bytes must not exceed max_bytes_per_poll")
     _integer(collectors["journal"]["timeout_seconds"], "collectors.journal.timeout_seconds", 1, 120)
     _integer(collectors["journal"]["lookback_seconds"], "collectors.journal.lookback_seconds", 1, 86400)
     nginx = collectors["nginx"]
