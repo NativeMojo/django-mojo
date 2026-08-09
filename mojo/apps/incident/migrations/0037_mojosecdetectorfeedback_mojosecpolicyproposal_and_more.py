@@ -105,4 +105,8 @@ class Migration(migrations.Migration):
             },
             bases=(models.Model, mojo.models.rest.MojoModel),
         ),
+        migrations.AddIndex(
+            model_name="mojosecreceipt",
+            index=models.Index(fields=["publish_state", "-created", "-id"], name="incident_mo_pub_created_idx"),
+        ),
     ]

@@ -170,7 +170,7 @@ def test_mojosec_feedback_exact_subject_and_reversal_chain(opts):
         head.save()
     other = mojosec_learning.create_feedback(
         opts.learning_author, "unknown",
-        manual_exemplar={"kind": "system.oom", "count": 1, "severity": "high"},
+        manual_exemplar={"kind": "system.oom", "count": 2, "severity": "high"},
         note=f"{PREFIX} other subject")
     with th.assert_raises(ValueError):
         head.advance(other)
@@ -330,6 +330,12 @@ def test_mojosec_learning_rejects_api_key_authors_and_reports_bounded_metrics(op
                    "learning metrics must not fabricate fleet or sensor-health truth")
     th.assert_true(bool(metrics["installations"]),
                    "bounded metrics should expose stable installation strata")
+    th.assert_true(
+        metrics["receipt_rows_scanned"] <= metrics["candidate_scan_limit"]
+        and metrics["feedback_rows_scanned"] <= metrics["candidate_scan_limit"]
+        and metrics["receipt_rows_sampled"] <= metrics["receipt_sample_limit"]
+        and metrics["feedback_rows_sampled"] <= metrics["feedback_sample_limit"],
+        "database candidates and installation-stratified output must have separate hard caps")
     th.assert_true(all(
         "group" not in row and "tenant" not in row
         and row["receipts"] <= metrics["per_installation_sample_limit"]
@@ -343,6 +349,30 @@ def test_mojosec_learning_rejects_api_key_authors_and_reports_bounded_metrics(op
                    "learning must remain human-only until structural approval exists")
     th.assert_true("create_rule" in registry,
                    "the learning prototype must not remove ordinary incident triage tools")
+
+
+@th.django_unit_test()
+def test_mojosec_learning_reproves_canonical_receipt_payloads(opts):
+    from mojo.apps.incident.models import MojoSecReceipt
+    from mojo.apps.incident.services import mojosec_learning
+
+    proposal = mojosec_learning.create_policy_proposal(
+        opts.learning_author, _policy(), summary=f"{PREFIX} payload binding")
+    original = opts.learning_receipt_one.replay_features
+    tampered = json.loads(json.dumps(original))
+    tampered["event"]["count"] += 1
+    MojoSecReceipt.objects.filter(pk=opts.learning_receipt_one.pk).update(
+        replay_features=tampered)
+    try:
+        with th.assert_raises(mojosec_learning.MojoSecLearningError):
+            mojosec_learning.evaluate_proposal(
+                opts.learning_author, proposal.pk,
+                receipt_ids=[opts.learning_receipt_one.pk])
+        with th.assert_raises(mojosec_learning.MojoSecLearningError):
+            mojosec_learning.detector_metrics(opts.learning_author, days=30, limit=100)
+    finally:
+        MojoSecReceipt.objects.filter(pk=opts.learning_receipt_one.pk).update(
+            replay_features=original)
 
 
 @th.django_unit_test()

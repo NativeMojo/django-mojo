@@ -2,10 +2,9 @@
 
 import hashlib
 import json
+import secrets
 
 from django.db import transaction
-from django.db.models import F, Window
-from django.db.models.functions import RowNumber
 
 from mojo.helpers import dates
 from mojo.helpers.settings import settings
@@ -21,6 +20,7 @@ MAX_DETECTORS = 24
 MAX_REPLAY_ROWS = 100
 MAX_METRIC_ROWS = 1000
 MAX_METRIC_ROWS_PER_INSTALLATION = 100
+MAX_METRIC_CANDIDATES = 4000
 MAX_NOTE = 1000
 MAX_SUMMARY = 500
 ALLOWED_KINDS = frozenset(KIND_POLICY)
@@ -383,6 +383,22 @@ def _feature_projection(replay_features):
     return {"kind": kind, "severity": severity, "level": level, "count": count}
 
 
+def _verified_receipt_feature(row):
+    replay_features = row.get("replay_features")
+    if (not isinstance(replay_features, dict)
+            or replay_features.get("feature_schema") != REPLAY_SCHEMA):
+        return None
+    event = replay_features.get("event")
+    payload_digest = row.get("payload_digest")
+    if not isinstance(event, dict) or not isinstance(payload_digest, str):
+        raise MojoSecLearningError("receipt replay evidence is incomplete")
+    actual_digest = _digest(event)
+    if not secrets.compare_digest(actual_digest, payload_digest):
+        raise MojoSecLearningError(
+            f"receipt {row.get('id')} replay evidence failed its canonical payload digest")
+    return _feature_projection(replay_features)
+
+
 def evaluate_features(content, rows):
     """Pure evaluator; rows contain only receipt identity/digest/replay_features."""
     policy = validate_policy_content(content)
@@ -394,7 +410,7 @@ def evaluate_features(content, rows):
     for row in rows[:MAX_REPLAY_ROWS]:
         receipt_id = row["id"]
         payload_digest = row["payload_digest"]
-        feature = _feature_projection(row["replay_features"])
+        feature = _verified_receipt_feature(row)
         if feature is None:
             continue
         totals["evaluated"] += 1
@@ -480,8 +496,23 @@ def evaluate_proposal(author, proposal_id, mode="replay", receipt_ids=None, limi
             result_digest=result["result_digest"], metrics=result["metrics"])
 
 
+def _stratified_sample(rows, limit, per_installation, identity):
+    selected = []
+    counts = {}
+    for row in rows:
+        key = identity(row)
+        if counts.get(key, 0) >= per_installation:
+            continue
+        selected.append(row)
+        counts[key] = counts.get(key, 0) + 1
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def detector_metrics(author, days=30, limit=1000):
-    from mojo.apps.incident.models import MojoSecDetectorFeedback, MojoSecReceipt
+    from mojo.apps.incident.models import (
+        MojoSecDetectorFeedbackHead, MojoSecReceipt)
 
     _assert_human_security_author(author, permission="view_security")
     days = _bounded_int(days, "days", 1, 365)
@@ -489,31 +520,29 @@ def detector_metrics(author, days=30, limit=1000):
     cutoff = dates.utcnow() - dates.timedelta(days=days)
     per_installation = min(
         MAX_METRIC_ROWS_PER_INSTALLATION, max(1, limit // 10))
-    receipts = list(MojoSecReceipt.objects.filter(
+    candidate_limit = min(MAX_METRIC_CANDIDATES, max(limit, limit * 4))
+    receipt_candidates = list(MojoSecReceipt.objects.filter(
         created__gte=cutoff, publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
-    ).annotate(
-        installation_row=Window(
-            expression=RowNumber(),
-            partition_by=[F("api_key_id"), F("sensor_id")],
-            order_by=[F("created").desc(), F("id").desc()],
-        ),
-    ).filter(installation_row__lte=per_installation).order_by(
-        "api_key_id", "sensor_id", "-created", "-id").values(
-            "id", "api_key_id", "sensor_id", "replay_features")[:limit])
-    feedback = list(MojoSecDetectorFeedback.objects.filter(
-        created__gte=cutoff, current_subject_head__isnull=False,
-    ).annotate(
-        installation_row=Window(
-            expression=RowNumber(),
-            partition_by=[F("installation_key_id_snapshot"), F("sensor_id")],
-            order_by=[F("created").desc(), F("id").desc()],
-        ),
-    ).filter(installation_row__lte=per_installation).order_by(
-        "installation_key_id_snapshot", "sensor_id", "-created", "-id")[:limit])
+    ).order_by("-created", "-id").values(
+        "id", "api_key_id", "sensor_id", "payload_digest",
+        "replay_features")[:candidate_limit])
+    head_candidates = list(MojoSecDetectorFeedbackHead.objects.filter(
+        modified__gte=cutoff, current__isnull=False,
+    ).select_related("current").order_by("-modified", "-id")[:candidate_limit])
+    for head in head_candidates:
+        head.current.assert_integrity()
+        if head.current.subject_key != head.subject_key:
+            raise MojoSecLearningError("feedback head and current revision subjects differ")
+    receipts = _stratified_sample(
+        receipt_candidates, limit, per_installation,
+        lambda row: (row["api_key_id"], row["sensor_id"]))
+    feedback = _stratified_sample(
+        [head.current for head in head_candidates], limit, per_installation,
+        lambda row: (row.installation_key_id_snapshot, row.sensor_id))
     kinds = {}
     installations = {}
     for receipt in receipts:
-        feature = _feature_projection(receipt["replay_features"])
+        feature = _verified_receipt_feature(receipt)
         if feature is None:
             continue
         row = kinds.setdefault(feature["kind"], {"receipts": 0, "occurrences": 0, "feedback": {}})
@@ -540,9 +569,12 @@ def detector_metrics(author, days=30, limit=1000):
         "window_days": days,
         "receipt_sample_limit": limit,
         "feedback_sample_limit": limit,
+        "candidate_scan_limit": candidate_limit,
         "per_installation_sample_limit": per_installation,
-        "receipt_rows_scanned": len(receipts),
-        "feedback_rows_scanned": len(feedback),
+        "receipt_rows_scanned": len(receipt_candidates),
+        "feedback_rows_scanned": len(head_candidates),
+        "receipt_rows_sampled": len(receipts),
+        "feedback_rows_sampled": len(feedback),
         "detectors": {key: kinds[key] for key in sorted(kinds)},
         "installations": [installations[key] for key in sorted(installations)],
     }

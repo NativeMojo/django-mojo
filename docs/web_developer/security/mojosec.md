@@ -167,14 +167,20 @@ evaluated or revised.
 
 Replay/shadow requests require `proposal_id` plus an explicit, duplicate-free
 `receipt_ids` list containing 1–100 retained receipts. The evaluator uses
-stored `replay_features_v1` only, canonicalizes IDs in ascending order, ignores
-host-reported severity in favor of the server `KIND_POLICY` level mapping, and
-returns bounded aggregate metrics and digests. Digests bind the proposal
-content, evaluator schema/version, and server policy-registry digest. `shadow`
-is not live-event
+stored `replay_features_v1` only, canonicalizes IDs in ascending order, and
+recomputes each stored event projection's canonical digest against the receipt
+payload digest before use. Altered or incomplete evidence fails closed. It
+ignores host-reported severity in favor of the server `KIND_POLICY` level
+mapping and returns bounded aggregate metrics and digests. Digests bind the
+proposal content, evaluator schema/version, and server policy-registry digest.
+`shadow` is not live-event
 evaluation and does not attach anything to ingestion. Neither operation can
 create an Event/Incident, call a handler or LLM, send an alert, or ban an IP.
-Metrics cap and stratify samples per stable installation identity; they contain
-no customer group/tenant stamp and are not fleet coverage or sensor health.
-There is no MojoSec assistant/LLM learning tool in this prototype. Existing
-incident-triage and live RuleSet assistant tools are unchanged.
+Metrics inspect a hard-capped newest candidate pool (at most 4,000 rows per
+receipt/current-feedback plane), then cap and stratify the requested sample per
+stable installation identity. A noisy installation can make the result smaller
+than the requested limit. Results contain no customer group/tenant stamp and
+are not fleet coverage or sensor health. All learning models are excluded from
+generic AI/model queries, and there is no MojoSec assistant/LLM learning tool
+in this prototype. Existing incident-triage and live RuleSet assistant tools
+are unchanged.

@@ -313,16 +313,19 @@ pruned without losing that audit record. Notes are untrusted text capped at
 1,000 characters and the feedback model, notes, and manual evidence are denied
 to generic AI/model-query tools.
 
-Feedback and proposal rows reject instance updates/deletes and default-manager
-queryset update/delete/bulk operations. Each row carries a canonical digest of
-its immutable fields, which services revalidate before reversal, revision,
-evaluation, or metrics use. A separate unique subject-head row is locked and
-updated transactionally, so concurrent first labels cannot create two current
-dispositions. The named `maintenance_objects` manager is only for database
-administration and migrations; ordinary application code must never use it.
-Django's deletion collector may use its unguarded base manager to apply the
-subject/author `SET_NULL` lifecycle. Database flush/migration tooling may bypass
-these application guards deliberately.
+Feedback, proposal, and evaluation rows reject instance updates/deletes and
+default-manager queryset update/delete/bulk operations. Each carries a
+canonical digest of its immutable fields, which services revalidate before
+reversal, revision, evaluation, or metrics use. Evaluation deletion is exposed
+only through the clamped retention service. A separate unique subject-head row
+rejects ordinary update/delete and advances only through a transactional,
+subject-matching compare-and-swap, so concurrent writers cannot fork or repoint
+the current disposition. The named `maintenance_objects` managers on feedback
+and proposal are only for database administration and migrations; ordinary
+application code must never use them. Django's deletion collector may use an
+unguarded base manager to apply the subject/author `SET_NULL` lifecycle.
+Database flush/migration tooling may bypass these application guards
+deliberately. All learning models are denied to generic AI/model-query tools.
 
 `MojoSecPolicyProposal` is a separate immutable revision chain. Its only states
 are `draft`, `shadow`, and `rejected`; there is intentionally no active state.
@@ -339,8 +342,11 @@ RuleSet assistant tools are unchanged.
 Replay and shadow are explicit offline operations. The operator must supply a
 non-empty, duplicate-free set of at most 100 retained receipt IDs. IDs are
 evaluated in canonical ascending order using only their stored
-`replay_features_v1`; no Event properties, network calls, LLMs, jobs, handlers,
-incidents, alerts, or bans are involved. Shadow additionally requires a
+`replay_features_v1`. Before use, the evaluator recomputes the canonical digest
+of the stored event projection and requires it to match the immutable receipt
+payload digest; altered or incomplete evidence fails closed. No Event
+properties, network calls, LLMs, jobs, handlers, incidents, alerts, or bans are
+involved. Shadow additionally requires a
 proposal revision already labelled `shadow`; only an unsuperseded leaf may be
 evaluated, and a rejected leaf closes its lineage. Host-reported severity is
 not an evaluator input: effective kind/count and severity/level are validated
@@ -353,12 +359,16 @@ decisions or copied evidence.
 90, clamped to 30–3,650 days); human feedback and proposal revisions remain
 audit history.
 
-Detector metrics scan at most 1,000 published-receipt and current-feedback rows
-from an indexed time window, cap each stable installation (`api_key_id` plus
-enrolled `sensor_id`) to at most 100 and one tenth of the requested sample, and
-return installation strata without a tenant/group stamp. They report
-receipt/occurrence and disposition counts only; they make no fleet coverage,
-liveness, or sensor-health claim.
+Detector metrics inspect at most four times the requested sample, capped at
+4,000 indexed, newest candidates in each of the published-receipt and
+current-feedback planes. They then return at most the requested 1,000 rows per
+plane and cap each stable installation (`api_key_id` plus enrolled `sensor_id`)
+to at most 100 and one tenth of the requested sample. A noisy installation can
+therefore make a bounded run return fewer rows; this is a detector sample, not
+a complete fleet census. Receipt candidates are canonically digest-verified.
+Installation strata have no tenant/group stamp and report receipt/occurrence
+and disposition counts only; they make no fleet coverage, liveness, or
+sensor-health claim.
 
 The receiver should return one result per event using the strict acknowledgement
 schema (a `reason` string is optional):
