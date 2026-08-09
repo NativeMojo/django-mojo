@@ -216,10 +216,12 @@ protected `mojosec_ingest` permission and a server-owned enrollment profile:
 {
   "permissions": {"mojosec_ingest": true},
   "metadata": {
-    "mojosec": {
-      "enabled": true,
-      "sensor_id": "prod-web-i-0123456789abcdef0",
-      "allowed_versions": [1]
+    "protected": {
+      "mojosec": {
+        "enabled": true,
+        "sensor_id": "prod-web-i-0123456789abcdef0",
+        "allowed_versions": [1]
+      }
     }
   }
 }
@@ -229,30 +231,42 @@ protected `mojosec_ingest` permission and a server-owned enrollment profile:
 administrator cannot mint it; the platform provisioning path must create the
 credential. The receiver requires the authenticated key's enrolled sensor ID
 and version to match every batch. A key is not an enrollment wildcard.
+Generic REST callers, including a confined `manage_group` administrator, cannot
+change the protected profile. The API key's `group` is only the authentication
+and administration container: neither the receipt nor the Event is stamped as
+customer-tenant data. Infrastructure identity remains explicit through the
+receipt's API-key/sensor fields and Event `metadata.mojosec.sensor_id` plus its
+non-secret installation-key ID.
+Use the in-place API-key rotation path for credential rotation so the key row,
+receipt identity, and host history remain stable while the bearer secret changes.
 
 The receiver validates compressed and decompressed sizes, strict UTF-8/JSON,
 duplicate fields, the shared protocol schema, and every event before writing.
-It persists a unique receipt for `(sensor_id, event_id)` and the canonical
-payload digest. Identical replay returns `duplicate`; reusing an ID for changed
+It persists a unique receipt for `(authenticated API key, event_id)` and the
+canonical payload digest. Identical replay returns `duplicate`; reusing an ID for changed
 evidence returns `rejected`. A receipt is acknowledged `accepted` only after
-its bounded Event projection has completed central publication. Incomplete
-publication remains `pending` and returns `retry`.
+its bounded Event projection has completed central publication and any required
+exact-RuleSet handler has a durably queued outbox job. Incomplete publication
+or queueing returns `retry`.
 
-`MojoSecReceipt` is the internal durable outbox/audit model, not a browser CRUD
-resource; no receipt URL is registered. Its unique key is
-`(sensor_id, wire_event_id)`. It retains the API key and projected Event links,
+`MojoSecReceipt` is an internal durable outbox/audit model, not writable browser
+CRUD state. Its unique key is
+`(api_key, wire_event_id)`. It retains the API key and projected Event links,
 payload digest, protocol/policy provenance, publication state and attempts, a
-bounded last error, and the replay features needed to distinguish an identical
-retry from conflicting evidence. The default `RestMeta` graph omits
+bounded last error, selected RuleSet/Incident, handler outbox state, and the
+replay features needed to distinguish an identical retry from conflicting
+evidence. The default `RestMeta` graph omits
 `payload_digest`, `last_error`, and `replay_features`; those fields are marked
-sensitive, the whole model is denied to generic AI queries, deletion is
-disabled at the model-REST layer, and read/write permissions are
-`view_security` / `manage_security` plus the `security` category.
+sensitive, the whole model is denied to generic AI queries, and generic model
+REST create/update/delete are disabled.
 
 Wire attributes remain in the receipt's `replay_features`, which is denied to
 generic AI/model query tools. The central Event contains a fixed title/detail
-and validated scalar provenance only. A source IP is promoted only for an
-explicit allowlist of source-bearing detector kinds. Sensor summaries, paths,
+and validated scalar provenance only. A source IP is promoted only for a
+server-owned per-kind registry after a minimum aggregate threshold. Successful
+login and web-error evidence never promotes a source IP. Host severity is
+preserved only as advisory evidence; the registry selects the effective level
+and category. Sensor summaries, paths,
 messages, commands, and other raw strings do not enter LLM-visible Event
 metadata.
 
@@ -263,9 +277,17 @@ level threshold, and the default LLM fallback are disabled on this trusted
 publication mode. This is why the sensor's `block_ip` recommendation remains
 advisory: action exists only when an operator installs an exact central rule.
 
+`Event.publish(..., dispatch_handlers=False)` records the selected RuleSet and
+Incident on the receipt first. After that transaction commits, a dedicated
+receipt dispatcher is queued with a stable receipt key. It invokes
+`RuleSet.run_handler(..., strict=True)` with stable child idempotency keys, then
+marks the receipt dispatched. Request replay and the five-minute
+`replay_mojosec_handler_outbox` cron recover pending/failed work. An accepted
+acknowledgement is never sent while required dispatch lacks a durable queue row.
+
 Published receipt rows are retained for `MOJOSEC_RECEIPT_RETENTION_DAYS`
-(default 45, minimum 7) and pruned daily. Pending receipts are never removed by
-that retention job.
+(default 45, minimum 7) and pruned daily. Pending publication and incomplete
+handler-outbox receipts are never removed by that retention job.
 
 The receiver should return one result per event using the strict acknowledgement
 schema (a `reason` string is optional):

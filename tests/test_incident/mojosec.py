@@ -1,4 +1,5 @@
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import gzip
 import json
 import os
@@ -92,9 +93,12 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
         "the batch should create one bounded central Event projection per wire event")
 
     probe = Event.objects.get(metadata__mojosec__event_id="e" * 64)
+    login = Event.objects.get(metadata__mojosec__event_id="d" * 64)
     receipt = MojoSecReceipt.objects.get(wire_event_id="e" * 64)
     th.assert_eq(probe.source_ip, "198.51.100.7",
                  "an eligible detector kind should promote its validated source IP")
+    th.assert_true(login.source_ip is None,
+                   "a successful login source can never be promoted for IP action")
     th.assert_true("attributes" not in probe.metadata["mojosec"],
                    "untrusted sensor attributes must stay out of LLM-visible Event metadata")
     th.assert_true("sensor_policy_revision" not in probe.metadata["mojosec"],
@@ -361,6 +365,39 @@ def test_mojosec_idempotency_is_scoped_to_installation_key(opts):
                  "another authenticated installation may use the same wire id")
     th.assert_eq(MojoSecReceipt.objects.filter(wire_event_id="3" * 64).count(), 2,
                  "deduplication identity must include the authenticated API key")
+
+
+@th.django_unit_test()
+def test_mojosec_concurrent_duplicate_creates_one_receipt(opts):
+    from django.db import close_old_connections
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models import MojoSecReceipt
+    from mojo.apps.incident.services import mojosec
+
+    key_id = ApiKey.objects.get(name="mojosec_receiver_test_authorized").pk
+    batch = _golden_batch()
+    sensor_event = batch["events"][0]
+    sensor_event["id"] = "5" * 64
+    digest = mojosec._payload_digest(sensor_event)
+
+    def create(unused):
+        close_old_connections()
+        try:
+            receipt, created = mojosec._create_receipt(
+                ApiKey.objects.get(pk=key_id), batch, sensor_event, digest)
+            return receipt.pk, created
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(create, range(2)))
+    th.assert_eq(len(set(row[0] for row in results)), 1,
+                 "concurrent copies must converge on one durable receipt")
+    th.assert_eq(sorted(row[1] for row in results), [False, True],
+                 "exactly one concurrent caller may create the installation event")
+    th.assert_eq(MojoSecReceipt.objects.filter(
+        api_key_id=key_id, wire_event_id="5" * 64).count(), 1,
+        "the database uniqueness boundary must enforce concurrent idempotency")
 
 
 @th.django_unit_test()

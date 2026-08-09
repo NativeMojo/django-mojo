@@ -287,6 +287,11 @@ def _queue_handler(receipt):
     if receipt.handler_state in (
             MojoSecReceipt.HANDLER_NONE, MojoSecReceipt.HANDLER_DISPATCHED):
         return True
+    if receipt.handler_state == MojoSecReceipt.HANDLER_FAILED and receipt.handler_job_id:
+        try:
+            return _dispatch_receipt_handlers(receipt.pk)
+        except Exception:
+            return False
     try:
         job_id = jobs.publish(
             "mojo.apps.incident.services.mojosec.dispatch_mojosec_receipt",
@@ -394,6 +399,8 @@ def prune_receipts(job=None, now=None):
     cutoff = (now or dates.utcnow()) - dates.timedelta(days=retention_days)
     deleted, _ = MojoSecReceipt.objects.filter(
         publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
+        handler_state__in=(
+            MojoSecReceipt.HANDLER_NONE, MojoSecReceipt.HANDLER_DISPATCHED),
         published_at__lt=cutoff,
     ).delete()
     if job is not None and hasattr(job, "add_log"):

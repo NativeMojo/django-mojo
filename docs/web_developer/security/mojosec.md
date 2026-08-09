@@ -15,7 +15,7 @@ Content-Encoding: gzip
 ```
 
 The key must carry `mojosec_ingest`, belong to an effectively active group, and
-have a protected server-side `metadata.mojosec` profile that is enabled, names
+have a protected server-side `metadata.protected.mojosec` profile that is enabled, names
 the same `sensor_id` as the batch, and allows the submitted protocol version.
 JWTs, ordinary or unenrolled API keys, keys under an inactive group chain, and
 sensor-ID/version mismatches receive `403`.
@@ -54,6 +54,11 @@ Event IDs are unique lowercase SHA-256 digests within a batch. A batch contains
 1–500 events and both its compressed wire body and decompressed JSON are capped
 at 512 KiB.
 
+The receiver streams at most 512 KiB plus one byte and never exposes this body
+to generic request parsing or request/DB logging. `Content-Length`, when sent,
+must match the bytes read. Broad request logging records only a fixed
+`mojosec_batch` sensitive-body marker.
+
 The body may be plain JSON or exactly one gzip member. Concatenated/trailing
 gzip data, duplicate JSON keys, non-finite numbers, invalid UTF-8, unknown
 schema fields, and unsupported content encodings are rejected. The
@@ -87,7 +92,15 @@ Missing result IDs, malformed acknowledgements, and non-2xx responses are also
 retryable. The receiver derives central categories and severity; a host
 `recommendation` never performs an action directly. Only an exact central
 RuleSet such as `mojosec.web.probe` may promote the Event to an Incident and
-run a handler.
+run a handler. Host severity cannot raise the server-owned level. Source IP is
+eligible only for centrally registered attack kinds and only after their
+central aggregate threshold; successful login and web-error reports never
+promote an address for action.
+
+An `accepted` result also means any required RuleSet handler dispatch has a
+durable receipt outbox job. Queue failure returns `retry`. Request replay and a
+five-minute central replayer recover pending/failed dispatch without duplicate
+handler jobs.
 
 ## HTTP errors
 
