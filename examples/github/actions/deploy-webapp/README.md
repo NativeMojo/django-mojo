@@ -26,6 +26,6 @@ its checkout, dependency install, tests, and build. Using the full Git commit
 SHA as `version` makes reruns idempotent: the same manifest is reused, while a
 different artifact under the same SHA is rejected.
 
-Automatic deployment must be enabled for the WebApp (the default). An explicit
-manual hold causes the action to fail after verification because CI cannot
-truthfully report that release as deployed.
+Verified completion always starts deployment. There is no separate promotion
+approval or manual hold: the protected GitHub branch is the human control
+plane. To roll back intentionally, rerun the workflow for the older commit.

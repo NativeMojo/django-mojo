@@ -19,8 +19,7 @@ def setup_webapp_deploy(opts):
     opts.domain = make_domain(group=opts.group)
     opts.cert = make_certificate(opts.domain)
     opts.vhost = make_vhost(opts.domain, opts.cert, label="deploy")
-    opts.webapp = make_webapp(
-        opts.group, slug="deployapp", vhost=opts.vhost, auto_promote=True)
+    opts.webapp = make_webapp(opts.group, slug="deployapp", vhost=opts.vhost)
     opts.v1 = make_release(opts.webapp, "a" * 40, status="uploaded")
     opts.v2 = make_release(opts.webapp, "b" * 40, status="uploaded")
 
@@ -200,7 +199,7 @@ def test_deployment_status_key_scope(opts):
             f"/api/edge/release/deployment/{deployment.pk}")
         assert response.status_code == 200, response.body
 
-        other = make_webapp(opts.group, slug="other-status", auto_promote=True)
+        other = make_webapp(opts.group, slug="other-status")
         other_release = make_release(other, "c" * 40, status="uploaded")
         other_deployment = _promote_without_publish(other, other_release)
         response = opts.client.get(

@@ -15,8 +15,8 @@ Backend reference:
 
 Developers do not receive deploy keys. A merge or push to the configured branch
 starts the repository's workflow; the WebApp-linked service key can release
-only that one WebApp. Automatic deployment is the default. `auto_promote=False`
-is reserved for an explicit manual-hold exception.
+only that one WebApp. Verified completion always starts deployment; there is no
+separate promotion approval or manual hold.
 
 Use the canonical copyable action at
 [`examples/github/actions/deploy-webapp`](../../../examples/github/actions/deploy-webapp).
@@ -113,22 +113,17 @@ stays `pending` and is not promotable.
 | 404 on `webapp` | The key is not this site's key, or the site has no key linked. Both look identical on purpose. |
 | Deployment `rolled_back` | At least one active node failed; the prior release was restored. Surface the runner diagnostics and fail CI. |
 
-## Manual promotion and rollback (exceptional admin flow)
+## Rollback through GitHub
 
-```
-POST /api/edge/webapp/promote  {"webapp": 42, "release": 7}
-```
+Rerun the workflow for the older commit. Its identical version and manifest
+are reused, then normal verified completion deploys it through the same fleet
+coordinator. This keeps GitHub as the only human deployment control plane.
 
-Requires `manage_webapp`. It uses the same fleet coordinator as automatic
-deployment. **Rollback is the same call** with an older release id.
-
-Rolling back to something older is safe too. Nodes retain a bounded number of
-releases, and a target that has aged out is simply **re-fetched from S3** on
-the next converge — you never need to re-upload a build, and you never need to
-know whether a given node still has one. Recent releases stay a pure symlink
-flip; an older one costs a download before it goes live. The one thing that
-does end a rollback is the bucket: a lifecycle rule that expires old release
-objects expires your ability to roll back to them.
+Nodes retain a bounded number of releases, and a target that has aged out is
+simply **re-fetched from S3** on the next converge. Recent releases stay a pure
+symlink flip; an older one costs a download before it goes live. The one thing
+that ends rollback is the bucket: a lifecycle rule that expires old release
+objects expires the ability to deploy that commit again.
 
 Read history from `GET /api/edge/release?webapp=42`. Statuses are `pending`,
 `uploaded`, `live`, `superseded`.

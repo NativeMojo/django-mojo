@@ -12,7 +12,7 @@ deployment coordinator.
 3. CI:  POST edge/release/complete {release}
         -> HeadObject per entry, compare checksum and size
         -> status=uploaded
-4. WebAppDeployment                 automatic by default; manual hold opt-out
+4. WebAppDeployment                 always starts after verified completion
 5. CI polls deployment status       live only after active-runner proof
 ```
 
@@ -233,12 +233,9 @@ def promote(web_app, release, user=None):
     return deployment
 
 
-def maybe_auto_promote(release):
-    """Deploy on verification unless this site explicitly uses manual hold."""
-    web_app = release.webapp
-    if not web_app.auto_promote:
-        return None
-    return promote(web_app, release)
+def deploy_verified(release):
+    """Deploy every verified release; CI completion is the control plane."""
+    return promote(release.webapp, release)
 
 
 def desired_webapps(vhosts):

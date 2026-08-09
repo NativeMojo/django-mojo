@@ -1,11 +1,8 @@
 """
-Promote, rollback, and the permission split that is the point of the item.
+Verified release deployment, automated rollback, and key isolation.
 
-`release_webapp` is what CI holds and reaches `uploaded`. `manage_webapp` is
-what a human holds and reaches `live`. With CI writing a `current` pointer in
-S3, the credential a web developer's pipeline holds could make any build live —
-that is the problem this separation exists to remove, so it is asserted on the
-wire rather than described in a comment.
+GitHub's WebApp-linked key completes verification and that completion always
+starts deployment. There is no separate human promotion endpoint.
 
 The revocation invariant has its own test because it is an ABSENCE of coupling:
 disabling a site's key must stop future releases and must not change what any
@@ -105,65 +102,27 @@ def test_cross_site_promote_refused(opts):
     assert err is not None, "a release was promoted onto a different site"
 
 
-@th.django_unit_test("auto_promote=False means a verified upload does NOT go live")
-def test_auto_promote_off(opts):
+@th.django_unit_test("verified completion always starts deployment")
+def test_verified_release_deploys(opts):
     from mojo.apps.edge.services import releases
 
-    assert not opts.webapp.auto_promote, "the fixture should default to off"
-    release = make_release(opts.webapp, "manual1", status="uploaded")
-    promoted = releases.maybe_auto_promote(release)
+    release = make_release(opts.webapp, "github1", status="uploaded")
+    deployment = releases.deploy_verified(release)
 
-    assert promoted is None, "a release auto-promoted on a site that opted out"
     opts.webapp.refresh_from_db()
-    assert opts.webapp.current_release_id != release.pk, \
-        "the release went live without an explicit promote"
+    assert deployment.release_id == release.pk, "completion deployed another release"
+    assert opts.webapp.current_release_id == release.pk, \
+        "verified completion did not start deployment"
 
 
-@th.django_unit_test("auto_promote=True promotes on verification")
-def test_auto_promote_on(opts):
-    from mojo.apps.edge.services import releases
-
-    site = make_webapp(opts.group, slug="autosite", auto_promote=True)
-    release = make_release(site, "auto1", status="uploaded")
-    releases.maybe_auto_promote(release)
-
-    site.refresh_from_db()
-    assert site.current_release_id == release.pk, \
-        "a site that opted into auto_promote did not go live"
-
-
-@th.django_unit_test("manage_dns alone cannot promote")
-def test_promote_needs_manage_webapp(opts):
-    """The whole point of the item: uploading and promoting are different
-    permissions. A web-dev-scoped credential must not reach `live`."""
+@th.django_unit_test("there is no out-of-band human promotion endpoint")
+def test_no_manual_promote_endpoint(opts):
     login(opts, opts.dnsonly_email, opts.dnsonly_pw)
     resp = opts.client.post("/api/edge/webapp/promote", json=dict(
         webapp=opts.webapp.pk, release=opts.v1.pk))
-    assert resp.status_code in (401, 403), (
-        "a manage_dns holder promoted a release without manage_webapp "
-        f"(status {resp.status_code})")
-
-
-@th.django_unit_test("a site's CI key cannot promote")
-def test_ci_key_cannot_promote(opts):
-    """A permission test, not a policy comment — the workspec asked for exactly
-    this. The key carries `release_webapp` and nothing else."""
-    from mojo.apps.account.models import ApiKey
-
-    key, token = ApiKey.create_for_group(
-        opts.group, "webapp:citest", permissions={"release_webapp": True})
-    opts.webapp.api_key = key
-    opts.webapp.save()
-
-    _use_apikey(opts, token)
-    try:
-        resp = opts.client.post("/api/edge/webapp/promote", json=dict(
-            webapp=opts.webapp.pk, release=opts.v1.pk))
-        assert resp.status_code in (401, 403), (
-            "a site's CI credential promoted a release — upload and promote "
-            f"are supposed to be different permissions (status {resp.status_code})")
-    finally:
-        _clear_apikey(opts)
+    assert resp.status_code == 404, (
+        "manual promotion endpoint still exists; deployment must start only "
+        f"from release completion (status {resp.status_code})")
 
 
 @th.django_unit_test("a key cannot register a release for ANOTHER site")

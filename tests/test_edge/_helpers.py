@@ -164,15 +164,14 @@ def declare_release_buckets(buckets=None):
                 group=None)
 
 
-def make_webapp(group, slug=None, vhost=None, bucket=None, auto_promote=False):
+def make_webapp(group, slug=None, vhost=None, bucket=None):
     from mojo.apps.edge.models import WebApp
 
     if slug is None:
         slug = f"app{_uuid.uuid4().hex[:8]}"
     web_app = WebApp(
         group=group, slug=slug, vhost=vhost,
-        bucket=bucket or RELEASE_BUCKET, prefix="pending",
-        auto_promote=auto_promote)
+        bucket=bucket or RELEASE_BUCKET, prefix="pending")
     web_app.save()
     # `storage_prefix` needs a pk, so the derived value lands on the second
     # save — the same two-step the REST create path takes via on_rest_created.

@@ -59,11 +59,6 @@ class WebApp(models.Model, MojoModel):
         help_text="The CI credential allowed to register releases for this "
                   "site. One key per site, enforced by the schema.")
 
-    auto_promote = models.BooleanField(
-        default=True,
-        help_text="Deploy a verified upload automatically. Disable only for "
-                  "an explicit manual-hold workflow.")
-
     current_release = models.ForeignKey(
         "edge.WebAppRelease",
         related_name="+",
@@ -110,12 +105,11 @@ class WebApp(models.Model, MojoModel):
         ]
         GRAPHS = {
             "basic": {
-                "fields": ["id", "slug", "auto_promote"],
+                "fields": ["id", "slug"],
             },
             "default": {
                 "fields": [
                     "id", "created", "modified", "slug", "bucket", "prefix",
-                    "auto_promote",
                 ],
                 "graphs": {
                     "group": "basic",
@@ -124,7 +118,7 @@ class WebApp(models.Model, MojoModel):
                 },
             },
             "list": {
-                "fields": ["id", "created", "slug", "auto_promote"],
+                "fields": ["id", "created", "slug"],
                 "graphs": {"current_release": "basic"},
             },
         }

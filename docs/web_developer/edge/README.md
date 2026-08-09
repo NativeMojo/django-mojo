@@ -5,7 +5,7 @@ the domain and issues the certificate.
 
 Backend reference: [django_developer/edge](../../django_developer/edge/README.md).
 
-Releasing site builds (register, promote, roll back):
+Deploying site builds from GitHub (register, verify, converge, roll back):
 [releases.md](releases.md).
 
 Deploying API code to the fleet (webhook + manual trigger):

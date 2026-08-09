@@ -3,7 +3,7 @@
 _Hygiene: max 5 bullets per section. Outcomes over narrative. Archive when resolved._
 
 ## Current Focus
-- **GitHub Actions is the canonical WebApp deployment path.** Merge/push the configured branch; one WebApp-linked service key lives only in the repository secret named exactly `MOJO_DEPLOY_KEY` (developers hold no deploy credential). The Git SHA is the immutable version; verified completion deploys automatically, immediately converges the active fleet, waits for node proof, and safely restores the prior release on partial failure. Manual hold/promotion is an explicit exception. (Maestro #1796/#1798/#1797)
+- **GitHub Actions is the only WebApp deployment control plane.** Merge/push the configured branch; one WebApp-linked service key lives only in the repository secret named exactly `MOJO_DEPLOY_KEY` (developers hold no deploy credential). The Git SHA is the immutable version; verified completion always deploys, immediately converges the active fleet, waits for node proof, and safely restores the prior release on partial failure. Intentional rollback means rerunning the workflow for an older commit—never a separate human promotion or manual hold. (Maestro #1796/#1798/#1797)
 
 ## Key Decisions
 _Non-obvious choices made — why, not just what._
