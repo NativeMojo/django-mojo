@@ -31,6 +31,7 @@ ACK_STATUSES = ("accepted", "duplicate", "rejected", "retry")
 _ID_RE = re.compile(r"^[a-f0-9]{64}$")
 _KIND_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,95}$")
 _SENSOR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_ATTRIBUTE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class ProtocolError(ValueError):
@@ -39,6 +40,11 @@ class ProtocolError(ValueError):
 
 def utc_now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def normalize_timestamp(value):
+    parsed = _require_timestamp(value, "timestamp")
+    return parsed.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def canonical_json(value):
@@ -82,8 +88,8 @@ def _validate_attributes(value, depth=0):
         if len(value) > 64:
             raise ProtocolError("event attributes have too many keys")
         for key, child in value.items():
-            if not isinstance(key, str) or not key or len(key) > 64:
-                raise ProtocolError("event attribute keys must be 1-64 character strings")
+            if not isinstance(key, str) or not _ATTRIBUTE_KEY_RE.fullmatch(key):
+                raise ProtocolError("event attribute keys must use lowercase snake_case")
             _validate_attributes(child, depth + 1)
         return
     if isinstance(value, list):
@@ -178,7 +184,9 @@ def validate_batch(value, encoded_size=None):
         optional=(),
         label="batch",
     )
-    if value["schema"] != BATCH_SCHEMA or value["version"] != PROTOCOL_VERSION:
+    if (value["schema"] != BATCH_SCHEMA or
+            not isinstance(value["version"], int) or isinstance(value["version"], bool) or
+            value["version"] != PROTOCOL_VERSION):
         raise ProtocolError("unsupported MojoSec batch schema or version")
     if not isinstance(value["sensor_id"], str) or not _SENSOR_RE.fullmatch(value["sensor_id"]):
         raise ProtocolError("sensor_id is invalid")
@@ -205,14 +213,20 @@ def validate_batch(value, encoded_size=None):
 
 def validate_ack(value, expected_ids=None):
     _require_keys(value, required=("schema", "version", "results"), optional=(), label="ack")
-    if value["schema"] != ACK_SCHEMA or value["version"] != PROTOCOL_VERSION:
+    if (value["schema"] != ACK_SCHEMA or
+            not isinstance(value["version"], int) or isinstance(value["version"], bool) or
+            value["version"] != PROTOCOL_VERSION):
         raise ProtocolError("unsupported MojoSec acknowledgement schema or version")
     if not isinstance(value["results"], list):
         raise ProtocolError("ack results must be a list")
+    if len(value["results"]) > MAX_BATCH_EVENTS:
+        raise ProtocolError("ack contains too many results")
     expected = set(expected_ids or ())
     seen = set()
     for result in value["results"]:
         _require_keys(result, required=("id", "status"), optional=("reason",), label="ack result")
+        if not isinstance(result["id"], str) or not _ID_RE.fullmatch(result["id"]):
+            raise ProtocolError("ack result id must be a lowercase SHA-256 digest")
         if result["id"] in seen:
             raise ProtocolError("ack contains duplicate event ids")
         if expected and result["id"] not in expected:

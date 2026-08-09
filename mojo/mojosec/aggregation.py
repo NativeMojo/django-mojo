@@ -11,12 +11,13 @@ def merge(existing, observation, window_seconds):
             "last_seen": observation["observed_at"],
             "flush_after": window_seconds,
         }
-    existing["observation"] = observation
+    if observation["observed_at"] >= existing["last_seen"]:
+        existing["observation"] = observation
     existing["count"] += 1
-    existing["last_seen"] = observation["observed_at"]
+    existing["first_seen"] = min(existing["first_seen"], observation["observed_at"])
+    existing["last_seen"] = max(existing["last_seen"], observation["observed_at"])
     return existing
 
 
 def should_flush(aggregate, flush_count, due=False):
     return due or aggregate["count"] >= flush_count
-

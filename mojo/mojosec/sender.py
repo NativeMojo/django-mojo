@@ -14,6 +14,11 @@ MAX_CREDENTIAL_BYTES = 16 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
 def read_credential(path):
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
@@ -43,10 +48,15 @@ def read_credential(path):
 
 
 class HttpTransport:
+    def __init__(self):
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoRedirect()
+        )
+
     def post(self, endpoint, body, headers, timeout):
         request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
         try:
-            response = urllib.request.urlopen(request, timeout=timeout)
+            response = self.opener.open(request, timeout=timeout)
             with response:
                 payload = response.read(MAX_RESPONSE_BYTES + 1)
                 if len(payload) > MAX_RESPONSE_BYTES:

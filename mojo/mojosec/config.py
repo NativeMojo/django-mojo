@@ -116,7 +116,8 @@ def _absolute(value, label):
 
 def validate_config(value):
     _reject_unknown(value, _TOP_KEYS, "config")
-    if value.get("version") != CONFIG_VERSION:
+    if (not isinstance(value.get("version"), int) or isinstance(value.get("version"), bool) or
+            value.get("version") != CONFIG_VERSION):
         raise ConfigError(f"config version must be {CONFIG_VERSION}")
     sensor_id = value.get("sensor_id")
     if not isinstance(sensor_id, str) or not _SENSOR_RE.fullmatch(sensor_id):
@@ -131,6 +132,8 @@ def validate_config(value):
         raise ConfigError("endpoint must be an https URL without credentials or a fragment")
     if parsed_endpoint.path.rstrip("/") != "/api/incident/mojosec/batch":
         raise ConfigError("endpoint must target /api/incident/mojosec/batch")
+    if not isinstance(value["policy_revision"], str) or len(value["policy_revision"]) > 128:
+        raise ConfigError("policy_revision must be a string up to 128 characters")
     for field in ("state_dir", "status_path", "credential_path"):
         _absolute(value[field], field)
     if value["status_path"].startswith(value["state_dir"].rstrip("/") + "/"):
@@ -159,6 +162,8 @@ def validate_config(value):
     fim = collectors["fim"]
     if not isinstance(fim["targets"], list) or len(fim["targets"]) > 128:
         raise ConfigError("collectors.fim.targets must be a list with at most 128 entries")
+    if fim["enabled"] and not fim["targets"]:
+        raise ConfigError("enabled FIM requires at least one explicit target")
     seen = set()
     for target in fim["targets"]:
         _reject_unknown(target, _TARGET_KEYS, "collectors.fim.targets[]")

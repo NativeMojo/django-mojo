@@ -4,7 +4,7 @@ import hashlib
 import ipaddress
 import json
 
-from .protocol import SEVERITIES, utc_now
+from .protocol import SEVERITIES, normalize_timestamp, utc_now
 
 
 def bounded_text(value, limit):
@@ -48,6 +48,5 @@ def observation(kind, severity, summary, attributes=None, fingerprint_values=Non
         "fingerprint": fingerprint(kind, values),
         "aggregate": bool(aggregate),
         "recommendation": recommendation,
-        "observed_at": observed_at or utc_now(),
+        "observed_at": normalize_timestamp(observed_at) if observed_at else utc_now(),
     }
-
