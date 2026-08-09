@@ -42,14 +42,17 @@ Requires `manage_group`, `manage_groups`, or the combined `groups` permission (g
 | `permissions` | No | JSON **object** of granted permissions (default: empty). Must be a real object — any other shape, including a JSON-encoded string, is rejected with `400` |
 | `limits` | No | Per-endpoint rate limit overrides |
 
-Two federation permissions are protected from ordinary group administrators:
-`geoip_sync` and `dnsman_acme_federation`. On the normal member assignment
-path they require the corresponding global `sys.geoip_sync` or
-`sys.dnsman_acme_federation` grant; a platform `manage_users` / `manage_groups`
-administrator can also provision them through the existing global key-admin
-override. Do not present either as a routine tenant permission toggle. The ACME
-hub additionally accepts only an active project's ApiKey carrying the latter —
-JWT users and group tokens cannot call it. See [dnsman](../dnsman/README.md#acme-delegation-hub-optional).
+Four machine permissions are protected from ordinary group administrators:
+`geoip_sync`, `dnsman_acme_federation`, `edge_node`, and `mojosec_ingest`. On
+the normal member assignment path each requires its corresponding global
+`sys.*` grant; a platform `manage_users` / `manage_groups` administrator can
+also provision them through the global key-admin override. Do not present them
+as routine tenant permission toggles. They authorize fleet-wide federation,
+private edge material, or host-security ingestion rather than tenant CRUD. The
+ACME hub additionally accepts only an active project's ApiKey carrying
+`dnsman_acme_federation` — JWT users and group tokens cannot call it. See
+[dnsman](../dnsman/README.md#acme-delegation-hub-optional) and
+[MojoSec ingestion](../security/mojosec.md).
 
 **Response:**
 

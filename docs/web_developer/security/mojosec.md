@@ -14,15 +14,51 @@ Content-Type: application/json
 Content-Encoding: gzip
 ```
 
-The key must carry `mojosec_ingest` and its protected server-side
-`metadata.mojosec` profile must be enabled, name the same `sensor_id` as the
-batch, and allow the submitted protocol version. Ordinary JWTs, group keys,
-unenrolled keys, and sensor-ID mismatches receive `403`.
+The key must carry `mojosec_ingest`, belong to an effectively active group, and
+have a protected server-side `metadata.mojosec` profile that is enabled, names
+the same `sensor_id` as the batch, and allows the submitted protocol version.
+JWTs, ordinary or unenrolled API keys, keys under an inactive group chain, and
+sensor-ID/version mismatches receive `403`.
 
-The body is the strict `mojosec.batch` v1 contract. It may be plain JSON or one
-gzip member. Concatenated/trailing gzip data, duplicate JSON keys, unknown
-schema fields, and oversized input are rejected. The authoritative example is
-the checked-in `tests/test_mojosec/golden/batch_v1.json` fixture.
+## Request
+
+The body is the strict `mojosec.batch` v1 contract:
+
+```json
+{
+  "schema": "mojosec.batch",
+  "version": 1,
+  "sensor_id": "web-prod-i-0123456789",
+  "sent_at": "2026-08-08T12:00:10Z",
+  "policy_revision": "baseline-1",
+  "events": [{
+    "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kind": "auth.ssh_login",
+    "observed_at": "2026-08-08T12:00:00Z",
+    "first_seen": "2026-08-08T12:00:00Z",
+    "last_seen": "2026-08-08T12:00:00Z",
+    "severity": "high",
+    "summary": "SSH login accepted",
+    "count": 1,
+    "attributes": {"source_ip": "192.0.2.20", "user": "deploy"},
+    "recommendation": "review"
+  }]
+}
+```
+
+Every field shown is required and unknown fields are rejected. Timestamps must
+be timezone-aware ISO-8601 values with
+`first_seen <= last_seen == observed_at`. Severity is `info`, `warning`,
+`high`, or `critical`; recommendation is `none`, `review`, or `block_ip`.
+Event IDs are unique lowercase SHA-256 digests within a batch. A batch contains
+1–500 events and both its compressed wire body and decompressed JSON are capped
+at 512 KiB.
+
+The body may be plain JSON or exactly one gzip member. Concatenated/trailing
+gzip data, duplicate JSON keys, non-finite numbers, invalid UTF-8, unknown
+schema fields, and unsupported content encodings are rejected. The
+authoritative compatibility example is the checked-in
+`tests/test_mojosec/golden/batch_v1.json` fixture.
 
 ## Acknowledgements
 
@@ -52,3 +88,17 @@ retryable. The receiver derives central categories and severity; a host
 `recommendation` never performs an action directly. Only an exact central
 RuleSet such as `mojosec.web.probe` may promote the Event to an Incident and
 run a handler.
+
+## HTTP errors
+
+Errors use a small unwrapped JSON object: `{"error": "reason"}`.
+
+| Status | Meaning |
+|---|---|
+| `400` | Empty body, invalid content length, malformed JSON/gzip, or invalid batch schema/event. |
+| `403` | Wrong auth type, missing protected permission, inactive group chain, or enrollment mismatch. |
+| `413` | Compressed or decompressed body exceeds 512 KiB. |
+| `415` | Content type is not `application/json`, or content encoding is not gzip/identity. |
+
+Valid batches always return `200`; persistence or central-publication failures
+are represented by per-event `retry` results rather than a batch-level 5xx.

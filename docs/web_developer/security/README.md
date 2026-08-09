@@ -411,6 +411,15 @@ These are the built-in detection sources. Your app can add custom events via the
 | System health | `system:health:{type}` | 5-10 | Infrastructure issues |
 | AWS version drift | `system:health:aws_versions` | 4-10 | Managed service on a major version losing support |
 
+### Legacy OSSEC receiver authentication
+
+`POST /api/incident/ossec/alert` and
+`POST /api/incident/ossec/alert/batch` are legacy machine receivers, not
+browser/admin APIs. They are enabled only when the deployment sets a non-empty
+`OSSEC_SECRET`; every request must send that exact value in
+`X-OSSEC-SECRET`. An unset secret, missing header, or mismatch returns
+`403 {"error": "unauthorized"}`. The comparison is constant-time.
+
 ## Configuring RuleSets
 
 RuleSets are the core of the rule engine. Each RuleSet watches a specific event category, groups related events into incidents, and fires a handler when enough events accumulate. You create and manage them via the REST API — no code deployment required.

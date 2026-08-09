@@ -44,7 +44,15 @@ Permissions are stored as a plain JSON dict on the key:
 
 In `GroupMember.has_permission`, a permission like `sys.manage_users` strips the prefix and checks `user.has_permission("manage_users")` — escalating to the user's system-level permissions. This is how endpoints enforce "only a real system-level user can do this, even within a group context." API keys have no backing user, so `sys.*` is unconditionally denied.
 
-**Framework protection floor.** `APIKEY_PERMS_PROTECTION` is **not** empty by default any more. `ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS` ships a floor — currently `{"geoip_sync": "sys.geoip_sync", "dnsman_acme_federation": "sys.dnsman_acme_federation"}` — and the effective map is `{**DEFAULTS, **configured}`. The merge is the point: `settings.get` returns a configured value *wholesale*, so a deployment that sets `APIKEY_PERMS_PROTECTION` for its own perms would otherwise silently drop the floor along with it. A deployment still wins per key — naming a protected permission explicitly overrides that entry, including relaxing it. Note that the merged effective map is not exposed anywhere: the `Setting` row shows only what the deployment wrote, so read `APIKEY_PERMS_PROTECTION_DEFAULTS` in the source to see the rest.
+**Framework protection floor.** `APIKEY_PERMS_PROTECTION` is **not** empty by
+default. `ApiKey.APIKEY_PERMS_PROTECTION_DEFAULTS` currently protects
+`geoip_sync`, `dnsman_acme_federation`, `edge_node`, and `mojosec_ingest` with
+their matching global `sys.*` grants. The effective map is
+`{**configured, **DEFAULTS}`: deployments may add protected permissions, but
+cannot replace or relax a framework-floor entry. The merge is the point:
+`settings.get` returns a configured value *wholesale*, so using only the
+configured dict would silently drop the floor. The merged map is not exposed
+as a Setting value; a Setting row shows only what the deployment added.
 
 **A key-backed session can never grant a protected permission.** Whatever its own permissions dict says, and regardless of the short-circuit described below, a request authenticated with an `ApiKey` is refused for any permission named in the effective protection map. Same reasoning as the acting-as block in `_can_manage_acting_user`: a confined credential must not be able to mint a successor carrying authority it does not legitimately hold. Unprotected permissions are unaffected, so key-provisions-key flows keep working.
 

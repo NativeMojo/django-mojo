@@ -238,6 +238,17 @@ evidence returns `rejected`. A receipt is acknowledged `accepted` only after
 its bounded Event projection has completed central publication. Incomplete
 publication remains `pending` and returns `retry`.
 
+`MojoSecReceipt` is the internal durable outbox/audit model, not a browser CRUD
+resource; no receipt URL is registered. Its unique key is
+`(sensor_id, wire_event_id)`. It retains the API key and projected Event links,
+payload digest, protocol/policy provenance, publication state and attempts, a
+bounded last error, and the replay features needed to distinguish an identical
+retry from conflicting evidence. The default `RestMeta` graph omits
+`payload_digest`, `last_error`, and `replay_features`; those fields are marked
+sensitive, the whole model is denied to generic AI queries, deletion is
+disabled at the model-REST layer, and read/write permissions are
+`view_security` / `manage_security` plus the `security` category.
+
 Wire attributes remain in the receipt's `replay_features`, which is denied to
 generic AI/model query tools. The central Event contains a fixed title/detail
 and validated scalar provenance only. A source IP is promoted only for an
