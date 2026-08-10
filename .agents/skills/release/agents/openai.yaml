@@ -1,0 +1,11 @@
+interface:
+  display_name: "Release"
+  short_description: "Cut and publish a django-mojo release"
+  default_prompt: "Use $release to inspect shipped changes, prepare the release note, bump the version, and publish django-mojo."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "maestro"
+      description: "Read and update the shared Maestro workspace and boards"
+      transport: "streamable_http"
+      url: "https://maestromojo.com/mcp"

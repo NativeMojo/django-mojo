@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate ChatGPT/Codex Maestro skills from the Claude-managed sources."""
+"""Generate ChatGPT/Codex project skills from the Claude-managed sources."""
 
 import argparse
 import re
@@ -17,6 +17,7 @@ SKILL_NAMES = (
     "maestro-auto",
     "maestro-vibe",
     "maestro-release-note",
+    "release",
     "sites-verify",
 )
 
@@ -50,6 +51,11 @@ INTERFACES = {
         "Maestro Release Note",
         "Draft a release note from the changes that actually shipped",
         "Use $maestro-release-note to inspect the shipped changes and draft the next release note.",
+    ),
+    "release": (
+        "Release",
+        "Cut and publish a django-mojo release",
+        "Use $release to inspect shipped changes, prepare the release note, bump the version, and publish django-mojo.",
     ),
     "sites-verify": (
         "Sites Verify",
@@ -118,6 +124,8 @@ def adapt_body(body):
     body = body.replace("`/sites-verify", "`$sites-verify")
     body = body.replace("`CLAUDE.md`", "`AGENTS.md`")
     body = body.replace("Opus, high effort", "frontier model, high reasoning")
+    body = body.replace(
+        "Delegate to `$maestro-release-note`", "Use `$maestro-release-note`")
     return body
 
 
@@ -129,10 +137,16 @@ def render_skill(name):
         raise ValueError(f"{source}: expected name {name!r}, found {source_name!r}")
     description = scalar(frontmatter, "description", source)
     version = source_version(frontmatter)
-    note = (
-        f"<!-- Generated from .claude/skills/{name}/SKILL.md "
-        f"(maestro-skill-version: {version}). Do not edit directly. -->"
-    )
+    if version == "unknown":
+        note = (
+            f"<!-- Generated from .claude/skills/{name}/SKILL.md. "
+            "Do not edit directly. -->"
+        )
+    else:
+        note = (
+            f"<!-- Generated from .claude/skills/{name}/SKILL.md "
+            f"(maestro-skill-version: {version}). Do not edit directly. -->"
+        )
     return (
         "---\n"
         f"name: {name}\n"
@@ -198,7 +212,7 @@ def main():
         return 1
 
     action = "checked" if args.check else "synced"
-    print(f"{action} {len(SKILL_NAMES)} Maestro skills in {TARGET_ROOT.relative_to(ROOT)}")
+    print(f"{action} {len(SKILL_NAMES)} Codex skills in {TARGET_ROOT.relative_to(ROOT)}")
     return 0
 
 
