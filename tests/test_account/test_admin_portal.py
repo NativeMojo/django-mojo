@@ -1,5 +1,8 @@
 """Private Admin source delivery and bootstrap boundary."""
 
+import uuid
+from unittest import mock
+
 from testit import helpers as th
 
 
@@ -66,6 +69,13 @@ def test_authenticated_admin_delivery(opts):
     assert "HttpOnly" in cookie._rest and cookie._rest.get("SameSite") == "Strict", \
         f"source cookie missed hardening attributes: {cookie._rest}"
 
+    bootstrap = opts.client.get("/api/account/admin/bootstrap")
+    capabilities = (bootstrap.json.get("data") or {}).get("capabilities") or {}
+    assert bootstrap.status_code == 200 and capabilities.get("network") is True, \
+        "superuser bootstrap did not advertise the permanent network controls"
+    assert capabilities.get("manage_network") is True, \
+        "superuser bootstrap did not advertise network mutation access"
+
     opts.client.logout()  # Browser navigation carries the cookie, not Authorization.
     root = opts.client.get("/admin/")
     assert root.status_code == 200 and "<title>MOJO Admin</title>" in root.text, \
@@ -76,6 +86,9 @@ def test_authenticated_admin_delivery(opts):
     setup_asset = opts.client.get("/admin/assets/setup.js")
     assert setup_asset.status_code == 200 and "Fix Setup" in setup_asset.text, \
         "valid source session did not receive the private System Setup module"
+    network_asset = opts.client.get("/admin/assets/network.js")
+    assert network_asset.status_code == 200 and "MutationCoordinator" in network_asset.text, \
+        "valid source session did not receive the private network module"
     cache_control = next((value for key, value in
                           opts.client.last_response.headers.items()
                           if key.lower() == "cache-control"), "")
@@ -129,3 +142,99 @@ def test_setup_source_is_private(opts):
     response = client.get("/admin/assets/setup.js")
     assert response.status_code == 404, \
         f"anonymous caller received System Setup source ({response.status_code})"
+
+    network = client.get("/admin/assets/network.js")
+    assert network.status_code == 404, \
+        f"anonymous caller received network source ({network.status_code})"
+
+
+@th.django_unit_test("portal assets encode provider-safe hosting workflows")
+def test_network_asset_contract(opts):
+    assert opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD), "Admin login failed"
+    assert opts.client.post("/api/account/admin/session", json={}).status_code == 200
+    opts.client.logout()
+
+    setup = opts.client.get("/admin/assets/setup.js").text
+    network = opts.client.get("/admin/assets/network.js").text
+    assert "result.token" not in setup and "MOJO_DEPLOY_KEY" not in setup, \
+        "System Setup learned how to read or render a deployment secret"
+    assert "apiOnce" in network and "refresh-required" in network, \
+        "DNS mutation safety or the authoritative-refresh latch disappeared"
+    for shape in ("api", "site", "site_api", "redirect"):
+        assert f"'{shape}'" in network, f"Vhost shape {shape} disappeared"
+    for endpoint in (
+            "/api/dnsman/registrar/purchase", "/api/dnsman/credential/link",
+            "/api/dnsman/dns", "/api/dnsman/certificate/request",
+            "/api/edge/upstream/declare", "/api/edge/vhost", "/api/edge/route"):
+        assert endpoint in network, f"permanent control is missing {endpoint}"
+
+
+@th.django_unit_test("authenticated portal covers missing active rotated and revoked deploy keys")
+def test_webapp_key_portal_smoke(opts):
+    from mojo.apps.account.models import ApiKey, Group
+    from mojo.apps.edge.models import WebApp
+
+    group_name = "admin_portal_key_lifecycle"
+    Group.objects.filter(name=group_name).delete()
+    group = Group.objects.create(name=group_name, kind="organization")
+    site = WebApp(group=group, slug="portal-key-smoke", bucket="portal-test",
+                  prefix="pending")
+    try:
+        with mock.patch("mojo.apps.edge.validators.validate_web_app"):
+            site.save()
+            site.prefix = site.storage_prefix()
+            site.save()
+
+            assert opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD), "Admin login failed"
+            missing = opts.client.get(
+                f"/api/edge/webapp/key_status?webapp={site.pk}")
+            missing_data = (missing.json.get("data") or {}).get("status") or {}
+            assert missing.status_code == 200 and missing_data.get("linked") is False, \
+                "a fresh WebApp did not report a missing deployment key"
+            assert "token" not in missing_data, "metadata status exposed a token field"
+
+            minted = opts.client.post("/api/edge/webapp/link_key", json={
+                "webapp": site.pk, "action": "mint",
+                "operation_id": str(uuid.uuid4()),
+            })
+            minted_data = minted.json.get("data") or {}
+            assert minted.status_code == 200 and isinstance(minted_data.get("token"), str), \
+                "the reveal-once create response did not contain the deployment key"
+            active = opts.client.get(
+                f"/api/edge/webapp/key_status?webapp={site.pk}")
+            active_data = (active.json.get("data") or {}).get("status") or {}
+            assert active_data.get("linked") is True and active_data.get("active") is True, \
+                "the created deployment key did not become active"
+            assert "token" not in active_data, "active status read the secret back"
+
+            first_key = active_data.get("api_key")
+            rotated = opts.client.post("/api/edge/webapp/link_key", json={
+                "webapp": site.pk, "action": "rotate",
+                "operation_id": str(uuid.uuid4()),
+            })
+            assert rotated.status_code == 200, "deployment-key rotation failed"
+            rotated_status = ((opts.client.get(
+                f"/api/edge/webapp/key_status?webapp={site.pk}").json.get("data")
+                               or {}).get("status") or {})
+            assert rotated_status.get("last_action") == "rotate", \
+                "rotation metadata was not visible to the portal"
+            assert rotated_status.get("api_key") != first_key, \
+                "rotation kept the previous deployment key"
+            assert "token" not in rotated_status, "rotated status read the secret back"
+
+            revoked = opts.client.post("/api/edge/webapp/revoke_key", json={
+                "webapp": site.pk, "operation_id": str(uuid.uuid4()),
+            })
+            assert revoked.status_code == 200, "deployment-key revoke failed"
+            revoked_status = ((opts.client.get(
+                f"/api/edge/webapp/key_status?webapp={site.pk}").json.get("data")
+                               or {}).get("status") or {})
+            assert revoked_status.get("linked") is False and \
+                revoked_status.get("last_action") == "revoke", \
+                "revoked deployment key was not distinguishable from never configured"
+            assert "token" not in revoked_status, "revoked status exposed a token field"
+    finally:
+        with mock.patch("mojo.apps.edge.validators.validate_web_app"):
+            WebApp.objects.filter(pk=site.pk).delete()
+        ApiKey.objects.filter(name="webapp:portal-key-smoke").delete()
+        Group.objects.filter(pk=group.pk).delete()
