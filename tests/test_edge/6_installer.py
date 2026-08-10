@@ -25,7 +25,7 @@ from testit import helpers as th
 from tests.test_edge._helpers import (
     declare_pools,
     cleanup, make_certificate, make_domain, make_group,
-    make_upstream, make_vhost, raises,
+    make_upstream, make_vhost, raises, with_setting,
 )
 
 
@@ -151,7 +151,7 @@ def _exit(patches, root):
 
 @th.django_unit_test("a clean install stages, validates, swaps and reloads")
 def test_install_happy_path(opts):
-    from mojo.apps.edge.services import installer, render
+    from mojo.apps.edge.services import installer, readiness, render
     from mojo.apps.dnsman.models import Certificate
 
     root = _root(opts)
@@ -184,6 +184,58 @@ def test_install_happy_path(opts):
             f"private key is not 0600: {oct(os.stat(key).st_mode)}"
     finally:
         _exit(patches, root)
+
+
+@th.django_unit_test("two assigned pools are served by one combined atomic generation")
+def test_install_two_pools_combines_serving_state(opts):
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.edge.services import installer, render
+
+    declare_pools(["alpha", "beta"])
+    alpha_domain = make_domain(group=opts.group)
+    alpha_cert = make_certificate(alpha_domain)
+    make_vhost(alpha_domain, alpha_cert, label="alpha", pool="alpha")
+    beta_domain = make_domain(group=opts.group)
+    beta_cert = make_certificate(beta_domain)
+    make_vhost(beta_domain, beta_cert, label="beta", pool="beta")
+    Certificate.objects.filter(pk__in=[alpha_cert.pk, beta_cert.pk]).update(
+        cert_pem="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+
+    root = _root(opts)
+    patches = _with_root(root)
+    _enter(patches)
+    try:
+        with mock.patch.object(installer, "_run", Recorder()):
+            result = installer.install_pools(["alpha", "beta"])
+        alpha = installer.read_installed("alpha")
+        beta = installer.read_installed("beta")
+        live_generation = os.path.basename(os.path.realpath(render.current_link()))
+        assert result.pools == ["alpha", "beta"], \
+            f"combined install lost an assigned pool: {result}"
+        assert alpha["generation"] == result.pool_generations["alpha"], \
+            "alpha evidence does not prove alpha's desired state"
+        assert beta["generation"] == result.pool_generations["beta"], \
+            "beta evidence does not prove beta's desired state"
+        assert alpha["serving_generation"] == beta["serving_generation"] \
+               == result.generation == live_generation, \
+            "per-pool proof is green against different/non-serving generations"
+        current = os.path.realpath(render.current_link())
+        assert os.path.exists(os.path.join(current, "conf.d")), \
+            "combined serving generation was not staged"
+        assert len([name for name in os.listdir(os.path.join(current, "conf.d"))
+                    if name.endswith(".conf")]) == 2, \
+            "the live combined generation omitted one pool's vhost"
+        proof = with_setting(
+            "EDGE_NODE_ID", "edge-two-pool",
+            lambda: readiness.local_node_proof({"pools": ["alpha", "beta"]}))
+        assert all(
+            evidence["serving_generation"] == evidence["current_generation"]
+            == result.generation
+            for evidence in proof["pools"].values()), \
+            f"two-pool local proof did not prove the common live union: {proof}"
+    finally:
+        _exit(patches, root)
+        declare_pools()
 
 
 @th.django_unit_test("an unchanged generation is a no-op")

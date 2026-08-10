@@ -39,8 +39,8 @@ def test_startup_converge_installs_pools(opts):
 
     try:
         with mock.patch(
-                "mojo.apps.edge.services.installer.install",
-                side_effect=lambda pool: installed.append(pool) or mock.Mock(changed=True)), \
+                "mojo.apps.edge.services.installer.install_pools",
+                side_effect=lambda pools: installed.append(list(pools)) or mock.Mock(changed=True)), \
                 th.capture_publishes(
                     lambda c: c.get("channel") == "edge" and c.get("broadcast")
                 ) as edge_broadcasts:
@@ -48,8 +48,8 @@ def test_startup_converge_installs_pools(opts):
     finally:
         declare_pools()
 
-    assert installed == ["alpha", "beta"], (
-        f"startup convergence must install each declared pool, got {installed}")
+    assert installed == [["alpha", "beta"]], (
+        f"startup convergence must atomically install the pool union, got {installed}")
     assert edge_broadcasts == [], (
         "startup convergence is the node reconciling ITSELF — it must not "
         f"broadcast to the fleet, got {edge_broadcasts}")
@@ -64,8 +64,8 @@ def test_startup_converge_honors_gate(opts):
     from mojo.apps.edge import asyncjobs
 
     installed = []
-    with mock.patch("mojo.apps.edge.services.installer.install",
-                    side_effect=lambda pool: installed.append(pool)):
+    with mock.patch("mojo.apps.edge.services.installer.install_pools",
+                    side_effect=lambda pools: installed.append(list(pools))):
         result = with_setting(
             "EDGE_CONVERGE_ENABLED", False,
             lambda: asyncjobs.on_engine_start(_engine()))
@@ -76,27 +76,25 @@ def test_startup_converge_honors_gate(opts):
         f"a disabled startup converge must not install anything, got {installed}")
 
 
-@th.django_unit_test("one pool's failure does not stop the others")
-def test_startup_converge_isolates_pool_failure(opts):
+@th.django_unit_test("a combined pool failure never claims a partial convergence")
+def test_startup_converge_reports_combined_failure(opts):
     from mojo.apps.edge import asyncjobs
 
     declare_pools(["alpha", "beta"])
     attempted = []
 
-    def install(pool):
-        attempted.append(pool)
-        if pool == "alpha":
-            raise RuntimeError("install blew up")
-        return mock.Mock(changed=True)
+    def install(pools):
+        attempted.append(list(pools))
+        raise RuntimeError("secret install detail")
 
     try:
-        with mock.patch("mojo.apps.edge.services.installer.install",
+        with mock.patch("mojo.apps.edge.services.installer.install_pools",
                         side_effect=install):
             result = asyncjobs.on_engine_start(_engine())
     finally:
         declare_pools()
 
-    assert attempted == ["alpha", "beta"], (
-        f"a failing pool must not stop convergence of the rest, got {attempted}")
-    assert result == "completed:converged=beta", (
-        f"the failed pool must not be reported converged, got {result!r}")
+    assert attempted == [["alpha", "beta"]], (
+        f"startup did not attempt the exact combined assignment: {attempted}")
+    assert result == "completed:converged=none", (
+        f"an atomic combined failure reported a partially green pool: {result!r}")

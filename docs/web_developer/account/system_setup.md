@@ -260,13 +260,17 @@ reveal-once deployment token in a report.
 |---|---|
 | `hosting_dns` | Managed domains can change DNS, certificates are active/unexpired, delegated ACME is verified, and no challenge reservation remains live |
 | `hosting_vhosts` | At least one enabled Vhost has an active domain and certificate, and every enabled Vhost passes that check |
-| `edge_fleet` | Every node/pool in `EDGE_EXPECTED_TOPOLOGY` answers from an `edge`-channel runner with the expected django-mojo version and desired generation, with no excluded or pending material |
+| `edge_fleet` | Every node/pool in `EDGE_EXPECTED_TOPOLOGY` answers from an `edge`-channel runner with the expected django-mojo version and desired generation, and its combined serving generation equals the live generation, with no excluded or pending material |
 | `webapp_keys` | Every WebApp's safe key metadata is active; missing is `pending`, inactive is `fail`, and revoked is `warn` |
 
 The fleet section never treats a missing topology, node, response, pool, or
 generation as green. WebApp checks return only bounded metadata such as
 `webapp`, `linked`, `active`, and `last_action`; no token/hash/ciphertext can be
 recovered through Setup.
+
+Every hosting section's first check is a global summary over all matching rows;
+only the subsequent problem-detail rows are bounded. Render the summary counts
+as authoritative, including failures beyond the detail-page limit.
 
 Render the server-returned `choice_schema`; do not build a second discovery UI.
 The current choice objects are:

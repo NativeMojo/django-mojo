@@ -166,27 +166,29 @@ def upsert_record(domain, rtype, name, record_values, ttl=300, reservation=None)
     from mojo.apps.dnsman.services import record_reservations
 
     adapter = get_adapter(domain)
+    if reservation is not None:
+        # Separate committed transaction. If the provider mutates and then
+        # raises, mutation_guard's rollback cannot erase this intent.
+        record_reservations.mark_attempted(reservation)
     with record_reservations.mutation_guard(
             domain, rtype, fqdn, reservation=reservation):
-        if reservation is not None:
-            record_reservations.mark_attempted(reservation)
         try:
             change_id = adapter.upsert_record(rtype, fqdn, values, ttl=ttl)
-        except Exception:
+        except Exception as provider_error:
             # Provider timeouts are ambiguous. Inventory is authoritative: if
             # it now equals the intended complete set, the retry converged and
             # must not write a second time.
             if reservation is not None:
                 try:
-                    if record_reservations.reconcile(
-                            reservation, adapter.list_records()):
-                        change_id = "reconciled"
-                    else:
-                        raise
+                    reconciled = record_reservations.reconcile(
+                        reservation, adapter.list_records())
                 except Exception:
-                    raise
+                    raise provider_error
+                if not reconciled:
+                    raise provider_error
+                change_id = "reconciled"
             else:
-                raise
+                raise provider_error
     return objict(change_id=change_id, provider=adapter.name, type=rtype, name=fqdn)
 
 

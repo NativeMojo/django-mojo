@@ -115,3 +115,20 @@ def sanitize(value, max_bytes=MAX_SERIALIZED_BYTES):
     if isinstance(output, dict):
         return {"truncated": True}
     return TRUNCATED
+
+
+def failure_metadata(error, action):
+    """Bounded non-secret exception identity for durable state and logs.
+
+    Exception messages are provider-controlled and can echo request values.
+    Callers that need an audit marker persist/log only this action and class;
+    full traceback detail remains in the protected exception path.
+    """
+    metadata = sanitize({
+        "action": str(action or "operation")[:80],
+        "exception_class": type(error).__name__[:80],
+    }, max_bytes=512)
+    return {
+        "action": metadata.get("action") or "operation",
+        "exception_class": metadata.get("exception_class") or "Exception",
+    }

@@ -662,11 +662,15 @@ def cleanup_challenges(domain, planted):
             if reservation is not None:
                 record_reservations.release(reservation)
         except Exception as err:
+            from mojo.apps.account.services.setup_safety import failure_metadata
+
             if reservation is not None:
                 record_reservations.mark_cleanup_pending(reservation, err)
+            failure = failure_metadata(err, "dns.cleanup")
             logit.error(
                 f"dnsman: could not remove challenge record {record_name} "
-                f"on {domain.name}: {err}")
+                f"on {domain.name} (action={failure['action']}, "
+                f"error={failure['exception_class']})")
 
 
 def _order_error(order):

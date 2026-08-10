@@ -144,13 +144,16 @@ actions through their existing guarded services.
 |---|---|
 | `hosting_dns` | Managed-domain status and credential usability, active/unexpired certificates, delegated ACME state, and live DNS challenge reservations |
 | `hosting_vhosts` | Every enabled Vhost has an active domain and certificate; no enabled rows is pending |
-| `edge_fleet` | Every protected topology node answers on an `edge`-channel runner with the installed django-mojo version and matching per-pool desired generation, with zero excluded/pending content or certificates |
+| `edge_fleet` | Every protected topology node answers on an `edge`-channel runner with the installed django-mojo version, matching per-pool desired generation, and a combined serving generation that equals the live generation, with zero excluded/pending content or certificates |
 | `webapp_keys` | Safe WebApp key metadata and latest mint/rotate/revoke receipt; no token or recoverable credential material |
 
 Missing topology, runner, node response, pool evidence, or generation never
 reports green. Fleet proof calls only live runners returned for channel
 `edge`; unrelated job runners are neither counted nor contacted. A revoked key
 is `warn`, an inactive linked key is `fail`, and a missing key is `pending`.
+Each hosting section scans its complete queryset and puts global status counts
+in the first check; only the following problem details are bounded. A failure
+after row 64 therefore still makes the section fail.
 
 ## Durable operation model
 

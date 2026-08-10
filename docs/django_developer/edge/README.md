@@ -161,8 +161,8 @@ EDGE_ROOT (default /opt/api/var/edge)
       www/<vhost-id>/                the web root (a release symlink later)
   current -> generations/<generation>
   log/                               access.log + edge_watch.log (EDGE_LOG_DIR)
-  installed/<pool>.json              {generation, excluded[], www_pending{},
-                                      cert_pending[]}
+  installed/<pool>.json              {generation, serving_generation,
+                                      excluded[], www_pending{}, cert_pending[]}
   installed.json                     legacy default-pool read fallback only
 ```
 
@@ -437,6 +437,14 @@ Installer evidence is `EDGE_ROOT/installed/<pool>.json`. The historical
 new writes never mutate it. The first new default-pool install writes
 `installed/default.json`; the legacy file may then be removed after operators
 verify the new evidence.
+
+A node assigned more than one pool installs the union of those pools into one
+atomic `current` generation; it never swaps `current` once per pool. Each
+per-pool file records that pool's desired `generation` plus the common
+`serving_generation`. Proof is green only when every desired pool generation
+matches and every file's `serving_generation` equals the generation named by
+the live `current` symlink. Thus per-pool evidence cannot claim two pools are
+served when the last pool swap actually displaced the first.
 
 `Vhost.save/delete()` and `VhostRoute.save/delete()` register on-commit jobs for
 the affected old/new pools and live edge-channel runners, keyed by target, pool,

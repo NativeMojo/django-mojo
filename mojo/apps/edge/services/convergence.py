@@ -45,8 +45,11 @@ def publish_pool(pool):
                 payload={"pool": pool, "generation": generation},
                 channel=target, idempotency_key=key))
     except Exception as error:
+        from mojo.apps.account.services.setup_safety import failure_metadata
+        failure = failure_metadata(error, "edge.publish")
         logit.error(
-            f"edge: convergence publication pending for pool {pool}: {error}")
+            f"edge: convergence publication pending for pool {pool} "
+            f"(action={failure['action']}, error={failure['exception_class']})")
         return objict(
             status="pending", pool=pool, generation=generation,
             error="Convergence publication failed; the periodic sweep will retry")

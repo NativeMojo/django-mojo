@@ -244,7 +244,7 @@ def pending_certs(installed=None):
 
 
 def write_installed(generation, excluded=None, www_pending=None,
-                    cert_pending=None, pool="default"):
+                    cert_pending=None, pool="default", serving_generation=None):
     """Record what this node installed.
 
     `www_pending` is {vhost id: desired version} for vhosts whose release
@@ -255,6 +255,8 @@ def write_installed(generation, excluded=None, www_pending=None,
     short-circuiting.
     """
     payload = dict(generation=generation, excluded=sorted(excluded or []))
+    if serving_generation:
+        payload["serving_generation"] = serving_generation
     if www_pending:
         # JSON object keys are strings either way; normalise here so a reader
         # never has to guess which side of a round-trip it is holding.
@@ -660,7 +662,7 @@ def prune_generations(keep=None):
 # the install
 # ----------------------------------------------------------------------
 
-def install(pool="default", force=False):
+def install(pool="default", force=False, pools=None):
     """Converge this node onto the current desired state for `pool`.
 
     Returns an objict-ish dict describing what happened. Raises InstallError on
@@ -668,21 +670,36 @@ def install(pool="default", force=False):
     """
     from objict import objict
 
+    from mojo.apps.edge import validators
     from mojo.apps.edge.rest.node import enabled_vhosts
 
     from mojo.apps.edge.services import releases
 
-    vhosts = enabled_vhosts(pool)
+    selected_pools = pools if pools is not None else [pool]
+    selected_pools = sorted({validators.validate_pool(item) for item in selected_pools})
+    if not selected_pools:
+        raise InstallError("at least one edge pool must be assigned to this node")
+    pool_vhosts = {item: enabled_vhosts(item) for item in selected_pools}
+    vhosts = [vhost for item in selected_pools for vhost in pool_vhosts[item]]
     # Built exactly as the REST endpoint builds it — same two calls, same
     # order. If these ever diverge, a node installs one thing while the fleet's
     # desired-state answer describes another.
     webapps = releases.desired_webapps(vhosts)
     payload = render.desired_state(vhosts, webapps=webapps)
     generation = payload["generation"]
-
-    installed = read_installed(pool)
-    pending = pending_releases(installed)
-    cert_pending = pending_certs(installed)
+    pool_generations = {}
+    installed_by_pool = {}
+    for item in selected_pools:
+        item_vhosts = pool_vhosts[item]
+        item_webapps = releases.desired_webapps(item_vhosts)
+        pool_generations[item] = render.desired_state(
+            item_vhosts, webapps=item_webapps)["generation"]
+        installed_by_pool[item] = read_installed(item)
+    installed = installed_by_pool[selected_pools[0]]
+    pending = any(pending_releases(row) for row in installed_by_pool.values())
+    cert_pending = any(pending_certs(row) for row in installed_by_pool.values())
+    live = current_target()
+    live_generation = live.rsplit("/", 1)[-1] if live else None
     # A recorded failure DEFEATS the short-circuit on purpose: a node that
     # could not fetch a release, or could not read key material, is degraded,
     # and the only thing that heals either is running the install again. Both
@@ -690,12 +707,17 @@ def install(pool="default", force=False):
     # without this a vhost stays degraded until something unrelated moves the
     # generation. A healthy node still does zero S3 work on an unchanged
     # generation, which is what keeps the ten-minute sweep cheap.
-    if (not force and installed.get("generation") == generation
+    evidence_current = all(
+        installed_by_pool[item].get("generation") == pool_generations[item]
+        and installed_by_pool[item].get("serving_generation") == generation
+        for item in selected_pools)
+    if (not force and evidence_current and live_generation == generation
             and not pending and not cert_pending):
-        return objict(changed=False, generation=generation, reason="unchanged")
+        return objict(changed=False, generation=generation, reason="unchanged",
+                      pools=selected_pools, pool_generations=pool_generations)
 
     os.makedirs(os.path.join(render.edge_root(), "generations"), exist_ok=True)
-    previous = current_target()
+    previous = live
 
     # Pull the promoted bytes BEFORE staging, so the web-root links point at
     # releases that are verified on disk. Never raises: one unfetchable
@@ -704,7 +726,7 @@ def install(pool="default", force=False):
 
     staged = stage_generation(vhosts, generation, webapps,
                               fetch_failures=fetch_failures,
-                              previous=previous, pool=pool)
+                              previous=previous, pool=selected_pools[0])
     excluded = staged.excluded
 
     gen_dir = render.generation_dir(generation)
@@ -751,18 +773,36 @@ def install(pool="default", force=False):
         str(row["vhost"]): row["release"]["version"]
         for row in webapps if row["vhost"] in fetch_failures
     }
-    write_installed(generation, excluded, www_pending=still_pending,
-                    cert_pending=staged.cert_excluded, pool=pool)
+    vhost_pools = {row.pk: row.pool for row in vhosts}
+    for item in selected_pools:
+        item_excluded = [
+            pk for pk in excluded if vhost_pools.get(pk) == item]
+        item_www_pending = {
+            pk: version for pk, version in still_pending.items()
+            if vhost_pools.get(int(pk)) == item}
+        item_cert_pending = [
+            pk for pk in staged.cert_excluded if vhost_pools.get(pk) == item]
+        write_installed(
+            pool_generations[item], item_excluded,
+            www_pending=item_www_pending, cert_pending=item_cert_pending,
+            pool=item, serving_generation=generation)
     prune_generations()
     www_sync.prune_releases(webapps)
     logit.info(
-        f"edge: installed generation {generation} for pool {pool} "
+        f"edge: installed combined generation {generation} for pools "
+        f"{','.join(selected_pools)} "
         f"({len(vhosts) - len(excluded)} vhosts, {len(excluded)} excluded, "
         f"{len(still_pending)} awaiting release bytes, "
         f"{len(staged.cert_excluded)} awaiting key material)")
     return objict(changed=True, generation=generation, excluded=excluded,
                   previous=previous, www_pending=still_pending,
-                  cert_pending=staged.cert_excluded)
+                  cert_pending=staged.cert_excluded, pools=selected_pools,
+                  pool_generations=pool_generations)
+
+
+def install_pools(pools, force=False):
+    """Atomically serve the union assigned to this node in one generation."""
+    return install(force=force, pools=pools)
 
 
 def _fail(generation, message, reverted_to=None, revert_note=None):

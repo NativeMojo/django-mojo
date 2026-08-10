@@ -5,8 +5,6 @@ from contextlib import contextmanager
 from django.db import IntegrityError, transaction
 
 from mojo import errors as me
-from mojo.helpers import dates
-
 from mojo.apps.dnsman.models.dns_record_reservation import (
     LIVE_STATES, STATE_CLEANUP_PENDING, STATE_RELEASED, STATE_RESERVED)
 
@@ -21,13 +19,18 @@ def reserve(certificate, record_name, record_values):
     A retry by the same certificate adopts its own durable intent. Any other
     owner receives a stable conflict and consumes no provider mutation.
     """
-    from mojo.apps.dnsman.models import DnsRecordReservation
+    from mojo.apps.dnsman.models import DnsRecordReservation, Domain
 
     desired = _values(record_values)
     try:
         with transaction.atomic():
+            # A SELECT FOR UPDATE on an absent reservation locks nothing. The
+            # stable parent serializes both the no-row check and interactive
+            # writes for every key in this zone.
+            domain = Domain.objects.select_for_update().get(
+                pk=certificate.domain_id)
             current = DnsRecordReservation.objects.select_for_update().filter(
-                domain=certificate.domain, record_type="TXT",
+                domain=domain, record_type="TXT",
                 record_name=record_name, state__in=LIVE_STATES).first()
             if current is not None:
                 if current.certificate_id != certificate.pk:
@@ -43,7 +46,7 @@ def reserve(certificate, record_name, record_values):
                     "mutation_proven", "last_error", "modified"])
                 return current
             return DnsRecordReservation.objects.create(
-                domain=certificate.domain, certificate=certificate,
+                domain=domain, certificate=certificate,
                 record_type="TXT", record_name=record_name,
                 record_values=desired)
     except IntegrityError:
@@ -61,9 +64,10 @@ def _same_owner(row, reservation):
 @contextmanager
 def mutation_guard(domain, record_type, record_name, reservation=None):
     """Serialize a complete-set provider mutation with ACME ownership."""
-    from mojo.apps.dnsman.models import DnsRecordReservation
+    from mojo.apps.dnsman.models import DnsRecordReservation, Domain
 
     with transaction.atomic():
+        domain = Domain.objects.select_for_update().get(pk=domain.pk)
         row = DnsRecordReservation.objects.select_for_update().filter(
             domain=domain, record_type=record_type, record_name=record_name,
             state__in=LIVE_STATES).first()
@@ -76,9 +80,21 @@ def mutation_guard(domain, record_type, record_name, reservation=None):
 
 
 def mark_attempted(reservation):
+    """Commit mutation intent before any ambiguous provider I/O begins."""
+    from mojo.apps.dnsman.models import DnsRecordReservation, Domain
+
+    with transaction.atomic():
+        Domain.objects.select_for_update().get(pk=reservation.domain_id)
+        current = DnsRecordReservation.objects.select_for_update().filter(
+            pk=reservation.pk, owner_ref=reservation.owner_ref,
+            state__in=LIVE_STATES).first()
+        if current is None:
+            raise me.ValueException("The DNS record reservation is no longer current")
+        current.mutation_attempted = True
+        current.last_error = None
+        current.save(update_fields=["mutation_attempted", "last_error", "modified"])
     reservation.mutation_attempted = True
     reservation.last_error = None
-    reservation.save(update_fields=["mutation_attempted", "last_error", "modified"])
 
 
 def mark_proven(reservation):
@@ -88,8 +104,15 @@ def mark_proven(reservation):
 
 
 def mark_cleanup_pending(reservation, error):
+    from mojo.apps.account.services.setup_safety import failure_metadata
+
     reservation.state = STATE_CLEANUP_PENDING
-    reservation.last_error = str(error)[:1000]
+    # Provider exception strings can contain request values. Persist only a
+    # bounded class/action category; detailed diagnostics stay in protected
+    # provider logs.
+    failure = failure_metadata(error, "dns.cleanup")
+    reservation.last_error = (
+        f"{failure['action']}:{failure['exception_class']}")
     reservation.save(update_fields=["state", "last_error", "modified"])
 
 
