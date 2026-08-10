@@ -154,3 +154,29 @@ interactive login and refuse machine-credential sessions.
 
 Revoking a key stops future releases and does **not** change what the site is
 currently serving.
+
+## Onboarding and workflow handoff
+
+The built-in Admin portal creates sites through App → Address → Connect GitHub
+→ Verify. The browser may resume an operation with:
+
+- `GET /api/edge/webapp/onboarding/options?group=<id>`
+- `POST /api/edge/webapp/onboarding/create`
+- `GET /api/edge/webapp/onboarding/detail?operation=<uuid>`
+- `POST /api/edge/webapp/onboarding/choose` with the current `revision`
+- `POST /api/edge/webapp/onboarding/cancel`
+
+Do not automatically retry `choose`: a provider can accept a mutation and lose
+the response. Reload `detail`; the server reconciles durable intent against
+authoritative inventory. Purchase confirmation remains synchronous and
+fresh-authenticated; the raw quote token is never stored or sent to a worker.
+
+`POST /api/edge/webapp/onboarding/workflow` returns the validated workflow for
+one WebApp. It can also mint or rotate `MOJO_DEPLOY_KEY` when supplied `action`
+and a fresh `operation_id`; the token appears only on the first successful
+response. A replay returns `delivery: secret_unavailable`, so rotate explicitly
+if the response was lost.
+
+`GET /api/edge/webapp/summary?webapp=<id>` is the secret-free, group-scoped v1
+read model. It includes profile, public address, onboarding evidence, and
+boolean key readiness—never credentials, certificate keys, or internal state.

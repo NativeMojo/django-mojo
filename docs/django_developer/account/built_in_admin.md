@@ -123,6 +123,8 @@ loopback-only API fixtures; it does not add a Django route or production bypass.
 The launcher is intentionally thin; `bin/admin_preview_support/` owns the
 support server, foundation gallery, and resettable feature providers. Use
 `--key-state missing|active|rotated|revoked` to exercise the four WebApp
-deployment-key presentations, `--setup-state idle|choice` for resumable Setup,
+deployment-key presentations, `--onboarding-state
+idle|address|github|verify|complete|lost_key` for WebApp onboarding,
+`--setup-state idle|choice` for resumable Setup,
 and `--port` when parallel work needs isolation. Every launch resets mutable
 provider state before serving.

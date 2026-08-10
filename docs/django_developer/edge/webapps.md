@@ -184,7 +184,7 @@ the operator must explicitly rotate.
 Rotation is a **hard cutover** — the previous key is deactivated atomically,
 with no grace window, because two live credentials for one site is exactly the
 state that makes revocation unprovable. The endpoint requires an interactive
-JWT authenticated within the last five minutes and refuses API-key and
+JWT authenticated within the last ten minutes and refuses API-key and
 group-token sessions. Capture the returned token and immediately replace the
 repository's `MOJO_DEPLOY_KEY` secret; a workflow caught between those
 operations fails safely and can be rerun.
@@ -207,6 +207,47 @@ no site going down and no emergency deploy. There is a test for it.
 The standard GitHub secret name is **`MOJO_DEPLOY_KEY`**. The token belongs to
 the repository's Actions secret store, not to developers' laptops. Merge/push
 to the configured deployment branch is the authorization event.
+
+### Durable onboarding
+
+Admin → WebApps drives a resumable four-step operation: **App → Address →
+Connect GitHub → Verify**. `WebAppOnboardingOperation` stores versioned intent,
+provider identity, bounded evidence, a revision, and a short lease. It never
+stores a registrar confirmation token, GitHub installation token, deployment
+key, certificate material, or raw provider error. `WebApp`, `Domain`,
+`Certificate`, and `Vhost` remain authoritative for their resources.
+
+The operation is actor-, group-, and origin-bound. Every continuation rechecks
+the active actor, group permission, object scope, and original origin. API keys
+and group tokens are refused. Workers use atomic leases and bounded backoff;
+after an uncertain provider result they read authoritative inventory before
+writing again. Cancellation stops recovery but preserves proved resources.
+
+Domain purchase still uses the registrar's live quote and typed domain/price
+confirmation. The operation commits only a hash-bound purchase intent, then
+the fresh-auth request consumes the raw one-use confirmation synchronously.
+Workers never receive it. A lost response is recovered from `DomainPurchase`
+and `Domain.metadata.purchase`, not by replaying money movement.
+
+Guided DNS accepts a non-apex label only. It inventories the complete record
+set, adopts an exact CNAME, and refuses mixed, ambiguous, or foreign values.
+The target is the file-only `EDGE_WEBAPP_CNAME_TARGET`. Certificate selection
+reuses an active exact/wildcard certificate outside its renewal window; private
+material never crosses the onboarding surface.
+
+GitHub evidence uses only a `GitHubInstall` whose `group` exactly matches the
+operation. Repository, ref, and build-output values are whitelist validated.
+Evidence is honestly `verified`, explicit `attested`, or `unavailable`. The
+generated workflow keeps inputs in quoted environment variables and references
+`${{ secrets.MOJO_DEPLOY_KEY }}` without embedding a secret.
+
+Final verification makes one DNS-pinned HTTPS request to exactly `/`. Every
+resolved address must be globally routable, SNI and `Host` retain the owned
+hostname, redirects are not followed, and timeout/body size are bounded.
+
+The frozen item-1818 handoff is
+`GET /api/edge/webapp/summary?webapp=<id>`, `schema_version: 1`. It is
+group-scoped and secret-free. Existing v1 meanings cannot change.
 
 ### First-deploy bootstrap
 
@@ -239,6 +280,9 @@ created `MOJO_WEBAPP_ID` to stderr so it remains visible while stdout carries
 only the token. It refuses to replace an existing key unless `--rotate` is
 explicit. Normal later rotation belongs in **Admin → WebApps → Manage key** in
 the built-in Admin portal.
+
+The onboarding flow supersedes this manual bootstrap for new sites. The command
+remains for recovery and pre-Admin installations.
 
 ## Node-side
 

@@ -410,6 +410,9 @@ reasoning: [edge README](../edge/README.md#settings),
 - `EDGE_ACME_WEBROOT` — **file-only** (`settings.get_static`), default
   `/var/www/certbot`. Filesystem root the per-name port-80 blocks serve the
   HTTP-01 challenge path from.
+- `EDGE_WEBAPP_CNAME_TARGET` — **file-only** (`settings.get_static`), required
+  for guided WebApp onboarding. Public FQDN used as the complete non-apex
+  CNAME value; the browser cannot supply a destination.
 - `EDGE_MIME_TYPES` — **file-only** (`settings.get_static`), default
   `/etc/nginx/mime.types`. The mime include in the rendered http base.
 - `EDGE_HTTP_DEFAULT_SERVER` — **file-only** (`settings.get_static`), bool,
