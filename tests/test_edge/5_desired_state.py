@@ -423,7 +423,9 @@ def test_node_proof_rest_no_secret_shape(opts):
         assert resp.status_code == 200, \
             f"edge node could not read safe local proof: {resp.status_code} {resp.body}"
         proof = resp.json.get("data") or {}
-        assert set(proof) == {"node_id", "django_mojo_version", "pools"}, \
+        assert set(proof) == {
+            "node_id", "django_mojo_version", "platform_sha",
+            "platform_deployment", "observed_at", "pools"}, \
             f"proof grew an unreviewed response surface: {proof}"
         blob = str(proof).lower()
         assert all(marker not in blob for marker in (

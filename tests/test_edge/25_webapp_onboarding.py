@@ -241,7 +241,7 @@ def test_inactive_parent_denies_onboarding(opts):
     from mojo import errors as me
     from mojo.apps.account.models import Group
     from mojo.apps.edge.models import WebAppOnboardingOperation
-    from mojo.apps.edge.rest import webapp_onboarding as onboarding_rest
+    from mojo.apps.edge.rest.webapp_onboarding import _group
 
     parent = Group.objects.create(name="onboarding-inactive-parent",
                                   kind="organization", is_active=False)
@@ -253,7 +253,7 @@ def test_inactive_parent_denies_onboarding(opts):
     request = SimpleNamespace(
         user=opts.actor, group_token=None, DATA={"group": opts.group.pk})
     try:
-        onboarding_rest._group(request)
+        _group(request)
         group_error = None
     except me.PermissionDeniedException as exc:
         group_error = exc

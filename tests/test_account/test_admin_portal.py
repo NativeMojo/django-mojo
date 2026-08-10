@@ -65,7 +65,7 @@ def test_authenticated_admin_delivery(opts):
     data = bootstrap.json.get("data") or {}
     assert data.get("capabilities", {}).get("manage_network") is True
     assert tuple(data.get("features", {})) == (
-        "dashboard", "people", "webapps", "activity", "platform", "advanced")
+        "dashboard", "people", "webapps", "platform", "activity", "advanced")
     assert data["features"]["activity"] == {
         "id": "activity", "enabled": True,
         "capabilities": {
@@ -85,7 +85,7 @@ def test_authenticated_admin_delivery(opts):
                   "assets/components/relationship.js"):
         response = opts.client.get(f"/admin/{asset}")
         assert response.status_code == 200, f"private asset unavailable: {asset}"
-        assert "no-store" in response.headers.get("Cache-Control", "")
+        assert "no-store" in opts.client.last_response.headers.get("Cache-Control", "")
 
 
 @th.django_unit_test("auth-key rotation invalidates the Admin source session")

@@ -75,14 +75,14 @@ def _credential_group_choices():
     """Eligible groups, matching Group.is_effectively_active(max_depth=8).
 
     Self is checked by the initial filter; the eight exclusions check parent
-    hops 1 through 8. Hop 9 is intentionally outside the model contract.
+    hops 1 through 8. Longer chains fail closed, matching Group.get_active().
     """
     queryset = Group.objects.filter(is_active=True)
     parent_path = "parent"
     for _ in range(8):
         queryset = queryset.exclude(**{f"{parent_path}__is_active": False})
         parent_path = f"{parent_path}__parent"
-    return queryset
+    return queryset.filter(**{f"{parent_path}__isnull": True})
 
 
 @md.GET("credential/group-choice")

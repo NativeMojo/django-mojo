@@ -267,11 +267,11 @@ def test_link_key_requires_recent_interactive_auth(opts):
     opts.client.is_authenticated = True
     opts.client.bearer = "bearer"
     opts.client.access_token = JWToken(opts.admin.get_auth_key()).create_access_token(
-        uid=opts.admin.pk, auth_time=int(time.time()) - 301)
+        uid=opts.admin.pk, auth_time=int(time.time()) - 601)
     stale = opts.client.post("/api/edge/webapp/link_key", json=dict(
         webapp=site.pk, action="rotate", operation_id=str(uuid.uuid4())))
     assert stale.status_code == 440, \
-        f"stale interactive login bypassed five-minute step-up ({stale.status_code})"
+        f"stale interactive login bypassed ten-minute step-up ({stale.status_code})"
 
 
 @th.django_unit_test("revoking a site's key stops releases and changes nothing served")

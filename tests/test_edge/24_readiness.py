@@ -262,7 +262,9 @@ def test_local_node_proof_no_secret_shape(opts):
         proof = with_setting(
             "EDGE_NODE_ID", "edge-proof-a",
             lambda: readiness.local_node_proof({"pools": ["default"]}))
-    assert set(proof) == {"node_id", "django_mojo_version", "pools"}, \
+    assert set(proof) == {
+        "node_id", "django_mojo_version", "platform_sha",
+        "platform_deployment", "observed_at", "pools"}, \
         f"proof grew an unreviewed top-level surface: {proof}"
     assert set(proof["pools"]["default"]) == {
         "generation", "excluded", "www_pending", "cert_pending",

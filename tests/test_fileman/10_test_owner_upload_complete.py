@@ -20,6 +20,7 @@ client with two permissionless members and a local `file://` backend.
 """
 import os
 import tempfile
+from unittest import mock
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
@@ -384,9 +385,8 @@ def test_inline_avatar_survives_parent_failure(opts):
 @th.django_unit_test("fileman relation: existing id resolves once and restores request group")
 def test_file_relation_single_resolution_and_group_restore(opts):
     import objict
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
     from mojo.apps.account.models import Group, User
+    from mojo.apps.fileman.models import File
     from mojo import errors as merrors
 
     owner = User.objects.get(pk=opts.owner.pk)
@@ -395,12 +395,10 @@ def test_file_relation_single_resolution_and_group_restore(opts):
         user=owner, acting_user=None, group=None, api_key=None, group_token=None,
         DATA=objict.objict(), method="POST", path="/test/file-relation", META={})
     field = owner._meta.get_field("avatar")
-    with CaptureQueriesContext(connection) as queries:
+    with mock.patch.object(File.objects, "get", wraps=File.objects.get) as file_get:
         owner.on_rest_save_related_field(field, candidate.id, request)
-    file_selects = [query for query in queries.captured_queries
-                    if 'FROM "fileman_file"' in query["sql"] and "SELECT" in query["sql"]]
-    assert_eq(len(file_selects), 1,
-              f"existing File candidate must resolve exactly once, queries={file_selects}")
+    assert_eq(file_get.call_count, 1,
+              "existing File candidate must resolve exactly once")
 
     ambient = Group.objects.get(pk=opts.group_id)
     admin = User.objects.get(pk=opts.admin.pk)

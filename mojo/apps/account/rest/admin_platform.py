@@ -2,7 +2,8 @@
 
 from mojo import decorators as md
 from mojo import errors as me
-from mojo.apps.account.services import admin_platform, system_settings
+from mojo.apps.account.services import admin_platform as _admin_platform
+from mojo.apps.account.services import system_settings
 
 
 def _deployment(value):
@@ -17,13 +18,13 @@ def _deployment(value):
 @md.requires_global_perms(
     "view_platform", "view_platform_security", "manage_platform", "admin")
 def on_admin_platform(request):
-    return admin_platform.platform_overview(request)
+    return _admin_platform.platform_overview(request)
 
 
 @md.GET("account/admin/dashboard")
 @md.requires_global_perms("view_admin", "manage_users", "admin")
 def on_admin_dashboard(request):
-    return admin_platform.dashboard_overview(request)
+    return _admin_platform.dashboard_overview(request)
 
 
 @md.GET("account/admin/advanced")
@@ -31,7 +32,7 @@ def on_admin_dashboard(request):
     "view_advanced", "view_advanced_inventory", "view_advanced_security",
     "view_advanced_settings", "manage_advanced", "admin")
 def on_admin_advanced(request):
-    return admin_platform.advanced_overview(request)
+    return _admin_platform.advanced_overview(request)
 
 
 @md.POST("account/admin/platform/deploy/retry")
@@ -50,7 +51,7 @@ def on_admin_platform_retry(request):
     except deploy.DeploymentCoordinationError:
         raise me.ValueException(
             "Deploy coordination unavailable", code=503, status=503) from None
-    admin_platform.audit_after_commit(request.user, "retry_same_sha", row.pk)
+    _admin_platform.audit_after_commit(request.user, "retry_same_sha", row.pk)
     from mojo.apps.edge.services import platform_deploy
     return {"schema_version": 1, "queued": started,
             "deployment": platform_deploy.serialize(row)}
@@ -64,7 +65,7 @@ def on_admin_platform_verify(request):
     from mojo.apps.edge.services import platform_deploy
     row = _deployment(request.DATA.get("deployment"))
     result = platform_deploy.verify(row.pk)
-    admin_platform.audit_after_commit(request.user, "verify", row.pk)
+    _admin_platform.audit_after_commit(request.user, "verify", row.pk)
     return {"schema_version": 1, "deployment": platform_deploy.serialize(result)}
 
 
@@ -76,7 +77,7 @@ def on_admin_platform_converge(request):
     from mojo.apps.edge.services import platform_deploy
     row = _deployment(request.DATA.get("deployment"))
     result = platform_deploy.converge(row.pk)
-    admin_platform.audit_after_commit(request.user, "converge", row.pk)
+    _admin_platform.audit_after_commit(request.user, "converge", row.pk)
     return {"schema_version": 1, "deployment": platform_deploy.serialize(result)}
 
 
@@ -96,5 +97,5 @@ def on_admin_advanced_settings(request):
         action = "edge_topology"
     else:
         raise me.ValueException("auth or edge_topology is required")
-    admin_platform.audit_after_commit(request.user, action)
+    _admin_platform.audit_after_commit(request.user, action)
     return {"schema_version": 1, "saved": True, "value": value}

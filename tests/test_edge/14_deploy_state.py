@@ -10,6 +10,7 @@ import json
 from unittest import mock
 
 from testit import helpers as th
+from tests.test_edge._helpers import with_setting
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -151,9 +152,11 @@ def test_deploy_status_command(opts):
     deploy.arm_status(SHA_C, deployment_id=row.pk)
 
     with mock.patch.object(platform_deploy, "evidence"):
-        call_command(
-            "deploy_status", "set", "deploying", sha=SHA_C,
-            deployment=str(row.pk))
+        with_setting(
+            "EDGE_NODE_ID", "edge-deploy-status-test",
+            lambda: call_command(
+                "deploy_status", "set", "deploying", sha=SHA_C,
+                deployment=str(row.pk)))
     out = io.StringIO()
     call_command("deploy_status", "get", stdout=out)
     state = json.loads(out.getvalue())

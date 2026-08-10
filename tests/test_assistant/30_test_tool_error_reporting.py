@@ -236,9 +236,11 @@ def test_execute_tool_result_with_model_instance_soft_coerces(opts):
         isinstance(parsed["user"], (dict, int)),
         "model instance must coerce to a JSON-native value",
     )
-    # The User's default graph must not include the password hash.
-    raw = result["content"]
-    assert_true(
-        "password" not in raw,
-        "User default RestMeta graph must not expose password field",
-    )
+    # The User's default graph must not include exact credential fields. A
+    # safe boolean such as requires_password_change may contain the word.
+    if isinstance(parsed["user"], dict):
+        forbidden = {"password", "auth_key", "onetime_code"}
+        assert_true(
+            forbidden.isdisjoint(parsed["user"]),
+            "User default RestMeta graph exposed a credential field",
+        )

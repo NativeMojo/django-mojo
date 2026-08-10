@@ -195,8 +195,10 @@ def test_canary_failure(opts):
     th.assert_true(incidents.called, "a canary failure must file an incident")
     th.assert_eq(incidents.call_args.kwargs.get("level"), 7,
                  f"canary failure is a level-7 incident, got {incidents.call_args!r}")
-    th.assert_in("sanity check failed", incidents.call_args.args[0],
-                 "the canary's detail must travel into the incident")
+    th.assert_in("update_failed", incidents.call_args.args[0],
+                 "the canary failure must use a fixed incident phase")
+    th.assert_true("local request" not in incidents.call_args.args[0],
+                   "raw canary output reached incident evidence")
     th.assert_eq(deploy.get_status(), None,
                  "the terminal path must clear the status so the next push starts clean")
 

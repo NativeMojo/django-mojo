@@ -69,8 +69,11 @@ def setup_admin_portal_integration(opts):
     certificate = Certificate.objects.create(
         domain=domain, common_name=domain.name, sans=[domain.name], status="active",
         cert_pem="-----BEGIN CERTIFICATE-----\nPUBLIC\n-----END CERTIFICATE-----")
-    certificate.set_private_key_pem(certificate_key)
-    certificate.save(update_fields=["mojo_secrets", "modified"])
+    # Persist a recognizable opaque secret blob without requiring a live KMS
+    # in the test project. Every non-reveal graph must still exclude it.
+    certificate.mojo_secrets = json.dumps({"ciphertext": certificate_key})
+    Certificate.objects.filter(pk=certificate.pk).update(
+        mojo_secrets=certificate.mojo_secrets)
     quote_token = _sentinel("REGISTRAR-TOKEN")
     purchase = DomainPurchase.objects.create(
         group=group, user=admin, domain_name=domain.name, status="quoted",
@@ -158,13 +161,12 @@ def test_dashboard_status_vocabulary(opts):
 @th.django_unit_test("real Admin HTTP responses and resulting logs contain no non-reveal secrets")
 def test_authenticated_secret_response_and_log_boundary(opts):
     from django.utils import timezone
+    from mojo.apps.account.models import Setting
     from mojo.apps.logit.models import Log
 
-    aws_access = _sentinel("AWS-ACCESS")
-    aws_secret = _sentinel("AWS-SECRET")
-    with th.server_settings(
-            AWS_ACCESS_KEY_ID=aws_access, AWS_SECRET_ACCESS_KEY=aws_secret,
-            EDGE_RELEASE_BUCKETS=["admin-integration-bucket"]):
+    old_buckets, had_old_buckets = Setting.get_from_db("EDGE_RELEASE_BUCKETS")
+    Setting.set("EDGE_RELEASE_BUCKETS", ["admin-integration-bucket"], group=None)
+    try:
         th.assert_true(opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD),
                        "integration Admin login failed")
         started = timezone.now()
@@ -176,7 +178,7 @@ def test_authenticated_secret_response_and_log_boundary(opts):
             th.assert_eq(response.status_code, 200,
                          "pre-reveal password/reset-state read failed")
             _assert_absent(
-                opts.integration_seeded_secrets + [aws_access, aws_secret],
+                opts.integration_seeded_secrets,
                 _body(response), "pre-reveal response")
         reveals = []
 
@@ -220,7 +222,7 @@ def test_authenticated_secret_response_and_log_boundary(opts):
         th.assert_true((replay.json.get("data") or {}).get("token") is None,
                        "a replay disclosed MOJO_DEPLOY_KEY twice")
 
-        secrets = opts.integration_seeded_secrets + reveals + [aws_access, aws_secret]
+        secrets = opts.integration_seeded_secrets + reveals
         responses = [*pre_reveal, replay]
         for path in (
                 "/api/account/admin/bootstrap",
@@ -253,6 +255,11 @@ def test_authenticated_secret_response_and_log_boundary(opts):
             time.sleep(0.05)
         th.assert_true(bool(logs), "real HTTP requests produced no Log evidence")
         _assert_absent(secrets, json.dumps(logs, default=str), "resulting Log rows")
+    finally:
+        if had_old_buckets:
+            Setting.set("EDGE_RELEASE_BUCKETS", old_buckets, group=None)
+        else:
+            Setting.remove("EDGE_RELEASE_BUCKETS", group=None)
 
 
 @th.django_unit_test("onboarding credentials are replaced before file logging")

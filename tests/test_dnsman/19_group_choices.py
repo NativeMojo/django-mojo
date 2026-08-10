@@ -336,13 +336,13 @@ def test_effective_active_depth_parity(opts):
     actual = set(_credential_group_choices().filter(
         pk__in=expected).values_list("pk", flat=True))
     assert expected == {
-        opts.hop1.pk: False, opts.hop8.pk: False, opts.hop9.pk: True}, expected
-    assert actual == {opts.hop9.pk}, \
-        f"hop 1/8 must be dark and deliberately-unchecked hop 9 live; got {actual}"
+        opts.hop1.pk: False, opts.hop8.pk: False, opts.hop9.pk: False}, expected
+    assert actual == set(), \
+        f"inactive or over-depth ancestry must fail closed; got {actual}"
 
     _login(opts, opts.manager_email, opts.manager_pw)
     response = opts.client.get(PATH, params={"search": "gc_chain_leaf_", "size": 50})
-    assert {row["id"] for row in response.response.data} == {opts.hop9.pk}, \
+    assert {row["id"] for row in response.response.data} == set(), \
         f"the HTTP list must use the same eligibility policy: {response.response}"
 
 

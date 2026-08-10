@@ -11,15 +11,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @th.django_unit_setup()
 def setup_admin_platform(opts):
-    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.models import User
     from mojo.apps.account.services import system_settings
-    Setting.objects.filter(key__in=system_settings.protected_keys()).delete()
     User.objects.filter(username__in=("platform-root", "platform-user")).delete()
-    root = User.objects.create_user(username="platform-root", password="example")
+    root = User.objects.create_user(
+        email="platform-root@test.com", username="platform-root", password="example")
     root.is_active = True
     root.is_superuser = True
     root.save()
-    user = User.objects.create_user(username="platform-user", password="example")
+    system_settings.set_value(root, system_settings.AUTH_CONFIG, {})
+    user = User.objects.create_user(
+        email="platform-user@test.com", username="platform-user", password="example")
     user.is_active = True
     user.save()
     opts.platform_root = root.pk

@@ -5,7 +5,7 @@ import mojo.decorators as md
 from mojo import errors as me
 from mojo.apps.account.models import Group
 from mojo.apps.edge.models import WebApp, WebAppOnboardingOperation
-from mojo.apps.edge.services import webapp_onboarding
+from mojo.apps.edge.services import webapp_onboarding as _webapp_onboarding
 
 
 def _human(request):
@@ -38,7 +38,7 @@ def _operation(request, mutate=False):
     if operation is None:
         raise me.RestErrorException(
             "WebApp onboarding operation not found", code=404, status=404)
-    webapp_onboarding._assert_current(operation, request, mutate=mutate)
+    _webapp_onboarding._assert_current(operation, request, mutate=mutate)
     return operation
 
 
@@ -47,7 +47,7 @@ def _operation(request, mutate=False):
 @md.requires_params("group")
 @md.requires_perms("manage_webapp", "security")
 def on_webapp_onboarding_options(request):
-    return webapp_onboarding.options(_group(request))
+    return _webapp_onboarding.options(_group(request))
 
 
 @md.POST("webapp/onboarding/create")
@@ -56,9 +56,9 @@ def on_webapp_onboarding_options(request):
 @md.requires_perms("manage_webapp", "security")
 def on_webapp_onboarding_create(request):
     group = _group(request)
-    operation, created = webapp_onboarding.create(
-        group, request.user, webapp_onboarding.request_origin(request), request.DATA)
-    return {"created": created, "operation": webapp_onboarding.serialize(operation)}
+    operation, created = _webapp_onboarding.create(
+        group, request.user, _webapp_onboarding.request_origin(request), request.DATA)
+    return {"created": created, "operation": _webapp_onboarding.serialize(operation)}
 
 
 @md.GET("webapp/onboarding/detail")
@@ -66,7 +66,7 @@ def on_webapp_onboarding_create(request):
 @md.requires_params("operation")
 @md.custom_security("operation actor and RestMeta group scope in body")
 def on_webapp_onboarding_detail(request):
-    return webapp_onboarding.serialize(_operation(request))
+    return _webapp_onboarding.serialize(_operation(request))
 
 
 @md.POST("webapp/onboarding/choose")
@@ -75,10 +75,10 @@ def on_webapp_onboarding_detail(request):
 @md.requires_params("operation", "revision", "step", "choice")
 @md.custom_security("operation actor, origin, revision, and RestMeta group scope in body")
 def on_webapp_onboarding_choose(request):
-    operation = webapp_onboarding.choose(
+    operation = _webapp_onboarding.choose(
         _operation(request, mutate=True), request, request.DATA)
     operation.refresh_from_db()
-    return webapp_onboarding.serialize(operation)
+    return _webapp_onboarding.serialize(operation)
 
 
 @md.POST("webapp/onboarding/cancel")
@@ -87,9 +87,9 @@ def on_webapp_onboarding_choose(request):
 @md.requires_params("operation")
 @md.custom_security("operation actor, origin, and RestMeta group scope in body")
 def on_webapp_onboarding_cancel(request):
-    operation = webapp_onboarding.cancel(
+    operation = _webapp_onboarding.cancel(
         _operation(request, mutate=True), request)
-    return webapp_onboarding.serialize(operation)
+    return _webapp_onboarding.serialize(operation)
 
 
 @md.POST("webapp/onboarding/workflow")
@@ -108,7 +108,7 @@ def on_webapp_onboarding_workflow(request):
                 request.user, ["manage_webapp", "security"])):
         raise me.PermissionDeniedException(
             "WebApp management is not granted in this group")
-    result = webapp_onboarding.workflow(web_app)
+    result = _webapp_onboarding.workflow(web_app)
     action = str(request.DATA.get("action") or "").strip().lower()
     if action:
         operation_id = request.DATA.get("operation_id")
@@ -131,4 +131,4 @@ def on_webapp_summary(request):
     web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
     WebApp.rest_check_permission_or_raise(
         request, ["VIEW_PERMS", "SAVE_PERMS"], web_app)
-    return webapp_onboarding.summary_for(web_app)
+    return _webapp_onboarding.summary_for(web_app)
