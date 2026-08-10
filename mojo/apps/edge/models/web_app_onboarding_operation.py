@@ -94,7 +94,7 @@ class WebAppOnboardingOperation(models.Model, MojoModel):
         CAN_UPDATE = False
         CAN_DELETE = False
         GROUP_FIELD = "group"
-        VIEW_PERMS = ["view_dns", "manage_dns", "security"]
+        VIEW_PERMS = ["manage_webapp", "security"]
         SAVE_PERMS = ["manage_webapp", "security"]
         NO_SHOW_FIELDS = ["state"]
         NO_SAVE_FIELDS = [

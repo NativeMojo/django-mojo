@@ -108,7 +108,7 @@ def _assert_current(operation, request, mutate=False):
         raise me.PermissionDeniedException("Group tokens cannot operate onboarding")
     if operation.actor_id != getattr(request.user, "pk", None):
         raise me.PermissionDeniedException("Only the initiating administrator may continue")
-    if not operation.group.is_active:
+    if not operation.group.is_effectively_active():
         raise me.PermissionDeniedException("The onboarding group is no longer active")
     WebAppOnboardingOperation.rest_check_permission_or_raise(
         request, ["SAVE_PERMS", "VIEW_PERMS"] if mutate else ["VIEW_PERMS"],
@@ -409,7 +409,7 @@ def advance(operation_id, owner=None):
             pk=operation_id)
     try:
         if (operation.actor is None or not operation.actor.is_active or
-                not operation.group.is_active or not
+                not operation.group.is_effectively_active() or not
                 operation.group.user_has_permission(
                     operation.actor, ["manage_webapp", "security"])):
             raise me.PermissionDeniedException("Onboarding authority is no longer current")

@@ -21,7 +21,7 @@ def _human(request):
 def _group(request):
     _human(request)
     group = Group.get_instance_or_404(request.DATA.get("group"))
-    if not group.is_active:
+    if not group.is_effectively_active():
         raise me.PermissionDeniedException("The selected group is inactive")
     if not group.user_has_permission(
             request.user, ["manage_webapp", "security"]):

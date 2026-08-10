@@ -179,6 +179,7 @@ def test_summary_is_frozen_and_secret_free(opts):
 
 @th.django_unit_test("operation detail authorizes a group member without a global grant")
 def test_detail_uses_operation_group_scope(opts):
+    from mojo.apps.account.models import GroupMember
     from mojo.apps.edge.models import WebAppOnboardingOperation
 
     operation = WebAppOnboardingOperation.objects.create(
@@ -191,6 +192,59 @@ def test_detail_uses_operation_group_scope(opts):
     assert response.status_code == 200, (
         "a group-scoped WebApp manager was blocked by an accidental global "
         f"permission gate ({response.status_code}: {response.body})")
+
+    member = GroupMember.objects.get(group=opts.group, user=opts.actor)
+    member.permissions = {"manage_dns": True}
+    member.save(update_fields=["permissions", "modified"])
+    revoked = opts.client.get(
+        f"/api/edge/webapp/onboarding/detail?operation={operation.operation_id}")
+    assert revoked.status_code in (401, 403), (
+        "revoking manage_webapp left operation detail readable through a DNS "
+        f"permission ({revoked.status_code}: {revoked.body})")
+    member.permissions = {"manage_webapp": True, "manage_dns": True}
+    member.save(update_fields=["permissions", "modified"])
+
+
+@th.django_unit_test("inactive group ancestor revokes request and worker onboarding authority")
+def test_inactive_parent_denies_onboarding(opts):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from mojo import errors as me
+    from mojo.apps.account.models import Group
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.rest import webapp_onboarding as onboarding_rest
+
+    parent = Group.objects.create(name="onboarding-inactive-parent",
+                                  kind="organization", is_active=False)
+    opts.group.parent = parent
+    opts.group.save(update_fields=["parent", "modified"])
+    operation = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, origin="http://testserver",
+        replay_fingerprint="e" * 64)
+    request = SimpleNamespace(
+        user=opts.actor, group_token=None, DATA={"group": opts.group.pk})
+    try:
+        onboarding_rest._group(request)
+        group_error = None
+    except me.PermissionDeniedException as exc:
+        group_error = exc
+    assert group_error is not None, \
+        "onboarding group selection ignored an inactive ancestor"
+
+    login(opts, opts.actor_email, opts.actor_password)
+    detail = opts.client.get(
+        f"/api/edge/webapp/onboarding/detail?operation={operation.operation_id}")
+    assert detail.status_code in (401, 403), \
+        "operation detail ignored an inactive group ancestor"
+
+    root = Path(__file__).resolve().parents[2]
+    service = (root / "mojo/apps/edge/services/webapp_onboarding.py").read_text()
+    assert service.count("operation.group.is_effectively_active()") >= 2, \
+        "request or worker authority checks use only the direct group flag"
+    opts.group.parent = None
+    opts.group.save(update_fields=["parent", "modified"])
+    parent.delete()
 
 
 @th.django_unit_test("stale worker release cannot resurrect cancellation")
