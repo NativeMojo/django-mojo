@@ -116,6 +116,18 @@ def _clear_state():
 @th.django_unit_setup()
 def setup_alarm_ingress(opts):
     _clear_state()
+    # AWS setup tests persist the protected runtime allowlist by design.  This
+    # module owns its receiver fixtures, so remove both the DB row and its Redis
+    # cache entry before testing the file-settings compatibility path.
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import system_settings
+    row = Setting.objects.filter(
+        key=system_settings.MONITORING_TOPICS, group=None).first()
+    if row is not None:
+        Setting.objects.filter(pk=row.pk).delete()
+    redis = Setting._redis()
+    if redis:
+        redis.hdel(Setting._redis_key(None), system_settings.MONITORING_TOPICS)
 
 
 @th.django_unit_test()
@@ -400,6 +412,63 @@ def test_default_rules_do_not_open_cloudwatch_incident(opts):
     assert transition.dispatch_status == "complete", "No-policy alarm must need no handler dispatch"
     assert not Incident.objects.filter(category="aws:cloudwatch:alarm").exists(), \
         "Enabling the receiver alone must not create an incident"
+
+
+@th.django_unit_test()
+def test_setup_delivery_probe_is_evidence_only_after_rules_exist(opts):
+    from django.utils import timezone
+    from mojo.apps.aws.models import CloudWatchAlarmTransition
+    from mojo.apps.aws.services import aws_setup
+    from mojo.apps.aws.services.cloudwatch_alarms import process_notification
+    from mojo.apps.incident.models import Event, Incident, RuleSet
+
+    _clear_state()
+    RuleSet.ensure_cloudwatch_rules()
+    probe_name = "django-mojo/test-installation/delivery-probe"
+    payload = _payload("ALARM", "OK", timezone.now(), extras={"AlarmName": probe_name})
+    envelope = _envelope("setup-delivery-probe", payload)
+    with mock.patch.object(aws_setup, "is_owned_delivery_probe", return_value=True):
+        first = process_notification(envelope)
+        second = process_notification(envelope)
+    transition = CloudWatchAlarmTransition.objects.get(pk=first["transition_id"])
+    assert transition.is_delivery_probe, "The owned System Setup alarm must be marked as probe evidence"
+    assert transition.event_id is None and transition.incident_id is None, \
+        "A delivery probe must never become an operational event or incident"
+    assert transition.dispatch_status == CloudWatchAlarmTransition.DISPATCH_COMPLETE, \
+        "Evidence-only probes must never enter handler dispatch"
+    assert second["duplicate"] is True, "Probe delivery reruns must remain idempotent"
+    assert not Event.objects.filter(category="aws:cloudwatch:alarm").exists(), \
+        "Installed incident rules must not turn a setup probe into an event"
+    assert not Incident.objects.filter(category="aws:cloudwatch:alarm").exists(), \
+        "Installed incident rules must not turn a setup probe into an incident"
+
+
+@th.django_unit_test()
+def test_delivery_probe_identity_rejects_wrong_topic_account_and_region(opts):
+    from mojo.apps.aws.services import aws_setup
+
+    identity = {"uuid": "00000000-0000-0000-0000-000000000001", "slug": "install-one"}
+    name = "django-mojo/install-one/delivery-probe"
+    topic = "arn:aws:sns:us-east-1:123456789012:django-mojo-install-one-operations"
+    data = {
+        "alarm_name": name,
+        "alarm_arn": f"arn:aws:cloudwatch:us-east-1:123456789012:alarm:{name}",
+        "account": "123456789012", "region": "us-east-1",
+    }
+    with mock.patch.object(aws_setup.system_settings, "read_installation_identity", return_value=identity), \
+            mock.patch.object(aws_setup.system_settings, "get_value", return_value=[topic]), \
+            mock.patch.object(aws_setup, "_region", return_value="us-east-1"):
+        assert aws_setup.is_owned_delivery_probe({"TopicArn": topic}, data), \
+            "The exact owned topic/account/region/alarm identity should classify as probe evidence"
+        wrong_topic = topic.replace("operations", "other")
+        assert not aws_setup.is_owned_delivery_probe({"TopicArn": wrong_topic}, data), \
+            "The deterministic name on another topic must remain an operational alarm"
+        wrong_account = dict(data, account="999999999999")
+        assert not aws_setup.is_owned_delivery_probe({"TopicArn": topic}, wrong_account), \
+            "A payload account mismatch must not suppress event dispatch"
+        wrong_region = dict(data, region="us-west-2")
+        assert not aws_setup.is_owned_delivery_probe({"TopicArn": topic}, wrong_region), \
+            "A payload region mismatch must not suppress event dispatch"
 
 
 @th.django_unit_test()
