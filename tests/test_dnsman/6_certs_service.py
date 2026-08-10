@@ -105,23 +105,16 @@ class FakeDns(object):
 class FakeJobs(object):
     """Captures the dnsman publishes the certs service makes.
 
-    Anything else is FORWARDED to the real ``jobs.publish``: the patch is
-    process-global while test modules run as parallel threads, and swallowing
-    a foreign module's real publish mid-window is the
-    15_deploy_orchestrate/test_run_jobs_helper flake. Kept as a stub class
-    (rather than th.capture_publishes) because the tests read ``.published``
-    objicts; the real publish is bound at construction, before the patch.
+    Tests patch the cert service's local ``publish_job`` seam instead of the
+    process-global ``jobs.publish`` function, so parallel modules retain their
+    own queue behavior. Kept as a stub class because the tests read
+    ``.published`` objicts.
     """
 
     def __init__(self):
-        import mojo.apps.jobs as jobs_module
-
         self.published = []
-        self._real_publish = jobs_module.publish
 
     def publish(self, func, payload=None, **kwargs):
-        if not str(func).startswith("mojo.apps.dnsman."):
-            return self._real_publish(func, payload=payload, **kwargs)
         job_id = f"job-{len(self.published) + 1}"
         self.published.append(objict(
             func=func,
@@ -130,6 +123,25 @@ class FakeJobs(object):
             broadcast=kwargs.get("broadcast", False),
             job_id=job_id))
         return job_id
+
+    def publish_certificate(self, func, certificate, channel="default",
+                            idempotency_marker=None):
+        return self.publish(
+            func, payload={"certificate": certificate.pk}, channel=channel,
+            idempotency_marker=idempotency_marker)
+
+    def publish_sync(self, certificate):
+        return self.publish(
+            "mojo.apps.dnsman.asyncjobs.certificate_updated",
+            payload={
+                "certificate": certificate.pk,
+                "domain": certificate.domain.name,
+                "common_name": certificate.common_name,
+                "not_after": (
+                    certificate.not_after.isoformat()
+                    if certificate.not_after else None),
+            },
+            channel="certs", broadcast=True)
 
 
 class FakeAcmeClient(object):
@@ -302,7 +314,6 @@ def _issuance_env(client=None, dns_stub=None, real_jobs=False):
     """
     from unittest import mock
 
-    from mojo.apps import jobs as jobs_module
     from mojo.apps.dnsman.services import certs, dns
     from mojo.models import KSMSecrets
 
@@ -310,12 +321,13 @@ def _issuance_env(client=None, dns_stub=None, real_jobs=False):
     jobs_stub = FakeJobs()
     kms = FakeKMS()
 
-    real_publish = jobs_module.publish
+    real_publish_job = certs.publish_job
 
-    def publish_certificate_job(func, payload=None, **kwargs):
-        if func in (certs.ISSUE_JOB, certs.RENEW_JOB):
-            kwargs["channel"] = CERT_JOB_CHANNEL
-        return real_publish(func, payload=payload, **kwargs)
+    def publish_certificate_job(func, certificate, channel="default",
+                                idempotency_marker=None):
+        return real_publish_job(
+            func, certificate, channel=CERT_JOB_CHANNEL,
+            idempotency_marker=idempotency_marker)
 
     patches = [
         mock.patch.object(KSMSecrets, "_get_kms", return_value=kms),
@@ -324,12 +336,14 @@ def _issuance_env(client=None, dns_stub=None, real_jobs=False):
         mock.patch.object(dns, "delete_record", dns_stub.delete_record),
         mock.patch.object(dns, "clear_record", dns_stub.clear_record),
         mock.patch.object(dns, "wait_for_propagation", dns_stub.wait_for_propagation),
+        mock.patch.object(certs, "publish_sync", side_effect=jobs_stub.publish_sync),
     ]
     if real_jobs:
         patches.append(mock.patch.object(
-            jobs_module, "publish", side_effect=publish_certificate_job))
+            certs, "publish_job", side_effect=publish_certificate_job))
     else:
-        patches.append(mock.patch.object(jobs_module, "publish", jobs_stub.publish))
+        patches.append(mock.patch.object(
+            certs, "publish_job", side_effect=jobs_stub.publish_certificate))
 
     with contextlib.ExitStack() as stack:
         for patch in patches:
@@ -1013,7 +1027,6 @@ def test_certs_sync_broadcast_carries_no_material(opts):
 def test_certs_renew_due_selects_only_due(opts):
     from unittest import mock
 
-    from mojo.apps import jobs as jobs_module
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.services import certs
     from mojo.helpers import dates
@@ -1039,7 +1052,8 @@ def test_certs_renew_due_selects_only_due(opts):
         not_after=None, renew_after=None)
 
     jobs_stub = FakeJobs()
-    with mock.patch.object(jobs_module, "publish", jobs_stub.publish):
+    with mock.patch.object(
+            certs, "publish_job", side_effect=jobs_stub.publish_certificate):
         result = certs.renew_due()
 
     assert result.certificates == [due.pk], (
@@ -1061,7 +1075,6 @@ def test_certs_request_refuses_duplicate_active(opts):
     from unittest import mock
 
     from mojo import errors as me
-    from mojo.apps import jobs as jobs_module
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.services import certs
     from mojo.helpers import dates
@@ -1077,7 +1090,8 @@ def test_certs_request_refuses_duplicate_active(opts):
         renew_after=now + timedelta(days=50))
 
     jobs_stub = FakeJobs()
-    with mock.patch.object(jobs_module, "publish", jobs_stub.publish):
+    with mock.patch.object(
+            certs, "publish_job", side_effect=jobs_stub.publish_certificate):
         refused = None
         try:
             certs.request_certificate(domain)
