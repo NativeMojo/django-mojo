@@ -339,6 +339,11 @@ rule dispatch. Classification requires the exact owned topic, alarm ARN,
 account, region, and allowlist. Final reconciliation accepts only evidence
 created after the current setup step began.
 
+Migration `aws.0012_cloudwatchalarmtransition_is_delivery_probe` adds the
+indexed boolean to `CloudWatchAlarmTransition`; its read-only REST graph exposes
+the field so Admin clients can separate setup proof from operational alarm
+history. Apply the migration before enabling `aws_monitoring`.
+
 ## SNS alarm ingestion
 
 For deployment-wide audit and create-missing setup, use

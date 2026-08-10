@@ -25,6 +25,12 @@ and owned alarms, then waits for a signed delivery probe before reporting the
 section ready. The probe is evidence-only and never opens an Event, Incident,
 Ticket, or normal alarm dispatch.
 
+An existing same-name untagged topic is not adopted silently. System Setup
+returns an exact `topic_arn` enum and requires
+`adopt_existing_topic: true`; partial or conflicting ownership tags fail
+closed. It preserves unrelated topic-policy statements and owns only the
+CloudWatch publish statement restricted to the selected AWS account.
+
 ---
 
 ## Endpoints
@@ -308,6 +314,13 @@ Alarm ingestion is opt-in at the policy layer. Without a CloudWatch-specific
 RuleSet, the Event is retained but no Incident or Ticket is created. With a
 matching rule, `ALARM` can open an incident and run configured handlers such as
 `ticket://?board=<id>`.
+
+System Setup's owned delivery probe is the exception: the persisted transition
+has `is_delivery_probe: true` and is evidence-only, so it never creates an
+Event, Incident, Ticket, or rule dispatch. Apply migration
+`aws.0012_cloudwatchalarmtransition_is_delivery_probe` before using the
+monitoring setup section. The transition's REST graph exposes the boolean so an
+Admin client can distinguish proof rows from operational alarm history.
 
 `INSUFFICIENT_DATA` records uncertainty without closing current work. `OK`
 resolves the matching Incident and adds recovery history/notes. An existing

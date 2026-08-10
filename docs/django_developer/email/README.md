@@ -6,6 +6,19 @@ The email subsystem lives in `mojo/apps/aws/` and is built on AWS SES.
 - [Sending Email](sending.md) — Direct send, templates, Mailbox API
 - [Receiving Email](receiving.md) — Inbound email handling
 
+For a new installation, prefer Admin **System Setup** section `aws_email`.
+It completely paginates SES domain identities, offers only identities whose
+verification status is `Success`, validates that the selected sender belongs
+to that domain, imports the local `EmailDomain`, and makes the sender the sole
+outbound system-default `Mailbox`. It then installs only missing shipped email
+templates; customized or unrelated rows are preserved. This is a local import
+of an already verified SES identity, not a request to verify a new domain.
+
+The default `seed_email_templates` command is an adapter over the same
+concurrency-safe missing-only installer. Its existing `--update-existing`
+maintenance mode remains explicit and is the only command path that overwrites
+shipped template fields.
+
 Run `python manage.py aws-check --section email --check` for a non-persistent
 SES/domain/DKIM/sandbox/topic/receiving audit plus system Mailbox and shipped
 template checks. Apply mode can create absent SES identity/DKIM requests, SNS

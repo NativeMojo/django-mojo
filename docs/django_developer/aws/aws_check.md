@@ -8,25 +8,39 @@ existing resources that differ from defaults are reported and preserved.
 
 ## Admin System Setup convergence
 
-The built-in Admin **System Setup** page registers four AWS sections from
-`mojo.apps.aws.services.aws_setup`: identity, system S3, SES email, and
-SNS/CloudWatch monitoring. It reuses AWS Check inventory and alarm-profile
-logic but runs mutations as durable, repeatable setup operations; it never
-shells out to this command.
+The built-in Admin **System Setup** page registers four stable sections from
+`mojo.apps.aws.services.aws_setup`: `aws_identity`, `aws_s3`, `aws_email`, and
+`aws_monitoring`. It reuses AWS Check inventory and alarm-profile logic but
+runs mutations as durable, repeatable setup operations; it never shells out to
+this command.
 
-Setup asks for a late choice only when ownership cannot be inferred safely: an
-exact discovered private media bucket, a verified SES domain and sender, or
-affirmative adoption of an exact same-name untagged operations topic. S3 keeps
-Block Public Access enabled and merges upload CORS. SES installs only missing
-shipped templates. Monitoring merges a restricted CloudWatch publish policy,
-persists the receiver allowlist, converges the real alarm profile, and requires
-a delivery-probe transition created after the operation began.
+`aws_identity` is read-only. The three mutable sections use these typed late
+choices:
 
-Provider failures cross the shared bounded provider-call boundary. UI, JSON,
-persisted operation logs, and application logs receive only the operation,
-safe provider code, safe request id, retryability/mutation state, and the exact
-IAM action for a denial. Raw provider messages and exception chains are not
-retained.
+| Section | Choice and convergence contract |
+|---|---|
+| `aws_s3` | Exact `bucket` enum from complete safe-candidate discovery plus `adopt_existing: true`. Adoption keeps all four Block Public Access flags enabled, preserves objects and policies, merges tags and wildcard direct-upload CORS without deleting unrelated rules, and creates or repairs the private system-default FileManager. |
+| `aws_email` | Exact verified SES `domain` enum plus a valid `sender` on that domain. Setup imports or updates the local `EmailDomain`, makes that outbound Mailbox the sole system default, and installs only missing shipped templates. Existing customized templates are never overwritten. |
+| `aws_monitoring` | Usually no choice. An exact same-name untagged legacy topic produces `topic_arn` plus `adopt_existing_topic: true`; partial or conflicting ownership tags fail closed. Setup preserves unrelated policy statements, owns one account-restricted CloudWatch publish statement, persists the receiver allowlist, converges the HTTPS subscription and real alarm profile, and requires a signed delivery-probe transition created after the current setup step began. |
+
+S3 and SES discovery never mutate provider state. The portal does not invent a
+bucket while a suitable existing private media bucket is available, and it
+never silently adopts an untagged legacy operations topic.
+
+Provider failures cross the shared bounded provider-call boundary. A provider
+failure detail may contain only `operation`, `provider_code`, `retryable`,
+`mutation_state`, an optional safe `request_id`, and the exact `iam_action` for
+an authorization denial. Normal successful checks may carry their documented
+bounded domain fields such as account, region, ARN, or candidate count. A
+denied fix step records its IAM action in the bounded operation log; other
+ambiguous provider failures remain reconciling. Raw provider messages,
+credentials, exception chains, and request parameters are never retained in
+UI, JSON, durable state, or application logs.
+
+This portal integration does not change the `manage.py aws-check` flags,
+section names, JSON schema, or exit codes below. The command and portal share
+the provider boundary and AWS Check logic, while the portal alone owns the
+durable operation protocol and protected runtime settings.
 
 ## Modes and exit status
 
@@ -74,9 +88,9 @@ remediation/changed items:
     "section": "monitoring",
     "status": "pending",
     "code": "sns.topic_not_allowlisted",
-    "message": "Operations topic ARN is not in the static receiver allowlist",
+    "message": "Operations topic ARN is not in the receiver allowlist",
     "details": {"topic_arn": "arn:aws:sns:us-west-2:123456789012:django-mojo-example-operations"},
-    "remediation": "Add the exact ARN to AWS_CLOUDWATCH_ALARM_TOPIC_ARNS, restart Django, then rerun.",
+    "remediation": "Use System Setup to persist the exact ARN, or update the static AWS_CLOUDWATCH_ALARM_TOPIC_ARNS fallback and restart Django, then rerun.",
     "changed": false
   }]
 }
@@ -366,6 +380,9 @@ AWS supports it:
 | SES/email create-missing | `ses:VerifyDomainIdentity`, `ses:VerifyDomainDkim`, `ses:SetIdentityNotificationTopic`, `sns:ListTopics`, `sns:ListTagsForResource`, `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe` |
 | Monitoring audit | `sns:ListTopics`, `sns:ListTagsForResource`, `sns:ListSubscriptionsByTopic`, `cloudwatch:DescribeAlarms`, `cloudwatch:ListTagsForResource`, `cloudwatch:ListMetrics`, `ec2:DescribeInstances`, `rds:DescribeDBInstances`, `elasticache:DescribeCacheClusters`, `elasticloadbalancing:DescribeTargetGroups` |
 | Monitoring apply | `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe`, `cloudwatch:PutMetricAlarm`, `cloudwatch:TagResource` |
+| System Setup S3 discovery/adoption | `s3:ListAllMyBuckets`, `s3:GetBucketLocation`, `s3:GetBucketWebsite`, `s3:GetBucketTagging`, `s3:GetBucketPolicy`, `s3:GetBucketPublicAccessBlock`, `s3:GetBucketCORS`, `s3:PutBucketPublicAccessBlock`, `s3:PutBucketTagging`, `s3:PutBucketCORS` |
+| System Setup SES import | `ses:ListIdentities`, `ses:GetIdentityVerificationAttributes`; sender, local domain import, and missing-only templates use the Django database |
+| System Setup monitoring convergence/probe | Monitoring audit actions above plus `sns:GetTopicAttributes`, `sns:SetTopicAttributes`, `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe`, `cloudwatch:PutMetricAlarm`, and `cloudwatch:SetAlarmState` |
 | Versions audit (opt-in) | `rds:DescribeDBClusters`, `rds:DescribeDBInstances`, `rds:DescribeDBEngineVersions`, `rds:DescribeDBMajorEngineVersions`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeCacheEngineVersions` |
 
 Cron, rule, mailbox and template checks use Django database/Redis access rather
