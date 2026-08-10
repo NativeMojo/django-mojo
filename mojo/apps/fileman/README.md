@@ -511,8 +511,8 @@ export KMS_KEY_ID="arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-123
 [
     {
         "AllowedHeaders": ["*"],
-        "AllowedMethods": ["GET", "POST", "PUT"],
-        "AllowedOrigins": ["https://yourdomain.com"],
+        "AllowedMethods": ["GET", "HEAD", "PUT", "POST", "DELETE"],
+        "AllowedOrigins": ["*"],
         "ExposeHeaders": ["ETag"],
         "MaxAgeSeconds": 3000
     }
@@ -528,8 +528,8 @@ export KMS_KEY_ID="arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-123
    - Ensure client uploads immediately after getting URL
 
 2. **CORS Errors on S3**
-   - Configure CORS policy on S3 bucket
-   - Ensure your domain is in AllowedOrigins
+   - Run `python manage.py aws-check --apply --section s3`
+   - Wildcard CORS is the default; the presigned URL, not the browser origin, authorizes the upload
 
 3. **File Not Found After Upload**
    - Check that finalize-upload was called successfully

@@ -72,6 +72,11 @@ The target depends on the storage backend:
   PUT are supported. Raw PUT requires an explicit `Content-Length`, including
   `0` for an empty file.
 
+The standard django-mojo S3 system bucket accepts these presigned requests from
+any browser origin. That wildcard CORS rule is not public upload access: the
+opaque presigned URL is still the short-lived upload credential, and an
+unsigned request still has no S3 permission.
+
 ### Step 2a: Upload to Presigned URL (S3/cloud backends)
 
 ```bash

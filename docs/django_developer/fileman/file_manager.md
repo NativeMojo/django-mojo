@@ -113,9 +113,14 @@ Files stored in AWS S3. Supports:
 `python manage.py aws-check --section s3 --check` audits the system-default S3
 manager, bucket access/region, Public Access Block and CORS without persisting
 audit state. `--apply --bucket-name <name>` can create a missing private bucket
-and system manager. `--probe-s3` is separately confirmed and uses only a unique
-sentinel key that is deleted in `finally`; it never lists or deletes user
-objects. Existing buckets and policies are preserved.
+and system manager. `--apply --section s3` also repairs missing direct-upload
+CORS. The default is `AllowedOrigins: ["*"]`, matching legacy django-mojo: CORS
+permits a browser origin to use a presigned URL but does not authorize uploads
+or make the private bucket public. Set `allowed_origins` on the FileManager when
+a deployment deliberately wants a narrower list. `--probe-s3` is separately
+confirmed and uses only a unique sentinel key that is deleted in `finally`; it
+never lists or deletes user objects. Existing policies and unrelated CORS rules
+are preserved.
 
 Bucket and prefix come from `backend_url` (`s3://my-bucket/some/prefix`).
 Credentials come from the manager's own settings, falling back to these

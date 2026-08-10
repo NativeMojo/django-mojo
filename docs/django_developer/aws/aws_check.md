@@ -2,9 +2,9 @@
 
 `python manage.py aws-check` audits the AWS and operational wiring required by
 django-mojo. It is audit-first: a normal non-interactive invocation never
-mutates AWS or Django state, and apply mode creates only confirmed missing
-resources. Existing resources that differ from defaults are reported and
-preserved.
+mutates AWS or Django state. Apply mode creates confirmed missing resources and
+repairs missing direct-upload CORS on the system FileManager bucket. Other
+existing resources that differ from defaults are reported and preserved.
 
 ## Modes and exit status
 
@@ -73,6 +73,19 @@ remediation/changed items:
 | `dns` | dnsman ACME directory/account, delegation states, certificate expiry; under `--apply`, bootstraps one domain |
 | `rules` | opt-in create-only CloudWatch and version-drift incident policies |
 | `versions` | **opt-in** managed-service major version drift (RDS/Aurora, ElastiCache) — never part of a default run, and never reports FAIL |
+
+### System S3 direct uploads
+
+A system bucket created or adopted by `aws-check` stays private and keeps all
+four S3 Block Public Access controls enabled. It also receives wildcard browser
+CORS (`AllowedOrigins: ["*"]`) and stores `allowed_origins=["*"]` on the
+FileManager. These settings are compatible: CORS only lets a browser use a
+presigned upload URL that the API already authorized; it does not make the
+bucket public or grant unsigned callers any S3 permission.
+
+For an existing system FileManager with direct uploads enabled, read-only mode
+reports missing or incomplete CORS. Rerun with `--apply --section s3` to merge
+the standard wildcard upload rule without replacing unrelated CORS rules.
 
 `versions` is the one section that is not in the default set: select it with
 `--section versions`. It can only report PASS, WARN or PENDING, so a run made
@@ -325,7 +338,7 @@ AWS supports it:
 |---|---|
 | identity/all AWS checks | `sts:GetCallerIdentity` |
 | S3 audit | `s3:ListBucket`, `s3:GetBucketPublicAccessBlock`, `s3:GetBucketCORS` |
-| S3 create/adopt | `s3:CreateBucket`, `s3:GetBucketLocation`, `s3:PutBucketPublicAccessBlock`, `s3:GetBucketTagging`, `s3:PutBucketTagging`; adoption also needs `s3:ListAllMyBuckets` |
+| S3 create/adopt/apply | `s3:CreateBucket`, `s3:GetBucketLocation`, `s3:PutBucketPublicAccessBlock`, `s3:GetBucketTagging`, `s3:PutBucketTagging`, `s3:GetBucketCORS`, `s3:PutBucketCORS`; adoption also needs `s3:ListAllMyBuckets` |
 | S3 probe | `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` on `__django_mojo_aws_check__/*` |
 | SES/email audit | `ses:GetAccount`, `ses:GetIdentityVerificationAttributes`, `ses:GetIdentityDkimAttributes`, `ses:GetIdentityNotificationAttributes`, `ses:DescribeReceiptRuleSet`, `sns:GetTopicAttributes`, `sns:ListSubscriptionsByTopic`, `s3:ListBucket` for optional inbound storage |
 | SES/email create-missing | `ses:VerifyDomainIdentity`, `ses:VerifyDomainDkim`, `ses:SetIdentityNotificationTopic`, `sns:ListTopics`, `sns:ListTagsForResource`, `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe` |

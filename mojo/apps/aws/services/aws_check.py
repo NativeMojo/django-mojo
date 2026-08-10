@@ -25,6 +25,7 @@ SECTIONS = ("prerequisites", "identity", "cron", "s3", "email", "monitoring", "d
 # default run, and it can only ever report pass/warn/pending — never fail.
 ALL_SECTIONS = SECTIONS + ("versions",)
 OWNERSHIP_TAGS = {"managed-by": "django-mojo", "purpose": "cloudwatch-incidents"}
+SYSTEM_FILEMAN_ALLOWED_ORIGINS = ["*"]
 
 # The custom certificate-expiry metric. The publisher (dnsman) and the alarm
 # (here) must agree on all three of namespace, name and the deployment
@@ -42,6 +43,35 @@ def _setting(name, default=None, kind=None):
 
 def _error_code(exc):
     return str((getattr(exc, "response", {}).get("Error") or {}).get("Code") or "")
+
+
+def _direct_upload_cors_rule(origins):
+    """Legacy-compatible browser CORS; presigned URLs remain the access control."""
+    return {
+        "AllowedHeaders": ["*"],
+        "AllowedMethods": ["GET", "HEAD", "PUT", "POST", "DELETE"],
+        "AllowedOrigins": list(origins),
+        "ExposeHeaders": ["ETag", "x-amz-version-id"],
+        "MaxAgeSeconds": 3000,
+    }
+
+
+def _cors_supports_direct_upload(cors, origins):
+    required_methods = {"PUT", "POST", "HEAD"}
+    for origin in origins:
+        covered = False
+        for rule in cors or []:
+            allowed_origins = rule.get("AllowedOrigins", [])
+            if "*" not in allowed_origins and origin not in allowed_origins:
+                continue
+            methods = {str(value).upper() for value in rule.get("AllowedMethods", [])}
+            headers = {str(value).lower() for value in rule.get("AllowedHeaders", [])}
+            if required_methods.issubset(methods) and "*" in headers:
+                covered = True
+                break
+        if not covered:
+            return False
+    return True
 
 
 def _safe_slug(value):
@@ -348,12 +378,16 @@ class AWSCheckRunner:
         verified = self._bucket_tags(s3, bucket)
         if any(verified.get(key) != value for key, value in OWNERSHIP_TAGS.items()):
             raise RuntimeError("bucket ownership tags did not verify")
+        self._ensure_direct_upload_cors(
+            s3, bucket, SYSTEM_FILEMAN_ALLOWED_ORIGINS, current=[],
+        )
         manager = FileManager.objects.create(
             name="django-mojo system S3", backend_type=FileManager.AWS_S3,
             backend_url=f"s3://{bucket}", is_active=True, is_default=True,
             is_public=False, supports_direct_upload=True,
         )
         manager.set_aws_region(self.region)
+        manager.set_allowed_origins(SYSTEM_FILEMAN_ALLOWED_ORIGINS)
         manager.save()
         manager._update_default()
         return manager
@@ -378,15 +412,33 @@ class AWSCheckRunner:
         s3.put_bucket_tagging(Bucket=bucket, Tagging={"TagSet": [
             {"Key": key, "Value": value} for key, value in sorted(tags.items())
         ]})
+        self._ensure_direct_upload_cors(s3, bucket, SYSTEM_FILEMAN_ALLOWED_ORIGINS)
         manager = FileManager.objects.create(
             name="django-mojo system S3", backend_type=FileManager.AWS_S3,
             backend_url=f"s3://{bucket}", is_active=True, is_default=True,
             is_public=False, supports_direct_upload=True,
         )
         manager.set_aws_region(self.region)
+        manager.set_allowed_origins(SYSTEM_FILEMAN_ALLOWED_ORIGINS)
         manager.save()
         manager._update_default()
         return manager
+
+    def _ensure_direct_upload_cors(self, s3, bucket, origins, current=None):
+        """Merge one upload rule without replacing unrelated bucket CORS rules."""
+        if current is None:
+            try:
+                current = s3.get_bucket_cors(Bucket=bucket).get("CORSRules", [])
+            except ClientError as exc:
+                if _error_code(exc) != "NoSuchCORSConfiguration":
+                    raise
+                current = []
+        if _cors_supports_direct_upload(current, origins):
+            return False
+        rules = list(current or [])
+        rules.append(_direct_upload_cors_rule(origins))
+        s3.put_bucket_cors(Bucket=bucket, CORSConfiguration={"CORSRules": rules})
+        return True
 
     def check_s3(self):
         from mojo.apps.fileman.models import FileManager
@@ -459,13 +511,34 @@ class AWSCheckRunner:
                       {"bucket": bucket, "configuration": block})
         except ClientError as exc:
             self._add("s3", "warn", "bucket.public_posture_unknown", exc, {"bucket": bucket})
-        try:
-            cors = s3.get_bucket_cors(Bucket=bucket).get("CORSRules", [])
-            self._add("s3", "pass" if cors else "warn", "bucket.cors", "S3 CORS configuration audited",
-                      {"bucket": bucket, "rule_count": len(cors)})
-        except ClientError as exc:
-            code = _error_code(exc)
-            self._add("s3", "warn" if code == "NoSuchCORSConfiguration" else "fail", "bucket.cors", exc, {"bucket": bucket})
+        if manager.supports_direct_upload:
+            origins = manager.allowed_origins or SYSTEM_FILEMAN_ALLOWED_ORIGINS
+            if isinstance(origins, str):
+                origins = [value.strip() for value in origins.split(",") if value.strip()]
+            try:
+                try:
+                    cors = s3.get_bucket_cors(Bucket=bucket).get("CORSRules", [])
+                except ClientError as exc:
+                    if _error_code(exc) != "NoSuchCORSConfiguration":
+                        raise
+                    cors = []
+                if _cors_supports_direct_upload(cors, origins):
+                    self._add("s3", "pass", "bucket.cors", "S3 direct-upload CORS is configured",
+                              {"bucket": bucket, "rule_count": len(cors), "allowed_origins": origins})
+                elif self.apply and self._approve(f"Configure direct-upload CORS on {bucket}?"):
+                    self._ensure_direct_upload_cors(s3, bucket, origins, current=cors)
+                    if not manager.allowed_origins:
+                        manager.set_allowed_origins(SYSTEM_FILEMAN_ALLOWED_ORIGINS)
+                        manager.save()
+                    self._add("s3", "pass", "bucket.cors_configured",
+                              "Configured S3 CORS for direct uploads",
+                              {"bucket": bucket, "allowed_origins": origins}, changed=True)
+                else:
+                    self._add("s3", "warn", "bucket.cors", "S3 direct-upload CORS is missing or incomplete",
+                              {"bucket": bucket, "rule_count": len(cors), "allowed_origins": origins},
+                              remediation="Rerun with --apply --section s3 to configure it.")
+            except ClientError as exc:
+                self._add("s3", "fail", "bucket.cors", exc, {"bucket": bucket, "aws_code": _error_code(exc)})
         if self.probe_s3 and self._approve(f"Write/read/delete one sentinel object in {bucket}?"):
             key = f"__django_mojo_aws_check__/{uuid.uuid4().hex}"
             body = uuid.uuid4().hex.encode("ascii")
