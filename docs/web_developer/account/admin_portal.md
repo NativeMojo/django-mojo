@@ -1,6 +1,30 @@
 # Admin Portal API Guide — REST API Reference
 
-This guide is for web developers building internal admin portals on top of django-mojo.
+This guide covers django-mojo's built-in Admin portal and the same APIs for web
+developers building a custom internal console.
+
+## Built-in portal
+
+The built-in portal defaults to `/admin/` and uses the hosted Bouncer auth
+pages. Round one provides a system overview, User and Group management, and
+WebApp `MOJO_DEPLOY_KEY` management with light, dark, and system themes.
+
+Anonymous document requests receive only a small auth handoff. Private HTML,
+JavaScript, and CSS require a short-lived path-scoped source cookie; anonymous
+asset requests return `404`. That prevents unauthenticated HTTP browsing of the
+implementation, but does not replace API authorization or hide source from an
+authorized operator or artifact holder.
+
+The browser obtains its source cookie with:
+
+```http
+POST /api/account/admin/session
+Authorization: Bearer <interactive-user-jwt>
+```
+
+The caller needs a global `view_admin`, `manage_users`, or `admin` grant. API
+keys and group-scoped tokens are refused. Normal portal data calls continue to
+send the JWT and are authorized by each endpoint's own permissions.
 
 ## What "Admin Portal" Means in Mojo
 
@@ -191,6 +215,9 @@ This prevents non-admin users from escalating their own access.
 | Metrics | `GET /api/metrics/fetch`, `POST /api/metrics/record` | `metrics` |
 | Metrics permissions | `GET/POST /api/metrics/permissions` | `metrics` |
 | File management | `GET/POST /api/fileman/manager`, `GET/POST /api/fileman/file` | `files` |
+| WebApp key status | `GET /api/edge/webapp/key_status?webapp=<id>` | `view_dns`, `manage_dns`, or `security`, plus object access |
+| WebApp key create/rotate | `POST /api/edge/webapp/link_key` | `manage_webapp`, recent interactive auth, plus object access |
+| WebApp key revoke | `POST /api/edge/webapp/revoke_key` | `manage_webapp`, recent interactive auth, plus object access |
 
 > **Global grants required for platform-wide endpoints.** Job control/status,
 > AWS ops and email admin (`cloudwatch/*`, `s3/bucket`, `email/send`,

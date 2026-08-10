@@ -312,7 +312,7 @@ def _auth_context(request, group=None):
     fwd_params = {}
     if group_uuid:
         fwd_params['group_uuid'] = group_uuid
-    for key in ('redirect', 'next', 'returnTo', 'back'):
+    for key in ('redirect', 'next', 'returnTo', 'back', 'force_reauth'):
         val = request_data.get(key)
         if val:
             fwd_params[key] = val
@@ -346,7 +346,7 @@ def _auth_context(request, group=None):
     step1_fields, step2_active, step3_field_rows = register_schema.partition_for_stepped_flow(
         register_fields)
 
-    return {
+    context = {
         # Per-request CSP nonce. Every inline <script> in a template extending
         # account/auth_base.html carries it; _render_with_csp puts the same
         # value in the header. See mojo.apps.account.services.csp.
@@ -398,6 +398,12 @@ def _auth_context(request, group=None):
         'identity_field': identity_field,
         'forgot_channel': forgot_channel,
     }
+    # Step-up links from the Admin portal must show the credential form even
+    # when a refresh token exists: refresh preserves auth_time and would loop
+    # straight back into another 440 response.
+    context['skip_session_check'] = str(
+        request_data.get('force_reauth', '')).lower() in ('1', 'true', 'yes')
+    return context
 
 
 def _serve_login(request, page_mode='login', group=None):
@@ -440,6 +446,8 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None):
     redirect_val = request_data.get('redirect') or request_data.get('next') or request_data.get('returnTo') or ''
     if redirect_val:
         fwd_params['redirect'] = redirect_val
+    if str(request_data.get('force_reauth', '')).lower() in ('1', 'true', 'yes'):
+        fwd_params['force_reauth'] = '1'
     back_val = request_data.get('back') or ''
     if back_val:
         fwd_params['back'] = back_val
