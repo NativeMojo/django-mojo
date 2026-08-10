@@ -221,6 +221,20 @@ class Vhost(models.Model, MojoModel):
     def save(self, *args, **kwargs):
         """Validate on EVERY write path — see Upstream.save for the reasoning."""
         from mojo.apps.edge import validators
+        from mojo.apps.edge.services import convergence
 
+        previous_pool = None
+        if self.pk:
+            previous_pool = type(self).objects.filter(pk=self.pk).values_list(
+                "pool", flat=True).first()
         validators.validate_vhost(self)
-        return super().save(*args, **kwargs)
+        result = super().save(*args, **kwargs)
+        convergence.publish_after_commit(previous_pool, self.pool)
+        return result
+
+    def delete(self, *args, **kwargs):
+        from mojo.apps.edge.services import convergence
+        pool = self.pool
+        result = super().delete(*args, **kwargs)
+        convergence.publish_after_commit(pool)
+        return result

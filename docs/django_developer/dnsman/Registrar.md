@@ -16,7 +16,8 @@ search_batch(domain=None, domains=None,   # one grid call: base+tlds or full nam
 suggest(name, count=10,                   # GetDomainSuggestions + cached per-TLD prices
         only_available=True)
 quote(group, user, name, years=1)         # -> price + single-use confirm token
-purchase(group, user, purchase_id, token) # the one irreversible money call
+purchase(group, user, purchase_id, token, # the one irreversible money call;
+         confirm_domain, confirm_price)   # typed values must match the quote
 poll_pending()                            # advance in-flight registrations; reconcile
 get_contacts(domain) / update_contacts(domain, contact) / set_privacy(domain, enabled)
 ```
@@ -70,7 +71,7 @@ botocore text (which carries the AWS account id and principal).
 
 ```
 atomic + select_for_update on the purchase row
-    verify token hash, TTL, and status == "quoted"   <- compare-and-swap
+    verify token hash, TTL, status, typed domain/price <- compare-and-swap
     create Domain(status="registering")              <- unique-name check fires here
     purchase.status = "submitted"
 commit
@@ -94,6 +95,13 @@ Nothing after 30 minutes → fail the row, delete the Domain, log an error for o
 
 Creating the Domain *inside* the transaction matters too: the unique-name
 collision then fires before any money moves, rather than after.
+
+The REST boundary is intentionally narrower than the service signature:
+`POST /api/dnsman/registrar/purchase` denies key-backed sessions, requires an
+interactive login no older than 600 seconds, and requires `confirm_domain` and
+`confirm_price`. The service normalizes/quantizes those typed values while the
+purchase row is locked. Any token, state, expiry, group, domain, or price
+mismatch returns the same refusal before `route53.register()` is reached.
 
 ### The no-failed-rows invariant
 
@@ -262,3 +270,12 @@ Ingest is deliberately two steps: `discover` never creates anything, and each
 `adopt` is its own call. Adopt without a `group` for anything that is not yet a
 specific tenant's, then `registrar/assign-group` when it is. Assignment is
 one-way — a domain that already has a group is never re-homed.
+
+## Purchase confirmation boundary
+
+The irreversible purchase endpoint accepts browser user sessions only and
+requires authentication no older than 600 seconds. Confirmation includes the
+single-use quote token plus the operator-typed normalized domain and exact
+quoted decimal price. All token, state, expiry, group, typed-domain, and
+typed-price mismatches return the same refusal and consume no registrar call.
+API keys and other machine sessions cannot purchase domains.

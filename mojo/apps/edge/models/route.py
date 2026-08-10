@@ -81,6 +81,16 @@ class VhostRoute(models.Model, MojoModel):
     def save(self, *args, **kwargs):
         """Validate on EVERY write path — see Upstream.save for the reasoning."""
         from mojo.apps.edge import validators
+        from mojo.apps.edge.services import convergence
 
         validators.validate_route(self)
-        return super().save(*args, **kwargs)
+        result = super().save(*args, **kwargs)
+        convergence.publish_after_commit(self.vhost.pool)
+        return result
+
+    def delete(self, *args, **kwargs):
+        from mojo.apps.edge.services import convergence
+        pool = self.vhost.pool
+        result = super().delete(*args, **kwargs)
+        convergence.publish_after_commit(pool)
+        return result

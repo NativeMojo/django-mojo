@@ -77,7 +77,7 @@ def _clear_apikey(opts):
 @th.django_unit_test("anonymous callers are refused on the node endpoints")
 def test_anonymous_refused(opts):
     opts.client.logout()
-    for path in ["/api/edge/desired_state",
+    for path in ["/api/edge/desired_state", "/api/edge/proof",
                  f"/api/edge/material/{opts.certificate.pk}"]:
         resp = opts.client.get(path)
         assert resp.status_code in (401, 403), \
@@ -405,6 +405,30 @@ def test_node_apikey_works(opts):
             f"{resp.status_code} {resp.body}")
         assert (resp.json.get("data") or {}).get("generation"), \
             "the node received no generation id"
+    finally:
+        _clear_apikey(opts)
+
+
+@th.django_unit_test("node proof REST response exposes metadata and no secrets")
+def test_node_proof_rest_no_secret_shape(opts):
+    from mojo.apps.account.models import ApiKey
+
+    group = make_group("edgeproofkey")
+    _, token = ApiKey.create_for_group(
+        group, "edge_node_test_proof", permissions={"edge_node": True})
+    _use_apikey(opts, token)
+    try:
+        with th.server_settings(EDGE_NODE_ID="edge-rest-proof"):
+            resp = opts.client.get("/api/edge/proof?pools=default,staging")
+        assert resp.status_code == 200, \
+            f"edge node could not read safe local proof: {resp.status_code} {resp.body}"
+        proof = resp.json.get("data") or {}
+        assert set(proof) == {"node_id", "django_mojo_version", "pools"}, \
+            f"proof grew an unreviewed response surface: {proof}"
+        blob = str(proof).lower()
+        assert all(marker not in blob for marker in (
+            "private_key", "api_key", "credential", "token", "secret")), \
+            f"proof response leaked secret-bearing fields: {proof}"
     finally:
         _clear_apikey(opts)
 

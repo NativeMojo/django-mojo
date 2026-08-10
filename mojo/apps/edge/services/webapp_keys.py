@@ -45,7 +45,11 @@ def _key_status(web_app):
 def status(web_app):
     """Return safe metadata only; a deployment token is never read back."""
     current = WebApp.objects.select_related("api_key").get(pk=web_app.pk)
-    return _key_status(current)
+    metadata = _key_status(current)
+    latest = WebAppKeyOperation.objects.filter(web_app=current).first()
+    metadata["last_action"] = latest.action if latest else None
+    metadata["last_operation_at"] = latest.created if latest else None
+    return metadata
 
 
 def _mint_locked(locked, previous=None):

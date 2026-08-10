@@ -171,3 +171,12 @@ the contract above:
 - `post_deploy.sh` runs `manage.py migrate_locked --noinput` instead of the
   `var/allow_migrate` gate (which becomes deletable), and installs
   `pip install django-mojo==<the --framework value>` instead of `--upgrade`.
+
+## Readiness proof versus deploy runners
+
+Job runners are nodes in the fleet, not a separate operator concept. System
+Setup filters heartbeat discovery to runners consuming the `edge` channel and
+targets only those runner ids for proof. Each response reports the file-only
+`EDGE_NODE_ID`, installed django-mojo version, and per-pool generation evidence.
+The protected `EDGE_EXPECTED_TOPOLOGY` is the expected inventory; every declared
+node/pool pair must answer and match before deployment readiness is green.

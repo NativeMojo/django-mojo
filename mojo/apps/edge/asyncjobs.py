@@ -24,11 +24,12 @@ def install_generation(job):
     and the raise is what makes a node that could not converge visible in the
     jobs surface as well as in the incident it already reported.
     """
+    from mojo.apps.edge import cronjobs
     from mojo.apps.edge.services import installer
 
     payload = job.payload or {}
-    pool = payload.get("pool") or "default"
-    result = installer.install(pool=pool, force=bool(payload.get("force")))
+    result = installer.install_pools(
+        cronjobs.converge_pools(), force=bool(payload.get("force")))
 
     if not result.changed:
         return f"completed:unchanged={result.generation}"
@@ -44,13 +45,16 @@ def _converge_pools(pools, source):
     from mojo.apps.edge.services import installer
 
     converged = []
-    for pool in pools:
-        try:
-            result = installer.install(pool=pool)
-            if result.changed:
-                converged.append(pool)
-        except Exception as err:
-            logit.error(f"edge: {source} convergence failed for pool {pool}: {err}")
+    try:
+        result = installer.install_pools(pools)
+        if result.changed:
+            converged = list(pools)
+    except Exception as err:
+        from mojo.apps.account.services.setup_safety import failure_metadata
+        failure = failure_metadata(err, "edge.install")
+        logit.error(
+            f"edge: {source} combined convergence failed "
+            f"(action={failure['action']}, error={failure['exception_class']})")
     return f"completed:converged={','.join(converged) if converged else 'none'}"
 
 

@@ -5,6 +5,8 @@ Every fixture refuses before the network: domains are GoDaddy-backed with no
 usable credential, and purchasing is off by its default.
 """
 
+import time
+
 from testit import helpers as th
 
 from tests.test_dnsman._helpers import (
@@ -243,7 +245,7 @@ def test_quote_disabled(opts):
         "a refused quote must not leave a purchase row behind"
 
 
-@th.django_unit_test("there is no single-call purchase path")
+@th.django_unit_test("purchase requires token plus typed domain and price")
 def test_purchase_requires_confirm_token(opts):
     login(opts, opts.manager_email, opts.manager_pw)
     resp = opts.client.post("/api/dnsman/registrar/purchase", json=dict(
@@ -251,6 +253,35 @@ def test_purchase_requires_confirm_token(opts):
     assert resp.status_code == 400, (
         "purchase without a confirm token must be a 400 from requires_params, "
         f"got {resp.status_code}")
+
+
+@th.django_unit_test("purchase refuses machine credentials and logins older than 600 seconds")
+def test_purchase_requires_recent_interactive_auth(opts):
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.account.utils.jwtoken import JWToken
+
+    _, token = ApiKey.create_for_group(
+        opts.group, "dns-purchase-machine", permissions={"manage_dns": True})
+    opts.client.logout()
+    opts.client.session.headers["Authorization"] = f"apikey {token}"
+    try:
+        machine = opts.client.post("/api/dnsman/registrar/purchase", json=dict(
+            group=opts.group.pk, purchase=1, confirm_token="opaque",
+            confirm_domain="never-bought-example.com", confirm_price="12.00"))
+        assert machine.status_code == 403, \
+            f"a machine credential reached the real-money mutation ({machine.status_code})"
+    finally:
+        opts.client.session.headers.pop("Authorization", None)
+
+    opts.client.is_authenticated = True
+    opts.client.bearer = "bearer"
+    opts.client.access_token = JWToken(opts.manager.get_auth_key()).create_access_token(
+        uid=opts.manager.pk, auth_time=int(time.time()) - 601)
+    stale = opts.client.post("/api/dnsman/registrar/purchase", json=dict(
+        group=opts.group.pk, purchase=1, confirm_token="opaque",
+        confirm_domain="never-bought-example.com", confirm_price="12.00"))
+    assert stale.status_code == 440, \
+        f"a 601-second-old login bypassed the 600-second purchase gate ({stale.status_code})"
 
 
 # ---------------------------------------------------------------------------

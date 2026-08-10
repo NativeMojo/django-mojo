@@ -10,6 +10,7 @@ from .certificate import Certificate
 from .acme_hub_delegation import AcmeHubDelegation
 from .acme_hub_challenge_lease import AcmeHubChallengeLease
 from .acme_delegation import AcmeDelegation
+from .dns_record_reservation import DnsRecordReservation
 
 __all__ = [
     "DnsCredential",
@@ -20,4 +21,5 @@ __all__ = [
     "AcmeHubDelegation",
     "AcmeHubChallengeLease",
     "AcmeDelegation",
+    "DnsRecordReservation",
 ]

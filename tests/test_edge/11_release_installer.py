@@ -184,7 +184,7 @@ def test_unfetchable_release_excludes_one_vhost(opts):
         assert other.pk not in result.excluded, \
             "a healthy vhost was excluded over another vhost's release"
 
-        installed = installer.read_installed()
+        installed = installer.read_installed(POOL)
         assert opts.vhost.pk in installed["excluded"], \
             "installed.json does not record the exclusion — it is invisible"
         assert installed.get("www_pending") == {str(opts.vhost.pk): "absent1"}, \
@@ -278,7 +278,7 @@ def test_cert_failure_is_retried_next_converge(opts):
 
         assert broken.pk in first.excluded, \
             "a vhost with unreadable key material was not excluded"
-        installed = installer.read_installed()
+        installed = installer.read_installed(POOL)
         assert installed.get("cert_pending") == [broken.pk], \
             (f"the certificate failure was not recorded, so the next converge "
              f"would short-circuit: {installed.get('cert_pending')}")
@@ -297,7 +297,7 @@ def test_cert_failure_is_retried_next_converge(opts):
             third = installer.install(pool=POOL)
         assert broken.pk not in third.excluded, \
             "the vhost stayed excluded after its key material became readable"
-        assert not installer.read_installed().get("cert_pending"), \
+        assert not installer.read_installed(POOL).get("cert_pending"), \
             "a healed node still reports a pending certificate"
     finally:
         from mojo.apps.edge.models import Vhost

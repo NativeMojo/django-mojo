@@ -773,7 +773,7 @@ def quote(group, user, name, years=1):
 # purchase
 # ---------------------------------------------------------------------------
 
-def purchase(group, user, purchase_id, token):
+def purchase(group, user, purchase_id, token, confirm_domain, confirm_price):
     """
     Confirm a quote and register the domain. The one irreversible mutation here.
 
@@ -799,6 +799,13 @@ def purchase(group, user, purchase_id, token):
             if row.status != STATUS_QUOTED or row.kind != KIND_REGISTER:
                 raise _refused()
             if not _token_matches(token, row.confirm_token):
+                raise _refused()
+            try:
+                typed_domain = naming.normalize_domain(confirm_domain)
+                typed_price = Decimal(str(confirm_price)).quantize(Decimal("0.01"))
+            except (InvalidOperation, TypeError, ValueError):
+                raise _refused()
+            if typed_domain != row.domain_name or typed_price != row.price:
                 raise _refused()
             if row.quote_expires is None or row.quote_expires <= dates.utcnow():
                 expired_pk = row.pk

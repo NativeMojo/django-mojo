@@ -424,6 +424,9 @@ reasoning: [edge README](../edge/README.md#settings),
   `["default"]`. Both the pools the convergence sweep broadcasts to and the
   allowlist `Vhost.pool` is validated against; an empty list falls back to
   `["default"]` rather than declaring none.
+- `EDGE_NODE_ID` — **file-only** (`settings.get_static`), no default. Stable
+  1–63 character node identity returned by safe fleet proof. It must match one
+  node in protected `EDGE_EXPECTED_TOPOLOGY`; absence never reports ready.
 - `EDGE_CONVERGE_ENABLED` — **file-only** (`settings.get_static`), bool,
   default `True`. `False` stops the ten-minute convergence sweep entirely —
   nothing is published to the `edge` channel — for deployments that install this

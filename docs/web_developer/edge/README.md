@@ -175,3 +175,48 @@ an in-place renewal changes the desired-state generation, so nodes follow the
 ordinary staged install path, fetch the new material through `material`,
 validate it, and reload nginx. `desired_state` itself never carries certificate
 PEM, chain, or private-key material.
+
+`GET /api/edge/proof?pools=default,blue` is another node-only endpoint with the
+same protected global `edge_node` permission (user or provisioned machine API
+key). `pools` may be a comma-separated query value or list; omitting it reads
+only `default`. The node must have a valid file-only `EDGE_NODE_ID`, and every
+requested pool must satisfy the configured pool-name grammar. Invalid input or
+node configuration is refused rather than returning partial proof.
+
+```json
+{
+  "node_id": "edge-a",
+  "django_mojo_version": "1.9.0",
+  "pools": {
+    "default": {
+      "generation": "sha256-generation",
+      "excluded": 0,
+      "www_pending": 0,
+      "cert_pending": 0,
+      "serving_generation": "sha256-combined-generation",
+      "current_generation": "sha256-combined-generation"
+    }
+  }
+}
+```
+
+It returns no paths, settings, PEM, deployment token, or credential. Browser
+portals must consume the literal-superuser-only System Setup readiness report
+instead of calling node proof directly.
+
+`generation` proves that pool's desired configuration. On a multi-pool node,
+`serving_generation` proves the atomic union installed for all assigned pools,
+and `current_generation` proves what nginx's global `current` link names now.
+Readiness requires the latter two to match for every pool; a UI must not infer
+green from the per-pool generation alone.
+
+Vhost and Route mutations publish convergence after commit. Route editors may
+preserve successful rows when a later row fails, display that partial result,
+and retry only the failed rows; each committed desired-state generation is
+idempotently published and readiness remains pending until every expected
+node/pool proves it.
+
+Although each publication receipt names the affected pool and generation, a
+node handles it by atomically installing the union of all pools assigned to
+that node. Portals should treat the receipt as convergence-pending evidence,
+not as proof that one pool was independently swapped live.

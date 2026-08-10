@@ -67,13 +67,15 @@ class FakeDns(object):
         self.delete_error = delete_error
         self.clear_error = clear_error
 
-    def upsert_record(self, domain, rtype, name, record_values, ttl=300):
+    def upsert_record(self, domain, rtype, name, record_values, ttl=300,
+                      reservation=None):
         self.upserts.append(objict(
             domain=domain.name, rtype=rtype, name=name,
             record_values=list(record_values), ttl=ttl))
         return objict(change_id="C-upsert", provider=domain.provider)
 
-    def delete_record(self, domain, rtype, name, record_values=None):
+    def delete_record(self, domain, rtype, name, record_values=None,
+                      reservation=None):
         self.deletes.append(objict(
             domain=domain.name, rtype=rtype, name=name,
             record_values=list(record_values) if record_values else None))
@@ -81,7 +83,8 @@ class FakeDns(object):
             raise RuntimeError(self.delete_error)
         return objict(change_id="C-delete", provider=domain.provider)
 
-    def clear_record(self, domain, rtype, name, record_values=None):
+    def clear_record(self, domain, rtype, name, record_values=None,
+                     reservation=None):
         self.clears.append(objict(
             domain=domain.name, rtype=rtype, name=name,
             record_values=list(record_values) if record_values else None))
@@ -399,6 +402,44 @@ def test_certs_wildcard_and_apex_share_one_record(opts):
         f"got {upsert.record_values}")
     assert len(client.answered) == 2, (
         f"each of the two challenges must be answered, got {len(client.answered)}")
+
+
+@th.django_unit_test("dnsman certs: durable reservation precedes every provider write")
+def test_certificate_reserves_before_provider(opts):
+    from unittest import mock
+
+    from mojo.apps.dnsman.services import certs, record_reservations
+
+    domain = _reset_domain("reserve-before-provider-certs.test")
+    names = [domain.name, f"*.{domain.name}"]
+    certificate = _pending_certificate(domain, names)
+    chain, _leaf = _make_chain(names)
+    client = FakeAcmeClient([domain.name, domain.name], chain=chain)
+    events = []
+    real_reserve = record_reservations.reserve
+
+    def reserve(*args, **kwargs):
+        row = real_reserve(*args, **kwargs)
+        events.append(("reserve", row.pk))
+        return row
+
+    dns_stub = FakeDns()
+    real_upsert = dns_stub.upsert_record
+
+    def provider(*args, **kwargs):
+        events.append(("provider", kwargs["reservation"].pk))
+        return real_upsert(*args, **kwargs)
+
+    dns_stub.upsert_record = provider
+    with _issuance_env(client, dns_stub=dns_stub), \
+            mock.patch.object(record_reservations, "reserve", side_effect=reserve):
+        result = certs.issue(certificate)
+
+    assert result.ok, f"issuance should succeed, got {result}"
+    assert events and events[0][0] == "reserve", \
+        f"provider I/O occurred before durable ownership was committed: {events}"
+    assert events[0][1] == events[1][1], \
+        f"the provider write did not carry the exact owned reservation: {events}"
 
 
 @th.django_unit_test("dnsman certs: pending delegation is inert and direct Route53 stays unchanged")
