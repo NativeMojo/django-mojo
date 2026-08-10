@@ -175,6 +175,55 @@ def test_provider_boundary_exposes_only_bounded_iam_evidence(opts):
         raise AssertionError("The SNS authorization denial must be mapped safely")
 
 
+@th.django_unit_test()
+def test_aws_check_provider_paths_keep_exact_denied_actions(opts):
+    from botocore.exceptions import ClientError
+    from mojo.apps.aws.services import aws_check
+    from mojo.apps.fileman.models import FileManager
+
+    denied = lambda operation: ClientError({
+        "Error": {"Code": "AuthorizationError", "Message": "raw private text"},
+        "ResponseMetadata": {"HTTPStatusCode": 403},
+    }, operation)
+    FileManager.objects.filter(
+        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
+    ).delete()
+    manager = FileManager.objects.create(
+        name="provider-boundary-s3", backend_type=FileManager.AWS_S3,
+        backend_url="s3://provider-boundary-s3", is_active=True, is_default=True,
+        is_public=False)
+    s3 = mock.Mock()
+    s3.head_bucket.side_effect = denied("HeadBucket")
+    s3_report = aws_check.AWSCheckRunner(
+        clients={"s3": s3, "sts": _verified_sts()}).run(["s3"])
+    s3_item = next(row for row in s3_report["items"] if row["code"] == "bucket.denied")
+    assert s3_item["details"]["iam_action"] == "s3:ListBucket", \
+        f"AWS Check S3 denial lost its exact IAM action: {s3_item}"
+    manager.delete()
+
+    sns = mock.Mock()
+    sns.list_topics.side_effect = denied("ListTopics")
+    cloudwatch = mock.Mock()
+    cloudwatch.list_metrics.return_value = {"Metrics": []}
+    report = aws_check.AWSCheckRunner(clients={
+        "sns": sns, "cloudwatch": cloudwatch, **_discovery_clients(),
+    }).run(["monitoring"])
+    sns_item = next(row for row in report["items"] if row["code"] == "monitoring.denied")
+    assert sns_item["details"]["iam_action"] == "sns:ListTopics", \
+        f"AWS Check SNS denial lost its exact IAM action: {sns_item}"
+
+    cloudwatch.list_metrics.side_effect = denied("ListMetrics")
+    cloudwatch.list_metrics.return_value = None
+    sns.list_topics.side_effect = None
+    sns.list_topics.return_value = {"Topics": []}
+    report = aws_check.AWSCheckRunner(clients={
+        "sns": sns, "cloudwatch": cloudwatch, **_discovery_clients(),
+    }).run(["monitoring"])
+    cw_item = next(row for row in report["items"] if row["code"] == "alarms.cert_metric_unknown")
+    assert cw_item["details"]["iam_action"] == "cloudwatch:ListMetrics", \
+        f"AWS Check CloudWatch denial lost its exact IAM action: {cw_item}"
+
+
 def _setup_admin_identity(email):
     from mojo.apps.account.models import Setting, User
     from mojo.apps.account.services import system_settings
@@ -201,13 +250,51 @@ def _missing(operation, code):
 
 def _safe_bucket_client(bucket="existing-media"):
     s3 = mock.Mock()
-    s3.list_buckets.return_value = {"Buckets": [{"Name": bucket}]}
+    s3.list_buckets.return_value = {
+        "Owner": {"ID": "canonical-owner"}, "Buckets": [{"Name": bucket}]}
     s3.get_bucket_location.return_value = {"LocationConstraint": None}
     s3.get_bucket_website.side_effect = _missing("GetBucketWebsite", "NoSuchWebsiteConfiguration")
-    s3.get_bucket_tagging.side_effect = _missing("GetBucketTagging", "NoSuchTagSet")
+    tags = {}
+
+    def get_tags(**kwargs):
+        if not tags:
+            raise _missing("GetBucketTagging", "NoSuchTagSet")
+        return {"TagSet": [{"Key": key, "Value": value}
+                           for key, value in sorted(tags.items())]}
+
+    def put_tags(**kwargs):
+        tags.update({row["Key"]: row["Value"]
+                     for row in kwargs["Tagging"]["TagSet"]})
+        return {}
+
+    s3.get_bucket_tagging.side_effect = get_tags
+    s3.put_bucket_tagging.side_effect = put_tags
     s3.get_bucket_policy.side_effect = _missing("GetBucketPolicy", "NoSuchBucketPolicy")
-    s3.get_public_access_block.return_value = {"PublicAccessBlockConfiguration": {}}
+    s3.get_bucket_policy_status.return_value = {"PolicyStatus": {"IsPublic": False}}
+    s3.get_bucket_acl.return_value = {
+        "Owner": {"ID": "canonical-owner"},
+        "Grants": [{"Grantee": {"Type": "CanonicalUser", "ID": "canonical-owner"},
+                    "Permission": "FULL_CONTROL"}],
+    }
+    public_access = {}
+    s3.get_public_access_block.side_effect = lambda **kwargs: {
+        "PublicAccessBlockConfiguration": dict(public_access)}
+
+    def put_public_access(**kwargs):
+        public_access.update(kwargs["PublicAccessBlockConfiguration"])
+        return {}
+
+    s3.put_public_access_block.side_effect = put_public_access
     return s3
+
+
+def _setup_sts():
+    sts = mock.Mock()
+    sts.get_caller_identity.return_value = {
+        "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:role/setup",
+        "UserId": "setup",
+    }
+    return sts
 
 
 @th.django_unit_test()
@@ -225,19 +312,32 @@ def test_setup_adopts_existing_private_bucket_and_merges_concurrent_cors(opts):
     def get_cors(**kwargs):
         return {"CORSRules": list(current)}
 
+    injected = {"AllowedOrigins": ["https://concurrent.example"],
+                "AllowedMethods": ["HEAD"], "AllowedHeaders": ["*"]}
+    puts = 0
+
     def put_cors(**kwargs):
+        nonlocal puts
+        puts += 1
         current[:] = kwargs["CORSConfiguration"]["CORSRules"]
+        if puts == 1:
+            current[:] = [row for row in current
+                          if row.get("AllowedOrigins") != ["*"]]
+            current.append(injected)
         return {}
 
     s3.get_bucket_cors.side_effect = get_cors
     s3.put_bucket_cors.side_effect = put_cors
-    service = AWSSetupService(clients={"s3": s3}, region="us-east-1")
+    service = AWSSetupService(
+        clients={"s3": s3, "sts": _setup_sts()}, region="us-east-1")
     manager = service.adopt_bucket(actor, "existing-media")
     assert manager.backend_url == "s3://existing-media", f"Expected exact adopted bucket, got {manager.backend_url}"
     assert manager.is_public is False and manager.supports_direct_upload, \
         "The adopted system FileManager must be private and direct-upload capable"
     assert manager.allowed_origins == ["*"], "System media must allow wildcard browser CORS"
     assert unrelated in current, "CORS repair must preserve unrelated rules"
+    assert injected in current, "A concurrent unrelated CORS rule must survive the retry"
+    assert puts == 2, "Concurrent CORS drift must be reread and repaired exactly once"
     assert any(rule.get("AllowedOrigins") == ["*"] for rule in current), \
         "CORS repair must add the wildcard direct-upload rule"
     block = s3.put_public_access_block.call_args.kwargs["PublicAccessBlockConfiguration"]
@@ -253,7 +353,8 @@ def test_setup_rejects_public_bucket_without_mutation(opts):
     s3.get_bucket_policy.side_effect = None
     s3.get_bucket_policy.return_value = {"Policy": __import__("json").dumps({
         "Statement": [{"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject"}]})}
-    result = AWSSetupService(clients={"s3": s3}).discover_buckets()
+    result = AWSSetupService(
+        clients={"s3": s3, "sts": _setup_sts()}).discover_buckets()
     assert result["candidates"] == [], f"A public-policy bucket must not be adoptable: {result}"
     assert result["rejected"] == ["public-media"], f"Rejected exact name should be reported: {result}"
     assert not s3.put_public_access_block.called and not s3.put_bucket_tagging.called, \
@@ -267,12 +368,110 @@ def test_setup_rejects_public_bucket_without_mutation(opts):
         "ResponseMetadata": {"HTTPStatusCode": 403},
     }, "GetBucketLocation")
     try:
-        AWSSetupService(clients={"s3": denied}).discover_buckets()
+        AWSSetupService(
+            clients={"s3": denied, "sts": _setup_sts()}).discover_buckets()
     except ProviderCallError as exc:
         assert exc.detail().get("iam_action") == "s3:GetBucketLocation", \
             f"Discovery IAM denial must expose the exact safe action: {exc.detail()}"
     else:
         raise AssertionError("S3 discovery must not misclassify IAM denial as no candidate")
+
+
+@th.django_unit_test()
+def test_setup_s3_inventory_is_complete_exact_and_fail_closed(opts):
+    from mojo.apps.aws.services.aws_setup import AWSSetupService
+
+    names = ["safe-media", "website-media", "tenant-media", "foreign-media",
+             "unknown-policy", "not-principal", "public-status"]
+    s3 = _safe_bucket_client("unused")
+
+    def list_buckets(**kwargs):
+        page = names[3:] if kwargs.get("ContinuationToken") == "page-2" else names[:3]
+        return {"Owner": {"ID": "canonical-owner"},
+                "Buckets": [{"Name": name} for name in page],
+                "IsTruncated": not kwargs, "NextContinuationToken": "page-2" if not kwargs else None}
+
+    s3.list_buckets.side_effect = list_buckets
+    s3.get_bucket_website.side_effect = lambda **kwargs: (
+        {"IndexDocument": {"Suffix": "index.html"}}
+        if kwargs["Bucket"] == "website-media" else
+        (_ for _ in ()).throw(_missing("GetBucketWebsite", "NoSuchWebsiteConfiguration")))
+    s3.get_bucket_tagging.side_effect = lambda **kwargs: (
+        {"TagSet": [{"Key": "tenant-id", "Value": "other"}]}
+        if kwargs["Bucket"] == "tenant-media" else
+        (_ for _ in ()).throw(_missing("GetBucketTagging", "NoSuchTagSet")))
+
+    def acl(**kwargs):
+        owner = "foreign-owner" if kwargs["Bucket"] == "foreign-media" else "canonical-owner"
+        return {"Owner": {"ID": owner}, "Grants": [{
+            "Grantee": {"Type": "CanonicalUser", "ID": owner},
+            "Permission": "FULL_CONTROL"}]}
+
+    s3.get_bucket_acl.side_effect = acl
+
+    def policy(**kwargs):
+        if kwargs["Bucket"] == "unknown-policy":
+            return {"Policy": __import__("json").dumps({"Statement": [{
+                "Effect": "Allow", "Principal": {"Federated": "accounts.example"},
+                "Action": "s3:GetObject", "Resource": "*"}]})}
+        if kwargs["Bucket"] == "not-principal":
+            return {"Policy": __import__("json").dumps({"Statement": [{
+                "Effect": "Allow", "NotPrincipal": {"AWS": "arn:aws:iam::123456789012:root"},
+                "Action": "s3:GetObject", "Resource": "*"}]})}
+        raise _missing("GetBucketPolicy", "NoSuchBucketPolicy")
+
+    s3.get_bucket_policy.side_effect = policy
+    s3.get_bucket_policy_status.side_effect = lambda **kwargs: {
+        "PolicyStatus": {"IsPublic": kwargs["Bucket"] == "public-status"}}
+    service = AWSSetupService(clients={"s3": s3, "sts": _setup_sts()})
+    result = service.discover_buckets()
+    assert [row["name"] for row in result["candidates"]] == ["safe-media"], \
+        f"Only the fully-proven private bucket may be offered: {result}"
+    assert sorted(result["rejected"]) == sorted(names[1:]), \
+        f"Every unsafe bucket must be named as rejected: {result}"
+    assert s3.list_buckets.call_count == 2, "Candidate discovery must consume every inventory page"
+    exact = service.discover_buckets(exact_name="safe-media")
+    assert [row["name"] for row in exact["candidates"]] == ["safe-media"], \
+        "Exact adoption must not accept a prefix or another page's bucket"
+
+
+@th.django_unit_test()
+def test_setup_s3_resume_skips_confirmed_provider_mutations(opts):
+    from mojo.apps.aws.services.aws_setup import AWSSetupService
+    from mojo.apps.fileman.models import FileManager
+
+    actor = _setup_admin_identity("aws-setup-s3-resume@test.com")
+    FileManager.objects.filter(user=None, group=None, backend_type=FileManager.AWS_S3).delete()
+    s3 = _safe_bucket_client("resume-media")
+    cors = []
+    s3.get_bucket_cors.side_effect = lambda **kwargs: {"CORSRules": list(cors)}
+    s3.put_bucket_cors.side_effect = lambda **kwargs: cors.__setitem__(
+        slice(None), kwargs["CORSConfiguration"]["CORSRules"])
+    service = AWSSetupService(clients={"s3": s3, "sts": _setup_sts()})
+    original_save = FileManager.save
+    failed = {"value": False}
+
+    def fail_once(instance, *args, **kwargs):
+        if not failed["value"]:
+            failed["value"] = True
+            raise RuntimeError("simulated crash after provider convergence")
+        return original_save(instance, *args, **kwargs)
+
+    with mock.patch.object(FileManager, "save", autospec=True, side_effect=fail_once):
+        try:
+            service.adopt_bucket(actor, "resume-media")
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("The interrupted DB save fixture must fail once")
+    provider_counts = (s3.put_public_access_block.call_count,
+                       s3.put_bucket_tagging.call_count, s3.put_bucket_cors.call_count)
+    manager = service.adopt_bucket(actor, "resume-media")
+    assert manager.backend_url == "s3://resume-media"
+    assert provider_counts == (s3.put_public_access_block.call_count,
+                               s3.put_bucket_tagging.call_count,
+                               s3.put_bucket_cors.call_count), \
+        "Resume must reread and skip every already-confirmed S3 mutation"
 
 
 @th.django_unit_test()
@@ -297,6 +496,52 @@ def test_setup_ses_discovery_is_complete_and_paginated(opts):
         f"SES discovery must follow every provider page: {discovered}"
     assert ses.list_identities.call_count == 2, \
         "SES discovery stopped before the continuation token"
+
+
+@th.django_unit_test()
+def test_aws_registry_builds_typed_late_choice_operations(opts):
+    from django.test import RequestFactory
+    from mojo.apps.account.models import SystemSetupOperation
+    from mojo.apps.account.services import system_setup
+    from mojo.apps.aws.services.aws_setup import AWSSetupService
+
+    actor = _setup_admin_identity("aws-setup-registry@test.com")
+    SystemSetupOperation.objects.filter(
+        status__in=SystemSetupOperation.ACTIVE_STATUSES).delete()
+    request = RequestFactory().post(
+        "/api/account/admin/setup/create", HTTP_ORIGIN="https://api.example.com",
+        HTTP_HOST="api.example.com", secure=True)
+    request.user = actor
+    request.bearer = "bearer"
+    request.api_key = None
+    with mock.patch.object(AWSSetupService, "discover_buckets", return_value={
+            "candidates": [{"name": "existing-media"}], "rejected": [], "complete": True}):
+        operation, _ = system_setup.create(
+            request, "fix", section="aws_s3", replay_key="aws-s3-choice")
+    assert [row["id"] for row in operation.steps] == [
+        "section:aws_s3", "final_readiness"], \
+        f"An AWS section operation must not silently become django-only: {operation.steps}"
+    operation = system_setup.advance(request, operation.pk)
+    step = operation.steps[operation.cursor]
+    assert step["state"] == "waiting_for_choice" \
+        and step["choice_schema"]["properties"]["bucket"]["enum"] == ["existing-media"], \
+        f"S3 discovery must become a typed late choice: {step}"
+    system_setup.choose(
+        request, operation.pk, step["id"], step["definition_version"],
+        step["choice_revision"], {"bucket": "existing-media", "adopt_existing": True})
+
+    SystemSetupOperation.objects.filter(pk=operation.pk).delete()
+    topic = "arn:aws:sns:us-east-1:123456789012:django-mojo-owned-operations"
+    with mock.patch.object(AWSSetupService, "monitoring_topic_adoption", return_value={
+            "topic_arn": topic, "topic_name": "django-mojo-owned-operations"}):
+        monitoring, _ = system_setup.create(
+            request, "fix", section="aws_monitoring", replay_key="aws-topic-choice")
+    monitoring = system_setup.advance(request, monitoring.pk)
+    step = monitoring.steps[monitoring.cursor]
+    assert step["choice_schema"]["properties"]["topic_arn"]["enum"] == [topic] \
+        and step["choice_schema"]["properties"]["adopt_existing_topic"]["enum"] == [True], \
+        f"Legacy SNS ownership adoption must require exact affirmative input: {step}"
+    SystemSetupOperation.objects.filter(pk=monitoring.pk).delete()
 
 
 @th.django_unit_test()
@@ -353,8 +598,17 @@ def test_monitoring_reconcile_is_repeatable_and_persists_protected_allowlist(opt
         {"Key": "django-mojo-installation", "Value": identity["uuid"]},
     ]
     sns.list_tags_for_resource.return_value = {"Tags": expected_tags}
-    sns.get_topic_attributes.return_value = {"Attributes": {"Policy": __import__("json").dumps({
-        "Version": "2012-10-17", "Statement": [{"Sid": "KeepMe", "Effect": "Deny"}]})}}
+    topic_policy = {"Version": "2012-10-17", "Statement": [
+        {"Sid": "KeepMe", "Effect": "Deny"}]}
+    sns.get_topic_attributes.side_effect = lambda **kwargs: {
+        "Attributes": {"Policy": __import__("json").dumps(topic_policy)}}
+
+    def set_policy(**kwargs):
+        topic_policy.clear()
+        topic_policy.update(__import__("json").loads(kwargs["AttributeValue"]))
+        return {}
+
+    sns.set_topic_attributes.side_effect = set_policy
     subscriptions = []
     sns.list_subscriptions_by_topic.side_effect = lambda **kwargs: {"Subscriptions": list(subscriptions)}
 
@@ -371,18 +625,28 @@ def test_monitoring_reconcile_is_repeatable_and_persists_protected_allowlist(opt
         alarms[name] for name in kwargs.get("AlarmNames", []) if name in alarms]}
 
     def put_alarm(**kwargs):
-        alarms[kwargs["AlarmName"]] = {
-            "AlarmName": kwargs["AlarmName"],
-            "AlarmArn": f"arn:aws:cloudwatch:us-east-1:123456789012:alarm:{kwargs['AlarmName']}"}
+        alarm = {key: value for key, value in kwargs.items() if key != "Tags"}
+        alarm.update({
+            "AlarmArn": f"arn:aws:cloudwatch:us-east-1:123456789012:alarm:{kwargs['AlarmName']}",
+            "StateValue": alarms.get(kwargs["AlarmName"], {}).get("StateValue", "OK"),
+        })
+        alarms[kwargs["AlarmName"]] = alarm
+
+    def set_state(**kwargs):
+        alarms[kwargs["AlarmName"]]["StateValue"] = kwargs["StateValue"]
+        return {}
 
     cloudwatch.put_metric_alarm.side_effect = put_alarm
+    cloudwatch.set_alarm_state.side_effect = set_state
     cloudwatch.list_tags_for_resource.return_value = {"Tags": expected_tags}
     discovery = _discovery_clients(instances=[{
         "State": {"Name": "running"}, "InstanceId": "i-setup", "InstanceType": "m6i.large"}])
     service = AWSSetupService(clients={
-        "sns": sns, "cloudwatch": cloudwatch, **discovery})
-    service.reconcile_monitoring(actor)
-    service.reconcile_monitoring(actor)
+        "sns": sns, "cloudwatch": cloudwatch, "sts": _setup_sts(), **discovery})
+    challenge = "a" * 32
+    cutoff = __import__("django.utils.timezone", fromlist=["now"]).now()
+    service.reconcile_monitoring(actor, challenge, cutoff)
+    service.reconcile_monitoring(actor, challenge, cutoff)
     assert system_settings.get_value(system_settings.MONITORING_TOPICS) == [topic], \
         "The owned topic must be persisted through the protected setter"
     assert sns.subscribe.call_count == 1, "Reruns must not create duplicate HTTPS subscriptions"
@@ -392,12 +656,17 @@ def test_monitoring_reconcile_is_repeatable_and_persists_protected_allowlist(opt
         f"The real serving-node status alarm must be converged: {sorted(alarms)}"
     assert any(name.endswith("/ec2/i-setup/cpu") for name in alarms), \
         f"The real serving-node CPU alarm must be converged: {sorted(alarms)}"
-    assert cloudwatch.set_alarm_state.call_count == 4, \
-        "Each requested evidence probe should record ALARM then OK without creating resources again"
-    policy = __import__("json").loads(sns.set_topic_attributes.call_args.kwargs["AttributeValue"])
-    assert any(row.get("Sid") == "KeepMe" for row in policy["Statement"]), \
+    drifted_name = next(name for name in alarms if name.endswith("/ec2/i-setup/cpu"))
+    alarms[drifted_name]["Threshold"] = -1
+    service.reconcile_monitoring(actor, challenge, cutoff)
+    assert cloudwatch.put_metric_alarm.call_count == 4 \
+        and alarms[drifted_name]["Threshold"] == 90, \
+        "An owned alarm's full desired configuration must be repaired idempotently"
+    assert cloudwatch.set_alarm_state.call_count == 1, \
+        "A resumed ambiguous probe must not replay an already-observed ALARM mutation"
+    assert any(row.get("Sid") == "KeepMe" for row in topic_policy["Statement"]), \
         "Monitoring setup must preserve unrelated SNS policy statements"
-    owned = next(row for row in policy["Statement"]
+    owned = next(row for row in topic_policy["Statement"]
                  if row.get("Sid") == "DjangoMojoCloudWatchPublish")
     assert owned["Principal"] == {"Service": "cloudwatch.amazonaws.com"}, \
         "The owned publish grant must be restricted to CloudWatch"
@@ -408,6 +677,7 @@ def test_monitoring_reconcile_is_repeatable_and_persists_protected_allowlist(opt
 @th.django_unit_test()
 def test_monitoring_proof_requires_delivery_after_this_operation(opts):
     from django.utils import timezone
+    from mojo.apps.account.models import SystemSetupOperation
     from mojo.apps.account.services import system_settings
     from mojo.apps.aws.models import CloudWatchAlarm, CloudWatchAlarmTransition
     from mojo.apps.aws.services import aws_setup
@@ -430,10 +700,22 @@ def test_monitoring_proof_requires_delivery_after_this_operation(opts):
         "Protocol": "https", "Endpoint": "https://api.example.com/api/aws/cloudwatch/sns/alarm",
         "SubscriptionArn": "arn:aws:sns:subscription/confirmed",
     }]}
-    probe_name = delivery_probe_alarm_name()
+    challenge = "b" * 32
+    probe_name = delivery_probe_alarm_name(challenge)
     probe_arn = f"arn:aws:cloudwatch:us-east-1:123456789012:alarm:{probe_name}"
     cloudwatch = mock.Mock()
-    cloudwatch.describe_alarms.return_value = {"MetricAlarms": [{"AlarmArn": probe_arn}]}
+    cloudwatch.list_metrics.return_value = {"Metrics": []}
+    probe = {
+        "AlarmName": probe_name, "AlarmArn": probe_arn,
+        "Namespace": "DjangoMojo/Setup", "MetricName": "DeliveryProbe",
+        "Statistic": "Maximum", "Period": 60, "EvaluationPeriods": 1,
+        "DatapointsToAlarm": 1, "Threshold": 0,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "notBreaching", "Dimensions": [],
+        "AlarmActions": [topic], "OKActions": [topic], "StateValue": "OK",
+    }
+    cloudwatch.describe_alarms.side_effect = lambda **kwargs: {
+        "MetricAlarms": [probe] if probe_name in kwargs.get("AlarmNames", []) else []}
     cloudwatch.list_tags_for_resource.return_value = {"Tags": expected_tags}
     CloudWatchAlarm.objects.filter(alarm_key="a" * 64).delete()
     alarm = CloudWatchAlarm.objects.create(alarm_key="a" * 64, alarm_arn=probe_arn)
@@ -443,26 +725,57 @@ def test_monitoring_proof_requires_delivery_after_this_operation(opts):
         old_state="OK", new_state="ALARM", state_changed_at=timezone.now(),
         is_delivery_probe=True)
     cutoff = timezone.now()
-    clients = {"sns": sns, "cloudwatch": cloudwatch, **_discovery_clients()}
+    CloudWatchAlarmTransition.objects.filter(pk=old.pk).update(
+        created=cutoff - __import__("datetime").timedelta(seconds=1))
+    clients = {"sns": sns, "cloudwatch": cloudwatch, "sts": _setup_sts(),
+               **_discovery_clients()}
     service = AWSSetupService(clients=clients)
-    assert not service.monitoring_proven(after=cutoff), \
+    policy = service._desired_topic_policy(
+        {"Version": "2012-10-17", "Statement": []}, topic,
+        "123456789012", identity)
+    sns.get_topic_attributes.return_value = {
+        "Attributes": {"Policy": __import__("json").dumps(policy)}}
+    assert service._desired_topic_policy(
+        policy, topic, "123456789012", identity) == policy, \
+        "The already-safe owned topic policy must be exact"
+    assert aws_setup._alarm_matches(probe, {
+        key: value for key, value in probe.items()
+        if key not in ("AlarmArn", "StateValue")}), \
+        "The persisted probe alarm must match its full desired configuration"
+    assert service._desired_monitoring_alarms(cloudwatch) == [], \
+        "This fixture intentionally has no real resource alarms"
+    assert not service.monitoring_proven(challenge, cutoff), \
         "A transition from before this operation's probe attempt must not prove delivery"
     CloudWatchAlarmTransition.objects.create(
-        alarm=alarm, topic_arn=topic, sns_message_id="new-proof",
+        alarm=alarm, topic_arn=topic, sns_message_id="premature-ok",
         old_state="ALARM", new_state="OK", state_changed_at=timezone.now(),
         is_delivery_probe=True)
-    assert service.monitoring_proven(after=cutoff), \
-        "A newly persisted owned probe transition should prove this operation's delivery"
-    operation = SimpleNamespace(
-        operation_log=[{"code": "step.started", "message": "Started section:aws_monitoring",
-                        "at": cutoff.isoformat()}],
-        created=cutoff - __import__("datetime").timedelta(seconds=1),
-        modified=timezone.now() + __import__("datetime").timedelta(seconds=30),
-    )
+    assert not service.monitoring_proven(challenge, cutoff), \
+        "A one-state or out-of-order probe must not prove delivery"
+    alarm_receipt = CloudWatchAlarmTransition.objects.create(
+        alarm=alarm, topic_arn=topic, sns_message_id="new-alarm",
+        old_state="OK", new_state="ALARM", state_changed_at=timezone.now(),
+        is_delivery_probe=True)
+    CloudWatchAlarmTransition.objects.create(
+        alarm=alarm, topic_arn=topic, sns_message_id="new-ok",
+        old_state="ALARM", new_state="OK",
+        state_changed_at=alarm_receipt.state_changed_at +
+        __import__("datetime").timedelta(milliseconds=1), is_delivery_probe=True)
+    proof_alarm, proof_ok = service._probe_evidence(topic, probe_arn, cutoff)
+    assert proof_alarm is not None and proof_ok is not None, \
+        "The exact ordered receipts must be selected as operation evidence"
+    assert service.monitoring_proven(challenge, cutoff), \
+        "Only the operation's ordered ALARM then OK receipts should prove delivery"
+    SystemSetupOperation.objects.filter(status__in=SystemSetupOperation.ACTIVE_STATUSES).delete()
+    operation = SystemSetupOperation.objects.create(
+        created_by=actor, mode="fix", section="aws_monitoring", status="reconciling",
+        replay_fingerprint="b" * 64, bound_origin="https://api.example.com",
+        steps=[{"id": "section:aws_monitoring", "state": "reconciling",
+                "probe_challenge": challenge, "probe_cutoff": cutoff.isoformat()}])
     outcome = aws_setup.reconcile_monitoring(
-        {"operation": operation, "aws_clients": clients}, {})
+        {"operation": operation, "actor": actor, "aws_clients": clients}, {})
     assert outcome["status"] == "proven", \
-        "Delivery between fixer return and the next advance must use the stable first-attempt cutoff"
+        "Delivery between fixer return and the next advance must use persisted proof intent"
 
 
 @th.django_unit_test()
@@ -476,16 +789,128 @@ def test_existing_untagged_operations_topic_requires_explicit_adoption(opts):
     sns = mock.Mock()
     sns.list_topics.return_value = {"Topics": [{"TopicArn": topic}]}
     sns.list_tags_for_resource.return_value = {"Tags": []}
+    sns.get_topic_attributes.return_value = {"Attributes": {"Policy": __import__("json").dumps({
+        "Version": "2012-10-17", "Statement": []})}}
     cloudwatch = mock.Mock()
-    service = AWSSetupService(clients={"sns": sns, "cloudwatch": cloudwatch})
+    service = AWSSetupService(clients={
+        "sns": sns, "cloudwatch": cloudwatch, "sts": _setup_sts()})
     denied = None
     try:
-        service.reconcile_monitoring(actor, send_probe=False)
+        service.reconcile_monitoring(
+            actor, "d" * 32, __import__("django.utils.timezone", fromlist=["now"]).now(),
+            send_probe=False)
     except Exception as exc:
         denied = exc
     assert denied is not None, "An existing untagged same-name topic must require a late adoption choice"
     assert not sns.tag_resource.called and not sns.set_topic_attributes.called, \
         "A refused legacy topic must remain byte-for-byte untouched"
+
+
+@th.django_unit_test()
+def test_monitoring_refuses_unsafe_publish_policy_before_legacy_adoption(opts):
+    from mojo.apps.account.services import system_settings
+    from mojo.apps.aws.services.aws_setup import AWSSetupService, _sns_publish_policy_is_safe
+
+    actor = _setup_admin_identity("aws-setup-topic-policy@test.com")
+    identity = system_settings.read_installation_identity()
+    topic = f"arn:aws:sns:us-east-1:123456789012:django-mojo-{identity['slug']}-operations"
+    unsafe = {"Version": "2012-10-17", "Statement": [{
+        "Sid": "AttackerPublish", "Effect": "Allow", "Principal": "*",
+        "Action": "sns:Publish", "Resource": topic}]}
+    sns = mock.Mock()
+    sns.list_topics.return_value = {"Topics": [{"TopicArn": topic}]}
+    sns.list_tags_for_resource.return_value = {"Tags": []}
+    sns.get_topic_attributes.return_value = {
+        "Attributes": {"Policy": __import__("json").dumps(unsafe)}}
+    service = AWSSetupService(clients={
+        "sns": sns, "cloudwatch": mock.Mock(), "sts": _setup_sts()})
+    try:
+        service.reconcile_monitoring(
+            actor, "e" * 32, __import__("django.utils.timezone", fromlist=["now"]).now(),
+            send_probe=False, choice={"adopt_existing_topic": True, "topic_arn": topic})
+    except Exception:
+        pass
+    else:
+        raise AssertionError("Unsafe publish grants must block explicit legacy adoption")
+    assert not sns.tag_resource.called and not sns.set_topic_attributes.called, \
+        "Unsafe legacy policy must remain untouched and unowned"
+    gov_topic = topic.replace("arn:aws:", "arn:aws-us-gov:")
+    gov_policy = {"Statement": [{
+        "Effect": "Allow", "Principal": {"Service": "cloudwatch.amazonaws.com"},
+        "Action": "sns:Publish", "Resource": gov_topic,
+        "Condition": {"StringEquals": {"AWS:SourceAccount": "123456789012"},
+                      "ArnLike": {"AWS:SourceArn": (
+                          f"arn:aws-us-gov:cloudwatch:us-east-1:123456789012:alarm:"
+                          f"django-mojo/{identity['slug']}/*")}}}]}
+    assert _sns_publish_policy_is_safe(
+        gov_policy, "123456789012", "us-east-1", identity["slug"], gov_topic), \
+        "GovCloud must derive its partition from the validated topic ARN"
+
+
+@th.django_unit_test()
+def test_monitoring_explicit_adoption_corrects_base_url_subscription_once(opts):
+    from mojo.apps.account.services import system_settings
+    from mojo.apps.aws.services.aws_setup import AWSSetupService
+
+    actor = _setup_admin_identity("aws-setup-topic-positive@test.com")
+    identity = system_settings.read_installation_identity()
+    topic = f"arn:aws:sns:us-east-1:123456789012:django-mojo-{identity['slug']}-operations"
+    tags = []
+    policy = {"Version": "2012-10-17", "Statement": []}
+    subscriptions = [{"Protocol": "https",
+                      "Endpoint": "https://old.example/api/aws/cloudwatch/sns/alarm",
+                      "SubscriptionArn": "arn:aws:sns:subscription/old"}]
+    sns = mock.Mock()
+    sns.list_topics.return_value = {"Topics": [{"TopicArn": topic}]}
+    sns.list_tags_for_resource.side_effect = lambda **kwargs: {"Tags": list(tags)}
+    sns.tag_resource.side_effect = lambda **kwargs: tags.extend(kwargs["Tags"])
+    sns.get_topic_attributes.side_effect = lambda **kwargs: {
+        "Attributes": {"Policy": __import__("json").dumps(policy)}}
+
+    def set_policy(**kwargs):
+        policy.clear()
+        policy.update(__import__("json").loads(kwargs["AttributeValue"]))
+
+    sns.set_topic_attributes.side_effect = set_policy
+    sns.list_subscriptions_by_topic.side_effect = lambda **kwargs: {
+        "Subscriptions": list(subscriptions)}
+
+    def subscribe(**kwargs):
+        subscriptions.append({"Protocol": kwargs["Protocol"], "Endpoint": kwargs["Endpoint"],
+                              "SubscriptionArn": "arn:aws:sns:subscription/new"})
+        return {"SubscriptionArn": "arn:aws:sns:subscription/new"}
+
+    sns.subscribe.side_effect = subscribe
+    alarms = {}
+    cloudwatch = mock.Mock()
+    cloudwatch.describe_alarms.side_effect = lambda **kwargs: {
+        "MetricAlarms": [alarms[name] for name in kwargs.get("AlarmNames", []) if name in alarms]}
+
+    def put_alarm(**kwargs):
+        alarms[kwargs["AlarmName"]] = {
+            **{key: value for key, value in kwargs.items() if key != "Tags"},
+            "AlarmArn": ("arn:aws:cloudwatch:us-east-1:123456789012:alarm:"
+                         + kwargs["AlarmName"]), "StateValue": "OK"}
+
+    cloudwatch.put_metric_alarm.side_effect = put_alarm
+    expected_tags = {**__import__(
+        "mojo.apps.aws.services.aws_check", fromlist=["OWNERSHIP_TAGS"]).OWNERSHIP_TAGS,
+        "deployment": identity["slug"], "django-mojo-installation": identity["uuid"]}
+    cloudwatch.list_tags_for_resource.return_value = {"Tags": [
+        {"Key": key, "Value": value} for key, value in expected_tags.items()]}
+    service = AWSSetupService(clients={
+        "sns": sns, "cloudwatch": cloudwatch, "sts": _setup_sts()})
+    service._desired_monitoring_alarms = lambda cloudwatch: []
+    choice = {"adopt_existing_topic": True, "topic_arn": topic}
+    cutoff = __import__("django.utils.timezone", fromlist=["now"]).now()
+    service.reconcile_monitoring(actor, "f" * 32, cutoff, send_probe=False, choice=choice)
+    service.reconcile_monitoring(actor, "f" * 32, cutoff, send_probe=False, choice=choice)
+    assert sns.tag_resource.call_count == 1, "Explicit ownership adoption must be idempotent"
+    assert sns.subscribe.call_count == 1, "The corrected BASE_URL subscription must be added once"
+    assert any(row["Endpoint"].startswith("https://old.example") for row in subscriptions), \
+        "Subscription correction must preserve the unrelated legacy endpoint"
+    assert any(row["Endpoint"].startswith("https://api.example.com") for row in subscriptions), \
+        "The current BASE_URL endpoint must be subscribed"
 
 
 @th.django_unit_test()
@@ -513,6 +938,7 @@ def test_monitoring_stops_before_subscription_until_static_allowlist_matches(opt
 
 @th.django_unit_test()
 def test_s3_probe_reports_exact_cleanup_failure(opts):
+    from botocore.exceptions import ReadTimeoutError
     from mojo.apps.fileman.models import FileManager
     from mojo.apps.aws.services import aws_check
 
@@ -532,7 +958,8 @@ def test_s3_probe_reports_exact_cleanup_failure(opts):
     }}
     s3.get_bucket_cors.return_value = {"CORSRules": [{"AllowedOrigins": ["https://example.com"]}]}
     s3.get_object.return_value = {"Body": io.BytesIO(b"probe")}
-    s3.delete_object.side_effect = RuntimeError("cleanup denied")
+    secret = "https://s3.example/?X-Amz-Credential=CLEANUP-SECRET"
+    s3.delete_object.side_effect = ReadTimeoutError(endpoint_url=secret)
     with mock.patch.object(aws_check.uuid, "uuid4", side_effect=[SimpleNamespace(hex="sentinel"), SimpleNamespace(hex="probe")]):
         report = aws_check.AWSCheckRunner(
             clients={"sts": _verified_sts(), "s3": s3},
@@ -541,6 +968,13 @@ def test_s3_probe_reports_exact_cleanup_failure(opts):
     cleanup = next(item for item in report["items"] if item["code"] == "bucket.probe_cleanup_failed")
     assert cleanup["details"]["key"] == "__django_mojo_aws_check__/sentinel", \
         f"Cleanup failure must name the exact sentinel, got {cleanup}"
+    assert cleanup["details"]["operation"] == "s3.delete_object", \
+        f"Cleanup ambiguity must retain its bounded operation: {cleanup}"
+    assert "iam_action" not in cleanup["details"], \
+        "Non-authorization failures must not claim a missing IAM action"
+    assert cleanup["details"]["mutation_state"] == "unknown", \
+        f"A timed-out cleanup mutation must remain explicitly ambiguous: {cleanup}"
+    assert secret not in str(cleanup), "Cleanup evidence must not expose the provider endpoint"
     manager.delete()
 
 

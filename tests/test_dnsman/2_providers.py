@@ -166,6 +166,44 @@ def test_route53_upsert_sends_the_fqdn(opts):
 
 
 @th.django_unit_test()
+def test_route53_adapter_uses_injected_safe_provider_boundary(opts):
+    import traceback
+    from botocore.exceptions import ClientError
+    from mojo.apps.dnsman.services.providers.route53_provider import Route53Provider
+    from mojo.helpers.aws.provider_call import ProviderCallError, ProviderCaller
+
+    api = MagicMock()
+    api.upsert_record.return_value = "C-INJECTED"
+    boundary = MagicMock()
+    boundary.call.side_effect = lambda operation, callback, iam_action="", mutation=False: callback()
+    adapter = Route53Provider(opts.r53_domain, provider=boundary, route53_api=api)
+    assert adapter.upsert_record("TXT", f"_acme-challenge.{R53_DOMAIN}", ["digest"]) == "C-INJECTED"
+    call = boundary.call.call_args
+    assert call.args[0] == "route53.upsert_record" \
+        and call.args[2] == "route53:ChangeResourceRecordSets" \
+        and call.kwargs["mutation"] is True, \
+        f"The adapter write must cross the injectable boundary with exact IAM evidence: {call}"
+
+    secret = "https://signed.example/?X-Amz-Credential=SECRET-SENTINEL"
+    api.upsert_record.side_effect = ClientError({
+        "Error": {"Code": "AccessDenied", "Message": secret},
+        "ResponseMetadata": {"HTTPStatusCode": 403, "RequestId": "route53-request-1"},
+    }, "ChangeResourceRecordSets")
+    safe_logger = MagicMock()
+    adapter = Route53Provider(
+        opts.r53_domain, provider=ProviderCaller(safe_logger), route53_api=api)
+    try:
+        adapter.upsert_record("TXT", f"_acme-challenge.{R53_DOMAIN}", ["digest"])
+    except ProviderCallError as exc:
+        assert exc.detail()["iam_action"] == "route53:ChangeResourceRecordSets"
+        rendered = "".join(traceback.format_exception(exc))
+        assert secret not in rendered and secret not in str(safe_logger.method_calls), \
+            "Raw Route53 provider text must not reach tracebacks or logs"
+    else:
+        raise AssertionError("A Route53 denial must leave the adapter as a safe typed error")
+
+
+@th.django_unit_test()
 def test_godaddy_upsert_sends_the_relative_label(opts):
     """
     The SAME logical upsert on GoDaddy: relative label, raw TXT, and a PUT

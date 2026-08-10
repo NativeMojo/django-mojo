@@ -444,19 +444,51 @@ def test_setup_delivery_probe_is_evidence_only_after_rules_exist(opts):
 
 
 @th.django_unit_test()
+def test_delivery_probe_migration_defaults_existing_rows_to_operational(opts):
+    import importlib
+    from django.utils import timezone
+    from mojo.apps.aws.models import CloudWatchAlarm, CloudWatchAlarmTransition
+
+    migration = importlib.import_module(
+        "mojo.apps.aws.migrations.0012_cloudwatchalarmtransition_is_delivery_probe")
+    operation = migration.Migration.operations[0]
+    assert operation.name == "is_delivery_probe" and operation.field.default is False, \
+        "The additive migration must backfill every existing transition as operational"
+    CloudWatchAlarm.objects.filter(alarm_key="9" * 64).delete()
+    alarm = CloudWatchAlarm.objects.create(
+        alarm_key="9" * 64,
+        alarm_arn="arn:aws:cloudwatch:us-east-1:123456789012:alarm:legacy")
+    transition = CloudWatchAlarmTransition.objects.create(
+        alarm=alarm, topic_arn="arn:aws:sns:us-east-1:123456789012:legacy",
+        sns_message_id="pre-migration", old_state="OK", new_state="ALARM",
+        state_changed_at=timezone.now())
+    assert transition.is_delivery_probe is False, \
+        "Existing operational transitions must never be reclassified as setup probes"
+    assert transition.dispatch_status == "complete", \
+        "The additive migration must preserve the existing non-dispatch default"
+
+
+@th.django_unit_test()
 def test_delivery_probe_identity_rejects_wrong_topic_account_and_region(opts):
+    from django.utils import timezone
     from mojo.apps.aws.services import aws_setup
 
     identity = {"uuid": "00000000-0000-0000-0000-000000000001", "slug": "install-one"}
-    name = "django-mojo/install-one/delivery-probe"
+    challenge = "c" * 32
+    name = f"django-mojo/install-one/delivery-probe/{challenge}"
     topic = "arn:aws:sns:us-east-1:123456789012:django-mojo-install-one-operations"
     data = {
         "alarm_name": name,
         "alarm_arn": f"arn:aws:cloudwatch:us-east-1:123456789012:alarm:{name}",
         "account": "123456789012", "region": "us-east-1",
+        "state_changed_at": timezone.now(),
     }
     with mock.patch.object(aws_setup.system_settings, "read_installation_identity", return_value=identity), \
             mock.patch.object(aws_setup.system_settings, "get_value", return_value=[topic]), \
+            mock.patch.object(aws_setup, "_active_probe_identity", return_value={
+                "challenge": challenge,
+                "cutoff": data["state_changed_at"] - __import__("datetime").timedelta(seconds=1),
+                "operation": object()}), \
             mock.patch.object(aws_setup, "_region", return_value="us-east-1"):
         assert aws_setup.is_owned_delivery_probe({"TopicArn": topic}, data), \
             "The exact owned topic/account/region/alarm identity should classify as probe evidence"
@@ -469,6 +501,15 @@ def test_delivery_probe_identity_rejects_wrong_topic_account_and_region(opts):
         wrong_region = dict(data, region="us-west-2")
         assert not aws_setup.is_owned_delivery_probe({"TopicArn": topic}, wrong_region), \
             "A payload region mismatch must not suppress event dispatch"
+        wrong_challenge = dict(data, alarm_name=name[:-1] + "d")
+        wrong_challenge["alarm_arn"] = wrong_challenge["alarm_arn"][:-1] + "d"
+        assert not aws_setup.is_owned_delivery_probe({"TopicArn": topic}, wrong_challenge), \
+            "A different setup challenge must remain an operational alarm"
+        preexisting = dict(
+            data, state_changed_at=data["state_changed_at"] -
+            __import__("datetime").timedelta(seconds=2))
+        assert not aws_setup.is_owned_delivery_probe({"TopicArn": topic}, preexisting), \
+            "A same-name state transition from before this operation must not prove delivery"
 
 
 @th.django_unit_test()
