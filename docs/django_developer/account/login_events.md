@@ -126,7 +126,13 @@ See [Login Events REST Reference](../../web_developer/account/login_events.md) f
 | `GET /api/account/logins/summary` | System-wide country/region aggregation |
 | `GET /api/account/logins/user` | Per-user country/region aggregation |
 
-All endpoints require `manage_users` + `security` + `users` permissions.
+All endpoints require one of `manage_users`, `security`, or `users`.
 `summary` and `user` are gated with `@md.requires_global_perms` (global grant
 only, no group/member fallback); `logins`/`logins/<pk>` are RestMeta-driven
 and follow normal permission rules.
+
+The Admin People inspector uses the existing list endpoint only. It reads the
+stored `ip_address`, country/region/city, `user_agent_info`, `device`, source,
+and new-country/new-region flags; it never invokes geolocation during a read.
+Links into Activity use the frozen bounded query vocabulary documented in the
+People feature and rely on each Activity lane's own permission gate.

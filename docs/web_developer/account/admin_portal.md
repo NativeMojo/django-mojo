@@ -265,6 +265,10 @@ This prevents non-admin users from escalating their own access.
 | User administration | `GET/POST /api/user`, `GET/POST /api/user/<id>` | `users` |
 | Group administration | `GET/POST /api/group`, `GET/POST /api/group/<id>` | `groups` |
 | Group membership | `POST /api/group/member`, `POST /api/group/member/<id>` | `groups` |
+| Admin reset link | `POST /api/account/admin/user/password/reset` | Global `users`/`manage_users`, interactive JWT authenticated in the last 600 seconds |
+| Admin temporary password | `POST /api/account/admin/user/password/temporary` | Same; plaintext appears once and forces replacement |
+| Permission bundles | `GET/POST /api/account/admin/people/permission-bundles` | Global User view/manage; writes require interactive auth in the last 600 seconds |
+| API-key lifecycle | `POST /api/account/admin/apikey/action` | Object edit authority, non-key session, interactive auth in the last 600 seconds |
 | Secure settings | `GET/POST /api/settings`, `DELETE /api/settings/<id>` | `groups` |
 | System Setup | `/api/account/admin/setup/*` | Literal active superuser only |
 | Security dashboard | `GET /api/incident/incident`, `GET /api/incident/event` | `security` |

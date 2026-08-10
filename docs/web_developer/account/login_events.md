@@ -270,3 +270,10 @@ A login recorded with `ip_address = null` also files a suppressed incident
 `account:login_no_client_ip` (level 5), keyed **globally** (not per-user) since a
 null client IP means a reverse-proxy / ingress is not forwarding the client
 address — it affects every request. Filter it via `GET /api/incident/event?category=account:login_no_client_ip`.
+
+The built-in Admin People inspector requests
+`GET /api/account/logins?user=<id>&size=50&sort=-created` and renders only
+stored evidence. Ordinary reads never trigger external geolocation. Activity
+links distinguish the selected User or Group from the actor/subject semantics
+of the destination resource and each destination lane remains independently
+permission-gated.

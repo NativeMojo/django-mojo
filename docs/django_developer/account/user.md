@@ -31,6 +31,7 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 | `avatar` | FK → fileman.File | Profile image |
 | `last_activity` | DateTimeField | Last seen timestamp |
 | `auth_key` | TextField | Per-user JWT signing key |
+| `requires_password_change` | BooleanField | Server-managed durable temporary-password state; indexed and never REST-writable |
 
 ### Avatar relation contract
 
@@ -54,14 +55,14 @@ class RestMeta:
     SAVE_PERMS = ["manage_users", "owner"]
     OWNER_FIELD = "self"           # owner = user is themselves
     NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
-    NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified"]
+    NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified", "requires_password_change"]
     SEARCH_FIELDS = ["username", "email", "display_name"]
     POST_SAVE_ACTIONS = ["send_invite", "disable", "reactivate"]
     GRAPHS = {
-        "basic": {"fields": ["id", "display_name", "username", "last_activity", "is_active"]},
+        "basic": {"fields": ["id", "uuid", "display_name", "username", "last_activity", "is_active", "requires_password_change"]},
         "default": {"fields": ["id", "display_name", "username", "email", "phone_number",
                                "permissions", "metadata", "is_active", "requires_mfa",
-                               "has_passkey"]},
+                               "requires_password_change", "has_passkey"]},
         "full": {}
     }
 ```
@@ -378,3 +379,21 @@ The full disable-lifecycle schema and service API are in [disable_lifecycle.md](
 | `USER_REGISTERED_HANDLER` | `None` | Dotted-path callable fired inside the registration transaction (and on OAuth new-user); raising rolls back |
 | `USER_LOGIN_HANDLER` | `None` | Dotted-path callable fired on every successful `jwt_login()`; errors are swallowed |
 | `FRESH_AUTH_WINDOW` | `0` | Step-up auth window in seconds. `0` (default) disables the gate entirely. When set, endpoints decorated with `@md.requires_fresh_auth()` require the caller's JWT `auth_time` to be within this many seconds of the request. See [step_up_auth.md](step_up_auth.md). |
+| `FORCED_PASSWORD_TOKEN_TTL` | `600` | Lifetime in seconds of the single-use `tp:` credential issued after successful temporary-password authentication. |
+
+## Administrator temporary passwords
+
+`services/admin_passwords.py` is the only administrator issuance boundary. It
+locks the selected User, generates and hashes a strong password, sets
+`requires_password_change=True`, rotates `auth_key` in the same transaction,
+disconnects realtime sessions, and audits only identifiers. The raw password
+exists only in the returned service value and the authorized one-time Admin
+dialog. Request and response body logging is replaced by a fixed marker.
+
+A successful temporary-password login returns only a short-lived, single-use
+`tp:` credential. It does not create an access token, refresh token, MFA token,
+group token, login event, or normal login side effect. The client posts that
+credential and a strong replacement to `POST /api/auth/password/forced`.
+Completion locks the User, consumes the credential once, persists a permanent
+password, clears the flag, and rotates `auth_key` again. Password-reset and
+invite-password completion use the same permanent-password choke point.

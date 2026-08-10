@@ -23,6 +23,9 @@
 | GET | `/api/auth/verify/email/confirm` | public | Confirm email via link |
 | POST | `/api/auth/verify/phone/send` | required | Send SMS verification code |
 | POST | `/api/auth/verify/phone/confirm` | required | Confirm phone via code |
+| POST | `/api/account/admin/user/password/reset` | global `users`/`manage_users`; fresh interactive auth | Send a dedicated audited reset link for a selected user |
+| POST | `/api/account/admin/user/password/temporary` | same | Set and reveal a real temporary password once |
+| POST | `/api/auth/password/forced` | single-use `tp:` credential | Replace a temporary password before any normal session can be issued |
 
 ---
 
@@ -111,6 +114,17 @@ detaches the relation without deleting the File.
 | `is_active`, `org`, `org_id` | Admin tier |
 | `permissions` (most keys) | Admin tier (matching `USER_PERMS_PROTECTION` rules) |
 | `new_password` (admin reset) | Admin tier — no `current_password` needed |
+| `requires_password_change` | Server only; clients cannot set or clear it directly |
+
+### Forced password response
+
+When `requires_password_change` is set, every successful login or token-reissue
+path returns `data.requires_password_change=true`, a `tp:`
+`forced_password_token`, and the basic User graph. It returns no access,
+refresh, MFA, or group token. Submit the one-time credential to
+`POST /api/auth/password/forced` with `new_password`; on success the response
+is the ordinary JWT login package. Do not persist the temporary password or
+the `tp:` credential in browser storage, telemetry, downloads, or logs.
 
 Attempts to set these fields without the required permission return `403`.
 
@@ -159,8 +173,8 @@ GET /api/user?search=alice&is_active=true&sort=-created&start=0&size=20
 
 | Graph | Fields |
 |---|---|
-| `basic` | id, display_name, username, last_activity, is_active, avatar |
-| `default` | id, display_name, username, email, phone_number, permissions, metadata, is_active, requires_mfa, has_passkey, avatar, org |
+| `basic` | id, uuid, display_name, username, last_activity, is_active, requires_password_change, avatar |
+| `default` | id, uuid, display_name, username, email, phone_number, permissions, metadata, is_active, requires_mfa, requires_password_change, has_passkey, avatar, org |
 | `full` | All fields |
 
 ```

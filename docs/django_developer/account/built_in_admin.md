@@ -101,6 +101,12 @@ a four-shape wizard (`api`, `site`, `site_api`, `redirect`); `site_api` routes
 are created sequentially so a partial result can be repaired without replaying
 successful rows.
 
+The People feature owns the complete User and Group operator journey. Its
+capabilities are issued by the backend per operation (view/manage Users,
+view/manage Groups, API-key custody, sign-in evidence, and each Activity lane);
+rendered controls are never authorization. See [People](admin_portal/people.md)
+for the custom fresh-auth actions, versioned permission map, and secret rules.
+
 ## Packaging and testing
 
 Portal assets live under `mojo/apps/account/admin_portal/` rather than Django's
