@@ -41,7 +41,7 @@ function refreshNavigation(route) {
 function mountShell() {
   navigation = h('nav', {class: 'nav'});
   const sidebar = h('aside', {class: 'sidebar', 'aria-label': 'Admin navigation'},
-    h('div', {class: 'brand'}, h('span', {class: 'brand-mark', text: 'M'}), h('div', {}, h('strong', {text: 'MOJO'}), h('small', {text: 'ADMIN'}))),
+    h('div', {class: 'brand'}, h('img', {class: 'brand-mark', src: 'assets/mojo-logo.png', alt: ''}), h('div', {}, h('strong', {text: 'MOJO'}), h('small', {text: 'ADMIN'}))),
     navigation, h('div', {class: 'sidebar-footer'}, h('span', {text: `django-mojo ${context.version}`})));
   sidebar.addEventListener('click', (event) => { if (event.target.closest('a')) sidebar.classList.remove('open'); });
   title = h('div', {class: 'topbar-title', text: 'Admin'});
