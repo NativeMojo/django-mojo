@@ -50,10 +50,12 @@ def test_allocation_idempotency_and_target_non_reuse(opts):
     from mojo.apps.dnsman.services import acme_hub
 
     zone = objict(name="hub.example.net", id="ZONE-HUB")
+    fake_secrets = SimpleNamespace(
+        token_hex=mock.Mock(side_effect=["a" * 32, "b" * 32]))
     with mock.patch.object(acme_hub, "_new_zone", return_value=zone), \
             mock.patch.object(acme_hub, "_stored_zone", return_value=zone), \
             mock.patch.object(acme_hub, "_audit"), \
-            mock.patch.object(acme_hub.secrets, "token_hex", side_effect=["a" * 32, "b" * 32]):
+            mock.patch.object(acme_hub, "secrets", fake_secrets):
         first = acme_hub.allocate(opts.acme_group, "client-a", "Example.COM.")
         retry = acme_hub.allocate(opts.acme_group, "client-a", "example.com")
         second = acme_hub.allocate(opts.acme_group, "client-b", "example.com")

@@ -313,13 +313,15 @@ When a large app has many tests, split it into domain-focused packages (`test_au
 > **`th.server_settings()` no longer requires `"serial": True`.** It restarts the
 > server (writing `var/django.conf` for uvicorn to reload), which used to tear
 > down any websocket another module had open — the cause of intermittent
-> "Connection is already closed" failures in `test_realtime` during full-suite
-> runs. `testit/server_lock.py` now serializes just that hazard: a `WsClient`
+> "Connection is already closed" failures during full-suite runs.
+> `testit/server_lock.py` now serializes just that hazard: a `WsClient`
 > connection holds a **shared** lock for its lifetime, and `server_settings()`
 > takes it **exclusively** for both of its reloads. Modules stay parallel and
 > only the actual restart windows are excluded — much cheaper than marking every
 > caller serial. Use `"serial": True` for the *other* reasons (signal handlers
-> bound to the main thread, as in `test_job_engine`).
+> bound to the main thread, as in `test_job_engine`; or a stress module that
+> intentionally holds many sockets longer than the writer's fail-open timeout,
+> as in `test_realtime`).
 >
 > A `WsClient` opened **inside** a `server_settings()` body is fine: the thread
 > already holding the exclusive hold is granted the shared hold immediately
