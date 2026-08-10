@@ -1,7 +1,7 @@
 # Admin Dashboard API
 
 The packaged Admin uses exactly five primary destinations: Dashboard, People,
-Web Apps, Platform, and Activity. Deployments, literal-superuser System Setup,
+Web Apps, Activity, and Platform. Deployments, literal-superuser System Setup,
 and a collapsed Advanced resource list live under Platform.
 
 `GET /api/account/admin/dashboard` requires ordinary Admin source access and

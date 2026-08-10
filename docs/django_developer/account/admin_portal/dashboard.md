@@ -1,7 +1,7 @@
 # Admin Dashboard integration contract
 
 The built-in Admin has five primary navigation items, in this order:
-Dashboard, People, Web Apps, Platform, and Activity. System Setup, deployments,
+Dashboard, People, Web Apps, Activity, and Platform. System Setup, deployments,
 and the collapsed Advanced raw-resource disclosure are destinations inside
 Platform; they are not additional primary navigation.
 

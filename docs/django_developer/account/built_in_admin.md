@@ -57,8 +57,8 @@ stylesheet, title, capability check, and one
 exactly one DOM `Node`; an optional `node.dispose()` releases feature-local
 listeners or work.
 
-Primary navigation is exactly Dashboard, People, Web Apps, Platform, and
-Activity. Platform contains deployments, literal-superuser System Setup, and
+Primary navigation is exactly Dashboard, People, Web Apps, Activity, and
+Platform. Platform contains deployments, literal-superuser System Setup, and
 one collapsed Advanced disclosure for raw resources. See
 [Dashboard integration](admin_portal/dashboard.md) for the permissioned source
 matrix and canonical cross-feature route state.

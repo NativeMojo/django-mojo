@@ -264,7 +264,7 @@ def test_merged_browser_secret_and_route_contract(opts):
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
     classifier = (ROOT / "mojo/helpers/request.py").read_text()
     th.assert_true(
-        "[dashboard, people, webapps, platform, activity, advanced]" in registry,
+        "[dashboard, people, webapps, activity, platform, advanced]" in registry,
         "feature order does not match the five-item product navigation")
     th.assert_true("navigation: () => []" in (
         ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/feature.js").read_text(),
