@@ -7,10 +7,14 @@ though `check_cors` consults it (`on_action_check_cors` passes
 therefore fail `fix_cors` with "No allowed origins provided" while passing
 `check_cors`.
 
-`_resolve_allowed_origins_from_value_or_settings` now also reads
-`self.allowed_origins`, so both actions resolve origins from the same source.
-These tests exercise that resolver directly — no S3 connectivity required.
+When no origin is configured, direct-upload CORS falls back to ``*``. This is
+the legacy django-mojo behavior: CORS permits browsers to use an upload
+capability, while the presigned URL remains the authorization boundary.
+
+These tests exercise the resolver directly — no S3 connectivity required.
 """
+from unittest import mock
+
 from testit import helpers as th
 from testit.helpers import assert_true
 
@@ -85,6 +89,24 @@ def test_resolve_payload_origins(opts):
     assert_true(
         "https://payload.example.com" in resolved,
         f"action payload origins should still resolve, got {resolved}",
+    )
+
+
+@th.django_unit_test("CORS: missing origins fall back to wildcard")
+def test_resolve_defaults_to_wildcard(opts):
+    fm = _fm(opts)
+    fm.set_allowed_origins([])
+    fm.save()
+
+    def configured_url(name):
+        return "https://api.example.com" if name == "BASE_URL" else None
+
+    with mock.patch("mojo.apps.fileman.models.manager.settings.get", side_effect=configured_url):
+        resolved = fm._resolve_allowed_origins_from_value_or_settings({})
+
+    assert_true(
+        resolved == ["*"],
+        f"BASE_URL must not narrow the wildcard direct-upload default, got {resolved}",
     )
 
 

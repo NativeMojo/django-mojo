@@ -286,6 +286,70 @@ def test_adopt_bucket_requires_private_public_access_block(opts):
 
 
 @th.django_unit_test()
+def test_create_system_bucket_installs_wildcard_direct_upload_cors(opts):
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.aws.services import aws_check
+
+    FileManager.objects.filter(
+        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
+    ).delete()
+    s3 = mock.Mock()
+    runner = aws_check.AWSCheckRunner(region="us-east-1", clients={"s3": s3})
+    owned = dict(aws_check.OWNERSHIP_TAGS, deployment="test")
+
+    with mock.patch.object(runner, "_bucket_tags", side_effect=[{}, owned]), \
+            mock.patch.object(runner, "_deployment_slug", return_value="test"):
+        manager = runner._create_bucket("system-media")
+
+    assert manager.allowed_origins == ["*"], \
+        f"system direct-upload manager should persist wildcard origins, got {manager.allowed_origins}"
+    cors = s3.put_bucket_cors.call_args.kwargs["CORSConfiguration"]["CORSRules"]
+    assert cors[0]["AllowedOrigins"] == ["*"], \
+        f"system media bucket should allow presigned uploads from every browser origin, got {cors}"
+    assert {"PUT", "POST", "HEAD"}.issubset(set(cors[0]["AllowedMethods"])), \
+        f"system media CORS should support both direct-upload signing modes, got {cors}"
+    manager.delete()
+
+
+@th.django_unit_test()
+def test_apply_repairs_missing_system_bucket_direct_upload_cors(opts):
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.aws.services import aws_check
+
+    FileManager.objects.filter(
+        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
+    ).delete()
+    manager = FileManager.objects.create(
+        name="aws-check-cors-repair", backend_type=FileManager.AWS_S3,
+        backend_url="s3://system-media", is_active=True, is_default=True,
+        is_public=False, supports_direct_upload=True,
+    )
+    s3 = mock.Mock()
+    s3.head_bucket.return_value = {}
+    s3.get_public_access_block.return_value = {"PublicAccessBlockConfiguration": {
+        "BlockPublicAcls": True, "IgnorePublicAcls": True,
+        "BlockPublicPolicy": True, "RestrictPublicBuckets": True,
+    }}
+    s3.get_bucket_cors.side_effect = aws_check.ClientError({
+        "Error": {"Code": "NoSuchCORSConfiguration", "Message": "missing"},
+    }, "GetBucketCors")
+
+    try:
+        report = aws_check.AWSCheckRunner(
+            clients={"sts": _verified_sts(), "s3": s3}, apply=True, yes=True,
+        ).run(["s3"])
+        manager.refresh_from_db()
+        configured = [item for item in report["items"] if item["code"] == "bucket.cors_configured"]
+        assert configured and configured[0]["status"] == "pass", \
+            f"apply should report repaired direct-upload CORS, got {report}"
+        assert manager.allowed_origins == ["*"], \
+            f"repaired system manager should persist wildcard origins, got {manager.allowed_origins}"
+        s3.put_bucket_cors.assert_called_once()
+    finally:
+        manager.delete()
+
+
+@th.django_unit_test()
 def test_s3_configured_region_mismatch_fails(opts):
     from mojo.apps.fileman.models import FileManager
     from mojo.apps.aws.services import aws_check

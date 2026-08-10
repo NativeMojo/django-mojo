@@ -844,10 +844,10 @@ class FileManager(MojoSecrets, MojoModel):
     def _resolve_allowed_origins_from_value_or_settings(self, value):
         """
         Resolve a list of allowed origins from the action value, this manager's
-        own ``allowed_origins`` setting, or global settings.
+        own ``allowed_origins`` setting, or explicit global CORS settings.
         Accepts 'origins', 'allowed_origins', 'domains', or 'list_of_domains' keys.
-        Falls back to the manager's ``allowed_origins`` and then settings such as
-        CORS_ALLOWED_ORIGINS, ALLOWED_ORIGINS, FRONTEND_ORIGIN/URL.
+        Falls back to ``*`` when none are configured. CORS controls which browser
+        origins may use a presigned capability; it does not grant S3 access.
         """
         origins = []
 
@@ -880,11 +880,6 @@ class FileManager(MojoSecrets, MojoModel):
                 elif isinstance(v, (list, tuple)):
                     origins.extend([str(s).strip() for s in v if str(s).strip()])
 
-        for key in ("FRONTEND_ORIGIN", "FRONTEND_URL", "SITE_URL", "BASE_URL"):
-            v = settings.get(key)
-            if v:
-                origins.append(str(v).strip())
-
         # Normalize: dedupe, drop trailing slash
         cleaned = []
         seen = set()
@@ -897,9 +892,7 @@ class FileManager(MojoSecrets, MojoModel):
                 seen.add(o)
                 cleaned.append(o)
 
-        if not cleaned:
-            raise ValueError("No allowed origins provided. Please pass at least one origin.")
-        return cleaned
+        return cleaned or ["*"]
 
     def check_cors_config(self, allowed_origins=None, required_methods=None, required_headers=None):
         """
@@ -920,10 +913,8 @@ class FileManager(MojoSecrets, MojoModel):
                 return {"ok": False, "issues": ["No CORS configuration set on this bucket."], "config": None}
             return {"ok": False, "issues": [str(e)], "config": None}
 
-        if allowed_origins is None:
-            allowed_origins = self._resolve_allowed_origins_from_value_or_settings({})
         if not allowed_origins:
-            raise ValueError("No allowed origins provided. Please pass at least one origin.")
+            allowed_origins = self._resolve_allowed_origins_from_value_or_settings({})
 
         required_methods = [m.upper() for m in (required_methods or ["GET", "PUT", "POST", "HEAD"])]
         required_headers = [h.lower() for h in (required_headers or ["content-type"])]
