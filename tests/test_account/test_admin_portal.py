@@ -73,6 +73,9 @@ def test_authenticated_admin_delivery(opts):
     asset = opts.client.get("/admin/assets/app.js")
     assert asset.status_code == 200 and "admin/bootstrap" in asset.text, \
         "valid source session did not receive the private JavaScript"
+    setup_asset = opts.client.get("/admin/assets/setup.js")
+    assert setup_asset.status_code == 200 and "Fix Setup" in setup_asset.text, \
+        "valid source session did not receive the private System Setup module"
     cache_control = next((value for key, value in
                           opts.client.last_response.headers.items()
                           if key.lower() == "cache-control"), "")
@@ -117,3 +120,12 @@ def test_non_admin_source_session_denied(opts):
     response = opts.client.post("/api/account/admin/session", json={})
     assert response.status_code == 403, \
         f"regular user received an Admin source session ({response.status_code})"
+
+
+@th.django_unit_test("anonymous callers cannot download the System Setup module")
+def test_setup_source_is_private(opts):
+    from testit.client import RestClient
+    client = RestClient(opts.client.host)
+    response = client.get("/admin/assets/setup.js")
+    assert response.status_code == 404, \
+        f"anonymous caller received System Setup source ({response.status_code})"

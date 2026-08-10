@@ -1,5 +1,6 @@
 import {api, h, icon} from './core.js';
 import {dashboardPage, peoplePage, webappsPage} from './pages.js';
+import {setupPage} from './setup.js';
 
 const app = document.getElementById('app');
 
@@ -23,6 +24,7 @@ function setTheme(value) {
 async function render(ctx) {
   const route = routeName();
   const nav = [
+    ['#/setup', 'System Setup', 'settings', ctx.capabilities.setup],
     ['#/system', 'System', 'home', true],
     ['#/users', 'People', 'users', ctx.capabilities.people || ctx.capabilities.groups],
     ['#/webapps', 'WebApps', 'deploy', ctx.capabilities.webapps],
@@ -34,7 +36,7 @@ async function render(ctx) {
     h('div', {class: 'sidebar-footer'}, h('span', {text: `django-mojo ${ctx.version}`})));
   const main = h('main', {class: 'main'}, h('header', {class: 'topbar'},
     h('button', {class: 'mobile-menu', 'aria-label': 'Toggle navigation', onclick: () => sidebar.classList.toggle('open')}, '☰'),
-    h('div', {class: 'topbar-title', text: route === 'system' ? 'System overview' : route === 'webapps' ? 'WebApps' : 'People'}),
+    h('div', {class: 'topbar-title', text: route === 'setup' ? 'System Setup' : route === 'system' ? 'System overview' : route === 'webapps' ? 'WebApps' : 'People'}),
     h('div', {class: 'topbar-actions'},
       h('button', {class: 'icon-button', title: 'Cycle color theme', onclick: () => { const current = document.documentElement.dataset.theme; setTheme(current === 'system' ? 'light' : current === 'light' ? 'dark' : 'system'); }}, icon('sun')),
       h('div', {class: 'user-menu'}, h('span', {class: 'avatar small', text: (ctx.user.display_name || ctx.user.email || '?').slice(0, 2).toUpperCase()}), h('div', {}, h('strong', {text: ctx.user.display_name || ctx.user.email}), h('small', {text: ctx.user.is_superuser ? 'Superuser' : 'Administrator'}))),
@@ -42,7 +44,8 @@ async function render(ctx) {
     h('div', {id: 'page-content', class: 'content'}, h('div', {class: 'loading', text: 'Loading…'})));
   app.replaceChildren(sidebar, main);
   let page;
-  if (route === 'users' || route === 'groups') page = await peoplePage(ctx, route);
+  if (route === 'setup') page = await setupPage(ctx);
+  else if (route === 'users' || route === 'groups') page = await peoplePage(ctx, route);
   else if (route === 'webapps') page = await webappsPage(ctx);
   else page = await dashboardPage(ctx);
   document.getElementById('page-content').replaceChildren(page);

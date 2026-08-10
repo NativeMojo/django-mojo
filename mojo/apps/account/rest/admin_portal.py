@@ -20,6 +20,7 @@ _PRIVATE_FILES = {
     "assets/app.js",
     "assets/core.js",
     "assets/pages.js",
+    "assets/setup.js",
 }
 _ADMIN_ROOT = f"/{admin_portal.ADMIN_PATH}"
 _ADMIN_ROOT_SLASH = f"/{admin_portal.ADMIN_PATH}/"
@@ -150,6 +151,7 @@ def on_admin_bootstrap(request):
         },
         "groups": groups,
         "capabilities": {
+            "setup": bool(request.user.is_superuser),
             "people": has(["view_users", "manage_users", "admin"]),
             "groups": has(["view_groups", "manage_groups", "admin"]),
             "webapps": has(["view_dns", "manage_dns", "security"]),

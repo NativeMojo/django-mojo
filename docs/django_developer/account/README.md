@@ -2,6 +2,7 @@
 
 - [Bootstrap](bootstrap.md) — Creating initial admin users via `manage.py create_user`; why `createsuperuser` doesn't work; portal-permission reference table
 - [Built-in Admin Portal](built_in_admin.md) — Private source delivery, Bouncer handoff, Hybrid UI architecture, themes, configuration, and tests
+- [System Setup and Readiness](system_setup.md) — Protected installation settings, versioned readiness registry, immutable ownership identity, and durable reconcile-before-retry operations
 - [User Model](user.md) — User model, permissions, JWT auth
 - [Group Model](group.md) — Group/organization model, membership, hierarchy
 - [Authentication Flow](auth.md) — JWT tokens, login, password reset

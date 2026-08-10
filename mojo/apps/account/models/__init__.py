@@ -17,3 +17,4 @@ from .bot_signature import BotSignature
 from .login_event import UserLoginEvent
 from .public_message import PublicMessage
 from .webhook_subscription import WebhookSubscription
+from .system_setup_operation import SystemSetupOperation

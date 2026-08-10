@@ -1,0 +1,256 @@
+# System Setup API
+
+The built-in Admin's **System Setup** page is the supported browser workflow
+for checking and repairing an installation. These endpoints are intentionally
+narrower than normal administrator APIs: the caller must be an active literal
+superuser using an interactive Bearer JWT. API keys, group tokens, inactive
+users, and permission-only non-superusers receive `403`.
+
+## Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/account/admin/setup/options` | Sections and an active fix operation |
+| `GET` | `/api/account/admin/setup/readiness?section=<code>` | Run all or one read-only report |
+| `POST` | `/api/account/admin/setup/create` | Create/replay a `check` or `fix` operation |
+| `GET` | `/api/account/admin/setup/detail?operation=<uuid>` | Reload/resume an operation |
+| `POST` | `/api/account/admin/setup/advance` | Execute or reconcile one step |
+| `POST` | `/api/account/admin/setup/choose` | Supply the current typed choice |
+| `POST` | `/api/account/admin/setup/cancel` | Cancel between steps |
+
+Operation creation and all advance/choose/cancel calls require authentication
+within 600 seconds. HTTP `440 reauth_required` means return through Bouncer with
+`force_reauth=1`, then retry. Mutable calls also require the same browser
+`Origin` that created the operation. Do not synthesize or forward a different
+Origin.
+
+The built-in page additionally requires the private Admin source session before
+the browser can download `/admin/assets/setup.js`. Obtain it through
+`POST /api/account/admin/session` as described in
+[Admin Portal API Guide](admin_portal.md). That cookie is only a source-delivery
+gate; every endpoint below still requires the interactive JWT and revalidates
+the literal superuser.
+
+## Request schemas
+
+| Endpoint | Request |
+|---|---|
+| `options` | No fields |
+| `readiness` | Optional query `section=<stable-section-code>` |
+| `create` | JSON `mode` (`check` or `fix`); optional `section`; optional `replay_key` up to 128 characters; same-origin `Origin` header |
+| `detail` | Query `operation=<operation-uuid>` (the alias `operation_id` is accepted) |
+| `advance` | JSON `operation`; bound `Origin` header |
+| `choose` | JSON `operation`, `step_id`, `definition_version`, `choice_revision`, and object `choice`; bound `Origin` header |
+| `cancel` | JSON `operation`; bound `Origin` header |
+
+`section` must be one of the codes returned by `options`. Omitting it means all
+sections. Generate a fresh `replay_key` for each create intent and retain it
+until the create response arrives; retrying the same actor/mode/section/Origin
+and key returns the original operation with `replayed: true`.
+
+`options` returns:
+
+```json
+{
+  "schema_version": 1,
+  "sections": [
+    {
+      "code": "django",
+      "label": "Django installation",
+      "fixable": false,
+      "choice_schema": null
+    }
+  ],
+  "active_fix": null
+}
+```
+
+`active_fix`, when present, has the operation shape below.
+
+## Run checks
+
+```http
+POST /api/account/admin/setup/create
+Origin: https://admin.example.com
+Authorization: Bearer <interactive-superuser-jwt>
+Content-Type: application/json
+
+{"mode":"check","replay_key":"client-generated-uuid"}
+```
+
+Call `advance` once with the returned operation id. The terminal operation has
+`status: "succeeded"` even when the readiness report contains a failed check;
+the operation successfully measured the system. Use `report.overall` for
+readiness.
+
+Reports use `schema_version: 1` and the statuses `pass`, `warn`, `fail`, and
+`pending`. Every check includes `code`, `explanation`, `remediation`,
+`fixable`, `required_choice`, and optional bounded scalar `details`. The full
+report shape is:
+
+```json
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-10T03:00:00+00:00",
+  "overall": "warn",
+  "summary": {"pass": 6, "warn": 1, "fail": 0, "pending": 0},
+  "sections": [
+    {
+      "code": "django",
+      "label": "Django installation",
+      "status": "warn",
+      "fixable": false,
+      "checks": [
+        {
+          "code": "django.static_directories",
+          "status": "warn",
+          "explanation": "One or more configured static directories are not present.",
+          "remediation": "Create the configured directories and run collectstatic.",
+          "fixable": false,
+          "required_choice": null
+        }
+      ]
+    }
+  ]
+}
+```
+
+Aggregate status uses the severity order `fail`, `pending`, `warn`, then
+`pass`. `GET readiness` returns this report directly. A check operation stores
+the same shape in `operation.report`.
+
+## Fix and resume
+
+Create with `mode: "fix"`, then call `advance` one step at a time. Persist only
+the operation id in browser state. The server owns the cursor, definition versions,
+choice revisions,
+lease, log, and report.
+
+When `status` is `waiting_for_choice`, render the exact
+`current_step.choice_schema`. Submit:
+
+```json
+{
+  "operation": "8d266835-1c5b-4434-9eb3-bb559b51ac64",
+  "step_id": "base_url",
+  "definition_version": 1,
+  "choice_revision": 0,
+  "choice": {"base_url": "https://mojo.example.com"}
+}
+```
+
+The choice is stored once under a row lock. A stale definition version or
+choice revision, wrong step,
+duplicate choice, unsupported field, or changed operation returns `409`/`400`
+without moving the cursor. Reload with `detail`, render the returned current
+step, and continue. Never replay an old choice optimistically.
+
+Fix steps may remain `reconciling` after a successful mutation. This is
+expected: the next `advance` proves provider state before marking the step
+`proven`. An interrupted `mutation_attempted` step reconciles instead of
+blindly repeating the provider write.
+An unexpected fixer or reconciliation exception leaves the operation active as
+`reconciling`; it does not mean the mutation failed. The safe log includes only
+the exception class. Continue calling `advance` so authoritative reconciliation
+can prove the outcome. Only a server-side typed definitive failure can move the
+step directly to `failed`.
+Neither `mutation_attempted` nor `reconciling` can be cancelled, even when its
+lease has expired: the provider outcome must first be reconciled. If an
+installed upgrade changes a step's registered `definition_version`, both
+choose and advance return `409` for planned/waiting steps; cancel from that safe
+state and start a new operation. An uncertain old-version step cannot be
+cancelled and does not return to its fixer: the server invokes the registered
+read-only reconciliation adapter for that exact version until it is proven.
+
+The operation log is bounded and safe to render as text. It never contains
+credentials or reveal-once secrets. Treat any future secret/provider-specific
+entry as a server defect; do not create UI that depends on such values.
+
+All operation endpoints return this shape; `create` adds `replayed`:
+
+```json
+{
+  "id": "8d266835-1c5b-4434-9eb3-bb559b51ac64",
+  "mode": "fix",
+  "section": null,
+  "status": "waiting_for_choice",
+  "cursor": 1,
+  "steps": [
+    {
+      "id": "base_url",
+      "definition_version": 1,
+      "choice_revision": 0,
+      "label": "Configure public BASE_URL",
+      "kind": "base_url",
+      "section": "",
+      "state": "waiting_for_choice",
+      "choice_schema": {
+        "type": "object",
+        "properties": {"base_url": {"type": "string", "format": "https-origin"}},
+        "required": ["base_url"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "current_step": {
+    "id": "base_url",
+    "definition_version": 1,
+    "choice_revision": 0,
+    "label": "Configure public BASE_URL",
+    "kind": "base_url",
+    "section": "",
+    "state": "waiting_for_choice",
+    "choice_schema": {
+      "type": "object",
+      "properties": {"base_url": {"type": "string", "format": "https-origin"}},
+      "required": ["base_url"],
+      "additionalProperties": false
+    }
+  },
+  "choices": {},
+  "report": {},
+  "log": [
+    {
+      "at": "2026-08-10T03:00:00+00:00",
+      "code": "choice.required",
+      "message": "Choice required for base_url"
+    }
+  ],
+  "created": "2026-08-10T02:59:58+00:00",
+  "modified": "2026-08-10T03:00:00+00:00",
+  "finished_at": null
+}
+```
+
+`current_step` is the full step at `cursor`, or `null` after the cursor passes
+the final step. Operation statuses are `planned`, `running`,
+`waiting_for_choice`, `reconciling`, `succeeded`, `failed`, and `cancelled`.
+Step states are `planned`, `waiting_for_choice`, `mutation_attempted`,
+`reconciling`, `proven`, and `failed`. A check operation can be `succeeded`
+while `report.overall` is not `pass`; a fix operation terminates `failed` when
+its final proof is `warn`, `pending`, or `fail`. Only an all-`pass` final report
+is a successful fix.
+
+Responses and durable operation state share one sanitizer. It enforces bounded
+depth, item count, string length, and total serialized bytes; recognizes
+credential/token/private-key/JWT/AWS-key and unlabeled high-entropy opaque
+material even under innocent field names; pre-bounds huge strings before
+inspection; and removes URL userinfo and query values, including presigned queries.
+Clients should preserve the response shape but tolerate a `"[truncated]"`
+value or `truncated: true` marker at a bounded collection edge.
+
+## Protected settings
+
+`BASE_URL`, installation identity, monitoring topic ownership, and expected
+edge topology cannot be created, updated, renamed, or deleted through generic
+`/api/settings`, regardless of permission. Use System Setup. Arbitrary Django
+settings editing is not part of this API.
+
+## Status handling
+
+- `401`: JWT missing or expired.
+- `400`: invalid mode, section, choice schema/value, or operation input.
+- `403`: not an active literal superuser, machine credential, or Origin mismatch.
+- `404`: operation id does not exist.
+- `409`: active fix conflict, stale choice, active lease, or terminal operation.
+- `440`: recent interactive authentication required.
