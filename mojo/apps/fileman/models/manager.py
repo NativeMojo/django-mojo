@@ -9,6 +9,7 @@ from mojo.models import MojoModel, MojoSecrets
 from urllib.parse import urlparse
 from mojo.helpers.settings import settings
 from mojo import errors as me
+from mojo.helpers.aws.provider_call import safe_error_detail
 
 class FileManager(MojoSecrets, MojoModel):
     """
@@ -700,8 +701,10 @@ class FileManager(MojoSecrets, MojoModel):
         except Exception as exc:
             status = "unknown"
             method = "object" if file_path else "policy"
-            issues = [str(exc)]
-            details = {"error": str(exc)}
+            safe = exc.failure() if hasattr(exc, "failure") else safe_error_detail(
+                exc, "s3.audit_public_access")
+            issues = ["S3 public-access evidence could not be collected safely."]
+            details = safe
 
         audit = {
             "version": self.PUBLIC_ACCESS_AUDIT_VERSION,
@@ -762,14 +765,16 @@ class FileManager(MojoSecrets, MojoModel):
             ok, issues, details = self.backend.check_public_access_for_prefix(file_path=None)
             return dict(status=True, result=dict(ok=ok, issues=issues, details=details))
         except Exception as e:
-            return dict(status=False, error=str(e))
+            return dict(status=False, error="S3 public-access audit failed",
+                        details=safe_error_detail(e, "s3.audit_public_access"))
 
     def on_action_test_connection(self, value):
         try:
             self.backend.test_connection()
             return dict(status=True)
         except Exception as e:
-            return dict(status=False, error=str(e))
+            return dict(status=False, error="Storage connection test failed",
+                        details=safe_error_detail(e, "s3.test_connection"))
 
     def on_action_fix_cors(self, value):
         try:
@@ -781,7 +786,8 @@ class FileManager(MojoSecrets, MojoModel):
             result = self.update_cors(allowed_origins)
             return dict(status=True, result=result)
         except Exception as e:
-            return dict(status=False, error=str(e))
+            return dict(status=False, error="S3 CORS repair failed",
+                        details=safe_error_detail(e, "s3.put_bucket_cors"))
 
     def on_action_check_cors(self, value):
         try:
@@ -792,7 +798,8 @@ class FileManager(MojoSecrets, MojoModel):
             result = self.check_cors_config(allowed_origins=self.allowed_origins)
             return dict(status=True, result=result)
         except Exception as e:
-            return dict(status=False, error=str(e))
+            return dict(status=False, error="S3 CORS audit failed",
+                        details=safe_error_detail(e, "s3.get_bucket_cors"))
 
     def on_action_check_public_access(self, value):
         """
@@ -911,7 +918,13 @@ class FileManager(MojoSecrets, MojoModel):
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") == "NoSuchCORSConfiguration":
                 return {"ok": False, "issues": ["No CORS configuration set on this bucket."], "config": None}
-            return {"ok": False, "issues": [str(e)], "config": None}
+            return {
+                "ok": False,
+                "issues": ["S3 CORS configuration could not be inspected safely."],
+                "config": None,
+                "failure": safe_error_detail(
+                    e, "s3.get_bucket_cors", "s3:GetBucketCORS"),
+            }
 
         if not allowed_origins:
             allowed_origins = self._resolve_allowed_origins_from_value_or_settings({})

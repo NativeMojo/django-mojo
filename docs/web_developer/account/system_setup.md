@@ -150,10 +150,11 @@ expected: the next `advance` proves provider state before marking the step
 `proven`. An interrupted `mutation_attempted` step reconciles instead of
 blindly repeating the provider write.
 An unexpected fixer or reconciliation exception leaves the operation active as
-`reconciling`; it does not mean the mutation failed. The safe log includes only
-the exception class. Continue calling `advance` so authoritative reconciliation
-can prove the outcome. Only a server-side typed definitive failure can move the
-step directly to `failed`.
+`reconciling`; it does not mean the mutation failed. The safe log includes the
+exception class and, only for a proved AWS authorization denial, the exact
+missing IAM action. Continue calling `advance` so authoritative reconciliation
+can prove the outcome. A denied AWS mutation or a server-side typed definitive
+failure can move the step directly to `failed`.
 Neither `mutation_attempted` nor `reconciling` can be cancelled, even when its
 lease has expired: the provider outcome must first be reconciled. If an
 installed upgrade changes a step's registered `definition_version`, both
@@ -238,6 +239,66 @@ material even under innocent field names; pre-bounds huge strings before
 inspection; and removes URL userinfo and query values, including presigned queries.
 Clients should preserve the response shape but tolerate a `"[truncated]"`
 value or `truncated: true` marker at a bounded collection edge.
+
+## AWS sections and choices
+
+AWS integration adds four section codes to `options`:
+
+| Code | Fixable | Behavior |
+|---|---:|---|
+| `aws_identity` | No | Reports the selected AWS identity, account, and region through bounded STS inspection. |
+| `aws_s3` | Yes | Discovers conservative private media-bucket candidates and adopts the exact selected bucket as the private system FileManager. |
+| `aws_email` | Yes | Imports an existing verified SES domain, selects its system sender, and installs only missing shipped templates. |
+| `aws_monitoring` | Yes | Creates or explicitly adopts the owned operations topic, HTTPS subscription, CloudWatch alarm profile, and delivery proof. |
+
+Render the server-returned `choice_schema`; do not build a second discovery UI.
+The current choice objects are:
+
+```json
+{"bucket":"existing-media","adopt_existing":true}
+```
+
+`bucket` is an exact enum. Public ACL/policy/status, foreign-owner, website,
+cross-region, tenant/user, wildcard/federated/unknown-policy, or unclassifiable
+buckets never appear. The adoption step separately rejects a bucket already
+tagged to another installation. Adoption keeps all four S3
+Block Public Access flags enabled, creates no public bucket policy, and merges
+wildcard presigned-upload CORS without deleting unrelated rules.
+
+```json
+{"domain":"verified.example","sender":"ops@verified.example"}
+```
+
+`domain` is an exact enum of fully paginated SES identities with verification
+status `Success`. `sender` must be a valid address on that domain. Existing
+customized email templates remain unchanged because Setup installs only missing
+shipped templates.
+
+```json
+{
+  "topic_arn":"arn:aws:sns:us-east-1:123456789012:django-mojo-example-operations",
+  "adopt_existing_topic":true
+}
+```
+
+The monitoring choice is present only when the exact reserved topic name
+already exists without django-mojo ownership tags. It is affirmative legacy
+adoption, not a free-form ARN field. Partial or conflicting ownership tags fail
+closed. Adoption also fails before tagging or allowlisting when any existing
+publish-capable Allow is not same-account/default-owner or an exact bounded
+CloudWatch source grant. Setup preserves safe unrelated SNS policy statements,
+creates the exact HTTPS subscription and repairs the complete owned alarm
+profile, and remains `reconciling` until the persisted random challenge for
+this operation delivers an ordered ALARM then OK after its stable cutoff. That probe is
+evidence-only: it does not create an Event, Incident, Ticket, or normal rule
+dispatch.
+
+An AWS provider-failure `details` object may contain only bounded scalar
+evidence: `operation`, `provider_code`, `retryable`, `mutation_state`, optional
+safe `request_id`, and `iam_action` only for an authorization denial. Successful
+checks may also include their documented bounded domain fields. Display the
+exact denied IAM action as remediation. Never expect raw AWS messages,
+credentials, provider payloads, or request parameters.
 
 ## Protected settings
 

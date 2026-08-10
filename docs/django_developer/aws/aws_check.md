@@ -6,6 +6,48 @@ mutates AWS or Django state. Apply mode creates confirmed missing resources and
 repairs missing direct-upload CORS on the system FileManager bucket. Other
 existing resources that differ from defaults are reported and preserved.
 
+## Admin System Setup convergence
+
+The built-in Admin **System Setup** page registers four stable sections from
+`mojo.apps.aws.services.aws_setup`: `aws_identity`, `aws_s3`, `aws_email`, and
+`aws_monitoring`. It reuses AWS Check inventory and alarm-profile logic but
+runs mutations as durable, repeatable setup operations; it never shells out to
+this command.
+
+`aws_identity` is read-only. The three mutable sections use these typed late
+choices:
+
+| Section | Choice and convergence contract |
+|---|---|
+| `aws_s3` | Exact `bucket` enum from complete safe-candidate discovery plus `adopt_existing: true`. Discovery proves the caller account, canonical owner/ACL, non-public policy status, fail-closed policy shape, region, website absence, and non-tenant ownership tags. Adoption keeps all four Block Public Access flags enabled, preserves objects and policies, merges tags and wildcard direct-upload CORS without deleting unrelated rules, and creates or repairs the private system-default FileManager. |
+| `aws_email` | Exact verified SES `domain` enum plus a valid `sender` on that domain. Setup imports or updates the local `EmailDomain`, makes that outbound Mailbox the sole system default, and installs only missing shipped templates. Existing customized templates are never overwritten. |
+| `aws_monitoring` | Usually no choice. An exact same-name untagged legacy topic produces `topic_arn` plus `adopt_existing_topic: true`; partial/conflicting tags or an unsafe publish policy fail closed before adoption. Setup preserves safe unrelated statements, owns one CloudWatch publish statement restricted by account and owned-alarm ARN, persists the receiver allowlist, converges the HTTPS subscription and full real-alarm configuration, and requires the current operation's unpredictable ALARM→OK delivery challenge after its persisted cutoff. |
+
+S3 and SES discovery never mutate provider state. The portal does not invent a
+bucket while a suitable existing private media bucket is available, and it
+never silently adopts an untagged legacy operations topic.
+
+Provider failures cross the shared bounded provider-call boundary. A provider
+failure detail may contain only `operation`, `provider_code`, `retryable`,
+`mutation_state`, an optional safe `request_id`, and the exact `iam_action` for
+an authorization denial. Normal successful checks may carry their documented
+bounded domain fields such as account, region, ARN, or candidate count. A
+denied fix step records its IAM action in the bounded operation log; other
+ambiguous provider failures remain reconciling. Raw provider messages,
+credentials, exception chains, and request parameters are never retained in
+UI, JSON, durable state, or application logs.
+
+This portal integration does not change the `manage.py aws-check` flags,
+section names, JSON schema, or exit codes below. The command and portal share
+the provider boundary and AWS Check logic, while the portal alone owns the
+durable operation protocol and protected runtime settings.
+
+Provider writes are followed by authoritative reads. A resumed operation writes
+only state that those reads still prove missing: an interruption after S3 tags,
+CORS, SNS policy/subscription, or an alarm update does not replay an already
+confirmed mutation. Concurrent unrelated CORS and safe SNS policy statements
+are merged and preserved.
+
 ## Modes and exit status
 
 ```bash
@@ -52,9 +94,9 @@ remediation/changed items:
     "section": "monitoring",
     "status": "pending",
     "code": "sns.topic_not_allowlisted",
-    "message": "Operations topic ARN is not in the static receiver allowlist",
+    "message": "Operations topic ARN is not in the receiver allowlist",
     "details": {"topic_arn": "arn:aws:sns:us-west-2:123456789012:django-mojo-example-operations"},
-    "remediation": "Add the exact ARN to AWS_CLOUDWATCH_ALARM_TOPIC_ARNS, restart Django, then rerun.",
+    "remediation": "Use System Setup to persist the exact ARN, or update the static AWS_CLOUDWATCH_ALARM_TOPIC_ARNS fallback and restart Django, then rerun.",
     "changed": false
   }]
 }
@@ -69,7 +111,7 @@ remediation/changed items:
 | `cron` | recent dispatcher run plus jobs Redis, runner heartbeats and scheduler lock |
 | `s3` | one system-default S3 FileManager, bucket/region/IAM, Public Access Block, CORS and optional sentinel |
 | `email` | SES identity/DKIM/sandbox/topics/receiving audit, outbound Mailbox and shipped templates |
-| `monitoring` | owned SNS topic, exact static allowlist, HTTPS subscription, owned alarms and receiver receipt |
+| `monitoring` | owned SNS topic, exact protected/static allowlist, HTTPS subscription, owned alarms and receiver receipt |
 | `dns` | dnsman ACME directory/account, delegation states, certificate expiry; under `--apply`, bootstraps one domain |
 | `rules` | opt-in create-only CloudWatch and version-drift incident policies |
 | `versions` | **opt-in** managed-service major version drift (RDS/Aurora, ElastiCache) — never part of a default run, and never reports FAIL |
@@ -136,7 +178,7 @@ The command uses the signed receiver already exposed at
 `/api/aws/cloudwatch/sns/alarm`:
 
 1. Create or discover the tagged operations topic and copy its ARN from the report.
-2. Add that exact ARN to file-only `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`, restart Django, and rerun.
+2. Add that exact ARN to `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` and rerun. System Setup writes the protected runtime value; file configuration remains the CLI fallback.
 3. Apply the HTTPS subscription and wait for confirmation.
 4. Apply missing alarms. Existing owned drift is WARN; non-owned reserved-name collisions are FAIL.
 5. Run the documented disposable-alarm ALARM→OK test. The durable transition receipt proves delivery.
@@ -344,6 +386,9 @@ AWS supports it:
 | SES/email create-missing | `ses:VerifyDomainIdentity`, `ses:VerifyDomainDkim`, `ses:SetIdentityNotificationTopic`, `sns:ListTopics`, `sns:ListTagsForResource`, `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe` |
 | Monitoring audit | `sns:ListTopics`, `sns:ListTagsForResource`, `sns:ListSubscriptionsByTopic`, `cloudwatch:DescribeAlarms`, `cloudwatch:ListTagsForResource`, `cloudwatch:ListMetrics`, `ec2:DescribeInstances`, `rds:DescribeDBInstances`, `elasticache:DescribeCacheClusters`, `elasticloadbalancing:DescribeTargetGroups` |
 | Monitoring apply | `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe`, `cloudwatch:PutMetricAlarm`, `cloudwatch:TagResource` |
+| System Setup S3 discovery/adoption | `s3:ListAllMyBuckets`, `s3:GetBucketLocation`, `s3:GetBucketWebsite`, `s3:GetBucketTagging`, `s3:GetBucketPolicy`, `s3:GetBucketPublicAccessBlock`, `s3:GetBucketCORS`, `s3:PutBucketPublicAccessBlock`, `s3:PutBucketTagging`, `s3:PutBucketCORS` |
+| System Setup SES import | `ses:ListIdentities`, `ses:GetIdentityVerificationAttributes`; sender, local domain import, and missing-only templates use the Django database |
+| System Setup monitoring convergence/probe | Monitoring audit actions above plus `sns:GetTopicAttributes`, `sns:SetTopicAttributes`, `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe`, `cloudwatch:PutMetricAlarm`, and `cloudwatch:SetAlarmState` |
 | Versions audit (opt-in) | `rds:DescribeDBClusters`, `rds:DescribeDBInstances`, `rds:DescribeDBEngineVersions`, `rds:DescribeDBMajorEngineVersions`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeCacheEngineVersions` |
 
 Cron, rule, mailbox and template checks use Django database/Redis access rather

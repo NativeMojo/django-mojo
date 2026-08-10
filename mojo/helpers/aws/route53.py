@@ -315,7 +315,7 @@ def list_prices(tld, access_key=None, secret_key=None, use_cache=True):
         client = _domains_client(access_key, secret_key)
         resp = client.list_prices(Tld=tld)
     except Exception as err:
-        logger.warning(f"route53 list_prices failed for tld '{tld}': {err}")
+        logger.warning("Route53 Domains call failed operation=route53domains.list_prices tld=%s", tld)
         return result
 
     entries = resp.get("Prices") or []

@@ -466,7 +466,8 @@ def test_authenticated_admin_setup_resume_smoke(opts):
     headers = {"Origin": origin}
     created = opts.client.post(
         "/api/account/admin/setup/create",
-        json={"mode": "fix", "replay_key": "browser-resume-smoke"}, headers=headers)
+        json={"mode": "fix", "section": "django",
+              "replay_key": "browser-resume-smoke"}, headers=headers)
     assert created.status_code == 200, f"browser Fix Setup create failed: {created.body}"
     operation = created.response.data
     for expected in ("reconciling", "planned", "waiting_for_choice"):

@@ -11,6 +11,7 @@ import fnmatch
 import requests
 
 from mojo.helpers.aws.client import get_session, get_assumed_session
+from mojo.helpers.aws.provider_call import safe_error_detail
 
 from .base import StorageBackend
 
@@ -622,18 +623,22 @@ class S3StorageBackend(StorageBackend):
             code = self._error_code(exc)
             details["authenticated_head"] = code or "error"
             details["status"] = "unknown"
-            return False, [f"Authenticated HeadObject could not confirm the object: {code or exc}"], details
+            details["failure"] = safe_error_detail(
+                exc, "s3.head_object", "s3:GetObject")
+            return False, ["Authenticated HeadObject could not confirm the object."], details
         except Exception as exc:
             details["authenticated_head"] = "error"
             details["status"] = "unknown"
-            return False, [f"Authenticated HeadObject failed: {exc}"], details
+            details["failure"] = safe_error_detail(exc, "s3.head_object", "s3:GetObject")
+            return False, ["Authenticated HeadObject failed safely."], details
 
         try:
             response = requests.head(self.get_url(file_path), allow_redirects=True, timeout=3)
             details["anonymous_head_status"] = response.status_code
         except Exception as exc:
             details["status"] = "unknown"
-            return False, [f"Anonymous HeadObject failed: {exc}"], details
+            details["failure"] = safe_error_detail(exc, "s3.anonymous_head_object")
+            return False, ["Anonymous HeadObject failed safely."], details
 
         if 200 <= response.status_code < 400:
             details["status"] = "public"
@@ -685,10 +690,13 @@ class S3StorageBackend(StorageBackend):
                 details["status"] = "private"
                 return False, ["No bucket policy grants anonymous access to this prefix."], details
             details["status"] = "unknown"
-            return False, [f"Unable to read bucket policy: {code or exc}"], details
+            details["failure"] = safe_error_detail(
+                exc, "s3.get_bucket_policy", "s3:GetBucketPolicy")
+            return False, ["Unable to read bucket policy safely."], details
         except Exception as exc:
             details["status"] = "unknown"
-            return False, [f"Unable to parse bucket policy: {exc}"], details
+            details["failure"] = safe_error_detail(exc, "s3.parse_bucket_policy")
+            return False, ["Unable to parse bucket policy safely."], details
 
         raw_statements = policy.get("Statement", [])
         statements = raw_statements if isinstance(raw_statements, list) else [raw_statements]
@@ -737,7 +745,10 @@ class S3StorageBackend(StorageBackend):
                 bucket_pab = {}
             else:
                 details["status"] = "unknown"
-                return False, [f"Unable to read bucket Public Access Block: {code or exc}"], details
+                details["failure"] = safe_error_detail(
+                    exc, "s3.get_public_access_block",
+                    "s3:GetBucketPublicAccessBlock")
+                return False, ["Unable to read bucket Public Access Block safely."], details
         details["bucket_public_access_block"] = bucket_pab
 
         try:
@@ -748,10 +759,16 @@ class S3StorageBackend(StorageBackend):
                 account_pab = {}
             else:
                 details["status"] = "unknown"
-                return False, [f"Unable to read account Public Access Block: {code or exc}"], details
+                details["failure"] = safe_error_detail(
+                    exc, "s3control.get_public_access_block",
+                    "s3:GetAccountPublicAccessBlock")
+                return False, ["Unable to read account Public Access Block safely."], details
         except Exception as exc:
             details["status"] = "unknown"
-            return False, [f"Unable to read account Public Access Block: {exc}"], details
+            details["failure"] = safe_error_detail(
+                exc, "s3control.get_public_access_block",
+                "s3:GetAccountPublicAccessBlock")
+            return False, ["Unable to read account Public Access Block safely."], details
         details["account_public_access_block"] = account_pab
 
         for scope, config in (("Bucket", bucket_pab), ("Account", account_pab)):

@@ -5,6 +5,7 @@ from seed JSON files when not found in the database.
 import json
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 from testit import helpers as th
 
@@ -144,3 +145,26 @@ def test_service_uses_autoload(opts):
         "Expected send_with_template to call get_or_load_from_seed, "
         "but it was not found in the function source"
     )
+
+
+@th.django_unit_test()
+def test_missing_only_installer_is_concurrency_idempotent(opts):
+    from django.db import close_old_connections
+    from mojo.apps.aws.models import EmailTemplate
+    from mojo.apps.aws.services.email_templates import install_missing
+
+    EmailTemplate.objects.filter(name="password_reset_code").delete()
+
+    def install():
+        close_old_connections()
+        try:
+            return install_missing()
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda ignored: install(), range(2)))
+    assert EmailTemplate.objects.filter(name="password_reset_code").count() == 1, \
+        "Concurrent missing-only installers must converge on one unique template row"
+    assert sum("password_reset_code" in result["created"] for result in results) == 1, \
+        f"Exactly one concurrent installer should report the create: {results}"

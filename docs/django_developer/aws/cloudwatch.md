@@ -61,7 +61,7 @@ ingestion is configured separately with the exact-topic allowlist below.
 | `AWS_KEY` | — | AWS access key ID |
 | `AWS_SECRET` | — | AWS secret access key |
 | `AWS_REGION` | `us-east-1` | AWS region for all CloudWatch calls |
-| `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` | `[]` | Static exact SNS topic ARN allowlist for alarm ingestion; empty denies all topics |
+| `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` | `[]` | Exact SNS topic ARN allowlist. System Setup persists the protected runtime value; file configuration is the fallback. Empty denies all topics. |
 
 ---
 
@@ -319,6 +319,31 @@ request/response documentation.
 
 ---
 
+## System Setup ownership and delivery proof
+
+Admin System Setup owns one operations topic named from the immutable
+installation slug. New topics are tagged at creation. A same-name untagged
+legacy topic is never silently claimed: the API returns an exact-ARN choice
+that requires affirmative adoption. Conflicting ownership tags fail closed.
+
+The converger preserves unrelated SNS policy statements and owns one statement
+that permits `sns:Publish` only from `cloudwatch.amazonaws.com` with the
+selected account as `AWS:SourceAccount`. It creates the exact HTTPS
+subscription, persists the topic ARN through the protected settings writer,
+and converges the delivery probe plus the real AWS Check alarm profile.
+Existing same-name alarms must carry the full installation ownership tags.
+
+The probe is evidence only: its signed transition has
+`is_delivery_probe=true` and does not create an Event, Incident, Ticket, or
+rule dispatch. Classification requires the exact owned topic, alarm ARN,
+account, region, and allowlist. Final reconciliation accepts only evidence
+created after the current setup step began.
+
+Migration `aws.0012_cloudwatchalarmtransition_is_delivery_probe` adds the
+indexed boolean to `CloudWatchAlarmTransition`; its read-only REST graph exposes
+the field so Admin clients can separate setup proof from operational alarm
+history. Apply the migration before enabling `aws_monitoring`.
+
 ## SNS alarm ingestion
 
 For deployment-wide audit and create-missing setup, use
@@ -333,7 +358,8 @@ POST /api/aws/cloudwatch/sns/alarm
 
 The endpoint is public because SNS cannot authenticate as a django-mojo User,
 but it is not anonymous in practice. Every envelope must have a valid AWS SNS
-signature and its `TopicArn` must exactly match a static deployment allowlist:
+signature and its `TopicArn` must exactly match the protected runtime allowlist
+or its static deployment fallback:
 
 ```python
 AWS_CLOUDWATCH_ALARM_TOPIC_ARNS = [
@@ -347,9 +373,10 @@ are deliberately unrelated, and the alarm endpoint never honors
 the signed confirmation URL is HTTPS on the matching AWS SNS service, carries
 the signed topic/token, does not redirect, and returns 2xx.
 
-`AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` is read as a static setting, so change it in
-deployment configuration and restart application processes when updating the
-allowlist. SNS envelopes are limited to 300 KiB.
+Prefer Admin System Setup, which persists `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`
+through the superuser-only protected writer. File configuration remains
+supported for externally managed deployments; restart application processes
+after changing that fallback. SNS envelopes are limited to 300 KiB.
 
 There is a sibling receiver for GuardDuty findings at
 `POST /api/aws/guardduty/sns/finding` (see

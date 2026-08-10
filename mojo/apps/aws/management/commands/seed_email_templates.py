@@ -42,6 +42,24 @@ class Command(BaseCommand):
         if not os.path.isdir(seed_dir):
             raise CommandError("Seed directory not found: %s" % seed_dir)
 
+        # The normal command is an adapter over the same missing-only service
+        # used by Admin System Setup. Keep the explicit legacy
+        # --update-existing maintenance mode below for operators who request it.
+        if not update_existing:
+            from mojo.apps.aws.services.email_templates import install_missing
+            try:
+                result = install_missing(seed_dir, dry_run=dry_run)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                raise CommandError("Unable to load shipped email templates: %s" % str(exc))
+            self.stdout.write("Seeding %d email template(s) from %s" % (
+                result["total"], seed_dir))
+            self.stdout.write("Mode: %s (existing templates unchanged)" % (
+                "DRY RUN" if dry_run else "WRITE"))
+            self.stdout.write(self.style.SUCCESS(
+                "Done. created=%d updated=0 skipped=%d" % (
+                    len(result["created"]), len(result["skipped"]))))
+            return
+
         seed_files = self._list_seed_files(seed_dir)
         if not seed_files:
             self.stdout.write(self.style.WARNING("No seed files found in %s" % seed_dir))

@@ -6,6 +6,33 @@
 
 Most email operations are backend-only (triggered by application logic). The REST API is primarily for administration.
 
+For installation bootstrap, use the superuser-only
+[System Setup API](../account/system_setup.md#aws-sections-and-choices) rather
+than assembling SES state through the generic model endpoints.
+
+The existing SES domain operations remain available at
+`/api/aws/email/domain/<id>/onboard`, `/audit`, and `/reconcile`. They require a
+global `manage_aws` or `comms` permission. An unexpected provider failure now
+returns a fixed `500` error plus bounded evidence instead of exposing the raw
+AWS exception:
+
+```json
+{
+  "error": "SES reconciliation could not complete safely",
+  "failure": {
+    "operation": "ses.get_identity_verification_attributes",
+    "provider_code": "AccessDenied",
+    "retryable": false,
+    "mutation_state": "none",
+    "iam_action": "ses:GetIdentityVerificationAttributes"
+  }
+}
+```
+
+`request_id` may be present when AWS supplies a safe identifier. `iam_action`
+is present only for an authorization denial. Raw provider messages,
+credentials, signed URLs, and request parameters are never returned.
+
 ## Email Templates
 
 ### List Templates

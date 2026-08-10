@@ -4,6 +4,7 @@ from mojo import decorators as md
 from mojo import JsonResponse
 from mojo.errors import MojoException
 from mojo.helpers import logit
+from mojo.helpers.aws.provider_call import safe_error_detail
 
 # Use the new email_ops service
 from mojo.apps.aws.services.email_ops import (
@@ -151,8 +152,14 @@ def on_email_domain_onboard(request, pk: int):
         # flattening "this domain is not managed here" into a 500.
         return JsonResponse({"error": e.reason, "code": e.code}, status=e.status)
     except Exception as e:
-        logger.error(f"onboard error for domain pk={pk}: {e}")
-        return JsonResponse({"error": str(e)}, status=500)
+        failure = safe_error_detail(e, "ses.onboard")
+        logger.error(
+            "SES onboarding failed operation=%s provider_code=%s domain_id=%s",
+            failure.get("operation"), failure.get("provider_code"), pk)
+        return JsonResponse({
+            "error": "SES onboarding could not complete safely",
+            "failure": failure,
+        }, status=500)
 
 
 @md.URL("email/domain/<int:pk>/audit")
@@ -199,8 +206,14 @@ def on_email_domain_audit(request, pk: int):
     except EmailDomainNotFound:
         return JsonResponse({"error": "EmailDomain not found", "code": 404}, status=404)
     except Exception as e:
-        logger.error(f"audit error for domain pk={pk}: {e}")
-        return JsonResponse({"error": str(e)}, status=500)
+        failure = safe_error_detail(e, "ses.audit")
+        logger.error(
+            "SES audit failed operation=%s provider_code=%s domain_id=%s",
+            failure.get("operation"), failure.get("provider_code"), pk)
+        return JsonResponse({
+            "error": "SES audit could not complete safely",
+            "failure": failure,
+        }, status=500)
 
 
 @md.URL("email/domain/<int:pk>/reconcile")
@@ -253,5 +266,11 @@ def on_email_domain_reconcile(request, pk: int):
     except InvalidConfiguration as e:
         return JsonResponse({"error": str(e)}, status=400)
     except Exception as e:
-        logger.error(f"reconcile error for domain pk={pk}: {e}")
-        return JsonResponse({"error": str(e)}, status=500)
+        failure = safe_error_detail(e, "ses.reconcile")
+        logger.error(
+            "SES reconcile failed operation=%s provider_code=%s domain_id=%s",
+            failure.get("operation"), failure.get("provider_code"), pk)
+        return JsonResponse({
+            "error": "SES reconciliation could not complete safely",
+            "failure": failure,
+        }, status=500)

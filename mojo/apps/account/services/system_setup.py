@@ -10,6 +10,8 @@ import json
 import secrets
 from datetime import timedelta
 
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -209,6 +211,12 @@ def _validate_choice(schema, value):
                 item = system_settings.validate_base_url(item)
             except ValueError as exc:
                 raise merrors.ValueException(str(exc))
+        if field.get("format") == "email":
+            try:
+                validate_email(item)
+            except ValidationError:
+                raise merrors.ValueException(
+                    f"choice.{name} must be a valid email address")
         clean[name] = sanitize(item)
     return sanitize(clean)
 
@@ -460,8 +468,20 @@ def advance(request, operation_id):
         logit.error("system_setup", f"step {step['id']} failed ({exc.__class__.__name__})")
         outcome = {"status": "fail", "exception_class": exc.__class__.__name__}
     except Exception as exc:
-        logit.error("system_setup", f"step {step['id']} pending ({exc.__class__.__name__})")
-        outcome = {"status": "pending", "exception_class": exc.__class__.__name__}
+        # ProviderCallError deliberately has no raw cause/message. Preserve its
+        # bounded evidence so the operation log can name the exact denied IAM
+        # action without ever serializing botocore text or credentials.
+        failure = exc.detail() if callable(getattr(exc, "detail", None)) else None
+        status = "fail" if isinstance(failure, dict) and failure.get(
+            "iam_action") else "pending"
+        logit.error(
+            "system_setup",
+            f"step {step['id']} {status} ({exc.__class__.__name__})")
+        outcome = {
+            "status": status,
+            "exception_class": exc.__class__.__name__,
+            "failure": sanitize(failure) if isinstance(failure, dict) else None,
+        }
 
     with transaction.atomic():
         operation = SystemSetupOperation.objects.select_for_update().get(pk=operation_id)
@@ -472,8 +492,12 @@ def advance(request, operation_id):
         step = dict(steps[step_index])
         status = outcome.get("status")
         if outcome.get("exception_class"):
-            _log(operation, "step.exception",
-                 f"{outcome['exception_class']} left this step {status}")
+            failure = outcome.get("failure") or {}
+            iam_action = failure.get("iam_action")
+            message = f"{outcome['exception_class']} left this step {status}"
+            if iam_action:
+                message += f"; missing IAM action: {iam_action}"
+            _log(operation, "step.exception", message)
         operation.lease_owner = ""
         operation.lease_expires_at = None
         if status == "mutation_attempted":

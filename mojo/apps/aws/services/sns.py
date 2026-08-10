@@ -122,7 +122,7 @@ def _certificate(url):
     except SNSTransientError:
         raise
     except Exception as exc:
-        logger.warning("SNS certificate fetch failed: %s", exc)
+        logger.warning("SNS certificate fetch failed (%s)", exc.__class__.__name__)
         raise SNSTransientError("SNS certificate fetch failed")
     _CERT_CACHE[url] = (now, cert)
     return cert
@@ -199,7 +199,7 @@ def confirm_subscription(envelope):
             envelope["SubscribeURL"], timeout=10, allow_redirects=False,
         )
     except Exception as exc:
-        logger.warning("SNS confirmation failed: %s", exc)
+        logger.warning("SNS confirmation failed (%s)", exc.__class__.__name__)
         raise SNSTransientError("SNS confirmation failed")
     if response.status_code < 200 or response.status_code >= 300:
         raise SNSTransientError("SNS confirmation failed")

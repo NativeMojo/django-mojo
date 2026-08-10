@@ -60,8 +60,8 @@ def _handle_inbound_notification(message):
                 email_logger.info(f"Inbound email processed with fallback key: s3://{bucket}/{fallback_key}")
                 return
             except Exception as e2:
-                email_logger.error(f"Fallback inbound processing failed for s3://{bucket}/{fallback_key}: {e2}")
-        email_logger.error(f"Inbound processing failed for s3://{bucket}/{key}: {e}")
+                email_logger.error("Inbound fallback failed operation=s3.get_object bucket=%s", bucket)
+        email_logger.error("Inbound processing failed operation=s3.get_object bucket=%s", bucket)
 
 
 def _handle_bounce_notification(message):
@@ -167,8 +167,8 @@ def _handle_sns(kind, request):
                 Q(sns_topic_delivery_arn=topic) |
                 Q(sns_topic_inbound_arn=topic)
             ).exists()
-        except Exception as e:
-            email_logger.error(f"TopicArn allow-check failed: {e}")
+        except Exception:
+            email_logger.error("SNS topic allow-check failed operation=db.topic_allowlist")
             return False
     allowed_topics = [topic_arn] if _is_allowed_topic(topic_arn) else []
     try:
@@ -275,7 +275,10 @@ def _receive_signed_sns(request, allowlist_setting):
     except sns_service.SNSPayloadError:
         return None, JsonResponse({"error": "Invalid SNS payload"}, status=400)
 
-    allowed_topics = settings.get_static(allowlist_setting, [], kind="list")
+    # System Setup persists the CloudWatch allowlist through the protected
+    # DB-backed writer. Other receiver lists remain compatible with file
+    # settings because ``get`` falls through when no DB row exists.
+    allowed_topics = settings.get(allowlist_setting, [], kind="list")
     try:
         sns_service.verify_envelope(
             envelope, allowed_topics, request=request, allow_debug=False,
@@ -324,7 +327,7 @@ def on_cloudwatch_alarm(request):
     except CloudWatchDispatchError:
         return JsonResponse({"error": "Alarm dispatch incomplete"}, status=503)
     except Exception:
-        logger.exception("CloudWatch SNS processing failed")
+        logger.error("CloudWatch SNS processing failed operation=cloudwatch.process_notification")
         return JsonResponse({"error": "Alarm processing failed"}, status=503)
     return JsonResponse({"status": True, "data": result})
 
@@ -360,6 +363,6 @@ def on_guardduty_finding(request):
     except GuardDutyDispatchError:
         return JsonResponse({"error": "Finding dispatch incomplete"}, status=503)
     except Exception:
-        logger.exception("GuardDuty SNS processing failed")
+        logger.error("GuardDuty SNS processing failed operation=guardduty.process_notification")
         return JsonResponse({"error": "Finding processing failed"}, status=503)
     return JsonResponse({"status": True, "data": result})
