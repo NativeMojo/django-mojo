@@ -251,6 +251,23 @@ AWS integration adds four section codes to `options`:
 | `aws_email` | Yes | Imports an existing verified SES domain, selects its system sender, and installs only missing shipped templates. |
 | `aws_monitoring` | Yes | Creates or explicitly adopts the owned operations topic, HTTPS subscription, CloudWatch alarm profile, and delivery proof. |
 
+Hosting integration adds four non-fixable readiness sections. Their
+remediation links should open the normal guarded Domains, Certificates,
+Vhosts/Routes, Fleet, or WebApp key workflows; System Setup never mints a
+reveal-once deployment token in a report.
+
+| Code | Ready only when |
+|---|---|
+| `hosting_dns` | Managed domains can change DNS, certificates are active/unexpired, delegated ACME is verified, and no challenge reservation remains live |
+| `hosting_vhosts` | At least one enabled Vhost has an active domain and certificate, and every enabled Vhost passes that check |
+| `edge_fleet` | Every node/pool in `EDGE_EXPECTED_TOPOLOGY` answers from an `edge`-channel runner with the expected django-mojo version and desired generation, with no excluded or pending material |
+| `webapp_keys` | Every WebApp's safe key metadata is active; missing is `pending`, inactive is `fail`, and revoked is `warn` |
+
+The fleet section never treats a missing topology, node, response, pool, or
+generation as green. WebApp checks return only bounded metadata such as
+`webapp`, `linked`, `active`, and `last_action`; no token/hash/ciphertext can be
+recovered through Setup.
+
 Render the server-returned `choice_schema`; do not build a second discovery UI.
 The current choice objects are:
 

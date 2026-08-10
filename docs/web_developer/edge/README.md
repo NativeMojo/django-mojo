@@ -176,11 +176,31 @@ ordinary staged install path, fetch the new material through `material`,
 validate it, and reload nginx. `desired_state` itself never carries certificate
 PEM, chain, or private-key material.
 
-`GET /api/edge/proof?pools=default,blue` is another node-only endpoint. It
-returns only `{node_id, django_mojo_version, pools}` where each pool has the
-installed generation and counts for excluded/pending content/certificates. It
-returns no paths, settings, PEM, deployment token, or credential. The browser
-portal consumes the superuser-only System Setup readiness report instead.
+`GET /api/edge/proof?pools=default,blue` is another node-only endpoint with the
+same protected global `edge_node` permission (user or provisioned machine API
+key). `pools` may be a comma-separated query value or list; omitting it reads
+only `default`. The node must have a valid file-only `EDGE_NODE_ID`, and every
+requested pool must satisfy the configured pool-name grammar. Invalid input or
+node configuration is refused rather than returning partial proof.
+
+```json
+{
+  "node_id": "edge-a",
+  "django_mojo_version": "1.9.0",
+  "pools": {
+    "default": {
+      "generation": "sha256-generation",
+      "excluded": 0,
+      "www_pending": 0,
+      "cert_pending": 0
+    }
+  }
+}
+```
+
+It returns no paths, settings, PEM, deployment token, or credential. Browser
+portals must consume the literal-superuser-only System Setup readiness report
+instead of calling node proof directly.
 
 Vhost and Route mutations publish convergence after commit. Route editors may
 preserve successful rows when a later row fails, display that partial result,

@@ -161,8 +161,9 @@ EDGE_ROOT (default /opt/api/var/edge)
       www/<vhost-id>/                the web root (a release symlink later)
   current -> generations/<generation>
   log/                               access.log + edge_watch.log (EDGE_LOG_DIR)
-  installed.json                     {generation, excluded[], www_pending{},
+  installed/<pool>.json              {generation, excluded[], www_pending{},
                                       cert_pending[]}
+  installed.json                     legacy default-pool read fallback only
 ```
 
 `/etc/nginx/nginx.conf` on a node is a ~12-line provision-time **bootstrap**
@@ -433,7 +434,13 @@ only; no configuration, key material, or credentials.
 
 Installer evidence is `EDGE_ROOT/installed/<pool>.json`. The historical
 `EDGE_ROOT/installed.json` is a read-only fallback for the default pool only;
-new writes never mutate it. Vhost and Route commits register on-commit jobs for
-the live edge-channel runners, each keyed by node, pool, and desired generation.
-A publication error is pending evidence and the periodic sweep remains the
-healing path.
+new writes never mutate it. The first new default-pool install writes
+`installed/default.json`; the legacy file may then be removed after operators
+verify the new evidence.
+
+`Vhost.save/delete()` and `VhostRoute.save/delete()` register on-commit jobs for
+the affected old/new pools and live edge-channel runners, keyed by target, pool,
+and desired generation. A rolled-back transaction publishes nothing. Each Route
+row is its own commit boundary, so a multi-row portal workflow keeps successful
+rows and retries only failures. A publication error is pending evidence and the
+periodic sweep remains the healing path.

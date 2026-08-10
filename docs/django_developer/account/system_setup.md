@@ -125,6 +125,33 @@ The optional validator receives `(key, value)`, returns the normalized value,
 and raises `ValueError` with operator-safe text on invalid input. Omitting it
 protects the key without transforming its value.
 
+The edge app replaces the base topology validator with its stricter protected
+contract at startup. `EDGE_EXPECTED_TOPOLOGY` accepts only `nodes` and `pools`,
+requires one of each, canonicalizes duplicate entries into sorted lists, and
+caps them at 64 nodes and 32 pools. Node ids are 1–63 lowercase letters,
+digits, dots, dashes, or underscores; pool ids use the same bound without dots.
+`EDGE_NODE_ID` is separate, file-only node configuration and must match one of
+the protected topology's nodes.
+
+## Hosting readiness sections
+
+The edge app registers four read-only sections. They deliberately have no
+generic setup fixer: domain purchase/adoption, certificate issuance, Vhost
+design, and reveal-once deployment-key handling remain explicit operator
+actions through their existing guarded services.
+
+| Code | Readiness proof |
+|---|---|
+| `hosting_dns` | Managed-domain status and credential usability, active/unexpired certificates, delegated ACME state, and live DNS challenge reservations |
+| `hosting_vhosts` | Every enabled Vhost has an active domain and certificate; no enabled rows is pending |
+| `edge_fleet` | Every protected topology node answers on an `edge`-channel runner with the installed django-mojo version and matching per-pool desired generation, with zero excluded/pending content or certificates |
+| `webapp_keys` | Safe WebApp key metadata and latest mint/rotate/revoke receipt; no token or recoverable credential material |
+
+Missing topology, runner, node response, pool evidence, or generation never
+reports green. Fleet proof calls only live runners returned for channel
+`edge`; unrelated job runners are neither counted nor contacted. A revoked key
+is `warn`, an inactive linked key is `fail`, and a missing key is `pending`.
+
 ## Durable operation model
 
 `account.SystemSetupOperation` stores:

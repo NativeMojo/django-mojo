@@ -525,10 +525,21 @@ configured cap.
 
 ### `POST /api/dnsman/registrar/purchase` → step 2 of 2
 ```json
-{ "group": 4, "purchase": 31, "confirm_token": "..." }
+{
+  "group": 4,
+  "purchase": 31,
+  "confirm_token": "...",
+  "confirm_domain": "example.com",
+  "confirm_price": "12.00"
+}
 ```
-Spends money. A quote can be redeemed exactly once — a second attempt gets a
-uniform `400` that deliberately does not say which check failed.
+Spends money. Requires `manage_dns` (or `security`) for the quote's group, a
+browser user session authenticated within the last 600 seconds, and the
+operator-typed normalized domain and exact quoted decimal price. API keys and
+other key-backed sessions receive `403`; stale interactive authentication uses
+the standard `440 reauth_required` response. A quote can be redeemed exactly
+once — a token, state, expiry, group, typed-domain, or typed-price mismatch gets
+the same uniform `400` and makes no registrar call.
 
 Registration is asynchronous at the registrar (minutes). The purchase row moves
 `quoted → submitted → completed`, and the domain becomes `active` when the
@@ -692,22 +703,13 @@ Standard mojo error envelope. Notable cases:
 | Tenant initiate shape, alias proof, active-group, or domain-claim failure | `400` |
 | Tenant downstream client configuration/allocation transport failure | `503` |
 
-## Registrar purchase confirmation
+## DNS record-set reservation conflicts
 
-`POST /api/dnsman/registrar/purchase` is interactive only: API-key sessions are
-refused and authentication must be fresh within 600 seconds.
-
-```json
-{
-  "group": 3,
-  "purchase": 18,
-  "confirm_token": "reveal-from-quote",
-  "confirm_domain": "example.com",
-  "confirm_price": "12.00"
-}
-```
-
-`confirm_domain` and `confirm_price` are values the UI asks the operator to
-type, not hidden fields copied by script. They must exactly match the locked
-quote. Every mismatch uses the same `400` confirmation refusal and spends
-nothing.
+Certificate DNS-01 challenges durably reserve their complete TXT record set.
+`POST /api/dnsman/dns` and `POST /api/dnsman/dns/delete` return `400` before a
+provider call if the exact `(domain, type, name)` is owned by an in-flight or
+cleanup-pending challenge. Refresh the record inventory and retry after the
+certificate operation finishes; do not overwrite the challenge with a partial
+value set. A provider timeout during challenge publication is reconciled from
+the exact authoritative record set, so clients must not add their own blind
+retry loop.
