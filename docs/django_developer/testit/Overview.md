@@ -668,7 +668,7 @@ inside the wrong test's assertions. Give a module that leans on the queue a
 private channel and pass it everywhere:
 
 ```python
-CHANNEL = "testit_myapp_jobs"        # any name legal per validate_channel_name
+CHANNEL = "testit_myapp_jobs"        # also declare in JOBS_ALLOWED_CHANNELS
 
 jobs.publish(func=HANDLER, payload={...}, channel=CHANNEL)
 th.run_jobs(channel=CHANNEL)
@@ -676,10 +676,11 @@ th.clear_jobs(channel=CHANNEL)       # setup AND teardown
 ```
 
 Keep the name **out of `JOBS_CHANNELS`** — that is what makes it invisible to
-everyone else's no-argument drain. `publish()` takes the channel verbatim and
-never requires the publishing box to consume it, so an unlisted channel is a
-supported target, not a trick. `channel=` scopes the whole of `clear_jobs()`,
-Job rows included, so a scoped clear never reaches another channel's rows.
+everyone else's no-argument drain — but add it to the generated test project's
+`JOBS_ALLOWED_CHANNELS`, because publish targets are fail-closed. `publish()`
+then takes the declared channel verbatim without requiring this box to consume
+it. `channel=` scopes the whole of `clear_jobs()`, Job rows included, so a
+scoped clear never reaches another channel's rows.
 
 The tradeoff to make deliberately: a module scoped this way no longer exercises
 the no-argument "drain everything" path. Leave that to a module that publishes

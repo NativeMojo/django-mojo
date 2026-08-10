@@ -34,13 +34,23 @@ def setup_forced_password(opts):
 def test_admin_temporary_password_semantics(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.services import admin_passwords
+    from mojo.apps.account.services.disable import disconnect_realtime as real_disconnect
 
     user = User.objects.get(pk=opts.user_id)
     admin = User.objects.get(pk=opts.admin_id)
     old_auth_key = user.get_auth_key()
     request = SimpleNamespace(user=admin)
+    target_disconnects = []
+
+    def capture_target_disconnect(entity, request=None):
+        if entity.pk == user.pk:
+            target_disconnects.append((entity.pk, request))
+            return None
+        return real_disconnect(entity, request=request)
+
     with mock.patch(
-            "mojo.apps.account.services.disable.disconnect_realtime") as disconnect:
+            "mojo.apps.account.services.disable.disconnect_realtime",
+            side_effect=capture_target_disconnect):
         result = admin_passwords.issue_temporary_password(request, user.pk)
     user.refresh_from_db()
     temporary = result.get("temporary_password")
@@ -50,7 +60,8 @@ def test_admin_temporary_password_semantics(opts):
         "temporary issuance must persist forced-change state"
     assert user.auth_key != old_auth_key, \
         "temporary issuance must invalidate all existing JWTs"
-    disconnect.assert_called_once()
+    assert target_disconnects == [(user.pk, request)], \
+        "temporary issuance must disconnect the target exactly once"
 
 
 @th.django_unit_test("temporary-password credentials are short-lived, typed, and single use")
