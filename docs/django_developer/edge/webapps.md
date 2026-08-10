@@ -173,12 +173,27 @@ coordinator converges it.
 | `manage_webapp` | an administrator | one-time key linkage and rotation |
 | `manage_dns` | a site administrator | the `WebApp` row itself |
 
-`POST /api/edge/webapp/link_key` mints the CI credential and returns the token
-once. Re-linking is a **hard cutover** — the previous key is deactivated
-immediately, no grace window, because two live credentials for one site is
-exactly the state that makes revocation unprovable. Capture the returned token
-and immediately replace the repository's `MOJO_DEPLOY_KEY` secret; a workflow
-caught between those operations fails safely and can be rerun.
+`POST /api/edge/webapp/link_key` requires explicit `action` (`mint` or
+`rotate`) and a client-generated UUID `operation_id`. It returns the CI token
+only for the first successful response. The raw token is removed from encrypted
+storage before commit, so it cannot be recovered through the generic ApiKey
+token graph. A retry with the same operation id returns its durable non-secret
+receipt with `replayed: true` and `token: null`; if the first response was lost,
+the operator must explicitly rotate.
+
+Rotation is a **hard cutover** — the previous key is deactivated atomically,
+with no grace window, because two live credentials for one site is exactly the
+state that makes revocation unprovable. The endpoint requires an interactive
+JWT authenticated within the last five minutes and refuses API-key and
+group-token sessions. Capture the returned token and immediately replace the
+repository's `MOJO_DEPLOY_KEY` secret; a workflow caught between those
+operations fails safely and can be rerun.
+
+`GET /api/edge/webapp/key_status?webapp=<id>` returns safe linked/active,
+timestamp, and last-use metadata; it never returns a token.
+`POST /api/edge/webapp/revoke_key` accepts `webapp` and `operation_id`,
+atomically deactivates and unlinks the key, and is replay-safe through the same
+non-secret receipt model.
 
 The cross-site check is an FK identity comparison (`request.api_key_id ==
 webapp.api_key_id`), not a permissions lookup, and it **fails closed on null**:
@@ -222,8 +237,8 @@ python manage.py webapp_bootstrap \
 Pipe that stdout into `gh secret set` in the same way. The command writes the
 created `MOJO_WEBAPP_ID` to stderr so it remains visible while stdout carries
 only the token. It refuses to replace an existing key unless `--rotate` is
-explicit. Normal later rotation belongs in **System → DNS → WebApps → Link new
-CI key** in web-mojo admin.
+explicit. Normal later rotation belongs in **Admin → WebApps → Manage key** in
+the built-in Admin portal.
 
 ## Node-side
 

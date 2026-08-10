@@ -8,7 +8,7 @@ Backend reference:
 ## What your pipeline needs
 
 - A **site** (`WebApp`) already registered by an administrator.
-- The site's **service key**, minted once with
+- The site's **service key**, minted with an explicit `mint` action at
   `POST /api/edge/webapp/link_key` and stored in GitHub Actions as the secret
   named exactly **`MOJO_DEPLOY_KEY`**. Authenticate with
   `Authorization: apikey <token>`.
@@ -16,7 +16,7 @@ Backend reference:
 For the first deployment—before the WebApp admin UI is available—a platform
 operator runs `python manage.py webapp_bootstrap --webapp <id> --token-only`
 on the Django platform and pipes stdout directly to `gh secret set
-MOJO_DEPLOY_KEY`. Later rotation is available from web-mojo admin.
+MOJO_DEPLOY_KEY`. Later rotation is available from the built-in Admin portal.
 
 Developers do not receive deploy keys. A merge or push to the configured branch
 starts the repository's workflow; the WebApp-linked service key can release
@@ -135,10 +135,22 @@ Read history from `GET /api/edge/release?webapp=42`. Statuses are `pending`,
 
 ## Key rotation
 
-`POST /api/edge/webapp/link_key` again. The previous key is deactivated
-**immediately** and the new token is returned once. Capture that response and
-immediately replace the GitHub `MOJO_DEPLOY_KEY` secret. A run caught in the
-short cutover window fails safely and can be rerun.
+Call `POST /api/edge/webapp/link_key` with an explicit action and a fresh UUID:
+
+```json
+{"webapp": 42, "action": "rotate", "operation_id": "8f581ec1-e70f-4b90-8147-461e0308887e"}
+```
+
+The previous key is deactivated **immediately** and the new token is returned
+once. The server does not retain a recoverable raw copy. Retrying the same UUID
+returns `replayed: true` and `token: null`; rotate with a new UUID if the first
+response was lost. Capture the successful first response and immediately
+replace the GitHub `MOJO_DEPLOY_KEY` secret. A run caught in the short cutover
+window fails safely and can be rerun.
+
+Use `POST /api/edge/webapp/revoke_key` with `webapp` and a new `operation_id`
+to deactivate and unlink the credential. Both mutations require a recent
+interactive login and refuse machine-credential sessions.
 
 Revoking a key stops future releases and does **not** change what the site is
 currently serving.

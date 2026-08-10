@@ -9,6 +9,7 @@ from .blocklist import BlocklistEntry
 from .web_app_release import WebAppRelease
 from .web_app import WebApp
 from .web_app_deployment import WebAppDeployment
+from .web_app_key_operation import WebAppKeyOperation
 
 __all__ = [
     "BlocklistEntry",
@@ -17,5 +18,6 @@ __all__ = [
     "VhostRoute",
     "WebApp",
     "WebAppDeployment",
+    "WebAppKeyOperation",
     "WebAppRelease",
 ]
