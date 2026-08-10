@@ -117,7 +117,16 @@ export class TableView {
       ...this.columns.map((c) => h('td', {}, c.render ? c.render(row) : String(row[c.key] ?? '—')))));
     const labels = this.columns.map((column) => column.label).filter(Boolean).join(', ');
     return h('div', {class: 'table-wrap', tabindex: '0', role: 'region',
-      'aria-label': `${labels || 'Data'} table`},
+      'aria-label': `${labels || 'Data'} table`, onkeydown: (event) => {
+        if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        const scroller = event.currentTarget;
+        const maximum = scroller.scrollWidth - scroller.clientWidth;
+        if (maximum <= 0) return;
+        event.preventDefault();
+        const direction = event.key === 'ArrowRight' ? 1 : -1;
+        const step = Math.max(48, Math.floor(scroller.clientWidth * 0.35));
+        scroller.scrollLeft = Math.max(0, Math.min(maximum, scroller.scrollLeft + direction * step));
+      }},
     h('table', {}, h('thead', {}, head), h('tbody', {}, ...body)));
   }
 }

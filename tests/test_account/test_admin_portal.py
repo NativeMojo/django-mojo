@@ -163,6 +163,9 @@ def test_network_asset_contract(opts):
         "DNS mutation safety or the authoritative-refresh latch disappeared"
     assert "class: 'table-wrap', tabindex: '0', role: 'region'" in core, \
         "horizontally clipped tables are no longer keyboard-scrollable"
+    assert "['ArrowLeft', 'ArrowRight'].includes(event.key)" in core and \
+        "scroller.scrollLeft = Math.max(0, Math.min(maximum" in core, \
+        "keyboard table scrolling lost its bounded arrow-key handler"
     for shape in ("api", "site", "site_api", "redirect"):
         assert f"'{shape}'" in network, f"Vhost shape {shape} disappeared"
     for endpoint in (
