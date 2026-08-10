@@ -714,6 +714,10 @@ def test_setup_sanitizer_all_boundaries(opts):
     huge = setup_safety.sanitize({"value": "A" * 10_000_000})
     assert huge["value"] == setup_safety.TRUNCATED, \
         f"huge input was processed instead of pre-bounded: {str(huge)[:100]}"
+    long_opaque = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" * 3
+    opaque = setup_safety.sanitize({"value": long_opaque})
+    assert opaque["value"] == setup_safety.REDACTED, \
+        f"129+ character opaque secret-shaped value was not redacted: {opaque}"
 
 
 @th.django_unit_test("step definition version rejects stale choose and advance")
@@ -928,6 +932,53 @@ def test_stale_uncertain_step_uses_versioned_adapter(opts):
         f"old uncertain step did not escape through adapter: {operation.cursor}/{operation.status}"
     assert calls == {"fix": 0, "adapter": 1}, \
         f"old adapter path repeated mutation or skipped reconciliation: {calls}"
+
+
+@th.django_unit_test("stale built-in identity and BASE_URL use retained v1 adapters")
+def test_stale_builtin_steps_use_read_only_v1_adapters(opts):
+    from unittest import mock
+    from mojo import errors as merrors
+    from mojo.apps.account.models import Setting, SystemSetupOperation, User
+    from mojo.apps.account.services import system_settings, system_setup
+    SystemSetupOperation.objects.all().delete()
+    actor = User.objects.get(pk=opts.system_setup_admin_id)
+    Setting.objects.filter(key__in=(
+        system_settings.INSTALLATION_UUID, system_settings.INSTALLATION_SLUG,
+        system_settings.BASE_URL)).delete()
+    system_settings.installation_identity(actor)
+    intended_url = system_settings.set_value(
+        actor, system_settings.BASE_URL, "https://retained-v1.example.com")
+    request = _request(actor)
+    operation, _ = system_setup.create(
+        request, "fix", replay_key="retained-builtins")
+    steps = list(operation.steps)
+    steps[0] = dict(steps[0], definition_version=1, state="mutation_attempted")
+    SystemSetupOperation.objects.filter(pk=operation.pk).update(
+        steps=steps, status="reconciling")
+
+    with mock.patch.object(system_setup, "STEP_DEFINITION_VERSION", 2), \
+            mock.patch.object(system_settings, "installation_identity") as identity_mutation, \
+            mock.patch.object(system_settings, "set_value") as base_url_mutation:
+        with th.assert_raises(merrors.ValueException):
+            system_setup.create(
+                request, "fix", replay_key="blocked-before-identity-proof")
+        operation = system_setup.advance(request, operation.pk)
+        assert operation.cursor == 1 and operation.status == "planned", \
+            f"retained identity v1 adapter did not prove the old step: {operation.cursor}/{operation.status}"
+        assert not identity_mutation.called, "stale identity adapter reran the mutation initializer"
+
+        steps = list(operation.steps)
+        steps[1] = dict(steps[1], definition_version=1, state="mutation_attempted")
+        SystemSetupOperation.objects.filter(pk=operation.pk).update(
+            steps=steps, choices={"base_url": {"base_url": intended_url}},
+            status="reconciling")
+        with th.assert_raises(merrors.ValueException):
+            system_setup.create(
+                request, "fix", replay_key="blocked-before-base-url-proof")
+        operation = system_setup.advance(request, operation.pk)
+        assert operation.cursor == 2 and operation.status == "planned", \
+            f"retained BASE_URL v1 adapter did not prove the old step: {operation.cursor}/{operation.status}"
+        assert not base_url_mutation.called, "stale BASE_URL adapter reran the protected setter"
 
 
 @th.django_unit_test("advance rejects active lease and safely resumes an expired lease")

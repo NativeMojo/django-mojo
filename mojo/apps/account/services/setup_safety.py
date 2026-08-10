@@ -24,7 +24,7 @@ _LABELED_SECRET = re.compile(
     r"(?i)\b(?:password|secret|token|credential|authorization|private[_ -]?key|"
     r"access[_ -]?key)\s*[:=]\s*[^\s,;]+")
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*")
-_OPAQUE_TOKEN = re.compile(r"(?<![A-Za-z0-9/+=_-])[A-Za-z0-9/+=_-]{32,128}(?![A-Za-z0-9/+=_-])")
+_OPAQUE_TOKEN = re.compile(r"(?<![A-Za-z0-9/+=_-])[A-Za-z0-9/+=_-]{32,8192}(?![A-Za-z0-9/+=_-])")
 
 
 def is_sensitive_name(value):

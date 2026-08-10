@@ -274,11 +274,16 @@ def _initialize_identity(actor):
         return _validate_identity_pair(identity, slug)
 
 
+def read_installation_identity():
+    """Read and validate frozen ownership identity without creating it."""
+    return _validate_identity_pair(
+        get_value(INSTALLATION_UUID), get_value(INSTALLATION_SLUG))
+
+
 def installation_identity(actor):
     """Validate or create the immutable ownership identity."""
     actor = require_system_admin(actor)
-    current = _validate_identity_pair(
-        get_value(INSTALLATION_UUID), get_value(INSTALLATION_SLUG))
+    current = read_installation_identity()
     return current or _initialize_identity(actor)
 
 

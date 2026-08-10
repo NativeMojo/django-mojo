@@ -234,9 +234,41 @@ def _definition_is_current(step):
     return step.get("definition_version") == _expected_definition_version(step)
 
 
+def _reconcile_identity_v1(operation, context, choice):
+    """Retained v1 adapter: prove identity without creating or changing it."""
+    identity = system_settings.read_installation_identity()
+    return {"status": "proven" if identity else "pending"}
+
+
+def _reconcile_base_url_v1(operation, context, choice):
+    """Retained v1 adapter: compare the intended canonical BASE_URL only."""
+    return {"status": "proven" if (
+        system_settings.get_value(system_settings.BASE_URL) == choice.get("base_url"))
+        else "pending"}
+
+
+def _reconcile_readiness_v1(operation, context, choice):
+    """Retained v1 adapter: rerun the original read-only proof."""
+    report = system_readiness.run(operation.section or None, context)
+    return {"status": "proven", "report": report}
+
+
+# Never rewrite these adapters in place. A future definition increment adds a
+# new implementation while retaining each old read-only proof by exact version.
+_BUILTIN_RECONCILIATION_ADAPTERS = {
+    ("identity", 1): _reconcile_identity_v1,
+    ("base_url", 1): _reconcile_base_url_v1,
+    ("readiness", 1): _reconcile_readiness_v1,
+    ("final", 1): _reconcile_readiness_v1,
+}
+
+
 def _versioned_reconciler(step):
     if step.get("kind") != "section":
-        return None
+        if _definition_is_current(step):
+            return None
+        return _BUILTIN_RECONCILIATION_ADAPTERS.get((
+            step.get("kind"), step.get("definition_version")))
     entry = system_readiness.get_section(step.get("section"))
     if entry is None:
         return None
@@ -318,9 +350,22 @@ def _execute_planned(operation, step, context):
 def _execute_reconcile(operation, step, context):
     kind = step["kind"]
     choice = (operation.choices or {}).get(step["id"], {})
+    if not _definition_is_current(step):
+        adapter = _versioned_reconciler(step)
+        if adapter is None:
+            return {"status": "pending"}
+        if kind == "section":
+            outcome = adapter(context, choice)
+            if isinstance(outcome, dict):
+                status = outcome.get("status", "pending")
+                if status not in ("proven", "pending"):
+                    raise ValueError("reconciler returned an unsupported status")
+                return {"status": status}
+            return {"status": "proven" if outcome else "pending"}
+        return adapter(operation, context, choice)
     if kind == "identity":
-        system_settings.installation_identity(context["actor"])
-        return {"status": "proven"}
+        identity = system_settings.read_installation_identity()
+        return {"status": "proven" if identity else "pending"}
     if kind == "base_url":
         return {"status": "proven" if (
             system_settings.get_value(system_settings.BASE_URL) == choice.get("base_url"))
