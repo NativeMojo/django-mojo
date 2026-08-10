@@ -82,3 +82,31 @@ def test_feature_asset_contracts(opts):
             "/api/edge/upstream/declare", "/api/edge/vhost",
             "/api/edge/route"):
         assert endpoint in advanced, f"Advanced is missing {endpoint}"
+
+
+@th.django_unit_test("WebApps owns resumable onboarding and lost-response UX")
+def test_webapp_onboarding_asset_contract(opts):
+    webapps = (ASSETS / "features/webapps/page.js").read_text()
+    preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
+
+    for step in ("App", "Address", "Connect GitHub", "Verify"):
+        assert step in webapps, f"WebApp onboarding omitted {step}"
+    for endpoint in (
+            "/api/edge/webapp/onboarding/options",
+            "/api/edge/webapp/onboarding/create",
+            "/api/edge/webapp/onboarding/detail",
+            "/api/edge/webapp/onboarding/choose",
+            "/api/edge/webapp/onboarding/workflow"):
+        assert endpoint in webapps, f"WebApp onboarding omitted {endpoint}"
+    assert "apiOnce('/api/edge/webapp/onboarding/choose'" in webapps, \
+        "provider-bearing onboarding choice gained a transport retry"
+    assert "do not replay it blindly" in webapps, \
+        "lost provider response has no reconciliation guidance"
+    assert "Apex onboarding is intentionally refused" in webapps, \
+        "the UI implies apex onboarding is supported"
+    assert "aria-current" in webapps and "aria-label': 'WebApp onboarding progress" in webapps, \
+        "wizard progress is not exposed to assistive technology"
+    assert "--onboarding-state" in preview and "lost_key" in preview, \
+        "preview cannot render onboarding recovery states"
+    assert "cls._safe_payload(value)" in preview, \
+        "preview redaction is not recursive"
