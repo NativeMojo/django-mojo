@@ -161,6 +161,9 @@ def test_activity_browser_contract(opts):
     assert "envelope.raw?.count" in page
     assert "QUERY_KEYS" in page and "Unsupported subject filter" in page
     assert "subjectFilters" in page and "without broadening the query" in page
+    assert "Incomplete subject filters cannot be discarded" in page
+    assert "subject_model is valid only with subject_type=model" in page
+    assert "button.classList.toggle('active', active)" in page
     assert "SENSITIVE_KEY" in page and "[redacted]" in page and "depth >= 5" in page
     assert "envelope.count > 0 && state.start >= envelope.count" in page
     assert "Unavailable" in page and "String(envelope.count)" in page

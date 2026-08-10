@@ -77,6 +77,7 @@ function normalizedState() {
     unsupported = 'Subject links require a supported subject_type and numeric subject_id.';
   }
   if (subjectType === 'model' && !/^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(subjectModel)) unsupported = 'Model subject links require a registered subject_model name.';
+  if (subjectModel && subjectType !== 'model') unsupported = 'subject_model is valid only with subject_type=model.';
   return {
     tab, size, sort, unsupported, search: params.get('search') || '',
     start: Math.max(0, Number.parseInt(params.get('start') || '0', 10) || 0),
@@ -99,19 +100,22 @@ function writeState(state, {load = true} = {}) {
 }
 
 function subjectFilters(state, tab) {
-  if (!state.subject_type) return {};
+  if (!state.subject_type) {
+    if (state.subject_id || state.subject_model) throw new Error('Incomplete subject filters cannot be discarded.');
+    return {};
+  }
   const id = state.subject_id;
   const translations = {
     incident: {incidents: {id}, events: {incident: id}, tickets: {incident: id}, logs: {model_name: 'Incident', model_id: id}},
     user: {events: {uid: id}, tickets: {user: id}, logs: {uid: id}},
     group: {incidents: {group: id}, events: {group: id}, tickets: {group: id}, logs: {gid: id}},
-    model: {
-      incidents: {model_name: state.subject_model, model_id: id},
-      events: {model_name: state.subject_model, model_id: id},
-      logs: {model_name: state.subject_model, model_id: id},
-    },
   };
-  const result = translations[state.subject_type]?.[tab];
+  let result = translations[state.subject_type]?.[tab];
+  if (state.subject_type === 'model') {
+    const recordModel = {incidents: 'Incident', events: 'Event', logs: 'Log', tickets: 'Ticket'}[tab];
+    if (recordModel.toLowerCase() === state.subject_model.toLowerCase()) result = {id};
+    else if (tab !== 'tickets') result = {model_name: state.subject_model, model_id: id};
+  }
   if (!result) throw new Error(`${MODELS[tab].label} cannot represent this ${state.subject_type} subject without broadening the query.`);
   return result;
 }
@@ -259,7 +263,17 @@ export async function activityPage(ctx, parentSignal) {
   }
   const body = h('section', {class: 'panel activity-stream'}, loadingState('Loading activity…'));
   const summary = h('section', {class: 'activity-summary'}, ...Object.values(MODELS).map((model) => h('article', {class: 'kpi'}, h('span', {text: model.label}), h('strong', {text: '…'}))));
-  const tabs = sectionTabs({items: Object.entries(MODELS).map(([id, model]) => ({id, label: model.label})), active: state.tab, label: 'Activity types', onChange: (tab) => { state.tab = tab; state.start = 0; state.sort = MODELS[tab].sorts[0]; state.search = ''; state.status = ''; state.category = ''; state.level = ''; state.kind = ''; writeState(state); }});
+  let tabs;
+  tabs = sectionTabs({items: Object.entries(MODELS).map(([id, model]) => ({id, label: model.label})), active: state.tab, label: 'Activity types', onChange: (tab) => {
+    state.tab = tab; state.start = 0; state.sort = MODELS[tab].sorts[0]; state.search = '';
+    state.status = ''; state.category = ''; state.level = ''; state.kind = '';
+    [...tabs.querySelectorAll('button')].forEach((button, index) => {
+      const active = Object.keys(MODELS)[index] === tab;
+      button.classList.toggle('active', active);
+      if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+    });
+    writeState(state);
+  }});
   const page = h('div', {class: 'page'}, pageHeader('Operations', 'Activity', 'Search and inspect bounded system evidence without bypassing source permissions.'), summary, tabs, body);
 
   const refresh = async () => {
