@@ -20,3 +20,4 @@ from .bouncer_admin import *
 from .login_event import *
 from .geofence import *
 from .admin_portal import *
+from .system_setup import *

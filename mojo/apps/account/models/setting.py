@@ -112,11 +112,33 @@ class Setting(MojoSecrets, MojoModel):
 
     def on_rest_pre_save(self, changed_fields, created):
         """Encrypt secret values before saving via REST."""
+        self._reject_protected_write(rest=True)
         if self.is_secret and "value" in changed_fields:
             raw = self.value
             self.value = ""
             self.set_secret("value", raw)
         self._validate_value()
+
+    def on_rest_pre_delete(self):
+        self._reject_protected_write(rest=True)
+
+    def _protected_keys_involved(self):
+        from mojo.apps.account.services import system_settings
+        keys = {self.key}
+        if self.pk:
+            original = Setting.objects.filter(pk=self.pk).values_list("key", flat=True).first()
+            if original:
+                keys.add(original)
+        return [key for key in keys if system_settings.is_protected_setting(key)]
+
+    def _reject_protected_write(self, rest=False):
+        protected = self._protected_keys_involved()
+        if not protected:
+            return
+        from mojo import errors as merrors
+        source = "generic settings API" if rest else "generic Setting writer"
+        raise merrors.PermissionDeniedException(
+            f"{protected[0]} is protected and cannot be changed through the {source}")
 
     def _validate_value(self):
         """Reject a malformed value for any registered key. Runs in the REST
@@ -301,6 +323,7 @@ class Setting(MojoSecrets, MojoModel):
         """Delete a setting and remove from Redis."""
         s = cls.objects.filter(key=key, group=group).first()
         if s:
+            s._reject_protected_write()
             s.remove_from_cache()
             s.delete()
             return True
@@ -311,12 +334,14 @@ class Setting(MojoSecrets, MojoModel):
     # ------------------------------------------------------------------
 
     def save(self, *args, **kwargs):
+        self._reject_protected_write()
         self._validate_value()
         super().save(*args, **kwargs)
         self.push_to_cache()
         self._invalidate_geofence_decisions()
 
     def delete(self, *args, **kwargs):
+        self._reject_protected_write()
         self.remove_from_cache()
         self._invalidate_geofence_decisions()
         super().delete(*args, **kwargs)
