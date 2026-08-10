@@ -19,6 +19,7 @@ _PRIVATE_FILES = {
     "assets/admin.css",
     "assets/app.js",
     "assets/core.js",
+    "assets/network.js",
     "assets/pages.js",
     "assets/setup.js",
 }
@@ -154,6 +155,8 @@ def on_admin_bootstrap(request):
             "setup": bool(request.user.is_superuser),
             "people": has(["view_users", "manage_users", "admin"]),
             "groups": has(["view_groups", "manage_groups", "admin"]),
+            "network": has(["view_dns", "manage_dns", "security"]),
+            "manage_network": has(["manage_dns", "security"]),
             "webapps": has(["view_dns", "manage_dns", "security"]),
             "manage_webapps": (
                 has("manage_webapp") and has(["manage_dns", "security"])),
