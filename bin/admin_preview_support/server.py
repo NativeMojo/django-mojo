@@ -14,13 +14,24 @@ ROOT = Path(__file__).resolve().parents[2] / "mojo/apps/account/admin_portal"
 HOST = "127.0.0.1"
 
 USERS = [
-    {"id": 1, "display_name": "Ian Smith", "email": "ian@example.com", "username": "ian@example.com", "is_active": True, "created": "2026-07-12T18:10:00Z"},
-    {"id": 2, "display_name": "Avery Chen", "email": "avery@example.com", "username": "avery@example.com", "is_active": True, "created": "2026-07-27T09:30:00Z"},
-    {"id": 3, "display_name": "Morgan Lee", "email": "morgan@example.com", "username": "morgan@example.com", "is_active": False, "created": "2026-06-03T14:20:00Z"},
+    {"id": 1, "uuid": "11111111-1111-4111-8111-111111111111", "display_name": "Ian Smith", "email": "ian@example.com", "username": "ian@example.com", "phone_number": "+14155550101", "is_active": True, "is_email_verified": True, "is_phone_verified": True, "requires_password_change": False, "last_login": "2026-08-10T16:44:00Z", "last_activity": "2026-08-10T17:02:00Z", "permissions": {"manage_users": True, "manage_groups": True, "custom_operator": True}, "created": "2026-07-12T18:10:00Z"},
+    {"id": 2, "uuid": "22222222-2222-4222-8222-222222222222", "display_name": "Avery Chen", "email": "avery@example.com", "username": "avery@example.com", "is_active": True, "is_email_verified": True, "is_phone_verified": False, "requires_password_change": True, "last_login": "2026-08-09T09:30:00Z", "last_activity": "2026-08-09T09:31:00Z", "permissions": {"view_users": True}, "created": "2026-07-27T09:30:00Z"},
+    {"id": 3, "uuid": "33333333-3333-4333-8333-333333333333", "display_name": "Morgan Lee", "email": "morgan@example.com", "username": "morgan@example.com", "is_active": False, "is_email_verified": False, "is_phone_verified": False, "requires_password_change": False, "last_login": None, "last_activity": "2026-07-03T14:20:00Z", "permissions": {}, "created": "2026-06-03T14:20:00Z"},
 ]
 GROUPS = [
-    {"id": 7, "name": "MOJO Platform", "kind": "organization", "is_active": True},
-    {"id": 9, "name": "Web Operations", "kind": "team", "is_active": True},
+    {"id": 7, "uuid": "77777777-7777-4777-8777-777777777777", "name": "MOJO Platform", "kind": "organization", "is_active": True, "parent": None, "member_count": 2, "last_activity": "2026-08-10T16:58:00Z", "metadata": {"region": "us-west"}},
+    {"id": 9, "uuid": "99999999-9999-4999-8999-999999999999", "name": "Web Operations", "kind": "team", "is_active": True, "parent": {"id": 7, "name": "MOJO Platform"}, "member_count": 2, "last_activity": "2026-08-10T16:55:00Z", "metadata": {"pager": "web-ops"}},
+]
+MEMBERS = [
+    {"id": 61, "group": {"id": 9, "name": "Web Operations"}, "user": USERS[0], "is_active": True, "permissions": {"manage_group": True}},
+    {"id": 62, "group": {"id": 9, "name": "Web Operations"}, "user": USERS[1], "is_active": True, "permissions": {"guest": True}},
+]
+API_KEYS = [
+    {"id": 91, "group": {"id": 9, "name": "Web Operations"}, "name": "deploy bot", "is_active": True, "created": "2026-07-20T12:00:00Z", "last_used": "2026-08-09T22:14:00Z", "permissions": {"manage_webapp": True}},
+]
+LOGIN_EVENTS = [
+    {"id": 501, "user": 1, "created": "2026-08-10T16:44:00Z", "ip_address": "198.51.100.14", "country_code": "US", "region": "California", "city": "San Francisco", "device": {"id": 44, "name": "Desktop"}, "user_agent_info": {"browser": "Chrome", "platform": "macOS"}, "source": "password", "is_new_country": False, "is_new_region": False},
+    {"id": 502, "user": 1, "created": "2026-08-08T08:12:00Z", "ip_address": "203.0.113.18", "country_code": "CA", "region": "Ontario", "city": "Toronto", "device": {"id": 45, "name": "Mobile"}, "user_agent_info": {"browser": "Safari", "platform": "iOS"}, "source": "passkey", "is_new_country": True, "is_new_region": True},
 ]
 DOMAINS = [
     {"id": 11, "name": "nativemojo.com", "provider": "route53", "status": "active", "verified": True, "auto_renew": True, "privacy": True, "expires": "2027-07-20T00:00:00Z", "group": {"id": 7, "name": "MOJO Platform"}},
@@ -127,6 +138,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
     credentials = []
     vhosts = []
     routes = []
+    users = []
+    groups = []
+    members = []
+    api_keys = []
+    permission_bundles = {}
 
     def log_message(self, fmt, *args):
         return
@@ -154,7 +170,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _safe_payload(payload):
-        hidden = {"api_key", "api_secret", "confirm_token", "token", "password"}
+        hidden = {"api_key", "api_secret", "confirm_token", "token", "password",
+                  "temporary_password", "forced_password_token", "rotated_token"}
         return {key: "[redacted]" if key in hidden else value
                 for key, value in payload.items()}
 
@@ -167,7 +184,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if path == "/api/account/static/mojo-auth.js":
             return self._send("window.MojoAuth={init:function(){},getAuthHeader:function(){return 'Bearer preview';},getRefreshToken:function(){return null;},logout:function(){}};", "application/javascript; charset=utf-8")
         if path == "/api/account/admin/bootstrap":
-            return self._send(bootstrap(GROUPS))
+            return self._send(bootstrap(self.groups))
         if path == "/api/account/admin/setup/options":
             active = self.setup_operation
             if active and active.get("status") in {"succeeded", "failed", "cancelled"}:
@@ -185,13 +202,47 @@ class PreviewHandler(BaseHTTPRequestHandler):
             overall = "fail" if summary["fail"] else "pending" if summary["pending"] else "warn" if summary["warn"] else "pass"
             return self._send({"schema_version": 1, "overall": overall, "summary": summary, "sections": sections})
         fixtures = {
-            "/api/user": USERS, "/api/group": GROUPS, "/api/dnsman/domain": DOMAINS,
+            "/api/user": self.users, "/api/group": self.groups,
+            "/api/group/member": self.members, "/api/group/apikey": self.api_keys,
+            "/api/account/logins": LOGIN_EVENTS,
+            "/api/dnsman/domain": DOMAINS,
             "/api/dnsman/credential": self.credentials, "/api/dnsman/certificate": CERTIFICATES,
             "/api/edge/upstream": UPSTREAMS, "/api/edge/vhost": self.vhosts,
             "/api/edge/route": self.routes, "/api/edge/webapp": WEBAPPS,
         }
         if path in fixtures:
-            return self._send(fixtures[path])
+            rows = fixtures[path]
+            query = parse_qs(parsed.query)
+            if path in ("/api/user", "/api/group") and query.get("search"):
+                term = query["search"][0].lower()
+                fields = ("display_name", "email", "username") if path == "/api/user" else ("name", "kind")
+                rows = [row for row in rows if any(term in str(row.get(field, "")).lower() for field in fields)]
+            if path in ("/api/group/member", "/api/group/apikey") and query.get("group"):
+                group_id = int(query["group"][0])
+                rows = [row for row in rows if row["group"]["id"] == group_id]
+            if path == "/api/account/logins" and query.get("user"):
+                user_id = int(query["user"][0])
+                rows = [row for row in rows if row["user"] == user_id]
+            return self._send(rows)
+        if path == "/api/account/admin/people/permission-bundles":
+            user_id = int(parse_qs(parsed.query).get("user", ["0"])[0])
+            selected = self.permission_bundles.get(user_id, [])
+            return self._send({"version": 1, "selected": selected, "bundles": [
+                {"id": "people", "label": "People", "permissions": ["view_users", "manage_users", "view_groups", "manage_groups"]},
+                {"id": "platform", "label": "Platform", "permissions": ["view_admin", "view_global", "manage_aws"]},
+                {"id": "network_hosting", "label": "Network & Hosting", "permissions": ["view_dns", "manage_dns"]},
+                {"id": "deployments", "label": "Deployments", "permissions": ["manage_webapp", "manage_deploy", "view_github", "manage_github"]},
+                {"id": "security_incidents", "label": "Security & Incidents", "permissions": ["view_security", "manage_security"]},
+                {"id": "logs_metrics", "label": "Logs & Metrics", "permissions": ["view_logs", "manage_logs", "view_metrics", "manage_metrics"]},
+                {"id": "system_administration", "label": "System Administration", "permissions": ["manage_settings", "view_jobs", "manage_jobs", "view_taskqueue", "admin_compliance", "admin_verify"]},
+            ]})
+        for prefix, rows in (("/api/user/", self.users), ("/api/group/", self.groups)):
+            if path.startswith(prefix):
+                try:
+                    pk = int(path.rsplit("/", 1)[-1])
+                except ValueError:
+                    continue
+                return self._send(next((row for row in rows if row["id"] == pk), {}))
         for prefix, rows in (("/api/dnsman/domain/", DOMAINS), ("/api/edge/vhost/", self.vhosts)):
             if path.startswith(prefix):
                 pk = int(path.rsplit("/", 1)[-1])
@@ -242,6 +293,59 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if path == "/api/edge/webapp/revoke_key":
             type(self).key_state = "revoked"
             return self._send({"webapp": 42, "secret_name": "MOJO_DEPLOY_KEY", "replayed": False, "operation_id": "preview", "status": self._key_status()})
+        if path == "/api/account/admin/user/password/reset":
+            return self._send({"user": payload.get("user"), "sent": True})
+        if path == "/api/account/admin/user/password/temporary":
+            return self._send({"user": payload.get("user"), "temporary_password": "Preview-Only-Temp-72!", "requires_password_change": True})
+        if path == "/api/account/admin/people/permission-bundles":
+            type(self).permission_bundles[int(payload.get("user"))] = list(payload.get("selected", []))
+            return self._send({"version": payload.get("version", 1), "user": payload.get("user"), "selected": payload.get("selected", []), "bundles": []})
+        if path == "/api/account/admin/apikey/action":
+            key = next((row for row in self.api_keys if row["id"] == int(payload.get("api_key", 0))), None)
+            if key is None:
+                return self._send({"error": "API key not found"}, status=404)
+            action = payload.get("action")
+            if action == "rotate":
+                return self._send({"id": key["id"], "action": action, "token": "preview-rotated-token-shown-once"})
+            if action in ("deactivate", "reactivate"):
+                key["is_active"] = action == "reactivate"
+            elif action == "revoke":
+                type(self).api_keys = [row for row in self.api_keys if row["id"] != key["id"]]
+                return self._send({"id": key["id"], "action": action, "revoked": True})
+            return self._send({"id": key["id"], "action": action, "is_active": key["is_active"]})
+        if path == "/api/group/apikey":
+            row = {"id": 100 + len(self.api_keys), "group": {"id": int(payload.get("group")), "name": "Web Operations"}, "name": payload.get("name"), "is_active": True, "last_used": None, "permissions": payload.get("permissions", {})}
+            type(self).api_keys.append(row)
+            return self._send({**row, "token": "preview-new-token-shown-once"})
+        if path == "/api/group/member":
+            row = {"id": 100 + len(self.members), "group": {"id": int(payload.get("group")), "name": "Web Operations"}, "user": next((user for user in self.users if user["id"] == int(payload.get("user"))), {}), "is_active": True, "permissions": payload.get("permissions", {})}
+            type(self).members.append(row)
+            return self._send(row)
+        if path == "/api/user":
+            row = {"id": 100 + len(self.users), "uuid": f"preview-user-{100 + len(self.users)}", "is_active": True, "is_email_verified": False, "is_phone_verified": False, "requires_password_change": False, "permissions": {}, "last_login": None, "last_activity": None, **payload}
+            type(self).users.append(row)
+            return self._send(row)
+        if path == "/api/group":
+            parent_id = payload.get("parent")
+            parent = next(({"id": row["id"], "name": row["name"]} for row in self.groups if str(row["id"]) == str(parent_id)), None)
+            row = {"id": 100 + len(self.groups), "uuid": f"preview-group-{100 + len(self.groups)}", "is_active": True, "member_count": 0, "last_activity": None, "metadata": {}, **payload, "parent": parent}
+            type(self).groups.append(row)
+            return self._send(row)
+        for prefix, rows in (("/api/user/", self.users), ("/api/group/", self.groups)):
+            if path.startswith(prefix):
+                try:
+                    pk = int(path.rsplit("/", 1)[-1])
+                except ValueError:
+                    continue
+                row = next((item for item in rows if item["id"] == pk), None)
+                if row is not None:
+                    if "disable" in payload:
+                        row["is_active"] = False
+                    elif "reactivate" in payload:
+                        row["is_active"] = True
+                    else:
+                        row.update(payload)
+                    return self._send(row)
         if path == "/api/account/admin/setup/create":
             type(self).setup_operation = setup_planned_operation(payload.get("mode", "fix"))
             return self._send(self.setup_operation)
@@ -307,7 +411,14 @@ class PreviewHandler(BaseHTTPRequestHandler):
         return self._send({"saved": True})
 
     def do_DELETE(self):
+        path = urlparse(self.path).path
         self._read_body()
+        if path.startswith("/api/group/apikey/"):
+            try:
+                pk = int(path.rsplit("/", 1)[-1])
+            except ValueError:
+                return self._send({"error": "Not found"}, status=404)
+            type(self).api_keys = [row for row in self.api_keys if row["id"] != pk]
         return self._send({"deleted": True})
 
 
@@ -320,6 +431,8 @@ def main():
     reset(PreviewHandler, {
         "records": RECORDS, "credentials": CREDENTIALS,
         "vhosts": VHOSTS, "routes": ROUTES,
+        "users": USERS, "groups": GROUPS, "members": MEMBERS,
+        "api_keys": API_KEYS,
         "setup_choice": setup_choice_operation,
     }, key_state=args.key_state, setup_state=args.setup_state)
     print(f"Admin visual fixture ({args.key_state} key): http://{HOST}:{args.port}/", flush=True)
