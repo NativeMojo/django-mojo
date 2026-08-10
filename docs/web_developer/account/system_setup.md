@@ -258,9 +258,10 @@ The current choice objects are:
 {"bucket":"existing-media","adopt_existing":true}
 ```
 
-`bucket` is an exact enum. Public, website, cross-region, tenant/user, or
-unclassifiable buckets never appear. The adoption step separately rejects a
-bucket already tagged to another installation. Adoption keeps all four S3
+`bucket` is an exact enum. Public ACL/policy/status, foreign-owner, website,
+cross-region, tenant/user, wildcard/federated/unknown-policy, or unclassifiable
+buckets never appear. The adoption step separately rejects a bucket already
+tagged to another installation. Adoption keeps all four S3
 Block Public Access flags enabled, creates no public bucket policy, and merges
 wildcard presigned-upload CORS without deleting unrelated rules.
 
@@ -283,10 +284,12 @@ shipped templates.
 The monitoring choice is present only when the exact reserved topic name
 already exists without django-mojo ownership tags. It is affirmative legacy
 adoption, not a free-form ARN field. Partial or conflicting ownership tags fail
-closed.
-Setup preserves unrelated SNS policy statements, creates the exact HTTPS
-subscription and owned alarm profile, and remains `reconciling` until a signed
-delivery-probe transition from this operation is persisted. That probe is
+closed. Adoption also fails before tagging or allowlisting when any existing
+publish-capable Allow is not same-account/default-owner or an exact bounded
+CloudWatch source grant. Setup preserves safe unrelated SNS policy statements,
+creates the exact HTTPS subscription and repairs the complete owned alarm
+profile, and remains `reconciling` until the persisted random challenge for
+this operation delivers an ordered ALARM then OK after its stable cutoff. That probe is
 evidence-only: it does not create an Event, Incident, Ticket, or normal rule
 dispatch.
 

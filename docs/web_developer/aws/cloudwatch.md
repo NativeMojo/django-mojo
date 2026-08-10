@@ -29,7 +29,12 @@ An existing same-name untagged topic is not adopted silently. System Setup
 returns an exact `topic_arn` enum and requires
 `adopt_existing_topic: true`; partial or conflicting ownership tags fail
 closed. It preserves unrelated topic-policy statements and owns only the
-CloudWatch publish statement restricted to the selected AWS account.
+CloudWatch publish statement restricted to the selected AWS account and the
+installation's bounded alarm ARN prefix. Unsafe wildcard, cross-account, or
+unknown publish grants block adoption without changing the policy. Delivery
+proof uses a persisted unpredictable per-operation alarm challenge and requires
+an ordered ALARM then OK after that operation's stable cutoff; an old receipt or
+same-name alarm cannot prove a new setup run.
 
 ---
 

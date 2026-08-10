@@ -19,9 +19,9 @@ choices:
 
 | Section | Choice and convergence contract |
 |---|---|
-| `aws_s3` | Exact `bucket` enum from complete safe-candidate discovery plus `adopt_existing: true`. Adoption keeps all four Block Public Access flags enabled, preserves objects and policies, merges tags and wildcard direct-upload CORS without deleting unrelated rules, and creates or repairs the private system-default FileManager. |
+| `aws_s3` | Exact `bucket` enum from complete safe-candidate discovery plus `adopt_existing: true`. Discovery proves the caller account, canonical owner/ACL, non-public policy status, fail-closed policy shape, region, website absence, and non-tenant ownership tags. Adoption keeps all four Block Public Access flags enabled, preserves objects and policies, merges tags and wildcard direct-upload CORS without deleting unrelated rules, and creates or repairs the private system-default FileManager. |
 | `aws_email` | Exact verified SES `domain` enum plus a valid `sender` on that domain. Setup imports or updates the local `EmailDomain`, makes that outbound Mailbox the sole system default, and installs only missing shipped templates. Existing customized templates are never overwritten. |
-| `aws_monitoring` | Usually no choice. An exact same-name untagged legacy topic produces `topic_arn` plus `adopt_existing_topic: true`; partial or conflicting ownership tags fail closed. Setup preserves unrelated policy statements, owns one account-restricted CloudWatch publish statement, persists the receiver allowlist, converges the HTTPS subscription and real alarm profile, and requires a signed delivery-probe transition created after the current setup step began. |
+| `aws_monitoring` | Usually no choice. An exact same-name untagged legacy topic produces `topic_arn` plus `adopt_existing_topic: true`; partial/conflicting tags or an unsafe publish policy fail closed before adoption. Setup preserves safe unrelated statements, owns one CloudWatch publish statement restricted by account and owned-alarm ARN, persists the receiver allowlist, converges the HTTPS subscription and full real-alarm configuration, and requires the current operation's unpredictable ALARM→OK delivery challenge after its persisted cutoff. |
 
 S3 and SES discovery never mutate provider state. The portal does not invent a
 bucket while a suitable existing private media bucket is available, and it
@@ -41,6 +41,12 @@ This portal integration does not change the `manage.py aws-check` flags,
 section names, JSON schema, or exit codes below. The command and portal share
 the provider boundary and AWS Check logic, while the portal alone owns the
 durable operation protocol and protected runtime settings.
+
+Provider writes are followed by authoritative reads. A resumed operation writes
+only state that those reads still prove missing: an interruption after S3 tags,
+CORS, SNS policy/subscription, or an alarm update does not replay an already
+confirmed mutation. Concurrent unrelated CORS and safe SNS policy statements
+are merged and preserved.
 
 ## Modes and exit status
 
