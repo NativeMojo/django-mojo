@@ -326,9 +326,8 @@ from mojo.helpers import dates
 api_key.expires_at = dates.utcnow() + dates.timedelta(days=90)
 api_key.save()
 
-# Rotate — create a new key, delete the old one
-new_key, new_token = ApiKey.create_for_group(group, name, permissions)
-old_key.delete()
+# Rotate in place — the prior token stops authenticating immediately
+new_token = api_key.rotate_token()
 ```
 
 ## Security Notes
@@ -338,7 +337,8 @@ old_key.delete()
 - **Token read-back is opt-in and audited.** The secret is on the `token` graph only — `GRAPHS["token"]` carries `("rest_get_token", "token")`. `default` (which list responses fall back to, since `ApiKey` defines no `list` graph) and `me` both omit it, and `/rotate` uses the forced `me` graph plus an explicit token field. Every export through `rest_get_token()` writes an `api_key:token_read` `logit.Log` row — one per serialized key, so a bulk read via `?graph=token` on a list is visible once per credential. **The permission bar is unchanged**: `graph=token` is open to the same `manage_group` / `manage_groups` / `groups` holders as any other read, including an API key that carries one of those grants. This is deliberate: those permissions confer full credential custody inside the group. What changed is that the credential no longer rides along on requests that never asked for it — not who may ask. If such a management key is compromised, rotate or revoke every sibling credential it could have read; revoking only the original key is not sufficient containment.
 - **An unrecognized graph name falls back to `default`.** A typo like `?graph=tokens` returns the key *without* the token rather than erroring — it fails closed, but it is a confusing silence if you are expecting the field.
 - **The opt-in read works on lists too.** `GET /api/group/apikey?graph=token` returns a live token for every key in the group, so it is a bulk credential read. It is audited once per key, but the list endpoint has no maximum page size — size the blast radius of a `groups` grant accordingly.
-- **File-based request logging is not masked.** With `LOGIT_FILE_ALL` / `LOGIT_DEBUG_ALL` enabled, `mojo/middleware/logging.py` writes small response bodies verbatim to `requests.log`, so a `?graph=token` response lands there in the clear. The DB-backed `logit.Log` path *is* masked (`mask_sensitive_data` matches `"token": "..."`). This predates the opt-in change — which strictly improves it, since previously *every* read did this — but it is the one place the "the secret only travels where it was asked for" property does not hold.
+- **Credential routes suppress bodies in every logging mode.** Request and response logging recognizes `/api/group/apikey*` before inspecting content and writes only a fixed marker, including with `LOGIT_FILE_ALL` or `LOGIT_DEBUG_ALL`. The recursive sanitizer remains defense in depth for token-shaped keys elsewhere.
+- **Admin People lifecycle actions are step-up protected.** `POST /api/account/admin/apikey/action` supports `rotate`, `deactivate`, `reactivate`, and `revoke`, denies API-key/group-token sessions, and requires an interactive JWT authenticated in the last 600 seconds. Creation and rotation return plaintext once to the caller. The older audited `graph=token` recovery contract remains compatible, but the built-in Admin portal never calls it.
 - **`DENY_AI = True`.** The assistant's model tools cannot read this table at all. `query_model` takes a caller-supplied graph and does not filter sensitive values out of serialized output, so nothing else would stop it asking for the `token` graph.
 - `sys.*` permissions are unconditionally denied
 - Expired or inactive keys return 401

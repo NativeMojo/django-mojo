@@ -1,1 +1,23 @@
 .identity .avatar { flex: 0 0 auto; }
+.people-page .panel-heading { gap: 16px; }
+.people-inspector { display: grid; gap: 16px; }
+.people-inspector .inspector-section { display: grid; gap: 12px; }
+.detail-grid { display: grid; grid-template-columns: minmax(8rem, .45fr) 1fr; gap: .6rem 1rem; margin: 0; }
+.detail-grid dt { color: var(--muted); font-size: .78rem; font-weight: 650; text-transform: uppercase; letter-spacing: .035em; }
+.detail-grid dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.bundle-grid { display: grid; gap: .65rem; }
+.bundle-option { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: .75rem; padding: .85rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.bundle-option strong, .bundle-option small { display: block; }
+.bundle-option small { color: var(--muted); margin-top: .2rem; overflow-wrap: anywhere; }
+.activity-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
+.activity-links .related-record { align-items: center; display: flex; justify-content: space-between; text-decoration: none; }
+.inline-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.secret-reveal { display: grid; gap: .75rem; }
+.secret-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; width: 100%; }
+.json-preview { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; margin: 0; max-height: 22rem; overflow: auto; padding: .85rem; }
+@media (max-width: 720px) {
+  .detail-grid { grid-template-columns: 1fr; gap: .15rem; }
+  .detail-grid dd { margin-bottom: .7rem; }
+  .activity-links { grid-template-columns: 1fr; }
+  .inline-actions { align-items: stretch; flex-direction: column; }
+}

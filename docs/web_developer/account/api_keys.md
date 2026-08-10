@@ -297,3 +297,13 @@ The request runs with the user's full permissions. If `allowed_ips` was set, req
 - **User Auth Tokens**: carry full user permissions including `sys.*` — use with caution
 - Set short expiry periods for temporary integrations
 - All key generation is logged in the audit trail
+
+### Admin People lifecycle
+
+The built-in portal uses `POST /api/account/admin/apikey/action` with
+`{"api_key": 91, "action": "rotate|deactivate|reactivate|revoke"}`. The caller
+must hold edit authority for that key, must be an interactive JWT user, and
+must have authenticated within 600 seconds. Rotate returns the new token once;
+creation uses the ordinary create response. Clear the value when its dialog
+closes. The portal deliberately never requests `graph=token`, although that
+audited backend recovery API remains available for compatible clients.

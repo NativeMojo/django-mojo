@@ -9,6 +9,10 @@ PROVIDERS = (dashboard, people, webapps, activity, platform, advanced)
 def bootstrap(groups):
     capabilities = {
         "setup": True, "people": True, "groups": True,
+        "manage_users": True, "manage_groups": True,
+        "manage_api_keys": True, "view_logins": True,
+        "view_logs": True, "view_events": True,
+        "view_incidents": True, "view_tickets": True,
         "network": True, "manage_network": True,
         "webapps": True, "manage_webapps": True,
         "view_logs": True, "view_security": True, "manage_security": True,

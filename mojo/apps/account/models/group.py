@@ -1,9 +1,10 @@
-from django.db import models
+from django.db import models, transaction
 from mojo.models import MojoModel, MojoSecrets
 from mojo.helpers import crypto, dates, logit
 from mojo.helpers.request import restricted_identity
 from mojo.apps import metrics
 from mojo.helpers.settings import settings
+from mojo import errors as merrors
 from objict import objict
 import uuid
 
@@ -219,6 +220,24 @@ class Group(MojoSecrets, MojoModel):
             return ms.has_permission(perms)
         return False
 
+    def save(self, *args, **kwargs):
+        """Serialize and validate parent changes with the saved row."""
+        update_fields = kwargs.get("update_fields")
+        parent_may_change = update_fields is None or bool(
+            {"parent", "parent_id"}.intersection(update_fields))
+        if self.pk is not None and parent_may_change:
+            old_parent_id = type(self).objects.filter(pk=self.pk).values_list(
+                "parent_id", flat=True).first()
+            parent_may_change = old_parent_id != self.parent_id
+        if not parent_may_change:
+            return super().save(*args, **kwargs)
+        from mojo.apps.account.services import group_hierarchy
+        with transaction.atomic():
+            if self.pk is not None:
+                type(self).objects.select_for_update().filter(pk=self.pk).exists()
+            group_hierarchy.validate_parent(self, self.parent, lock=True)
+            return super().save(*args, **kwargs)
+
     def is_effectively_active(self, max_depth=8):
         """A group counts as active only if it AND every ancestor is active
         (DM-048): deactivating a parent darkens its whole subtree dynamically —
@@ -226,17 +245,15 @@ class Group(MojoSecrets, MojoModel):
         individually-active children (no one-way door). The single owner of
         this contract; every gate delegates here.
 
-        Depth-capped like get_member_for_user (also guards a parent cycle);
-        ancestors beyond the cap are not verified — chains that deep are
-        already unsupported for membership."""
-        current = self
-        depth = 0
-        while current is not None and depth <= max_depth:
-            if not current.is_active:
-                return False
-            current = current.parent
-            depth += 1
-        return True
+        Depth-capped like get_member_for_user (also guards a parent cycle).
+        A chain beyond the cap fails closed rather than treating the unchecked
+        remainder as active."""
+        from mojo.apps.account.services import group_hierarchy
+        try:
+            return all(item.is_active for item in group_hierarchy.ancestors(
+                self, include_self=True, max_depth=max_depth + 1))
+        except merrors.ValueException:
+            return False
 
     @classmethod
     def get_active(cls, pk):
@@ -348,31 +365,21 @@ class Group(MojoSecrets, MojoModel):
         # (admin/introspection) keeps raw behavior.
         if is_active and not self.is_effectively_active(max_depth=max_depth):
             return None
-        # First check direct membership
-        queryset = self.members.filter(user=user)
-        if is_active:
-            queryset = queryset.filter(is_active=True)
-        member = queryset.last()
-
-        if member is not None or not check_parents:
-            return member
-
-        # Walk up the parent chain with depth protection
-        current = self.parent
-        depth = 0
-
-        while current is not None and depth < max_depth:
+        from mojo.apps.account.services import group_hierarchy
+        try:
+            groups = group_hierarchy.ancestors(
+                self, include_self=True, max_depth=max_depth + 1)
+        except merrors.ValueException:
+            return None
+        if not check_parents:
+            groups = groups[:1]
+        for current in groups:
             queryset = current.members.filter(user=user)
             if is_active:
                 queryset = queryset.filter(is_active=True)
             member = queryset.last()
-
             if member is not None:
                 return member
-
-            current = current.parent
-            depth += 1
-
         return None
 
     def get_children(self, is_active=True, kind=None):
@@ -408,11 +415,8 @@ class Group(MojoSecrets, MojoModel):
         """
         Returns a QuerySet of all parents (ancestors) of this group.
         """
-        parent_ids = []
-        current = self.parent
-        while current:
-            parent_ids.append(current.id)
-            current = current.parent
+        from mojo.apps.account.services import group_hierarchy
+        parent_ids = [item.pk for item in group_hierarchy.ancestors(self)]
 
         queryset = Group.objects.filter(id__in=parent_ids)
 
@@ -432,23 +436,21 @@ class Group(MojoSecrets, MojoModel):
         return self.get_top_most_parent()
 
     def get_top_most_parent(self, kind=None):
-        current = self
-        while current.parent:
-            current = current.parent
-            if current.kind == kind:
-                return current
-        return current
+        from mojo.apps.account.services import group_hierarchy
+        chain = group_hierarchy.ancestors(self, include_self=True)
+        if kind:
+            for current in chain[1:]:
+                if current.kind == kind:
+                    return current
+        return chain[-1]
 
     def is_child_of(self, parent_group):
         """
         Checks if this group is a descendant of the given parent_group.
         """
-        current = self.parent
-        while current:
-            if current.id == parent_group.id:
-                return True
-            current = current.parent
-        return False
+        from mojo.apps.account.services import group_hierarchy
+        return any(item.pk == parent_group.pk
+                   for item in group_hierarchy.ancestors(self))
 
     def is_parent_of(self, child_group):
         """
@@ -457,11 +459,10 @@ class Group(MojoSecrets, MojoModel):
         return child_group.is_child_of(self)
 
     def get_metadata_value(self, key):
-        current = self
-        while current:
+        from mojo.apps.account.services import group_hierarchy
+        for current in group_hierarchy.ancestors(self, include_self=True):
             if key in current.metadata:
                 return current.metadata[key]
-            current = current.parent
         return None
 
     def invite(self, email, context=None):
@@ -734,6 +735,9 @@ class Group(MojoSecrets, MojoModel):
         )
 
     def on_rest_pre_save(self, changed_fields, created):
+        if created or "parent" in changed_fields or "parent_id" in changed_fields:
+            from mojo.apps.account.services import group_hierarchy
+            group_hierarchy.validate_parent(self, self.parent)
         # Reject an invalid auth config at write time so a bad
         # metadata.auth_config surfaces as a 400 here, not a render error later.
         auth_cfg = (self.metadata or {}).get("auth_config")

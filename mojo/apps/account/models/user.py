@@ -129,6 +129,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     is_phone_verified = models.BooleanField(default=False)
     is_dob_verified = models.BooleanField(default=False)
     requires_mfa = models.BooleanField(default=False)
+    requires_password_change = models.BooleanField(default=False, db_index=True)
 
     dob = models.DateField(null=True, blank=True, default=None)
 
@@ -152,7 +153,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         # attack vector. last_activity is a server-managed audit timestamp.
         # Superusers who need to rotate auth_key or correct last_activity should
         # do so via direct DB access or a dedicated management command.
-        NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified"]
+        NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified",
+                          "requires_password_change"]
         # org is guarded by MANAGE_USERS_ONLY_FIELDS in on_rest_pre_save;
         # skip the Group VIEW_PERMS gate so manage_users admins (who may not
         # have view_groups) can still assign an org to a user.
@@ -166,6 +168,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             "basic": {
                 "fields": [
                     'id',
+                    'uuid',
                     'display_name',
                     'username',
                     'last_login',
@@ -173,7 +176,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     'is_active',
                     "is_email_verified",
                     "is_phone_verified",
-                    "is_dob_verified"
+                    "is_dob_verified",
+                    "requires_password_change"
                 ],
                 "graphs": {
                     "avatar": "basic"
@@ -182,6 +186,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             "list": {
                 "fields": [
                     'id',
+                    'uuid',
                     "first_name",
                     "last_name",
                     'display_name',
@@ -197,6 +202,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     "is_email_verified",
                     "is_phone_verified",
                     "is_dob_verified",
+                    "requires_password_change",
                     "is_online",
                     "dob"
                 ],
@@ -208,6 +214,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             "default": {
                 "fields": [
                     'id',
+                    'uuid',
                     "first_name",
                     "last_name",
                     'display_name',
@@ -225,6 +232,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                     "is_dob_verified",
                     "dob",
                     "requires_mfa",
+                    "requires_password_change",
                     "has_passkey"
                 ],
                 "graphs": {
@@ -560,6 +568,16 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             self.atomic_save()
         return self.auth_key
 
+    def set_password(self, raw_password):
+        """Hash a password without changing forced-password state."""
+        super().set_password(raw_password)
+
+    def set_permanent_password(self, raw_password):
+        """Validate a real password and clear forced-change state in memory."""
+        self.check_password_strength(raw_password)
+        super().set_password(raw_password)
+        self.requires_password_change = False
+
     def set_username(self, value):
         if not isinstance(value, str):
             raise ValueError("Username must be a string")
@@ -656,7 +674,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         self.save()
 
     def save_password(self, value):
-        self.set_password(value)
+        self.set_permanent_password(value)
         self.save()
 
     def set_phone_number(self, value):
@@ -760,8 +778,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if old_password and not self.check_password(old_password):
             self.report_incident(f"{self.username} entered an invalid password", "invalid_password")
             raise merrors.ValueException("Incorrect current password")
-        self.check_password_strength(new_password)
-        self.set_password(new_password)
+        self.set_permanent_password(new_password)
         self._set_field_change("new_password", "*", "*********")
 
     def can_change_password(self):

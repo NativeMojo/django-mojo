@@ -203,6 +203,12 @@ Groups can have a parent group. Child groups inherit parent-level permissions fo
 GET /api/group?parent=7
 ```
 
+`POST /api/group/<id>` may update `name`, `kind`, `uuid`, and `parent`. Parent
+validation rejects the group itself, a descendant, and any already-corrupt or
+over-depth candidate ancestry. The write is serialized server-side; excluding
+the current id in a relationship picker is only a convenience, not the safety
+boundary.
+
 ---
 
 ## Disable Lifecycle

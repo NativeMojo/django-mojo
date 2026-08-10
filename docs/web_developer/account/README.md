@@ -33,6 +33,7 @@
 - [Phone Number Change](phone_change.md) — Self-service phone number change with OTP verification
 - [User Self-Management](user_self_management.md) — Everything a logged-in user can do for their own account (profile, avatar, password, email, phone, passkeys, TOTP, files, notifications, activity log)
 - [User API](user.md) — User profile, registration, password reset
+- [Admin People](admin_portal/people.md) — Operator workflows for Users, Groups, access, sign-ins, and API keys
 - [Group API](group.md) — Groups, membership, permissions
 - [Admin Portal API Guide](admin_portal.md) — Building admin consoles (users, groups, secure settings)
 - [System Setup API](system_setup.md) — Superuser-only readiness, durable Fix Setup operations, late choices, resume, Origin binding, and protected settings

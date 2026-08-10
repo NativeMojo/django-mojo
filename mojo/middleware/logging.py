@@ -3,7 +3,7 @@ import threading
 from queue import Queue, Empty
 from mojo.apps.logit.models import Log
 from mojo.helpers.settings import settings
-from mojo.helpers import logit
+from mojo.helpers import logit, request as request_helper
 from mojo.helpers.response import JsonResponse
 
 API_PREFIX = "/".join([settings.get_static("MOJO_PREFIX", "api/").rstrip("/"), ""])
@@ -141,6 +141,10 @@ class LoggerMiddleware:
 
     def get_response_log_content(self, request, response):
         """Extract log content - prioritize log_context if available."""
+        sensitive = (getattr(request, "_sensitive_body_label", None)
+                     or request_helper.sensitive_body_label(request))
+        if sensitive:
+            return json.dumps({"sensitive_body": sensitive})
         if LOGIT_DEBUG_ALL:
             return response.content
 
@@ -165,6 +169,15 @@ class LoggerMiddleware:
 
     def log_request(self, request):
         if not self.can_log(request):
+            return
+        sensitive = (getattr(request, "_sensitive_body_label", None)
+                     or request_helper.sensitive_body_label(request))
+        if sensitive:
+            summary = json.dumps({"sensitive_body": sensitive})
+            if LOGIT_DB_ALL:
+                self.queue_log("db", request, summary, "request")
+            if LOGIT_FILE_ALL:
+                self.queue_log("file", request, summary, "request")
             return
         is_mojosec = getattr(request, "_mojosec_sensitive_body", False) or (
             request.method == "POST"

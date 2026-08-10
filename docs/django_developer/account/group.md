@@ -410,6 +410,16 @@ Each Group's active webhook delivery targets are managed through the `WebhookSub
 group.touch()   # updates last_activity (rate-limited by GROUP_LAST_ACTIVITY_FREQ)
 ```
 
+## Hierarchy integrity
+
+All parent-chain reads use `services/group_hierarchy.py`. The traversal tracks
+visited ids, applies a fixed depth bound, and raises on a cycle, missing row,
+unsaved parent, or excessive depth. Authorization-facing callers catch that
+failure only to deny: corrupt ancestry never becomes an implicit root or
+active group. Parent writes run in a transaction, lock the edited row and
+candidate ancestry, and reject self-parenting or parenting beneath a
+descendant. Do not add a second hand-written `while group.parent` traversal.
+
 ## Settings
 
 | Setting | Default | Description |

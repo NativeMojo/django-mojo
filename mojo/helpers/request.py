@@ -9,6 +9,7 @@ DUID_HEADER = settings.get_static('DUID_HEADER', 'X-Mojo-UID').replace('-', '_')
 DUID_HEADER = f"HTTP_{DUID_HEADER}"
 
 REQUEST_PARSER = RequestDataParser()
+API_ROOT = "/" + settings.get_static("MOJO_PREFIX", "api/").strip("/")
 
 def parse_request_data(request):
     """
@@ -82,6 +83,34 @@ def is_key_backed_session(request):
     # question is genuinely "is request.user a User model instance"
     # (attribution).
     return restricted_identity(request) is not None
+
+
+def sensitive_body_label(request):
+    """Return a fixed log marker for credential-bearing API requests.
+
+    Both request and response logging call this before honoring broad debug or
+    file logging.  Keep the decision path-based: request logging runs before a
+    view can annotate the request, and a secret endpoint must therefore be
+    recognizable without inspecting its body.
+    """
+    path = str(getattr(request, "path", "") or "").rstrip("/")
+    method = str(getattr(request, "method", "") or "").upper()
+    if path.startswith(f"{API_ROOT}/auth/"):
+        return "account_auth"
+    if method == "POST" and path in (
+            f"{API_ROOT}/login", f"{API_ROOT}/account/jwt/login",
+            f"{API_ROOT}/refresh_token", f"{API_ROOT}/token/refresh",
+            f"{API_ROOT}/account/jwt/refresh"):
+        return "account_auth"
+    if path.startswith(f"{API_ROOT}/group/apikey"):
+        return "group_api_key"
+    if path == f"{API_ROOT}/group/webhook_secret":
+        return "group_webhook_secret"
+    if path.startswith(f"{API_ROOT}/account/admin/user/password"):
+        return "admin_password"
+    if path == f"{API_ROOT}/account/admin/apikey/action":
+        return "admin_api_key"
+    return None
 
 
 def is_override_user_session(request):
