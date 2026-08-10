@@ -6,6 +6,28 @@ mutates AWS or Django state. Apply mode creates confirmed missing resources and
 repairs missing direct-upload CORS on the system FileManager bucket. Other
 existing resources that differ from defaults are reported and preserved.
 
+## Admin System Setup convergence
+
+The built-in Admin **System Setup** page registers four AWS sections from
+`mojo.apps.aws.services.aws_setup`: identity, system S3, SES email, and
+SNS/CloudWatch monitoring. It reuses AWS Check inventory and alarm-profile
+logic but runs mutations as durable, repeatable setup operations; it never
+shells out to this command.
+
+Setup asks for a late choice only when ownership cannot be inferred safely: an
+exact discovered private media bucket, a verified SES domain and sender, or
+affirmative adoption of an exact same-name untagged operations topic. S3 keeps
+Block Public Access enabled and merges upload CORS. SES installs only missing
+shipped templates. Monitoring merges a restricted CloudWatch publish policy,
+persists the receiver allowlist, converges the real alarm profile, and requires
+a delivery-probe transition created after the operation began.
+
+Provider failures cross the shared bounded provider-call boundary. UI, JSON,
+persisted operation logs, and application logs receive only the operation,
+safe provider code, safe request id, retryability/mutation state, and the exact
+IAM action for a denial. Raw provider messages and exception chains are not
+retained.
+
 ## Modes and exit status
 
 ```bash
@@ -69,7 +91,7 @@ remediation/changed items:
 | `cron` | recent dispatcher run plus jobs Redis, runner heartbeats and scheduler lock |
 | `s3` | one system-default S3 FileManager, bucket/region/IAM, Public Access Block, CORS and optional sentinel |
 | `email` | SES identity/DKIM/sandbox/topics/receiving audit, outbound Mailbox and shipped templates |
-| `monitoring` | owned SNS topic, exact static allowlist, HTTPS subscription, owned alarms and receiver receipt |
+| `monitoring` | owned SNS topic, exact protected/static allowlist, HTTPS subscription, owned alarms and receiver receipt |
 | `dns` | dnsman ACME directory/account, delegation states, certificate expiry; under `--apply`, bootstraps one domain |
 | `rules` | opt-in create-only CloudWatch and version-drift incident policies |
 | `versions` | **opt-in** managed-service major version drift (RDS/Aurora, ElastiCache) — never part of a default run, and never reports FAIL |
@@ -136,7 +158,7 @@ The command uses the signed receiver already exposed at
 `/api/aws/cloudwatch/sns/alarm`:
 
 1. Create or discover the tagged operations topic and copy its ARN from the report.
-2. Add that exact ARN to file-only `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`, restart Django, and rerun.
+2. Add that exact ARN to `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` and rerun. System Setup writes the protected runtime value; file configuration remains the CLI fallback.
 3. Apply the HTTPS subscription and wait for confirmation.
 4. Apply missing alarms. Existing owned drift is WARN; non-owned reserved-name collisions are FAIL.
 5. Run the documented disposable-alarm ALARM→OK test. The durable transition receipt proves delivery.

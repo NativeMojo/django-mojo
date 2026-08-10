@@ -18,6 +18,13 @@ Use the `slug` value from the `resources` endpoint when targeting specific insta
 metric reads. The SNS alarm POST is public and instead requires a valid AWS SNS
 signature from an exactly allowlisted topic.
 
+Admin System Setup is the preferred configuration surface. It creates or
+explicitly adopts the installation-owned operations topic, persists the exact
+ARN through a protected superuser-only setting, creates the HTTPS subscription
+and owned alarms, then waits for a signed delivery probe before reporting the
+section ready. The probe is evidence-only and never opens an Event, Incident,
+Ticket, or normal alarm dispatch.
+
 ---
 
 ## Endpoints
