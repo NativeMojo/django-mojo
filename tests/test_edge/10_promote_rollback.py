@@ -1,5 +1,4 @@
-"""
-Verified release deployment, automated rollback, and key isolation.
+"""Verified release deployment, automated rollback, and key isolation.
 
 GitHub's WebApp-linked key completes verification and that completion always
 starts deployment. There is no separate human promotion endpoint.
@@ -8,6 +7,9 @@ The revocation invariant has its own test because it is an ABSENCE of coupling:
 disabling a site's key must stop future releases and must not change what any
 node is serving.
 """
+
+import uuid
+import time
 
 from testit import helpers as th
 
@@ -178,8 +180,9 @@ def test_link_key(opts):
     site = make_webapp(opts.group, slug="keyedsite")
     login(opts, opts.admin_email, opts.admin_pw)
 
+    mint_operation = str(uuid.uuid4())
     resp = opts.client.post("/api/edge/webapp/link_key", json=dict(
-        webapp=site.pk))
+        webapp=site.pk, action="mint", operation_id=mint_operation))
     assert resp.status_code == 200, \
         f"link_key failed: {resp.status_code} {resp.body}"
     first_token = (resp.json.get("data") or {}).get("token")
@@ -192,16 +195,83 @@ def test_link_key(opts):
         "the minted key cannot register releases"
     assert not key.has_permission("manage_webapp"), \
         "the minted CI key can PROMOTE — that defeats the whole split"
+    assert key.get_token() is None, \
+        "the reveal-once deployment token remained recoverable at rest"
+
+    # A transport retry is safe and cannot reveal the token twice or create a
+    # second key. The operator must rotate if the first response was lost.
+    resp = opts.client.post("/api/edge/webapp/link_key", json=dict(
+        webapp=site.pk, action="mint", operation_id=mint_operation))
+    replay = resp.json.get("data") or {}
+    assert resp.status_code == 200 and replay.get("replayed") is True, \
+        f"operation replay was not recognized: {resp.body}"
+    assert replay.get("token") is None, "a replay disclosed the token again"
+    assert ApiKey.objects.filter(name="webapp:keyedsite").count() == 1, \
+        "an idempotent replay created a duplicate deployment key"
 
     # Rotation is a hard cutover: no grace window, because two live credentials
     # for one site is the state that makes revocation unprovable.
     first_key_id = site.api_key_id
     resp = opts.client.post("/api/edge/webapp/link_key", json=dict(
-        webapp=site.pk))
+        webapp=site.pk, action="rotate", operation_id=str(uuid.uuid4())))
     assert resp.status_code == 200, f"re-linking failed: {resp.body}"
     old = ApiKey.objects.get(pk=first_key_id)
     assert not old.is_active, \
         "the previous CI credential is still active after rotation"
+
+
+@th.django_unit_test("deployment-key revoke is explicit, replay-safe, and unlinks the WebApp")
+def test_revoke_linked_key(opts):
+    from mojo.apps.account.models import ApiKey
+
+    site = make_webapp(opts.group, slug="revokekey")
+    login(opts, opts.admin_email, opts.admin_pw)
+    minted = opts.client.post("/api/edge/webapp/link_key", json=dict(
+        webapp=site.pk, action="mint", operation_id=str(uuid.uuid4())))
+    assert minted.status_code == 200, f"mint failed: {minted.body}"
+    site.refresh_from_db()
+    key_id = site.api_key_id
+
+    operation_id = str(uuid.uuid4())
+    revoked = opts.client.post("/api/edge/webapp/revoke_key", json=dict(
+        webapp=site.pk, operation_id=operation_id))
+    assert revoked.status_code == 200, f"revoke failed: {revoked.body}"
+    site.refresh_from_db()
+    assert site.api_key_id is None, "revoke left the credential linked"
+    assert ApiKey.objects.get(pk=key_id).is_active is False, \
+        "revoke left the credential active"
+
+    replay = opts.client.post("/api/edge/webapp/revoke_key", json=dict(
+        webapp=site.pk, operation_id=operation_id))
+    data = replay.json.get("data") or {}
+    assert replay.status_code == 200 and data.get("replayed") is True, \
+        "repeated revoke was not served from its receipt"
+
+
+@th.django_unit_test("deployment-key mutation refuses machine sessions and stale logins")
+def test_link_key_requires_recent_interactive_auth(opts):
+    from mojo.apps.account.utils.jwtoken import JWToken
+    from mojo.apps.edge.services import webapp_keys
+
+    site = make_webapp(opts.group, slug="keysessiongate")
+    _, _, machine_token, _ = webapp_keys.link(site)
+    _use_apikey(opts, machine_token)
+    try:
+        machine = opts.client.post("/api/edge/webapp/link_key", json=dict(
+            webapp=site.pk, action="rotate", operation_id=str(uuid.uuid4())))
+        assert machine.status_code == 403, \
+            f"deployment API key rotated itself ({machine.status_code})"
+    finally:
+        _clear_apikey(opts)
+
+    opts.client.is_authenticated = True
+    opts.client.bearer = "bearer"
+    opts.client.access_token = JWToken(opts.admin.get_auth_key()).create_access_token(
+        uid=opts.admin.pk, auth_time=int(time.time()) - 301)
+    stale = opts.client.post("/api/edge/webapp/link_key", json=dict(
+        webapp=site.pk, action="rotate", operation_id=str(uuid.uuid4())))
+    assert stale.status_code == 440, \
+        f"stale interactive login bypassed five-minute step-up ({stale.status_code})"
 
 
 @th.django_unit_test("revoking a site's key stops releases and changes nothing served")
