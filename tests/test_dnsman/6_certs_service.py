@@ -67,13 +67,15 @@ class FakeDns(object):
         self.delete_error = delete_error
         self.clear_error = clear_error
 
-    def upsert_record(self, domain, rtype, name, record_values, ttl=300):
+    def upsert_record(self, domain, rtype, name, record_values, ttl=300,
+                      reservation=None):
         self.upserts.append(objict(
             domain=domain.name, rtype=rtype, name=name,
             record_values=list(record_values), ttl=ttl))
         return objict(change_id="C-upsert", provider=domain.provider)
 
-    def delete_record(self, domain, rtype, name, record_values=None):
+    def delete_record(self, domain, rtype, name, record_values=None,
+                      reservation=None):
         self.deletes.append(objict(
             domain=domain.name, rtype=rtype, name=name,
             record_values=list(record_values) if record_values else None))
@@ -81,7 +83,8 @@ class FakeDns(object):
             raise RuntimeError(self.delete_error)
         return objict(change_id="C-delete", provider=domain.provider)
 
-    def clear_record(self, domain, rtype, name, record_values=None):
+    def clear_record(self, domain, rtype, name, record_values=None,
+                     reservation=None):
         self.clears.append(objict(
             domain=domain.name, rtype=rtype, name=name,
             record_values=list(record_values) if record_values else None))

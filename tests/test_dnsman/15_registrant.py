@@ -569,7 +569,9 @@ def test_purchase_uses_row_group_not_argument(opts):
         with mock.patch(f"{R53}.register", return_value=registered) as register:
             # group=None on purpose: exactly what the REST layer passes when the
             # buyer's group has gone inactive since the quote.
-            registrar.purchase(None, opts.user_a, quoted.purchase, quoted.token)
+            registrar.purchase(
+                None, opts.user_a, quoted.purchase, quoted.token,
+                quoted.name, quoted.price)
 
     sent = register.call_args.args[1]
     assert sent["Email"] == TENANT_CONTACT["Email"], (

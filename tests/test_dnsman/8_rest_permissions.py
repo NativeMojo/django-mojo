@@ -243,7 +243,7 @@ def test_quote_disabled(opts):
         "a refused quote must not leave a purchase row behind"
 
 
-@th.django_unit_test("there is no single-call purchase path")
+@th.django_unit_test("purchase requires token plus typed domain and price")
 def test_purchase_requires_confirm_token(opts):
     login(opts, opts.manager_email, opts.manager_pw)
     resp = opts.client.post("/api/dnsman/registrar/purchase", json=dict(

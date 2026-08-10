@@ -731,7 +731,8 @@ def test_purchase_happy_path_creates_registering_domain(opts):
         with mock.patch(f"{R53}.register",
                         return_value=_register_result(name, "op-buy")) as register:
             result = registrar.purchase(
-                opts.group, opts.user, quoted.purchase, quoted.token)
+                opts.group, opts.user, quoted.purchase, quoted.token,
+                quoted.name, quoted.price)
 
     assert register.call_count == 1, (
         f"Expected exactly one registration call, got {register.call_count}")
@@ -779,9 +780,11 @@ def test_purchase_second_call_on_same_quote_is_uniformly_refused(opts):
             quoted = registrar.quote(opts.group, opts.user, name)
         with mock.patch(f"{R53}.register",
                         return_value=_register_result(name, "op-cas")) as register:
-            registrar.purchase(opts.group, opts.user, quoted.purchase, quoted.token)
+            registrar.purchase(opts.group, opts.user, quoted.purchase, quoted.token,
+                               quoted.name, quoted.price)
             try:
-                registrar.purchase(opts.group, opts.user, quoted.purchase, quoted.token)
+                registrar.purchase(opts.group, opts.user, quoted.purchase, quoted.token,
+                                   quoted.name, quoted.price)
             except me.ValueException as err:
                 raised = err
 
@@ -812,7 +815,8 @@ def test_purchase_with_a_wrong_token_is_uniformly_refused(opts):
             quoted = registrar.quote(opts.group, opts.user, name)
         with mock.patch(f"{R53}.register") as register:
             try:
-                registrar.purchase(opts.group, opts.user, quoted.purchase, "not-the-token")
+                registrar.purchase(opts.group, opts.user, quoted.purchase, "not-the-token",
+                                   quoted.name, quoted.price)
             except me.ValueException as err:
                 raised = err
 
@@ -825,6 +829,37 @@ def test_purchase_with_a_wrong_token_is_uniformly_refused(opts):
         "A refused confirmation must not create a domain row")
     assert DomainPurchase.objects.get(pk=quoted.purchase).status == "quoted", (
         "A bad token must leave the quote usable")
+
+
+@th.django_unit_test("typed domain and price must exactly match the locked quote")
+def test_purchase_requires_typed_domain_and_price(opts):
+    from mojo.apps.dnsman.models import Domain, DomainPurchase
+    from mojo.apps.dnsman.services import registrar
+    from mojo import errors as me
+
+    name = f"{NAME_PREFIX}typed.com"
+    _clean()
+    with _enabled():
+        with mock.patch(f"{R53}.check_availability", return_value=_avail(name)):
+            quoted = registrar.quote(opts.group, opts.user, name)
+        for typed_domain, typed_price in (("wrong.example", quoted.price),
+                                          (quoted.name, "0.01")):
+            raised = None
+            with mock.patch(f"{R53}.register") as register:
+                try:
+                    registrar.purchase(
+                        opts.group, opts.user, quoted.purchase, quoted.token,
+                        typed_domain, typed_price)
+                except me.ValueException as error:
+                    raised = error
+            assert raised is not None, \
+                f"mismatched typed confirmation {typed_domain}/{typed_price} was accepted"
+            assert not register.called, \
+                "typed confirmation mismatch reached the irreversible registrar call"
+    assert DomainPurchase.objects.get(pk=quoted.purchase).status == "quoted", \
+        "a refused typed confirmation consumed the still-valid quote"
+    assert not Domain.objects.filter(name=name).exists(), \
+        "a refused typed confirmation created durable registration intent"
 
 
 @th.django_unit_test()
@@ -847,7 +882,8 @@ def test_purchase_refuses_and_expires_a_stale_quote(opts):
 
         with mock.patch(f"{R53}.register") as register:
             try:
-                registrar.purchase(opts.group, opts.user, quoted.purchase, quoted.token)
+                registrar.purchase(opts.group, opts.user, quoted.purchase, quoted.token,
+                                   quoted.name, quoted.price)
             except me.ValueException as err:
                 raised = err
 
@@ -882,7 +918,8 @@ def test_purchase_kill_switch_blocks_a_valid_quote(opts):
     with _enabled(DNSMAN_PURCHASE_ENABLED=False):
         with mock.patch(f"{R53}.register") as register:
             try:
-                registrar.purchase(opts.group, opts.user, quoted.purchase, quoted.token)
+                registrar.purchase(opts.group, opts.user, quoted.purchase, quoted.token,
+                                   quoted.name, quoted.price)
             except me.ValueException as err:
                 raised = err
 
@@ -910,7 +947,8 @@ def test_purchase_register_failure_leaves_no_orphan_domain(opts):
         with mock.patch(f"{R53}.register",
                         side_effect=Exception("InvalidInput: registrant rejected")):
             try:
-                registrar.purchase(opts.group, opts.user, quoted.purchase, quoted.token)
+                registrar.purchase(opts.group, opts.user, quoted.purchase, quoted.token,
+                                   quoted.name, quoted.price)
             except me.ValueException as err:
                 raised = err
 
@@ -941,7 +979,8 @@ def test_purchase_records_a_privacy_downgrade_honestly(opts):
                         return_value=_register_result(name, "op-dg", privacy=False,
                                                       downgraded=True)):
             result = registrar.purchase(
-                opts.group, opts.user, quoted.purchase, quoted.token)
+                opts.group, opts.user, quoted.purchase, quoted.token,
+                quoted.name, quoted.price)
 
     domain = Domain.objects.get(name=name)
     assert domain.privacy is False, (
