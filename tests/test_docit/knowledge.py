@@ -345,7 +345,8 @@ def test_page_save_publishes_embed_job(opts):
     assert any((j.payload or {}).get("page_id") == page.pk for j in queued), \
         f"A queued job must carry this page's id, payloads={[j.payload for j in queued]}"
 
-    executed = th.run_pending_jobs()
+    executed = th.run_pending_jobs(
+        func=EMBED_JOB, payload={"page_id": page.pk})
     assert executed >= 1, f"Expected at least one job to execute, got {executed}"
     chunks = PageChunk.objects.filter(page=page)
     assert chunks.count() == 1, f"The job must have chunked the page, got {chunks.count()} chunks"
@@ -371,7 +372,7 @@ def test_book_reindex_action(opts):
     queued = Job.objects.filter(func=EMBED_JOB, status="pending").count()
     assert queued == page_count, \
         f"Reindex must queue one job per page ({page_count}), got {queued}"
-    th.run_pending_jobs()
+    th.run_pending_jobs(func=EMBED_JOB)
     reindexed = PageChunk.objects.filter(page__book_id=opts.kb_book_id).count()
     assert reindexed >= page_count, \
         f"Every page must have chunks after reindex, got {reindexed} chunks for {page_count} pages"
@@ -550,7 +551,7 @@ def test_reconcile_heals_stale_page(opts):
     assert _recon_job_count(page.pk) == 1, \
         f"The sweep must queue exactly one recon embed job for the stale page, sweep={result}"
 
-    th.run_pending_jobs()
+    th.run_pending_jobs(func=EMBED_JOB, payload={"page_id": page.pk})
     bodies = " ".join(PageChunk.objects.filter(page=page).values_list("content", flat=True))
     assert "RECONOLDTOK11" not in bodies, \
         f"The healed page must no longer serve pre-edit content, chunks={bodies!r}"
@@ -600,7 +601,8 @@ def test_reconcile_metadata_only_save_not_requeued(opts):
 
     page.metadata = {"note": "metadata only"}
     page.save()
-    executed = th.run_pending_jobs()
+    executed = th.run_pending_jobs(
+        func=EMBED_JOB, payload={"page_id": page.pk})
     assert executed >= 1, f"The save must queue an embed job to run, executed={executed}"
 
     later = timezone.now() + timedelta(hours=2)
@@ -692,7 +694,7 @@ def test_reconcile_blank_guard_asymmetry(opts):
     assert _recon_job_count(blanked.pk) == 1, \
         f"A blanked page that still serves chunks must heal, sweep={result}"
 
-    th.run_pending_jobs()
+    th.run_pending_jobs(func=EMBED_JOB, payload={"page_id": blanked.pk})
     assert PageChunk.objects.filter(page=blanked).count() == 0, \
         "Healing a blanked page must remove the chunks it was still serving"
     _drop_embed_jobs(blanked.pk)
@@ -735,7 +737,8 @@ def test_reconcile_inflight_and_bucket_dedupe(opts):
     assert result.skipped_inflight >= 1, \
         f"The in-flight page must be counted, sweep={result}"
 
-    executed = th.run_pending_jobs()
+    executed = th.run_pending_jobs(
+        func=EMBED_JOB, payload={"page_id": page.pk})
     assert executed >= 1, f"The in-flight embed job must run, executed={executed}"
 
     # Make it stale again with a dropped publish, then sweep twice in one bucket.
@@ -802,10 +805,11 @@ def test_reconcile_cron_dispatcher(opts):
     assert Job.objects.filter(func=RECON_JOB, status="pending").count() == 1, \
         "The dispatcher must queue exactly one sweep job"
 
-    th.run_pending_jobs()   # the sweep runs and publishes per-page embed jobs
+    th.run_pending_jobs(func=RECON_JOB)   # sweep publishes per-page embed jobs
     assert _recon_job_count(page.pk) == 1, \
         "The sweep job must queue a recon embed job for the stale page"
-    th.run_pending_jobs()   # the embed jobs run
+    th.run_pending_jobs(
+        func=EMBED_JOB, payload={"page_id": page.pk})   # embed jobs run
     assert PageChunk.objects.filter(page=page).count() >= 1, \
         "The full cron -> sweep -> embed chain must chunk the page"
 

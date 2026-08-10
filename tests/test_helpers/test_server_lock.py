@@ -154,12 +154,13 @@ def test_timeout_degrades(opts):
 def test_exclusive_context_manager(opts):
     from testit import server_lock
 
-    with server_lock.exclusive(timeout=2.0) as acquired:
-        assert_true(acquired, "the process-wide lock should be idle in this test")
-        _readers, writer_held, _waiting = server_lock.LOCK.state()
+    lock = server_lock.ServerRestartLock()
+    with server_lock.exclusive(timeout=2.0, lock=lock) as acquired:
+        assert_true(acquired, "the test-owned lock should be idle")
+        _readers, writer_held, _waiting = lock.state()
         assert_true(writer_held, "the exclusive hold should be recorded inside the context")
 
-    _readers, writer_held, _waiting = server_lock.LOCK.state()
+    _readers, writer_held, _waiting = lock.state()
     assert_true(not writer_held, "the exclusive hold must be released when the context exits")
 
 

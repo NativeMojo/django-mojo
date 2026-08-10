@@ -129,11 +129,12 @@ def release_shared():
 
 
 @contextmanager
-def exclusive(timeout=WRITER_TIMEOUT, logger=None):
+def exclusive(timeout=WRITER_TIMEOUT, logger=None, lock=None):
     """Hold the server exclusively — no websocket may be open across this."""
-    acquired = LOCK.acquire_write(timeout=timeout)
+    target = lock or LOCK
+    acquired = target.acquire_write(timeout=timeout)
     if not acquired and logger:
-        readers, _writer, _waiting = LOCK.state()
+        readers, _writer, _waiting = target.state()
         logger.warning(
             f"[server_lock] proceeding without the exclusive hold after {timeout}s "
             f"({readers} client request(s) still active) — the caller is about "
@@ -144,4 +145,4 @@ def exclusive(timeout=WRITER_TIMEOUT, logger=None):
         yield acquired
     finally:
         if acquired:
-            LOCK.release_write()
+            target.release_write()

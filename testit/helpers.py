@@ -569,12 +569,13 @@ def expect(value, got, name="field"):
     assert value == got, f"{name} expected {value} got {got}"
 
 
-def run_pending_jobs(channel=None, status="pending"):
+def run_pending_jobs(channel=None, status="pending", func=None, payload=None):
     """
     Execute pending jobs from the DB the same way the job engine does.
     No Redis or running engine needed.
 
-    Queries Job.objects.filter(status=status), optionally filtered by channel.
+    Queries Job.objects.filter(status=status), optionally filtered by channel,
+    function, and payload fields.
     For each job: imports the function via load_job_function(job.func),
     calls func(job) — exactly like job_engine.py:642.
     Marks job completed on success, failed on exception.
@@ -583,22 +584,30 @@ def run_pending_jobs(channel=None, status="pending"):
     """
     from mojo.apps.jobs.models import Job
     from mojo.apps.jobs.job_engine import load_job_function
+    from django.utils import timezone
 
     qs = Job.objects.filter(status=status)
     if channel:
         qs = qs.filter(channel=channel)
+    if func:
+        qs = qs.filter(func=func)
+    for key, value in (payload or {}).items():
+        qs = qs.filter(**{f"payload__{key}": value})
     qs = qs.order_by("created")
 
     count = 0
     for job in qs:
-        func = load_job_function(job.func)
+        handler = load_job_function(job.func)
         try:
-            func(job)
-            job.status = "completed"
-            job.save(update_fields=["status", "modified"])
+            handler(job)
+            next_status = "completed"
         except Exception:
-            job.status = "failed"
-            job.save(update_fields=["status", "modified"])
+            next_status = "failed"
+        # Parallel test modules own separate job fixtures. If an owner removes
+        # its row while this helper is finishing, a conditional UPDATE is a
+        # harmless no-op instead of a stale-instance DatabaseError.
+        Job.objects.filter(pk=job.pk).update(
+            status=next_status, modified=timezone.now())
         count += 1
     return count
 

@@ -696,7 +696,8 @@ of the module with its own module-level state, immune to your patches.
 ### `th.run_pending_jobs()`
 
 ```python
-count = th.run_pending_jobs(channel=None, status="pending")
+count = th.run_pending_jobs(
+    channel=None, status="pending", func=None, payload=None)
 ```
 
 Executes pending jobs from the database using the same calling convention as the production job engine — `func(job)` where `job` is a `Job` model instance. No Redis or running engine process is required.
@@ -707,12 +708,19 @@ Executes pending jobs from the database using the same calling convention as the
 |---|---|---|
 | `channel` | `None` | Filter to jobs on a specific channel. Omit to run all pending jobs. |
 | `status` | `"pending"` | Job status to filter on. |
+| `func` | `None` | Filter to one dotted job-function path. |
+| `payload` | `None` | Filter by the supplied JSON payload fields. |
 
 **Behavior:**
 - Queries `Job.objects.filter(status=status)` ordered by `created`
 - For each job: resolves the function via `load_job_function(job.func)`, calls `func(job)`
 - Marks each job `completed` on success, `failed` on exception
+- Treats a row removed by its owning parallel test after execution as a harmless no-op
 - Returns the count of jobs executed
+
+Parallel test packages should always pass the narrowest available `channel`,
+`func`, and `payload` filters. An unfiltered drain owns the entire shared test
+queue and may execute a different package's fixture.
 
 **Why use this instead of calling job functions directly:**
 
