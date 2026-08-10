@@ -39,6 +39,10 @@ class Log(dm.Model, MojoModel):
         ]
 
     class RestMeta:
+        # Keep Activity search on operator-facing text. Payload, device ids,
+        # and user-agent values are deliberately not searchable because they
+        # commonly contain credentials or high-entropy identifiers.
+        SEARCH_FIELDS = ["kind", "method", "path", "ip", "username", "log", "model_name"]
         VIEW_PERMS = ["manage_logs", "view_logs", "security", "admin"]
         SAVE_PERMS = ["admin", "security"]  # Only admins should create/edit logs manually
         DELETE_PERMS = ["admin"]  # Only admins can delete logs
@@ -56,6 +60,12 @@ class Log(dm.Model, MojoModel):
                     "id", "created", "level", "kind", "method", "path", "payload",
                     "ip", "duid", "uid", "gid", "username", "user_agent", "log",
                     "model_name", "model_id"
+                ],
+            },
+            "activity": {
+                "fields": [
+                    "id", "created", "level", "kind", "method", "path", "payload",
+                    "ip", "uid", "gid", "username", "log", "model_name", "model_id",
                 ],
             },
         }

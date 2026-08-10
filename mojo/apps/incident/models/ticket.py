@@ -9,6 +9,7 @@ class Ticket(models.Model, MojoModel):
         ordering = ['-modified']
 
     class RestMeta:
+        SEARCH_FIELDS = ["title", "description", "status", "category"]
         VIEW_PERMS = ["view_security", "security"]
         SAVE_PERMS = ["manage_security", "security"]
         DELETE_PERMS = ["manage_security"]
@@ -23,10 +24,24 @@ class Ticket(models.Model, MojoModel):
                     "group": "basic"
                 }
             },
+            # The Activity center must not serialize the default nested User
+            # and Group basic graphs. Relationship context is intentionally
+            # limited to scalar ids and labels owned by this ticket view.
+            "activity": {
+                "fields": [
+                    "id", "created", "modified", "title", "description", "status",
+                    "priority", "category", "metadata",
+                ],
+                "extra": [
+                    "user_id", "group_id", "assignee_id", "incident_id",
+                    "activity_user_label", "activity_group_label",
+                    "activity_assignee_label", "activity_incident_label",
+                ],
+            },
         }
 
-    created = models.DateTimeField(auto_now_add=True, editable=False)
-    modified = models.DateTimeField(auto_now=True)
+    created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
+    modified = models.DateTimeField(auto_now=True, db_index=True)
 
     user = models.ForeignKey("account.User", blank=True, null=True, default=None, related_name="+", on_delete=models.SET_NULL)
     group = models.ForeignKey("account.Group", blank=True, null=True, default=None, related_name="+", on_delete=models.SET_NULL)
@@ -42,6 +57,35 @@ class Ticket(models.Model, MojoModel):
     incident = models.ForeignKey("incident.Incident", blank=True, null=True, default=None, related_name="tickets", on_delete=models.SET_NULL)
 
     metadata = models.JSONField(default=dict, blank=True)
+
+    @property
+    def activity_user_label(self):
+        return self._activity_user_label(self.user)
+
+    @property
+    def activity_group_label(self):
+        return self.group.name if self.group_id else None
+
+    @property
+    def activity_assignee_label(self):
+        return self._activity_user_label(self.assignee)
+
+    @property
+    def activity_incident_label(self):
+        return self.incident.title if self.incident_id else None
+
+    @staticmethod
+    def _activity_user_label(user):
+        if user is None:
+            return None
+        return user.display_name or user.username
+
+    @classmethod
+    def on_rest_list(cls, request, queryset=None):
+        queryset = queryset if queryset is not None else cls.objects.all()
+        if request.DATA.get("graph") == "activity":
+            queryset = queryset.select_related("user", "group", "assignee", "incident")
+        return super().on_rest_list(request, queryset)
 
     def on_rest_created(self):
         logit.info("Ticket created")

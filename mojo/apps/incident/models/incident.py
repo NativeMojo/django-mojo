@@ -42,7 +42,9 @@ class Incident(models.Model, MojoModel):
         null=True, blank=True, related_name="incidents")
 
     class RestMeta:
-        SEARCH_FIELDS = ["details"]
+        SEARCH_FIELDS = [
+            "category", "title", "details", "source_ip", "hostname", "model_name",
+        ]
         VIEW_PERMS = ["view_security", "security"]
         CREATE_PERMS = None
         SAVE_PERMS = ["manage_security", "security"]
@@ -68,6 +70,14 @@ class Incident(models.Model, MojoModel):
                 "graphs": {
                     "rule_set": "basic",
                 },
+            },
+            "activity": {
+                "fields": [
+                    "id", "created", "priority", "state", "status", "scope",
+                    "category", "country_code", "title", "details", "model_name",
+                    "model_id", "source_ip", "hostname", "metadata",
+                ],
+                "extra": ["group_id", "rule_set_id"],
             },
         }
 

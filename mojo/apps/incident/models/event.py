@@ -73,7 +73,9 @@ class Event(models.Model, MojoModel):
         ]
 
     class RestMeta:
-        SEARCH_FIELDS = ["details"]
+        SEARCH_FIELDS = [
+            "category", "title", "details", "source_ip", "hostname", "model_name",
+        ]
         VIEW_PERMS = ["view_security", "security"]
         CREATE_PERMS = ["all"]
         SAVE_PERMS = ["manage_security", "security"]
@@ -102,6 +104,16 @@ class Event(models.Model, MojoModel):
                     ("security_summary", "summary"),
                     ("source_ip", "ip"),
                 ],
+            },
+            # List-only Activity graph: relation ids are scalar and geo_ip is
+            # intentionally absent, avoiding one lookup per row.
+            "activity": {
+                "fields": [
+                    "id", "created", "level", "scope", "category", "source_ip",
+                    "hostname", "uid", "country_code", "title", "details",
+                    "model_name", "model_id", "metadata",
+                ],
+                "extra": ["group_id", "incident_id"],
             },
         }
 
