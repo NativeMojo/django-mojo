@@ -458,7 +458,7 @@ def test_authenticated_admin_setup_resume_smoke(opts):
     source = opts.client.post("/api/account/admin/session", json={})
     assert source.status_code == 200, f"Admin source session failed: {source.body}"
     shell = opts.client.get("/admin/")
-    module = opts.client.get("/admin/assets/setup.js")
+    module = opts.client.get("/admin/assets/features/platform/page.js")
     assert shell.status_code == 200 and module.status_code == 200, \
         f"authenticated browser could not load System Setup source: {shell.status_code}/{module.status_code}"
 

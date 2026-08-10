@@ -1,4 +1,4 @@
-import {api, badge, h, icon, pageHeader, statusTone} from './core.js';
+import {api, badge, h, icon, pageHeader, statusTone} from '../../core.js';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
 const DEEP_LINKS = {

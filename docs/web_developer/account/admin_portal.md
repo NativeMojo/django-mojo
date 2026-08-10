@@ -48,6 +48,51 @@ Routes are created sequentially and a partial failure offers repair of only the
 missing rows. WebApps is the sole UI that receives the reveal-once deployment
 token for create/rotate and offers revoke; System Setup only links there.
 
+### Modular browser contract
+
+The packaged portal is divided into six fixed, capability-gated feature lanes:
+Dashboard, People, WebApps, Activity (reserved and disabled until its provider
+enables it), Platform, and Advanced. Platform owns System Setup, readiness, and
+the guided control-plane journey. Advanced owns the raw Domains, Credentials,
+DNS, Certificates, Upstreams, Vhosts, Routes, and network resources. Bootstrap
+returns both the stable flat `capabilities` object and a namespaced `features`
+object:
+
+```json
+{
+  "capabilities": {"people": true, "network": true},
+  "features": {
+    "people": {"id": "people", "enabled": true,
+               "capabilities": {"users": true, "groups": true}},
+    "platform": {"id": "platform", "enabled": true,
+                 "capabilities": {"setup": true}},
+    "advanced": {"id": "advanced", "enabled": true,
+                 "capabilities": {"view": true, "manage": true}},
+    "activity": {"id": "activity", "enabled": false,
+                 "capabilities": {"view": false}}
+  }
+}
+```
+
+Unknown namespaces are not loaded. Malformed server provider output disables
+that namespace. The browser registry likewise imports a fixed set of local
+descriptors; no URL, package name, or module path comes from user or deployment
+settings.
+
+Feature renderers receive `{ctx, route, navigate, signal}` and return one DOM
+node. Honor the abort signal for fetches and attach a `dispose()` function to
+the returned node when the feature owns timers, observers, or document-level
+listeners. Route changes abort stale work, discard late nodes, close all nested
+overlays, and focus the new page heading.
+
+For searchable foreign-key inputs, the shared relationship control consumes
+ordinary REST list and detail endpoints. Configure its endpoint, value/label
+paths, optional `graph`, fixed filters, and capability boolean. It sends
+encoded `search`, `start`, and `size` query parameters, preserves the REST
+envelope's count and paging metadata, and submits the selected id through its
+named hidden input. Treat endpoint permissions as authoritative: hiding or
+disabling a control is only presentation, never authorization.
+
 ## What "Admin Portal" Means in Mojo
 
 An admin portal is a frontend that calls privileged REST endpoints. Access is controlled by permissions stored on each user. Always design UI and API calls around explicit permission checks. A logged-in user is not automatically an admin.

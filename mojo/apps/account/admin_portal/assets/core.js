@@ -1,3 +1,8 @@
+import {openModal} from './components/overlays.js';
+import {RelationshipSelect} from './components/relationship.js';
+
+export {openModal};
+
 const SVG = {
   home: '<path d="M3 10.7 12 3l9 7.7v9.1a1.2 1.2 0 0 1-1.2 1.2H4.2A1.2 1.2 0 0 1 3 19.8Z"/><path d="M9 21v-7h6v7"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
@@ -60,7 +65,7 @@ async function renewSourceSession() {
   return response.ok;
 }
 
-export async function api(path, options = {}, retry = true) {
+async function requestPayload(path, options = {}, retry = true) {
   const headers = new Headers(options.headers || {});
   const authorization = authHeader();
   if (authorization) headers.set('Authorization', authorization);
@@ -69,7 +74,7 @@ export async function api(path, options = {}, retry = true) {
   if (response.status === 401 && retry && window.MojoAuth?.getRefreshToken?.()) {
     await window.MojoAuth.refreshToken();
     await renewSourceSession();
-    return api(path, options, false);
+    return requestPayload(path, options, false);
   }
   if (response.status === 440) {
     const next = encodeURIComponent(location.pathname + location.hash);
@@ -79,7 +84,35 @@ export async function api(path, options = {}, retry = true) {
   let payload = {};
   try { payload = await response.json(); } catch (_) { payload = {}; }
   if (!response.ok || payload.status === false) throw new Error(payload.error || payload.reason || `Request failed (${response.status})`);
+  return payload;
+}
+
+export async function api(path, options = {}, retry = true) {
+  const payload = await requestPayload(path, options, retry);
   return payload.data ?? payload;
+}
+
+export function responseEnvelope(payload) {
+  const data = payload && Object.prototype.hasOwnProperty.call(payload, 'data') ? payload.data : payload;
+  const object = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  const items = Array.isArray(data) ? data
+    : Array.isArray(object.results) ? object.results
+      : Array.isArray(object.items) ? object.items
+        : Array.isArray(object.data) ? object.data : [];
+  const number = (value, fallback) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+  return {
+    data,
+    results: Array.isArray(object.results) ? object.results : items,
+    items,
+    count: number(object.count, items.length),
+    start: number(object.start, 0),
+    size: number(object.size, items.length),
+    raw: payload,
+  };
+}
+
+export async function apiEnvelope(path, options = {}, retry = true) {
+  return responseEnvelope(await requestPayload(path, options, retry));
 }
 
 // Mutations whose provider outcome may be ambiguous deliberately receive no
@@ -132,6 +165,14 @@ export class TableView {
 }
 
 function fieldControl(field, value) {
+  if (field.type === 'relationship') {
+    const relationship = new RelationshipSelect({
+      ...(field.relationship || {}), name: field.name, label: field.label,
+      required: field.required, value,
+    });
+    return {node: relationship.node, input: relationship.hidden,
+      getValue: () => relationship.getValue(), dispose: () => relationship.dispose()};
+  }
   if (field.type === 'select') {
     const select = h('select', {id: `field-${field.name}`, name: field.name, required: field.required || null});
     if (field.placeholder) select.append(h('option', {value: '', text: field.placeholder}));
@@ -139,18 +180,22 @@ function fieldControl(field, value) {
       value: option.value, text: option.label, selected: String(option.value) === String(value) || null,
     })));
     select.value = value ?? '';
-    return select;
+    return {node: select, input: select};
   }
-  if (field.type === 'textarea') return h('textarea', {
+  if (field.type === 'textarea') {
+    const textarea = h('textarea', {
     id: `field-${field.name}`, name: field.name, rows: field.rows || 4,
     required: field.required || null, placeholder: field.placeholder || null, text: value ?? '',
-  });
-  return h('input', {
+    });
+    return {node: textarea, input: textarea};
+  }
+  const input = h('input', {
     id: `field-${field.name}`, name: field.name, type: field.type || 'text',
     value: field.type === 'checkbox' ? null : (value ?? ''), checked: field.type === 'checkbox' && value,
     required: field.required || null, autocomplete: field.autocomplete || null,
     placeholder: field.placeholder || null, min: field.min ?? null, max: field.max ?? null,
   });
+  return {node: input, input};
 }
 
 export class FormView {
@@ -161,53 +206,29 @@ export class FormView {
     const message = h('div', {class: 'form-message', role: 'alert'});
     const inputs = {};
     const fields = this.fields.map((field) => {
-      const input = fieldControl(field, this.value[field.name]);
-      inputs[field.name] = input;
+      const control = fieldControl(field, this.value[field.name]);
+      const input = control.input;
+      inputs[field.name] = control;
       return h('label', {class: field.type === 'checkbox' ? 'check-field' : 'field'},
-        field.type === 'checkbox' ? input : h('span', {text: field.label}),
-        field.type === 'checkbox' ? h('span', {text: field.label}) : input,
+        field.type === 'checkbox' ? control.node : h('span', {text: field.label}),
+        field.type === 'checkbox' ? h('span', {text: field.label}) : control.node,
         field.help ? h('small', {text: field.help}) : null);
     });
     const button = h('button', {class: 'button primary', type: 'submit'}, icon('check'), this.submitLabel);
-    return h('form', {onsubmit: async (event) => {
+    const form = h('form', {onsubmit: async (event) => {
       event.preventDefault(); button.disabled = true; message.textContent = '';
       const data = {};
-      Object.entries(inputs).forEach(([name, input]) => {
-        data[name] = input.type === 'checkbox' ? input.checked : input.value;
+      Object.entries(inputs).forEach(([name, control]) => {
+        data[name] = control.getValue ? control.getValue()
+          : control.input.type === 'checkbox' ? control.input.checked : control.input.value;
       });
-      try { await this.onSubmit(data, inputs); } catch (error) { message.textContent = error.message; button.disabled = false; }
+      try {
+        await this.onSubmit(data, Object.fromEntries(Object.entries(inputs).map(([name, control]) => [name, control.input])));
+      } catch (error) { message.textContent = error.message; button.disabled = false; }
     }}, ...fields, message, h('div', {class: 'form-actions'}, button));
+    form.dispose = () => Object.values(inputs).forEach((control) => control.dispose?.());
+    return form;
   }
-}
-
-export function openModal({title, subtitle, content, danger = false, wide = false, onClose = () => {}, returnFocus = null}) {
-  const layer = document.getElementById('portal-layer');
-  const previous = returnFocus || document.activeElement;
-  let closed = false;
-  const close = () => {
-    if (closed) return;
-    closed = true;
-    document.removeEventListener('keydown', onKeydown);
-    try { onClose(); }
-    finally { layer.replaceChildren(); document.body.classList.remove('locked'); previous?.focus?.(); }
-  };
-  const panel = h('section', {class: `modal ${danger ? 'danger-modal' : ''} ${wide ? 'wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'modal-title'},
-    h('header', {}, h('div', {}, h('h2', {id: 'modal-title', text: title}), subtitle ? h('p', {text: subtitle}) : null),
-      h('button', {class: 'icon-button', 'aria-label': 'Close', onclick: close}, icon('close'))),
-    h('div', {class: 'modal-body'}, content));
-  const onKeydown = (event) => {
-    if (event.key === 'Escape') { close(); return; }
-    if (event.key !== 'Tab') return;
-    const focusable = [...panel.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href]')];
-    if (!focusable.length) return;
-    const first = focusable[0]; const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-  };
-  layer.replaceChildren(h('div', {class: 'scrim', onclick: (e) => { if (e.target === e.currentTarget) close(); }}, panel));
-  document.body.classList.add('locked'); document.addEventListener('keydown', onKeydown);
-  panel.querySelector('input,select,textarea,button')?.focus();
-  return close;
 }
 
 export function badge(text, tone = 'neutral') { return h('span', {class: `badge ${tone}`, text}); }

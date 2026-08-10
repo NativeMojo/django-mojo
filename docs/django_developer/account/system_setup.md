@@ -221,8 +221,8 @@ are documented in the web-developer
 
 The System Setup page is advertised only when bootstrap returns
 `capabilities.setup: true`, which is derived from literal superuser status.
-Its `assets/setup.js` module is in the private Admin asset allowlist: the
-browser must first obtain the path-scoped Admin source session described in
+Its `assets/features/platform/page.js` module is in the private Admin manifest:
+the browser must first obtain the path-scoped Admin source session described in
 [Built-in Admin Portal](built_in_admin.md). The source cookie controls delivery
 of the UI bytes; the interactive JWT and endpoint checks remain authoritative
 for every setup read and mutation.
@@ -239,7 +239,8 @@ The Network & Hosting checklist deep-links non-fixable readiness sections to
 the permanent Domains, DNS, Certificates, Vhosts, Routes, or WebApps pages.
 System Setup never calls those mutation APIs on the operator's behalf. In
 particular, deployment-key create/rotate/revoke and the reveal-once token stay
-exclusively on WebApps; neither `setup.js` nor an operation log reads it.
+exclusively on WebApps; neither the Platform feature nor an operation log reads
+it.
 
 ## REST boundary
 
@@ -273,5 +274,5 @@ service additionally reports configured static directories and `BASE_URL`.
 Migration `account.0050_systemsetupoperation` adds the durable model and the
 partial unique constraint for one active fix. Coverage lives in
 `tests/test_account/test_system_setup.py`, Admin source tests in
-`tests/test_account/test_admin_portal.py`, and command compatibility in
+`tests/test_account/test_admin_portal_*.py`, and command compatibility in
 `tests/test_edge/13_migrate_locked.py`.

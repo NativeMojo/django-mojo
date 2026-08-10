@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "owner": "foundation",
+  "assets": [
+    "index.html",
+    "assets/admin.css",
+    "assets/app.js",
+    "assets/core.js",
+    "assets/components/components.css",
+    "assets/components/model.js",
+    "assets/components/overlays.js",
+    "assets/components/relationship.js",
+    "assets/components/views.js",
+    "assets/features/registry.js"
+  ]
+}

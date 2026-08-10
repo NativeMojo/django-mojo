@@ -25,7 +25,7 @@ within 600 seconds. HTTP `440 reauth_required` means return through Bouncer with
 Origin.
 
 The built-in page additionally requires the private Admin source session before
-the browser can download `/admin/assets/setup.js`. Obtain it through
+the browser can download `/admin/assets/features/platform/page.js`. Obtain it through
 `POST /api/account/admin/session` as described in
 [Admin Portal API Guide](admin_portal.md). That cookie is only a source-delivery
 gate; every endpoint below still requires the interactive JWT and revalidates
