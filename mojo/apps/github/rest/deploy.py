@@ -56,12 +56,23 @@ def on_deploy_webhook(request):
 
     pusher = request.DATA.get("pusher") or {}
     actor = f"github:{pusher.get('name') or 'unknown'}"
+    delivery = (request.META.get("HTTP_X_GITHUB_DELIVERY", "") or "").strip()
+    replay_key = f"github:{delivery}" if delivery else None
+    repository = request.DATA.get("repository") or {}
+    commit_url = str(repository.get("html_url") or "").rstrip("/")
+    if not commit_url.startswith("https://github.com/"):
+        commit_url = ""
+    links = {"github_commit": f"{commit_url}/commit/{sha}"} if commit_url else {}
     try:
-        started = deploy.request_deploy(sha, actor=actor)
-    except (redis_lib.RedisError, OSError) as err:
+        started = deploy.request_deploy(
+            sha, actor=actor, source="github", idempotency_key=replay_key,
+            source_delivery=delivery, links=links)
+    except (redis_lib.RedisError, OSError, deploy.DeploymentCoordinationError) as err:
         # No coordination state means no deploy — deploying blind is the
         # concurrent-migrate scenario this item exists to remove.
-        logger.error(f"deploy webhook: coordination unavailable: {err}")
+        logger.error(
+            "deploy webhook: coordination unavailable "
+            f"(error={type(err).__name__[:80]})")
         return JsonResponse(
             dict(status=False, error="deploy coordination unavailable"),
             status=503)

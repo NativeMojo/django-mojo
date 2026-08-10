@@ -33,9 +33,11 @@ SHA_3 = "f" * 40
 @th.django_unit_setup()
 def setup_webhook(opts):
     from mojo.apps.edge.services import deploy
+    from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.jobs.models import Job
 
     deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+    PlatformDeployment.objects.all().delete()
     Job.objects.filter(
         func__in=[deploy.DEPLOY_ORCHESTRATE_JOB, deploy.DEPLOY_NODE_JOB]).delete()
 
@@ -125,7 +127,7 @@ def test_webhook_deploy_flow(opts):
     rows = Job.objects.filter(func=deploy.DEPLOY_ORCHESTRATE_JOB)
     th.assert_eq(rows.count(), 1,
                  f"exactly one orchestrate may exist across both pushes (NX), got {rows.count()}")
-    deploy.clear_status()
+    deploy.clear_status(status["deployment"])
 
 
 @th.django_unit_test("manual deploy: anonymous and unprivileged callers are refused")
@@ -190,7 +192,8 @@ def test_manual_deploy_allowed(opts):
     th.assert_eq(rows.count(), 1,
                  f"the operator deploy must publish one orchestrate, got {rows.count()}")
     opts.client.logout()
-    deploy.clear_status()
+    status = deploy.get_status()
+    deploy.clear_status(status["deployment"])
 
 
 @th.django_unit_test("webhook: Redis down means 503 and NO deploy state")

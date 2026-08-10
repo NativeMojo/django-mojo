@@ -11,6 +11,7 @@ from .web_app import WebApp
 from .web_app_deployment import WebAppDeployment
 from .web_app_key_operation import WebAppKeyOperation
 from .web_app_onboarding_operation import WebAppOnboardingOperation
+from .platform_deployment import PlatformDeployment
 
 __all__ = [
     "BlocklistEntry",
@@ -22,4 +23,5 @@ __all__ = [
     "WebAppKeyOperation",
     "WebAppOnboardingOperation",
     "WebAppRelease",
+    "PlatformDeployment",
 ]

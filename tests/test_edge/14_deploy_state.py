@@ -19,9 +19,11 @@ SHA_C = "c1" * 20
 @th.django_unit_setup()
 def setup_state(opts):
     from mojo.apps.edge.services import deploy
+    from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.jobs.models import Job
 
     deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+    PlatformDeployment.objects.all().delete()
     Job.objects.filter(
         func__in=[deploy.DEPLOY_ORCHESTRATE_JOB, deploy.DEPLOY_NODE_JOB]).delete()
 
@@ -133,7 +135,7 @@ def test_request_deploy_rule(opts):
                  f"the orchestrate job must publish max_retries=0, got {job.max_retries}")
     th.assert_true(job.expires_at is not None,
                    "the orchestrate job must carry an expiry")
-    deploy.clear_status()
+    deploy.clear_status(status["deployment"])
 
 
 @th.django_unit_test("deploy_status command: set applies, get reads back, superseded exits 3")
@@ -141,13 +143,17 @@ def test_deploy_status_command(opts):
     import io
 
     from django.core.management import call_command
-    from mojo.apps.edge.services import deploy
+    from mojo.apps.edge.services import deploy, platform_deploy
 
     deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
-    deploy.set_target(SHA_C, actor="test")
-    deploy.arm_status(SHA_C)
+    row, _ = platform_deploy.create(SHA_C, actor="test", source="test")
+    deploy.set_target(SHA_C, actor="test", deployment_id=row.pk)
+    deploy.arm_status(SHA_C, deployment_id=row.pk)
 
-    call_command("deploy_status", "set", "deploying", sha=SHA_C)
+    with mock.patch.object(platform_deploy, "evidence"):
+        call_command(
+            "deploy_status", "set", "deploying", sha=SHA_C,
+            deployment=str(row.pk))
     out = io.StringIO()
     call_command("deploy_status", "get", stdout=out)
     state = json.loads(out.getvalue())
@@ -157,14 +163,17 @@ def test_deploy_status_command(opts):
                  f"get must include the target, got {state!r}")
 
     # Supersede the deploy; the old SHA's writer must exit 3, not 0 or 1.
-    deploy.arm_status(SHA_B, force=True)
+    other, _ = platform_deploy.create(SHA_B, actor="test", source="test")
+    deploy.arm_status(SHA_B, force=True, deployment_id=other.pk)
     try:
-        call_command("deploy_status", "set", "failed", sha=SHA_C)
+        call_command(
+            "deploy_status", "set", "failed", sha=SHA_C,
+            deployment=str(row.pk))
         raise AssertionError("a superseded set must not exit 0")
     except SystemExit as err:
         th.assert_eq(err.code, 3,
                      f"superseded set must exit 3 (distinct from usage errors), got {err.code}")
-    deploy.clear_status()
+    deploy.clear_status(other.pk)
 
 
 @th.django_unit_test("framework version resolution: success, garbage, and failure fail loudly")

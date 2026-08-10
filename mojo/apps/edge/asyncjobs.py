@@ -138,16 +138,29 @@ def webapp_onboarding_advance(job):
 DEPLOY_POLL_INTERVAL = 3.0
 
 
-def _publish_deploy_node(runner_id, sha, framework, migrate):
+def _publish_deploy_node(runner_id, sha, framework, migrate, deployment_id):
     from mojo.apps import jobs
     from mojo.apps.edge.services import deploy
+    from mojo.apps.edge.services import platform_deploy
 
-    jobs.publish(
-        func=deploy.DEPLOY_NODE_JOB,
-        payload=dict(sha=sha, framework=framework, migrate=bool(migrate)),
-        channel=runner_id,
-        max_retries=0,
-        expires_in=deploy.canary_timeout())
+    try:
+        job_id = jobs.publish(
+            func=deploy.DEPLOY_NODE_JOB,
+            payload=dict(
+                sha=sha, framework=framework, migrate=bool(migrate),
+                deployment=str(deployment_id)),
+            channel=runner_id,
+            max_retries=0,
+            expires_in=deploy.canary_timeout())
+    except Exception:
+        platform_deploy.evidence(
+            deployment_id, runner_id, "publish_failed",
+            detail={"migrate": bool(migrate)})
+        raise
+    platform_deploy.evidence(
+        deployment_id, runner_id, "dispatched",
+        detail={"migrate": bool(migrate), "job": str(job_id)})
+    return job_id
 
 
 def deploy_orchestrate(job):
@@ -162,38 +175,71 @@ def deploy_orchestrate(job):
 
     from mojo.apps import jobs
     from mojo.apps.edge.services import deploy
+    from mojo.apps.edge.services import platform_deploy
     from mojo.apps.incident import reporter
 
-    target = deploy.get_target()
-    if not target or not deploy.is_valid_sha(target.get("sha") or ""):
+    payload = job.payload or {}
+    deployment_id = platform_deploy.deployment_id(payload.get("deployment"))
+    record = platform_deploy.get(deployment_id)
+    if record is None or not deploy.is_valid_sha(record.sha):
         logit.warn("edge deploy: orchestrate fired with no usable target")
-        deploy.clear_status()
         return "no_target"
-    sha = target["sha"]
+    sha = record.sha
     me = job.runner_id or deploy.local_runner_id()
+    runners = list(record.frozen_roster or [])
+
+    target = deploy.get_target()
+    status = deploy.get_status()
+    if (not target or target.get("deployment") != deployment_id or not status
+            or status.get("deployment") != deployment_id):
+        platform_deploy.transition(
+            deployment_id, "superseded", {"reason": "target_moved_before_start"})
+        if target and target.get("deployment") != deployment_id:
+            return _deploy_terminal(
+                sha, me, framework=None, released=False,
+                deployment_id=deployment_id)
+        return "superseded"
+
+    if not runners:
+        event = reporter.report_event(
+            f"deploy {sha}: frozen edge runner roster was empty",
+            title="Edge deploy has no proven runner roster",
+            category="edge_deploy", level=7)
+        platform_deploy.add_link(deployment_id, "incident_events", event.pk)
+        return _deploy_terminal(
+            sha, me, framework=None, released=False,
+            deployment_id=deployment_id)
 
     try:
         framework = deploy.resolve_framework_version()
     except Exception as err:
         # C1: a deploy that cannot pin the framework version fails loudly
         # rather than letting each node resolve "latest" at its own moment.
-        reporter.report_event(
-            f"deploy {sha}: framework version resolution failed: {err}",
+        from mojo.apps.account.services.setup_safety import failure_metadata
+        failure = failure_metadata(err, "edge.deploy.framework_resolution")
+        event = reporter.report_event(
+            f"deploy {sha}: framework version resolution failed "
+            f"(error={failure['exception_class']})",
             title="Edge deploy failed before it started",
             category="edge_deploy", level=7)
-        return _deploy_terminal(sha, me, framework=None, released=False)
+        platform_deploy.add_link(deployment_id, "incident_events", event.pk)
+        return _deploy_terminal(
+            sha, me, framework=None, released=False,
+            deployment_id=deployment_id)
 
-    runners = deploy.alive_runner_ids(jobs.get_runners())
+    platform_deploy.set_framework(deployment_id, framework)
+    platform_deploy.transition(deployment_id, "canary", {"runner": me})
     if len(runners) <= 1:
         # Single-runner fleet: this node IS the canary. Fire-and-forget — the
         # script reports status, and this engine dies with the update. The
         # status tail is cleaned only by its TTL (D3, documented bound).
-        _publish_deploy_node(me, sha, framework, migrate=True)
+        _publish_deploy_node(me, sha, framework, migrate=True, deployment_id=deployment_id)
         logit.info(f"edge deploy {sha}: single runner, updating locally")
         return f"single:{sha}"
 
     canary = deploy.pick_canary(runners, me)
-    _publish_deploy_node(canary, sha, framework, migrate=True)
+    _publish_deploy_node(
+        canary, sha, framework, migrate=True, deployment_id=deployment_id)
     logit.info(f"edge deploy {sha}: canary {canary} told to migrate")
 
     deadline = _time.time() + deploy.canary_timeout()
@@ -201,6 +247,7 @@ def deploy_orchestrate(job):
     while _time.time() < deadline:
         status = deploy.get_status()
         if (status and status.get("sha") == sha
+                and status.get("deployment") == deployment_id
                 and status.get("state") in deploy.TERMINAL_STATES):
             outcome = status
             break
@@ -208,51 +255,72 @@ def deploy_orchestrate(job):
 
     released = bool(outcome and outcome.get("state") == deploy.STATUS_DEPLOYING)
     if released:
+        platform_deploy.transition(
+            deployment_id, "fleet", {"canary": canary, "proven": True})
         # The release is proven. Tell the START-of-deploy snapshot, minus the
         # canary and me — a re-read here would miss nodes whose engines are
         # cycling and silently leave them on the old release.
         for runner_id in runners:
             if runner_id in (canary, me):
                 continue
-            _publish_deploy_node(runner_id, sha, framework, migrate=False)
+            _publish_deploy_node(
+                runner_id, sha, framework, migrate=False,
+                deployment_id=deployment_id)
         logit.info(f"edge deploy {sha}: released to {len(runners) - 2} fleet node(s)")
     else:
-        detail = (outcome or {}).get("detail") or (
+        detail = deploy.failure_phase((outcome or {}).get("detail")) if outcome else (
             "canary reported failure" if outcome else
             f"canary did not report within {deploy.canary_timeout()}s")
-        reporter.report_event(
+        event = reporter.report_event(
             f"deploy {sha}: canary {canary} did not prove the release: {detail}",
             title="Edge deploy canary failed",
             category="edge_deploy", level=7)
+        platform_deploy.add_link(deployment_id, "incident_events", event.pk)
 
-    return _deploy_terminal(sha, me, framework=framework, released=released)
+    return _deploy_terminal(
+        sha, me, framework=framework, released=released,
+        deployment_id=deployment_id)
 
 
-def _deploy_terminal(sha, me, framework, released):
+def _deploy_terminal(sha, me, framework, released, deployment_id):
     """The orchestrator's terminal, in D4's order: chain check, clear status,
     then — on a released deploy only — update self, fire-and-forget."""
     from mojo.apps import jobs
     from mojo.apps.edge.services import deploy
+    from mojo.apps.edge.services import platform_deploy
 
     current = deploy.get_target()
-    if current and deploy.is_valid_sha(current.get("sha") or "") and current["sha"] != sha:
+    if (current and deploy.is_valid_sha(current.get("sha") or "")
+            and current.get("deployment") != deployment_id):
         # A push landed while this deploy ran. Re-arm and chain a fresh
         # orchestrate — the new deploy moves everyone, including this node,
         # so the stale self-update is skipped.
-        deploy.arm_status(current["sha"], force=True)
+        platform_deploy.transition(
+            deployment_id, "superseded",
+            {"next_deployment": current.get("deployment")})
+        deploy.arm_status(
+            current["sha"], force=True,
+            deployment_id=current.get("deployment"))
         jobs.publish(
             func=deploy.DEPLOY_ORCHESTRATE_JOB,
-            payload=dict(sha=current["sha"]),
+            payload=dict(
+                sha=current["sha"], deployment=current.get("deployment")),
             channel=deploy.DEPLOY_CHANNEL,
             max_retries=0,
             expires_in=deploy.canary_timeout())
         logit.info(f"edge deploy {sha}: target moved to {current['sha']}, chained")
         return f"chained:{current['sha']}"
 
-    deploy.clear_status()
+    deploy.clear_status(deployment_id)
     if released and framework:
-        _publish_deploy_node(me, sha, framework, migrate=False)
+        platform_deploy.transition(
+            deployment_id, "verified", {"canary_proven": True})
+        _publish_deploy_node(
+            me, sha, framework, migrate=False,
+            deployment_id=deployment_id)
         return f"released:{sha}"
+    platform_deploy.transition(
+        deployment_id, "failed", {"reason": "canary_not_proven"})
     return f"failed:{sha}"
 
 
@@ -267,20 +335,29 @@ def deploy_node(job):
     incident must be filed.
     """
     from mojo.apps.edge.services import deploy
+    from mojo.apps.edge.services import platform_deploy
     from mojo.apps.incident import reporter
 
     payload = job.payload or {}
     sha = payload.get("sha") or ""
     framework = payload.get("framework") or ""
     migrate = bool(payload.get("migrate"))
+    deployment_id = payload.get("deployment") or ""
+    deployment_id = platform_deploy.deployment_id(deployment_id)
+    if not deployment_id:
+        raise RuntimeError("refusing platform deploy without deployment UUID")
+    record = platform_deploy.get(deployment_id)
+    if record is None or record.sha != sha:
+        raise RuntimeError("refusing platform deploy with mismatched deployment UUID")
 
     argv_base = deploy.deploy_script_argv()
     if not argv_base:
-        reporter.report_event(
-            f"deploy {sha}: EDGE_DEPLOY_SCRIPT is not configured on this node "
+        event = reporter.report_event(
+            f"deploy {deployment_id} ({sha}): EDGE_DEPLOY_SCRIPT is not configured on this node "
             "— refusing to deploy",
             title="Edge deploy node unconfigured",
             category="edge_deploy", level=7)
+        platform_deploy.add_link(deployment_id, "incident_events", event.pk)
         raise RuntimeError("EDGE_DEPLOY_SCRIPT is not configured")
     # Defense-in-depth before anything enters a subprocess argv. There is no
     # shell, but argv hygiene is cheap and the values crossed a webhook.
@@ -289,17 +366,27 @@ def deploy_node(job):
     if not deploy.is_valid_version(framework):
         raise RuntimeError(f"refusing to deploy an invalid framework version: {framework!r}")
 
-    argv = list(argv_base) + ["--sha", sha, "--framework", framework]
+    argv = list(argv_base) + [
+        "--sha", sha, "--framework", framework,
+        "--deployment", deployment_id]
     if migrate:
         argv.append("--migrate")
-    logit.info(f"edge deploy {sha}: running update script (migrate={migrate})")
+    logit.info(
+        f"edge deploy {deployment_id} ({sha}): running update script "
+        f"(migrate={migrate})")
     result = deploy._run(argv)
     if result.returncode != 0:
-        tail = (result.stderr or result.stdout or "")[-800:]
-        reporter.report_event(
-            f"deploy {sha}: update script failed on {job.runner_id or 'this node'} "
-            f"(exit {result.returncode}): {tail}",
+        # stdout/stderr may contain echoed credentials. They remain process-
+        # local only and never enter incidents, Redis, or durable evidence.
+        event = reporter.report_event(
+            f"deploy {deployment_id} ({sha}): update script failed on "
+            f"{job.runner_id or 'this node'} "
+            f"(phase=update_script, exit={result.returncode})",
             title="Edge deploy node failed",
             category="edge_deploy", level=7)
+        platform_deploy.add_link(deployment_id, "incident_events", event.pk)
+        platform_deploy.evidence(
+            deployment_id, job.runner_id or deploy.local_runner_id(),
+            "failed", detail={"exit": result.returncode})
         raise RuntimeError(f"update script exited {result.returncode}")
     return f"completed:{sha}"

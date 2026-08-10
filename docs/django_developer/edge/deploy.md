@@ -17,7 +17,7 @@ GitHub push ──► POST /api/github/deploy/webhook        (HMAC-verified)
                   arm DEPLOY_STATUS=migrating (SET NX) ──► publish deploy_orchestrate
 
 orchestrator (whichever job runner takes it):
-  snapshot the target and the ALIVE runner list — decisions never re-read
+  load the UUID attempt and its frozen edge-channel runner roster
   canary = lowest alive runner id that is not me
   tell the canary to update WITH --migrate, then poll DEPLOY_STATUS
 
@@ -52,19 +52,20 @@ fraction of the machinery.
 
 ## The deploy state (Redis)
 
-Two keys, both TTL'd (`EDGE_DEPLOY_STATUS_TTL`, default 900s):
+Two keys, both TTL'd (`EDGE_DEPLOY_STATUS_TTL`, default 900s), accelerate the
+durable `edge.PlatformDeployment` journal:
 
 | Key | Holds | Semantics |
 |---|---|---|
-| `edge:deploy:target` | commit SHA + who asked | **Last writer wins.** A push mid-deploy overwrites it; the orchestrator's chain check deploys it next. |
-| `edge:deploy:status` | `migrating` / `deploying` / `failed`, stamped with its deploy's SHA | Armed with `SET NX` (a same-second race starts exactly one deploy). Terminal writes are **compare-and-set on the stamped SHA** (Lua), so a ghost job redelivery or a superseded canary is ignored without knowing it is stale. |
+| `edge:deploy:target` | deployment UUID + commit SHA + who asked | **Last writer wins.** A push mid-deploy overwrites it; the orchestrator's chain check deploys it next. |
+| `edge:deploy:status` | `migrating` / `deploying` / `failed`, stamped with UUID + SHA | Armed with `SET NX`. Terminal writes and deletion are **compare-and-set on UUID and SHA** (Lua), so an older attempt cannot settle a newer same-SHA retry. |
 
 The TTL is load-bearing: a canary that dies hard would otherwise leave
 `migrating` set forever and wedge every future deploy. The orchestrator clears
 the status at its terminal; the TTL is the backstop, and the only cleaner on a
-single-runner fleet. Redis is not durable and does not need to be — **the
-durable record is the incident trail** (`category="edge_deploy"`: level 7 for
-a canary failure/timeout or a node that failed to converge).
+single-runner fleet. Redis is not durable. `PlatformDeployment` retains request
+identity, its frozen roster, transitions, and the latest bounded proof per
+runner; incidents remain the alerting trail.
 
 Deploy jobs are published `max_retries=0` with an expiry: a node updating
 itself kills its own job engine mid-job by design, and a redelivered deploy
@@ -118,14 +119,16 @@ status itself — and never reimplements the Redis conventions in bash:
 
 ```
 manage.py deploy_status get
-manage.py deploy_status set deploying --sha <target-sha>
-manage.py deploy_status set failed    --sha <target-sha> --detail "why"
+manage.py deploy_status set deploying --sha <target-sha> --deployment <uuid>
+manage.py deploy_status set failed    --sha <target-sha> --deployment <uuid> --detail <known-phase>
 ```
 
-`set` is compare-and-set on the stamped SHA. Exit 0 = applied; **exit 3** =
+`set` is compare-and-set on the stamped UUID and SHA. Exit 0 = applied; **exit 3** =
 ignored because the deploy was superseded (distinct from argparse's 2, so the
-script can tell "stale, fine" from "called wrong"). `--detail` travels into
-the orchestrator's incident.
+script can tell "stale, fine" from "called wrong"). `--detail` is reduced to
+a fixed allowlisted phase before it enters Redis, evidence, or an incident;
+arbitrary callback text becomes `update_failed`. Process stdout/stderr and
+provider exception messages never enter durable or operator-facing surfaces.
 
 ## Settings
 
@@ -146,7 +149,7 @@ global `manage_settings` grant.
 The node's script is invoked as:
 
 ```
-<EDGE_DEPLOY_SCRIPT...> --sha <40-hex> --framework <version> [--migrate]
+<EDGE_DEPLOY_SCRIPT...> --sha <40-hex> --framework <version> --deployment <uuid> [--migrate]
 ```
 
 with both values pattern-validated before they enter the argv (no shell, no

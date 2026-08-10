@@ -39,6 +39,9 @@ def local_node_proof(data=None):
     from mojo.apps.edge.services import installer
     from mojo.apps.edge.settings_validators import expected_topology
 
+    from pathlib import Path
+    from mojo.apps.edge.services import deploy, platform_deploy
+
     raw = data or {}
     topology = expected_topology("EDGE_EXPECTED_TOPOLOGY", {
         "nodes": [local_node_id()],
@@ -57,9 +60,22 @@ def local_node_proof(data=None):
             "serving_generation": installed.get("serving_generation"),
             "current_generation": current_generation,
         }
+    deployed_sha = ""
+    deployed_uuid = ""
+    try:
+        candidate = Path("var/deploy_sha").read_text(encoding="utf-8").strip()
+        if deploy.is_valid_sha(candidate):
+            deployed_sha = candidate
+        candidate = Path("var/deployment_uuid").read_text(encoding="utf-8").strip()
+        deployed_uuid = platform_deploy.deployment_id(candidate) or ""
+    except OSError:
+        pass
     return {
         "node_id": local_node_id(),
         "django_mojo_version": mojo.__version__,
+        "platform_sha": deployed_sha,
+        "platform_deployment": deployed_uuid,
+        "observed_at": dates.utcnow().isoformat(),
         "pools": evidence,
     }
 

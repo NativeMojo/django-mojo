@@ -19,9 +19,10 @@ The TTL is load-bearing: a canary that dies hard would otherwise leave
 orchestrator clears the status at its terminal; the TTL is the backstop for
 every crash in between, and the only cleaner on a single-runner fleet.
 
-Nothing here is durable on purpose — the durable record is the incident trail
-(category ``edge_deploy``). Worst case on a Redis flush: the status is lost and
-the next push starts clean.
+Redis remains ephemeral coordination, while ``edge.PlatformDeployment`` is the
+durable UUID-addressed attempt journal. A Redis flush can release coordination,
+but the five-minute reconciler closes the abandoned durable attempt as unknown
+instead of erasing its history.
 
 Every ``EDGE_DEPLOY_*`` setting is read with ``settings.get_static`` — never
 ``settings.get``. ``settings.get`` resolves a DB-backed ``Setting`` row first,
@@ -42,6 +43,10 @@ from mojo.helpers.settings import settings
 
 logger = logit.get_logger("edge", "edge.log")
 
+
+class DeploymentCoordinationError(RuntimeError):
+    """A fixed, non-provider failure safe for endpoint classification."""
+
 TARGET_KEY = "edge:deploy:target"
 STATUS_KEY = "edge:deploy:status"
 
@@ -49,6 +54,20 @@ STATUS_MIGRATING = "migrating"
 STATUS_DEPLOYING = "deploying"
 STATUS_FAILED = "failed"
 TERMINAL_STATES = (STATUS_DEPLOYING, STATUS_FAILED)
+
+# Only update.sh's fixed phase labels may cross from process execution into
+# Redis, incidents, or the durable deployment journal.  Exception and command
+# output can echo credentials, so an arbitrary --detail is never persisted.
+_FAILURE_PHASES = {
+    "git fetch": "git_fetch",
+    "git clean": "git_clean",
+    "post_deploy (migrate)": "post_deploy_migrate",
+    "sanity_check": "sanity_check",
+    "deploy_status report": "deploy_status_report",
+    "post_deploy": "post_deploy",
+    "rollback failed": "rollback_failed",
+    "rollback impossible: no previous state": "rollback_impossible",
+}
 
 DEPLOY_CHANNEL = "default"
 DEPLOY_ORCHESTRATE_JOB = "mojo.apps.edge.asyncjobs.deploy_orchestrate"
@@ -73,8 +92,17 @@ local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
 local cur = cjson.decode(raw)
 if cur['sha'] ~= ARGV[1] then return 0 end
-redis.call('SET', KEYS[1], ARGV[2], 'EX', tonumber(ARGV[3]))
+if (cur['deployment'] or '') ~= ARGV[2] then return 0 end
+redis.call('SET', KEYS[1], ARGV[3], 'EX', tonumber(ARGV[4]))
 return 1
+"""
+
+_CLEAR_STATUS_LUA = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local cur = cjson.decode(raw)
+if (cur['deployment'] or '') ~= ARGV[1] then return 0 end
+return redis.call('DEL', KEYS[1])
 """
 
 
@@ -120,6 +148,16 @@ def is_valid_version(value):
     return isinstance(value, str) and bool(VERSION_PATTERN.match(value))
 
 
+def failure_phase(value):
+    """Map script-owned labels to a fixed non-secret failure classification."""
+    value = str(value or "")
+    if value in set(_FAILURE_PHASES.values()) | {"git_reset", "update_failed"}:
+        return value
+    if value.startswith("git reset to "):
+        return "git_reset"
+    return _FAILURE_PHASES.get(value, "update_failed")
+
+
 # ----------------------------------------------------------------------
 # state
 # ----------------------------------------------------------------------
@@ -136,9 +174,12 @@ def _loads(raw):
     return value if isinstance(value, dict) else None
 
 
-def set_target(sha, actor=None):
+def set_target(sha, actor=None, deployment_id=None):
     """Record what the fleet should be on. Last writer wins (D3)."""
-    payload = dict(sha=sha, actor=actor or "unknown", at=dates.utcnow().isoformat())
+    payload = dict(
+        sha=sha, actor=actor or "unknown",
+        deployment=str(deployment_id) if deployment_id else "",
+        at=dates.utcnow().isoformat())
     get_client().set(TARGET_KEY, json.dumps(payload), ex=status_ttl())
     return payload
 
@@ -151,7 +192,7 @@ def get_status():
     return _loads(get_client().get(STATUS_KEY))
 
 
-def arm_status(sha, force=False):
+def arm_status(sha, force=False, deployment_id=None):
     """Arm ``migrating`` for one deploy.
 
     ``SET NX`` by default, so of two same-second webhooks exactly one starts a
@@ -160,14 +201,16 @@ def arm_status(sha, force=False):
     Returns whether the arm landed.
     """
     payload = json.dumps(dict(
-        state=STATUS_MIGRATING, sha=sha, at=dates.utcnow().isoformat()))
+        state=STATUS_MIGRATING, sha=sha,
+        deployment=str(deployment_id) if deployment_id else "",
+        at=dates.utcnow().isoformat()))
     client = get_client()
     if force:
         return bool(client.set(STATUS_KEY, payload, ex=status_ttl()))
     return bool(client.set(STATUS_KEY, payload, ex=status_ttl(), nx=True))
 
 
-def set_status(state, sha, detail=None):
+def set_status(state, sha, detail=None, deployment_id=None):
     """Terminal status write, compare-and-set on the stamped SHA (D3).
 
     Returns True when applied, False when the armed status no longer belongs
@@ -176,15 +219,21 @@ def set_status(state, sha, detail=None):
     """
     if state not in TERMINAL_STATES:
         raise ValueError(f"not a terminal deploy state: {state!r}")
+    deployment_id = str(deployment_id) if deployment_id else ""
     payload = json.dumps(dict(
-        state=state, sha=sha, detail=detail or "", at=dates.utcnow().isoformat()))
+        state=state, sha=sha, deployment=deployment_id,
+        detail=failure_phase(detail) if state == STATUS_FAILED else "",
+        at=dates.utcnow().isoformat()))
     result = get_client().eval(
-        _CAS_STATUS_LUA, 1, STATUS_KEY, sha, payload, status_ttl())
+        _CAS_STATUS_LUA, 1, STATUS_KEY, sha, deployment_id, payload, status_ttl())
     return bool(result)
 
 
-def clear_status():
-    get_client().delete(STATUS_KEY)
+def clear_status(deployment_id=None):
+    """Delete only the UUID-owned lease; legacy empty leases stay compatible."""
+    deployment_id = str(deployment_id) if deployment_id else ""
+    return bool(get_client().eval(
+        _CLEAR_STATUS_LUA, 1, STATUS_KEY, deployment_id))
 
 
 # ----------------------------------------------------------------------
@@ -243,30 +292,62 @@ def resolve_framework_version():
     return version
 
 
-def request_deploy(sha, actor=None):
+def request_deploy(sha, actor=None, source="external", created_by=None,
+                   idempotency_key=None, source_delivery="", retry_of=None,
+                   return_deployment=False, links=None):
     """The uniform receiver rule (D3), shared by the webhook and the manual
     endpoint: always record the target; publish an orchestrate job only when
     this call armed the status. Returns True when a deploy was started, False
     when the target was recorded onto a deploy already in flight.
     """
     from mojo.apps import jobs
+    from mojo.apps.edge.services import platform_deploy
 
-    set_target(sha, actor=actor)
-    if not arm_status(sha):
+    row, replayed = platform_deploy.create(
+        sha, actor=actor or "", source=source, created_by=created_by,
+        idempotency_key=idempotency_key, source_delivery=source_delivery,
+        retry_of=retry_of, links=links)
+    if row.status == "failed" and row.detail.get("reason") == "roster_unavailable":
+        raise DeploymentCoordinationError("edge runner roster unavailable")
+    if replayed:
+        started = any(
+            (item.get("detail") or {}).get("queue") == "orchestrator_published"
+            for item in (row.transitions or []) if isinstance(item, dict))
+        return (started, row) if return_deployment else started
+
+    try:
+        set_target(sha, actor=row.actor, deployment_id=row.pk)
+    except Exception:
+        platform_deploy.transition(row.pk, "failed", {"reason": "coordination_unavailable"})
+        raise DeploymentCoordinationError("deploy coordination unavailable") from None
+    platform_deploy.transition(
+        row.pk, "requested", {"coordination": "target_recorded"})
+    if not arm_status(sha, deployment_id=row.pk):
         logger.info(f"deploy {sha}: recorded onto an in-flight deploy")
-        return False
+        return (False, row) if return_deployment else False
     # State first, publish second — a published job with no state would be a
     # deploy with no coordination. max_retries=0: a redelivered orchestrator
     # double-driving the protocol is worse than a bounded wedge (the status
     # TTL). The NX arm above is what dedupes GitHub's own webhook retries.
-    jobs.publish(
-        func=DEPLOY_ORCHESTRATE_JOB,
-        payload=dict(sha=sha),
-        channel=DEPLOY_CHANNEL,
-        max_retries=0,
-        expires_in=canary_timeout())
-    logger.info(f"deploy {sha}: started by {actor or 'unknown'}")
-    return True
+    try:
+        jobs.publish(
+            func=DEPLOY_ORCHESTRATE_JOB,
+            payload=dict(sha=sha, deployment=str(row.pk)),
+            channel=DEPLOY_CHANNEL,
+            max_retries=0,
+            expires_in=canary_timeout())
+    except Exception:
+        platform_deploy.transition(
+            row.pk, "failed", {"reason": "orchestrator_publish_failed"})
+        try:
+            clear_status(row.pk)
+        except Exception:
+            pass
+        raise DeploymentCoordinationError("deployment queue unavailable") from None
+    platform_deploy.transition(
+        row.pk, "requested", {"queue": "orchestrator_published"})
+    logger.info(f"deploy {sha}: started by {row.actor or 'unknown'}")
+    return (True, row) if return_deployment else True
 
 
 def _run(argv):
