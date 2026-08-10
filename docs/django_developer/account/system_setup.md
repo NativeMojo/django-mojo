@@ -227,6 +227,20 @@ browser must first obtain the path-scoped Admin source session described in
 of the UI bytes; the interactive JWT and endpoint checks remain authoritative
 for every setup read and mutation.
 
+The page is an operation driver, not an alternate setup implementation. It
+loads `options` and `readiness` together, resumes `active_fix`, and advances one
+durable step at a time until the service returns a choice or terminal state.
+It renders the server-provided choice schema, supports all/one-section check
+and fix actions, exposes cancellation only when the service allows it, and
+finishes by rendering the stored final readiness rerun. The live log is shown
+only as text.
+
+The Network & Hosting checklist deep-links non-fixable readiness sections to
+the permanent Domains, DNS, Certificates, Vhosts, Routes, or WebApps pages.
+System Setup never calls those mutation APIs on the operator's behalf. In
+particular, deployment-key create/rotate/revoke and the reveal-once token stay
+exclusively on WebApps; neither `setup.js` nor an operation log reads it.
+
 ## REST boundary
 
 `mojo.apps.account.rest.system_setup` exposes the service without duplicating

@@ -716,3 +716,18 @@ success: the server keeps durable attempted intent and reports failure without
 treating the write as proven. Clients must not add their own blind retry loop.
 Reservation creation and interactive complete-set writes share a stable
 per-domain lock, including when no reservation row existed at request start.
+
+## Built-in Admin workflow
+
+The packaged Admin exposes permanent Domains, Credentials, DNS records, and
+Certificates pages using exactly these APIs. Availability is permission-gated:
+house-account discover/adopt controls appear only for a literal superuser, and
+all writes still rely on server authorization.
+
+The DNS page edits complete record sets. It performs at most one provider write
+per `(domain, type, name)` intent, never transport-retries that write, and then
+reloads authoritative inventory. If the outcome cannot be proved, the set is
+marked refresh-required and remains write-locked until the operator refreshes.
+Clients implementing another console should preserve that behavior. The
+Certificates page polls list/detail metadata only; it does not request PEM or
+private-key material.

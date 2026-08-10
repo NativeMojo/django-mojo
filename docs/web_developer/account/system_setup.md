@@ -31,6 +31,19 @@ the browser can download `/admin/assets/setup.js`. Obtain it through
 gate; every endpoint below still requires the interactive JWT and revalidates
 the literal superuser.
 
+## Built-in page behavior
+
+The packaged page is a thin client for this protocol. It supports running or
+fixing all sections or one section, resumes `active_fix`, renders late choices
+from the returned JSON schema, shows durable step progress and the bounded live
+log, and displays the final readiness rerun. It never shells out, calls a
+management command, or repeats setup service logic in JavaScript.
+
+`hosting_dns`, `hosting_vhosts`, `edge_fleet`, and `webapp_keys` render as a
+Network & Hosting checklist with links to permanent Admin pages. Those links do
+not grant authority and Setup does not invoke the linked mutation APIs. WebApp
+deployment-key tokens are never accepted, read, or rendered on this page.
+
 ## Request schemas
 
 | Endpoint | Request |

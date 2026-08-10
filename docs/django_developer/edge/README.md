@@ -458,3 +458,18 @@ idempotency inputs, not permission to swap one pool into the global `current`
 link. When any receipt runs, the node reads its configured pool assignment and
 installs the complete pool union once. Startup and periodic convergence use the
 same combined install path; a combined failure never reports a subset green.
+
+## Built-in Admin integration
+
+The permanent Upstreams, Vhosts, and Routes pages call the existing edge REST
+handlers. Upstreams may be declared or retired by a platform administrator;
+there is no edit path that repoints a destination. The Vhost creator is a
+four-shape wizard mirroring the model constraint (`api`, `site`, `site_api`,
+`redirect`) and never accepts nginx text.
+
+For `site_api`, the browser creates the Vhost first and submits requested Routes
+sequentially. Each successful row remains committed. A later failure is shown
+as a partial result and the Routes page retries only missing rows, followed by
+fresh Vhost/Route and System Setup readiness reads as convergence evidence.
+This frontend sequencing depends on the existing per-row commit/publication
+contract; it does not add a batch mutation endpoint.

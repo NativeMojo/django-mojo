@@ -220,3 +220,17 @@ Although each publication receipt names the affected pool and generation, a
 node handles it by atomically installing the union of all pools assigned to
 that node. Portals should treat the receipt as convergence-pending evidence,
 not as proof that one pool was independently swapped live.
+
+## Built-in Admin workflow
+
+The packaged Admin exposes permanent Upstreams, Vhosts, and Routes pages over
+these APIs. Its Vhost wizard offers only `api`, `site`, `site_api`, and
+`redirect`, derives the fields for the selected shape, and never accepts nginx
+configuration. Platform administrators can declare or retire Upstreams; an
+existing destination is never repointed.
+
+Routes requested with a new `site_api` Vhost are created one at a time. If one
+fails, successful rows remain visible and the Routes page repairs only the
+missing desired rows. The UI reloads authoritative Vhost/Route state and the
+System Setup hosting proof rather than treating a successful POST or publish
+receipt as fleet convergence.

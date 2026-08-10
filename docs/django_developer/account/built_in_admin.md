@@ -1,8 +1,9 @@
 # Built-in Admin Portal
 
 django-mojo ships a small, dependency-free control-plane UI. It covers System
-Setup/readiness, the system overview, User and Group CRUD, and WebApp GitHub
-deployment-key management. Fleet, network, operations, security,
+Setup/readiness, the system overview, User and Group CRUD, Domains, provider
+credentials, live DNS record sets, Certificates, Upstreams, Vhosts, Routes,
+and WebApp GitHub deployment-key management. Fleet, operations, security,
 configuration, and metrics extend the same shell without changing its delivery
 boundary.
 
@@ -52,15 +53,26 @@ renews the source session, and handles HTTP `440` by returning through Bouncer
 with `force_reauth=1`; that flag suppresses the ordinary silent-refresh path,
 which cannot make an old `auth_time` fresh.
 
-The Hybrid visual density is intentional: 14px body and form text, 13px tables,
-24px page titles, and 26px KPI values. Light, dark, and system themes are built
-in and stored only in browser local storage.
+The Hybrid visual density is intentional: 13px base text, 11–12px tables and
+forms, 21px page titles, and 20px KPI values. Light, dark, and system themes are
+built in and stored only in browser local storage. The responsive shell keeps
+keyboard-visible controls, traps focus in modals, restores focus on close, and
+uses text nodes for API data; only the fixed local SVG icon catalog uses HTML.
 
 System Setup is visible only to a literal superuser. Its private `setup.js`
 module renders the normalized readiness report, durable step progress, typed
 late choices, cancellation, and bounded live log. See
 [System Setup and Readiness](system_setup.md) for the service and security
 contracts.
+
+`assets/network.js` is the permanent hosting UI. It does not create portal-only
+mutation endpoints. Provider DNS writes are keyed single-flight and receive no
+automatic transport retry. Every write is followed by a fresh authoritative
+record read; an unconfirmed outcome latches that record set as
+refresh-required until the operator explicitly refreshes it. Vhost creation is
+a four-shape wizard (`api`, `site`, `site_api`, `redirect`); `site_api` routes
+are created sequentially so a partial result can be repaired without replaying
+successful rows.
 
 ## Packaging and testing
 
@@ -76,3 +88,5 @@ delivery, auth-key revocation, and forced-reauth behavior.
 For pixel review without weakening Bouncer, run `bin/admin_preview` and open
 `http://127.0.0.1:5608/`. It serves the exact packaged assets with deterministic
 loopback-only API fixtures; it does not add a Django route or production bypass.
+Use `--key-state missing|active|rotated|revoked` to exercise the four WebApp
+deployment-key presentations and `--port` when parallel work needs isolation.
