@@ -235,8 +235,8 @@ def _dispatch(transition_id):
             idempotency_prefix=f"aws-cw:{transition.pk}",
             strict=True,
         )
-    except Exception as exc:
-        raise CloudWatchDispatchError("CloudWatch handler dispatch failed") from exc
+    except Exception:
+        raise CloudWatchDispatchError("CloudWatch handler dispatch failed") from None
     transition.dispatch_status = CloudWatchAlarmTransition.DISPATCH_COMPLETE
     transition.save(update_fields=["dispatch_status", "modified"])
 

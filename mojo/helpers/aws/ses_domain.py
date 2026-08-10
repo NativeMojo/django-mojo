@@ -34,7 +34,7 @@ from mojo.helpers.aws.client import get_client, get_session
 from mojo.helpers.aws.ses import EmailSender
 from mojo.helpers.aws.sns import SNSTopic, SNSSubscription
 from mojo.helpers.aws.s3 import S3Bucket
-from mojo.helpers.aws.provider_call import safe_error_detail
+from mojo.helpers.aws.provider_call import ProviderCallError, safe_error_detail
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
@@ -289,7 +289,7 @@ def set_mail_from_domain(
             BehaviorOnMXFailure=behavior_on_mx_failure,
         )
         logger.info(f"MAIL FROM enabled for {domain}")
-    except ClientError as e:
+    except (ClientError, ProviderCallError) as e:
         logger.error("SES call failed operation=ses.set_identity_mail_from_domain domain=%s", domain)
 
 
@@ -311,7 +311,7 @@ def ensure_dkim_enabled(
         if vstatus == "Success" and not enabled:
             ses.set_identity_dkim_enabled(Identity=domain, DkimEnabled=True)
             logger.info(f"Enabled DKIM signing for {domain}")
-    except ClientError as e:
+    except (ClientError, ProviderCallError) as e:
         logger.error("SES call failed operation=ses.set_identity_dkim_enabled domain=%s", domain)
 
 def ensure_receiving_catch_all(
@@ -370,7 +370,7 @@ def ensure_receiving_catch_all(
     try:
         rs = ses.describe_receipt_rule_set(RuleSetName=rule_set_name)
         existing = [r for r in rs.get("Rules", []) if r.get("Name") == rule_name]
-    except ClientError as e:
+    except (ClientError, ProviderCallError) as e:
         logger.error("SES call failed operation=ses.describe_active_receipt_rule_set rule_set=%s", rule_set_name)
         existing = []
 
@@ -407,7 +407,7 @@ def ensure_receiving_catch_all(
                 Rule=rule_def,
             )
             logger.info(f"Created SES receipt rule {rule_name} in set {rule_set_name}")
-        except ClientError as e:
+        except (ClientError, ProviderCallError) as e:
             # Attempt to auto-fix InvalidS3Configuration by applying SES PutObject bucket policy, then retry
             err_code = getattr(e, "response", {}).get("Error", {}).get("Code")
             if err_code == "InvalidS3Configuration":
@@ -594,7 +594,7 @@ def audit_domain_config(
             )
         )
         checks["ses_verified"] = (vstatus == "Success")
-    except ClientError as e:
+    except (ClientError, ProviderCallError) as e:
         items.append(
             AuditItem(
                 resource="ses.identity.verification",
@@ -626,7 +626,7 @@ def audit_domain_config(
             )
         )
         checks["dkim_verified"] = (current_dkim.get("Enabled") is True and current_dkim.get("VerificationStatus") == "Success")
-    except ClientError as e:
+    except (ClientError, ProviderCallError) as e:
         items.append(
             AuditItem(
                 resource="ses.identity.dkim",
@@ -669,7 +669,7 @@ def audit_domain_config(
             )
         )
         checks["notification_topics_ok"] = mapping_ok
-    except ClientError as e:
+    except (ClientError, ProviderCallError) as e:
         items.append(
             AuditItem(
                 resource="ses.identity.notification_topics",
@@ -781,7 +781,7 @@ def audit_domain_config(
                 )
                 checks["receiving_rule_s3_ok"] = False
                 checks["receiving_rule_sns_ok"] = False
-        except ClientError as e:
+        except (ClientError, ProviderCallError) as e:
             items.append(
                 AuditItem(
                     resource=f"ses.receipt_rule.{rs_name}",

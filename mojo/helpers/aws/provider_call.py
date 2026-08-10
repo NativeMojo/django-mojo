@@ -27,6 +27,10 @@ _DENIED = {
 }
 _RETRYABLE = {"RequestLimitExceeded", "RequestTimeout", "ServiceUnavailable", "SlowDown",
               "Throttling", "ThrottlingException", "TooManyRequestsException"}
+_MUTATION_PREFIXES = (
+    "create_", "delete_", "put_", "set_", "subscribe", "tag_", "untag_",
+    "update_", "verify_",
+)
 
 
 def _safe_code(value):
@@ -132,6 +136,30 @@ class ProviderCaller:
             # Do not retain the raw botocore exception as a chained cause.
             # Tracebacks and later ``logger.exception`` calls must remain safe.
             raise error from None
+
+
+class ProviderClient:
+    """Inject the safe call boundary around an existing boto-style client."""
+
+    def __init__(self, client, service, caller=None, action_service=None):
+        self.client = client
+        self.service = str(service)
+        self.action_service = str(action_service or service).removesuffix("v2")
+        self.caller = caller or provider_caller
+
+    def __getattr__(self, name):
+        value = getattr(self.client, name)
+        if not callable(value):
+            return value
+        action = "".join(part[:1].upper() + part[1:] for part in name.split("_"))
+        mutation = name.startswith(_MUTATION_PREFIXES)
+
+        def bounded(*args, **kwargs):
+            return self.caller.call(
+                f"{self.service}.{name}", lambda: value(*args, **kwargs),
+                f"{self.action_service}:{action}", mutation=mutation)
+
+        return bounded
 
 
 provider_caller = ProviderCaller()

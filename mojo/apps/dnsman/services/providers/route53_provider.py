@@ -14,6 +14,7 @@ import time
 from mojo import errors as me
 from mojo.helpers import logit
 from mojo.helpers.aws import route53
+from mojo.helpers.aws.provider_call import ProviderCaller
 from mojo.helpers.dns import probe
 from mojo.helpers.settings import settings
 
@@ -32,8 +33,10 @@ class Route53Provider(DnsProvider):
 
     name = "route53"
 
-    def __init__(self, domain):
+    def __init__(self, domain, provider=None, route53_api=None):
         super().__init__(domain)
+        self.provider = provider or ProviderCaller(logger)
+        self.route53_api = route53_api or route53
         self._zone_id = domain.hosted_zone_id or None
         # Change ids from writes made through THIS adapter instance, so a
         # caller that reuses the adapter gets the INSYNC gate for free.
@@ -48,7 +51,10 @@ class Route53Provider(DnsProvider):
         the mechanism layer and a read path must not produce a surprise write.
         """
         if not self._zone_id:
-            found = route53.find_zone_id(self.zone_name)
+            found = self.provider.call(
+                "route53.find_zone_id",
+                lambda: self.route53_api.find_zone_id(self.zone_name),
+                "route53:ListHostedZonesByName")
             if not found:
                 raise me.ValueException(
                     f"No Route53 hosted zone exists for '{self.zone_name}'")
@@ -59,7 +65,11 @@ class Route53Provider(DnsProvider):
 
     def list_records(self):
         records = []
-        for record in route53.list_records(self.zone_id):
+        rows = self.provider.call(
+            "route53.list_records",
+            lambda: self.route53_api.list_records(self.zone_id),
+            "route53:ListResourceRecordSets")
+        for record in rows:
             values = list(record.record_values or [])
             if (record.type or "").upper() in TXT_TYPES:
                 values = [unquote_txt(value) for value in values]
@@ -76,16 +86,23 @@ class Route53Provider(DnsProvider):
         # The helper quotes/chunks TXT itself and always sends the whole value
         # list, which is what makes a wildcard and its apex share one
         # _acme-challenge record set carrying two digests.
-        change_id = route53.upsert_record(
-            self.zone_id, rtype, name, values, ttl=int(ttl), zone_name=self.zone_name)
+        change_id = self.provider.call(
+            "route53.upsert_record",
+            lambda: self.route53_api.upsert_record(
+                self.zone_id, rtype, name, values, ttl=int(ttl),
+                zone_name=self.zone_name),
+            "route53:ChangeResourceRecordSets", mutation=True)
         self._change_ids[(rtype, name)] = change_id
         return change_id
 
     def delete_record(self, rtype, name, record_values=None):
         rtype = (rtype or "").strip().upper()
         values = as_value_list(record_values) or None
-        change_id = route53.delete_record(
-            self.zone_id, rtype, name, values=values, zone_name=self.zone_name)
+        change_id = self.provider.call(
+            "route53.delete_record",
+            lambda: self.route53_api.delete_record(
+                self.zone_id, rtype, name, values=values, zone_name=self.zone_name),
+            "route53:ChangeResourceRecordSets", mutation=True)
         self._change_ids[(rtype, name)] = change_id
         return change_id
 
@@ -94,7 +111,10 @@ class Route53Provider(DnsProvider):
     def _wait_for_insync(self, change_id, deadline):
         """Poll the change batch until Route53 reports INSYNC or time runs out."""
         while True:
-            change = route53.get_change(change_id)
+            change = self.provider.call(
+                "route53.get_change",
+                lambda: self.route53_api.get_change(change_id),
+                "route53:GetChange")
             if change.insync:
                 return True
             remaining = deadline - time.monotonic()

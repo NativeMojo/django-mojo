@@ -16,7 +16,9 @@ from objict import objict
 from mojo.apps.account.services.setup_safety import sanitize
 from mojo.helpers import logit
 from mojo.helpers.aws.client import get_client, get_session
-from mojo.helpers.aws.provider_call import ProviderCallError, ProviderCaller, safe_error_detail
+from mojo.helpers.aws.provider_call import (
+    ProviderCallError, ProviderCaller, ProviderClient, safe_error_detail,
+)
 from mojo.helpers.settings import settings
 
 
@@ -292,6 +294,14 @@ class AWSCheckRunner:
             except (ConnectTimeoutError, ReadTimeoutError, EndpointConnectionError) as exc:
                 self._add(section, "fail", f"{section}.service_unreachable", exc,
                           remediation="Check AWS network access, endpoint and selected region, then rerun.")
+            except ProviderCallError as exc:
+                code = "denied" if exc.denied else "service_error"
+                self._add(
+                    section, "fail", f"{section}.{code}", exc, exc.detail(),
+                    remediation=(
+                        f"Grant {exc.iam_action} to the selected identity, then rerun."
+                        if exc.denied and exc.iam_action else
+                        "Verify the selected AWS identity and region, then rerun."))
             except ClientError as exc:
                 aws_code = _error_code(exc)
                 code = "denied" if aws_code in ("403", "AccessDenied", "AccessDeniedException") else "service_error"
@@ -403,10 +413,13 @@ class AWSCheckRunner:
 
     def _bucket_tags(self, s3, bucket):
         try:
-            rows = s3.get_bucket_tagging(Bucket=bucket).get("TagSet", [])
+            rows = self._provider_call(
+                "s3.get_bucket_tagging",
+                lambda: s3.get_bucket_tagging(Bucket=bucket),
+                "s3:GetBucketTagging").get("TagSet", [])
             return {row.get("Key"): row.get("Value") for row in rows}
-        except ClientError as exc:
-            if _error_code(exc) in ("NoSuchTagSet", "NoSuchTagSetError"):
+        except ProviderCallError as exc:
+            if exc.provider_code in ("NoSuchTagSet", "NoSuchTagSetError"):
                 return {}
             raise
 
@@ -419,16 +432,23 @@ class AWSCheckRunner:
         params = {"Bucket": bucket}
         if self.region != "us-east-1":
             params["CreateBucketConfiguration"] = {"LocationConstraint": self.region}
-        s3.create_bucket(**params)
-        s3.put_public_access_block(Bucket=bucket, PublicAccessBlockConfiguration={
-            "BlockPublicAcls": True, "IgnorePublicAcls": True,
-            "BlockPublicPolicy": True, "RestrictPublicBuckets": True,
-        })
+        self._provider_call(
+            "s3.create_bucket", lambda: s3.create_bucket(**params),
+            "s3:CreateBucket", mutation=True)
+        self._provider_call(
+            "s3.put_public_access_block",
+            lambda: s3.put_public_access_block(
+                Bucket=bucket, PublicAccessBlockConfiguration={
+                    "BlockPublicAcls": True, "IgnorePublicAcls": True,
+                    "BlockPublicPolicy": True, "RestrictPublicBuckets": True,
+                }), "s3:PutBucketPublicAccessBlock", mutation=True)
         tags = self._bucket_tags(s3, bucket)
         tags.update({**OWNERSHIP_TAGS, "deployment": self._deployment_slug()})
-        s3.put_bucket_tagging(Bucket=bucket, Tagging={"TagSet": [
-            {"Key": key, "Value": value} for key, value in sorted(tags.items())
-        ]})
+        self._provider_call(
+            "s3.put_bucket_tagging",
+            lambda: s3.put_bucket_tagging(Bucket=bucket, Tagging={"TagSet": [
+                {"Key": key, "Value": value} for key, value in sorted(tags.items())
+            ]}), "s3:PutBucketTagging", mutation=True)
         verified = self._bucket_tags(s3, bucket)
         if any(verified.get(key) != value for key, value in OWNERSHIP_TAGS.items()):
             raise RuntimeError("bucket ownership tags did not verify")
@@ -450,22 +470,31 @@ class AWSCheckRunner:
         """Explicitly merge ownership tags after a verified interrupted create."""
         from mojo.apps.fileman.models import FileManager
         s3 = self._client("s3")
-        owned_names = {row.get("Name") for row in s3.list_buckets().get("Buckets", [])}
+        owned_names = {row.get("Name") for row in self._provider_call(
+            "s3.list_buckets", s3.list_buckets,
+            "s3:ListAllMyBuckets").get("Buckets", [])}
         if bucket not in owned_names:
             raise RuntimeError("selected credentials do not prove ownership of the exact bucket")
-        location = s3.get_bucket_location(Bucket=bucket).get("LocationConstraint") or "us-east-1"
+        location = self._provider_call(
+            "s3.get_bucket_location", lambda: s3.get_bucket_location(Bucket=bucket),
+            "s3:GetBucketLocation").get("LocationConstraint") or "us-east-1"
         if location != self.region:
             raise RuntimeError(f"bucket is in {location}, not selected region {self.region}")
-        block = s3.get_public_access_block(Bucket=bucket).get("PublicAccessBlockConfiguration", {})
+        block = self._provider_call(
+            "s3.get_public_access_block",
+            lambda: s3.get_public_access_block(Bucket=bucket),
+            "s3:GetBucketPublicAccessBlock").get("PublicAccessBlockConfiguration", {})
         if not all(block.get(key) is True for key in (
             "BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets",
         )):
             raise RuntimeError("bucket adoption requires all public-access block controls")
         tags = self._bucket_tags(s3, bucket)
         tags.update({**OWNERSHIP_TAGS, "deployment": self._deployment_slug()})
-        s3.put_bucket_tagging(Bucket=bucket, Tagging={"TagSet": [
-            {"Key": key, "Value": value} for key, value in sorted(tags.items())
-        ]})
+        self._provider_call(
+            "s3.put_bucket_tagging",
+            lambda: s3.put_bucket_tagging(Bucket=bucket, Tagging={"TagSet": [
+                {"Key": key, "Value": value} for key, value in sorted(tags.items())
+            ]}), "s3:PutBucketTagging", mutation=True)
         self._ensure_direct_upload_cors(s3, bucket, SYSTEM_FILEMAN_ALLOWED_ORIGINS)
         manager = FileManager.objects.create(
             name="django-mojo system S3", backend_type=FileManager.AWS_S3,
@@ -482,16 +511,22 @@ class AWSCheckRunner:
         """Merge one upload rule without replacing unrelated bucket CORS rules."""
         if current is None:
             try:
-                current = s3.get_bucket_cors(Bucket=bucket).get("CORSRules", [])
-            except ClientError as exc:
-                if _error_code(exc) != "NoSuchCORSConfiguration":
+                current = self._provider_call(
+                    "s3.get_bucket_cors", lambda: s3.get_bucket_cors(Bucket=bucket),
+                    "s3:GetBucketCORS").get("CORSRules", [])
+            except ProviderCallError as exc:
+                if exc.provider_code != "NoSuchCORSConfiguration":
                     raise
                 current = []
         if _cors_supports_direct_upload(current, origins):
             return False
         rules = list(current or [])
         rules.append(_direct_upload_cors_rule(origins))
-        s3.put_bucket_cors(Bucket=bucket, CORSConfiguration={"CORSRules": rules})
+        self._provider_call(
+            "s3.put_bucket_cors",
+            lambda: s3.put_bucket_cors(
+                Bucket=bucket, CORSConfiguration={"CORSRules": rules}),
+            "s3:PutBucketCORS", mutation=True)
         return True
 
     def check_s3(self):
@@ -542,7 +577,9 @@ class AWSCheckRunner:
                 return
         s3 = self._client("s3", stored_key, stored_secret, region)
         try:
-            response = s3.head_bucket(Bucket=bucket)
+            response = self._provider_call(
+                "s3.head_bucket", lambda: s3.head_bucket(Bucket=bucket),
+                "s3:ListBucket")
             actual = (response.get("ResponseMetadata", {}).get("HTTPHeaders", {}) or {}).get("x-amz-bucket-region")
             if actual and actual != region:
                 self._add("s3", "fail", "bucket.region_mismatch",
@@ -552,18 +589,23 @@ class AWSCheckRunner:
                 return
             self._add("s3", "pass", "bucket.accessible", "S3 bucket is accessible",
                       {"bucket": bucket, "region": actual or region})
-        except ClientError as exc:
-            code = _error_code(exc)
-            status_code = "bucket.denied" if code in ("403", "AccessDenied") else "bucket.missing" if code in ("404", "NoSuchBucket") else "bucket.error"
-            self._add("s3", "fail", status_code, exc, {"bucket": bucket, "aws_code": code})
+        except ProviderCallError as exc:
+            code = exc.provider_code
+            status_code = "bucket.denied" if exc.denied else "bucket.missing" if code in ("404", "NoSuchBucket") else "bucket.error"
+            detail = {"bucket": bucket, "aws_code": code}
+            detail.update(exc.detail())
+            self._add("s3", "fail", status_code, exc, detail)
             return
         try:
-            block = s3.get_public_access_block(Bucket=bucket).get("PublicAccessBlockConfiguration", {})
+            block = self._provider_call(
+                "s3.get_public_access_block",
+                lambda: s3.get_public_access_block(Bucket=bucket),
+                "s3:GetBucketPublicAccessBlock").get("PublicAccessBlockConfiguration", {})
             private = all(block.get(key) is True for key in ("BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets"))
             self._add("s3", "pass" if private else "warn", "bucket.public_access_block",
                       "S3 public-access block is enabled" if private else "S3 public-access block is incomplete",
                       {"bucket": bucket, "configuration": block})
-        except ClientError as exc:
+        except ProviderCallError as exc:
             self._add("s3", "warn", "bucket.public_posture_unknown", exc, {"bucket": bucket})
         if manager.supports_direct_upload:
             origins = manager.allowed_origins or SYSTEM_FILEMAN_ALLOWED_ORIGINS
@@ -571,9 +613,11 @@ class AWSCheckRunner:
                 origins = [value.strip() for value in origins.split(",") if value.strip()]
             try:
                 try:
-                    cors = s3.get_bucket_cors(Bucket=bucket).get("CORSRules", [])
-                except ClientError as exc:
-                    if _error_code(exc) != "NoSuchCORSConfiguration":
+                    cors = self._provider_call(
+                        "s3.get_bucket_cors", lambda: s3.get_bucket_cors(Bucket=bucket),
+                        "s3:GetBucketCORS").get("CORSRules", [])
+                except ProviderCallError as exc:
+                    if exc.provider_code != "NoSuchCORSConfiguration":
                         raise
                     cors = []
                 if _cors_supports_direct_upload(cors, origins):
@@ -591,27 +635,46 @@ class AWSCheckRunner:
                     self._add("s3", "warn", "bucket.cors", "S3 direct-upload CORS is missing or incomplete",
                               {"bucket": bucket, "rule_count": len(cors), "allowed_origins": origins},
                               remediation="Rerun with --apply --section s3 to configure it.")
-            except ClientError as exc:
-                self._add("s3", "fail", "bucket.cors", exc, {"bucket": bucket, "aws_code": _error_code(exc)})
+            except ProviderCallError as exc:
+                self._add("s3", "fail", "bucket.cors", exc, {
+                    "bucket": bucket, "aws_code": exc.provider_code,
+                    "iam_action": exc.iam_action})
         if self.probe_s3 and self._approve(f"Write/read/delete one sentinel object in {bucket}?"):
             key = f"__django_mojo_aws_check__/{uuid.uuid4().hex}"
             body = uuid.uuid4().hex.encode("ascii")
             probe_error = cleanup_error = None
             try:
-                s3.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/octet-stream")
-                if s3.get_object(Bucket=bucket, Key=key)["Body"].read() != body:
+                self._provider_call(
+                    "s3.put_object",
+                    lambda: s3.put_object(Bucket=bucket, Key=key, Body=body,
+                                          ContentType="application/octet-stream"),
+                    "s3:PutObject", mutation=True)
+                response = self._provider_call(
+                    "s3.get_object", lambda: s3.get_object(Bucket=bucket, Key=key),
+                    "s3:GetObject")
+                if response["Body"].read() != body:
                     raise RuntimeError("S3 probe body did not round-trip")
             except Exception as exc:
                 probe_error = exc
             finally:
                 try:
-                    s3.delete_object(Bucket=bucket, Key=key)
+                    self._provider_call(
+                        "s3.delete_object",
+                        lambda: s3.delete_object(Bucket=bucket, Key=key),
+                        "s3:DeleteObject", mutation=True)
                 except Exception as exc:
                     cleanup_error = exc
             if probe_error:
-                self._add("s3", "fail", "bucket.probe_failed", probe_error, {"bucket": bucket, "key": key})
+                detail = {"bucket": bucket, "key": key}
+                if isinstance(probe_error, ProviderCallError):
+                    detail.update(probe_error.detail())
+                self._add("s3", "fail", "bucket.probe_failed", probe_error, detail)
             if cleanup_error:
-                self._add("s3", "fail", "bucket.probe_cleanup_failed", cleanup_error, {"bucket": bucket, "key": key})
+                detail = {"bucket": bucket, "key": key}
+                if isinstance(cleanup_error, ProviderCallError):
+                    detail.update(cleanup_error.detail())
+                self._add(
+                    "s3", "fail", "bucket.probe_cleanup_failed", cleanup_error, detail)
             if not probe_error and not cleanup_error:
                 self._add("s3", "pass", "bucket.probe_passed", "S3 object round-trip succeeded", {"bucket": bucket}, changed=True)
 
@@ -701,11 +764,15 @@ class AWSCheckRunner:
         """Keep every email audit call in the record's or runner's selected context."""
         def factory(service, **kwargs):
             if domain.aws_key or domain.aws_secret:
-                return self._client(
+                client = self._client(
                     service, domain.aws_key, domain.aws_secret,
                     domain.aws_region or self.region,
                 )
-            return self._client(service)
+            else:
+                client = self._client(service)
+            return ProviderClient(
+                client, service, caller=self.provider,
+                action_service="ses" if service == "sesv2" else service)
         return factory
 
     def _create_missing_email_resources(self, domain, report):
@@ -717,16 +784,27 @@ class AWSCheckRunner:
         by_resource = {item.resource: item for item in report.items}
         identity = by_resource.get("ses.identity.verification")
         if identity and identity.current is None:
-            ses.verify_domain_identity(Domain=domain.name)
+            self._provider_call(
+                "ses.verify_domain_identity",
+                lambda: ses.verify_domain_identity(Domain=domain.name),
+                "ses:VerifyDomainIdentity", mutation=True)
             created.append("ses-identity")
         dkim = by_resource.get("ses.identity.dkim")
         if dkim and isinstance(dkim.current, dict) and not dkim.current.get("VerificationStatus"):
-            ses.verify_domain_dkim(Domain=domain.name)
+            self._provider_call(
+                "ses.verify_domain_dkim",
+                lambda: ses.verify_domain_dkim(Domain=domain.name),
+                "ses:VerifyDomainDkim", mutation=True)
             created.append("ses-dkim")
 
-        attributes = ses.get_identity_notification_attributes(Identities=[domain.name])
+        attributes = self._provider_call(
+            "ses.get_identity_notification_attributes",
+            lambda: ses.get_identity_notification_attributes(Identities=[domain.name]),
+            "ses:GetIdentityNotificationAttributes")
         current = (attributes.get("NotificationAttributes", {}).get(domain.name, {}) or {})
-        topic_rows = self._list_paginated(sns, "list_topics", "Topics")
+        topic_rows = self._list_paginated(
+            sns, "list_topics", "Topics", operation="sns.list_topics",
+            iam_action="sns:ListTopics")
         topics_by_name = {
             row.get("TopicArn", "").rsplit(":", 1)[-1]: row.get("TopicArn") for row in topic_rows
         }
@@ -762,16 +840,22 @@ class AWSCheckRunner:
             if arn:
                 tags = {
                     row.get("Key"): row.get("Value") for row in
-                    sns.list_tags_for_resource(ResourceArn=arn).get("Tags", [])
+                    self._provider_call(
+                        "sns.list_tags_for_resource",
+                        lambda: sns.list_tags_for_resource(ResourceArn=arn),
+                        "sns:ListTagsForResource").get("Tags", [])
                 }
                 if not all(tags.get(key) == value for key, value in expected_tags.items()):
                     raise RuntimeError(
                         f"same-name SES topic {name} is not owned by this deployment/domain"
                     )
             if not arn:
-                arn = sns.create_topic(Name=name, Tags=[
-                    {"Key": key, "Value": value} for key, value in sorted(expected_tags.items())
-                ]).get("TopicArn")
+                arn = self._provider_call(
+                    "sns.create_topic",
+                    lambda: sns.create_topic(Name=name, Tags=[
+                        {"Key": key, "Value": value}
+                        for key, value in sorted(expected_tags.items())]),
+                    "sns:CreateTopic", mutation=True).get("TopicArn")
                 created.append(f"sns-topic:{kind}")
             if arn:
                 setattr(domain, field, arn)
@@ -784,9 +868,12 @@ class AWSCheckRunner:
             arn = topic_arns.get(kind)
             existing = current.get(f"{notification}Topic")
             if arn and not existing:
-                ses.set_identity_notification_topic(
-                    Identity=domain.name, NotificationType=notification, SnsTopic=arn,
-                )
+                self._provider_call(
+                    "ses.set_identity_notification_topic",
+                    lambda: ses.set_identity_notification_topic(
+                        Identity=domain.name, NotificationType=notification,
+                        SnsTopic=arn),
+                    "ses:SetIdentityNotificationTopic", mutation=True)
                 created.append(f"ses-mapping:{kind}")
         metadata = domain.metadata if isinstance(domain.metadata, dict) else {}
         for kind, arn in topic_arns.items():
@@ -794,29 +881,41 @@ class AWSCheckRunner:
             if not endpoint:
                 continue
             subscriptions = self._list_paginated(
-                sns, "list_subscriptions_by_topic", "Subscriptions", TopicArn=arn,
+                sns, "list_subscriptions_by_topic", "Subscriptions",
+                operation="sns.list_subscriptions_by_topic",
+                iam_action="sns:ListSubscriptionsByTopic", TopicArn=arn,
             )
             matching = [row for row in subscriptions if
                         row.get("Protocol") == "https" and row.get("Endpoint") == endpoint]
             if not matching:
-                sns.subscribe(
-                    TopicArn=arn, Protocol="https", Endpoint=endpoint,
-                    ReturnSubscriptionArn=True,
-                )
+                self._provider_call(
+                    "sns.subscribe",
+                    lambda: sns.subscribe(
+                        TopicArn=arn, Protocol="https", Endpoint=endpoint,
+                        ReturnSubscriptionArn=True),
+                    "sns:Subscribe", mutation=True)
                 created.append(f"sns-subscription:{kind}")
         return created
 
-    def _list_paginated(self, client, method, result_key, **params):
-        rows, token = [], None
-        while True:
+    def _list_paginated(self, client, method, result_key, operation="provider.list",
+                        iam_action="", **params):
+        rows, token, seen = [], None, set()
+        for _ in range(100):
             request = dict(params)
             if token:
                 request["NextToken"] = token
-            response = getattr(client, method)(**request)
+            response = self._provider_call(
+                operation,
+                lambda request=request: getattr(client, method)(**request),
+                iam_action)
             rows.extend(response.get(result_key, []))
             token = response.get("NextToken")
             if not token:
                 return rows
+            if token in seen:
+                break
+            seen.add(token)
+        raise RuntimeError(f"{operation} did not return a complete bounded inventory")
 
     def _discover_resources(self):
         """Every alarmable resource, as objict rows. Raises ClientError to the caller."""
@@ -1069,13 +1168,18 @@ class AWSCheckRunner:
                 request = {"AlarmNames": chunk, "AlarmTypes": ["MetricAlarm"]}
                 if token:
                     request["NextToken"] = token
-                response = cloudwatch.describe_alarms(**request)
+                response = self._provider_call(
+                    "cloudwatch.describe_alarms",
+                    lambda request=request: cloudwatch.describe_alarms(**request),
+                    "cloudwatch:DescribeAlarms")
                 for alarm in response.get("MetricAlarms", []):
                     if alarm.get("MetricName") != "FreeStorageSpace" or alarm.get("Namespace") != "AWS/RDS":
                         continue
-                    tags = cloudwatch.list_tags_for_resource(
-                        ResourceARN=alarm.get("AlarmArn"),
-                    ).get("Tags", [])
+                    tags = self._provider_call(
+                        "cloudwatch.list_tags_for_resource",
+                        lambda alarm=alarm: cloudwatch.list_tags_for_resource(
+                            ResourceARN=alarm.get("AlarmArn")),
+                        "cloudwatch:ListTagsForResource").get("Tags", [])
                     tag_map = {row.get("Key"): row.get("Value") for row in tags}
                     if all(tag_map.get(key) == value for key, value in expected_tags.items()):
                         stale.append(alarm.get("AlarmName"))
@@ -1114,19 +1218,27 @@ class AWSCheckRunner:
         desired = self._desired_alarms() + self._desired_deployment_alarms(cloudwatch)
         self._report_aurora_storage(cloudwatch, expected_tags, slug)
         topic_name = f"django-mojo-{slug}-operations"[:256]
-        topic_arn = next((row.get("TopicArn") for row in self._list_paginated(sns, "list_topics", "Topics")
+        topic_arn = next((row.get("TopicArn") for row in self._list_paginated(
+                          sns, "list_topics", "Topics", operation="sns.list_topics",
+                          iam_action="sns:ListTopics")
                           if row.get("TopicArn", "").rsplit(":", 1)[-1] == topic_name), None)
         if not topic_arn and self._approve(f"Create owned SNS topic {topic_name}?"):
-            topic_arn = sns.create_topic(Name=topic_name, Tags=[
-                {"Key": key, "Value": value} for key, value in sorted({**OWNERSHIP_TAGS, "deployment": slug}.items())
-            ]).get("TopicArn")
+            topic_arn = self._provider_call(
+                "sns.create_topic",
+                lambda: sns.create_topic(Name=topic_name, Tags=[
+                    {"Key": key, "Value": value} for key, value in sorted(
+                        {**OWNERSHIP_TAGS, "deployment": slug}.items())]),
+                "sns:CreateTopic", mutation=True).get("TopicArn")
             self._add("monitoring", "pass", "sns.topic_created", "Created operations SNS topic", {"topic_arn": topic_arn}, changed=True)
         elif not topic_arn:
             self._add("monitoring", "warn", "sns.topic_missing", "Operations SNS topic is missing",
                       remediation="Rerun with --apply after choosing AWS_MONITORING_NAME.")
             return
         else:
-            tags = {row.get("Key"): row.get("Value") for row in sns.list_tags_for_resource(ResourceArn=topic_arn).get("Tags", [])}
+            tags = {row.get("Key"): row.get("Value") for row in self._provider_call(
+                "sns.list_tags_for_resource",
+                lambda: sns.list_tags_for_resource(ResourceArn=topic_arn),
+                "sns:ListTagsForResource").get("Tags", [])}
             if not all(tags.get(key) == value for key, value in expected_tags.items()):
                 self._add("monitoring", "fail", "sns.topic_conflict",
                           "Same-name SNS topic is not owned by this django-mojo deployment",
@@ -1139,11 +1251,18 @@ class AWSCheckRunner:
                       {"topic_arn": topic_arn}, remediation="Add the exact ARN to AWS_CLOUDWATCH_ALARM_TOPIC_ARNS, restart Django, then rerun.")
             return
         endpoint = (_setting("BASE_URL", "") or "").rstrip("/") + "/api/aws/cloudwatch/sns/alarm"
-        subscriptions = self._list_paginated(sns, "list_subscriptions_by_topic", "Subscriptions", TopicArn=topic_arn)
+        subscriptions = self._list_paginated(
+            sns, "list_subscriptions_by_topic", "Subscriptions",
+            operation="sns.list_subscriptions_by_topic",
+            iam_action="sns:ListSubscriptionsByTopic", TopicArn=topic_arn)
         matching = [row for row in subscriptions if row.get("Protocol") == "https" and row.get("Endpoint") == endpoint]
         confirmed = any(row.get("SubscriptionArn") not in (None, "PendingConfirmation") for row in matching)
         if not matching and self._approve(f"Subscribe {endpoint} to {topic_arn}?"):
-            arn = sns.subscribe(TopicArn=topic_arn, Protocol="https", Endpoint=endpoint, ReturnSubscriptionArn=True).get("SubscriptionArn")
+            arn = self._provider_call(
+                "sns.subscribe",
+                lambda: sns.subscribe(TopicArn=topic_arn, Protocol="https",
+                                      Endpoint=endpoint, ReturnSubscriptionArn=True),
+                "sns:Subscribe", mutation=True).get("SubscriptionArn")
             confirmed = arn != "PendingConfirmation"
             self._add("monitoring", "pass" if confirmed else "pending", "sns.subscription_created", "Created SNS HTTPS subscription", {"endpoint": endpoint}, changed=True)
         elif confirmed:
@@ -1158,10 +1277,18 @@ class AWSCheckRunner:
         created, drifted, conflicts, uncreated = 0, [], [], 0
         for alarm in desired:
             alarm.update({"AlarmActions": [topic_arn], "OKActions": [topic_arn]})
-            existing = cloudwatch.describe_alarms(AlarmNames=[alarm["AlarmName"]]).get("MetricAlarms", [])
+            existing = self._provider_call(
+                "cloudwatch.describe_alarms",
+                lambda alarm=alarm: cloudwatch.describe_alarms(
+                    AlarmNames=[alarm["AlarmName"]]),
+                "cloudwatch:DescribeAlarms").get("MetricAlarms", [])
             if existing:
                 current = existing[0]
-                tags = cloudwatch.list_tags_for_resource(ResourceARN=current.get("AlarmArn")).get("Tags", [])
+                tags = self._provider_call(
+                    "cloudwatch.list_tags_for_resource",
+                    lambda: cloudwatch.list_tags_for_resource(
+                        ResourceARN=current.get("AlarmArn")),
+                    "cloudwatch:ListTagsForResource").get("Tags", [])
                 tag_map = {row.get("Key"): row.get("Value") for row in tags}
                 if not all(tag_map.get(key) == value for key, value in expected_tags.items()):
                     conflicts.append(alarm["AlarmName"])
@@ -1181,11 +1308,18 @@ class AWSCheckRunner:
             if not self._approve(f"Create missing CloudWatch alarm {alarm['AlarmName']}?"):
                 uncreated += 1
                 continue
-            if cloudwatch.describe_alarms(AlarmNames=[alarm["AlarmName"]]).get("MetricAlarms", []):
+            if self._provider_call(
+                    "cloudwatch.describe_alarms",
+                    lambda alarm=alarm: cloudwatch.describe_alarms(
+                        AlarmNames=[alarm["AlarmName"]]),
+                    "cloudwatch:DescribeAlarms").get("MetricAlarms", []):
                 continue
-            cloudwatch.put_metric_alarm(**alarm, Tags=[
-                {"Key": key, "Value": value} for key, value in sorted({**OWNERSHIP_TAGS, "deployment": slug}.items())
-            ])
+            self._provider_call(
+                "cloudwatch.put_metric_alarm",
+                lambda alarm=alarm: cloudwatch.put_metric_alarm(**alarm, Tags=[
+                    {"Key": key, "Value": value} for key, value in sorted(
+                        {**OWNERSHIP_TAGS, "deployment": slug}.items())]),
+                "cloudwatch:PutMetricAlarm", mutation=True)
             created += 1
         if conflicts:
             self._add("monitoring", "fail", "alarms.name_conflict", "Non-owned alarms use reserved names", {"alarm_names": conflicts})
