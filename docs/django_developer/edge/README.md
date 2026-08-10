@@ -433,6 +433,7 @@ only; no configuration, key material, or credentials.
 
 Installer evidence is `EDGE_ROOT/installed/<pool>.json`. The historical
 `EDGE_ROOT/installed.json` is a read-only fallback for the default pool only;
-new writes never mutate it. Vhost and Route commits register an on-commit edge
-broadcast keyed by pool and desired generation. A publication error is pending
-evidence and the periodic sweep remains the healing path.
+new writes never mutate it. Vhost and Route commits register on-commit jobs for
+the live edge-channel runners, each keyed by node, pool, and desired generation.
+A publication error is pending evidence and the periodic sweep remains the
+healing path.

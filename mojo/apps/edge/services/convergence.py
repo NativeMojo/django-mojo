@@ -1,5 +1,7 @@
 """Idempotent post-commit publication of pool desired-state convergence."""
 
+import hashlib
+
 from django.db import transaction
 
 from objict import objict
@@ -26,19 +28,30 @@ def publish_pool(pool):
 
     generation = desired_generation(pool)
     try:
-        job_ids = jobs.publish(
-            func=INSTALL_JOB,
-            payload={"pool": pool, "generation": generation},
-            channel=EDGE_CHANNEL, broadcast=True,
-            idempotency_key=f"edge-converge:{pool}:{generation}")
+        runners = [
+            row.get("runner_id") for row in jobs.get_runners(channel=EDGE_CHANNEL)
+            if row.get("alive") and row.get("runner_id")]
+        targets = sorted(set(runners)) or [EDGE_CHANNEL]
+        job_ids = []
+        for target in targets:
+            # Job.idempotency_key is varchar(64). Hash pool/generation/target
+            # together rather than appending a runner id to a long base key.
+            # This also avoids broadcast's fan-out suffix exceeding that DB
+            # bound for a long but valid runner id.
+            identity = f"edge-converge:{pool}:{generation}:{target}"
+            key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+            job_ids.append(jobs.publish(
+                func=INSTALL_JOB,
+                payload={"pool": pool, "generation": generation},
+                channel=target, idempotency_key=key))
     except Exception as error:
         logit.error(
             f"edge: convergence publication pending for pool {pool}: {error}")
         return objict(
             status="pending", pool=pool, generation=generation,
             error="Convergence publication failed; the periodic sweep will retry")
-    return objict(
-        status="published", pool=pool, generation=generation, jobs=job_ids)
+    return objict(status="published", pool=pool, generation=generation,
+                  jobs=job_ids, targets=targets)
 
 
 def publish_after_commit(*pools):

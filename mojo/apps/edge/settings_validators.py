@@ -4,6 +4,7 @@ import re
 
 
 IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
+POOL_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 MAX_NODES = 64
 MAX_POOLS = 32
 
@@ -30,7 +31,13 @@ def expected_topology(key, value):
     if len(nodes) > MAX_NODES or len(pools) > MAX_POOLS:
         raise ValueError(f"{key} exceeds the supported fleet size")
     clean_nodes = [node_id(item) for item in nodes]
-    clean_pools = [node_id(item) for item in pools]
+    clean_pools = []
+    for item in pools:
+        item = str(item or "").strip().lower()
+        if not POOL_RE.fullmatch(item):
+            raise ValueError(
+                f"{key} pools use lowercase letters, digits, dashes, or underscores")
+        clean_pools.append(item)
     # Package A's protected-setting contract is canonicalizing: repeated UI
     # selections round-trip as one sorted identity rather than failing a save.
     return {"nodes": sorted(set(clean_nodes)), "pools": sorted(set(clean_pools))}

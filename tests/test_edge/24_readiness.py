@@ -133,6 +133,7 @@ def test_webapp_key_lifecycle_metadata(opts):
 
 @th.django_unit_test("vhost and route changes publish after commit with one generation key")
 def test_convergence_publication_is_post_commit_and_idempotent(opts):
+    import hashlib
     from django.db import transaction
     from mojo.apps.edge.services import convergence
 
@@ -140,14 +141,18 @@ def test_convergence_publication_is_post_commit_and_idempotent(opts):
     with mock.patch.object(transaction, "on_commit",
                            side_effect=lambda callback: callbacks.append(callback)), \
             mock.patch("mojo.apps.jobs.publish", return_value=["job-a"]) as publish, \
+            mock.patch("mojo.apps.jobs.get_runners", return_value=[]), \
             mock.patch.object(convergence, "desired_generation", return_value="generation"):
         convergence.publish_after_commit("default", "default")
         assert not publish.called, "convergence published before the database commit"
         assert len(callbacks) == 1, f"duplicate pool callbacks were registered: {callbacks}"
         callbacks[0]()
     publish.assert_called_once()
-    assert publish.call_args.kwargs["idempotency_key"] == \
-        "edge-converge:default:generation", "publication key was not generation-idempotent"
+    expected = hashlib.sha256(
+        b"edge-converge:default:generation:edge").hexdigest()
+    assert publish.call_args.kwargs["idempotency_key"] == expected, \
+        "publication key was not target/generation-idempotent"
+    assert len(expected) == 64, "publication idempotency key exceeds the DB bound"
 
 
 @th.django_unit_test("publication failure is explicit pending evidence")
@@ -155,6 +160,7 @@ def test_convergence_publish_failure_is_pending(opts):
     from mojo.apps.edge.services import convergence
 
     with mock.patch.object(convergence, "desired_generation", return_value="generation"), \
+            mock.patch("mojo.apps.jobs.get_runners", return_value=[]), \
             mock.patch("mojo.apps.jobs.publish", side_effect=RuntimeError("redis down")):
         result = convergence.publish_pool("default")
     assert result.status == "pending", \
