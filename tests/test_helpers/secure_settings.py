@@ -8,6 +8,11 @@ from testit import helpers as th
 TEST_USER = "settings_admin"
 TEST_PWORD = "settings##mojo99"
 TEST_EMAIL = "settings_admin@example.com"
+OWNED_SETTING_KEYS = (
+    "SITE_NAME", "API_KEY", "COLOR", "TEMP", "CACHED_KEY", "W1", "W2",
+    "FEATURE_FLAG", "PARENT_ONLY", "GLOBAL_ONLY", "MY_FAKE_VAR",
+    "CUSTOM_FLAG", "SECRET_TOKEN", "REST_TEST", "LIST_PLAIN", "LIST_SECRET",
+)
 
 
 @th.django_unit_setup()
@@ -46,17 +51,40 @@ def setup_secure_settings(opts):
         child.save(update_fields=["parent"])
     opts.child_group_id = child.pk
 
-    # Clean up any leftover settings
-    Setting.objects.all().delete()
+    # Clean up only this module's fixtures. Other modules deliberately keep
+    # global settings alive while test packages run in parallel.
+    Setting.objects.filter(
+        key__in=OWNED_SETTING_KEYS, group=None).delete()
+    Setting.objects.filter(
+        key__in=OWNED_SETTING_KEYS,
+        group_id__in=(parent.pk, child.pk)).delete()
     r = Setting._redis()
     if r:
-        for key in r.scan_iter("settings:*"):
-            r.delete(key)
+        for group_id in (None, parent.pk, child.pk):
+            r.hdel(Setting._redis_key(group_id), *OWNED_SETTING_KEYS)
 
 
 # ===========================================================================
 # Model tests
 # ===========================================================================
+
+@th.django_unit_test("secure-settings setup preserves settings owned by parallel modules")
+def test_setup_preserves_unrelated_settings(opts):
+    from mojo.apps.account.models.setting import Setting
+
+    Setting.set("PARALLEL_MODULE_SETTING", "preserve-me")
+    setup_secure_settings(opts)
+
+    value, found = Setting.get_from_db("PARALLEL_MODULE_SETTING")
+    assert found, "secure-settings setup deleted a setting owned by another module"
+    assert value == "preserve-me", f"the unrelated setting changed during setup: {value!r}"
+    cached, cached_found = Setting.get_cached("PARALLEL_MODULE_SETTING")
+    assert cached_found, "secure-settings setup deleted another module's Redis setting"
+    assert cached == "preserve-me", \
+        f"the unrelated Redis value changed during setup: {cached!r}"
+
+    Setting.remove("PARALLEL_MODULE_SETTING")
+
 
 @th.django_unit_test()
 def test_setting_create_plain(opts):
