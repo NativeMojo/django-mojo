@@ -22,7 +22,7 @@ def _sentinel(kind):
 
 @th.django_unit_setup()
 def setup_admin_portal_integration(opts):
-    from mojo.apps.account.models import ApiKey, Group, User
+    from mojo.apps.account.models import ApiKey, Group, Setting, User
     from mojo.apps.dnsman.models import Certificate, DnsCredential, Domain, DomainPurchase
     from mojo.apps.edge.models import WebApp
     from mojo.apps.logit.models import Log
@@ -36,6 +36,9 @@ def setup_admin_portal_integration(opts):
     Group.objects.filter(name="admin-integration-secret-group").delete()
     User.objects.filter(email__in=(ADMIN_EMAIL, TARGET_EMAIL)).delete()
     Log.objects.filter(username=ADMIN_EMAIL).delete()
+    # Use the edge suite's shared fixture bucket so concurrent modules agree
+    # on one allowlist value and no test needs to restore process-global state.
+    Setting.set("EDGE_RELEASE_BUCKETS", ["edge-test-releases"], group=None)
 
     admin = User.objects.create_user(
         username=ADMIN_EMAIL, email=ADMIN_EMAIL, password=ADMIN_PASSWORD)
@@ -81,7 +84,7 @@ def setup_admin_portal_integration(opts):
     webapp = WebApp(
         group=group, slug="admin-integration-secret-app",
         display_name="Admin integration secret app", environment="production",
-        bucket="admin-integration-bucket", prefix="pending")
+        bucket="edge-test-releases", prefix="pending")
     with mock.patch("mojo.apps.edge.validators.validate_web_app"):
         webapp.save(); webapp.prefix = webapp.storage_prefix(); webapp.save()
 
@@ -161,105 +164,96 @@ def test_dashboard_status_vocabulary(opts):
 @th.django_unit_test("real Admin HTTP responses and resulting logs contain no non-reveal secrets")
 def test_authenticated_secret_response_and_log_boundary(opts):
     from django.utils import timezone
-    from mojo.apps.account.models import Setting
     from mojo.apps.logit.models import Log
 
-    old_buckets, had_old_buckets = Setting.get_from_db("EDGE_RELEASE_BUCKETS")
-    Setting.set("EDGE_RELEASE_BUCKETS", ["admin-integration-bucket"], group=None)
-    try:
-        th.assert_true(opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD),
-                       "integration Admin login failed")
-        started = timezone.now()
-        pre_reveal = [
-            opts.client.get(f"/api/user/{opts.integration_target}"),
-            opts.client.get("/api/account/admin/bootstrap"),
-        ]
-        for response in pre_reveal:
-            th.assert_eq(response.status_code, 200,
-                         "pre-reveal password/reset-state read failed")
-            _assert_absent(
-                opts.integration_seeded_secrets,
-                _body(response), "pre-reveal response")
-        reveals = []
+    th.assert_true(opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD),
+                   "integration Admin login failed")
+    started = timezone.now()
+    pre_reveal = [
+        opts.client.get(f"/api/user/{opts.integration_target}"),
+        opts.client.get("/api/account/admin/bootstrap"),
+    ]
+    for response in pre_reveal:
+        th.assert_eq(response.status_code, 200,
+                     "pre-reveal password/reset-state read failed")
+        _assert_absent(
+            opts.integration_seeded_secrets,
+            _body(response), "pre-reveal response")
+    reveals = []
 
-        temporary = opts.client.post(
-            "/api/account/admin/user/password/temporary",
-            json={"user": opts.integration_target})
-        th.assert_eq(temporary.status_code, 200,
-                     "temporary-password reveal endpoint failed")
-        reveals.append((temporary.json.get("data") or {}).get("temporary_password"))
+    temporary = opts.client.post(
+        "/api/account/admin/user/password/temporary",
+        json={"user": opts.integration_target})
+    th.assert_eq(temporary.status_code, 200,
+                 "temporary-password reveal endpoint failed")
+    reveals.append((temporary.json.get("data") or {}).get("temporary_password"))
 
-        created_key = opts.client.post("/api/group/apikey", json={
-            "group": opts.integration_group,
-            "name": f"admin-integration-secret-{uuid.uuid4().hex[:8]}",
-            "permissions": {},
-        })
-        th.assert_eq(created_key.status_code, 200, "API-key reveal endpoint failed")
-        created_data = created_key.json.get("data") or {}
-        reveals.append(created_data.get("token"))
-        rotated_key = opts.client.post("/api/account/admin/apikey/action", json={
-            "api_key": created_data.get("id"), "action": "rotate",
-        })
-        th.assert_eq(rotated_key.status_code, 200, "API-key rotation reveal failed")
-        reveals.append((rotated_key.json.get("data") or {}).get("token"))
+    created_key = opts.client.post("/api/group/apikey", json={
+        "group": opts.integration_group,
+        "name": f"admin-integration-secret-{uuid.uuid4().hex[:8]}",
+        "permissions": {},
+    })
+    th.assert_eq(created_key.status_code, 200, "API-key reveal endpoint failed")
+    created_data = created_key.json.get("data") or {}
+    reveals.append(created_data.get("token"))
+    rotated_key = opts.client.post("/api/account/admin/apikey/action", json={
+        "api_key": created_data.get("id"), "action": "rotate",
+    })
+    th.assert_eq(rotated_key.status_code, 200, "API-key rotation reveal failed")
+    reveals.append((rotated_key.json.get("data") or {}).get("token"))
 
-        operation = str(uuid.uuid4())
-        deploy_key = opts.client.post("/api/edge/webapp/link_key", json={
-            "webapp": opts.integration_webapp, "action": "mint",
-            "operation_id": operation,
-        })
-        th.assert_eq(deploy_key.status_code, 200,
-                     "WebApp deployment-key reveal failed")
-        reveals.append((deploy_key.json.get("data") or {}).get("token"))
-        th.assert_true(all(isinstance(value, str) and value for value in reveals),
-                       "an authorized reveal response omitted its one-time value")
+    operation = str(uuid.uuid4())
+    deploy_key = opts.client.post("/api/edge/webapp/link_key", json={
+        "webapp": opts.integration_webapp, "action": "mint",
+        "operation_id": operation,
+    })
+    th.assert_eq(deploy_key.status_code, 200,
+                 "WebApp deployment-key reveal failed")
+    reveals.append((deploy_key.json.get("data") or {}).get("token"))
+    th.assert_true(all(isinstance(value, str) and value for value in reveals),
+                   "an authorized reveal response omitted its one-time value")
 
-        replay = opts.client.post("/api/edge/webapp/link_key", json={
-            "webapp": opts.integration_webapp, "action": "mint",
-            "operation_id": operation,
-        })
-        th.assert_eq(replay.status_code, 200, "deployment-key replay failed")
-        th.assert_true((replay.json.get("data") or {}).get("token") is None,
-                       "a replay disclosed MOJO_DEPLOY_KEY twice")
+    replay = opts.client.post("/api/edge/webapp/link_key", json={
+        "webapp": opts.integration_webapp, "action": "mint",
+        "operation_id": operation,
+    })
+    th.assert_eq(replay.status_code, 200, "deployment-key replay failed")
+    th.assert_true((replay.json.get("data") or {}).get("token") is None,
+                   "a replay disclosed MOJO_DEPLOY_KEY twice")
 
-        secrets = opts.integration_seeded_secrets + reveals
-        responses = [*pre_reveal, replay]
-        for path in (
-                "/api/account/admin/bootstrap",
-                "/api/account/admin/dashboard",
-                "/api/account/admin/platform",
-                "/api/account/admin/advanced",
-                f"/api/user/{opts.integration_target}",
-                f"/api/group/apikey?group={opts.integration_group}",
-                f"/api/edge/webapp/key_status?webapp={opts.integration_webapp}",
-                f"/api/edge/webapp/summary?webapp={opts.integration_webapp}",
-                f"/api/dnsman/credential/{opts.integration_credential}",
-                f"/api/dnsman/certificate/{opts.integration_certificate}",
-                f"/api/dnsman/purchase/{opts.integration_purchase}",
-                "/api/logs?graph=activity&size=50&sort=-created"):
-            response = opts.client.get(path)
-            th.assert_eq(response.status_code, 200,
-                         f"non-reveal integration read failed for {path}")
-            responses.append(response)
-        for index, response in enumerate(responses):
-            _assert_absent(secrets, _body(response), f"non-reveal response {index}")
+    secrets = opts.integration_seeded_secrets + reveals
+    responses = [*pre_reveal, replay]
+    for path in (
+            "/api/account/admin/bootstrap",
+            "/api/account/admin/dashboard",
+            "/api/account/admin/platform",
+            "/api/account/admin/advanced",
+            f"/api/user/{opts.integration_target}",
+            f"/api/group/apikey?group={opts.integration_group}",
+            f"/api/edge/webapp/key_status?webapp={opts.integration_webapp}",
+            f"/api/edge/webapp/summary?webapp={opts.integration_webapp}",
+            f"/api/dnsman/credential/{opts.integration_credential}",
+            f"/api/dnsman/certificate/{opts.integration_certificate}",
+            f"/api/dnsman/purchase/{opts.integration_purchase}",
+            "/api/logs?graph=activity&size=50&sort=-created"):
+        response = opts.client.get(path)
+        th.assert_eq(response.status_code, 200,
+                     f"non-reveal integration read failed for {path}")
+        responses.append(response)
+    for index, response in enumerate(responses):
+        _assert_absent(secrets, _body(response), f"non-reveal response {index}")
 
-        deadline = time.monotonic() + 3.0
-        logs = []
-        while time.monotonic() < deadline:
-            logs = list(Log.objects.filter(
-                created__gte=started).values(
-                    "path", "kind", "log", "payload"))
-            if any(row["path"] == "/api/edge/webapp/link_key" for row in logs):
-                break
-            time.sleep(0.05)
-        th.assert_true(bool(logs), "real HTTP requests produced no Log evidence")
-        _assert_absent(secrets, json.dumps(logs, default=str), "resulting Log rows")
-    finally:
-        if had_old_buckets:
-            Setting.set("EDGE_RELEASE_BUCKETS", old_buckets, group=None)
-        else:
-            Setting.remove("EDGE_RELEASE_BUCKETS", group=None)
+    deadline = time.monotonic() + 3.0
+    logs = []
+    while time.monotonic() < deadline:
+        logs = list(Log.objects.filter(
+            created__gte=started).values(
+                "path", "kind", "log", "payload"))
+        if any(row["path"] == "/api/edge/webapp/link_key" for row in logs):
+            break
+        time.sleep(0.05)
+    th.assert_true(bool(logs), "real HTTP requests produced no Log evidence")
+    _assert_absent(secrets, json.dumps(logs, default=str), "resulting Log rows")
 
 
 @th.django_unit_test("onboarding credentials are replaced before file logging")

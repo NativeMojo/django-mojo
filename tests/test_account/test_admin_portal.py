@@ -55,29 +55,29 @@ def test_anonymous_delivery_is_gate_only(opts):
 def test_authenticated_admin_delivery(opts):
     assert opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD), "Admin login failed"
     issued = opts.client.post("/api/account/admin/session", json={})
-    assert issued.status_code == 200
+    assert issued.status_code == 200, issued.response
     cookie = next((item for item in opts.client.session.cookies
                    if item.name == "mojo_admin"), None)
-    assert cookie is not None and cookie.path == "/admin"
-    assert "HttpOnly" in cookie._rest and cookie._rest.get("SameSite") == "Strict"
+    assert cookie is not None and cookie.path == "/admin", cookie
+    assert "HttpOnly" in cookie._rest and cookie._rest.get("SameSite") == "Strict", cookie._rest
 
     bootstrap = opts.client.get("/api/account/admin/bootstrap")
     data = bootstrap.json.get("data") or {}
-    assert data.get("capabilities", {}).get("manage_network") is True
+    assert data.get("capabilities", {}).get("manage_network") is True, data
     assert tuple(data.get("features", {})) == (
-        "dashboard", "people", "webapps", "activity", "platform", "advanced")
+        "dashboard", "people", "webapps", "activity", "platform", "advanced"), data.get("features")
     assert data["features"]["activity"] == {
         "id": "activity", "enabled": True,
         "capabilities": {
             "view_logs": True, "view_security": True,
             "manage_security": True,
         },
-    }
-    assert data["features"]["platform"]["capabilities"]["setup"] is True
-    assert data["features"]["advanced"]["capabilities"]["manage"] is True
+    }, data["features"]["activity"]
+    assert data["features"]["platform"]["capabilities"]["setup"] is True, data["features"]["platform"]
+    assert data["features"]["advanced"]["capabilities"]["manage"] is True, data["features"]["advanced"]
 
     opts.client.logout()
-    assert "<title>MOJO Admin</title>" in opts.client.get("/admin/").text
+    assert "<title>MOJO Admin</title>" in opts.client.get("/admin/").text, "Admin shell unavailable"
     for asset in ("assets/app.js", "assets/features/registry.js",
                   "assets/features/advanced/page.js",
                   "assets/features/platform/page.js",
@@ -85,7 +85,8 @@ def test_authenticated_admin_delivery(opts):
                   "assets/components/relationship.js"):
         response = opts.client.get(f"/admin/{asset}")
         assert response.status_code == 200, f"private asset unavailable: {asset}"
-        assert "no-store" in opts.client.last_response.headers.get("Cache-Control", "")
+        assert "no-store" in opts.client.last_response.headers.get("cache-control", ""), \
+            opts.client.last_response.headers
 
 
 @th.django_unit_test("auth-key rotation invalidates the Admin source session")
