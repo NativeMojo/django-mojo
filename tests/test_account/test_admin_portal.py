@@ -179,6 +179,9 @@ def test_network_asset_contract(opts):
     assert "onClose = () => {}" in core and "result.token = null" in pages and \
         "quote.token = null" in network and "secretPayload.api_secret = ''" in network, \
         "modal close paths no longer scrub reveal-once or provider secrets"
+    assert "returnFocus = null" in core and "returnFocus || document.activeElement" in core and \
+        "data-webapp-key" in pages and "oneTimeSecret(webapp, result, returnFocus)" in pages, \
+        "nested reveal-once modal no longer restores the refreshed Manage key opener"
     assert "--setup-state" in preview and "[redacted]" in preview and \
         "setup_choice_operation" in preview and "Deterministic partial route failure" in preview, \
         "deterministic preview lost resumable setup or safe mutation evidence"

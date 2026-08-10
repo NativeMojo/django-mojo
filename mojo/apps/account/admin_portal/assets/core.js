@@ -180,9 +180,9 @@ export class FormView {
   }
 }
 
-export function openModal({title, subtitle, content, danger = false, wide = false, onClose = () => {}}) {
+export function openModal({title, subtitle, content, danger = false, wide = false, onClose = () => {}, returnFocus = null}) {
   const layer = document.getElementById('portal-layer');
-  const previous = document.activeElement;
+  const previous = returnFocus || document.activeElement;
   let closed = false;
   const close = () => {
     if (closed) return;

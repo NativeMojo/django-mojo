@@ -85,7 +85,7 @@ export async function peoplePage(ctx, route) {
   await render(); return root;
 }
 
-function oneTimeSecret(webapp, result) {
+function oneTimeSecret(webapp, result, returnFocus) {
   let secret = result.token;
   const secretField = h('textarea', {class: 'secret', readonly: true, rows: '4', text: secret});
   const content = h('div', {},
@@ -93,7 +93,7 @@ function oneTimeSecret(webapp, result) {
     h('label', {class: 'field'}, h('span', {text: 'GitHub Actions secret: MOJO_DEPLOY_KEY'}), secretField),
     h('button', {class: 'button primary', onclick: async (event) => { await navigator.clipboard.writeText(secret); event.currentTarget.textContent = 'Copied'; }}, icon('key'), 'Copy secret'),
     h('div', {class: 'command'}, h('code', {text: 'gh secret set MOJO_DEPLOY_KEY --repo YOUR_ORG/YOUR_REPO'})));
-  openModal({title: `${webapp.slug} deployment key`, subtitle: 'The previous key is already inactive.', content, onClose: () => {
+  openModal({title: `${webapp.slug} deployment key`, subtitle: 'The previous key is already inactive.', content, returnFocus, onClose: () => {
     secretField.value = ''; secretField.textContent = ''; secret = ''; result.token = null;
   }});
 }
@@ -119,7 +119,9 @@ async function credentialDialog(webapp, reload) {
     submit.disabled = true;
     try {
       const result = await api('/api/edge/webapp/link_key', {method: 'POST', body: JSON.stringify({webapp: webapp.id, action, operation_id: crypto.randomUUID()})});
-      close(); await reload(); oneTimeSecret(webapp, result);
+      close(); await reload();
+      const returnFocus = document.querySelector(`[data-webapp-key="${webapp.id}"]`);
+      oneTimeSecret(webapp, result, returnFocus);
     } catch (error) { message.textContent = error.message; submit.disabled = false; }
   });
 }
@@ -157,7 +159,7 @@ export async function webappsPage(ctx) {
         {label: 'Current release', render: (r) => r.current_release ? badge(r.current_release.version || r.current_release.id, 'success') : badge('No release')},
         {label: 'Deploy key', render: (r) => { const status = statuses.get(r.id); return status?.linked && status?.active ? badge('Active', 'success') : status?.last_action === 'revoke' ? badge('Revoked', 'warning') : badge('Missing', 'neutral'); }},
         {label: 'Created', render: (r) => formatDate(r.created)},
-        {label: '', render: () => ctx.capabilities.manage_webapps ? h('button', {class: 'button compact'}, icon('key'), 'Manage key') : null},
+        {label: '', render: (row) => ctx.capabilities.manage_webapps ? h('button', {class: 'button compact', 'data-webapp-key': row.id}, icon('key'), 'Manage key') : null},
       ], rows, empty: 'No WebApps are visible in your scope.', onSelect: ctx.capabilities.manage_webapps ? (row) => credentialDialog(row, render) : null}).render());
     } catch (error) { panel.append(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
   }
