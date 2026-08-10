@@ -4,6 +4,7 @@ _Hygiene: max 5 bullets per section. Outcomes over narrative. Archive when resol
 
 ## Current Focus
 - **GitHub Actions is the only WebApp deployment control plane.** Merge/push the configured branch; one WebApp-linked service key lives only in the repository secret named exactly `MOJO_DEPLOY_KEY` (developers hold no deploy credential). The Git SHA is the immutable version; verified completion always deploys, immediately converges the active fleet, waits for node proof, and safely restores the prior release on partial failure. Intentional rollback means rerunning the workflow for an older commit—never a separate human promotion or manual hold. (Maestro #1796/#1798/#1797)
+- **AWS environment setup must be automatic and functional-first.** A new fleet node receives the standard `django-mojo-setup` instance role (domains/DNS, compute/data, S3/SES, IAM/KMS, CloudWatch/SNS, GuardDuty/EventBridge) rather than a developer-held AWS key; narrow it only after the admin setup flow can reproduce the complete environment. The built-in admin's Setup/Health surface owns `aws-check` audit + repair: configure `BASE_URL`/deployment identity, adopt the real system media bucket with wildcard direct-upload CORS, discover existing SES identities, create monitoring + signed SNS delivery + default rules, and wire GuardDuty. No deployment step waits for a separate human promotion/approval after the initiating Git push.
 
 ## Key Decisions
 _Non-obvious choices made — why, not just what._
