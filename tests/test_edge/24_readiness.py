@@ -156,14 +156,36 @@ def test_webapp_key_lifecycle_metadata(opts):
     missing = summary()
     assert missing["details"]["pending"] >= 1, \
         "a missing deploy key was absent from global readiness counts"
-    linked, api_key, token, rotated = webapp_keys.link(opts.webapp)
+    exact = webapp_keys.status(opts.webapp)
+    assert exact["linked"] is False and exact["active"] is False \
+           and exact["last_action"] is None, \
+        f"the target WebApp was not exactly missing: {exact}"
+    assert WebAppKeyOperation.objects.filter(web_app=opts.webapp).first() is None, \
+        "a missing WebApp unexpectedly had a key-operation receipt"
+
+    minted = webapp_keys.link_once(
+        opts.webapp, WebAppKeyOperation.ACTION_MINT, None,
+        "00000000-0000-0000-0000-000000000022")
+    opts.webapp.refresh_from_db()
+    token = minted["token"]
     active = summary()
     assert active["details"]["pass"] >= 1, \
         "an active deploy key was absent from global readiness counts"
     assert token not in str(active), "readiness leaked the reveal-once deployment token"
+    exact = webapp_keys.status(opts.webapp)
+    latest = WebAppKeyOperation.objects.filter(web_app=opts.webapp).first()
+    assert exact["linked"] and exact["active"] \
+           and exact["api_key"] == opts.webapp.api_key_id \
+           and exact["last_action"] == WebAppKeyOperation.ACTION_MINT, \
+        f"the target WebApp was not exactly active after mint: {exact}"
+    assert latest and latest.action == WebAppKeyOperation.ACTION_MINT \
+           and latest.api_key_id == opts.webapp.api_key_id, \
+        f"the target WebApp's latest receipt was not its mint: {latest}"
+
     rotated = webapp_keys.link_once(
-        linked, WebAppKeyOperation.ACTION_ROTATE, None,
+        opts.webapp, WebAppKeyOperation.ACTION_ROTATE, None,
         "00000000-0000-0000-0000-000000000023")
+    opts.webapp.refresh_from_db()
     rotated_ready = summary()
     assert rotated_ready["details"]["pass"] >= 1, \
         "a rotated active key was absent from global readiness counts"
@@ -172,13 +194,34 @@ def test_webapp_key_lifecycle_metadata(opts):
         "readiness lost the safe rotation receipt"
     assert rotated["token"] not in str(rotated_ready), \
         "readiness recovered a rotated reveal-once token"
-    webapp_keys.revoke_once(linked, None, "00000000-0000-0000-0000-000000000024")
+    exact = webapp_keys.status(opts.webapp)
+    latest = WebAppKeyOperation.objects.filter(web_app=opts.webapp).first()
+    assert exact["linked"] and exact["active"] \
+           and exact["api_key"] == opts.webapp.api_key_id \
+           and exact["last_action"] == WebAppKeyOperation.ACTION_ROTATE, \
+        f"the target WebApp was not exactly active after rotation: {exact}"
+    assert latest and latest.action == WebAppKeyOperation.ACTION_ROTATE \
+           and latest.api_key_id == opts.webapp.api_key_id, \
+        f"the target WebApp's latest receipt was not its rotation: {latest}"
+
+    revoked_key_id = opts.webapp.api_key_id
+    webapp_keys.revoke_once(
+        opts.webapp, None, "00000000-0000-0000-0000-000000000024")
+    opts.webapp.refresh_from_db()
     revoked = summary()
     assert revoked["details"]["warn"] >= 1, \
         "a revoked deploy key was absent from global readiness counts"
     assert revoked["details"].get(
         f"action_{WebAppKeyOperation.ACTION_REVOKE}", 0) >= 1, \
         "readiness lost the non-secret revoke receipt"
+    exact = webapp_keys.status(opts.webapp)
+    latest = WebAppKeyOperation.objects.filter(web_app=opts.webapp).first()
+    assert exact["linked"] is False and exact["active"] is False \
+           and exact["last_action"] == WebAppKeyOperation.ACTION_REVOKE, \
+        f"the target WebApp was not exactly revoked: {exact}"
+    assert latest and latest.action == WebAppKeyOperation.ACTION_REVOKE \
+           and latest.api_key_id == revoked_key_id, \
+        f"the target WebApp's latest receipt was not its revoke: {latest}"
 
 
 @th.django_unit_test("readiness counts failures after the first 64 rows")
@@ -240,14 +283,16 @@ def test_convergence_publication_is_post_commit_and_idempotent(opts):
     jobs.get_runners.return_value = []
     jobs.publish.return_value = ["job-a"]
     with mock.patch.object(transaction, "on_commit",
-                           side_effect=lambda callback: callbacks.append(callback)):
+                           side_effect=lambda callback: callbacks.append(callback)), \
+            convergence.publisher_scope(
+                lambda pool: convergence.publish_pool(
+                    pool, jobs_module=jobs, generation="generation")):
         convergence.publish_after_commit("default", "default")
         assert not jobs.publish.called, "convergence published before the database commit"
         assert len(callbacks) == 1, f"duplicate pool callbacks were registered: {callbacks}"
-        assert callbacks[0].__defaults__ == ("default",), \
-            "post-commit callback did not retain the exact pool"
-    convergence.publish_pool(
-        "default", jobs_module=jobs, generation="generation")
+    result = callbacks[0]()
+    assert result.status == "published", \
+        f"the captured commit callback did not reach publication: {result}"
     jobs.publish.assert_called_once()
     expected = hashlib.sha256(
         b"edge-converge:default:generation:edge").hexdigest()
@@ -265,8 +310,10 @@ def test_model_lifecycle_publications(opts):
     certificate = make_certificate(domain)
     upstream = make_upstream(group=opts.group)
     callbacks = []
+    publisher = mock.Mock(return_value={"status": "published"})
     with mock.patch.object(transaction, "on_commit",
-                           side_effect=lambda callback: callbacks.append(callback)):
+                           side_effect=lambda callback: callbacks.append(callback)), \
+            convergence.publisher_scope(publisher):
         vhost = make_vhost(
             domain, certificate, label="app", kind="site_api", pool="default")
         assert len(callbacks) == 1, "Vhost create did not register after-commit publication"
@@ -283,10 +330,14 @@ def test_model_lifecycle_publications(opts):
         route.delete()
         vhost.delete()
 
-    pools = [callback.__defaults__[0] for callback in callbacks]
+    assert not publisher.called, "a model published before its transaction committed"
+    results = [callback() for callback in callbacks]
+    pools = [call.args[0] for call in publisher.call_args_list]
     assert pools == ["default", "default", "blue", "default",
                      "blue", "blue", "blue", "blue"], \
         f"create/update/move/delete publications were incomplete: {pools}"
+    assert all(result["status"] == "published" for result in results), \
+        f"captured model callbacks did not reach the scoped publisher: {results}"
 
 
 @th.django_unit_test("partial route work remains durable and pending publication repairs")
@@ -305,13 +356,19 @@ def test_sequential_partial_route_pending_repair(opts):
     jobs.get_runners.return_value = []
     jobs.publish.side_effect = [
         RuntimeError("private transport detail"), "job-ok"]
+    publications = []
+
+    def publisher(pool):
+        result = convergence.publish_pool(
+            pool, jobs_module=jobs, generation="generation")
+        publications.append(result)
+        return result
+
     with mock.patch.object(transaction, "on_commit",
-                           side_effect=lambda callback: callbacks.append(callback)):
+                           side_effect=lambda callback: callbacks.append(callback)), \
+            convergence.publisher_scope(publisher):
         first = make_route(vhost, "/one", upstream)
-        assert callbacks.pop().__defaults__ == ("default",), \
-            "the committed first Route did not retain its publication pool"
-        pending = convergence.publish_pool(
-            "default", jobs_module=jobs, generation="generation")
+        pending = callbacks.pop()()
         assert pending.status == "pending", \
             "a publication failure did not leave explicit pending evidence"
         raised = None
@@ -324,14 +381,13 @@ def test_sequential_partial_route_pending_repair(opts):
             "the valid first Route was rolled back with a later invalid row"
         assert not callbacks, "the invalid Route registered a convergence publication"
         repaired = make_route(vhost, "/two", upstream)
-        assert callbacks.pop().__defaults__ == ("default",), \
-            "the repaired Route did not retain its publication pool"
-        published = convergence.publish_pool(
-            "default", jobs_module=jobs, generation="generation")
+        published = callbacks.pop()()
         assert published.status == "published", \
             f"retry did not repair pending publication evidence: {published}"
         assert VhostRoute.objects.filter(pk__in=[first.pk, repaired.pk]).count() == 2, \
             "sequential repair lost one of the valid Route rows"
+    assert [result.status for result in publications] == ["pending", "published"], \
+        f"captured Route callbacks lost pending/repair evidence: {publications}"
 
 
 @th.django_unit_test("publication failure is explicit pending evidence")

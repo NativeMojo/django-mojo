@@ -1,6 +1,8 @@
 """Idempotent post-commit publication of pool desired-state convergence."""
 
 import hashlib
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from django.db import transaction
 
@@ -11,6 +13,7 @@ from mojo.helpers import logit
 
 INSTALL_JOB = "mojo.apps.edge.asyncjobs.install_generation"
 EDGE_CHANNEL = "edge"
+_PUBLISHER = ContextVar("edge_convergence_publisher", default=None)
 
 
 def desired_generation(pool):
@@ -59,9 +62,28 @@ def publish_pool(pool, jobs_module=None, generation=None):
                   jobs=job_ids, targets=targets)
 
 
-def publish_after_commit(*pools):
+@contextmanager
+def publisher_scope(publisher):
+    """Temporarily inject a callback publisher in this execution context.
+
+    Context-local scope keeps in-process tests and callers isolated across
+    parallel threads/tasks. Registered callbacks retain the selected publisher
+    after the scope exits, matching Django's deferred on-commit behavior.
+    """
+    if not callable(publisher):
+        raise ValueError("convergence publisher must be callable")
+    token = _PUBLISHER.set(publisher)
+    try:
+        yield
+    finally:
+        _PUBLISHER.reset(token)
+
+
+def publish_after_commit(*pools, publisher=None):
     """Schedule publication after persistence; duplicates converge by hash."""
+    publisher = publisher or _PUBLISHER.get() or publish_pool
     clean = sorted({str(pool or "default") for pool in pools if pool is not None})
     for pool in clean:
-        transaction.on_commit(lambda pool=pool: publish_pool(pool))
+        transaction.on_commit(
+            lambda pool=pool, publisher=publisher: publisher(pool))
     return clean
