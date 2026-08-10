@@ -210,8 +210,15 @@ to the configured deployment branch is the authorization event.
 
 ### Durable onboarding
 
-Admin → WebApps drives a resumable four-step operation: **App → Address →
-Connect GitHub → Verify**. `WebAppOnboardingOperation` stores versioned intent,
+Admin → WebApps drives a resumable four-step operation: **WebApp → Domain &
+DNS → GitHub → Go live**. The first screen collects only application identity;
+repository and build settings wait until the GitHub step. At Domain & DNS the
+operator selects a managed domain or buys a new one, and can open the permanent
+Domains & DNS control to register an existing domain. The onboarding service
+creates the exact CNAME itself. Certificate selection and renewal remain
+automatic implementation details rather than a wizard choice.
+
+`WebAppOnboardingOperation` stores versioned intent,
 provider identity, bounded evidence, a revision, and a short lease. It never
 stores a registrar confirmation token, GitHub installation token, deployment
 key, certificate material, or raw provider error. `WebApp`, `Domain`,

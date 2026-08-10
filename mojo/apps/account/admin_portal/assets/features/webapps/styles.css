@@ -1,14 +1,39 @@
 .credential-status { container-type: inline-size; }
 .onboarding-panel { border-color: var(--accent, #5b6cff); }
-.onboarding-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; list-style: none; margin: 0 0 1.25rem; padding: 0; }
+.onboarding-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; list-style: none; margin: 0 0 1rem; padding: 0 1rem; }
 .onboarding-steps li { display: flex; align-items: center; gap: .45rem; color: var(--muted); font-size: .85rem; }
-.onboarding-steps li span { display: grid; place-items: center; width: 1.65rem; height: 1.65rem; border: 1px solid var(--border); border-radius: 50%; }
+.onboarding-steps li span { display: grid; place-items: center; width: 1.65rem; height: 1.65rem; border: 1px solid var(--line); border-radius: 50%; }
 .onboarding-steps li.current { color: var(--text); font-weight: 700; }
 .onboarding-steps li.current span { border-color: var(--accent); color: var(--accent); }
 .onboarding-steps li.complete span { border-color: var(--success); color: var(--success); }
 .wizard-choice, .wizard-form { display: grid; gap: .9rem; }
-.onboarding-evidence { margin-bottom: 1rem; }
+.onboarding-panel > .wizard-choice { padding: 0 1rem 1rem; }
+.wizard-progress { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; color: var(--muted); font-size: .68rem; font-weight: 700; }
+.wizard-progress span { padding: 7px 8px; border-top: 2px solid var(--line); }
+.wizard-progress span.current { border-color: var(--accent); color: var(--text); }
+.wizard-intro { display: flex; align-items: flex-start; gap: .7rem; padding: .85rem; border-radius: 9px; background: var(--surface-2); }
+.wizard-intro svg { flex: 0 0 auto; margin-top: .12rem; color: var(--accent); }
+.wizard-intro strong { display: block; }
+.wizard-intro p { margin: .2rem 0 0; color: var(--muted); font-size: .82rem; line-height: 1.45; }
+.wizard-advanced { border-top: 1px solid var(--line); padding-top: .65rem; }
+.wizard-advanced summary { color: var(--muted); cursor: pointer; font-size: .78rem; font-weight: 700; }
+.wizard-advanced .field { margin-top: .75rem; }
+.choice-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
+.choice-tab { padding: .7rem .8rem; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: .78rem; font-weight: 700; cursor: pointer; }
+.choice-tab:hover, .choice-tab:focus-visible { border-color: var(--accent); color: var(--text); }
+.choice-tab.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--text); }
+.hostname-preview { display: grid; gap: .2rem; padding: .75rem .85rem; border: 1px solid var(--line); border-radius: 8px; }
+.hostname-preview span { color: var(--muted); font-size: .72rem; }
+.hostname-value { overflow-wrap: anywhere; font-size: .9rem; }
+.domain-actions, .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: .5rem; flex-wrap: wrap; }
+.row-actions { white-space: nowrap; }
+.onboarding-evidence { margin: 0 1rem 1rem; color: var(--muted); font-size: .75rem; }
+.onboarding-evidence summary { cursor: pointer; font-weight: 700; }
+.onboarding-evidence .details { margin-top: .65rem; }
 @media (max-width: 540px) {
   .onboarding-steps { grid-template-columns: 1fr 1fr; }
   .onboarding-steps li { min-width: 0; }
+  .wizard-progress { grid-template-columns: 1fr 1fr; }
+  .choice-tabs { grid-template-columns: 1fr; }
+  .domain-actions { justify-content: flex-start; }
 }

@@ -90,9 +90,11 @@ def test_feature_asset_contracts(opts):
 @th.django_unit_test("WebApps owns resumable onboarding and lost-response UX")
 def test_webapp_onboarding_asset_contract(opts):
     webapps = (ASSETS / "features/webapps/page.js").read_text()
+    webapp_styles = (ASSETS / "features/webapps/styles.css").read_text()
+    platform = (ASSETS / "features/platform/page.js").read_text()
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
 
-    for step in ("App", "Address", "Connect GitHub", "Verify"):
+    for step in ("WebApp", "Domain & DNS", "GitHub", "Go live"):
         assert step in webapps, f"WebApp onboarding omitted {step}"
     for endpoint in (
             "/api/edge/webapp/onboarding/options",
@@ -109,6 +111,28 @@ def test_webapp_onboarding_asset_contract(opts):
         "the UI implies apex onboarding is supported"
     assert "aria-current" in webapps and "aria-label': 'WebApp onboarding progress" in webapps, \
         "wizard progress is not exposed to assistive technology"
+    start = webapps[webapps.index("function startOnboarding"):webapps.index("export async function webappsPage")]
+    github = webapps[webapps.index("function githubChoice"):webapps.index("function wizardChoice")]
+    assert "owner/repository" not in start and "owner/repository" in github, \
+        "GitHub fields leaked into the WebApp identity step"
+    assert "Continue to Domain & DNS" in start and "A guided setup with DNS included." in start, \
+        "the first wizard step does not explain its single purpose"
+    assert "We create the DNS record automatically" in webapps and "HTTPS is handled automatically" in webapps, \
+        "the domain step does not explain automatic DNS and HTTPS"
+    assert "target: '_blank', rel: 'noopener'" in webapps and "Add or connect a domain" in webapps, \
+        "WebApp onboarding cannot reach first-class domain management safely"
+    assert "group=${encodeURIComponent(groupId || '')}" in webapps and "group: groupId" in webapps, \
+        "domain discovery and purchase are not bound to the selected WebApp group"
+    assert "ctx.groups?.[0]?.id" not in webapps, \
+        "WebApp onboarding silently fell back to the first visible group"
+    assert "Domains & DNS" in platform and "Add domains and manage the public records" in platform, \
+        "Platform still buries domain management under Advanced"
+    assert ".row-actions" in webapp_styles and "gap: .5rem" in webapp_styles, \
+        "WebApp table actions have no stable spacing contract"
+    assert "Technical details" in webapps and "].filter(Boolean)" in webapps, \
+        "provider evidence or empty states can leak raw values into the wizard"
+    assert "var(--border)" not in webapp_styles, \
+        "WebApp progress uses an undefined border token"
     assert "--onboarding-state" in preview and "lost_key" in preview, \
         "preview cannot render onboarding recovery states"
     assert "cls._safe_payload(value)" in preview, \

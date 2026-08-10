@@ -10,6 +10,9 @@ pages. It provides System Setup/readiness, a system overview, User and Group
 management, permanent Domains/Credentials/DNS/Certificates/Upstreams/Vhosts/
 Routes pages, an Activity center for Incidents, Events, Logs, and Tickets, and
 WebApp `MOJO_DEPLOY_KEY` management with light, dark, and system themes.
+Domains & DNS is a first-class Platform and WebApps destination: operators can
+register an existing domain or buy a new one before selecting it during WebApp
+onboarding.
 
 System Setup is a stricter surface than ordinary Admin pages: only an active
 literal superuser with an interactive JWT can use it. See the
@@ -41,6 +44,14 @@ set is visibly refresh-required and further writes are blocked. Domain purchase
 keeps the quote token in the confirmation modal only and requires the operator
 to type the exact domain and price. Provider credentials are write-only and
 cleared from the form after verification.
+
+WebApp onboarding is a focused **WebApp → Domain & DNS → GitHub → Go live**
+wizard. The identity screen does not ask for repository details. Choosing a
+managed domain creates the required CNAME automatically, while the permanent
+Domains & DNS page handles adding, adopting, purchasing, and inspecting names.
+Users with WebApp authority but without `manage_dns` can select an available
+managed domain; adding one remains a DNS administrator action. HTTPS issuance
+and renewal are automatic and do not appear as onboarding decisions.
 
 Certificates poll list/detail metadata only. Upstreams are declared or retired,
 never repointed. The Vhost wizard exposes only the four structured edge shapes;

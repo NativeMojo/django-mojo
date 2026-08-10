@@ -99,7 +99,7 @@ function field(label, input, help = '') {
 }
 
 function stepList(operation) {
-  const steps = [['app', 'App'], ['address', 'Address'], ['github', 'Connect GitHub'], ['verify', 'Verify']];
+  const steps = [['app', 'WebApp'], ['address', 'Domain & DNS'], ['github', 'GitHub'], ['verify', 'Go live']];
   const current = steps.findIndex(([id]) => id === operation.cursor);
   return h('ol', {class: 'onboarding-steps', 'aria-label': 'WebApp onboarding progress'},
     ...steps.map(([id, label], index) => h('li', {
@@ -121,43 +121,88 @@ async function chooseStep(operation, choice, update, message) {
   }
 }
 
-function addressChoice(operation, ctx, update) {
+function addressChoice(operation, ctx, update, groupId) {
   const wrap = h('div', {class: 'wizard-choice'});
   const message = h('div', {class: 'form-message', role: 'alert'});
   const label = h('input', {value: 'www', autocomplete: 'off'});
-  const mode = h('select', {}, h('option', {value: 'existing', text: 'Use a managed domain'}),
-    h('option', {value: 'purchase', text: 'Purchase a new domain'}));
+  const modeButtons = h('div', {class: 'choice-tabs', role: 'group', 'aria-label': 'Domain source'});
   const choices = h('div');
+  const hostname = h('strong', {class: 'hostname-value', text: 'www.your-domain.com'});
+  let mode = 'existing';
   let quote = null;
+
+  function selectMode(next) {
+    mode = next;
+    modeButtons.querySelectorAll('button').forEach((button) => {
+      const active = button.dataset.mode === mode;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    renderMode();
+  }
+
+  const modes = [['existing', 'Use managed domain']];
+  if (ctx.capabilities.manage_network) modes.push(['purchase', 'Buy new domain']);
+  modes.forEach(([value, text]) => modeButtons.append(h('button', {
+    class: `choice-tab ${value === mode ? 'active' : ''}`, type: 'button', 'data-mode': value,
+    'aria-pressed': value === mode ? 'true' : 'false', onclick: () => selectMode(value),
+  }, text)));
+
   async function renderMode() {
     choices.replaceChildren();
-    if (mode.value === 'existing') {
+    message.textContent = '';
+    if (mode === 'existing') {
       const domain = h('select', {}, h('option', {value: '', text: 'Select a domain'}));
-      try {
-        listData(await api(`/api/dnsman/domain?group=${encodeURIComponent(ctx.groups?.[0]?.id || '')}`))
-          .filter((row) => row.status === 'active' && row.verified !== false)
-          .forEach((row) => domain.append(h('option', {value: row.id, text: row.name})));
-      } catch (error) { message.textContent = error.message; }
-      choices.append(field('Managed domain', domain), h('button', {class: 'button primary', onclick: () => {
-        if (!domain.value) { message.textContent = 'Select a managed domain.'; return; }
-        chooseStep(operation, {domain: Number(domain.value), label: label.value}, update, message);
-      }}, 'Continue'));
+      const refresh = h('button', {class: 'button ghost compact', type: 'button'}, icon('refresh'), 'Refresh domains');
+      const updateHostname = () => {
+        const domainName = domain.selectedOptions[0]?.dataset.name || 'your-domain.com';
+        hostname.textContent = `${label.value.trim() || 'www'}.${domainName}`;
+      };
+      const loadManagedDomains = async () => {
+        refresh.disabled = true;
+        domain.replaceChildren(h('option', {value: '', text: 'Select a domain'}));
+        try {
+          listData(await api(`/api/dnsman/domain?group=${encodeURIComponent(groupId || '')}`))
+            .filter((row) => row.status === 'active' && row.verified !== false)
+            .forEach((row) => domain.append(h('option', {value: row.id, text: row.name, 'data-name': row.name})));
+          if (domain.options.length === 1) message.textContent = ctx.capabilities.manage_network ?
+            'No managed domains yet. Add or connect one, then refresh this list.' :
+            'No managed domains are available. Ask a DNS administrator to add one, then refresh this list.';
+          updateHostname();
+        } catch (error) { message.textContent = error.message; }
+        finally { refresh.disabled = false; }
+      };
+      refresh.addEventListener('click', loadManagedDomains);
+      domain.addEventListener('change', updateHostname);
+      label.addEventListener('input', updateHostname);
+      choices.append(field('Managed domain', domain, 'Choose a domain already controlled by this group.'),
+        h('div', {class: 'domain-actions'},
+          ctx.capabilities.network || ctx.capabilities.manage_network ? h('a', {
+            class: 'button ghost compact', href: routeHref('domains'), target: '_blank', rel: 'noopener',
+          }, icon('plus'), 'Add or connect a domain') : null,
+          refresh),
+        h('button', {class: 'button primary', type: 'button', onclick: () => {
+          if (!domain.value) { message.textContent = 'Select a managed domain.'; return; }
+          chooseStep(operation, {domain: Number(domain.value), label: label.value}, update, message);
+        }}, 'Configure DNS and continue'));
+      await loadManagedDomains();
       return;
     }
     const name = h('input', {placeholder: 'example.com', autocomplete: 'off'});
-    const quoteButton = h('button', {class: 'button'}, 'Get live quote');
+    const quoteButton = h('button', {class: 'button', type: 'button'}, 'Get live quote');
     const confirm = h('div');
     quoteButton.addEventListener('click', async () => {
       try {
         quote = await apiOnce('/api/dnsman/registrar/quote', {method: 'POST', body: JSON.stringify({
-          group: ctx.groups?.[0]?.id, domain: name.value, years: 1,
+          group: groupId, domain: name.value, years: 1,
         })});
+        hostname.textContent = `${label.value.trim() || 'www'}.${quote.name}`;
         confirm.replaceChildren(h('div', {class: 'callout warning'}, icon('alert'), h('div', {},
           h('strong', {text: `${quote.name} — ${quote.price} ${quote.currency}`}),
           h('p', {text: `Quote expires ${formatDate(quote.expires)}. Type the exact domain and price to authorize the purchase.`}))),
         field('Confirm domain', h('input', {id: 'purchase-domain', autocomplete: 'off'})),
         field('Confirm price', h('input', {id: 'purchase-price', inputmode: 'decimal', autocomplete: 'off'})),
-        h('button', {class: 'button danger', onclick: async () => {
+        h('button', {class: 'button danger', type: 'button', onclick: async () => {
           const payload = {purchase: quote.purchase, confirm_token: quote.token,
             confirm_domain: confirm.querySelector('#purchase-domain').value,
             confirm_price: confirm.querySelector('#purchase-price').value, label: label.value};
@@ -168,8 +213,11 @@ function addressChoice(operation, ctx, update) {
     });
     choices.append(field('Domain to purchase', name), quoteButton, confirm);
   }
-  mode.addEventListener('change', renderMode);
-  wrap.append(field('Subdomain', label, 'Apex onboarding is intentionally refused.'), field('Address source', mode), choices, message);
+  wrap.append(h('div', {class: 'wizard-intro'}, icon('globe'), h('div', {},
+    h('strong', {text: 'Choose the public address'}),
+    h('p', {text: 'We create the DNS record automatically. HTTPS is handled automatically too.'}))),
+  modeButtons, field('Subdomain', label, 'Use a concrete label such as www or app. Apex onboarding is intentionally refused.'),
+  h('div', {class: 'hostname-preview'}, h('span', {text: 'Your WebApp will open at'}), hostname), choices, message);
   renderMode();
   return wrap;
 }
@@ -191,20 +239,20 @@ function githubChoice(operation, update) {
     }, update, message)}, 'Connect and verify'), message);
 }
 
-function wizardChoice(operation, ctx, update) {
+function wizardChoice(operation, ctx, update, groupId) {
   const message = h('div', {class: 'form-message', role: 'alert'});
   if (operation.cursor === 'app') return h('div', {class: 'wizard-choice'},
     h('p', {text: 'Create or adopt the application profile using the frozen values above.'}),
     h('button', {class: 'button primary', onclick: () => chooseStep(operation, {}, update, message)}, 'Create application'), message);
-  if (operation.cursor === 'address') return addressChoice(operation, ctx, update);
+  if (operation.cursor === 'address') return addressChoice(operation, ctx, update, groupId);
   if (operation.cursor === 'github') return githubChoice(operation, update);
   if (operation.cursor === 'verify') return h('div', {class: 'wizard-choice'},
-    h('p', {text: 'Run a DNS-pinned HTTPS request to the owned hostname. Redirects and non-public addresses are refused.'}),
-    h('button', {class: 'button primary', onclick: () => chooseStep(operation, {}, update, message)}, 'Verify HTTPS root'), message);
+    h('p', {text: 'Confirm that the public address serves this WebApp. DNS and HTTPS have already been configured.'}),
+    h('button', {class: 'button primary', onclick: () => chooseStep(operation, {}, update, message)}, 'Check public address'), message);
   return h('div', {class: 'callout success'}, icon('check'), h('p', {text: 'Onboarding is complete.'}));
 }
 
-function onboardingPanel(initial, ctx, reloadApps) {
+function onboardingPanel(initial, ctx, reloadApps, groupId) {
   let operation = initial;
   const root = h('section', {class: 'panel onboarding-panel'});
   const update = (next) => { operation = next.operation || next; render(); };
@@ -214,14 +262,14 @@ function onboardingPanel(initial, ctx, reloadApps) {
   }
   function render() {
     const evidence = Object.entries(operation.evidence || {}).map(([key, value]) =>
-      h('div', {}, h('dt', {text: key}), h('dd', {}, badge(value.status || 'recorded'))));
-    root.replaceChildren(h('div', {class: 'panel-heading'}, h('div', {},
+      h('div', {}, h('dt', {text: key}), h('dd', {}, badge(value?.status || 'recorded'))));
+    root.replaceChildren(...[h('div', {class: 'panel-heading'}, h('div', {},
       h('h2', {text: operation.profile?.display_name || operation.profile?.slug || 'New WebApp'}),
       h('p', {text: `${operation.status} · revision ${operation.revision}`})),
       h('button', {class: 'button compact', onclick: reconcile}, icon('refresh'), 'Reconcile status')),
     stepList(operation), operation.last_error ? h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: operation.last_error})) : null,
-    evidence.length ? h('dl', {class: 'details onboarding-evidence'}, ...evidence) : null,
-    wizardChoice(operation, ctx, update), h('div', {class: 'form-message', role: 'alert'}));
+    evidence.length ? h('details', {class: 'onboarding-evidence'}, h('summary', {text: 'Technical details'}), h('dl', {class: 'details'}, ...evidence)) : null,
+    wizardChoice(operation, ctx, update, groupId), h('div', {class: 'form-message', role: 'alert'})].filter(Boolean));
   }
   render(); return root;
 }
@@ -231,29 +279,53 @@ function startOnboarding(ctx, mount, reloadApps) {
   const slug = h('input', {placeholder: 'customer-portal', autocomplete: 'off'});
   const name = h('input', {placeholder: 'Customer portal', autocomplete: 'off'});
   const environment = h('select', {}, ...['production', 'staging', 'preview', 'development'].map((value) => h('option', {value, text: value})));
-  const repository = h('input', {placeholder: 'owner/repository', autocomplete: 'off'});
-  const ref = h('input', {value: 'main', autocomplete: 'off'});
-  const output = h('input', {value: 'dist', autocomplete: 'off'});
   const bucket = h('select');
+  const advanced = h('details', {class: 'wizard-advanced'}, h('summary', {text: 'Advanced'}), field('Release bucket', bucket, 'Storage is selected automatically when only one bucket is available.'));
   const message = h('div', {class: 'form-message', role: 'alert'});
-  const submit = h('button', {class: 'button primary'}, 'Start onboarding');
-  api(`/api/edge/webapp/onboarding/options?group=${encodeURIComponent(group.value)}`).then((data) => {
-    bucket.replaceChildren(...(data.buckets || []).map((value) => h('option', {value, text: value})));
-  }).catch((error) => { message.textContent = error.message; });
-  const content = h('div', {class: 'wizard-form'}, field('Group', group), field('Application slug', slug),
-    field('Display name', name), field('Environment', environment), field('Release bucket', bucket),
-    field('GitHub repository', repository), field('Deployment ref', ref), field('Build output', output),
-    message, h('div', {class: 'form-actions'}, submit));
-  const close = openModal({title: 'Onboard WebApp', subtitle: 'App → Address → Connect GitHub → Verify', content});
+  const submit = h('button', {class: 'button primary'}, 'Continue to Domain & DNS');
+  let slugEdited = false;
+  const slugify = (value) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  name.addEventListener('input', () => { if (!slugEdited) slug.value = slugify(name.value); });
+  slug.addEventListener('input', () => { slugEdited = true; });
+  async function loadOptions() {
+    submit.disabled = true; message.textContent = '';
+    try {
+      const data = await api(`/api/edge/webapp/onboarding/options?group=${encodeURIComponent(group.value)}`);
+      bucket.replaceChildren(...(data.buckets || []).map((value) => h('option', {value, text: value})));
+      advanced.hidden = bucket.options.length <= 1;
+      if (!bucket.options.length) message.textContent = 'No release storage is configured for this installation.';
+      submit.disabled = !bucket.options.length;
+    } catch (error) { message.textContent = error.message; }
+  }
+  group.addEventListener('change', loadOptions);
+  loadOptions();
+  const content = h('div', {class: 'wizard-form'},
+    h('div', {class: 'wizard-progress'}, h('span', {class: 'current', text: '1 WebApp'}), h('span', {text: '2 Domain & DNS'}), h('span', {text: '3 GitHub'}), h('span', {text: '4 Go live'})),
+    h('div', {class: 'wizard-intro'}, icon('deploy'), h('div', {}, h('strong', {text: 'Name the application'}), h('p', {text: 'Start with the WebApp itself. Domain and GitHub setup come next, one clear step at a time.'}))),
+    field('Group', group), field('Display name', name, 'The human-friendly name shown in Admin.'),
+    field('WebApp slug', slug, 'A short stable identifier, generated from the name.'), field('Environment', environment),
+    advanced, message, h('div', {class: 'form-actions'}, submit));
+  const close = openModal({title: 'Create WebApp', subtitle: 'A guided setup with DNS included.', content});
   submit.addEventListener('click', async () => {
     submit.disabled = true;
     try {
       const result = await api('/api/edge/webapp/onboarding/create', {method: 'POST', body: JSON.stringify({
         group: Number(group.value), slug: slug.value, display_name: name.value,
         environment: environment.value, bucket: bucket.value,
-        github_repository: repository.value, deployment_ref: ref.value, build_output: output.value,
+        github_repository: '', deployment_ref: 'main', build_output: 'dist',
       })});
-      close(); mount.replaceChildren(onboardingPanel(result.operation, ctx, reloadApps));
+      let operation = result.operation;
+      if (operation.cursor === 'app') {
+        try {
+          const next = await apiOnce('/api/edge/webapp/onboarding/choose', {method: 'POST', body: JSON.stringify({
+            operation: operation.operation_id, revision: operation.revision, step: 'app', choice: {},
+          })});
+          operation = next.operation || next;
+        } catch (_) {
+          // The durable panel keeps the explicit App continuation available.
+        }
+      }
+      close(); mount.replaceChildren(onboardingPanel(operation, ctx, reloadApps, Number(group.value)));
     } catch (error) { message.textContent = error.message; submit.disabled = false; }
   });
 }
@@ -262,9 +334,12 @@ export async function webappsPage(ctx) {
   const root = h('div', {class: 'page'}); let linkedInspectorOpened = false;
   const onboarding = h('div', {class: 'onboarding-mount'});
   async function render() {
-    root.replaceChildren(pageHeader('Deployments', 'WebApps', 'Durable App → Address → GitHub → Verify onboarding.'), onboarding);
-    const panel = h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: 'Applications'}), h('p', {text: 'Manage onboarding and MOJO_DEPLOY_KEY without exposing unrelated API keys.'})),
-      ctx.capabilities.manage_webapps ? h('button', {class: 'button primary', onclick: () => startOnboarding(ctx, onboarding, render)}, icon('plus'), 'Onboard WebApp') : null));
+    const canManageDomains = ctx.capabilities.network || ctx.capabilities.manage_network;
+    root.replaceChildren(pageHeader('Deployments', 'WebApps', 'Create an application, connect its domain, then deploy from GitHub.', [
+      canManageDomains ? h('a', {class: 'button ghost', href: routeHref('domains')}, icon('globe'), 'Domains & DNS') : null,
+      ctx.capabilities.manage_webapps ? h('button', {class: 'button primary', onclick: () => startOnboarding(ctx, onboarding, render)}, icon('plus'), 'Onboard WebApp') : null,
+    ].filter(Boolean)), onboarding);
+    const panel = h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: 'Applications'}), h('p', {text: 'Manage onboarding and MOJO_DEPLOY_KEY without exposing unrelated API keys.'}))));
     root.append(panel);
     try {
       const rows = listData(await api('/api/edge/webapp'));

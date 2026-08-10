@@ -43,7 +43,7 @@ function readinessStrip(report) {
 function networkChecklist(report) {
   const map = new Map((report?.sections || []).map((section) => [section.code, section]));
   const rows = [
-    ['hosting_dns', 'Domains & certificates', '#/domains', 'globe'],
+    ['hosting_dns', 'Domains & DNS', '#/domains', 'globe'],
     ['hosting_vhosts', 'Vhosts & routes', '#/vhosts', 'deploy'],
     ['edge_fleet', 'Fleet convergence', '#/vhosts', 'activity'],
     ['webapp_keys', 'WebApp deploy keys', '#/webapps', 'key'],
@@ -189,10 +189,14 @@ function evidenceCard(name, section) {
 
 function platformDestinations(ctx) {
   const advanced = ctx.features?.advanced?.enabled === true;
+  const network = ctx.capabilities.network || ctx.capabilities.manage_network;
   return h('section', {class: 'platform-destinations'},
     ctx.capabilities.setup ? h('a', {class: 'destination-card', href: routeHref('setup')},
       icon('settings'), h('div', {}, h('strong', {text: 'System Setup'}),
         h('span', {text: 'Check or repair installation dependencies as a literal superuser.'})), icon('chevron')) : null,
+    network ? h('a', {class: 'destination-card', href: routeHref('domains')},
+      icon('globe'), h('div', {}, h('strong', {text: 'Domains & DNS'}),
+        h('span', {text: 'Add domains and manage the public records your WebApps use.'})), icon('chevron')) : null,
     advanced ? h('details', {class: 'advanced-disclosure'},
       h('summary', {}, icon('settings'), h('span', {}, h('strong', {text: 'Advanced'}),
         h('small', {text: 'Raw network, hosting, inventory, and protected settings'})), icon('chevron')),
