@@ -11,6 +11,7 @@ def bootstrap(groups):
         "setup": True, "people": True, "groups": True,
         "network": True, "manage_network": True,
         "webapps": True, "manage_webapps": True,
+        "view_logs": True, "view_security": True, "manage_security": True,
     }
     return {
         "version": "1.9.0", "admin_path": "/", "groups": groups,
@@ -22,8 +23,8 @@ def bootstrap(groups):
     }
 
 
-def reset(handler, fixtures, *, key_state="active", setup_state="idle"):
+def reset(handler, fixtures, *, key_state="active", setup_state="idle", activity_state="full"):
     """Reset every stateful provider so scenarios never leak across runs."""
     for provider in PROVIDERS:
         provider.reset(handler, fixtures, key_state=key_state,
-                       setup_state=setup_state)
+                       setup_state=setup_state, activity_state=activity_state)

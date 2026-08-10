@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .gallery import bootstrap, reset
+from .features import activity
 
 
 ROOT = Path(__file__).resolve().parents[2] / "mojo/apps/account/admin_portal"
@@ -168,6 +169,10 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return self._send("window.MojoAuth={init:function(){},getAuthHeader:function(){return 'Bearer preview';},getRefreshToken:function(){return null;},logout:function(){}};", "application/javascript; charset=utf-8")
         if path == "/api/account/admin/bootstrap":
             return self._send(bootstrap(GROUPS))
+        activity_response = activity.get(self, parsed)
+        if activity_response is not None:
+            status, payload = activity_response
+            return self._send(payload, status=status)
         if path == "/api/account/admin/setup/options":
             active = self.setup_operation
             if active and active.get("status") in {"succeeded", "failed", "cancelled"}:
@@ -303,7 +308,13 @@ class PreviewHandler(BaseHTTPRequestHandler):
         return self._send({"saved": True, "id": 999})
 
     def do_PUT(self):
-        self._read_body()
+        path = urlparse(self.path).path
+        payload = self._read_body()
+        self._record_event(path, payload)
+        activity_response = activity.put(self, path, payload)
+        if activity_response is not None:
+            status, body = activity_response
+            return self._send(body, status=status)
         return self._send({"saved": True})
 
     def do_DELETE(self):
@@ -316,12 +327,14 @@ def main():
     parser.add_argument("--port", type=int, default=5608)
     parser.add_argument("--key-state", choices=("missing", "active", "rotated", "revoked"), default="active")
     parser.add_argument("--setup-state", choices=("idle", "choice"), default="idle")
+    parser.add_argument("--activity-state", choices=("full", "empty", "unavailable"), default="full")
     args = parser.parse_args()
     reset(PreviewHandler, {
         "records": RECORDS, "credentials": CREDENTIALS,
         "vhosts": VHOSTS, "routes": ROUTES,
         "setup_choice": setup_choice_operation,
-    }, key_state=args.key_state, setup_state=args.setup_state)
+    }, key_state=args.key_state, setup_state=args.setup_state,
+        activity_state=args.activity_state)
     print(f"Admin visual fixture ({args.key_state} key): http://{HOST}:{args.port}/", flush=True)
     try:
         ThreadingHTTPServer((HOST, args.port), PreviewHandler).serve_forever()

@@ -48,6 +48,7 @@ def test_anonymous_delivery_is_gate_only(opts):
     assert client.get("/admin/assets/features/people/feature.js").status_code == 404
     assert client.get("/admin/assets/features/advanced/page.js").status_code == 404
     assert client.get("/admin/assets/features/platform/page.js").status_code == 404
+    assert client.get("/admin/assets/features/activity/page.js").status_code == 404
 
 
 @th.django_unit_test("interactive JWT creates a path-scoped modular Admin source session")
@@ -65,7 +66,13 @@ def test_authenticated_admin_delivery(opts):
     assert data.get("capabilities", {}).get("manage_network") is True
     assert tuple(data.get("features", {})) == (
         "dashboard", "people", "webapps", "activity", "platform", "advanced")
-    assert data["features"]["activity"]["enabled"] is False
+    assert data["features"]["activity"] == {
+        "id": "activity", "enabled": True,
+        "capabilities": {
+            "view_logs": True, "view_security": True,
+            "manage_security": True,
+        },
+    }
     assert data["features"]["platform"]["capabilities"]["setup"] is True
     assert data["features"]["advanced"]["capabilities"]["manage"] is True
 
@@ -74,6 +81,7 @@ def test_authenticated_admin_delivery(opts):
     for asset in ("assets/app.js", "assets/features/registry.js",
                   "assets/features/advanced/page.js",
                   "assets/features/platform/page.js",
+                  "assets/features/activity/page.js",
                   "assets/components/relationship.js"):
         response = opts.client.get(f"/admin/{asset}")
         assert response.status_code == 200, f"private asset unavailable: {asset}"
