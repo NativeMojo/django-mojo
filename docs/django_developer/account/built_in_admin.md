@@ -81,15 +81,20 @@ built in and stored only in browser local storage. The responsive shell keeps
 keyboard-visible controls, traps focus in modals, restores focus on close, and
 uses text nodes for API data; only the fixed local SVG icon catalog uses HTML.
 
-The Platform feature owns the System Setup/readiness/control-plane journey and
-is visible only to a literal superuser. Its private
+The Platform feature owns API/service health, UUID-addressed deployment
+history and recovery, fleet/certificate/security evidence, and the System
+Setup/readiness journey. Its private
 `assets/features/platform/page.js` module renders the normalized readiness
 report, durable step progress, typed
 late choices, cancellation, and bounded live log. See
 [System Setup and Readiness](system_setup.md) for the service and security
 contracts.
 
-The Advanced feature owns raw Domains, Credentials, DNS, Certificates,
+See [Platform and Advanced Admin controls](admin_portal/platform.md) for the
+dedicated permissions, bounded evidence contract, and typed settings boundary.
+
+The Advanced feature owns read-only hosting/AWS inventory, typed safe settings,
+and raw Domains, Credentials, DNS, Certificates,
 Upstreams, Vhosts, and Routes. Its `assets/features/advanced/page.js` module is
 the permanent hosting UI. It does not
 create portal-only mutation endpoints. Provider DNS writes are keyed

@@ -1,1 +1,4 @@
 .setup-flow { view-transition-name: admin-platform-setup; }
+.health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: 1rem; }
+.platform-evidence .evidence-json { max-height: 22rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .78rem; }
+.deployment-row .form-actions { justify-content: flex-end; }

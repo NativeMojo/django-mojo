@@ -12,7 +12,7 @@
 # NEXT run resolves the new copy through the shim's `locate`.
 #
 # Modes:
-#   update.sh --sha <7-40 hex> --framework <version> [--migrate]
+#   update.sh --sha <7-40 hex> --framework <version> --deployment <uuid> [--migrate]
 #       Deploy mode — what the engine's deploy_node job invokes. Checks out
 #       the NAMED commit (never origin/main), installs the PINNED framework
 #       version, and reports terminal status via `manage.py deploy_status`.
@@ -51,7 +51,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S'): $*" | tee -a var/update.log; }
 usage() {
     cat >&2 <<'EOF'
 usage:
-  aws/update.sh --sha <7-40 hex> --framework <version> [--migrate]   (deploy)
+  aws/update.sh --sha <7-40 hex> --framework <version> --deployment <uuid> [--migrate]   (deploy)
   aws/update.sh --manual                                             (hands-on)
 
 A bare invocation is refused: deploys are driven by the fleet orchestrator
@@ -66,11 +66,13 @@ MODE=""
 SHA=""
 FRAMEWORK=""
 MIGRATE=0
+DEPLOYMENT=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --sha)       SHA="${2:-}"; shift 2 || { usage; exit 2; } ;;
         --framework) FRAMEWORK="${2:-}"; shift 2 || { usage; exit 2; } ;;
+        --deployment) DEPLOYMENT="${2:-}"; shift 2 || { usage; exit 2; } ;;
         --migrate)   MIGRATE=1; shift ;;
         --manual)    MODE="manual"; shift ;;
         *)           usage; exit 2 ;;
@@ -78,7 +80,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$MODE" = "manual" ]; then
-    if [ -n "$SHA" ] || [ -n "$FRAMEWORK" ] || [ "$MIGRATE" = "1" ]; then
+    if [ -n "$SHA" ] || [ -n "$FRAMEWORK" ] || [ -n "$DEPLOYMENT" ] || [ "$MIGRATE" = "1" ]; then
         usage; exit 2
     fi
 elif [ -n "$SHA" ] || [ -n "$FRAMEWORK" ]; then
@@ -90,6 +92,9 @@ elif [ -n "$SHA" ] || [ -n "$FRAMEWORK" ]; then
     fi
     if ! [[ "$FRAMEWORK" =~ ^[A-Za-z0-9][A-Za-z0-9._!+-]{0,63}$ ]]; then
         echo "invalid --framework: ${FRAMEWORK}" >&2; usage; exit 2
+    fi
+    if ! [[ "$DEPLOYMENT" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]; then
+        echo "invalid --deployment: ${DEPLOYMENT}" >&2; usage; exit 2
     fi
 else
     usage; exit 2
@@ -117,9 +122,9 @@ report_status() {
     # report_status <deploying|failed> <sha> [detail]
     local state="$1" sha="$2" detail="${3:-}" rc=0
     if [ -n "$detail" ]; then
-        python3 bin/manage.py deploy_status set "$state" --sha "$sha" --detail "$detail" || rc=$?
+        python3 bin/manage.py deploy_status set "$state" --sha "$sha" --deployment "$DEPLOYMENT" --detail "$detail" || rc=$?
     else
-        python3 bin/manage.py deploy_status set "$state" --sha "$sha" || rc=$?
+        python3 bin/manage.py deploy_status set "$state" --sha "$sha" --deployment "$DEPLOYMENT" || rc=$?
     fi
     if [ "$rc" = "3" ]; then
         log "deploy_status: deploy superseded — report ignored (tolerated)"
@@ -182,7 +187,7 @@ if [ "$MODE" = "deploy" ]; then
         exit 1
     }
 
-    log "UPDATE STARTED sha=${SHA} framework=${FRAMEWORK} migrate=${MIGRATE}"
+    log "UPDATE STARTED deployment=${DEPLOYMENT} sha=${SHA} framework=${FRAMEWORK} migrate=${MIGRATE}"
     git fetch origin                    || fail_deploy "git fetch"
     git reset --hard "$SHA"             || fail_deploy "git reset to ${SHA}"
     git clean -fd                       || fail_deploy "git clean"
@@ -216,6 +221,10 @@ fi
 VERSION="$(grep '^__version__' config/settings/version.py | cut -d '"' -f 2)"
 log "system now at: ${VERSION}"
 echo "$VERSION" > var/version
+if [ "$MODE" = "deploy" ]; then
+    echo "$SHA" > var/deploy_sha
+    echo "$DEPLOYMENT" > var/deployment_uuid
+fi
 
 # LAST, and redirected — see the header. Cron's `jobman start` brings the
 # engine back on the new code within a minute.

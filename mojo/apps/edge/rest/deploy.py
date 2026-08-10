@@ -27,6 +27,7 @@ logger = logit.get_logger("edge", "edge.log")
 @md.requires_global_perms("manage_deploy")
 def on_deploy(request):
     from mojo.apps.edge.services import deploy
+    from mojo.apps.account.models import User
 
     sha = (request.DATA.get("sha") or request.DATA.get("commit") or "")
     sha = str(sha).strip().lower()
@@ -35,9 +36,14 @@ def on_deploy(request):
 
     actor = f"manual:{getattr(request.user, 'username', None) or 'operator'}"
     try:
-        started = deploy.request_deploy(sha, actor=actor)
-    except (redis_lib.RedisError, OSError) as err:
-        logger.error(f"manual deploy: coordination unavailable: {err}")
+        started = deploy.request_deploy(
+            sha, actor=actor, source="external_api",
+            created_by=request.user if isinstance(request.user, User) else None,
+            idempotency_key=request.META.get("HTTP_IDEMPOTENCY_KEY"))
+    except (redis_lib.RedisError, OSError, deploy.DeploymentCoordinationError) as err:
+        logger.error(
+            "manual deploy: coordination unavailable "
+            f"(error={type(err).__name__[:80]})")
         return JsonResponse(
             dict(status=False, error="deploy coordination unavailable"),
             status=503)

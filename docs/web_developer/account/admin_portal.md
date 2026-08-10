@@ -53,8 +53,9 @@ token for create/rotate and offers revoke; System Setup only links there.
 The packaged portal is divided into six fixed, capability-gated feature lanes:
 Dashboard, People, WebApps, Activity, Platform, and Advanced. Activity owns the
 bounded Incidents, Events, Logs, and Tickets operator journey. Platform owns
-System Setup, readiness, and
-the guided control-plane journey. Advanced owns the raw Domains, Credentials,
+public/local health, UUID deployment recovery, fleet evidence, System Setup,
+and readiness. Advanced owns bounded hosting/AWS inventory, typed settings,
+and the raw Domains, Credentials,
 DNS, Certificates, Upstreams, Vhosts, Routes, and network resources. Bootstrap
 returns both the stable flat `capabilities` object and a namespaced `features`
 object:
@@ -323,6 +324,8 @@ This prevents non-admin users from escalating their own access.
 | API-key lifecycle | `POST /api/account/admin/apikey/action` | Object edit authority, non-key session, interactive auth in the last 600 seconds |
 | Secure settings | `GET/POST /api/settings`, `DELETE /api/settings/<id>` | `groups` |
 | System Setup | `/api/account/admin/setup/*` | Literal active superuser only |
+| Platform evidence/deploy recovery | `/api/account/admin/platform`, `/api/account/admin/platform/deploy/*` | Dedicated global Platform grants; writes require fresh non-key auth |
+| Advanced evidence/settings | `/api/account/admin/advanced`, `/api/account/admin/advanced/settings` | Dedicated global Advanced grants; settings additionally require literal superuser |
 | Security dashboard | `GET /api/incident/incident`, `GET /api/incident/event` | `security` |
 | Firewall / IP blocks | `GET/POST /api/incident/ipset` — see [IPSet Bulk Blocking](../security/README.md#ipset-bulk-blocking) | `security` |
 | Geofence admin | `GET/POST /api/geo/rules`, `GET/POST /api/geo/allowlist` — see [Geofence Admin](geofence.md) | `security` (or `view_geofence`/`manage_geofence`) |

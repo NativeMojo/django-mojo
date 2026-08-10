@@ -21,9 +21,10 @@ def test_modular_shell_contract(opts):
     assert "features/platform/page.js" not in app and "features/people/page.js" not in app
     for name in ("dashboard", "people", "webapps", "activity", "platform", "advanced"):
         assert f"./{name}/feature.js" in registry
-    assert "routes: ['setup']" in platform and "setupPage(ctx)" in platform
-    assert "const ROUTES = ['domains', 'credentials', 'dns', 'certificates'" in advanced
-    assert "networkPage(ctx, route)" in advanced
+    assert "routes: ['platform', 'deployments', 'setup']" in platform
+    assert "setupPage(ctx)" in platform and "platformPage(ctx, route)" in platform
+    assert "const ROUTES = ['advanced', 'domains', 'credentials', 'dns', 'certificates'" in advanced
+    assert "networkPage(ctx, route)" in advanced and "advancedControlPage(ctx)" in advanced
 
 
 @th.django_unit_test("shared relationship controls preserve paged REST envelopes")
@@ -60,6 +61,8 @@ def test_feature_asset_contracts(opts):
 
     assert "result.token" not in platform and "MOJO_DEPLOY_KEY" not in platform
     assert "apiOnce" in advanced and "refresh-required" in advanced
+    assert "'login.methods'" in advanced and "'registration.methods'" in advanced
+    assert "name === 'password'" in advanced and "Save access methods" in advanced
     assert "class: 'table-wrap', tabindex: '0', role: 'region'" in core
     assert "['ArrowLeft', 'ArrowRight'].includes(event.key)" in core
     assert "canonicalRecordName" in advanced and "sameRecordSet" in advanced

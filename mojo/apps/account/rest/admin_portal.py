@@ -148,6 +148,18 @@ def on_admin_bootstrap(request):
         "webapps": has(["view_dns", "manage_dns", "security"]),
         "manage_webapps": (
             has("manage_webapp") and has(["manage_dns", "security"])),
+        "view_platform": has(["view_platform", "manage_platform", "admin"]),
+        "manage_platform": has(["manage_platform", "admin"]),
+        "view_platform_security": has([
+            "view_platform_security", "manage_platform", "admin"]),
+        "view_advanced": has(["view_advanced", "manage_advanced", "admin"]),
+        "manage_advanced": has(["manage_advanced", "admin"]),
+        "view_advanced_inventory": has([
+            "view_advanced_inventory", "manage_advanced", "admin"]),
+        "view_advanced_security": has([
+            "view_advanced_security", "manage_advanced", "admin"]),
+        "view_advanced_settings": has([
+            "view_advanced_settings", "manage_advanced", "admin"]),
     }
     return {
         "version": mojo.__version__,

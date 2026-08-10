@@ -190,6 +190,51 @@ def probe_public_api(origin, timeout=2.0):
         connection.close()
 
 
+def probe_public_api_details(origin, timeout=2.0):
+    """SSRF-safe bounded version probe with status/body-size metadata."""
+    import json
+    import time
+
+    parsed = urlsplit(origin)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise UnsafePublicProbe("Public probe requires an HTTPS origin")
+    port = parsed.port or 443
+    address = _resolve_public_address(parsed.hostname, port)
+    connection = _PinnedHTTPSConnection(
+        parsed.hostname, port, address, float(timeout))
+    host_header = parsed.hostname
+    if ":" in host_header:
+        host_header = f"[{host_header}]"
+    if port != 443:
+        host_header = f"{host_header}:{port}"
+    started = time.monotonic()
+    try:
+        connection.request(
+            "GET", "/api/version",
+            headers={"Host": host_header, "Accept": "application/json",
+                     "Connection": "close"})
+        response = connection.getresponse()
+        raw = response.read(4097)
+        too_large = len(raw) > 4096
+        payload = {}
+        if not too_large:
+            try:
+                parsed_body = json.loads(raw.decode("utf-8"))
+                payload = parsed_body if isinstance(parsed_body, dict) else {}
+            except (UnicodeDecodeError, ValueError):
+                pass
+        body = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        return {
+            "ok": response.status == 200 and not too_large,
+            "http_status": response.status,
+            "latency_ms": round((time.monotonic() - started) * 1000, 1),
+            "version": str(body.get("version") or "")[:64],
+            "body_truncated": too_large,
+        }
+    finally:
+        connection.close()
+
+
 def trusted_local_api_url(request=None):
     """Build the local probe destination without consulting the Host header."""
     configured = str(settings.get_static("SYSTEM_SETUP_LOCAL_API_URL", "") or "").strip()

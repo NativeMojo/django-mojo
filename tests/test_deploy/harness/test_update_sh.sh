@@ -161,15 +161,24 @@ EOF
 }
 
 run_update() { # args...
-    ( cd "$TMP" && PROJ_PATH="$PROJ" PATH="$STUB:$PATH" bash "$PROJ/aws/update.sh" "$@" )
+    local args=("$@") joined=" $* "
+    if [[ "$joined" == *" --sha "* ]] && [[ "$joined" != *" --deployment "* ]]; then
+        args+=(--deployment "$DEPLOYMENT_UUID")
+    fi
+    ( cd "$TMP" && PROJ_PATH="$PROJ" PATH="$STUB:$PATH" bash "$PROJ/aws/update.sh" "${args[@]}" )
 }
 
 run_update_with_url() { # url args...
     local url="$1"; shift
-    ( cd "$TMP" && SANITY_URL="$url" PROJ_PATH="$PROJ" PATH="$STUB:$PATH" bash "$PROJ/aws/update.sh" "$@" )
+    local args=("$@") joined=" $* "
+    if [[ "$joined" == *" --sha "* ]] && [[ "$joined" != *" --deployment "* ]]; then
+        args+=(--deployment "$DEPLOYMENT_UUID")
+    fi
+    ( cd "$TMP" && SANITY_URL="$url" PROJ_PATH="$PROJ" PATH="$STUB:$PATH" bash "$PROJ/aws/update.sh" "${args[@]}" )
 }
 
 SHA_NEW="2222222222222222222222222222222222222222"
+DEPLOYMENT_UUID="12345678-1234-4123-8123-123456789abc"
 DEFAULT_URL="http://127.0.0.1/api/version"
 SHIM_URL="http://127.0.0.1:8080/api/version"
 
@@ -189,6 +198,8 @@ run_update --sha "0000000000000000000000000000000000000000" --framework "1.5.0" 
 assert_eq "$?" 2 "zero sha exits 2"
 run_update --sha "$SHA_NEW" --framework "1.5; rm -rf /" >/dev/null 2>&1
 assert_eq "$?" 2 "shell metacharacters in --framework exit 2"
+run_update --sha "$SHA_NEW" --framework "1.5.0" --deployment "not-a-uuid" >/dev/null 2>&1
+assert_eq "$?" 2 "invalid deployment UUID exits 2"
 assert_eq "$(wc -l < "$CALLLOG" | tr -d ' ')" 0 "no command ran for any refused argv"
 
 echo "update.sh: short-circuit when already on target (sha prefix + framework)"

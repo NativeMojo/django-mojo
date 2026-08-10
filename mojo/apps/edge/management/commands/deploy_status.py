@@ -10,7 +10,7 @@ Redis key, TTL or compare-and-set conventions in bash. It calls this instead:
 
     manage.py deploy_status get
     manage.py deploy_status set deploying --sha <target-sha>
-    manage.py deploy_status set failed --sha <target-sha> --detail "why"
+    manage.py deploy_status set failed --sha <target-sha> --detail <known-phase>
 
 ``set`` is compare-and-set on the stamped SHA. Exit codes: 0 applied, 3 the
 write was ignored because the deploy was superseded (distinct from argparse's
@@ -22,6 +22,7 @@ import sys
 from django.core.management.base import BaseCommand, CommandError
 
 from mojo.apps.edge.services import deploy
+from mojo.apps.edge.services import platform_deploy
 
 
 class Command(BaseCommand):
@@ -40,8 +41,11 @@ class Command(BaseCommand):
             "--sha", default=None,
             help="The target commit SHA this report belongs to (set only).")
         parser.add_argument(
+            "--deployment", default=None,
+            help="The platform deployment UUID this report belongs to (set only).")
+        parser.add_argument(
             "--detail", default=None,
-            help="Optional failure detail; travels into the deploy incident.")
+            help="Optional update.sh phase; arbitrary values become update_failed.")
 
     def handle(self, *args, **options):
         if options["action"] == "get":
@@ -51,11 +55,35 @@ class Command(BaseCommand):
 
         state = options.get("state")
         sha = options.get("sha") or ""
+        deployment_id = platform_deploy.deployment_id(options.get("deployment"))
         if not state:
             raise CommandError("set requires a state: deploying or failed")
         if not deploy.is_valid_sha(sha):
             raise CommandError("set requires --sha <the target commit sha>")
-        if deploy.set_status(state, sha, detail=options.get("detail")):
+        if not deployment_id:
+            raise CommandError("set requires --deployment <platform deployment UUID>")
+        record = platform_deploy.get(deployment_id)
+        if record is None or record.sha != sha:
+            raise CommandError("deployment UUID does not belong to --sha")
+        if deploy.set_status(
+                state, sha, detail=options.get("detail"),
+                deployment_id=deployment_id):
+            from mojo.apps.edge.services import readiness
+            platform_deploy.evidence(
+                deployment_id, deploy.local_runner_id(), state,
+                proof={"sha": sha, "deployment": deployment_id,
+                       "node": readiness.local_node_proof()},
+                detail={"phase": deploy.failure_phase(options.get("detail"))
+                        if state == deploy.STATUS_FAILED else ""})
+            if state == deploy.STATUS_FAILED:
+                platform_deploy.transition(
+                    deployment_id, "failed",
+                    {"phase": deploy.failure_phase(options.get("detail")),
+                     "source": "node_report"})
+            elif len(record.frozen_roster or []) <= 1:
+                platform_deploy.transition(
+                    deployment_id, "verified",
+                    {"source": "node_report", "sha": sha})
             self.stdout.write(self.style.SUCCESS(f"applied: {state} ({sha})"))
             return
         self.stderr.write(

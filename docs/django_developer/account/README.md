@@ -4,6 +4,7 @@
 - [Built-in Admin Portal](built_in_admin.md) — Private source delivery, Bouncer handoff, Hybrid UI architecture, themes, configuration, and tests
   - [People feature](admin_portal/people.md) — User, Group, permission, sign-in, and credential contracts
 - [System Setup and Readiness](system_setup.md) — Protected installation settings, versioned readiness registry, immutable ownership identity, and durable reconcile-before-retry operations
+- [Platform and Advanced Admin controls](admin_portal/platform.md) — UUID deployment truth, bounded health/inventory evidence, dedicated global permissions, and typed settings
 - [User Model](user.md) — User model, permissions, JWT auth
 - [Group Model](group.md) — Group/organization model, membership, hierarchy
 - [Authentication Flow](auth.md) — JWT tokens, login, password reset

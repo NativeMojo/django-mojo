@@ -18,6 +18,7 @@ never told before the canary proves the release, self is told last, a moved
 target is chained rather than lost, and a ghost cannot stomp a later deploy.
 """
 from unittest import mock
+import uuid
 
 from testit import helpers as th
 
@@ -71,9 +72,11 @@ def _drain(opts):
 @th.django_unit_setup()
 def setup_orchestrate(opts):
     from mojo.apps.edge.services import deploy
+    from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.jobs.models import Job
 
     deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+    PlatformDeployment.objects.all().delete()
     Job.objects.filter(channel=CHANNEL).delete()
     opts.me = deploy.local_runner_id()
 
@@ -101,12 +104,34 @@ def test_alive_filter(opts):
                  f"dead runners must not be deploy targets, got {ids!r}")
 
 
-def _publish_orchestrate(sha):
+def _arm(sha, roster, actor="test"):
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy
+    row = PlatformDeployment.objects.create(
+        sha=sha, actor=actor, source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=list(roster), transitions=[])
+    deploy.set_target(sha, actor=actor, deployment_id=row.pk)
+    deploy.arm_status(sha, deployment_id=row.pk)
+    return row
+
+
+def _publish_orchestrate(sha, deployment):
     from mojo.apps import jobs
     from mojo.apps.edge.services import deploy
 
     return jobs.publish(
-        func=deploy.DEPLOY_ORCHESTRATE_JOB, payload=dict(sha=sha), channel=CHANNEL)
+        func=deploy.DEPLOY_ORCHESTRATE_JOB,
+        payload=dict(sha=sha, deployment=str(deployment.pk)), channel=CHANNEL)
+
+
+def _node_payload(opts, sha, migrate):
+    from mojo.apps.edge.models import PlatformDeployment
+    row = PlatformDeployment.objects.create(
+        sha=sha, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[opts.me], transitions=[])
+    return dict(
+        sha=sha, framework=FRAMEWORK, migrate=bool(migrate),
+        deployment=str(row.pk)), row
 
 
 @th.django_unit_test("single-runner fleet: local canary update, fire-and-forget")
@@ -114,9 +139,8 @@ def test_single_runner(opts):
     import mojo.apps.jobs as jobs_module
     from mojo.apps.edge.services import deploy
 
-    deploy.set_target(SHA_A, actor="test")
-    deploy.arm_status(SHA_A)
-    _publish_orchestrate(SHA_A)
+    deployment = _arm(SHA_A, [opts.me])
+    _publish_orchestrate(SHA_A, deployment)
 
     with th.capture_publishes(_deploy_publish) as calls, \
          mock.patch.object(jobs_module, "get_runners",
@@ -139,7 +163,7 @@ def test_single_runner(opts):
                  "deploy jobs publish max_retries=0 — a redelivery re-runs an update")
     th.assert_true(call.get("expires_in"),
                    "deploy jobs must expire rather than fire hours late")
-    deploy.clear_status()
+    deploy.clear_status(deployment.pk)
 
 
 @th.django_unit_test("canary failure: no fleet node is ever told, incident filed, status cleared")
@@ -148,11 +172,12 @@ def test_canary_failure(opts):
     import mojo.apps.jobs as jobs_module
     from mojo.apps.edge.services import deploy
 
-    deploy.set_target(SHA_A, actor="test")
-    deploy.arm_status(SHA_A)
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
     # The canary already reported failure; the poll sees it immediately.
-    deploy.set_status(deploy.STATUS_FAILED, SHA_A, detail="sanity check failed: local request")
-    _publish_orchestrate(SHA_A)
+    deploy.set_status(
+        deploy.STATUS_FAILED, SHA_A, detail="sanity check failed: local request",
+        deployment_id=deployment.pk)
+    _publish_orchestrate(SHA_A, deployment)
 
     incidents = mock.Mock()
     with th.capture_publishes(_deploy_publish) as calls, \
@@ -181,10 +206,10 @@ def test_canary_success_flow(opts):
     import mojo.apps.jobs as jobs_module
     from mojo.apps.edge.services import deploy
 
-    deploy.set_target(SHA_A, actor="test")
-    deploy.arm_status(SHA_A)
-    deploy.set_status(deploy.STATUS_DEPLOYING, SHA_A)
-    _publish_orchestrate(SHA_A)
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
+    deploy.set_status(
+        deploy.STATUS_DEPLOYING, SHA_A, deployment_id=deployment.pk)
+    _publish_orchestrate(SHA_A, deployment)
 
     get_runners = mock.Mock(return_value=_runners(CANARY_ID, opts.me, FLEET_ID,
                                                   dead=(DEAD_ID,)))
@@ -215,8 +240,8 @@ def test_canary_success_flow(opts):
                        f"every deploy publish carries an expiry, got {call!r}")
     th.assert_true(DEAD_ID not in _channels(calls),
                    "a dead runner must never be told to deploy")
-    th.assert_eq(get_runners.call_count, 1,
-                 "the fleet list is the START-of-deploy snapshot — one read, no re-read")
+    th.assert_eq(get_runners.call_count, 0,
+                 "orchestration must use the durable frozen roster, never a live re-read")
     th.assert_eq(deploy.get_status(), None,
                  "the multi-node terminal must delete the status")
 
@@ -228,9 +253,8 @@ def test_canary_timeout(opts):
     from mojo.apps.edge import asyncjobs
     from mojo.apps.edge.services import deploy
 
-    deploy.set_target(SHA_A, actor="test")
-    deploy.arm_status(SHA_A)  # never leaves migrating — the canary is silent
-    _publish_orchestrate(SHA_A)
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
+    _publish_orchestrate(SHA_A, deployment)  # canary remains silent
 
     incidents = mock.Mock()
     with th.capture_publishes(_deploy_publish) as calls, \
@@ -257,14 +281,15 @@ def test_chain_on_moved_target(opts):
     import mojo.apps.jobs as jobs_module
     from mojo.apps.edge.services import deploy
 
-    deploy.set_target(SHA_A, actor="test")
-    deploy.arm_status(SHA_A)
-    _publish_orchestrate(SHA_A)
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
+    _publish_orchestrate(SHA_A, deployment)
 
     def status_with_push(*args, **kwargs):
         # The canary proved SHA_A — and meanwhile a new push moved the target.
-        deploy.set_target(SHA_B, actor="github:later")
-        return dict(state=deploy.STATUS_DEPLOYING, sha=SHA_A)
+        next_row = _arm(SHA_B, [CANARY_ID, opts.me, FLEET_ID], actor="github:later")
+        return dict(
+            state=deploy.STATUS_DEPLOYING, sha=SHA_A,
+            deployment=str(deployment.pk))
 
     with th.capture_publishes(_deploy_publish) as calls, \
          mock.patch.object(jobs_module, "get_runners",
@@ -288,7 +313,7 @@ def test_chain_on_moved_target(opts):
     th.assert_true(status and status["sha"] == SHA_B
                    and status["state"] == deploy.STATUS_MIGRATING,
                    f"the chain must re-arm the status for the new deploy, got {status!r}")
-    deploy.clear_status()
+    deploy.clear_status(status["deployment"])
 
 
 @th.django_unit_test("framework resolution failure fails the deploy before any node is told")
@@ -297,22 +322,27 @@ def test_resolution_failure_fails_deploy(opts):
     import mojo.apps.jobs as jobs_module
     from mojo.apps.edge.services import deploy
 
-    deploy.set_target(SHA_A, actor="test")
-    deploy.arm_status(SHA_A)
-    _publish_orchestrate(SHA_A)
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me])
+    _publish_orchestrate(SHA_A, deployment)
 
     incidents = mock.Mock()
     with th.capture_publishes(_deploy_publish) as calls, \
          mock.patch.object(jobs_module, "get_runners",
                            return_value=_runners(CANARY_ID, opts.me)), \
          mock.patch.object(deploy, "resolve_framework_version",
-                           side_effect=ValueError("pypi unreachable")), \
+                           side_effect=ValueError(
+                               "provider password=framework-sentinel")), \
          mock.patch.object(reporter_module, "report_event", incidents):
         _drain(opts)
 
     th.assert_eq(_node_calls(calls), [],
                  "an unpinned deploy must never reach a node (C1)")
     th.assert_true(incidents.called, "the failed resolution must file an incident")
+    th.assert_true("framework-sentinel" not in incidents.call_args.args[0],
+                   "provider exception messages must never enter incidents")
+    deployment.refresh_from_db()
+    th.assert_true("framework-sentinel" not in str(deployment.transitions),
+                   "provider exception messages must never enter the journal")
     th.assert_eq(deploy.get_status(), None,
                  "the failed deploy must clear the status for the next push")
 
@@ -324,9 +354,10 @@ def test_node_unconfigured(opts):
     from mojo.apps.edge.services import deploy
     from mojo.apps.jobs.models import Job
 
+    payload, deployment = _node_payload(opts, SHA_A, True)
     job_id = jobs.publish(
         func=deploy.DEPLOY_NODE_JOB,
-        payload=dict(sha=SHA_A, framework=FRAMEWORK, migrate=True),
+        payload=payload,
         channel=CHANNEL)
     incidents = mock.Mock()
     with mock.patch.object(reporter_module, "report_event", incidents):
@@ -347,9 +378,10 @@ def test_node_runs_script(opts):
     from mojo.apps.edge.services import deploy
     from mojo.apps.jobs.models import Job
 
+    payload, deployment = _node_payload(opts, SHA_A, True)
     job_id = jobs.publish(
         func=deploy.DEPLOY_NODE_JOB,
-        payload=dict(sha=SHA_A, framework=FRAMEWORK, migrate=True),
+        payload=payload,
         channel=CHANNEL)
     ran = []
     with mock.patch.object(deploy, "deploy_script_argv",
@@ -362,7 +394,8 @@ def test_node_runs_script(opts):
     th.assert_eq(row.status, "completed",
                  f"a zero-exit script completes the job, got {row.status}")
     th.assert_eq(
-        ran, [["/bin/echo", "--sha", SHA_A, "--framework", FRAMEWORK, "--migrate"]],
+        ran, [["/bin/echo", "--sha", SHA_A, "--framework", FRAMEWORK,
+               "--deployment", str(deployment.pk), "--migrate"]],
         f"the argv must be the configured base plus validated args, got {ran!r}")
 
 
@@ -373,32 +406,41 @@ def test_node_failure_no_rollback(opts):
     from mojo.apps.edge.services import deploy
     from mojo.apps.jobs.models import Job
 
-    deploy.set_target(SHA_A, actor="test")
-    deploy.arm_status(SHA_A)
+    deployment = _arm(SHA_A, [opts.me])
+    payload = dict(
+        sha=SHA_A, framework=FRAMEWORK, migrate=False,
+        deployment=str(deployment.pk))
     job_id = jobs.publish(
         func=deploy.DEPLOY_NODE_JOB,
-        payload=dict(sha=SHA_A, framework=FRAMEWORK, migrate=False),
+        payload=payload,
         channel=CHANNEL)
     incidents = mock.Mock()
     with th.capture_publishes(_deploy_publish) as calls, \
          mock.patch.object(deploy, "deploy_script_argv",
                            return_value=["/bin/echo"]), \
          mock.patch.object(deploy, "_run",
-                           return_value=FakeProc(1, stderr="pip exploded")), \
+                           return_value=FakeProc(
+                               23, stderr="password=sentinel-secret pip exploded")), \
          mock.patch.object(reporter_module, "report_event", incidents):
         _drain(opts)
 
     row = Job.objects.get(id=job_id)
     th.assert_eq(row.status, "failed", f"the node job must fail, got {row.status}")
     th.assert_true(incidents.called, "the failed node must appear on the dashboard (D7)")
-    th.assert_in("pip exploded", incidents.call_args.args[0],
-                 "the script's stderr tail must travel into the incident")
+    incident_message = incidents.call_args.args[0]
+    th.assert_in("phase=update_script, exit=23", incident_message,
+                 "the incident must retain fixed phase and exit metadata")
+    th.assert_true("sentinel-secret" not in incident_message,
+                   "raw process output must never enter an incident")
+    deployment.refresh_from_db()
+    th.assert_true("sentinel-secret" not in str(deployment.node_evidence),
+                   "raw process output must never enter durable evidence")
     th.assert_eq(calls, [],
                  "one node's failure after release must not publish anything — no rollback")
     status = deploy.get_status()
     th.assert_true(status and status["sha"] == SHA_A,
                    f"a fleet-node failure must not touch the deploy status, got {status!r}")
-    deploy.clear_status()
+    deploy.clear_status(deployment.pk)
 
 
 @th.django_unit_test("deploy_node: an invalid sha never reaches the script")
@@ -407,9 +449,10 @@ def test_node_validates_sha(opts):
     from mojo.apps.edge.services import deploy
     from mojo.apps.jobs.models import Job
 
+    payload, deployment = _node_payload(opts, "main; rm -rf /", False)
     job_id = jobs.publish(
         func=deploy.DEPLOY_NODE_JOB,
-        payload=dict(sha="main; rm -rf /", framework=FRAMEWORK, migrate=False),
+        payload=payload,
         channel=CHANNEL)
     ran = []
     with mock.patch.object(deploy, "deploy_script_argv",

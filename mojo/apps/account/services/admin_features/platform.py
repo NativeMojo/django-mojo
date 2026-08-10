@@ -1,7 +1,12 @@
-"""Platform/System Setup feature capabilities."""
+"""Platform health, deployment, and System Setup capabilities."""
 
 
 def describe(request, capabilities):
-    enabled = bool(capabilities.get("setup"))
-    return {"id": "platform", "enabled": enabled,
-            "capabilities": {"setup": enabled}}
+    values = {
+        "setup": bool(capabilities.get("setup")),
+        "view": bool(capabilities.get("view_platform")),
+        "manage": bool(capabilities.get("manage_platform")),
+        "security": bool(capabilities.get("view_platform_security")),
+    }
+    return {"id": "platform", "enabled": any(values.values()),
+            "capabilities": values}

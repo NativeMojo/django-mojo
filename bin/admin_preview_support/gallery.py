@@ -16,6 +16,10 @@ def bootstrap(groups):
         "network": True, "manage_network": True,
         "webapps": True, "manage_webapps": True,
         "view_logs": True, "view_security": True, "manage_security": True,
+        "view_platform": True, "manage_platform": True,
+        "view_platform_security": True, "view_advanced": True,
+        "manage_advanced": True, "view_advanced_inventory": True,
+        "view_advanced_security": True, "view_advanced_settings": True,
     }
     return {
         "version": "1.9.0", "admin_path": "/", "groups": groups,

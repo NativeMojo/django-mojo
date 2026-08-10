@@ -51,3 +51,10 @@ def converge_edge():
         payload={"pools": converge_pools()},
         channel=EDGE_CHANNEL,
         broadcast=True)
+
+
+@schedule(minutes="*/5")
+def reconcile_platform_deployments():
+    """Close durable attempts whose Redis coordination lease disappeared."""
+    from mojo.apps.edge.services import platform_deploy
+    return platform_deploy.reconcile_stale()

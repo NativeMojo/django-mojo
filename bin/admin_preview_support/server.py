@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .gallery import bootstrap, reset
-from .features import activity
+from .features import activity, advanced, platform
 
 
 ROOT = Path(__file__).resolve().parents[2] / "mojo/apps/account/admin_portal"
@@ -225,6 +225,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if activity_response is not None:
             status, payload = activity_response
             return self._send(payload, status=status)
+        for provider in (platform, advanced):
+            response = provider.get(self, parsed)
+            if response is not None:
+                status, payload = response
+                return self._send(payload, status=status)
         if path == "/api/account/admin/setup/options":
             active = self.setup_operation
             if active and active.get("status") in {"succeeded", "failed", "cancelled"}:
@@ -339,6 +344,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         payload = self._read_body()
         self._record_event(path, payload)
+        for provider in (platform, advanced):
+            response = provider.post(self, path, payload)
+            if response is not None:
+                status, body = response
+                return self._send(body, status=status)
         if path == "/api/edge/webapp/link_key":
             type(self).key_state = "rotated" if payload.get("action") == "rotate" else "active"
             return self._send({"webapp": 42, "secret_name": "MOJO_DEPLOY_KEY", "replayed": False, "operation_id": "preview", "token": "preview-token-shown-once", "status": self._key_status()})
