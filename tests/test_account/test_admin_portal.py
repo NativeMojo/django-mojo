@@ -156,10 +156,13 @@ def test_network_asset_contract(opts):
 
     setup = opts.client.get("/admin/assets/setup.js").text
     network = opts.client.get("/admin/assets/network.js").text
+    core = opts.client.get("/admin/assets/core.js").text
     assert "result.token" not in setup and "MOJO_DEPLOY_KEY" not in setup, \
         "System Setup learned how to read or render a deployment secret"
     assert "apiOnce" in network and "refresh-required" in network, \
         "DNS mutation safety or the authoritative-refresh latch disappeared"
+    assert "class: 'table-wrap', tabindex: '0', role: 'region'" in core, \
+        "horizontally clipped tables are no longer keyboard-scrollable"
     for shape in ("api", "site", "site_api", "redirect"):
         assert f"'{shape}'" in network, f"Vhost shape {shape} disappeared"
     for endpoint in (
@@ -171,11 +174,13 @@ def test_network_asset_contract(opts):
 
 @th.django_unit_test("authenticated portal covers missing active rotated and revoked deploy keys")
 def test_webapp_key_portal_smoke(opts):
-    from mojo.apps.account.models import ApiKey, Group
+    from mojo.apps.account.models import ApiKey, Group, Setting
     from mojo.apps.edge.models import WebApp
 
     group_name = "admin_portal_key_lifecycle"
     Group.objects.filter(name=group_name).delete()
+    old_buckets, had_old_buckets = Setting.get_from_db("EDGE_RELEASE_BUCKETS")
+    Setting.set("EDGE_RELEASE_BUCKETS", ["portal-test"], group=None)
     group = Group.objects.create(name=group_name, kind="organization")
     site = WebApp(group=group, slug="portal-key-smoke", bucket="portal-test",
                   prefix="pending")
@@ -198,7 +203,9 @@ def test_webapp_key_portal_smoke(opts):
                 "operation_id": str(uuid.uuid4()),
             })
             minted_data = minted.json.get("data") or {}
-            assert minted.status_code == 200 and minted_data.get("token"), \
+            assert minted.status_code == 200, \
+                f"deployment-key create failed before reveal: {minted.body}"
+            assert minted_data.get("token"), \
                 "the reveal-once create response did not contain the deployment key"
             active = opts.client.get(
                 f"/api/edge/webapp/key_status?webapp={site.pk}")
@@ -238,3 +245,7 @@ def test_webapp_key_portal_smoke(opts):
             WebApp.objects.filter(pk=site.pk).delete()
         ApiKey.objects.filter(name="webapp:portal-key-smoke").delete()
         Group.objects.filter(pk=group.pk).delete()
+        if had_old_buckets:
+            Setting.set("EDGE_RELEASE_BUCKETS", old_buckets, group=None)
+        else:
+            Setting.remove("EDGE_RELEASE_BUCKETS", group=None)

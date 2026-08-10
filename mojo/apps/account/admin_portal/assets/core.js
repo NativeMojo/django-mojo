@@ -115,7 +115,10 @@ export class TableView {
     const body = this.rows.map((row) => h('tr', {tabindex: this.onSelect ? '0' : null,
       onclick: () => this.onSelect?.(row), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.onSelect?.(row); } }},
       ...this.columns.map((c) => h('td', {}, c.render ? c.render(row) : String(row[c.key] ?? '—')))));
-    return h('div', {class: 'table-wrap'}, h('table', {}, h('thead', {}, head), h('tbody', {}, ...body)));
+    const labels = this.columns.map((column) => column.label).filter(Boolean).join(', ');
+    return h('div', {class: 'table-wrap', tabindex: '0', role: 'region',
+      'aria-label': `${labels || 'Data'} table`},
+    h('table', {}, h('thead', {}, head), h('tbody', {}, ...body)));
   }
 }
 
