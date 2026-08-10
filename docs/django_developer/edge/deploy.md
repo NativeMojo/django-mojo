@@ -130,6 +130,13 @@ a fixed allowlisted phase before it enters Redis, evidence, or an incident;
 arbitrary callback text becomes `update_failed`. Process stdout/stderr and
 provider exception messages never enter durable or operator-facing surfaces.
 
+The 1.9-to-UUID rollout has one compatibility seam: an already-running 1.9
+canary script cannot add `--deployment` after it installs the new framework.
+The command accepts that callback only when Redis still holds the same SHA in
+an empty-UUID legacy lease, and writes no journal evidence for it. A lease that
+contains a UUID always requires the matching `--deployment`; the bridge cannot
+claim or settle a new attempt.
+
 ## Settings
 
 All read with `settings.get_static` — **never** `settings.get`. A DB-backed

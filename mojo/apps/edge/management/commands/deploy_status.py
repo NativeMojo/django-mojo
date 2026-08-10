@@ -55,11 +55,31 @@ class Command(BaseCommand):
 
         state = options.get("state")
         sha = options.get("sha") or ""
-        deployment_id = platform_deploy.deployment_id(options.get("deployment"))
+        supplied_deployment = options.get("deployment")
+        deployment_id = platform_deploy.deployment_id(supplied_deployment)
         if not state:
             raise CommandError("set requires a state: deploying or failed")
         if not deploy.is_valid_sha(sha):
             raise CommandError("set requires --sha <the target commit sha>")
+        if not supplied_deployment:
+            # The 1.9 updater installs this command before reporting its
+            # canary result, but its in-flight argv and Redis lease predate
+            # UUID ownership. Permit only that exact empty-UUID lease. A new
+            # UUID-owned attempt can never be claimed through this bridge.
+            armed = deploy.get_status() or {}
+            if armed.get("sha") != sha or armed.get("deployment"):
+                raise CommandError(
+                    "set requires --deployment <platform deployment UUID>")
+            if deploy.set_status(
+                    state, sha, detail=options.get("detail"),
+                    deployment_id=None):
+                self.stdout.write(self.style.SUCCESS(
+                    f"applied legacy upgrade: {state} ({sha})"))
+                return
+            self.stderr.write(
+                f"ignored: the armed legacy deploy no longer belongs to {sha} "
+                "(superseded, or nothing armed)")
+            sys.exit(3)
         if not deployment_id:
             raise CommandError("set requires --deployment <platform deployment UUID>")
         record = platform_deploy.get(deployment_id)

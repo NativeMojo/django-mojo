@@ -179,6 +179,36 @@ def test_deploy_status_command(opts):
     deploy.clear_status(other.pk)
 
 
+@th.django_unit_test(
+    "deploy_status command: one legacy empty-UUID lease can finish the upgrade")
+def test_deploy_status_legacy_upgrade_bridge(opts):
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+    from mojo.apps.edge.services import deploy
+
+    deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+    deploy.arm_status(SHA_A)
+
+    call_command("deploy_status", "set", "deploying", sha=SHA_A)
+    status = deploy.get_status()
+    th.assert_eq(
+        status["state"], deploy.STATUS_DEPLOYING,
+        f"the 1.9 updater's empty-UUID lease must finish once, got {status!r}")
+    th.assert_eq(
+        status["deployment"], "",
+        f"the compatibility write must not invent UUID ownership, got {status!r}")
+
+    deployment_id = "11111111-1111-4111-8111-111111111111"
+    deploy.arm_status(SHA_B, force=True, deployment_id=deployment_id)
+    with th.assert_raises(CommandError):
+        call_command("deploy_status", "set", "deploying", sha=SHA_B)
+    status = deploy.get_status()
+    th.assert_eq(
+        status["state"], deploy.STATUS_MIGRATING,
+        f"a UUID-owned lease must still refuse an unstamped callback, got {status!r}")
+    deploy.clear_status(deployment_id)
+
+
 @th.django_unit_test("framework version resolution: success, garbage, and failure fail loudly")
 def test_resolve_framework_version(opts):
     import requests as requests_lib
