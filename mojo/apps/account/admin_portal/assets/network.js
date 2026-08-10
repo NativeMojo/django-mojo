@@ -39,7 +39,50 @@ export class MutationCoordinator {
 }
 
 export const networkMutations = new MutationCoordinator();
-const partialRoutes = new Map();
+const ROUTE_REPAIR_KEY = 'mojo-admin-route-repair-v1';
+
+function readRouteRepairs() {
+  const plans = new Map();
+  try {
+    const parsed = JSON.parse(localStorage.getItem(ROUTE_REPAIR_KEY) || '[]');
+    if (!Array.isArray(parsed)) throw new Error('invalid repair plan');
+    parsed.slice(0, 100).forEach((plan) => {
+      const vhost = Number(plan.vhost); const upstream = Number(plan.upstream);
+      const path = String(plan.path_prefix || '');
+      if (Number.isInteger(vhost) && vhost > 0 && Number.isInteger(upstream) && upstream > 0 && path.length <= 255 && path.startsWith('/') && path !== '/') {
+        const rows = plans.get(vhost) || []; rows.push({path_prefix: path, upstream, upstream_name: String(plan.upstream_name || `#${upstream}`).slice(0, 128)}); plans.set(vhost, rows);
+      }
+    });
+  } catch (_) { try { localStorage.removeItem(ROUTE_REPAIR_KEY); } catch (_) { /* storage is optional */ } }
+  return plans;
+}
+
+const partialRoutes = readRouteRepairs();
+
+function writeRouteRepairs() {
+  const rows = [...partialRoutes.entries()].flatMap(([vhost, plans]) => plans.map((plan) => ({
+    vhost, path_prefix: plan.path_prefix, upstream: plan.upstream, upstream_name: plan.upstream_name,
+  })));
+  try {
+    if (rows.length) localStorage.setItem(ROUTE_REPAIR_KEY, JSON.stringify(rows));
+    else localStorage.removeItem(ROUTE_REPAIR_KEY);
+  } catch (_) { /* authoritative reconciliation still works without browser storage */ }
+}
+
+function rememberRoute(desired, upstreamName = '') {
+  const vhost = Number(desired.vhost);
+  const plans = partialRoutes.get(vhost) || [];
+  const plan = {path_prefix: desired.path_prefix, upstream: Number(desired.upstream), upstream_name: upstreamName || `#${desired.upstream}`};
+  partialRoutes.set(vhost, [...plans.filter((row) => row.path_prefix !== plan.path_prefix), plan]);
+  writeRouteRepairs();
+}
+
+function forgetRoute(desired) {
+  const vhost = Number(desired.vhost);
+  const remaining = (partialRoutes.get(vhost) || []).filter((row) => row.path_prefix !== desired.path_prefix);
+  if (remaining.length) partialRoutes.set(vhost, remaining); else partialRoutes.delete(vhost);
+  writeRouteRepairs();
+}
 
 function queryParam(name) {
   const query = location.hash.split('?')[1] || '';
@@ -86,6 +129,29 @@ async function loadCertificates() { return listData(await api('/api/dnsman/certi
 async function loadUpstreams() { return listData(await api('/api/edge/upstream?graph=default&size=200')); }
 async function loadVhosts() { return listData(await api('/api/edge/vhost?graph=default&size=200')); }
 async function loadRoutes() { return listData(await api('/api/edge/route?graph=default&size=200')); }
+
+function routeIds(row) {
+  return {vhost: Number(row.vhost?.id || row.vhost), upstream: Number(row.upstream?.id || row.upstream)};
+}
+
+function routeState(rows, desired) {
+  const samePath = rows.find((row) => routeIds(row).vhost === Number(desired.vhost) && row.path_prefix === desired.path_prefix);
+  if (!samePath) return {state: 'missing'};
+  if (routeIds(samePath).upstream === Number(desired.upstream)) return {state: 'applied', row: samePath};
+  return {state: 'mismatch', row: samePath};
+}
+
+async function ensureRoute(desired, mutate) {
+  const before = routeState(await loadRoutes(), desired);
+  if (before.state === 'applied') return before.row;
+  if (before.state === 'mismatch') throw new Error(`${desired.path_prefix} already points to a different upstream. Review it before retrying.`);
+  let mutationError = null;
+  try { await mutate(); } catch (error) { mutationError = error; }
+  const after = routeState(await loadRoutes(), desired);
+  if (after.state === 'applied') return after.row;
+  if (after.state === 'mismatch') throw new Error(`${desired.path_prefix} landed with a different upstream. No retry was attempted.`);
+  throw new Error(mutationError ? `The route result was not confirmed: ${mutationError.message}` : 'The route response succeeded but authoritative state is still missing.');
+}
 
 async function ensureGroupChoices(ctx) {
   if (ctx.networkGroupsLoaded) return;
@@ -148,7 +214,13 @@ async function adoptDomain(ctx, reload) {
 async function purchaseDomain(ctx, reload) {
   let quote = null; let token = null;
   const body = h('div', {class: 'wizard'});
-  const close = openModal({title: 'Buy a domain', subtitle: 'Search, quote, typed confirmation, then one non-retried purchase attempt.', content: body, wide: true});
+  const scrub = () => {
+    token = null;
+    if (quote) quote.token = null;
+    quote = null;
+    body.querySelectorAll('input,textarea').forEach((input) => { input.value = ''; });
+  };
+  const close = openModal({title: 'Buy a domain', subtitle: 'Search, quote, typed confirmation, then one non-retried purchase attempt.', content: body, wide: true, onClose: scrub});
   function renderSearch() {
     const name = h('input', {type: 'text', placeholder: 'example.com', autocomplete: 'off'});
     const group = h('select', {}, h('option', {value: '', text: 'Choose a group'}), ...(ctx.groups || []).map((row) => h('option', {value: row.id, text: row.name})));
@@ -172,7 +244,7 @@ async function purchaseDomain(ctx, reload) {
           event.currentTarget.disabled = true;
           try {
             quote = await apiOnce('/api/dnsman/registrar/quote', {method: 'POST', body: JSON.stringify({group: groupId, domain: row.name, years: 1})});
-            token = quote.token; renderConfirm(groupId);
+            token = quote.token; quote.token = null; renderConfirm(groupId);
           } catch (error) { body.append(h('div', {class: 'form-message', text: error.message})); }
         }}, 'Get live quote') : null));
   }
@@ -182,11 +254,12 @@ async function purchaseDomain(ctx, reload) {
     const message = h('div', {class: 'form-message', role: 'alert'});
     const buy = h('button', {class: 'button danger', disabled: true, onclick: async () => {
       buy.disabled = true;
-      const purchaseToken = token; token = null;
+      let purchaseToken = token; token = null;
       try {
         await apiOnce('/api/dnsman/registrar/purchase', {method: 'POST', body: JSON.stringify({group: groupId, purchase: quote.purchase, confirm_token: purchaseToken, confirm_domain: typedDomain.value, confirm_price: typedPrice.value})});
         close(); await reload();
-      } catch (error) { message.textContent = `${error.message} The quote was spent; take a new quote before trying again.`; }
+      } catch (error) { if (quote) quote.token = null; message.textContent = `${error.message} The quote was spent; take a new quote before trying again.`; }
+      finally { purchaseToken = null; }
     }}, 'Register domain');
     const validate = () => { buy.disabled = typedDomain.value.trim().toLowerCase() !== quote.name || typedPrice.value.trim() !== String(quote.price); };
     typedDomain.addEventListener('input', validate); typedPrice.addEventListener('input', validate);
@@ -230,8 +303,10 @@ function credentialDialog(ctx, existing, reload) {
   ];
   const groupId = existing?.group?.id || existing?.group || '';
   const value = {group: groupId, provider: existing?.provider || 'godaddy', name: existing?.name || ''};
+  let secretValues = null; let secretPayload = null;
   const form = new FormView({fields, value, submitLabel: existing ? 'Rotate and verify' : 'Link and verify', onSubmit: async (values, inputs) => {
     const payload = {...values, provider: existing?.provider || values.provider};
+    secretValues = values; secretPayload = payload;
     if (existing) payload.credential = existing.id;
     const baseline = existing?.modified;
     try {
@@ -247,9 +322,17 @@ function credentialDialog(ctx, existing, reload) {
     } finally {
       payload.api_key = ''; payload.api_secret = ''; values.api_key = ''; values.api_secret = '';
       if (inputs.api_key) inputs.api_key.value = ''; if (inputs.api_secret) inputs.api_secret.value = '';
+      secretValues = null; secretPayload = null;
     }
   }});
-  const close = openModal({title: existing ? `Rotate ${existing.name}` : 'Link DNS credential', subtitle: 'Provider secrets are submitted once, verified, encrypted, and never shown again.', content: form.render(), danger: Boolean(existing)});
+  const content = form.render();
+  const scrub = () => {
+    content.querySelectorAll('input[type="password"]').forEach((input) => { input.value = ''; });
+    if (secretValues) { secretValues.api_key = ''; secretValues.api_secret = ''; }
+    if (secretPayload) { secretPayload.api_key = ''; secretPayload.api_secret = ''; }
+    secretValues = null; secretPayload = null;
+  };
+  const close = openModal({title: existing ? `Rotate ${existing.name}` : 'Link DNS credential', subtitle: 'Provider secrets are submitted once, verified, encrypted, and never shown again.', content, danger: Boolean(existing), onClose: scrub});
 }
 
 async function credentialsPage(ctx) {
@@ -273,9 +356,17 @@ async function credentialsPage(ctx) {
   await render(); return root;
 }
 
-function recordIdentity(record) { return `${String(record.type).toUpperCase()}|${String(record.name).toLowerCase().replace(/\.+$/, '')}`; }
+function canonicalRecordName(domain, value) {
+  const apex = String(domain.name || '').trim().toLowerCase().replace(/\.+$/, '');
+  const name = String(value || '').trim().toLowerCase().replace(/\.+$/, '');
+  if (!name || name === '@' || name === apex) return apex;
+  if (name.endsWith(`.${apex}`)) return name;
+  return `${name}.${apex}`;
+}
+function recordIdentity(domain, record) { return `${String(record.type).toUpperCase()}|${canonicalRecordName(domain, record.name)}`; }
 function normalizedValues(values) { return [...new Set((values || []).map((value) => String(value).trim()).filter(Boolean))].sort(); }
 function sameValues(a, b) { return JSON.stringify(normalizedValues(a)) === JSON.stringify(normalizedValues(b)); }
+function sameRecordSet(a, b) { return sameValues(a?.record_values, b?.record_values) && Number(a?.ttl) === Number(b?.ttl); }
 
 function recordEditor(domain, record, records, refresh) {
   const original = record ? {...record, record_values: [...(record.record_values || [])]} : null;
@@ -296,17 +387,20 @@ function recordEditor(domain, record, records, refresh) {
     save.disabled = true; message.textContent = '';
     try {
       const before = await refresh(false);
-      if (original) {
-        const current = before.find((row) => recordIdentity(row) === recordIdentity(original));
-        if (!current || !sameValues(current.record_values, original.record_values)) throw new Error('The provider record set changed. Review the refreshed values and confirm again.');
+      const current = before.find((row) => recordIdentity(domain, row) === recordIdentity(domain, target));
+      if (!original && current) {
+        close(); recordEditor(domain, current, before, refresh); return;
       }
-      const key = `dns:${domain.id}:${recordIdentity(target)}`;
+      if (original) {
+        if (!current || !sameRecordSet(current, original)) throw new Error('The provider record set changed, including its TTL or values. Review the refreshed set and confirm again.');
+      }
+      const key = `dns:${domain.id}:${recordIdentity(domain, target)}`;
       await providerMutation(key,
         () => apiOnce('/api/dnsman/dns', {method: 'POST', body: JSON.stringify({domain: domain.id, ...target})}),
         () => refresh(false),
         (observed) => {
-          const current = observed.find((row) => recordIdentity(row) === recordIdentity(target));
-          return current && sameValues(current.record_values, target.record_values) && Number(current.ttl) === target.ttl ? 'applied' : 'unconfirmed';
+          const applied = observed.find((row) => recordIdentity(domain, row) === recordIdentity(domain, target));
+          return applied && sameRecordSet(applied, target) ? 'applied' : 'unconfirmed';
         });
       close(); await refresh(false);
     } catch (error) { message.textContent = error.message; save.disabled = false; }
@@ -319,11 +413,11 @@ function recordEditor(domain, record, records, refresh) {
 async function deleteRecord(domain, record, refresh) {
   const confirmed = await confirmAction({title: `Delete ${record.type} record?`, copy: `Delete the complete ${record.type} set at ${record.name}? This request is attempted once and then reconciled from the provider.`, confirmLabel: 'Delete record set', danger: true});
   if (!confirmed) return;
-  const key = `dns:${domain.id}:${recordIdentity(record)}`;
+  const key = `dns:${domain.id}:${recordIdentity(domain, record)}`;
   await providerMutation(key,
     () => apiOnce('/api/dnsman/dns/delete', {method: 'POST', body: JSON.stringify({domain: domain.id, type: record.type, name: record.name, record_values: record.record_values})}),
     () => refresh(false),
-    (observed) => observed.some((row) => recordIdentity(row) === recordIdentity(record)) ? 'unconfirmed' : 'applied');
+    (observed) => observed.some((row) => recordIdentity(domain, row) === recordIdentity(domain, record)) ? 'unconfirmed' : 'applied');
   await refresh(false);
 }
 
@@ -482,15 +576,18 @@ async function createVhostWizard(ctx, reload) {
         const routeRows = kind === 'site_api' ? parseRoutes(routes.value, upstreams) : [];
         const vhost = await apiOnce('/api/edge/vhost', {method: 'POST', body: JSON.stringify(payload)});
         const results = [];
+        routeRows.forEach((row) => rememberRoute({vhost: vhost.id, path_prefix: row.path_prefix, upstream: row.upstream}, row.upstream_name));
         for (const row of routeRows) {
           try {
             // Sequential on purpose: a partial state names exactly which rows landed.
-            await apiOnce('/api/edge/route', {method: 'POST', body: JSON.stringify({vhost: vhost.id, path_prefix: row.path_prefix, upstream: row.upstream})});
+            const desired = {vhost: vhost.id, path_prefix: row.path_prefix, upstream: row.upstream};
+            await ensureRoute(desired, () => apiOnce('/api/edge/route', {method: 'POST', body: JSON.stringify(desired)}));
+            forgetRoute(desired);
             results.push({...row, ok: true});
           } catch (error) { results.push({...row, ok: false, error: error.message}); }
         }
         const failed = results.filter((row) => !row.ok);
-        if (failed.length) partialRoutes.set(vhost.id, failed);
+        if (failed.length) { partialRoutes.set(vhost.id, failed); writeRouteRepairs(); }
         await reload();
         body.replaceChildren(h('div', {class: `result-state ${failed.length ? 'warning' : 'success'}`}, icon(failed.length ? 'alert' : 'check'), h('h3', {text: failed.length ? 'Vhost created; routes need repair' : 'Vhost created'}), h('p', {text: failed.length ? `${failed.length} route(s) did not land. Open Routes to retry only those rows.` : 'The desired generation was published and the fleet can converge.'}), h('div', {class: 'form-actions'}, failed.length ? h('a', {class: 'button primary', href: '#/routes', onclick: close}, 'Open Routes') : h('button', {class: 'button primary', onclick: close}, 'Done'))));
       } catch (error) { message.textContent = error.message; create.disabled = false; }
@@ -560,7 +657,11 @@ function routeDialog(vhosts, upstreams, reload) {
     {name: 'path_prefix', label: 'Path prefix', required: true, placeholder: '/api'},
     {name: 'upstream', label: 'Upstream', type: 'select', required: true, placeholder: 'Choose an upstream', options: upstreams.filter((row) => row.is_enabled).map((row) => ({value: row.id, label: row.name}))},
   ], submitLabel: 'Create route', onSubmit: async (values) => {
-    await apiOnce('/api/edge/route', {method: 'POST', body: JSON.stringify(values)}); close(); await reload();
+    const desired = {vhost: Number(values.vhost), path_prefix: values.path_prefix, upstream: Number(values.upstream)};
+    const upstreamName = upstreams.find((row) => row.id === desired.upstream)?.name;
+    rememberRoute(desired, upstreamName);
+    await ensureRoute(desired, () => apiOnce('/api/edge/route', {method: 'POST', body: JSON.stringify(desired)}));
+    forgetRoute(desired); close(); await reload();
   }});
   const close = openModal({title: 'Create route', subtitle: 'The path selects a platform-declared destination; arbitrary proxy targets are impossible.', content: form.render()});
 }
@@ -569,28 +670,47 @@ async function repairRoutes(vhost, reload) {
   const pending = partialRoutes.get(vhost) || []; const remaining = [];
   for (const row of pending) {
     try {
-      await apiOnce('/api/edge/route', {method: 'POST', body: JSON.stringify({vhost, path_prefix: row.path_prefix, upstream: row.upstream})});
+      const desired = {vhost, path_prefix: row.path_prefix, upstream: row.upstream};
+      await ensureRoute(desired, () => apiOnce('/api/edge/route', {method: 'POST', body: JSON.stringify(desired)}));
+      forgetRoute(desired);
     } catch (error) { remaining.push({...row, error: error.message}); }
   }
   if (remaining.length) partialRoutes.set(vhost, remaining); else partialRoutes.delete(vhost);
+  writeRouteRepairs();
   await reload();
 }
 
 async function deleteRoute(row, reload) {
   const confirmed = await confirmAction({title: `Delete ${row.path_prefix}?`, copy: 'Requests below this prefix will fall back to the static site.', confirmLabel: 'Delete route', danger: true});
   if (!confirmed) return;
-  await apiOnce(`/api/edge/route/${row.id}`, {method: 'DELETE'}); await reload();
+  let mutationError = null;
+  try { await apiOnce(`/api/edge/route/${row.id}`, {method: 'DELETE'}); } catch (error) { mutationError = error; }
+  const remaining = await loadRoutes();
+  if (remaining.some((item) => item.id === row.id)) throw new Error(mutationError ? `Route deletion was not confirmed: ${mutationError.message}` : 'Route deletion was not visible in authoritative state.');
+  await reload();
 }
 
 async function routesPage(ctx) {
   const root = h('div', {class: 'page'});
   async function render() {
     const [vhosts, upstreams, rows] = await Promise.all([loadVhosts(), loadUpstreams(), loadRoutes()]);
+    [...partialRoutes.entries()].forEach(([vhost, plans]) => {
+      const remaining = plans.flatMap((plan) => {
+        const state = routeState(rows, {vhost, ...plan}).state;
+        if (state === 'applied') return [];
+        return [{...plan, error: state === 'mismatch' ? `${plan.path_prefix} points to a different authoritative upstream; review it before repair.` : plan.error}];
+      });
+      if (remaining.length) partialRoutes.set(vhost, remaining); else partialRoutes.delete(vhost);
+    });
+    writeRouteRepairs();
     const filter = queryParam('vhost'); const filtered = filter ? rows.filter((row) => String(row.vhost?.id || row.vhost) === filter) : rows;
     root.replaceChildren(pageHeader('Network & hosting', 'Routes', 'Path-prefix proxy rules for Site + API Vhosts, created and repaired sequentially.', [
       ctx.capabilities.manage_network ? h('button', {class: 'button primary', onclick: () => routeDialog(vhosts, upstreams, render)}, icon('plus'), 'Create route') : null,
     ]));
-    [...partialRoutes.entries()].forEach(([vhost, pending]) => root.append(h('div', {class: 'callout warning'}, icon('alert'), h('div', {}, h('strong', {text: `${pending.length} route(s) need repair`}), h('p', {text: 'The Vhost and earlier routes remain in place. Retry only the missing rows.'})), h('button', {class: 'button compact', onclick: () => repairRoutes(vhost, render)}, 'Repair routes'))));
+    [...partialRoutes.entries()].forEach(([vhost, pending]) => {
+      const detail = pending.map((row) => row.error).filter(Boolean).join(' · ');
+      root.append(h('div', {class: 'callout warning'}, icon('alert'), h('div', {}, h('strong', {text: `${pending.length} route(s) need repair`}), h('p', {text: detail || 'The Vhost and earlier routes remain in place. Retry only the missing rows.'})), h('button', {class: 'button compact', onclick: () => repairRoutes(vhost, render)}, 'Repair routes')));
+    });
     const panel = tablePanel('Proxied paths', filter ? 'Filtered to one Vhost. Clear the filter from the sidebar Routes link.' : 'Longest matching prefix wins.'); root.append(panel);
     panel.append(new TableView({rows: filtered, empty: 'No proxied routes are configured.', columns: [
       {label: 'Vhost', render: (row) => row.vhost?.server_name || `Vhost ${row.vhost?.id || row.vhost}`},

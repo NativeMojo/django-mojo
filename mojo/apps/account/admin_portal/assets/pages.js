@@ -86,13 +86,16 @@ export async function peoplePage(ctx, route) {
 }
 
 function oneTimeSecret(webapp, result) {
-  const secret = result.token;
+  let secret = result.token;
+  const secretField = h('textarea', {class: 'secret', readonly: true, rows: '4', text: secret});
   const content = h('div', {},
     h('div', {class: 'callout warning'}, icon('alert'), h('div', {}, h('strong', {text: 'Copy this value now'}), h('p', {text: 'It cannot be retrieved after this window closes. If it is lost, rotate the credential.'}))),
-    h('label', {class: 'field'}, h('span', {text: 'GitHub Actions secret: MOJO_DEPLOY_KEY'}), h('textarea', {class: 'secret', readonly: true, rows: '4', text: secret})),
+    h('label', {class: 'field'}, h('span', {text: 'GitHub Actions secret: MOJO_DEPLOY_KEY'}), secretField),
     h('button', {class: 'button primary', onclick: async (event) => { await navigator.clipboard.writeText(secret); event.currentTarget.textContent = 'Copied'; }}, icon('key'), 'Copy secret'),
     h('div', {class: 'command'}, h('code', {text: 'gh secret set MOJO_DEPLOY_KEY --repo YOUR_ORG/YOUR_REPO'})));
-  openModal({title: `${webapp.slug} deployment key`, subtitle: 'The previous key is already inactive.', content});
+  openModal({title: `${webapp.slug} deployment key`, subtitle: 'The previous key is already inactive.', content, onClose: () => {
+    secretField.value = ''; secretField.textContent = ''; secret = ''; result.token = null;
+  }});
 }
 
 async function credentialDialog(webapp, reload) {

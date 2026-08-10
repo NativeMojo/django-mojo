@@ -180,12 +180,16 @@ export class FormView {
   }
 }
 
-export function openModal({title, subtitle, content, danger = false, wide = false}) {
+export function openModal({title, subtitle, content, danger = false, wide = false, onClose = () => {}}) {
   const layer = document.getElementById('portal-layer');
   const previous = document.activeElement;
+  let closed = false;
   const close = () => {
+    if (closed) return;
+    closed = true;
     document.removeEventListener('keydown', onKeydown);
-    layer.replaceChildren(); document.body.classList.remove('locked'); previous?.focus?.();
+    try { onClose(); }
+    finally { layer.replaceChildren(); document.body.classList.remove('locked'); previous?.focus?.(); }
   };
   const panel = h('section', {class: `modal ${danger ? 'danger-modal' : ''} ${wide ? 'wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'modal-title'},
     h('header', {}, h('div', {}, h('h2', {id: 'modal-title', text: title}), subtitle ? h('p', {text: subtitle}) : null),

@@ -1,6 +1,7 @@
 """Private Admin source delivery and bootstrap boundary."""
 
 import uuid
+from pathlib import Path
 from unittest import mock
 
 from testit import helpers as th
@@ -157,6 +158,9 @@ def test_network_asset_contract(opts):
     setup = opts.client.get("/admin/assets/setup.js").text
     network = opts.client.get("/admin/assets/network.js").text
     core = opts.client.get("/admin/assets/core.js").text
+    app = opts.client.get("/admin/assets/app.js").text
+    pages = opts.client.get("/admin/assets/pages.js").text
+    preview = (Path(__file__).resolve().parents[2] / "bin/admin_preview").read_text()
     assert "result.token" not in setup and "MOJO_DEPLOY_KEY" not in setup, \
         "System Setup learned how to read or render a deployment secret"
     assert "apiOnce" in network and "refresh-required" in network, \
@@ -166,6 +170,23 @@ def test_network_asset_contract(opts):
     assert "['ArrowLeft', 'ArrowRight'].includes(event.key)" in core and \
         "scroller.scrollLeft = Math.max(0, Math.min(maximum" in core, \
         "keyboard table scrolling lost its bounded arrow-key handler"
+    assert "canonicalRecordName" in network and "sameRecordSet" in network, \
+        "DNS canonical identity or complete values-plus-TTL preflight disappeared"
+    assert "ensureRoute" in network and "ROUTE_REPAIR_KEY" in network and \
+        "routeState(await loadRoutes(), desired)" in network and \
+        "rememberRoute(desired" in network and "forgetRoute(desired)" in network, \
+        "route repair lost authoritative reconciliation or durable non-secret plans"
+    assert "onClose = () => {}" in core and "result.token = null" in pages and \
+        "quote.token = null" in network and "secretPayload.api_secret = ''" in network, \
+        "modal close paths no longer scrub reveal-once or provider secrets"
+    assert "--setup-state" in preview and "[redacted]" in preview and \
+        "setup_choice_operation" in preview and "Deterministic partial route failure" in preview, \
+        "deterministic preview lost resumable setup or safe mutation evidence"
+    assert "mojo-admin-theme" in app and \
+        "document.querySelector('.page-header h1')?.focus" in app and \
+        "if (event.key === 'Escape')" in core and "previous?.focus?.()" in core and \
+        "tabindex: '-1'" in core, \
+        "theme persistence or keyboard modal/page focus behavior disappeared"
     for shape in ("api", "site", "site_api", "redirect"):
         assert f"'{shape}'" in network, f"Vhost shape {shape} disappeared"
     for endpoint in (
