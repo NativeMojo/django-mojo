@@ -131,13 +131,8 @@ def _read_test_header(request, header_name):
 
 def _group_chain(group):
     """Return [root, ..., group] — ancestors first, the group itself last."""
-    chain = []
-    seen = set()
-    current = group
-    while current is not None and current.pk not in seen:
-        chain.append(current)
-        seen.add(current.pk)
-        current = current.parent
+    from mojo.apps.account.services import group_hierarchy
+    chain = group_hierarchy.ancestors(group, include_self=True)
     chain.reverse()
     return chain
 

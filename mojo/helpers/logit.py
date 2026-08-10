@@ -218,6 +218,7 @@ def exception(*args):
 
 SENSITIVE_KEYS = frozenset({
     "password", "pwd", "new_password", "current_password",
+    "temporary_password", "forced_password_token", "rotated_token",
     "secret", "token", "access_token", "refresh_token", "id_token",
     "api_key", "auth_token", "bearer_token", "authorization",
     "private_key", "otp", "mfa_code",

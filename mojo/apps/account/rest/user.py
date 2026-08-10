@@ -1,4 +1,5 @@
 import time
+import uuid
 from django.db import transaction
 from mojo import decorators as md
 from mojo.apps.account.utils.jwtoken import JWToken
@@ -127,6 +128,8 @@ def on_refresh_token(request):
     user, error = User.validate_jwt(request.DATA.refresh_token)
     if error is not None:
         raise merrors.PermissionDeniedException(error, 401, 401)
+    if user.requires_password_change:
+        return forced_password_response(user)
     # future look at keeping the refresh token the same but updating the access_token
     # TODO add device id to the token as well
     # user.touch()
@@ -199,6 +202,14 @@ def on_user_login(request):
     # "username") used to find the account. The gate enforces REQUIRE_VERIFIED_EMAIL
     # / REQUIRE_VERIFIED_PHONE only for the matching channel.
     _check_verification_gate(user, source)
+
+    # A temporary password proves only enough authority to replace itself. Do
+    # not mint an MFA token first: that token is another authentication
+    # credential and would create a bypass around the forced-change boundary.
+    if user.requires_password_change:
+        return jwt_login(
+            request, user, "account/jwt/login" in request.path,
+            source="password")
 
     mfa_methods = get_mfa_methods(user)
     if mfa_methods:
@@ -786,6 +797,21 @@ def _check_verification_gate(user, source=None):
 GEOFENCE_EXEMPT_JWT_SOURCES = ("sessions_revoke", "email_change")
 
 
+def forced_password_response(user):
+    """Return only the short-lived credential needed to set a real password."""
+    token = tokens.generate_forced_password_token(user)
+    response = JsonResponse({
+        "status": True,
+        "data": {
+            "requires_password_change": True,
+            "forced_password_token": token,
+            "user": user.to_dict("basic"),
+        },
+    })
+    response.log_context = {"sensitive_body": "forced_password"}
+    return response
+
+
 def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=False):
     """Issue an access+refresh JWT pair for the given user.
 
@@ -809,6 +835,8 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
         blocked = enforcement.enforce(request, scope="auth", user=user)
         if blocked is not None:
             return blocked
+    if user.requires_password_change:
+        return forced_password_response(user)
     user.last_login = dates.utcnow()
     user.track()
     # Record login event with geo data — must not break login on failure
@@ -888,6 +916,8 @@ def group_token_login(request, user, group):
     blocked = enforcement.enforce(request, scope="auth", user=user)
     if blocked is not None:
         return blocked
+    if user.requires_password_change:
+        return forced_password_response(user)
 
     # Mint FIRST, before any side effect: a refused mint must leave no
     # last_login and no login event behind. It raises PermissionDenied (403),
@@ -1048,8 +1078,7 @@ def on_user_password_reset_code(request):
     if now_ts - code_ts > settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int"):
         user.report_incident(f"{user.username} expired password reset code", "password_reset")
         raise merrors.ValueException("Expired code")
-    user.check_password_strength(new_password)
-    user.set_password(new_password)
+    user.set_permanent_password(new_password)
     user.set_secret("password_reset_code", None)
     user.set_secret("password_reset_code_ts", None)
     user.save()
@@ -1074,10 +1103,46 @@ def on_user_password_reset_token(request):
             user.is_email_verified = True
     else:
         raise merrors.ValueException("Invalid token kind")
-    user.check_password_strength(new_password)
-    user.set_password(new_password)
+    user.set_permanent_password(new_password)
     user.save()
     return jwt_login(request, user, source="password_reset")
+
+
+@md.POST("auth/password/forced")
+@md.strict_rate_limit("forced_password", ip_limit=10, ip_window=600)
+@md.custom_security("requires a short-lived single-use tp credential")
+@md.requires_geofence(scope="auth", after_auth=True)
+@md.requires_params("token", "new_password")
+def on_user_password_forced(request):
+    """Replace an administrator-issued temporary password.
+
+    The token is checked without consumption before strength validation, then
+    consumed while the User row is locked. A weak password therefore does not
+    burn the credential, while concurrent valid submissions remain single-use.
+    """
+    token = request.DATA.get("token")
+    new_password = request.DATA.get("new_password")
+    user = tokens.verify_forced_password_token(token, consume=False)
+    if not user.is_active or not user.requires_password_change:
+        raise merrors.PermissionDeniedException("Forced password change is unavailable")
+    user.check_password_strength(new_password)
+
+    with transaction.atomic():
+        locked = User.objects.select_for_update().filter(pk=user.pk).first()
+        if locked is None or not locked.is_active or not locked.requires_password_change:
+            raise merrors.PermissionDeniedException("Forced password change is unavailable")
+        verified = tokens.verify_forced_password_token(token, consume=True)
+        if verified.pk != locked.pk:
+            raise merrors.PermissionDeniedException("Invalid forced password credential")
+        locked.set_permanent_password(new_password)
+        locked.auth_key = uuid.uuid4().hex
+        locked.save(update_fields=[
+            "password", "requires_password_change", "auth_key", "modified"])
+        locked.log("Temporary password replaced", "password:forced_completed")
+
+    from mojo.apps.account.services.disable import disconnect_realtime
+    disconnect_realtime(locked, request=request)
+    return jwt_login(request, locked, source="forced_password")
 
 
 @md.POST("auth/magic/send")

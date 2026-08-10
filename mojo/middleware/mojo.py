@@ -67,7 +67,10 @@ class MojoMiddleware:
                 "/api/incident/mojosec/batch", "/api/incident/mojosec/batch/")
         )
         request._mojosec_sensitive_body = is_mojosec_batch
-        if settings.LOGIT_REQUEST_BODY and not is_raw_file_upload and not is_mojosec_batch:
+        sensitive_body = rhelper.sensitive_body_label(request)
+        request._sensitive_body_label = sensitive_body
+        if (settings.LOGIT_REQUEST_BODY and not is_raw_file_upload
+                and not is_mojosec_batch and not sensitive_body):
             request._raw_body = str(request.body)
         else:
             request._raw_body = None

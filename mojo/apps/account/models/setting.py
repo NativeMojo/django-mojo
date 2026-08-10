@@ -258,14 +258,13 @@ class Setting(MojoSecrets, MojoModel):
         """
         # Walk group + parent chain
         if group is not None:
-            seen = set()
-            current = group
-            depth = 0
-            while current and depth < MAX_PARENT_DEPTH:
-                if current.pk in seen:
-                    break
-                seen.add(current.pk)
-
+            try:
+                from mojo.apps.account.services import group_hierarchy
+                chain = group_hierarchy.ancestors(
+                    group, include_self=True, max_depth=MAX_PARENT_DEPTH)
+            except Exception:
+                return default
+            for current in chain:
                 val, found = cls.get_cached(name, group_id=current.pk)
                 if found:
                     return val
@@ -276,16 +275,6 @@ class Setting(MojoSecrets, MojoModel):
                     if r:
                         r.hset(cls._redis_key(current.pk), name, val if isinstance(val, str) else json.dumps(val))
                     return val
-
-                current = getattr(current, 'parent', None)
-                if current and not hasattr(current, 'pk'):
-                    # parent is a deferred FK — fetch it
-                    try:
-                        from mojo.apps.account.models import Group
-                        current = Group.objects.filter(pk=current).first()
-                    except Exception:
-                        break
-                depth += 1
 
         # Global scope
         val, found = cls.get_cached(name)
