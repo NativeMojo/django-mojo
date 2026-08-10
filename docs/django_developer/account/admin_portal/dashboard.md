@@ -1,9 +1,11 @@
 # Admin Dashboard integration contract
 
-The built-in Admin has five primary navigation items, in this order:
-Dashboard, People, Web Apps, Platform, and Activity. System Setup, deployments,
-and the collapsed Advanced raw-resource disclosure are destinations inside
-Platform; they are not additional primary navigation.
+The built-in Admin has six primary navigation items, in this order: Dashboard,
+People, Web Apps, Domains & DNS, Platform, and Activity. Domains & DNS appears
+only with DNS read/manage authority and owns ongoing domain and public-record
+work. System Setup, deployments, and the collapsed Advanced raw-resource
+disclosure are destinations inside Platform; they are not additional primary
+navigation.
 
 Dashboard answers two questions only: can customers use the system, and can
 operators detect failures? `GET /api/account/admin/dashboard` returns a small

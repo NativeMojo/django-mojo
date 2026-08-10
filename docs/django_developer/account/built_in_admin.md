@@ -57,9 +57,11 @@ stylesheet, title, capability check, and one
 exactly one DOM `Node`; an optional `node.dispose()` releases feature-local
 listeners or work.
 
-Primary navigation is exactly Dashboard, People, Web Apps, Platform, and
-Activity. Platform contains deployments, literal-superuser System Setup, and
-one collapsed Advanced disclosure for raw resources. See
+Primary navigation is Dashboard, People, Web Apps, Domains & DNS, Platform,
+and Activity. Domains & DNS is permission-gated and stays beside Web Apps
+because domains and public records are ongoing application controls. Platform
+contains deployments, literal-superuser System Setup, and one collapsed
+Advanced disclosure for raw resources. See
 [Dashboard integration](admin_portal/dashboard.md) for the permissioned source
 matrix and canonical cross-feature route state.
 
@@ -99,8 +101,9 @@ contracts.
 See [Platform and Advanced Admin controls](admin_portal/platform.md) for the
 dedicated permissions, bounded evidence contract, and typed settings boundary.
 
-The Advanced feature owns read-only hosting/AWS inventory, typed safe settings,
-and raw Domains, Credentials, DNS, Certificates,
+The Advanced feature owns the first-class Domains & DNS destination plus
+read-only hosting/AWS inventory, typed safe settings, and raw Credentials,
+Certificates,
 Upstreams, Vhosts, and Routes. Its `assets/features/advanced/page.js` module is
 the permanent hosting UI. It does not
 create portal-only mutation endpoints. Provider DNS writes are keyed

@@ -21,9 +21,15 @@ def test_modular_shell_contract(opts):
     assert "features/platform/page.js" not in app and "features/people/page.js" not in app
     for name in ("dashboard", "people", "webapps", "activity", "platform", "advanced"):
         assert f"./{name}/feature.js" in registry
+    assert "[dashboard, people, webapps, advanced, platform, activity]" in registry, \
+        "Domains & DNS is not positioned beside Web Apps in primary navigation"
     assert "routes: ['platform', 'deployments', 'setup']" in platform
     assert "setupPage(ctx)" in platform and "platformPage(ctx, route)" in platform
     assert "const ROUTES = ['advanced', 'domains', 'credentials', 'dns', 'certificates'" in advanced
+    assert "route: 'domains'" in advanced and "label: 'Domains & DNS'" in advanced, \
+        "the permanent Domains & DNS control is missing from the sidebar"
+    assert "ctx.capabilities.network || ctx.capabilities.manage_network" in advanced, \
+        "Domains & DNS sidebar visibility is not permission-gated"
     assert "networkPage(ctx, route)" in advanced and "advancedControlPage(ctx)" in advanced
 
 
