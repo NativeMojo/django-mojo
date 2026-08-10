@@ -1,9 +1,10 @@
 # Built-in Admin Portal
 
-django-mojo ships a small, dependency-free control-plane UI. Round one covers
-the system overview, User and Group CRUD, and WebApp GitHub deployment-key
-management. Fleet, network, operations, security, configuration, and metrics
-can be added behind the same shell without changing its delivery boundary.
+django-mojo ships a small, dependency-free control-plane UI. It covers System
+Setup/readiness, the system overview, User and Group CRUD, and WebApp GitHub
+deployment-key management. Fleet, network, operations, security,
+configuration, and metrics extend the same shell without changing its delivery
+boundary.
 
 ## Enable and route it
 
@@ -54,6 +55,12 @@ which cannot make an old `auth_time` fresh.
 The Hybrid visual density is intentional: 14px body and form text, 13px tables,
 24px page titles, and 26px KPI values. Light, dark, and system themes are built
 in and stored only in browser local storage.
+
+System Setup is visible only to a literal superuser. Its private `setup.js`
+module renders the normalized readiness report, durable step progress, typed
+late choices, cancellation, and bounded live log. See
+[System Setup and Readiness](system_setup.md) for the service and security
+contracts.
 
 ## Packaging and testing
 

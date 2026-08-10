@@ -6,8 +6,14 @@ developers building a custom internal console.
 ## Built-in portal
 
 The built-in portal defaults to `/admin/` and uses the hosted Bouncer auth
-pages. Round one provides a system overview, User and Group management, and
-WebApp `MOJO_DEPLOY_KEY` management with light, dark, and system themes.
+pages. It provides System Setup/readiness, a system overview, User and Group
+management, and WebApp `MOJO_DEPLOY_KEY` management with light, dark, and
+system themes.
+
+System Setup is a stricter surface than ordinary Admin pages: only an active
+literal superuser with an interactive JWT can use it. See the
+[System Setup API](system_setup.md) for its report, late-choice, resume,
+fresh-auth, and Origin contracts.
 
 Anonymous document requests receive only a small auth handoff. Private HTML,
 JavaScript, and CSS require a short-lived path-scoped source cookie; anonymous
@@ -199,6 +205,7 @@ This prevents non-admin users from escalating their own access.
 | Group administration | `GET/POST /api/group`, `GET/POST /api/group/<id>` | `groups` |
 | Group membership | `POST /api/group/member`, `POST /api/group/member/<id>` | `groups` |
 | Secure settings | `GET/POST /api/settings`, `DELETE /api/settings/<id>` | `groups` |
+| System Setup | `/api/account/admin/setup/*` | Literal active superuser only |
 | Security dashboard | `GET /api/incident/incident`, `GET /api/incident/event` | `security` |
 | Firewall / IP blocks | `GET/POST /api/incident/ipset` — see [IPSet Bulk Blocking](../security/README.md#ipset-bulk-blocking) | `security` |
 | Geofence admin | `GET/POST /api/geo/rules`, `GET/POST /api/geo/allowlist` — see [Geofence Admin](geofence.md) | `security` (or `view_geofence`/`manage_geofence`) |
@@ -246,6 +253,11 @@ This prevents non-admin users from escalating their own access.
 ## Secure Settings API (Admin)
 
 The secure settings API is intended for admin portals and configuration consoles.
+
+`BASE_URL`, `MOJO_INSTALLATION_UUID`, `MOJO_INSTALLATION_SLUG`,
+`AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`, and `EDGE_EXPECTED_TOPOLOGY` are protected
+system keys. Generic settings create/update/rename/delete requests refuse them
+for every caller, including superusers. Configure them through System Setup.
 
 ### Endpoints
 
