@@ -4,3 +4,32 @@
 - [Incident API](incidents.md) — View and manage security incidents, tickets, and history
 - [Reporting Events](reporting_events.md) — Report events from a web page
 - [Security Overview](../security/README.md) — Unified guide to building a security dashboard
+
+## Activity-oriented list reads
+
+The built-in Admin Activity center is a reference consumer of the public list
+APIs. Use the dedicated graph for bounded operator tables:
+
+```http
+GET /api/incident/incident?graph=activity&size=25&start=0&sort=-created
+GET /api/incident/event?graph=activity&size=25&start=0&sort=-created
+GET /api/logs?graph=activity&size=25&start=0&sort=-created
+GET /api/incident/ticket?graph=activity&size=25&start=0&sort=-modified
+```
+
+The response envelope supplies `results`, `count`, `start`, and `size`. Treat a
+successful `count: 0` as empty and an authorization/transport failure as
+unavailable; never substitute zero for a source that could not be read. Logs
+require `view_logs` (or their broader Log grants), while the three incident
+sources require `view_security`; Incident/Ticket writes additionally require
+`manage_security`.
+
+Free-text `search` is intentionally narrower than the returned graph and never
+searches JSON evidence or request payloads. The Event graph exposes scalar
+incident/group ids without `geo_ip`; Ticket exposes scalar relationship ids and
+minimal labels without nested User/Group objects. Use those scalars for deep
+links rather than client-side joins.
+
+Do not use `/api/incident/stats` to build Activity counts. It is not the
+permission-scoped list authority. Request a size-one page from each source and
+use that envelope's `count` instead.

@@ -8,8 +8,8 @@ developers building a custom internal console.
 The built-in portal defaults to `/admin/` and uses the hosted Bouncer auth
 pages. It provides System Setup/readiness, a system overview, User and Group
 management, permanent Domains/Credentials/DNS/Certificates/Upstreams/Vhosts/
-Routes pages, and WebApp `MOJO_DEPLOY_KEY` management with light, dark, and
-system themes.
+Routes pages, an Activity center for Incidents, Events, Logs, and Tickets, and
+WebApp `MOJO_DEPLOY_KEY` management with light, dark, and system themes.
 
 System Setup is a stricter surface than ordinary Admin pages: only an active
 literal superuser with an interactive JWT can use it. See the
@@ -51,8 +51,9 @@ token for create/rotate and offers revoke; System Setup only links there.
 ### Modular browser contract
 
 The packaged portal is divided into six fixed, capability-gated feature lanes:
-Dashboard, People, WebApps, Activity (reserved and disabled until its provider
-enables it), Platform, and Advanced. Platform owns System Setup, readiness, and
+Dashboard, People, WebApps, Activity, Platform, and Advanced. Activity owns the
+bounded Incidents, Events, Logs, and Tickets operator journey. Platform owns
+System Setup, readiness, and
 the guided control-plane journey. Advanced owns the raw Domains, Credentials,
 DNS, Certificates, Upstreams, Vhosts, Routes, and network resources. Bootstrap
 returns both the stable flat `capabilities` object and a namespaced `features`
@@ -68,8 +69,10 @@ object:
                  "capabilities": {"setup": true}},
     "advanced": {"id": "advanced", "enabled": true,
                  "capabilities": {"view": true, "manage": true}},
-    "activity": {"id": "activity", "enabled": false,
-                 "capabilities": {"view": false}}
+    "activity": {"id": "activity", "enabled": true,
+                 "capabilities": {"view_logs": true,
+                                  "view_security": true,
+                                  "manage_security": false}}
   }
 }
 ```
@@ -92,6 +95,55 @@ encoded `search`, `start`, and `size` query parameters, preserves the REST
 envelope's count and paging metadata, and submits the selected id through its
 named hidden input. Treat endpoint permissions as authoritative: hiding or
 disabling a control is only presentation, never authorization.
+
+### Activity center contract
+
+Activity uses the ordinary public REST lists; it never calls the legacy
+`/api/incident/stats` aggregate. Each request sends `graph=activity`, an
+explicit bounded `size`, `start`, and an allowlisted `sort`. The four sources
+remain permission-separated:
+
+| Tab | Endpoint | Capability |
+|---|---|---|
+| Incidents | `GET /api/incident/incident` | `view_security` |
+| Events | `GET /api/incident/event` | `view_security` |
+| Logs | `GET /api/logs` | `view_logs` |
+| Tickets | `GET /api/incident/ticket` | `view_security` |
+
+Incident and Ticket status controls appear only with `manage_security` and
+write through their existing model REST save paths. Those paths remain the
+authority for IncidentHistory and TicketNote audit records; Activity defines no
+parallel mutation endpoint.
+
+The frozen hash vocabulary is:
+
+```text
+#/activity?tab=events&search=login&start=0&size=25&sort=-created
+            &status=open&category=auth&level=9&kind=request
+            &date_from=2026-08-01&date_to=2026-08-10
+            &subject_type=group&subject_id=9
+```
+
+Allowed subject types are `incident`, `user`, `group`, and `model`; model links
+also require `subject_model`. A subject is translated only when that source has
+a stored scalar relationship (`incident`, `uid`/`user`, `group`/`gid`, or
+`model_name` plus `model_id`). An unsupported combination displays an explicit
+unsupported state and issues no list request, so a narrow deep link can never
+silently become a global query.
+
+The `activity` graphs avoid nested User/Group graphs. Ticket provides scalar
+relation ids and minimal labels owned by the Ticket view; Event excludes
+`geo_ip`, preventing a lookup per list row. Free-text search is restricted to
+each model's explicit `SEARCH_FIELDS`; JSON metadata, request payloads, device
+ids, credentials, and user-agent strings are not search columns. Structured
+evidence is recursively masked for sensitive key names and bounded by depth,
+item count, and string length before display or copy. This display protection
+does not weaken the endpoint permission requirement.
+
+Counts come from each permission-scoped list envelope. A successful empty list
+shows `0`; a denied or failed source shows `Unavailable`. Search is debounced,
+in-flight requests are aborted on replacement/navigation, and a stale page
+offset is clamped to the last real page after the authoritative count arrives.
 
 ## What "Admin Portal" Means in Mojo
 
