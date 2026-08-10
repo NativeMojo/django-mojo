@@ -69,17 +69,22 @@ def _fingerprint(group, payload):
 
 def request_origin(request):
     raw = str(request.META.get("HTTP_ORIGIN") or "").strip().rstrip("/")
+    request_scheme = "https" if request.is_secure() else "http"
     if not raw:
-        scheme = "https" if request.is_secure() else "http"
-        raw = f"{scheme}://{request.get_host()}"
+        raw = f"{request_scheme}://{request.get_host()}"
     parsed = urlsplit(raw)
     if (parsed.scheme not in ("http", "https") or not parsed.hostname or
             parsed.username or parsed.password or parsed.path not in ("", "/") or
             parsed.query or parsed.fragment):
         raise me.PermissionDeniedException("A valid same-origin request is required")
-    host = parsed.hostname.lower()
-    request_host = (urlsplit(f"//{request.get_host()}").hostname or "").lower()
-    if host != request_host:
+    expected = urlsplit(f"{request_scheme}://{request.get_host()}")
+    try:
+        origin_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        request_port = expected.port or (443 if request_scheme == "https" else 80)
+    except ValueError:
+        raise me.PermissionDeniedException("A valid same-origin request is required")
+    if (parsed.hostname.lower() != (expected.hostname or "").lower() or
+            parsed.scheme != request_scheme or origin_port != request_port):
         raise me.PermissionDeniedException("Cross-origin onboarding is refused")
     return raw
 
@@ -196,6 +201,10 @@ def choose(operation, request, payload):
         _assert_current(locked, request, mutate=True)
         if locked.status in TERMINAL_STATUSES:
             raise me.ValueException("This onboarding operation is already finished")
+        if (locked.lease_expires_at and
+                locked.lease_expires_at > timezone.now()):
+            raise me.ValueException(
+                "Onboarding is reconciling; reload before choosing again")
         revision = payload.get("revision")
         try:
             revision = int(revision)
@@ -255,11 +264,57 @@ def choose(operation, request, payload):
             metadata__purchase=purchase_confirmation["purchase"],
             group=locked.group).first()
         if domain is None:
-            result = registrar.purchase(
-                locked.group, locked.actor, purchase_confirmation["purchase"],
-                purchase_confirmation["token"],
-                purchase_confirmation["domain"], purchase_confirmation["price"])
-            domain = Domain.objects.get(pk=result.domain)
+            try:
+                result = registrar.purchase(
+                    locked.group, locked.actor,
+                    purchase_confirmation["purchase"],
+                    purchase_confirmation["token"],
+                    purchase_confirmation["domain"],
+                    purchase_confirmation["price"])
+                domain = Domain.objects.get(pk=result.domain)
+            except Exception:
+                # Registrar detail belongs in its permission-scoped ledger and
+                # logs. The onboarding response must neither replay nor echo a
+                # provider body, which can contain account/contact metadata.
+                from mojo.apps.dnsman.models import DomainPurchase
+
+                purchase_status = DomainPurchase.objects.filter(
+                    pk=purchase_confirmation["purchase"],
+                    group=locked.group).values_list("status", flat=True).first()
+                if purchase_status in ("quoted", "expired"):
+                    message = "Domain purchase confirmation was refused"
+                    status_code = 400
+                elif purchase_status == "failed":
+                    message = "Domain registration failed; review the purchase ledger"
+                    status_code = 503
+                else:
+                    message = "Domain purchase outcome is being reconciled"
+                    status_code = 503
+                with transaction.atomic():
+                    failed = WebAppOnboardingOperation.objects.select_for_update().get(
+                        pk=locked.pk)
+                    if purchase_status in ("quoted", "expired"):
+                        failed_state = dict(failed.state or {})
+                        failed_choices = dict(failed_state.get("choices") or {})
+                        failed_choices.pop("address", None)
+                        failed_intent = dict(failed_state.get("intent") or {})
+                        failed_intent.pop("purchase", None)
+                        failed_state["choices"] = failed_choices
+                        failed_state["intent"] = failed_intent
+                        failed.state = failed_state
+                    failed.status = (
+                        STATUS_FAILED if purchase_status == "failed"
+                        else STATUS_WAITING)
+                    failed.finished = (
+                        timezone.now() if purchase_status == "failed" else None)
+                    failed.last_error = message
+                    failed.revision += 1
+                    failed.save(update_fields=[
+                        "state", "status", "finished", "last_error",
+                        "revision", "modified"])
+                raise me.ValueException(
+                    f"{message}; reload status",
+                    code=status_code, status=status_code)
         with transaction.atomic():
             locked = WebAppOnboardingOperation.objects.select_for_update().get(
                 pk=locked.pk)
@@ -325,7 +380,14 @@ def _lease(operation_id, owner):
     return operation.pk
 
 
-def _release(operation, wait=False):
+@transaction.atomic
+def _release(operation, owner, wait=False):
+    """Publish worker state only while this exact lease/revision still owns it."""
+    current = WebAppOnboardingOperation.objects.select_for_update().get(
+        pk=operation.pk)
+    if (current.lease_owner != owner or
+            current.revision != operation.revision):
+        return False
     operation.lease_owner = ""
     operation.lease_expires_at = None
     if wait and operation.status not in TERMINAL_STATUSES:
@@ -335,6 +397,7 @@ def _release(operation, wait=False):
         "lease_owner", "lease_expires_at", "status", "revision", "activity",
         "evidence", "last_error", "attempts", "next_attempt_at", "cursor",
         "web_app", "domain", "certificate", "vhost", "finished", "modified"])
+    return True
 
 
 def advance(operation_id, owner=None):
@@ -373,7 +436,9 @@ def advance(operation_id, owner=None):
             operation.finished = timezone.now()
             operation.last_error = "Onboarding recovery attempts were exhausted"
             _activity(operation, operation.last_error, "error")
-        _release(operation, wait=wait)
+        released = _release(operation, owner, wait=wait)
+        if not released:
+            return "superseded"
         if retry_delay:
             publish(operation.pk, delay=retry_delay)
         return f"{operation.status}:{operation.cursor}"
@@ -389,7 +454,9 @@ def advance(operation_id, owner=None):
             operation.status = STATUS_WAITING
             delay = min(300, 2 ** operation.attempts)
             operation.next_attempt_at = timezone.now() + timedelta(seconds=delay)
-        _release(operation, wait=True)
+        released = _release(operation, owner, wait=True)
+        if not released:
+            return "superseded"
         if operation.status not in TERMINAL_STATUSES:
             publish(operation.pk, delay=delay)
         return f"{operation.status}:{operation.last_error}"
@@ -445,9 +512,10 @@ def _advance_address(operation):
     if not choice:
         return True
     label = str(choice.get("label") or "").strip().lower()
-    if not label:
+    if not label or label == "*":
         raise me.ValueException(
-            "Apex WebApp onboarding is not supported; choose a subdomain")
+            "Apex and wildcard WebApp onboarding are not supported; "
+            "choose one subdomain")
     validators.validate_label(label)
 
     domain = None
@@ -510,7 +578,9 @@ def _advance_address(operation):
                       and str(getattr(row, "type", row.get("type", ""))).upper() == "CNAME"
                       and _record_values(row) == [target]]
             if len(proven) != 1:
-                raise
+                raise me.ValueException(
+                    "DNS provider outcome is ambiguous; reconciliation will retry",
+                    code=503, status=503)
 
     from mojo.apps.edge.models import Vhost
     existing_vhost = Vhost.objects.filter(

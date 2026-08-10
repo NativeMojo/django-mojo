@@ -6,8 +6,7 @@ from unittest import mock
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
-    RELEASE_BUCKET, declare_release_buckets, make_group, make_group_member,
-    make_webapp,
+    declare_release_buckets, login, make_group, make_group_member, make_webapp,
 )
 
 
@@ -18,7 +17,7 @@ def setup_webapp_onboarding(opts):
     WebAppOnboardingOperation.objects.all().delete()
     declare_release_buckets()
     opts.group = make_group("edge-onboard")
-    opts.actor, _, _, _ = make_group_member(
+    opts.actor, opts.actor_email, opts.actor_password, _ = make_group_member(
         ["manage_webapp", "manage_dns"], group=opts.group)
 
 
@@ -58,6 +57,25 @@ def test_profile_input_validation(opts):
         except me.ValueException as exc:
             error = exc
         assert error is not None, f"{validator.__name__} accepted {value!r}"
+
+
+@th.django_unit_test("address onboarding refuses apex and wildcard serving names")
+def test_address_requires_one_concrete_label(opts):
+    from mojo import errors as me
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    for index, label in enumerate(("", "*")):
+        operation = WebAppOnboardingOperation.objects.create(
+            group=opts.group, actor=opts.actor, origin="http://testserver",
+            replay_fingerprint=str(index + 7) * 64,
+            state={"choices": {"address": {"label": label, "domain": 0}}})
+        try:
+            webapp_onboarding._advance_address(operation)
+            error = None
+        except me.ValueException as exc:
+            error = exc
+        assert error is not None, f"address onboarding accepted label {label!r}"
 
 
 @th.django_unit_test("generated workflow is secret-free and quotes shell inputs")
@@ -157,6 +175,41 @@ def test_summary_is_frozen_and_secret_free(opts):
     assert result["webapp"]["id"] == web_app.pk, "summary changed WebApp identity"
     assert "state" not in result["onboarding"], "internal reconciliation state escaped"
     assert "must-never-export" not in str(result), "summary exported secret material"
+
+
+@th.django_unit_test("operation detail authorizes a group member without a global grant")
+def test_detail_uses_operation_group_scope(opts):
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+
+    operation = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, origin="http://testserver",
+        replay_fingerprint="c" * 64)
+    login(opts, opts.actor_email, opts.actor_password)
+    response = opts.client.get(
+        f"/api/edge/webapp/onboarding/detail?operation={operation.operation_id}")
+
+    assert response.status_code == 200, (
+        "a group-scoped WebApp manager was blocked by an accidental global "
+        f"permission gate ({response.status_code}: {response.body})")
+
+
+@th.django_unit_test("stale worker release cannot resurrect cancellation")
+def test_stale_lease_cannot_overwrite_cancel(opts):
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    operation = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, origin="http://testserver",
+        replay_fingerprint="d" * 64, lease_owner="worker-1")
+    stale = WebAppOnboardingOperation.objects.get(pk=operation.pk)
+    WebAppOnboardingOperation.objects.filter(pk=operation.pk).update(
+        status="cancelled", lease_owner="", revision=1)
+
+    released = webapp_onboarding._release(stale, "worker-1", wait=True)
+    operation.refresh_from_db()
+    assert released is False, "a stale worker retained authority after cancellation"
+    assert operation.status == "cancelled", \
+        "stale worker release resurrected a cancelled onboarding operation"
 
 
 @th.django_unit_test("migration 0009 is the frozen onboarding edge")

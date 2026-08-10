@@ -9,9 +9,13 @@ from mojo.apps.edge.services import webapp_onboarding
 
 
 def _human(request):
-    if getattr(request, "group_token", None) is not None:
+    from mojo.helpers.request import is_request_user
+
+    if (not is_request_user(request) or
+            not getattr(request.user, "is_authenticated", False) or
+            getattr(request, "group_token", None) is not None):
         raise me.PermissionDeniedException(
-            "Group tokens cannot operate WebApp onboarding")
+            "An interactive user session is required for WebApp onboarding")
 
 
 def _group(request):
@@ -60,7 +64,7 @@ def on_webapp_onboarding_create(request):
 @md.GET("webapp/onboarding/detail")
 @md.denies_key_backed_session()
 @md.requires_params("operation")
-@md.requires_perms("view_dns", "manage_dns", "security")
+@md.custom_security("operation actor and RestMeta group scope in body")
 def on_webapp_onboarding_detail(request):
     return webapp_onboarding.serialize(_operation(request))
 
@@ -69,7 +73,7 @@ def on_webapp_onboarding_detail(request):
 @md.denies_key_backed_session()
 @md.requires_fresh_auth(600)
 @md.requires_params("operation", "revision", "step", "choice")
-@md.requires_perms("manage_webapp", "security")
+@md.custom_security("operation actor, origin, revision, and RestMeta group scope in body")
 def on_webapp_onboarding_choose(request):
     operation = webapp_onboarding.choose(
         _operation(request, mutate=True), request, request.DATA)
@@ -81,7 +85,7 @@ def on_webapp_onboarding_choose(request):
 @md.denies_key_backed_session()
 @md.requires_fresh_auth(600)
 @md.requires_params("operation")
-@md.requires_perms("manage_webapp", "security")
+@md.custom_security("operation actor, origin, and RestMeta group scope in body")
 def on_webapp_onboarding_cancel(request):
     operation = webapp_onboarding.cancel(
         _operation(request, mutate=True), request)
@@ -92,15 +96,18 @@ def on_webapp_onboarding_cancel(request):
 @md.denies_key_backed_session()
 @md.requires_fresh_auth(600)
 @md.requires_params("webapp")
-@md.requires_perms("manage_webapp", "security")
+@md.custom_security("exact WebApp group manage permission in body")
 def on_webapp_onboarding_workflow(request):
     """Return safe workflow text and optionally a newly minted key once."""
     from mojo.apps.edge.services import webapp_keys
 
     _human(request)
     web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
-    WebApp.rest_check_permission_or_raise(
-        request, ["SAVE_PERMS", "VIEW_PERMS"], web_app)
+    if (not web_app.group.is_effectively_active() or not
+            web_app.group.user_has_permission(
+                request.user, ["manage_webapp", "security"])):
+        raise me.PermissionDeniedException(
+            "WebApp management is not granted in this group")
     result = webapp_onboarding.workflow(web_app)
     action = str(request.DATA.get("action") or "").strip().lower()
     if action:
@@ -118,7 +125,7 @@ def on_webapp_onboarding_workflow(request):
 @md.GET("webapp/summary")
 @md.denies_key_backed_session()
 @md.requires_params("webapp")
-@md.requires_perms("view_dns", "manage_dns", "security")
+@md.custom_security("WebApp RestMeta group scope in body")
 def on_webapp_summary(request):
     _human(request)
     web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
