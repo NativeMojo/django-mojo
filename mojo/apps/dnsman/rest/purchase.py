@@ -67,7 +67,10 @@ def on_registrar_quote(request):
 
 
 @md.POST('registrar/purchase')
-@md.requires_params("group", "purchase", "confirm_token")
+@md.denies_key_backed_session()
+@md.requires_fresh_auth(seconds=600)
+@md.requires_params(
+    "group", "purchase", "confirm_token", "confirm_domain", "confirm_price")
 def on_registrar_purchase(request):
     """Step two of two — the one irreversible, real-money mutation."""
     Domain.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"])
@@ -76,6 +79,8 @@ def on_registrar_purchase(request):
         user=request.user,
         purchase_id=request.DATA.get("purchase"),
         token=request.DATA.get("confirm_token"),
+        confirm_domain=request.DATA.get("confirm_domain"),
+        confirm_price=request.DATA.get("confirm_price"),
     )
 
 

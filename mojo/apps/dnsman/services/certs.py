@@ -350,6 +350,7 @@ def _issue_locked(certificate):
     from mojo.apps.dnsman.models.acme_delegation import STATE_VERIFIED
     from mojo.apps.dnsman.services import delegation
     from mojo.apps.dnsman.services import dns
+    from mojo.apps.dnsman.services import record_reservations
     from mojo.helpers import acme
 
     with transaction.atomic():
@@ -375,6 +376,10 @@ def _issue_locked(certificate):
 
     certificate = claimed
     domain = certificate.domain
+    try:
+        record_reservations.cleanup_for_certificate(certificate)
+    except Exception as err:
+        return _record_issue_failure(certificate, err, renewing)
     names = list(certificate.sans or [certificate.common_name])
     delegated = delegation.for_domain(domain)
     if delegated is None and domain.provider == "mojo":
@@ -419,9 +424,15 @@ def _issue_locked(certificate):
                 delegated, challenges)
         else:
             for record_name, digests in challenges.items():
+                reservation = record_reservations.reserve(
+                    certificate, record_name, list(digests))
+                # From here on the provider outcome may be ambiguous. Put the
+                # durable owner in finally's cleanup list before making the
+                # call so a lost response cannot strand an invisible write.
+                planted.append((reservation, record_name, list(digests)))
                 dns.upsert_record(
-                    domain, "TXT", record_name, list(digests), ttl=CHALLENGE_TTL)
-                planted.append((record_name, list(digests)))
+                    domain, "TXT", record_name, list(digests), ttl=CHALLENGE_TTL,
+                    reservation=reservation)
 
             for record_name, digests in challenges.items():
                 ok, seen = dns.wait_for_propagation(
@@ -431,6 +442,9 @@ def _issue_locked(certificate):
                         f"Timed out waiting for {record_name} to publish "
                         f"{len(digests)} challenge value(s); "
                         f"saw {list(seen or []) or 'nothing'}")
+                reservation = next(
+                    item[0] for item in planted if item[1] == record_name)
+                record_reservations.mark_proven(reservation)
 
         for challenge_url in answers:
             client.answer_challenge(challenge_url)
@@ -631,12 +645,16 @@ def cleanup_challenges(domain, planted):
     Still deliberately swallows its own errors: a cleanup problem must never
     replace the real reason issuance failed, nor fail an issuance that succeeded.
     """
-    from mojo.apps.dnsman.services import dns
+    from mojo.apps.dnsman.services import dns, record_reservations
 
-    for record_name, digests in planted:
+    for reservation, record_name, digests in planted:
         try:
-            dns.clear_record(domain, "TXT", record_name, list(digests))
+            dns.clear_record(
+                domain, "TXT", record_name, list(digests),
+                reservation=reservation)
+            record_reservations.release(reservation)
         except Exception as err:
+            record_reservations.mark_cleanup_pending(reservation, err)
             logit.error(
                 f"dnsman: could not remove challenge record {record_name} "
                 f"on {domain.name}: {err}")

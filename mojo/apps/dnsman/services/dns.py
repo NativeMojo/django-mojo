@@ -151,7 +151,7 @@ def list_records(domain):
     return get_adapter(domain).list_records()
 
 
-def upsert_record(domain, rtype, name, record_values, ttl=300):
+def upsert_record(domain, rtype, name, record_values, ttl=300, reservation=None):
     """
     Create or REPLACE a record set. Returns objict(change_id, provider, type, name).
 
@@ -163,12 +163,34 @@ def upsert_record(domain, rtype, name, record_values, ttl=300):
     values = base.as_value_list(record_values)
     if not values:
         raise me.ValueException("At least one record value is required")
+    from mojo.apps.dnsman.services import record_reservations
+
     adapter = get_adapter(domain)
-    change_id = adapter.upsert_record(rtype, fqdn, values, ttl=ttl)
+    with record_reservations.mutation_guard(
+            domain, rtype, fqdn, reservation=reservation):
+        if reservation is not None:
+            record_reservations.mark_attempted(reservation)
+        try:
+            change_id = adapter.upsert_record(rtype, fqdn, values, ttl=ttl)
+        except Exception:
+            # Provider timeouts are ambiguous. Inventory is authoritative: if
+            # it now equals the intended complete set, the retry converged and
+            # must not write a second time.
+            if reservation is not None:
+                try:
+                    if record_reservations.reconcile(
+                            reservation, adapter.list_records()):
+                        change_id = "reconciled"
+                    else:
+                        raise
+                except Exception:
+                    raise
+            else:
+                raise
     return objict(change_id=change_id, provider=adapter.name, type=rtype, name=fqdn)
 
 
-def delete_record(domain, rtype, name, record_values=None):
+def delete_record(domain, rtype, name, record_values=None, reservation=None):
     """
     Delete a record set (or just the given values from it).
 
@@ -178,11 +200,14 @@ def delete_record(domain, rtype, name, record_values=None):
     rtype, fqdn = _validate(domain, rtype, name)
     adapter = get_adapter(domain)
     values = base.as_value_list(record_values) or None
-    change_id = adapter.delete_record(rtype, fqdn, record_values=values)
+    from mojo.apps.dnsman.services import record_reservations
+    with record_reservations.mutation_guard(
+            domain, rtype, fqdn, reservation=reservation):
+        change_id = adapter.delete_record(rtype, fqdn, record_values=values)
     return objict(change_id=change_id, provider=adapter.name, type=rtype, name=fqdn)
 
 
-def clear_record(domain, rtype, name, record_values=None):
+def clear_record(domain, rtype, name, record_values=None, reservation=None):
     """
     Retire a record's values — the strongest removal the provider can express.
 
@@ -196,7 +221,10 @@ def clear_record(domain, rtype, name, record_values=None):
     rtype, fqdn = _validate(domain, rtype, name)
     adapter = get_adapter(domain)
     values = base.as_value_list(record_values) or None
-    change_id = adapter.clear_record(rtype, fqdn, record_values=values)
+    from mojo.apps.dnsman.services import record_reservations
+    with record_reservations.mutation_guard(
+            domain, rtype, fqdn, reservation=reservation):
+        change_id = adapter.clear_record(rtype, fqdn, record_values=values)
     return objict(change_id=change_id, provider=adapter.name, type=rtype, name=fqdn)
 
 

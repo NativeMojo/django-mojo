@@ -36,6 +36,27 @@ def _safe_hub_error(error):
     return getattr(error, "kind", None) or ERROR_HUB_UNAVAILABLE
 
 
+def readiness_state(row):
+    """Safe, read-only System Setup metadata for one delegation."""
+    if row.state == STATE_VERIFIED and row.source_name and row.target_name:
+        return {
+            "status": "pass",
+            "explanation": f"Delegated ACME DNS for {row.domain_name} is verified.",
+            "remediation": "",
+        }
+    if row.state in (STATE_BROKEN, STATE_RETIRED):
+        return {
+            "status": "fail",
+            "explanation": f"Delegated ACME DNS for {row.domain_name} is {row.state}.",
+            "remediation": "Repair ownership and re-verify the exact ACME CNAME.",
+        }
+    return {
+        "status": "pending",
+        "explanation": f"Delegated ACME DNS for {row.domain_name} is awaiting verification.",
+        "remediation": "Publish the displayed CNAME and verify the delegation.",
+    }
+
+
 def _compare_allocation(row, allocation):
     if (
         str(allocation.client_ref) != str(row.client_ref)
