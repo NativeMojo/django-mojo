@@ -784,6 +784,11 @@ def test_monitoring_reconcile_is_repeatable_and_persists_protected_allowlist(opt
         and alarms[drifted_name]["ActionsEnabled"] is True \
         and alarms[drifted_name]["InsufficientDataActions"] == [], \
         "Disabled actions and injected insufficient-data actions must be repaired"
+    alarms[drifted_name]["Unit"] = "Seconds"
+    service.reconcile_monitoring(actor, challenge, cutoff)
+    assert cloudwatch.put_metric_alarm.call_count == 6 \
+        and "Unit" not in alarms[drifted_name], \
+        "An unintended explicit metric Unit must be removed during convergence"
     assert cloudwatch.set_alarm_state.call_count == 1, \
         "A resumed ambiguous probe must not replay an already-observed ALARM mutation"
     assert any(row.get("Sid") == "KeepMe" for row in topic_policy["Statement"]), \
@@ -887,6 +892,10 @@ def test_monitoring_proof_requires_delivery_after_this_operation(opts):
     proof_alarm, proof_ok = service._probe_evidence(topic, probe_arn, cutoff)
     assert proof_alarm is not None and proof_ok is not None, \
         "The exact ordered receipts must be selected as operation evidence"
+    probe["Unit"] = "Seconds"
+    assert not service.monitoring_proven(challenge, cutoff), \
+        "Proof must reject an explicit Unit when the intended alarm has no Unit"
+    probe.pop("Unit")
     assert service.monitoring_proven(challenge, cutoff), \
         "Only the operation's ordered ALARM then OK receipts should prove delivery"
     SystemSetupOperation.objects.filter(status__in=SystemSetupOperation.ACTIVE_STATUSES).delete()

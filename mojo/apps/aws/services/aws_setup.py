@@ -264,8 +264,8 @@ def _alarm_matches(current, desired):
         return False
     if not all(current.get(key) == desired.get(key) for key in _ALARM_COMPARE_FIELDS):
         return False
-    desired_unit = desired.get("Unit")
-    return desired_unit in (None, "", "None") or current.get("Unit") == desired_unit
+    normalize_unit = lambda value: None if value in (None, "", "None") else value
+    return normalize_unit(current.get("Unit")) == normalize_unit(desired.get("Unit"))
 
 
 def _complete_alarm_config(alarm, topic_arn):

@@ -1276,8 +1276,10 @@ class AWSCheckRunner:
                     desired_dimensions = sorted(
                         (row.get("Name"), row.get("Value")) for row in alarm.get("Dimensions", [])
                     )
-                    unit_drift = (alarm.get("Unit") not in (None, "", "None")
-                                  and current.get("Unit") != alarm.get("Unit"))
+                    normalize_unit = lambda value: (
+                        None if value in (None, "", "None") else value)
+                    unit_drift = (normalize_unit(current.get("Unit")) !=
+                                  normalize_unit(alarm.get("Unit")))
                     if current_dimensions != desired_dimensions or unit_drift or any(
                         current.get(key) != alarm.get(key) for key in comparable
                     ):
