@@ -759,11 +759,20 @@ export async function advancedControlPage(ctx) {
   async function render() {
     const report = await api('/api/account/admin/advanced');
     const sections = report.sections || {};
+    const evidencePanels = Object.entries(sections).map(([name, section]) =>
+      h('section', {class: 'panel'},
+        h('div', {class: 'panel-heading'},
+          h('div', {},
+            h('h2', {text: name.replaceAll('_', ' ')}),
+            h('p', {text: section.reason || section.observed_at})),
+          badge(section.status, statusTone(section.status))),
+        h('pre', {
+          class: 'evidence-json',
+          text: JSON.stringify(section.data || {}, null, 2),
+        })));
     root.replaceChildren(pageHeader('Advanced operations', 'Advanced', 'Read-only hosting and AWS inventory, network posture, and allowlisted settings.', [
       h('button', {class: 'button ghost', onclick: render}, icon('refresh'), 'Refresh evidence'),
-    ]), h('div', {class: 'advanced-evidence-grid'}, ...Object.entries(sections).map(([name, section]) =>
-      h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: name.replaceAll('_', ' ')}), h('p', {text: section.reason || section.observed_at})), badge(section.status, statusTone(section.status))),
-        h('pre', {class: 'evidence-json', text: JSON.stringify(section.data || {}, null, 2)}))));
+    ]), h('div', {class: 'advanced-evidence-grid'}, ...evidencePanels));
     if (!ctx.capabilities.manage_advanced || !ctx.user?.is_superuser) return;
     const settingsData = sections.settings?.data || {};
     const topology = settingsData.edge_topology || {nodes: [], pools: []};
