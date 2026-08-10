@@ -355,3 +355,12 @@ landed. Keeping multi-megabyte bundles out of the request path is deliberate.
 The node-side fetch is not an exception to that: it runs in the converge job on
 the node that will serve the bytes, streaming S3 to disk, and never inside a
 request.
+
+## Deployment-key readiness
+
+System Setup reports each WebApp's deployment-key lifecycle as missing, active,
+rotated, inactive, or revoked using `WebAppKeyOperation` receipts and safe
+`ApiKey` metadata. It never reads back a token: mint/rotate returns the token
+once, and a replay returns only the receipt/current status. Losing that response
+requires an explicit rotation. The readiness response contains no token hash,
+encrypted token, or recoverable credential material.

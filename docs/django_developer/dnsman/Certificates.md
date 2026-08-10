@@ -202,3 +202,12 @@ run through the job queue with backoff rather than a burst loop.
 HTTP-01 on the serving box remains the documented fallback for zones whose DNS
 we cannot write at all. It is not implemented here — DNS-01 covers every domain
 dnsman manages, by definition.
+
+## Durable DNS reservations
+
+Direct-provider DNS-01 issuance persists the complete TXT value set before the
+first write. Wildcard/apex values therefore share one reservation and one
+provider mutation. A timeout is reconciled by exact authoritative inventory;
+it is not blindly replayed. Cleanup releases ownership only after the provider
+accepted the removal. A failure leaves `cleanup_pending`, and the next issuance
+must repair that old intent before creating a new CA order.

@@ -369,6 +369,7 @@ installer can be unit-tested but cannot be exercised on a node.
 | `EDGE_RELEASE_FETCH_TIMEOUT` | `60` | Per-attempt connect/read timeout for a node's release GET (static) |
 | `EDGE_RELEASE_FETCH_BUDGET` | `300` | Wall-clock ceiling for one release's fetch; the rest resumes next converge (static) |
 | `EDGE_POOLS` | `["default"]` | Pools the convergence sweep covers |
+| `EDGE_NODE_ID` | *(unset)* | Required file-only stable identity used in safe fleet proof |
 | `EDGE_NGINX_TEST_CMD` | `["sudo","-n","nginx","-t"]` | Root check, no arguments |
 | `EDGE_NGINX_STAGED_TEST_CMD` | `["nginx","-e","stderr","-t","-c"]` | Staged check, **unprivileged** (`-e stderr` suppresses the default-error-log alert) |
 | `EDGE_NGINX_RELOAD_CMD` | `["sudo","-n","systemctl","reload","nginx"]` | Constant argv |
@@ -418,3 +419,20 @@ serving?" and installs the answer.
 
 Removing them is skeleton-side work and is sequenced: install this app on every
 node → verify `installed.json` fleet-wide → then delete the old path.
+
+## Fleet readiness and convergence proof
+
+`EDGE_NODE_ID` is a required file-only stable node identity.
+`EDGE_EXPECTED_TOPOLOGY` is the protected System Setup inventory of every
+expected node and pool. Readiness discovers only live runners that consume the
+`edge` channel, asks those exact runners for safe proof, and compares every
+node/pool against the current desired generation and installed django-mojo
+version. Missing topology, node response, pool evidence, or generation is
+pending/fail—never green. Proof contains identity/version/generation counters
+only; no configuration, key material, or credentials.
+
+Installer evidence is `EDGE_ROOT/installed/<pool>.json`. The historical
+`EDGE_ROOT/installed.json` is a read-only fallback for the default pool only;
+new writes never mutate it. Vhost and Route commits register an on-commit edge
+broadcast keyed by pool and desired generation. A publication error is pending
+evidence and the periodic sweep remains the healing path.

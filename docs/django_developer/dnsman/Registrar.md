@@ -262,3 +262,12 @@ Ingest is deliberately two steps: `discover` never creates anything, and each
 `adopt` is its own call. Adopt without a `group` for anything that is not yet a
 specific tenant's, then `registrar/assign-group` when it is. Assignment is
 one-way — a domain that already has a group is never re-homed.
+
+## Purchase confirmation boundary
+
+The irreversible purchase endpoint accepts browser user sessions only and
+requires authentication no older than 600 seconds. Confirmation includes the
+single-use quote token plus the operator-typed normalized domain and exact
+quoted decimal price. All token, state, expiry, group, typed-domain, and
+typed-price mismatches return the same refusal and consume no registrar call.
+API keys and other machine sessions cannot purchase domains.

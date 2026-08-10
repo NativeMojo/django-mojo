@@ -175,3 +175,15 @@ an in-place renewal changes the desired-state generation, so nodes follow the
 ordinary staged install path, fetch the new material through `material`,
 validate it, and reload nginx. `desired_state` itself never carries certificate
 PEM, chain, or private-key material.
+
+`GET /api/edge/proof?pools=default,blue` is another node-only endpoint. It
+returns only `{node_id, django_mojo_version, pools}` where each pool has the
+installed generation and counts for excluded/pending content/certificates. It
+returns no paths, settings, PEM, deployment token, or credential. The browser
+portal consumes the superuser-only System Setup readiness report instead.
+
+Vhost and Route mutations publish convergence after commit. Route editors may
+preserve successful rows when a later row fails, display that partial result,
+and retry only the failed rows; each committed desired-state generation is
+idempotently published and readiness remains pending until every expected
+node/pool proves it.

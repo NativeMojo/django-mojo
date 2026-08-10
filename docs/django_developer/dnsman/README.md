@@ -310,3 +310,13 @@ sits on a queue nobody reads (which raises a `jobs:unconsumed_channel` incident)
 - [Certificates.md](Certificates.md) — ACME flow, custody, renewal, sync
 - [AcmeFederation.md](AcmeFederation.md) — optional protected downstream DNS-01 delegation hub
 - [EmailSetupAudit.md](EmailSetupAudit.md) — audit of the pre-existing email path
+
+## System Setup readiness and record ownership
+
+System Setup registers a `hosting_dns` section covering every managed domain,
+certificate, delegated ACME allocation, and live challenge reservation. ACME
+creates a durable `DnsRecordReservation` before a provider mutation. The row
+exclusively owns the complete `(domain, type, name)` record set, records an
+ambiguous write before reconciling provider inventory, and remains
+`cleanup_pending` until exact challenge cleanup succeeds. Interactive DNS
+writes lock/check the same row and cannot replace an in-flight challenge.

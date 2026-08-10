@@ -691,3 +691,23 @@ Standard mojo error envelope. Notable cases:
 | Tenant delegation cross-tenant or missing read/write permission | `403` |
 | Tenant initiate shape, alias proof, active-group, or domain-claim failure | `400` |
 | Tenant downstream client configuration/allocation transport failure | `503` |
+
+## Registrar purchase confirmation
+
+`POST /api/dnsman/registrar/purchase` is interactive only: API-key sessions are
+refused and authentication must be fresh within 600 seconds.
+
+```json
+{
+  "group": 3,
+  "purchase": 18,
+  "confirm_token": "reveal-from-quote",
+  "confirm_domain": "example.com",
+  "confirm_price": "12.00"
+}
+```
+
+`confirm_domain` and `confirm_price` are values the UI asks the operator to
+type, not hidden fields copied by script. They must exactly match the locked
+quote. Every mismatch uses the same `400` confirmation refusal and spends
+nothing.
