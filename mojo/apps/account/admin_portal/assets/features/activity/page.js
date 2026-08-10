@@ -1,9 +1,15 @@
-import {api, apiEnvelope, badge, formatDate, h, pageHeader, statusTone, TableView} from '../../core.js';
+import {api, apiEnvelope, badge, formatDate, h, icon, pageHeader, statusTone, TableView} from '../../core.js';
 import {openInspector} from '../../components/overlays.js';
 import {decodeRouteState, restoreReturnLocation, returnLocation, routeHref} from '../../components/routes.js';
 import {emptyState, errorState, loadingState, permissionDeniedState, sectionTabs} from '../../components/views.js';
 
 const PAGE_SIZES = [10, 25, 50];
+const SORT_LABELS = {
+  '-created': 'Newest first', created: 'Oldest first',
+  '-modified': 'Recently updated', modified: 'Least recently updated',
+  '-priority': 'Highest priority', priority: 'Lowest priority',
+  '-level': 'Highest level', level: 'Lowest level', '-id': 'Newest record',
+};
 const QUERY_KEYS = new Set([
   'tab', 'search', 'start', 'size', 'sort', 'status', 'category', 'level', 'kind',
   'date_from', 'date_to', 'subject_type', 'subject_id',
@@ -227,19 +233,40 @@ function filtersView(state, reload) {
   const search = h('input', {type: 'search', value: state.search, placeholder: `Search ${model.label.toLowerCase()}`, 'aria-label': `Search ${model.label}`});
   let debounce = null;
   search.addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(() => { state.search = search.value.trim(); state.start = 0; writeState(state); }, 300); });
-  const controls = [h('label', {class: 'field'}, h('span', {text: 'Search'}), search)];
+  const controls = [];
   model.filters.forEach(({name, label}) => {
     const input = h('input', {value: state[name], placeholder: `Any ${label.toLowerCase()}`});
     input.addEventListener('change', () => { state[name] = input.value.trim(); state.start = 0; writeState(state); });
     controls.push(h('label', {class: 'field'}, h('span', {text: label}), input));
   });
-  const sort = h('select', {}, ...model.sorts.map((value) => h('option', {value, text: value, selected: state.sort === value || null})));
+  const sort = h('select', {}, ...model.sorts.map((value) => h('option', {value, text: SORT_LABELS[value] || value, selected: state.sort === value || null})));
   sort.addEventListener('change', () => { state.sort = sort.value; state.start = 0; writeState(state); });
   controls.push(h('label', {class: 'field'}, h('span', {text: 'Sort'}), sort));
   const dateFrom = h('input', {type: 'date', value: state.date_from}); const dateTo = h('input', {type: 'date', value: state.date_to});
   for (const [input, key] of [[dateFrom, 'date_from'], [dateTo, 'date_to']]) input.addEventListener('change', () => { state[key] = input.value; state.start = 0; writeState(state); });
   controls.push(h('label', {class: 'field'}, h('span', {text: 'From'}), dateFrom), h('label', {class: 'field'}, h('span', {text: 'To'}), dateTo));
-  const node = h('section', {class: 'activity-filters'}, ...controls);
+  const advancedKeys = [...model.filters.map(({name}) => name), 'date_from', 'date_to'];
+  const activeAdvanced = advancedKeys.filter((key) => state[key]).length + (state.sort === model.sorts[0] ? 0 : 1);
+  const hasQuery = Boolean(state.search || activeAdvanced);
+  if (state.filters_open == null) state.filters_open = activeAdvanced > 0;
+  const panelId = `activity-filter-panel-${state.tab}`;
+  const panel = h('div', {class: 'activity-filter-panel', id: panelId, hidden: !state.filters_open || null}, ...controls);
+  const toggle = h('button', {
+    class: 'button ghost compact activity-filter-toggle', type: 'button',
+    'aria-controls': panelId, 'aria-expanded': state.filters_open ? 'true' : 'false',
+  }, 'Filters', activeAdvanced ? h('span', {class: 'activity-filter-count', text: activeAdvanced}) : null);
+  toggle.addEventListener('click', () => {
+    state.filters_open = !state.filters_open;
+    panel.hidden = !state.filters_open;
+    toggle.setAttribute('aria-expanded', String(state.filters_open));
+  });
+  const clear = hasQuery ? h('button', {class: 'button ghost compact activity-filter-clear', type: 'button', onclick: () => {
+    clearTimeout(debounce); state.search = ''; state.start = 0; state.sort = model.sorts[0];
+    for (const key of advancedKeys) state[key] = '';
+    state.filters_open = false; writeState(state);
+  }}, 'Clear') : null;
+  const toolbar = h('div', {class: 'activity-toolbar'}, h('label', {class: 'search activity-search'}, icon('search'), search), toggle, clear);
+  const node = h('section', {class: 'activity-query'}, toolbar, panel);
   node.dispose = () => clearTimeout(debounce);
   state.reload = reload;
   return node;

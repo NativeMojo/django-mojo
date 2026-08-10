@@ -48,3 +48,8 @@ from a size-one request to the same scoped list endpoint, preserving permissions
 and filters and distinguishing an actual zero from an unavailable source.
 Incident/Ticket lifecycle changes continue through their normal REST saves so
 `IncidentHistory` and `TicketNote` hooks remain the audit authority.
+
+The Activity table keeps search visible and collapses secondary query controls
+behind a Filters disclosure. Active secondary filters are counted on the
+trigger, while Clear resets only those visible query controls and preserves any
+permission-scoped subject link that established the current context.

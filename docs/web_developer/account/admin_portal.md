@@ -122,6 +122,11 @@ write through their existing model REST save paths. Those paths remain the
 authority for IncidentHistory and TicketNote audit records; Activity defines no
 parallel mutation endpoint.
 
+The table presents one persistent search field. Secondary filters and sorting
+are collapsed behind a Filters button, which shows an active-filter count and
+can be closed without clearing the query. Clear resets the visible query while
+preserving subject context from a deep link.
+
 The frozen hash vocabulary is:
 
 ```text

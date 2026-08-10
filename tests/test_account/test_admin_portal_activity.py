@@ -152,6 +152,7 @@ def test_activity_lifecycle_uses_audited_public_saves(opts):
 @th.django_unit_test("Activity browser owns frozen queries, masking, unavailable states, and no aggregate shortcut")
 def test_activity_browser_contract(opts):
     page = (ASSETS / "page.js").read_text()
+    styles = (ASSETS / "styles.css").read_text()
     feature = (ASSETS / "feature.js").read_text()
     manifest = (ASSETS / "manifest.json").read_text()
     preview = (ROOT / "bin/admin_preview_support/features/activity.py").read_text()
@@ -164,6 +165,14 @@ def test_activity_browser_contract(opts):
     assert "Incomplete subject filters cannot be discarded" in page
     assert "subject_model is valid only with subject_type=model" in page
     assert "button.classList.toggle('active', active)" in page
+    assert "activity-toolbar" in page and "activity-filter-panel" in page, "Activity must render a compact toolbar and secondary filter panel"
+    assert "'aria-expanded': state.filters_open ? 'true' : 'false'" in page, "the filter trigger must publish its disclosure state"
+    assert "state.filters_open = activeAdvanced > 0" in page, "a linked query with secondary filters must expose those active constraints"
+    assert "SORT_LABELS" in page and "Newest first" in page and "Highest priority" in page, "sort choices must be operator-readable"
+    assert "for (const key of advancedKeys) state[key] = ''" in page, "Clear must reset every visible secondary filter"
+    assert "state.subject_type = ''" not in page, "clearing visible filters must preserve contextual subject scope"
+    assert ".activity-filter-panel[hidden]" in styles and "display: none" in styles, "collapsed secondary filters must leave the content flow"
+    assert "var(--border)" not in styles and "var(--surface-alt)" not in styles, "Activity styles must use the portal's defined surface tokens"
     assert "SENSITIVE_KEY" in page and "[redacted]" in page and "depth >= 5" in page
     assert "envelope.count > 0 && state.start >= envelope.count" in page
     assert "Unavailable" in page and "String(envelope.count)" in page

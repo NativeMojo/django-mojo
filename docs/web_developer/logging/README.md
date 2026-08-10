@@ -46,3 +46,8 @@ fixed sensitive marker before database or file logging.
 Do not use `/api/incident/stats` to build Activity counts. It is not the
 permission-scoped list authority. Request a size-one page from each source and
 use that envelope's `count` instead.
+
+In the built-in Admin, search remains immediately available while status,
+category/level/kind, sort, and date controls live behind the Filters button.
+The button reports the number of active secondary filters; clearing the visible
+query does not discard a subject-scoped deep link.
