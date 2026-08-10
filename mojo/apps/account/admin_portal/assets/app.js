@@ -1,15 +1,16 @@
 import {api, h, icon} from './core.js';
 import {closeAllOverlays} from './components/overlays.js';
+import {decodeRouteState, routeHref} from './components/routes.js';
 import {featureForRoute, installFeatureStyles, navigationFor} from './features/registry.js';
 
 const app = document.getElementById('app');
 let context = null; let content = null; let navigation = null; let title = null;
 let generation = 0; let controller = null; let dispose = null;
 
-function routeName() { return location.hash.replace(/^#\//, '').split('?')[0].split('/')[0] || 'system'; }
+function routeName() { return decodeRouteState().route; }
 
-function navigate(route, {replace = false} = {}) {
-  const hash = `#/${route}`;
+function navigate(route, {replace = false, state = {}} = {}) {
+  const hash = routeHref(route, state);
   if (location.hash === hash) { render().catch(showFatal); return; }
   if (replace) { history.replaceState({}, '', hash); render().catch(showFatal); }
   else location.hash = hash;
@@ -60,7 +61,8 @@ function mountShell() {
 async function render() {
   if (!context) return;
   const requestedRoute = routeName(); const feature = featureForRoute(requestedRoute, context);
-  const route = feature.routes.includes(requestedRoute) ? requestedRoute : 'system';
+  const route = feature.routes.includes(requestedRoute) ? requestedRoute : 'dashboard';
+  if (route !== requestedRoute) history.replaceState({}, '', routeHref(route));
   const current = ++generation; controller?.abort();
   const renderController = new AbortController(); controller = renderController;
   if (typeof dispose === 'function') { try { dispose(); } finally { dispose = null; } }

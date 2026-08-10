@@ -1,4 +1,6 @@
 import {api, apiOnce, badge, formatDate, h, icon, listData, openModal, pageHeader, TableView} from '../../core.js';
+import {openInspector} from '../../components/overlays.js';
+import {activityHref, decodeRouteState, returnLocation, routeHref} from '../../components/routes.js';
 
 function oneTimeSecret(webapp, result, returnFocus) {
   let secret = result.token;
@@ -11,6 +13,27 @@ function oneTimeSecret(webapp, result, returnFocus) {
   openModal({title: `${webapp.slug} deployment key`, subtitle: 'The previous key is already inactive.', content, returnFocus, onClose: () => {
     secretField.value = ''; secretField.textContent = ''; secret = ''; result.token = null;
   }});
+}
+
+async function openWebapp(ctx, webapp, reload) {
+  const summary = await api(`/api/edge/webapp/summary?webapp=${encodeURIComponent(webapp.id)}`);
+  const address = summary.address || {};
+  const deploymentKey = summary.deployment_key || {};
+  const content = h('div', {class: 'webapp-inspector'},
+    h('dl', {class: 'details'},
+      h('div', {}, h('dt', {text: 'Environment'}), h('dd', {text: webapp.environment || '—'})),
+      h('div', {}, h('dt', {text: 'Repository'}), h('dd', {text: webapp.github_repository || 'Not connected'})),
+      h('div', {}, h('dt', {text: 'Address'}), h('dd', {text: address.hostname || 'Not configured'})),
+      h('div', {}, h('dt', {text: 'Onboarding'}), h('dd', {text: summary.onboarding?.status || 'unknown'})),
+      h('div', {}, h('dt', {text: 'Deployment key'}), h('dd', {text: deploymentKey.active ? 'Active' : 'Not active'}))),
+    h('div', {class: 'activity-links'},
+      h('a', {class: 'related-record', href: activityHref('logs', {type: 'model', id: webapp.id, model: 'WebApp'}, {return: returnLocation()})}, h('strong', {text: 'Related logs'}), icon('chevron')),
+      h('a', {class: 'related-record', href: activityHref('events', {type: 'model', id: webapp.id, model: 'WebApp'}, {return: returnLocation()})}, h('strong', {text: 'Related events'}), icon('chevron')),
+      address.domain?.id ? h('a', {class: 'related-record', href: routeHref('domains', {inspector: address.domain.id, return: returnLocation()})}, h('strong', {text: 'Open domain'}), icon('chevron')) : null));
+  const inspector = openInspector({title: `WebApp · ${webapp.display_name || webapp.slug}`, content, wide: true});
+  if (ctx.capabilities.manage_webapps) content.prepend(h('button', {class: 'button compact', onclick: () => {
+    inspector.close(); credentialDialog(webapp, reload);
+  }}, icon('key'), 'Manage deployment key'));
 }
 
 async function credentialDialog(webapp, reload) {
@@ -236,7 +259,7 @@ function startOnboarding(ctx, mount, reloadApps) {
 }
 
 export async function webappsPage(ctx) {
-  const root = h('div', {class: 'page'});
+  const root = h('div', {class: 'page'}); let linkedInspectorOpened = false;
   const onboarding = h('div', {class: 'onboarding-mount'});
   async function render() {
     root.replaceChildren(pageHeader('Deployments', 'WebApps', 'Durable App → Address → GitHub → Verify onboarding.'), onboarding);
@@ -260,7 +283,10 @@ export async function webappsPage(ctx) {
         {label: '', render: (row) => ctx.capabilities.manage_webapps ? h('div', {class: 'row-actions'},
           h('button', {class: 'button compact', 'data-webapp-key': row.id, onclick: (event) => { event.stopPropagation(); credentialDialog(row, render); }}, icon('key'), 'Manage key'),
           row.github_repository ? h('button', {class: 'button compact', onclick: (event) => { event.stopPropagation(); workflowDialog(row); }}, 'Workflow') : null) : null},
-      ], rows, empty: 'No WebApps are visible in your scope.', onSelect: ctx.capabilities.manage_webapps ? (row) => credentialDialog(row, render) : null}).render());
+      ], rows, empty: 'No WebApps are visible in your scope.', onSelect: (row) => openWebapp(ctx, row, render)}).render());
+      const inspector = decodeRouteState().state.inspector;
+      const linked = inspector && rows.find((row) => String(row.id) === String(inspector));
+      if (linked && !linkedInspectorOpened) { linkedInspectorOpened = true; await openWebapp(ctx, linked, render); }
     } catch (error) { panel.append(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
   }
   await render(); return root;

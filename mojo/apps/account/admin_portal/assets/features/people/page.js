@@ -1,6 +1,7 @@
 import {api, apiEnvelope, badge, FormView, formatDate, h, icon, pageHeader, TableView} from '../../core.js';
 import {modelHeader} from '../../components/model.js';
 import {confirmAction, openInspector, openModal} from '../../components/overlays.js';
+import {activityHref, decodeRouteState, returnLocation, routeHref} from '../../components/routes.js';
 import {sectionTabs, timelineView} from '../../components/views.js';
 
 export const ACTIVITY_QUERY_KEYS = Object.freeze([
@@ -28,15 +29,7 @@ function detailGrid(rows) {
   ]));
 }
 
-function activityUrl(tab, values) {
-  const params = new URLSearchParams({tab, size: '25', sort: '-created'});
-  Object.entries(values).forEach(([key, value]) => {
-    if (ACTIVITY_QUERY_KEYS.includes(key) && value != null && value !== '') params.set(key, value);
-  });
-  return `#/activity?${params}`;
-}
-
-function activityLinks(ctx, values) {
+function activityLinks(ctx, subject) {
   const caps = capabilities(ctx);
   const lanes = [
     ['logs', 'view_logs'], ['events', 'view_events'],
@@ -45,7 +38,7 @@ function activityLinks(ctx, values) {
   if (!lanes.length) return h('p', {class: 'muted', text: 'No related Activity lanes are available with your current access.'});
   return h('div', {class: 'activity-links'},
     lanes.map(([tab]) => h('a', {
-      class: 'related-record', href: activityUrl(tab, values),
+      class: 'related-record', href: activityHref(tab, subject, {return: returnLocation()}),
     }, h('strong', {text: tab[0].toUpperCase() + tab.slice(1)}), icon('chevron'))));
 }
 
@@ -145,7 +138,7 @@ async function userSection(ctx, user, section, body, reload) {
     }))));
     return;
   }
-  body.replaceChildren(activityLinks(ctx, {user: user.id, model: 'account.User', model_id: user.id}));
+  body.replaceChildren(activityLinks(ctx, {type: 'user', id: user.id}));
 }
 
 async function openUser(ctx, summary, reloadList) {
@@ -263,7 +256,7 @@ async function groupSection(ctx, group, section, body, reload) {
     caps.manage_api_keys ? h('button', {class: 'button', onclick: () => createApiKey(group, reload)}, 'Create API key') : null); return;
   }
   if (section === 'activity') {
-    body.replaceChildren(activityLinks(ctx, {group: group.id, model: 'account.Group', model_id: group.id})); return;
+    body.replaceChildren(activityLinks(ctx, {type: 'group', id: group.id})); return;
   }
   body.replaceChildren(h('p', {class: 'muted', text: 'Advanced configuration is read-only here. Use the Advanced feature for raw JSON changes.'}),
     h('pre', {class: 'json-preview', text: JSON.stringify(group.metadata || {}, null, 2)}));
@@ -293,14 +286,14 @@ async function openGroup(ctx, summary, reloadList) {
 export async function peoplePage(ctx, route) {
   const available = [['users', 'Users', capabilities(ctx).users], ['groups', 'Groups', capabilities(ctx).groups]].filter(([, , allowed]) => allowed);
   let active = available.some(([id]) => id === route) ? route : available[0]?.[0] || 'users'; let generation = 0;
-  const root = h('div', {class: 'page people-page'});
+  const root = h('div', {class: 'page people-page'}); let linkedInspectorOpened = false;
   async function render(term = '') {
     const mine = ++generation; const isUsers = active === 'users'; const caps = capabilities(ctx);
     const canManage = isUsers ? caps.manage_users : caps.manage_groups;
     root.replaceChildren(pageHeader('Identity & access', 'People', 'Manage users, groups, access, and authentication evidence.', [
       canManage ? h('button', {class: 'button primary', onclick: () => isUsers ? inviteUser(render) : newGroup(render)}, icon('plus'), isUsers ? 'Invite user' : 'New group') : null,
     ]));
-    const tabs = h('nav', {class: 'tabs', 'aria-label': 'People views'}, ...available.map(([id, label]) => h('button', {class: id === active ? 'active' : '', onclick: () => { active = id; history.replaceState({}, '', `#/${id}`); render(); }, text: label})));
+    const tabs = h('nav', {class: 'tabs', 'aria-label': 'People views'}, ...available.map(([id, label]) => h('button', {class: id === active ? 'active' : '', onclick: () => { active = id; history.replaceState({}, '', routeHref(id)); render(); }, text: label})));
     const input = h('input', {placeholder: `Search ${active}`, 'aria-label': `Search ${active}`, value: term});
     const panel = h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: isUsers ? 'Users' : 'Groups'}), h('p', {text: 'Select a row to open the standard inspector.'})), h('label', {class: 'search'}, icon('search'), input)));
     root.append(tabs, panel);
@@ -317,7 +310,11 @@ export async function peoplePage(ctx, route) {
         {label: 'Group', render: (row) => h('strong', {text: row.name})}, {label: 'Kind', render: (row) => badge(row.kind || 'group')},
         {label: 'Parent', render: (row) => row.parent?.name || '—'}, {label: 'Status', render: (row) => badge(row.is_active ? 'Active' : 'Inactive', row.is_active ? 'success' : 'danger')}, {label: '', render: () => icon('chevron')},
       ];
-      panel.append(new TableView({columns, rows, empty: `No matching ${active}.`, onSelect: (row) => isUsers ? openUser(ctx, row, render) : openGroup(ctx, row, render)}).render());
+      const open = (row) => isUsers ? openUser(ctx, row, render) : openGroup(ctx, row, render);
+      panel.append(new TableView({columns, rows, empty: `No matching ${active}.`, onSelect: open}).render());
+      const inspector = decodeRouteState().state.inspector;
+      const linked = inspector && rows.find((row) => String(row.id) === String(inspector));
+      if (linked && !linkedInspectorOpened) { linkedInspectorOpened = true; await open(linked); }
     } catch (error) { panel.append(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
     return root;
   }

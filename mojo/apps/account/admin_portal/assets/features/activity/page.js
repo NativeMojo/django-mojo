@@ -1,12 +1,13 @@
 import {api, apiEnvelope, badge, formatDate, h, pageHeader, statusTone, TableView} from '../../core.js';
 import {openInspector} from '../../components/overlays.js';
-import {emptyState, errorState, loadingState, sectionTabs} from '../../components/views.js';
+import {decodeRouteState, restoreReturnLocation, returnLocation, routeHref} from '../../components/routes.js';
+import {emptyState, errorState, loadingState, permissionDeniedState, sectionTabs} from '../../components/views.js';
 
 const PAGE_SIZES = [10, 25, 50];
 const QUERY_KEYS = new Set([
   'tab', 'search', 'start', 'size', 'sort', 'status', 'category', 'level', 'kind',
   'date_from', 'date_to', 'subject_type', 'subject_id',
-  'subject_model',
+  'subject_model', 'inspector', 'return',
 ]);
 const SENSITIVE_KEY = /(password|secret|token|authorization|cookie|credential|api[_-]?key|private[_-]?key)/i;
 const SUBJECT_TYPES = new Set(['incident', 'user', 'group', 'model']);
@@ -59,12 +60,13 @@ const MODELS = {
 };
 
 function hashParams() {
-  return new URLSearchParams(location.hash.split('?')[1] || '');
+  return new URLSearchParams(decodeRouteState().state);
 }
 
 function normalizedState() {
   const params = hashParams();
-  const unknown = [...params.keys()].filter((key) => !QUERY_KEYS.has(key));
+  const unknown = [...decodeRouteState().unknown,
+    ...[...params.keys()].filter((key) => !QUERY_KEYS.has(key))];
   const tab = MODELS[params.get('tab')] ? params.get('tab') : 'incidents';
   const size = PAGE_SIZES.includes(Number(params.get('size'))) ? Number(params.get('size')) : 25;
   const model = MODELS[tab];
@@ -85,6 +87,7 @@ function normalizedState() {
     level: params.get('level') || '', kind: params.get('kind') || '',
     date_from: params.get('date_from') || '', date_to: params.get('date_to') || '',
     subject_type: subjectType, subject_id: subjectId, subject_model: subjectModel,
+    inspector: params.get('inspector') || '', return: params.get('return') || '',
   };
 }
 
@@ -93,7 +96,7 @@ function writeState(state, {load = true} = {}) {
   Object.entries(state).forEach(([key, value]) => {
     if (QUERY_KEYS.has(key) && value !== '' && value != null && !(key === 'start' && Number(value) === 0)) params.set(key, value);
   });
-  const target = `#/activity${params.size ? `?${params}` : ''}`;
+  const target = routeHref('activity', Object.fromEntries(params));
   history.replaceState({}, '', target);
   state.unsupported = '';
   if (load) state.reload?.();
@@ -172,11 +175,24 @@ function detailFields(row) {
 
 function knownReference(row) {
   const name = String(row.model_name || '').toLowerCase();
-  const id = Number(row.model_id);
+  const rawId = String(row.model_id || '');
+  const destinations = {
+    user: ['users', 'User'], group: ['groups', 'Group'], webapp: ['webapps', 'WebApp'],
+    domain: ['domains', 'Domain'], platformdeployment: ['deployments', 'Deployment'],
+  };
+  if (destinations[name] && /^[A-Za-z0-9._:-]{1,80}$/.test(rawId)) {
+    const [route, label] = destinations[name];
+    return h('a', {class: 'button ghost compact', href: routeHref(route, {
+      inspector: rawId, return: returnLocation(),
+    })}, `Open ${label} ${rawId}`);
+  }
+  const id = Number(rawId);
   const tab = {incident: 'incidents', event: 'events', ticket: 'tickets', log: 'logs'}[name];
   if (!tab || !Number.isInteger(id) || id < 1) return null;
-  const model = encodeURIComponent(row.model_name);
-  return h('a', {class: 'button ghost compact', href: `#/activity?tab=${tab}&subject_type=${name === 'incident' ? 'incident' : 'model'}&subject_id=${id}${name === 'incident' ? '' : `&subject_model=${model}`}`}, `Open ${name} ${id}`);
+  return h('a', {class: 'button ghost compact', href: routeHref('activity', {
+    tab, subject_type: name === 'incident' ? 'incident' : 'model', subject_id: id,
+    subject_model: name === 'incident' ? '' : row.model_name,
+  })}, `Open ${name} ${id}`);
 }
 
 async function saveStatus(state, row, inspector, status, refresh) {
@@ -255,7 +271,7 @@ async function countFor(tab, ctx, signal) {
 }
 
 export async function activityPage(ctx, parentSignal) {
-  const state = normalizedState(); let controller = null; let disposed = false; let filters = null;
+  const state = normalizedState(); let controller = null; let disposed = false; let filters = null; let linkedInspectorOpened = false;
   const abortFromParent = () => controller?.abort();
   parentSignal?.addEventListener('abort', abortFromParent, {once: true});
   if (!hashParams().has('tab') && !ctx.features.activity.capabilities.view_security && ctx.features.activity.capabilities.view_logs) {
@@ -274,7 +290,10 @@ export async function activityPage(ctx, parentSignal) {
     });
     writeState(state);
   }});
-  const page = h('div', {class: 'page'}, pageHeader('Operations', 'Activity', 'Search and inspect bounded system evidence without bypassing source permissions.'), summary, tabs, body);
+  const returnHref = restoreReturnLocation(state.return);
+  const page = h('div', {class: 'page'}, pageHeader('Operations', 'Activity', 'Search and inspect bounded system evidence without bypassing source permissions.', [
+    returnHref ? h('a', {class: 'button ghost', href: returnHref}, 'Return to record') : null,
+  ]), summary, tabs, body);
 
   const refresh = async () => {
     if (disposed) return;
@@ -282,7 +301,7 @@ export async function activityPage(ctx, parentSignal) {
     if (parentSignal?.aborted) activeController.abort();
     if (state.unsupported) { body.replaceChildren(emptyState('Unsupported Activity link', state.unsupported)); return; }
     const model = MODELS[state.tab];
-    if (!ctx.features.activity.capabilities[model.capability]) { body.replaceChildren(emptyState('Access denied', `${model.label} require ${model.capability}.`)); return; }
+    if (!ctx.features.activity.capabilities[model.capability]) { body.replaceChildren(permissionDeniedState(`${model.label} require ${model.capability}. No source request was issued.`)); return; }
     body.replaceChildren(loadingState(`Loading ${model.label.toLowerCase()}…`));
     let envelope;
     try {
@@ -298,6 +317,8 @@ export async function activityPage(ctx, parentSignal) {
       filters?.dispose?.(); filters = filtersView(state, refresh);
       const table = new TableView({columns: model.columns, rows: envelope.items, empty: `No ${model.label.toLowerCase()} match this query.`, onSelect: (row) => openRecord(state, row, ctx, refresh)}).render();
       body.replaceChildren(filters, table, pagination(state, envelope));
+      const linked = state.inspector && envelope.items.find((row) => String(row.id) === String(state.inspector));
+      if (linked && !linkedInspectorOpened) { linkedInspectorOpened = true; openRecord(state, linked, ctx, refresh); }
     } catch (error) { if (!activeController.signal.aborted && controller === activeController) body.replaceChildren(errorState(error, refresh)); }
   };
   state.reload = refresh;

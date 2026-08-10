@@ -6,6 +6,16 @@ export function errorState(error, retry = null) {
   return h('div', {class: 'error-state state-view', role: 'alert'}, icon('alert'), h('strong', {text: 'This view could not load'}), h('p', {text: error?.message || String(error || 'Unknown error')}), retry ? h('button', {class: 'button compact', onclick: retry}, 'Retry') : null);
 }
 
+export function permissionDeniedState(copy = 'Your current role cannot read this source.') {
+  return h('div', {class: 'state-view permission-denied', role: 'status'}, icon('lock'),
+    h('strong', {text: 'Permission denied'}), h('p', {text: copy}));
+}
+
+export function degradedState(title, copy, action = null) {
+  return h('div', {class: 'state-view degraded-state', role: 'status'}, icon('alert'),
+    h('strong', {text: title}), h('p', {text: copy}), action);
+}
+
 export function sectionTabs({items, active, onChange, label = 'Sections'}) {
   return h('nav', {class: 'tabs', 'aria-label': label}, ...items.map((item) => h('button', {
     type: 'button', class: item.id === active ? 'active' : '', 'aria-current': item.id === active ? 'page' : null,

@@ -20,6 +20,12 @@ def on_admin_platform(request):
     return admin_platform.platform_overview(request)
 
 
+@md.GET("account/admin/dashboard")
+@md.requires_global_perms("view_admin", "manage_users", "admin")
+def on_admin_dashboard(request):
+    return admin_platform.dashboard_overview(request)
+
+
 @md.GET("account/admin/advanced")
 @md.requires_global_perms(
     "view_advanced", "view_advanced_inventory", "view_advanced_security",

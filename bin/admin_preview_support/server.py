@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .gallery import bootstrap, reset
 from .features import activity, advanced, platform
+from .features import dashboard
 
 
 ROOT = Path(__file__).resolve().parents[2] / "mojo/apps/account/admin_portal"
@@ -225,7 +226,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if activity_response is not None:
             status, payload = activity_response
             return self._send(payload, status=status)
-        for provider in (platform, advanced):
+        for provider in (dashboard, platform, advanced):
             response = provider.get(self, parsed)
             if response is not None:
                 status, payload = response
@@ -517,6 +518,7 @@ def main():
     parser.add_argument("--key-state", choices=("missing", "active", "rotated", "revoked"), default="active")
     parser.add_argument("--setup-state", choices=("idle", "choice"), default="idle")
     parser.add_argument("--activity-state", choices=("full", "empty", "unavailable"), default="full")
+    parser.add_argument("--dashboard-state", choices=("healthy", "degraded", "denied", "unknown"), default="healthy")
     parser.add_argument("--onboarding-state", choices=("idle", "address", "github", "verify", "complete", "lost_key"), default="idle")
     args = parser.parse_args()
     reset(PreviewHandler, {
@@ -528,6 +530,7 @@ def main():
         "webapp_onboarding": webapp_onboarding_operation,
     }, key_state=args.key_state, setup_state=args.setup_state,
        activity_state=args.activity_state,
+       dashboard_state=args.dashboard_state,
        onboarding_state=args.onboarding_state)
     print(f"Admin visual fixture ({args.key_state} key): http://{HOST}:{args.port}/", flush=True)
     try:

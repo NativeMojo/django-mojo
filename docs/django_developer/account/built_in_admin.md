@@ -1,7 +1,7 @@
 # Built-in Admin Portal
 
 django-mojo ships a small, dependency-free control-plane UI. It covers System
-Setup/readiness, the system overview, User and Group CRUD, Domains, provider
+Setup/readiness, the Dashboard, User and Group CRUD, Domains, provider
 credentials, live DNS record sets, Certificates, Upstreams, Vhosts, Routes,
 and WebApp GitHub deployment-key management. Fleet, operations, security,
 configuration, and metrics extend the same shell without changing its delivery
@@ -56,6 +56,12 @@ stylesheet, title, capability check, and one
 `render({ctx, route, navigate, signal})` function. Render must resolve to
 exactly one DOM `Node`; an optional `node.dispose()` releases feature-local
 listeners or work.
+
+Primary navigation is exactly Dashboard, People, Web Apps, Platform, and
+Activity. Platform contains deployments, literal-superuser System Setup, and
+one collapsed Advanced disclosure for raw resources. See
+[Dashboard integration](admin_portal/dashboard.md) for the permissioned source
+matrix and canonical cross-feature route state.
 
 Python publishes the same fixed namespaces at `bootstrap.features`, alongside
 the stable flat `bootstrap.capabilities` compatibility object. Provider output
@@ -137,5 +143,6 @@ support server, foundation gallery, and resettable feature providers. Use
 deployment-key presentations, `--onboarding-state
 idle|address|github|verify|complete|lost_key` for WebApp onboarding,
 `--setup-state idle|choice` for resumable Setup,
+`--dashboard-state healthy|degraded|denied|unknown` for Dashboard source states,
 and `--port` when parallel work needs isolation. Every launch resets mutable
 provider state before serving.
