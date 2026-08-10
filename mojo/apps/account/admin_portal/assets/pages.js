@@ -12,9 +12,9 @@ export async function dashboardPage(ctx) {
       card('Framework', `v${ctx.version}`, 'Installed django-mojo version', 'accent'),
       card('Access', ctx.user.is_superuser ? 'Superuser' : 'Admin', 'Current control-plane role'),
       card('Groups', String(ctx.groups.length), 'Active memberships in scope'),
-      card('Modules', String(caps), 'Available round-one modules')),
-    h('section', {class: 'panel welcome'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: 'Round-one control center'}), h('p', {text: 'People management and WebApp deployment credentials are live. Fleet, network, operations, security, configuration, and charts follow on this foundation.'}))),
-      h('div', {class: 'roadmap'}, ...['People', 'WebApps', 'Fleet', 'Network', 'Operations', 'Security', 'Configuration'].map((name, index) => h('div', {class: index < 2 ? 'roadmap-item live' : 'roadmap-item'}, h('span', {text: index < 2 ? 'Available' : 'Planned'}), h('strong', {text: name}))))));
+      card('Modules', String(caps), 'Available Admin capabilities')),
+    h('section', {class: 'panel welcome'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: 'Installation control center'}), h('p', {text: 'Identity, setup, domains, DNS, certificates, Vhosts, Routes, and WebApp deployment keys share one compact operator surface.'}))),
+      h('div', {class: 'roadmap'}, ...['People', 'Setup', 'Domains', 'DNS', 'Certificates', 'Vhosts', 'WebApps'].map((name) => h('div', {class: 'roadmap-item live'}, h('span', {text: 'Available'}), h('strong', {text: name}))))));
 }
 
 const PEOPLE_MODELS = {
@@ -85,27 +85,30 @@ export async function peoplePage(ctx, route) {
   await render(); return root;
 }
 
-function oneTimeSecret(webapp, result) {
-  const secret = result.token;
+function oneTimeSecret(webapp, result, returnFocus) {
+  let secret = result.token;
+  const secretField = h('textarea', {class: 'secret', readonly: true, rows: '4', text: secret});
   const content = h('div', {},
     h('div', {class: 'callout warning'}, icon('alert'), h('div', {}, h('strong', {text: 'Copy this value now'}), h('p', {text: 'It cannot be retrieved after this window closes. If it is lost, rotate the credential.'}))),
-    h('label', {class: 'field'}, h('span', {text: 'GitHub Actions secret: MOJO_DEPLOY_KEY'}), h('textarea', {class: 'secret', readonly: true, rows: '4', text: secret})),
+    h('label', {class: 'field'}, h('span', {text: 'GitHub Actions secret: MOJO_DEPLOY_KEY'}), secretField),
     h('button', {class: 'button primary', onclick: async (event) => { await navigator.clipboard.writeText(secret); event.currentTarget.textContent = 'Copied'; }}, icon('key'), 'Copy secret'),
     h('div', {class: 'command'}, h('code', {text: 'gh secret set MOJO_DEPLOY_KEY --repo YOUR_ORG/YOUR_REPO'})));
-  openModal({title: `${webapp.slug} deployment key`, subtitle: 'The previous key is already inactive.', content});
+  openModal({title: `${webapp.slug} deployment key`, subtitle: 'The previous key is already inactive.', content, returnFocus, onClose: () => {
+    secretField.value = ''; secretField.textContent = ''; secret = ''; result.token = null;
+  }});
 }
 
 async function credentialDialog(webapp, reload) {
   const payload = await api(`/api/edge/webapp/key_status?webapp=${encodeURIComponent(webapp.id)}`);
   const status = payload.status;
   const action = status.linked ? 'rotate' : 'mint';
-  const actionLabel = status.linked ? 'Rotate key' : 'Create key';
+  const actionLabel = status.linked ? 'Rotate key' : status.last_action === 'revoke' ? 'Create new key' : 'Create key';
   const confirm = h('input', {placeholder: webapp.slug, autocomplete: 'off'});
   const message = h('div', {class: 'form-message', role: 'alert'});
   const submit = h('button', {class: `button ${status.linked ? 'danger' : 'primary'}`, disabled: true}, icon('key'), actionLabel);
   confirm.addEventListener('input', () => { submit.disabled = confirm.value !== webapp.slug; });
   const content = h('div', {},
-    h('div', {class: 'credential-status'}, h('div', {}, h('span', {text: 'GitHub Actions secret'}), h('strong', {text: 'MOJO_DEPLOY_KEY'})), badge(status.linked && status.active ? 'Active' : 'Not configured', status.linked && status.active ? 'success' : 'neutral')),
+    h('div', {class: 'credential-status'}, h('div', {}, h('span', {text: 'GitHub Actions secret'}), h('strong', {text: 'MOJO_DEPLOY_KEY'})), badge(status.linked && status.active ? 'Active' : status.last_action === 'revoke' ? 'Revoked' : 'Not configured', status.linked && status.active ? 'success' : status.last_action === 'revoke' ? 'warning' : 'neutral')),
     status.linked ? h('dl', {class: 'details'}, h('div', {}, h('dt', {text: 'Created'}), h('dd', {text: formatDate(status.created)})), h('div', {}, h('dt', {text: 'Last used'}), h('dd', {text: formatDate(status.last_used)}))) : null,
     h('div', {class: 'callout'}, icon('alert'), h('p', {text: status.linked ? 'Rotation immediately disables the current key. Update GitHub before running another deployment.' : 'The token is restricted to registering releases for this WebApp.'})),
     h('label', {class: 'field'}, h('span', {text: `Type “${webapp.slug}” to confirm`}), confirm), message,
@@ -116,7 +119,9 @@ async function credentialDialog(webapp, reload) {
     submit.disabled = true;
     try {
       const result = await api('/api/edge/webapp/link_key', {method: 'POST', body: JSON.stringify({webapp: webapp.id, action, operation_id: crypto.randomUUID()})});
-      close(); await reload(); oneTimeSecret(webapp, result);
+      close(); await reload();
+      const returnFocus = document.querySelector(`[data-webapp-key="${webapp.id}"]`);
+      oneTimeSecret(webapp, result, returnFocus);
     } catch (error) { message.textContent = error.message; submit.disabled = false; }
   });
 }
@@ -134,7 +139,7 @@ function revokeCredential(webapp, reload) {
   });
 }
 
-export async function webappsPage() {
+export async function webappsPage(ctx) {
   const root = h('div', {class: 'page'});
   async function render() {
     root.replaceChildren(pageHeader('Deployments', 'WebApps', 'Release destinations and their GitHub deployment credentials.'));
@@ -142,12 +147,20 @@ export async function webappsPage() {
     root.append(panel);
     try {
       const rows = listData(await api('/api/edge/webapp'));
+      const statuses = new Map();
+      await Promise.all(rows.map(async (row) => {
+        try {
+          const payload = await api(`/api/edge/webapp/key_status?webapp=${encodeURIComponent(row.id)}`);
+          statuses.set(row.id, payload.status);
+        } catch (_) { statuses.set(row.id, null); }
+      }));
       panel.append(new TableView({columns: [
         {label: 'WebApp', render: (r) => h('div', {}, h('strong', {text: r.slug}), h('small', {class: 'mono', text: `#${r.id}`}))},
         {label: 'Current release', render: (r) => r.current_release ? badge(r.current_release.version || r.current_release.id, 'success') : badge('No release')},
+        {label: 'Deploy key', render: (r) => { const status = statuses.get(r.id); return status?.linked && status?.active ? badge('Active', 'success') : status?.last_action === 'revoke' ? badge('Revoked', 'warning') : badge('Missing', 'neutral'); }},
         {label: 'Created', render: (r) => formatDate(r.created)},
-        {label: '', render: () => h('button', {class: 'button compact'}, icon('key'), 'Manage key')},
-      ], rows, empty: 'No WebApps are visible in your scope.', onSelect: (row) => credentialDialog(row, render)}).render());
+        {label: '', render: (row) => ctx.capabilities.manage_webapps ? h('button', {class: 'button compact', 'data-webapp-key': row.id}, icon('key'), 'Manage key') : null},
+      ], rows, empty: 'No WebApps are visible in your scope.', onSelect: ctx.capabilities.manage_webapps ? (row) => credentialDialog(row, render) : null}).render());
     } catch (error) { panel.append(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
   }
   await render(); return root;

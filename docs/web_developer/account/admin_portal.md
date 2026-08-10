@@ -7,7 +7,8 @@ developers building a custom internal console.
 
 The built-in portal defaults to `/admin/` and uses the hosted Bouncer auth
 pages. It provides System Setup/readiness, a system overview, User and Group
-management, and WebApp `MOJO_DEPLOY_KEY` management with light, dark, and
+management, permanent Domains/Credentials/DNS/Certificates/Upstreams/Vhosts/
+Routes pages, and WebApp `MOJO_DEPLOY_KEY` management with light, dark, and
 system themes.
 
 System Setup is a stricter surface than ordinary Admin pages: only an active
@@ -31,6 +32,21 @@ Authorization: Bearer <interactive-user-jwt>
 The caller needs a global `view_admin`, `manage_users`, or `admin` grant. API
 keys and group-scoped tokens are refused. Normal portal data calls continue to
 send the JWT and are authorized by each endpoint's own permissions.
+
+The permanent network pages consume the public APIs documented by dnsman and
+edge; there are no Admin-only write endpoints. DNS changes operate on complete
+record sets, never retry a provider write after transport ambiguity, then read
+the authoritative provider inventory. Until that proof matches, the affected
+set is visibly refresh-required and further writes are blocked. Domain purchase
+keeps the quote token in the confirmation modal only and requires the operator
+to type the exact domain and price. Provider credentials are write-only and
+cleared from the form after verification.
+
+Certificates poll list/detail metadata only. Upstreams are declared or retired,
+never repointed. The Vhost wizard exposes only the four structured edge shapes;
+Routes are created sequentially and a partial failure offers repair of only the
+missing rows. WebApps is the sole UI that receives the reveal-once deployment
+token for create/rotate and offers revoke; System Setup only links there.
 
 ## What "Admin Portal" Means in Mojo
 
@@ -225,6 +241,11 @@ This prevents non-admin users from escalating their own access.
 | WebApp key status | `GET /api/edge/webapp/key_status?webapp=<id>` | `view_dns`, `manage_dns`, or `security`, plus object access |
 | WebApp key create/rotate | `POST /api/edge/webapp/link_key` | `manage_webapp`, recent interactive auth, plus object access |
 | WebApp key revoke | `POST /api/edge/webapp/revoke_key` | `manage_webapp`, recent interactive auth, plus object access |
+| Domains and live DNS | `/api/dnsman/domain`, `/api/dnsman/dns*`, `/api/dnsman/registrar/*` | `view_dns` / `manage_dns`; adopt/discover are literal superuser only |
+| DNS provider credentials | `/api/dnsman/credential`, `/api/dnsman/credential/link` | `view_dns` / `manage_dns`; secrets are write-only |
+| Certificates | `/api/dnsman/certificate`, `/api/dnsman/certificate/request` | `view_dns` / `manage_dns`; portal never calls material |
+| Upstreams | `/api/edge/upstream`, `/api/edge/upstream/declare`, `/api/edge/upstream/retire` | Read by DNS grants; declare/retire are literal platform-admin actions |
+| Vhosts and Routes | `/api/edge/vhost`, `/api/edge/route` | `view_dns` / `manage_dns` / `security` |
 
 > **Global grants required for platform-wide endpoints.** Job control/status,
 > AWS ops and email admin (`cloudwatch/*`, `s3/bucket`, `email/send`,

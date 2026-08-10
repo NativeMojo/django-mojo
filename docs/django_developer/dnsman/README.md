@@ -335,3 +335,21 @@ error containing only an action and exception class, never provider-controlled
 exception text. REST cannot create, update, or delete it. Its read graph requires
 `view_dns`, `manage_dns`, or `security`, follows `domain__group` scoping, and
 does not expose `owner_ref` or `record_values`.
+
+## Built-in Admin integration
+
+The Admin portal's Domains, Credentials, DNS records, and Certificates pages
+are clients of the normal dnsman REST boundary. They add no privileged mutation
+route. Domain onboarding exposes register-existing, superuser discovery/adopt,
+and the search → quote → typed-confirm purchase sequence. The confirm token
+stays inside the purchase modal and is discarded after the attempt. Credential
+forms verify before persistence and clear the supplied key/secret immediately.
+
+The DNS editor treats `(domain, type, normalized name)` as a complete record
+set. Its mutation coordinator allows only one write for that key, calls the
+non-retrying API wrapper, and then fetches live provider inventory. Ambiguous or
+mismatched proof latches the row as refresh-required and blocks another write
+until an explicit authoritative refresh. This mirrors the service reservation
+contract and prevents a frontend retry from overwriting ACME or parallel
+values. Certificate status polling reads metadata endpoints only; the browser
+portal never calls `certificate/material`.

@@ -11,6 +11,14 @@ const SVG = {
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   alert: '<path d="M10.3 3.7 2.2 18a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4m0 4h.01"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  dns: '<circle cx="12" cy="12" r="2"/><circle cx="12" cy="12" r="7"/><path d="M12 3V1m0 22v-2M3 12H1m22 0h-2"/>',
+  certificate: '<path d="M7 3h10v7a5 5 0 0 1-10 0Z"/><path d="M9 15v6l3-2 3 2v-6"/>',
+  server: '<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/>',
+  route: '<path d="M6 3v6a3 3 0 0 0 3 3h6a3 3 0 0 1 3 3v6"/><path d="m14 17 4 4 4-4M2 7l4-4 4 4"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0 1 5"/><path d="M20 4v7h-7"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3m3 0-1 14H7L6 7m4 4v6m4-6v6"/>',
+  activity: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
 };
 
 export function icon(name, label = '') {
@@ -31,6 +39,8 @@ export function h(tag, attrs = {}, ...children) {
     if (key === 'class') node.className = value;
     else if (key === 'text') node.textContent = value ?? '';
     else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2), value);
+    else if (key === 'checked') node.checked = Boolean(value);
+    else if (key === 'value') node.value = value ?? '';
     else if (value !== false && value != null) node.setAttribute(key, value === true ? '' : String(value));
   });
   children.flat().filter((item) => item != null).forEach((item) => {
@@ -39,9 +49,7 @@ export function h(tag, attrs = {}, ...children) {
   return node;
 }
 
-function authHeader() {
-  return window.MojoAuth?.getAuthHeader?.();
-}
+function authHeader() { return window.MojoAuth?.getAuthHeader?.(); }
 
 async function renewSourceSession() {
   const header = authHeader();
@@ -70,9 +78,13 @@ export async function api(path, options = {}, retry = true) {
   }
   let payload = {};
   try { payload = await response.json(); } catch (_) { payload = {}; }
-  if (!response.ok) throw new Error(payload.error || payload.reason || `Request failed (${response.status})`);
+  if (!response.ok || payload.status === false) throw new Error(payload.error || payload.reason || `Request failed (${response.status})`);
   return payload.data ?? payload;
 }
+
+// Mutations whose provider outcome may be ambiguous deliberately receive no
+// transport retry. Their caller must reconcile authoritative state instead.
+export function apiOnce(path, options = {}) { return api(path, options, false); }
 
 export function listData(payload) {
   if (Array.isArray(payload)) return payload;
@@ -85,6 +97,14 @@ export function formatDate(value) {
   return Number.isNaN(date.valueOf()) ? String(value) : date.toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'});
 }
 
+export function statusTone(status) {
+  const value = String(status || '').toLowerCase();
+  if (['pass', 'passed', 'active', 'succeeded', 'completed', 'verified', 'ready', 'applied', 'live'].includes(value)) return 'success';
+  if (['fail', 'failed', 'inactive', 'error', 'revoked', 'expired'].includes(value)) return 'danger';
+  if (['warn', 'warning', 'waiting_for_choice', 'registering', 'issuing', 'partial'].includes(value)) return 'warning';
+  return 'neutral';
+}
+
 export class TableView {
   constructor({columns, rows = [], empty = 'No records found.', onSelect}) {
     this.columns = columns; this.rows = rows; this.empty = empty; this.onSelect = onSelect;
@@ -93,10 +113,44 @@ export class TableView {
     if (!this.rows.length) return h('div', {class: 'empty'}, h('p', {text: this.empty}));
     const head = h('tr', {}, ...this.columns.map((c) => h('th', {scope: 'col', text: c.label})));
     const body = this.rows.map((row) => h('tr', {tabindex: this.onSelect ? '0' : null,
-      onclick: () => this.onSelect?.(row), onkeydown: (e) => { if (e.key === 'Enter') this.onSelect?.(row); }},
+      onclick: () => this.onSelect?.(row), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.onSelect?.(row); } }},
       ...this.columns.map((c) => h('td', {}, c.render ? c.render(row) : String(row[c.key] ?? '—')))));
-    return h('div', {class: 'table-wrap'}, h('table', {}, h('thead', {}, head), h('tbody', {}, ...body)));
+    const labels = this.columns.map((column) => column.label).filter(Boolean).join(', ');
+    return h('div', {class: 'table-wrap', tabindex: '0', role: 'region',
+      'aria-label': `${labels || 'Data'} table`, onkeydown: (event) => {
+        if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        const scroller = event.currentTarget;
+        const maximum = scroller.scrollWidth - scroller.clientWidth;
+        if (maximum <= 0) return;
+        event.preventDefault();
+        const direction = event.key === 'ArrowRight' ? 1 : -1;
+        const step = Math.max(48, Math.floor(scroller.clientWidth * 0.35));
+        scroller.scrollLeft = Math.max(0, Math.min(maximum, scroller.scrollLeft + direction * step));
+      }},
+    h('table', {}, h('thead', {}, head), h('tbody', {}, ...body)));
   }
+}
+
+function fieldControl(field, value) {
+  if (field.type === 'select') {
+    const select = h('select', {id: `field-${field.name}`, name: field.name, required: field.required || null});
+    if (field.placeholder) select.append(h('option', {value: '', text: field.placeholder}));
+    (field.options || []).forEach((option) => select.append(h('option', {
+      value: option.value, text: option.label, selected: String(option.value) === String(value) || null,
+    })));
+    select.value = value ?? '';
+    return select;
+  }
+  if (field.type === 'textarea') return h('textarea', {
+    id: `field-${field.name}`, name: field.name, rows: field.rows || 4,
+    required: field.required || null, placeholder: field.placeholder || null, text: value ?? '',
+  });
+  return h('input', {
+    id: `field-${field.name}`, name: field.name, type: field.type || 'text',
+    value: field.type === 'checkbox' ? null : (value ?? ''), checked: field.type === 'checkbox' && value,
+    required: field.required || null, autocomplete: field.autocomplete || null,
+    placeholder: field.placeholder || null, min: field.min ?? null, max: field.max ?? null,
+  });
 }
 
 export class FormView {
@@ -107,40 +161,59 @@ export class FormView {
     const message = h('div', {class: 'form-message', role: 'alert'});
     const inputs = {};
     const fields = this.fields.map((field) => {
-      const input = h(field.type === 'textarea' ? 'textarea' : 'input', {
-        id: `field-${field.name}`, name: field.name, type: field.type || 'text',
-        value: field.type === 'checkbox' ? null : (this.value[field.name] ?? ''),
-        checked: field.type === 'checkbox' && this.value[field.name] ? true : null,
-        required: field.required || null, autocomplete: field.autocomplete || null,
-      });
+      const input = fieldControl(field, this.value[field.name]);
       inputs[field.name] = input;
       return h('label', {class: field.type === 'checkbox' ? 'check-field' : 'field'},
-        h('span', {text: field.label}), input, field.help ? h('small', {text: field.help}) : null);
+        field.type === 'checkbox' ? input : h('span', {text: field.label}),
+        field.type === 'checkbox' ? h('span', {text: field.label}) : input,
+        field.help ? h('small', {text: field.help}) : null);
     });
     const button = h('button', {class: 'button primary', type: 'submit'}, icon('check'), this.submitLabel);
     return h('form', {onsubmit: async (event) => {
       event.preventDefault(); button.disabled = true; message.textContent = '';
       const data = {};
-      Object.entries(inputs).forEach(([name, input]) => { data[name] = input.type === 'checkbox' ? input.checked : input.value; });
-      try { await this.onSubmit(data); } catch (error) { message.textContent = error.message; button.disabled = false; }
+      Object.entries(inputs).forEach(([name, input]) => {
+        data[name] = input.type === 'checkbox' ? input.checked : input.value;
+      });
+      try { await this.onSubmit(data, inputs); } catch (error) { message.textContent = error.message; button.disabled = false; }
     }}, ...fields, message, h('div', {class: 'form-actions'}, button));
   }
 }
 
-export function openModal({title, subtitle, content, danger = false}) {
+export function openModal({title, subtitle, content, danger = false, wide = false, onClose = () => {}, returnFocus = null}) {
   const layer = document.getElementById('portal-layer');
-  const close = () => { layer.replaceChildren(); document.body.classList.remove('locked'); };
-  const panel = h('section', {class: `modal ${danger ? 'danger-modal' : ''}`, role: 'dialog', 'aria-modal': 'true'},
-    h('header', {}, h('div', {}, h('h2', {text: title}), subtitle ? h('p', {text: subtitle}) : null),
+  const previous = returnFocus || document.activeElement;
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener('keydown', onKeydown);
+    try { onClose(); }
+    finally { layer.replaceChildren(); document.body.classList.remove('locked'); previous?.focus?.(); }
+  };
+  const panel = h('section', {class: `modal ${danger ? 'danger-modal' : ''} ${wide ? 'wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'modal-title'},
+    h('header', {}, h('div', {}, h('h2', {id: 'modal-title', text: title}), subtitle ? h('p', {text: subtitle}) : null),
       h('button', {class: 'icon-button', 'aria-label': 'Close', onclick: close}, icon('close'))),
     h('div', {class: 'modal-body'}, content));
+  const onKeydown = (event) => {
+    if (event.key === 'Escape') { close(); return; }
+    if (event.key !== 'Tab') return;
+    const focusable = [...panel.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href]')];
+    if (!focusable.length) return;
+    const first = focusable[0]; const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  };
   layer.replaceChildren(h('div', {class: 'scrim', onclick: (e) => { if (e.target === e.currentTarget) close(); }}, panel));
-  document.body.classList.add('locked'); panel.querySelector('input,button')?.focus();
+  document.body.classList.add('locked'); document.addEventListener('keydown', onKeydown);
+  panel.querySelector('input,select,textarea,button')?.focus();
   return close;
 }
 
 export function badge(text, tone = 'neutral') { return h('span', {class: `badge ${tone}`, text}); }
 
 export function pageHeader(eyebrow, title, copy, actions = []) {
-  return h('header', {class: 'page-header'}, h('div', {}, h('div', {class: 'eyebrow', text: eyebrow}), h('h1', {text: title}), h('p', {text: copy})), h('div', {class: 'page-actions'}, ...actions));
+  return h('header', {class: 'page-header'}, h('div', {}, h('div', {class: 'eyebrow', text: eyebrow}), h('h1', {text: title, tabindex: '-1'}), h('p', {text: copy})), h('div', {class: 'page-actions'}, ...actions));
 }
+
+export function stopRow(event) { event.stopPropagation(); }
