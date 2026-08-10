@@ -52,7 +52,8 @@ def test_protected_key_registry(opts):
     from mojo.apps.account.services import system_settings
     expected = {
         "BASE_URL", "MOJO_INSTALLATION_UUID", "MOJO_INSTALLATION_SLUG",
-        "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", "EDGE_EXPECTED_TOPOLOGY"}
+        "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", "EDGE_EXPECTED_TOPOLOGY",
+        "AUTH_CONFIG"}
     assert set(system_settings.protected_keys()) == expected, \
         f"protected key registry drifted: {system_settings.protected_keys()!r}"
 

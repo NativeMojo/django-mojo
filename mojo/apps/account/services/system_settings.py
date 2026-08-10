@@ -7,6 +7,7 @@ superuser.
 """
 
 import json
+import copy
 import re
 import uuid
 from urllib.parse import urlsplit, urlunsplit
@@ -23,6 +24,7 @@ INSTALLATION_UUID = "MOJO_INSTALLATION_UUID"
 INSTALLATION_SLUG = "MOJO_INSTALLATION_SLUG"
 MONITORING_TOPICS = "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS"
 EXPECTED_EDGE_TOPOLOGY = "EDGE_EXPECTED_TOPOLOGY"
+AUTH_CONFIG = "AUTH_CONFIG"
 
 _PROTECTED = {}
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,62}$")
@@ -230,6 +232,47 @@ def set_value(actor, key, value):
     return normalized
 
 
+AUTH_SAFE_PATHS = {
+    "theme.app_title", "theme.auth_provider_name", "theme.logo_url",
+    "theme.favicon_url", "theme.hero_image_url", "theme.hero_image_url_light",
+    "theme.hero_image_url_dark", "theme.hero_headline", "theme.hero_subheadline",
+    "theme.hero_image_position", "theme.back_to_website_url",
+    "theme.back_to_website_label", "theme.terms_url", "theme.layout",
+    "theme.appearance", "theme.accent_color", "theme.api_base",
+    "theme.success_redirect", "theme.custom_css", "theme.custom_css_url",
+    "login.heading", "login.supporting_copy",
+}
+
+
+def set_auth_safe_fields(actor, patch):
+    """Merge allowlisted presentation fields without replacing AUTH_CONFIG."""
+    require_system_admin(actor)
+    if not isinstance(patch, dict) or not patch:
+        raise merrors.ValueException("settings patch must be a non-empty object")
+    unknown = set(patch) - AUTH_SAFE_PATHS
+    if unknown:
+        raise merrors.ValueException(
+            f"setting is not editable here: {sorted(unknown)[0]}")
+    current = get_value(AUTH_CONFIG, {})
+    if not isinstance(current, dict):
+        raise merrors.ValueException("Stored AUTH_CONFIG is not an object")
+    candidate = copy.deepcopy(current)
+    for path, value in patch.items():
+        section, name = path.split(".", 1)
+        bucket = candidate.setdefault(section, {})
+        if not isinstance(bucket, dict):
+            raise merrors.ValueException(f"Stored AUTH_CONFIG.{section} is not an object")
+        bucket[name] = value
+    from mojo.apps.account.services import auth_config
+    auth_config.validate_auth_config(candidate)
+    methods = ((candidate.get("login") or {}).get("methods") or
+               auth_config.DEFAULT_AUTH_CONFIG["login"]["methods"])
+    if "password" not in methods:
+        raise merrors.ValueException(
+            "AUTH_CONFIG must retain password login for administrative recovery")
+    return set_value(actor, AUTH_CONFIG, candidate)
+
+
 def _validate_identity_pair(current_uuid, current_slug):
     if bool(current_uuid) != bool(current_slug):
         raise merrors.ValueException("Stored installation identity is incomplete")
@@ -293,6 +336,7 @@ def _register_defaults():
     register_protected_setting(INSTALLATION_SLUG, _validate_slug)
     register_protected_setting(MONITORING_TOPICS, _validate_list)
     register_protected_setting(EXPECTED_EDGE_TOPOLOGY, _validate_topology)
+    register_protected_setting(AUTH_CONFIG, lambda key, value: value)
 
 
 _register_defaults()

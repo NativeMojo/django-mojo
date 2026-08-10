@@ -22,3 +22,4 @@ from .geofence import *
 from .admin_portal import *
 from .admin_people import *
 from .system_setup import *
+from .admin_platform import *
