@@ -84,7 +84,7 @@ def test_authenticated_admin_delivery(opts):
     assert asset.status_code == 200 and "admin/bootstrap" in asset.text, \
         "valid source session did not receive the private JavaScript"
     setup_asset = opts.client.get("/admin/assets/setup.js")
-    assert setup_asset.status_code == 200 and "Fix Setup" in setup_asset.text, \
+    assert setup_asset.status_code == 200 and "Run all checks" in setup_asset.text, \
         "valid source session did not receive the private System Setup module"
     network_asset = opts.client.get("/admin/assets/network.js")
     assert network_asset.status_code == 200 and "MutationCoordinator" in network_asset.text, \
@@ -198,7 +198,7 @@ def test_webapp_key_portal_smoke(opts):
                 "operation_id": str(uuid.uuid4()),
             })
             minted_data = minted.json.get("data") or {}
-            assert minted.status_code == 200 and isinstance(minted_data.get("token"), str), \
+            assert minted.status_code == 200 and minted_data.get("token"), \
                 "the reveal-once create response did not contain the deployment key"
             active = opts.client.get(
                 f"/api/edge/webapp/key_status?webapp={site.pk}")
