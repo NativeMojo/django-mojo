@@ -391,7 +391,7 @@ class CloudWatchHelper:
                 Statistics=[stat],
             )
         except botocore.exceptions.ClientError as exc:
-            logger.error("CloudWatch get_metric_statistics failed: %s", exc)
+            logger.error("CloudWatch call failed operation=cloudwatch.get_metric_statistics")
             raise
 
         datapoints = sorted(resp.get("Datapoints", []), key=lambda dp: dp["Timestamp"])
@@ -538,7 +538,7 @@ class CloudWatchHelper:
                             "public_ip":     inst.get("PublicIpAddress", ""),
                         })
         except botocore.exceptions.ClientError as exc:
-            logger.error("list_ec2_instances failed: %s", exc)
+            logger.error("AWS inventory failed operation=ec2.describe_instances")
             raise
         return results
 
@@ -565,7 +565,7 @@ class CloudWatchHelper:
                         "endpoint":       endpoint,
                     })
         except botocore.exceptions.ClientError as exc:
-            logger.error("list_rds_instances failed: %s", exc)
+            logger.error("AWS inventory failed operation=rds.describe_db_instances")
             raise
         return results
 
@@ -591,7 +591,7 @@ class CloudWatchHelper:
                         "num_nodes": cluster.get("NumCacheNodes", 0),
                     })
         except botocore.exceptions.ClientError as exc:
-            logger.error("list_elasticache_clusters failed: %s", exc)
+            logger.error("AWS inventory failed operation=elasticache.describe_cache_clusters")
             raise
         return results
 

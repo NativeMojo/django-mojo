@@ -10,10 +10,18 @@ import botocore
 from typing import Dict, List, Optional, Union, Any
 
 from .client import get_session
+from .provider_call import safe_error_detail
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
 logger = logit.get_logger(__name__, "aws.log")
+
+
+def _failure(exc, operation, iam_action):
+    return {
+        "Error": "AWS provider operation failed",
+        "failure": safe_error_detail(exc, operation, iam_action),
+    }
 
 
 class EmailSender:
@@ -100,8 +108,8 @@ class EmailSender:
             logger.info(f"Email sent successfully with MessageId: {response['MessageId']}")
             return response
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to send email: {e}")
-            return {'Error': str(e)}
+            logger.error("SES call failed operation=ses.send_email")
+            return _failure(e, "ses.send_email", "ses:SendEmail")
 
     def send_template_email(self,
                            source: str,
@@ -149,8 +157,8 @@ class EmailSender:
             logger.info(f"Template email sent successfully with MessageId: {response['MessageId']}")
             return response
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to send template email: {e}")
-            return {'Error': str(e)}
+            logger.error("SES call failed operation=ses.send_templated_email")
+            return _failure(e, "ses.send_templated_email", "ses:SendTemplatedEmail")
 
     def send_raw_email(self, raw_message: str, source: Optional[str] = None) -> Dict:
         """
@@ -175,8 +183,8 @@ class EmailSender:
             logger.info(f"Raw email sent successfully with MessageId: {response['MessageId']}")
             return response
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to send raw email: {e}")
-            return {'Error': str(e)}
+            logger.error("SES call failed operation=ses.send_raw_email")
+            return _failure(e, "ses.send_raw_email", "ses:SendRawEmail")
 
     def get_send_quota(self) -> Dict:
         """
@@ -188,8 +196,8 @@ class EmailSender:
         try:
             return self.client.get_send_quota()
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to get send quota: {e}")
-            return {'Error': str(e)}
+            logger.error("SES call failed operation=ses.get_send_quota")
+            return _failure(e, "ses.get_send_quota", "ses:GetSendQuota")
 
     def verify_email_identity(self, email: str) -> bool:
         """
@@ -206,7 +214,7 @@ class EmailSender:
             logger.info(f"Verification email sent to {email}")
             return True
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to initiate verification for {email}: {e}")
+            logger.error("SES call failed operation=ses.verify_email_identity")
             return False
 
     def verify_domain_identity(self, domain: str) -> Dict:
@@ -224,8 +232,9 @@ class EmailSender:
             logger.info(f"Domain verification initiated for {domain}")
             return response
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to initiate domain verification for {domain}: {e}")
-            return {'Error': str(e)}
+            logger.error("SES call failed operation=ses.verify_domain_identity domain=%s", domain)
+            return _failure(
+                e, "ses.verify_domain_identity", "ses:VerifyDomainIdentity")
 
     def list_identities(self, identity_type: Optional[str] = None) -> List[str]:
         """
@@ -245,7 +254,7 @@ class EmailSender:
             response = self.client.list_identities(**params)
             return response.get('Identities', [])
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to list identities: {e}")
+            logger.error("SES call failed operation=ses.list_identities")
             return []
 
 
@@ -282,7 +291,7 @@ class EmailTemplate:
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] == 'TemplateDoesNotExist':
                 return False
-            logger.error(f"Error checking template existence: {e}")
+            logger.error("SES call failed operation=ses.get_template")
             raise
 
     def create(self, subject: str, html_content: str,
@@ -316,7 +325,7 @@ class EmailTemplate:
             self.exists = True
             return True
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to create template {self.name}: {e}")
+            logger.error("SES call failed operation=ses.create_template template=%s", self.name)
             return False
 
     def update(self, subject: Optional[str] = None,
@@ -354,7 +363,7 @@ class EmailTemplate:
             self.client.update_template(Template=template)
             return True
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to update template {self.name}: {e}")
+            logger.error("SES call failed operation=ses.update_template template=%s", self.name)
             return False
 
     def delete(self) -> bool:
@@ -373,7 +382,7 @@ class EmailTemplate:
             self.exists = False
             return True
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to delete template {self.name}: {e}")
+            logger.error("SES call failed operation=ses.delete_template template=%s", self.name)
             return False
 
     def get(self) -> Dict:
@@ -391,7 +400,7 @@ class EmailTemplate:
             response = self.client.get_template(TemplateName=self.name)
             return response.get('Template', {})
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to get template {self.name}: {e}")
+            logger.error("SES call failed operation=ses.get_template template=%s", self.name)
             return {}
 
     @staticmethod
@@ -411,7 +420,7 @@ class EmailTemplate:
             response = client.list_templates()
             return response.get('TemplatesMetadata', [])
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to list templates: {e}")
+            logger.error("SES call failed operation=ses.list_templates")
             return []
 
 
@@ -478,5 +487,5 @@ def is_identity_verified(identity: str) -> bool:
         status = attributes.get('VerificationStatus', '')
         return status.lower() == 'success'
     except botocore.exceptions.ClientError as e:
-        logger.error(f"Failed to check verification status for {identity}: {e}")
+        logger.error("SES call failed operation=ses.get_identity_verification_attributes")
         return False

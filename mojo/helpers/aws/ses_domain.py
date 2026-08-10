@@ -34,6 +34,7 @@ from mojo.helpers.aws.client import get_client, get_session
 from mojo.helpers.aws.ses import EmailSender
 from mojo.helpers.aws.sns import SNSTopic, SNSSubscription
 from mojo.helpers.aws.s3 import S3Bucket
+from mojo.helpers.aws.provider_call import safe_error_detail
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
@@ -266,7 +267,7 @@ def map_identity_notification_topics(
                 SnsTopic=arn,
             )
         except ClientError as e:
-            logger.error(f"Failed to map {notif} topic for {domain}: {e}")
+            logger.error("SES call failed operation=ses.set_identity_notification_topic domain=%s type=%s", domain, notif)
 
 
 def set_mail_from_domain(
@@ -289,7 +290,7 @@ def set_mail_from_domain(
         )
         logger.info(f"MAIL FROM enabled for {domain}")
     except ClientError as e:
-        logger.error(f"Failed to configure MAIL FROM for {domain}: {e}")
+        logger.error("SES call failed operation=ses.set_identity_mail_from_domain domain=%s", domain)
 
 
 def ensure_dkim_enabled(
@@ -311,7 +312,7 @@ def ensure_dkim_enabled(
             ses.set_identity_dkim_enabled(Identity=domain, DkimEnabled=True)
             logger.info(f"Enabled DKIM signing for {domain}")
     except ClientError as e:
-        logger.error(f"Failed to ensure DKIM enabled for {domain}: {e}")
+        logger.error("SES call failed operation=ses.set_identity_dkim_enabled domain=%s", domain)
 
 def ensure_receiving_catch_all(
     domain: str,
@@ -350,7 +351,7 @@ def ensure_receiving_catch_all(
             logger.info(f"Created SES receipt rule set: {rule_set_name}")
         except ClientError as e:
             # Might already exist due to race; re-fetch
-            logger.warning(f"Create rule set warning: {e}")
+            logger.warning("SES call failed operation=ses.create_receipt_rule_set")
 
     # If there is no active set, set ours active
     if not active_set:
@@ -358,7 +359,7 @@ def ensure_receiving_catch_all(
             ses.set_active_receipt_rule_set(RuleSetName=rule_set_name)
             active_set = rule_set_name
         except ClientError as e:
-            logger.error(f"Failed to set active rule set: {e}")
+            logger.error("SES call failed operation=ses.set_active_receipt_rule_set")
     # If active set differs, we still can place rules in our set; SES uses only active one.
     # In production, you might want to switch or merge rules; we report via audit.
 
@@ -370,7 +371,7 @@ def ensure_receiving_catch_all(
         rs = ses.describe_receipt_rule_set(RuleSetName=rule_set_name)
         existing = [r for r in rs.get("Rules", []) if r.get("Name") == rule_name]
     except ClientError as e:
-        logger.error(f"Failed to describe rule set {rule_set_name}: {e}")
+        logger.error("SES call failed operation=ses.describe_active_receipt_rule_set rule_set=%s", rule_set_name)
         existing = []
 
     actions = [
@@ -481,9 +482,9 @@ def ensure_receiving_catch_all(
                         )
                         logger.info(f"Created SES receipt rule {rule_name} in set {rule_set_name}")
                 except Exception as pe:
-                    logger.error(f"Failed to auto-apply SES S3 policy and create rule {rule_name}: {pe}")
+                    logger.error("SES setup failed operation=ses.create_receipt_rule rule=%s", rule_name)
             else:
-                logger.error(f"Failed to create receipt rule {rule_name}: {e}")
+                logger.error("SES call failed operation=ses.create_receipt_rule rule=%s", rule_name)
     else:
         # Update to desired shape (best effort)
         try:
@@ -493,7 +494,7 @@ def ensure_receiving_catch_all(
             )
             logger.info(f"Updated SES receipt rule {rule_name} in set {rule_set_name}")
         except ClientError as e:
-            logger.error(f"Failed to update receipt rule {rule_name}: {e}")
+            logger.error("SES call failed operation=ses.update_receipt_rule rule=%s", rule_name)
 
     return rule_set_name, rule_name
 
@@ -547,7 +548,7 @@ def audit_domain_config(
             AuditItem(
                 resource="ses.account.production_access",
                 desired={"ProductionAccessEnabled": True},
-                current=f"error: {e}",
+                current=safe_error_detail(e, "sesv2.get_account", "ses:GetAccount"),
                 status="conflict",
             )
         )
@@ -598,7 +599,9 @@ def audit_domain_config(
             AuditItem(
                 resource="ses.identity.verification",
                 desired="Success",
-                current=f"error: {e}",
+                current=safe_error_detail(
+                    e, "ses.get_identity_verification_attributes",
+                    "ses:GetIdentityVerificationAttributes"),
                 status="conflict",
             )
         )
@@ -628,7 +631,9 @@ def audit_domain_config(
             AuditItem(
                 resource="ses.identity.dkim",
                 desired={"Enabled": True, "VerificationStatus": "Success"},
-                current=f"error: {e}",
+                current=safe_error_detail(
+                    e, "ses.get_identity_dkim_attributes",
+                    "ses:GetIdentityDkimAttributes"),
                 status="conflict",
             )
         )
@@ -669,7 +674,9 @@ def audit_domain_config(
             AuditItem(
                 resource="ses.identity.notification_topics",
                 desired=desired_topics or {},
-                current=f"error: {e}",
+                current=safe_error_detail(
+                    e, "ses.get_identity_notification_attributes",
+                    "ses:GetIdentityNotificationAttributes"),
                 status="conflict",
             )
         )
@@ -709,7 +716,7 @@ def audit_domain_config(
                 AuditItem(
                     resource=f"s3.bucket.exists.{want_bucket}",
                     desired={"Exists": True},
-                    current=f"error: {e}",
+                    current=safe_error_detail(e, "s3.head_bucket", "s3:ListBucket"),
                     status="missing",
                 )
             )
@@ -779,7 +786,9 @@ def audit_domain_config(
                 AuditItem(
                     resource=f"ses.receipt_rule.{rs_name}",
                     desired=desired_receiving,
-                    current=f"error: {e}",
+                    current=safe_error_detail(
+                        e, "ses.describe_receipt_rule_set",
+                        "ses:DescribeReceiptRuleSet"),
                     status="conflict",
                 )
             )
@@ -820,7 +829,9 @@ def audit_domain_config(
                     AuditItem(
                         resource=f"sns.topic.exists.{key}",
                         desired={"TopicArn": arn},
-                        current=f"error: {e}",
+                        current=safe_error_detail(
+                            e, "sns.get_topic_attributes",
+                            "sns:GetTopicAttributes"),
                         status="missing",
                     )
                 )
@@ -854,7 +865,9 @@ def audit_domain_config(
                         AuditItem(
                             resource=f"sns.topic.subscriptions.{key}",
                             desired={"ConfirmedHttpsSubscription": True},
-                            current=f"error: {e}",
+                            current=safe_error_detail(
+                                e, "sns.list_subscriptions_by_topic",
+                                "sns:ListSubscriptionsByTopic"),
                             status="conflict",
                         )
                     )
@@ -955,7 +968,7 @@ def reconcile_domain_config(
                     setattr(_ed, _k, _v)
                 _ed.save(update_fields=list(_updates.keys()) + ["modified"])
     except Exception as _e:
-        logger.warning(f"Failed to persist topic ARNs for domain {domain}: {_e}")
+        logger.warning("SES setup failed operation=db.persist_topic_arns domain=%s", domain)
 
     # Map notifications (bounce/complaint/delivery)
     map_identity_notification_topics(

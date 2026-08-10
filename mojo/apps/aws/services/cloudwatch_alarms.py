@@ -251,6 +251,8 @@ def process_notification(envelope):
     except Exception:
         raise CloudWatchPayloadError("invalid CloudWatch message")
     data = normalize(payload)
+    from mojo.apps.aws.services.aws_setup import is_owned_delivery_probe
+    is_delivery_probe = is_owned_delivery_probe(envelope, data)
 
     duplicate = False
     with transaction.atomic():
@@ -267,17 +269,21 @@ def process_notification(envelope):
                 old_state=data["old_state"],
                 new_state=data["new_state"],
                 state_changed_at=data["state_changed_at"],
+                is_delivery_probe=is_delivery_probe,
             )
             stale = bool(
                 alarm.last_state_change
                 and data["state_changed_at"] <= alarm.last_state_change
             )
-            if data["new_state"] == "ALARM" and not alarm.opening_transition_id and not stale:
+            if (not is_delivery_probe and data["new_state"] == "ALARM"
+                    and not alarm.opening_transition_id and not stale):
                 alarm.opening_transition = transition
-            event = _record_transition_event(transition, alarm, data, stale=stale)
-            transition.event = event
+            event = None
+            if not is_delivery_probe:
+                event = _record_transition_event(transition, alarm, data, stale=stale)
+                transition.event = event
 
-            if not stale and data["new_state"] == "ALARM":
+            if not is_delivery_probe and not stale and data["new_state"] == "ALARM":
                 result = event.publish(use_catchall=False, dispatch_handlers=False)
                 incident = result["incident"]
                 transition.incident = incident
@@ -286,7 +292,8 @@ def process_notification(envelope):
                 if result["should_dispatch"]:
                     transition.dispatch_status = CloudWatchAlarmTransition.DISPATCH_PENDING
             elif (
-                not stale
+                not is_delivery_probe
+                and not stale
                 and alarm.active_incident_id
                 and data["new_state"] in ("OK", "INSUFFICIENT_DATA")
             ):

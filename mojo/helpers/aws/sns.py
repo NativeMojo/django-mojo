@@ -10,10 +10,18 @@ import botocore
 from typing import Dict, List, Optional, Union, Any
 
 from .client import get_session
+from .provider_call import safe_error_detail
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
 logger = logit.get_logger(__name__, "aws.log")
+
+
+def _failure(exc, operation, iam_action):
+    return {
+        "Error": "AWS provider operation failed",
+        "failure": safe_error_detail(exc, operation, iam_action),
+    }
 
 
 class SNSTopic:
@@ -61,7 +69,7 @@ class SNSTopic:
 
             return False
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Error checking topic existence: {e}")
+            logger.error("SNS call failed operation=sns.get_topic_attributes")
             return False
 
     def create(self, display_name: Optional[str] = None,
@@ -100,7 +108,7 @@ class SNSTopic:
             self.exists = True
             return True
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to create topic {self.name}: {e}")
+            logger.error("SNS call failed operation=sns.create_topic topic=%s", self.name)
             return False
 
     def delete(self) -> bool:
@@ -120,7 +128,7 @@ class SNSTopic:
             self.exists = False
             return True
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to delete topic {self.name}: {e}")
+            logger.error("SNS call failed operation=sns.delete_topic topic=%s", self.name)
             return False
 
     def publish(self, message: str, subject: Optional[str] = None,
@@ -163,8 +171,8 @@ class SNSTopic:
             logger.info(f"Message published successfully with MessageId: {response['MessageId']}")
             return response
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to publish message to topic {self.name}: {e}")
-            return {'Error': str(e)}
+            logger.error("SNS call failed operation=sns.publish topic=%s", self.name)
+            return _failure(e, "sns.publish", "sns:Publish")
 
     def set_attributes(self, attributes: Dict[str, str]) -> bool:
         """
@@ -188,7 +196,7 @@ class SNSTopic:
             )
             return True
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to set attributes for topic {self.name}: {e}")
+            logger.error("SNS call failed operation=sns.set_topic_attributes topic=%s", self.name)
             return False
 
     def get_attributes(self) -> Dict[str, str]:
@@ -206,7 +214,7 @@ class SNSTopic:
             response = self.client.get_topic_attributes(TopicArn=self.arn)
             return response.get('Attributes', {})
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to get attributes for topic {self.name}: {e}")
+            logger.error("SNS call failed operation=sns.get_topic_attributes topic=%s", self.name)
             return {}
 
     def list_subscriptions(self) -> List[Dict]:
@@ -224,7 +232,7 @@ class SNSTopic:
             response = self.client.list_subscriptions_by_topic(TopicArn=self.arn)
             return response.get('Subscriptions', [])
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to list subscriptions for topic {self.name}: {e}")
+            logger.error("SNS call failed operation=sns.list_subscriptions_by_topic topic=%s", self.name)
             return []
 
     @staticmethod
@@ -244,7 +252,7 @@ class SNSTopic:
             response = client.list_topics()
             return response.get('Topics', [])
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to list topics: {e}")
+            logger.error("SNS call failed operation=sns.list_topics")
             return []
 
 
@@ -304,8 +312,8 @@ class SNSSubscription:
             logger.info(f"Subscription created: {response.get('SubscriptionArn')}")
             return response
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to create subscription: {e}")
-            return {'Error': str(e)}
+            logger.error("SNS call failed operation=sns.subscribe")
+            return _failure(e, "sns.subscribe", "sns:Subscribe")
 
     def unsubscribe(self, subscription_arn: str) -> bool:
         """
@@ -322,7 +330,7 @@ class SNSSubscription:
             logger.info(f"Subscription {subscription_arn} deleted")
             return True
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to delete subscription {subscription_arn}: {e}")
+            logger.error("SNS call failed operation=sns.unsubscribe")
             return False
 
     def set_attributes(self, subscription_arn: str,
@@ -346,7 +354,7 @@ class SNSSubscription:
             )
             return True
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to set attributes for subscription {subscription_arn}: {e}")
+            logger.error("SNS call failed operation=sns.set_subscription_attributes")
             return False
 
     def get_attributes(self, subscription_arn: str) -> Dict[str, str]:
@@ -365,7 +373,7 @@ class SNSSubscription:
             )
             return response.get('Attributes', {})
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to get attributes for subscription {subscription_arn}: {e}")
+            logger.error("SNS call failed operation=sns.get_subscription_attributes")
             return {}
 
     @staticmethod
@@ -385,7 +393,7 @@ class SNSSubscription:
             response = client.list_subscriptions()
             return response.get('Subscriptions', [])
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Failed to list subscriptions: {e}")
+            logger.error("SNS call failed operation=sns.list_subscriptions")
             return []
 
 

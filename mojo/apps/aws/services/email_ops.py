@@ -359,7 +359,7 @@ def onboard_email_domain(
         )
 
     except Exception as e:
-        logger.error(f"onboard error for domain {domain.name}: {e}")
+        logger.error("SES onboard failed operation=ses.onboard domain=%s", domain.name)
         raise
 
 
@@ -476,7 +476,7 @@ def audit_email_domain(
         )
 
     except Exception as e:
-        logger.error(f"Audit error for domain {domain.name}: {e}")
+        logger.error("SES audit failed operation=ses.audit domain=%s", domain.name)
         raise
 
 
@@ -587,5 +587,5 @@ def reconcile_email_domain(
         )
 
     except Exception as e:
-        logger.error(f"reconcile error for domain {domain.name}: {e}")
+        logger.error("SES reconcile failed operation=ses.reconcile domain=%s", domain.name)
         raise

@@ -31,6 +31,10 @@ class CloudWatchAlarmTransition(models.Model, MojoModel):
     dispatch_status = models.CharField(
         max_length=16, default=DISPATCH_COMPLETE, db_index=True,
     )
+    is_delivery_probe = models.BooleanField(
+        default=False, db_index=True,
+        help_text="Evidence-only System Setup probe; never dispatched to incident rules",
+    )
 
     class Meta:
         constraints = [
@@ -55,9 +59,9 @@ class CloudWatchAlarmTransition(models.Model, MojoModel):
                 "fields": [
                     "id", "topic_arn", "sns_message_id", "old_state",
                     "new_state", "state_changed_at", "dispatch_status",
+                    "is_delivery_probe",
                     "created", "modified",
                 ],
                 "extra": ["alarm_id", "event_id", "incident_id"],
             },
         }
-

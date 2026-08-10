@@ -13,8 +13,10 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from objict import objict
 
+from mojo.apps.account.services.setup_safety import sanitize
 from mojo.helpers import logit
 from mojo.helpers.aws.client import get_client, get_session
+from mojo.helpers.aws.provider_call import ProviderCallError, ProviderCaller, safe_error_detail
 from mojo.helpers.settings import settings
 
 
@@ -36,7 +38,14 @@ CERT_METRIC_NAME = "MinDaysToExpiry"
 
 def _setting(name, default=None, kind=None):
     try:
-        return settings.get_static(name, default, kind=kind) if kind else settings.get_static(name, default)
+        # Only System Setup's explicitly protected installation controls are
+        # runtime DB-backed here.  Reading every AWS tuning knob through Redis
+        # changes the long-standing CLI contract and can turn a transient cache
+        # value into an invalid threshold.
+        from mojo.apps.account.services import system_settings
+        getter = settings.get if system_settings.is_protected_setting(name) \
+            else settings.get_static
+        return getter(name, default, kind=kind) if kind else getter(name, default)
     except Exception:
         return default
 
@@ -152,7 +161,7 @@ class AWSCheckRunner:
     def __init__(self, region=None, profile=None, timeout=3, apply=False, yes=False,
                  probe_s3=False, bucket_name=None, mailbox_email=None,
                  adopt_bucket=False, confirm=None, clients=None, session=None, now=None,
-                 dns_domain=None, dns_group=None):
+                 dns_domain=None, dns_group=None, provider=None):
         self.region = region or _setting("AWS_REGION", "us-east-1")
         self.profile = profile
         self.timeout = max(1, min(int(timeout or 3), 30))
@@ -173,6 +182,7 @@ class AWSCheckRunner:
         self.delivery_seen = False
         self.dns_domain = dns_domain
         self.dns_group = dns_group
+        self.provider = provider or ProviderCaller(logger)
         # DNSMAN_ACME_HUB_API_KEY belongs here too: the dns section surfaces hub
         # client errors through _add(), and #1423 requires that key never be
         # logged. Without it a hub failure reaches stdout and --json in the clear.
@@ -188,11 +198,28 @@ class AWSCheckRunner:
         return re.sub(r"\b(?:AKIA|ASIA)[A-Z0-9]{12,}\b", "[REDACTED]", text)[:2000]
 
     def _add(self, section, status, code, message, details=None, remediation=None, changed=False):
+        if isinstance(message, Exception):
+            # Preserve only the fact that the legacy redactor found a configured
+            # secret.  The raw exception text itself must never survive into the
+            # report, logs, or an exception chain.
+            raw_message = str(message)
+            redaction_applied = self._redact(raw_message) != raw_message
+            safe = safe_error_detail(message, code)
+            message = "AWS provider operation failed"
+            if redaction_applied:
+                message += " ([REDACTED])"
+            details = dict(details) if isinstance(details, dict) else {}
+            details.update(safe)
         self.results.append({
             "section": section, "status": status, "code": code,
-            "message": self._redact(message), "details": details or {},
-            "remediation": remediation or "", "changed": bool(changed),
+            "message": self._redact(message)[:500],
+            "details": sanitize(details) if isinstance(details, dict) else {},
+            "remediation": self._redact(remediation or "")[:500],
+            "changed": bool(changed),
         })
+
+    def _provider_call(self, operation, callback, iam_action="", mutation=False):
+        return self.provider.call(operation, callback, iam_action, mutation)
 
     def _approve(self, message):
         return bool(self.apply and (self.yes or self.confirm(message)))
@@ -206,6 +233,14 @@ class AWSCheckRunner:
             self._add(section, "pass", "mutation.identity_verified",
                       "Selected AWS identity is verified for apply mode", self.primary_identity)
             return True
+        except ProviderCallError as exc:
+            if exc.provider_code == "credentials_unavailable":
+                code = "credentials.missing"
+            elif exc.provider_code == "network_unavailable":
+                code = "sts.timeout"
+            else:
+                code = "sts.denied" if exc.denied else "sts.error"
+            error = exc
         except (NoCredentialsError, PartialCredentialsError) as exc:
             code = "credentials.missing"
             error = exc
@@ -264,9 +299,13 @@ class AWSCheckRunner:
             except BotoCoreError as exc:
                 self._add(section, "fail", f"{section}.service_error", exc)
             except Exception as exc:
-                logger.exception("aws-check section failed: %s", section)
+                safe = safe_error_detail(exc, f"{section}.check")
+                logger.error(
+                    "aws-check section failed section=%s operation=%s provider_code=%s",
+                    section, safe.get("operation"), safe.get("provider_code"),
+                )
                 self._add(section, "fail", f"{section}.internal_error",
-                          f"Unexpected {type(exc).__name__}: {self._redact(exc)}",
+                          "The AWS readiness section could not complete safely.", safe,
                           remediation=f"Rerun: manage.py aws-check --check --section {section}")
         counts = {status: 0 for status in STATUSES}
         for item in self.results:
@@ -288,13 +327,28 @@ class AWSCheckRunner:
                       remediation="Set BASE_URL in deployment configuration and restart Django.")
 
     def _identity(self, access_key=None, secret_key=None, label="selected", region=None):
-        response = self._client("sts", access_key, secret_key, region).get_caller_identity()
+        response = self._provider_call(
+            "sts.get_caller_identity",
+            lambda: self._client("sts", access_key, secret_key, region).get_caller_identity(),
+            "sts:GetCallerIdentity",
+        )
         return {"context": label, "account": response.get("Account"), "arn": response.get("Arn"), "region": region or self.region}
 
     def check_identity(self):
         try:
             self.primary_identity = self._identity()
             self._add("identity", "pass", "sts.identity", "AWS credentials are valid", self.primary_identity)
+        except ProviderCallError as exc:
+            if exc.provider_code == "credentials_unavailable":
+                code = "credentials.missing"
+            elif exc.provider_code == "network_unavailable":
+                code = "sts.timeout"
+            else:
+                code = "sts.denied" if exc.denied else "sts.error"
+            self._add("identity", "fail", code, exc, exc.detail(),
+                      remediation=(f"Grant {exc.iam_action} to the selected identity."
+                                   if exc.iam_action and code == "sts.denied" else
+                                   "Verify the selected AWS identity and region."))
         except (NoCredentialsError, PartialCredentialsError) as exc:
             self._add("identity", "fail", "credentials.missing", exc,
                       remediation="Configure a complete key pair, AWS profile, or task/instance role.")
@@ -767,7 +821,12 @@ class AWSCheckRunner:
     def _discover_resources(self):
         """Every alarmable resource, as objict rows. Raises ClientError to the caller."""
         resources = []
-        for page in self._client("ec2").get_paginator("describe_instances").paginate():
+        ec2_pages = self._provider_call(
+            "ec2.describe_instances",
+            lambda: list(self._client("ec2").get_paginator(
+                "describe_instances").paginate()),
+            "ec2:DescribeInstances")
+        for page in ec2_pages:
             for reservation in page.get("Reservations", []):
                 for row in reservation.get("Instances", []):
                     if row.get("State", {}).get("Name") == "running":
@@ -777,7 +836,12 @@ class AWSCheckRunner:
                             instance_type=row.get("InstanceType", ""),
                             dimensions=[{"Name": "InstanceId", "Value": row.get("InstanceId")}],
                         ))
-        for page in self._client("rds").get_paginator("describe_db_instances").paginate():
+        rds_pages = self._provider_call(
+            "rds.describe_db_instances",
+            lambda: list(self._client("rds").get_paginator(
+                "describe_db_instances").paginate()),
+            "rds:DescribeDBInstances")
+        for page in rds_pages:
             for row in page.get("DBInstances", []):
                 if row.get("DBInstanceStatus") == "available":
                     resources.append(objict(
@@ -787,7 +851,12 @@ class AWSCheckRunner:
                         dimensions=[{"Name": "DBInstanceIdentifier",
                                      "Value": row.get("DBInstanceIdentifier")}],
                     ))
-        for page in self._client("elasticache").get_paginator("describe_cache_clusters").paginate():
+        cache_pages = self._provider_call(
+            "elasticache.describe_cache_clusters",
+            lambda: list(self._client("elasticache").get_paginator(
+                "describe_cache_clusters").paginate()),
+            "elasticache:DescribeCacheClusters")
+        for page in cache_pages:
             for row in page.get("CacheClusters", []):
                 if row.get("CacheClusterStatus") == "available":
                     resources.append(objict(
@@ -797,7 +866,7 @@ class AWSCheckRunner:
                     ))
         try:
             resources.extend(self._discover_target_groups())
-        except ClientError as exc:
+        except ProviderCallError as exc:
             # Its OWN guard, deliberately. Letting this reach _desired_alarms'
             # handler would return [] and take EC2, RDS and ElastiCache down with
             # it — no alarms created, no drift or name-conflict detection — on
@@ -805,7 +874,7 @@ class AWSCheckRunner:
             # elasticloadbalancing:DescribeTargetGroups, which is every
             # deployment that upgrades to this version.
             self._add("monitoring", "warn", "resources.elbv2_denied", exc,
-                      {"aws_code": _error_code(exc)},
+                      exc.detail(),
                       remediation=("Grant elasticloadbalancing:DescribeTargetGroups to the "
                                    "selected identity to alarm on load-balancer health. "
                                    "Every other resource is still monitored."))
@@ -820,7 +889,12 @@ class AWSCheckRunner:
         reaches the single owned SNS topic and its one allowlist entry.
         """
         rows = []
-        for page in self._client("elbv2").get_paginator("describe_target_groups").paginate():
+        pages = self._provider_call(
+            "elasticloadbalancing.describe_target_groups",
+            lambda: list(self._client("elbv2").get_paginator(
+                "describe_target_groups").paginate()),
+            "elasticloadbalancing:DescribeTargetGroups")
+        for page in pages:
             for row in page.get("TargetGroups", []):
                 balancers = row.get("LoadBalancerArns") or []
                 if not balancers:
@@ -912,8 +986,12 @@ class AWSCheckRunner:
         self.aurora_instance_ids = []
         try:
             resources = self._discover_resources()
-        except ClientError as exc:
-            self._add("monitoring", "fail", "resources.discovery_denied", exc, {"aws_code": _error_code(exc)})
+        except ProviderCallError as exc:
+            remediation = (f"Grant {exc.iam_action} to the selected identity, then rerun."
+                           if exc.iam_action else
+                           "Verify AWS discovery permissions, then rerun.")
+            self._add("monitoring", "fail", "resources.discovery_denied", exc,
+                      exc.detail(), remediation=remediation)
             return []
         desired, slug = [], self._deployment_slug()
         for resource in resources:
@@ -940,17 +1018,19 @@ class AWSCheckRunner:
         slug = self._deployment_slug()
         dimensions = [{"Name": "Deployment", "Value": slug}]
         try:
-            published = cloudwatch.list_metrics(
-                Namespace=CERT_METRIC_NAMESPACE, MetricName=CERT_METRIC_NAME,
-                Dimensions=dimensions,
-            ).get("Metrics") or []
-        except ClientError as exc:
+            published = self._provider_call(
+                "cloudwatch.list_metrics",
+                lambda: cloudwatch.list_metrics(
+                    Namespace=CERT_METRIC_NAMESPACE, MetricName=CERT_METRIC_NAME,
+                    Dimensions=dimensions),
+                "cloudwatch:ListMetrics").get("Metrics") or []
+        except ProviderCallError as exc:
             # Must not escape: this runs outside _discover_resources' guard, and
             # run()'s per-section handler would abort the ENTIRE monitoring
             # section — no SNS audit, no alarm inventory — on a deployment whose
             # IAM policy predates cloudwatch:ListMetrics.
             self._add("monitoring", "pending", "alarms.cert_metric_unknown", exc,
-                      {"aws_code": _error_code(exc)},
+                      exc.detail(),
                       remediation="Grant cloudwatch:ListMetrics to the selected identity, then rerun.")
             return []
         if not published:
@@ -1114,13 +1194,15 @@ class AWSCheckRunner:
         self._add("monitoring", "warn" if uncreated else "pass", "alarms.profile", "CloudWatch alarm profile audited",
                   {"desired": len(desired), "created": created, "uncreated": uncreated}, changed=bool(created))
         from mojo.apps.aws.models import CloudWatchAlarmTransition
-        received = CloudWatchAlarmTransition.objects.filter(topic_arn=topic_arn).order_by("-created").first()
+        received = CloudWatchAlarmTransition.objects.filter(
+            topic_arn=topic_arn, is_delivery_probe=True).order_by("-created").first()
         if received:
             self.delivery_seen = True
             self._add("monitoring", "pass", "receiver.delivery_seen", "A signed alarm transition has reached django-mojo", {"transition_id": received.pk})
         else:
-            self._add("monitoring", "warn", "receiver.delivery_unverified", "No alarm transition receipt exists yet",
-                      remediation="Use the documented AWS set-alarm-state ALARM then OK test on a disposable owned alarm.")
+            self._add("monitoring", "warn", "receiver.delivery_unverified",
+                      "No owned System Setup delivery-probe receipt exists yet",
+                      remediation="Run Fix Setup for SNS and CloudWatch to send the owned ALARM then OK probe.")
 
     def check_dns(self):
         """
