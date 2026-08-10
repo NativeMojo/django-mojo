@@ -236,19 +236,22 @@ def test_convergence_publication_is_post_commit_and_idempotent(opts):
     from mojo.apps.edge.services import convergence
 
     callbacks = []
+    jobs = mock.Mock()
+    jobs.get_runners.return_value = []
+    jobs.publish.return_value = ["job-a"]
     with mock.patch.object(transaction, "on_commit",
-                           side_effect=lambda callback: callbacks.append(callback)), \
-            mock.patch("mojo.apps.jobs.publish", return_value=["job-a"]) as publish, \
-            mock.patch("mojo.apps.jobs.get_runners", return_value=[]), \
-            mock.patch.object(convergence, "desired_generation", return_value="generation"):
+                           side_effect=lambda callback: callbacks.append(callback)):
         convergence.publish_after_commit("default", "default")
-        assert not publish.called, "convergence published before the database commit"
+        assert not jobs.publish.called, "convergence published before the database commit"
         assert len(callbacks) == 1, f"duplicate pool callbacks were registered: {callbacks}"
-        callbacks[0]()
-    publish.assert_called_once()
+        assert callbacks[0].__defaults__ == ("default",), \
+            "post-commit callback did not retain the exact pool"
+    convergence.publish_pool(
+        "default", jobs_module=jobs, generation="generation")
+    jobs.publish.assert_called_once()
     expected = hashlib.sha256(
         b"edge-converge:default:generation:edge").hexdigest()
-    assert publish.call_args.kwargs["idempotency_key"] == expected, \
+    assert jobs.publish.call_args.kwargs["idempotency_key"] == expected, \
         "publication key was not target/generation-idempotent"
     assert len(expected) == 64, "publication idempotency key exceeds the DB bound"
 
@@ -263,32 +266,24 @@ def test_model_lifecycle_publications(opts):
     upstream = make_upstream(group=opts.group)
     callbacks = []
     with mock.patch.object(transaction, "on_commit",
-                           side_effect=lambda callback: callbacks.append(callback)), \
-            mock.patch.object(convergence, "publish_pool") as publish:
+                           side_effect=lambda callback: callbacks.append(callback)):
         vhost = make_vhost(
             domain, certificate, label="app", kind="site_api", pool="default")
         assert len(callbacks) == 1, "Vhost create did not register after-commit publication"
-        callbacks.pop()()
         vhost.spa = True
         vhost.save()
-        callbacks.pop()()
         vhost.pool = "blue"
         vhost.save()
-        assert len(callbacks) == 2, \
+        assert len(callbacks) == 4, \
             "a pool move did not publish both the old and new pool"
-        [callbacks.pop(0)() for _ in range(2)]
 
         route = make_route(vhost, "/api", upstream)
-        callbacks.pop()()
         route.path_prefix = "/api-v2"
         route.save()
-        callbacks.pop()()
         route.delete()
-        callbacks.pop()()
         vhost.delete()
-        callbacks.pop()()
 
-    pools = [call.args[0] for call in publish.call_args_list]
+    pools = [callback.__defaults__[0] for callback in callbacks]
     assert pools == ["default", "default", "blue", "default",
                      "blue", "blue", "blue", "blue"], \
         f"create/update/move/delete publications were incomplete: {pools}"
@@ -306,14 +301,17 @@ def test_sequential_partial_route_pending_repair(opts):
     vhost = make_vhost(
         domain, certificate, label="partial", kind="site_api", pool="default")
     callbacks = []
+    jobs = mock.Mock()
+    jobs.get_runners.return_value = []
+    jobs.publish.side_effect = [
+        RuntimeError("private transport detail"), "job-ok"]
     with mock.patch.object(transaction, "on_commit",
-                           side_effect=lambda callback: callbacks.append(callback)), \
-            mock.patch.object(convergence, "desired_generation", return_value="generation"), \
-            mock.patch("mojo.apps.jobs.get_runners", return_value=[]), \
-            mock.patch("mojo.apps.jobs.publish",
-                       side_effect=[RuntimeError("private transport detail"), "job-ok"]):
+                           side_effect=lambda callback: callbacks.append(callback)):
         first = make_route(vhost, "/one", upstream)
-        pending = callbacks.pop()()
+        assert callbacks.pop().__defaults__ == ("default",), \
+            "the committed first Route did not retain its publication pool"
+        pending = convergence.publish_pool(
+            "default", jobs_module=jobs, generation="generation")
         assert pending.status == "pending", \
             "a publication failure did not leave explicit pending evidence"
         raised = None
@@ -326,7 +324,10 @@ def test_sequential_partial_route_pending_repair(opts):
             "the valid first Route was rolled back with a later invalid row"
         assert not callbacks, "the invalid Route registered a convergence publication"
         repaired = make_route(vhost, "/two", upstream)
-        published = callbacks.pop()()
+        assert callbacks.pop().__defaults__ == ("default",), \
+            "the repaired Route did not retain its publication pool"
+        published = convergence.publish_pool(
+            "default", jobs_module=jobs, generation="generation")
         assert published.status == "published", \
             f"retry did not repair pending publication evidence: {published}"
         assert VhostRoute.objects.filter(pk__in=[first.pk, repaired.pk]).count() == 2, \
@@ -337,12 +338,12 @@ def test_sequential_partial_route_pending_repair(opts):
 def test_convergence_publish_failure_is_pending(opts):
     from mojo.apps.edge.services import convergence
 
-    with mock.patch.object(convergence, "desired_generation", return_value="generation"), \
-            mock.patch("mojo.apps.jobs.get_runners", return_value=[]), \
-            mock.patch("mojo.apps.jobs.publish",
-                       side_effect=RuntimeError("token=do-not-log-this")), \
-            mock.patch.object(convergence.logit, "error") as logged:
-        result = convergence.publish_pool("default")
+    jobs = mock.Mock()
+    jobs.get_runners.return_value = []
+    jobs.publish.side_effect = RuntimeError("token=do-not-log-this")
+    with mock.patch.object(convergence.logit, "error") as logged:
+        result = convergence.publish_pool(
+            "default", jobs_module=jobs, generation="generation")
     assert result.status == "pending", \
         f"failed convergence publication was treated as success: {result}"
     assert "do-not-log-this" not in str(logged.call_args), \

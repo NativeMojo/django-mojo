@@ -22,14 +22,16 @@ def desired_generation(pool):
         vhosts, webapps=releases.desired_webapps(vhosts))["generation"]
 
 
-def publish_pool(pool):
+def publish_pool(pool, jobs_module=None, generation=None):
     """Publish one generation once; a retry reuses the durable job receipt."""
-    from mojo.apps import jobs
+    if jobs_module is None:
+        from mojo.apps import jobs as jobs_module
 
-    generation = desired_generation(pool)
+    generation = generation or desired_generation(pool)
     try:
         runners = [
-            row.get("runner_id") for row in jobs.get_runners(channel=EDGE_CHANNEL)
+            row.get("runner_id")
+            for row in jobs_module.get_runners(channel=EDGE_CHANNEL)
             if row.get("alive") and row.get("runner_id")]
         targets = sorted(set(runners)) or [EDGE_CHANNEL]
         job_ids = []
@@ -40,7 +42,7 @@ def publish_pool(pool):
             # bound for a long but valid runner id.
             identity = f"edge-converge:{pool}:{generation}:{target}"
             key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-            job_ids.append(jobs.publish(
+            job_ids.append(jobs_module.publish(
                 func=INSTALL_JOB,
                 payload={"pool": pool, "generation": generation},
                 channel=target, idempotency_key=key))
