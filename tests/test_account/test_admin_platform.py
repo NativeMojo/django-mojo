@@ -45,6 +45,7 @@ def test_auth_config_generic_protection(opts):
     generic.key = "AUTH_CONFIG"
     with th.assert_raises(me.PermissionDeniedException):
         generic.save()
+    system_settings.set_value(root, system_settings.AUTH_CONFIG, {})
 
 
 @th.django_unit_test("safe auth writer supports methods and preserves unknown keys")
@@ -92,6 +93,7 @@ def test_auth_safe_merge(opts):
         with th.assert_raises(me.ValueException):
             system_settings.set_auth_safe_fields(root, {path: "https://unsafe.test"})
     assert Setting.objects.get(key="AUTH_CONFIG").is_secret is False
+    system_settings.set_value(root, system_settings.AUTH_CONFIG, {})
 
 
 @th.django_unit_test("fleet collector performs one bounded Redis scan page")
