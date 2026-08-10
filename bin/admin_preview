@@ -56,7 +56,20 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return self._send({
                 "version": "1.9.0", "admin_path": "/", "groups": GROUPS,
                 "user": {"id": 1, "display_name": "Ian Smith", "email": "ian@example.com", "is_superuser": True},
-                "capabilities": {"people": True, "groups": True, "webapps": True, "manage_webapps": True},
+                "capabilities": {"setup": True, "people": True, "groups": True, "webapps": True, "manage_webapps": True},
+            })
+        if path == "/api/account/admin/setup/readiness":
+            return self._send({
+                "schema_version": 1, "overall": "warn",
+                "summary": {"pass": 5, "warn": 1, "fail": 0, "pending": 0},
+                "sections": [{
+                    "code": "django", "label": "Django installation", "status": "warn",
+                    "checks": [
+                        {"code": "django.apps", "status": "pass", "explanation": "Django applications loaded successfully.", "remediation": "", "fixable": False},
+                        {"code": "django.database", "status": "pass", "explanation": "The database answered a query.", "remediation": "", "fixable": False},
+                        {"code": "django.base_url", "status": "warn", "explanation": "The public hostname is ready for final verification.", "remediation": "Rerun after DNS propagation completes.", "fixable": True},
+                    ],
+                }],
             })
         if path == "/api/user":
             return self._send(USERS)
@@ -94,6 +107,12 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return self._send({"webapp": 42, "secret_name": "MOJO_DEPLOY_KEY", "replayed": False, "operation_id": "preview", "token": "preview-token-shown-once", "status": {"linked": True, "active": True}})
         if path == "/api/edge/webapp/revoke_key":
             return self._send({"webapp": 42, "secret_name": "MOJO_DEPLOY_KEY", "replayed": False, "operation_id": "preview", "status": {"linked": False, "active": False}})
+        if path == "/api/account/admin/setup/create":
+            return self._send({"id": "preview-setup", "mode": "fix", "status": "planned", "cursor": 0, "steps": [{"id": "installation_identity", "version": 1, "label": "Freeze installation identity", "state": "planned"}], "current_step": {"id": "installation_identity", "version": 1, "label": "Freeze installation identity", "state": "planned"}, "log": []})
+        if path == "/api/account/admin/setup/advance":
+            return self._send({"id": "preview-setup", "mode": "fix", "status": "reconciling", "cursor": 0, "steps": [{"id": "installation_identity", "version": 1, "label": "Freeze installation identity", "state": "reconciling"}], "current_step": {"id": "installation_identity", "version": 1, "label": "Freeze installation identity", "state": "reconciling"}, "log": [{"at": "2026-08-10T03:00:00Z", "message": "Reconciling installation_identity"}]})
+        if path in ("/api/account/admin/setup/choose", "/api/account/admin/setup/cancel"):
+            return self._send({"id": "preview-setup", "mode": "fix", "status": "cancelled", "cursor": 0, "steps": [], "current_step": None, "log": []})
         return self._send({"saved": True})
 
 
