@@ -711,5 +711,8 @@ provider call if the exact `(domain, type, name)` is owned by an in-flight or
 cleanup-pending challenge. Refresh the record inventory and retry after the
 certificate operation finishes; do not overwrite the challenge with a partial
 value set. A provider timeout during challenge publication is reconciled from
-the exact authoritative record set, so clients must not add their own blind
-retry loop.
+the exact authoritative record set. Absent or mismatched inventory is not
+success: the server keeps durable attempted intent and reports failure without
+treating the write as proven. Clients must not add their own blind retry loop.
+Reservation creation and interactive complete-set writes share a stable
+per-domain lock, including when no reservation row existed at request start.

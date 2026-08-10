@@ -215,3 +215,8 @@ preserve successful rows when a later row fails, display that partial result,
 and retry only the failed rows; each committed desired-state generation is
 idempotently published and readiness remains pending until every expected
 node/pool proves it.
+
+Although each publication receipt names the affected pool and generation, a
+node handles it by atomically installing the union of all pools assigned to
+that node. Portals should treat the receipt as convergence-pending evidence,
+not as proof that one pool was independently swapped live.

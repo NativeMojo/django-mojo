@@ -152,8 +152,11 @@ reports green. Fleet proof calls only live runners returned for channel
 `edge`; unrelated job runners are neither counted nor contacted. A revoked key
 is `warn`, an inactive linked key is `fail`, and a missing key is `pending`.
 Each hosting section scans its complete queryset and puts global status counts
-in the first check; only the following problem details are bounded. A failure
-after row 64 therefore still makes the section fail.
+in the first check; only the following problem details are bounded to 16. A
+failure anywhere after that detail limit therefore still makes the section
+fail. WebApp key summaries retain only counts by status and last operation
+action; per-WebApp detail is emitted only for non-green rows and remains
+non-secret.
 
 ## Durable operation model
 

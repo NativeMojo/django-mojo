@@ -269,8 +269,11 @@ generation as green. WebApp checks return only bounded metadata such as
 recovered through Setup.
 
 Every hosting section's first check is a global summary over all matching rows;
-only the subsequent problem-detail rows are bounded. Render the summary counts
-as authoritative, including failures beyond the detail-page limit.
+only the subsequent problem-detail rows are bounded to 16. Render the summary
+counts as authoritative, including failures beyond that limit. WebApp summary
+details contain status counts and `action_<mint|rotate|revoke>` receipt counts;
+per-WebApp `webapp`, `linked`, `active`, and `last_action` detail appears only
+for non-green rows. Neither shape contains token material.
 
 Render the server-returned `choice_schema`; do not build a second discovery UI.
 The current choice objects are:

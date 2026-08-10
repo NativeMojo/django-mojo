@@ -452,3 +452,9 @@ and desired generation. A rolled-back transaction publishes nothing. Each Route
 row is its own commit boundary, so a multi-row portal workflow keeps successful
 rows and retries only failures. A publication error is pending evidence and the
 periodic sweep remains the healing path.
+
+The pool/generation values on those jobs are durable publication receipts and
+idempotency inputs, not permission to swap one pool into the global `current`
+link. When any receipt runs, the node reads its configured pool assignment and
+installs the complete pool union once. Startup and periodic convergence use the
+same combined install path; a combined failure never reports a subset green.

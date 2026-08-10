@@ -206,8 +206,12 @@ dnsman manages, by definition.
 ## Durable DNS reservations
 
 Direct-provider DNS-01 issuance persists the complete TXT value set before the
-first write. Wildcard/apex values therefore share one reservation and one
-provider mutation. A timeout is reconciled by exact authoritative inventory;
-it is not blindly replayed. Cleanup releases ownership only after the provider
-accepted the removal. A failure leaves `cleanup_pending`, and the next issuance
-must repair that old intent before creating a new CA order.
+first write and commits `mutation_attempted` before provider I/O. Wildcard/apex
+values therefore share one reservation and one provider mutation. Reservation
+and interactive complete-set writes serialize on the stable parent domain even
+when no reservation row exists yet. A timeout is reconciled by exact
+authoritative inventory; absent or mismatched inventory leaves the attempted
+intent durable and raises the original provider failure rather than blindly
+replaying it. Cleanup releases ownership only after the provider accepted the
+removal. A failure leaves `cleanup_pending`, and the next issuance must repair
+that old intent before creating a new CA order.

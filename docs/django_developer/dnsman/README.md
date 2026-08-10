@@ -316,16 +316,22 @@ sits on a queue nobody reads (which raises a `jobs:unconsumed_channel` incident)
 System Setup registers a `hosting_dns` section covering every managed domain,
 certificate, delegated ACME allocation, and live challenge reservation. ACME
 creates a durable `DnsRecordReservation` before a provider mutation. The row
-exclusively owns the complete `(domain, type, name)` record set, records an
-ambiguous write before reconciling provider inventory, and remains
+exclusively owns the complete `(domain, type, name)` record set. Reservation
+creation and every interactive complete-set mutation lock the stable parent
+`Domain` row, so a concurrent no-row check cannot race past ownership. Before
+provider I/O, ACME commits `mutation_attempted` in its own transaction. A
+provider timeout is successful only when exact inventory proves the intended
+complete set; otherwise the original provider error is raised while the
+durable attempted intent remains for reconciliation. The row remains
 `cleanup_pending` until exact challenge cleanup succeeds. Interactive DNS
-writes lock/check the same row and cannot replace an in-flight challenge.
+writes cannot replace an in-flight challenge.
 
 `DnsRecordReservation` is internal orchestration evidence added by migration
 `dnsman.0004_dnsrecordreservation`. Its live states are `reserved` and
 `cleanup_pending`; `released` rows retain the completed audit trail. The row
 stores the owning domain/certificate, opaque owner reference, normalized record
 identity and complete value set, attempted/proven flags, and a bounded cleanup
-error. REST cannot create, update, or delete it. Its read graph requires
+error containing only an action and exception class, never provider-controlled
+exception text. REST cannot create, update, or delete it. Its read graph requires
 `view_dns`, `manage_dns`, or `security`, follows `domain__group` scoping, and
 does not expose `owner_ref` or `record_values`.
