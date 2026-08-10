@@ -21,9 +21,10 @@ def test_modular_shell_contract(opts):
     assert "features/platform/page.js" not in app and "features/people/page.js" not in app
     for name in ("dashboard", "people", "webapps", "activity", "platform", "advanced"):
         assert f"./{name}/feature.js" in registry
-    assert "routes: ['setup']" in platform and "setupPage(ctx)" in platform
-    assert "const ROUTES = ['domains', 'credentials', 'dns', 'certificates'" in advanced
-    assert "networkPage(ctx, route)" in advanced
+    assert "routes: ['platform', 'deployments', 'setup']" in platform
+    assert "setupPage(ctx)" in platform and "platformPage(ctx, route)" in platform
+    assert "const ROUTES = ['advanced', 'domains', 'credentials', 'dns', 'certificates'" in advanced
+    assert "networkPage(ctx, route)" in advanced and "advancedControlPage(ctx)" in advanced
 
 
 @th.django_unit_test("shared relationship controls preserve paged REST envelopes")

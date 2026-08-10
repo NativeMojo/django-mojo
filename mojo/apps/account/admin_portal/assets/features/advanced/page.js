@@ -734,3 +734,40 @@ export async function networkPage(ctx, route) {
   if (route === 'vhosts') return vhostsPage(ctx);
   return routesPage(ctx);
 }
+
+export async function advancedControlPage(ctx) {
+  const root = h('div', {class: 'page'});
+  async function render() {
+    const report = await api('/api/account/admin/advanced');
+    const sections = report.sections || {};
+    root.replaceChildren(pageHeader('Advanced operations', 'Advanced', 'Read-only hosting and AWS inventory, network posture, and allowlisted settings.', [
+      h('button', {class: 'button ghost', onclick: render}, icon('refresh'), 'Refresh evidence'),
+    ]), h('div', {class: 'advanced-evidence-grid'}, ...Object.entries(sections).map(([name, section]) =>
+      h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: name.replaceAll('_', ' ')}), h('p', {text: section.reason || section.observed_at})), badge(section.status, statusTone(section.status))),
+        h('pre', {class: 'evidence-json', text: JSON.stringify(section.data || {}, null, 2)}))));
+    if (!ctx.capabilities.manage_advanced || !ctx.user?.is_superuser) return;
+    const settingsData = sections.settings?.data || {};
+    const topology = settingsData.edge_topology || {nodes: [], pools: []};
+    const title = h('input', {value: settingsData.auth?.theme?.app_title || '', autocomplete: 'off'});
+    const accent = h('input', {value: settingsData.auth?.theme?.accent_color || '#6384ff', type: 'color'});
+    const nodes = h('input', {value: (topology.nodes || []).join(', '), autocomplete: 'off'});
+    const pools = h('input', {value: (topology.pools || []).join(', '), autocomplete: 'off'});
+    const message = h('div', {class: 'form-message', role: 'alert'});
+    root.append(h('section', {class: 'panel typed-settings'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: 'Typed settings'}), h('p', {text: 'Only presentation fields and expected edge topology are writable here.'}))),
+      h('label', {class: 'field'}, h('span', {text: 'Admin title'}), title),
+      h('label', {class: 'field'}, h('span', {text: 'Accent color'}), accent),
+      h('button', {class: 'button', onclick: async () => {
+        try { await api('/api/account/admin/advanced/settings', {method: 'POST', body: JSON.stringify({auth: {'theme.app_title': title.value, 'theme.accent_color': accent.value}})}); await render(); }
+        catch (error) { message.textContent = error.message; }
+      }}, 'Save presentation'),
+      h('label', {class: 'field'}, h('span', {text: 'Expected edge nodes (comma-separated)'}), nodes),
+      h('label', {class: 'field'}, h('span', {text: 'Expected pools (comma-separated)'}), pools),
+      h('button', {class: 'button', onclick: async () => {
+        const split = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
+        try { await api('/api/account/admin/advanced/settings', {method: 'POST', body: JSON.stringify({edge_topology: {nodes: split(nodes.value), pools: split(pools.value)}})}); await render(); }
+        catch (error) { message.textContent = error.message; }
+      }}, 'Save topology'), message));
+  }
+  try { await render(); } catch (error) { root.replaceChildren(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
+  return root;
+}

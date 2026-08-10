@@ -173,3 +173,41 @@ export async function setupPage() {
   } catch (error) { root.append(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
   return root;
 }
+
+function evidenceCard(name, section) {
+  const title = name.replaceAll('_', ' ').replace(/^./, (value) => value.toUpperCase());
+  const data = section?.data || {};
+  return h('section', {class: 'panel platform-evidence'},
+    h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: title}),
+      h('p', {text: section?.reason || `Observed ${section?.observed_at ? new Date(section.observed_at).toLocaleString() : 'now'}`})),
+      badge(String(section?.status || 'unavailable').toUpperCase(), statusTone(section?.status))),
+    h('pre', {class: 'evidence-json', text: JSON.stringify(data, null, 2)}));
+}
+
+export async function platformPage(ctx, route = 'platform') {
+  const root = h('div', {class: 'page'});
+  async function load() {
+    const report = await api('/api/account/admin/platform');
+    const sections = report.sections || {};
+    const deployments = sections.deployments?.data?.items || [];
+    const actions = (row) => ctx.capabilities.manage_platform ? h('div', {class: 'form-actions'},
+      ...['retry', 'verify', 'converge'].map((action) => h('button', {class: 'button compact', onclick: async (event) => {
+        event.currentTarget.disabled = true;
+        try { await api(`/api/account/admin/platform/deploy/${action}`, {method: 'POST', body: JSON.stringify({deployment: row.id})}); await load(); }
+        catch (error) { root.prepend(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
+      }}, action === 'retry' ? 'Retry same SHA' : action.replace(/^./, (value) => value.toUpperCase())))) : null;
+    if (route === 'deployments') {
+      root.replaceChildren(pageHeader('Platform control plane', 'Deployments', 'Immutable attempts, UUID-bound proof, and same-SHA recovery actions.'),
+        ...deployments.map((row) => h('section', {class: 'panel deployment-row'},
+          h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {class: 'mono', text: row.sha}), h('p', {text: row.id})), badge(row.status, statusTone(row.status))),
+          h('p', {text: `${row.frozen_roster?.length || 0} frozen edge runner(s) · ${row.node_evidence?.length || 0} current proof row(s)`}), actions(row))),
+        ...(!deployments.length ? [h('div', {class: 'empty'}, h('p', {text: 'No platform deployment attempts have been recorded.'}))] : []));
+      return;
+    }
+    root.replaceChildren(pageHeader('Platform control plane', 'Platform health', 'Bounded evidence for API, fleet, data services, certificates, security, and WebApps.', [
+      h('button', {class: 'button ghost', onclick: load}, icon('refresh'), 'Refresh evidence'),
+    ]), h('div', {class: 'health-grid'}, ...Object.entries(sections).filter(([name]) => name !== 'deployments').map(([name, section]) => evidenceCard(name, section))));
+  }
+  try { await load(); } catch (error) { root.replaceChildren(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
+  return root;
+}

@@ -37,6 +37,7 @@
 - [Group API](group.md) — Groups, membership, permissions
 - [Admin Portal API Guide](admin_portal.md) — Building admin consoles (users, groups, secure settings)
 - [System Setup API](system_setup.md) — Superuser-only readiness, durable Fix Setup operations, late choices, resume, Origin binding, and protected settings
+- [Platform and Advanced APIs](admin_portal/platform.md) — Global health, UUID deployment recovery, bounded inventory, and typed settings
 - [API Keys](api_keys.md) — Long-lived tokens for programmatic access
 - [Webhook Signing](webhook_signing.md) — Per-Group HMAC secret for outbound webhooks, `X-Mojo-Signature` header (operator-configurable), rotation endpoint
 - [Webhook Subscriptions](webhook_subscriptions.md) — CRUD endpoints for managing webhook receivers per Group

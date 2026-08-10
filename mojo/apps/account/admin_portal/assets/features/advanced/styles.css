@@ -1,1 +1,4 @@
 .health-grid { view-transition-name: admin-advanced-health; }
+.advanced-evidence-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: 1rem; }
+.advanced-evidence-grid .evidence-json { max-height: 22rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .78rem; }
+.typed-settings { display: grid; gap: 1rem; }
