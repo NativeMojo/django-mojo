@@ -34,6 +34,7 @@ from mojo.apps.dnsman.models import Certificate
 from mojo.apps.dnsman.services import certs
 from mojo.apps.edge.models import Vhost
 from mojo.apps.edge.services import render
+from mojo.apps.edge.services import readiness
 
 
 def enabled_vhosts(pool):
@@ -75,6 +76,16 @@ def on_desired_state(request):
         for v in {v.certificate_id: v for v in vhosts}.values()
     ]
     return payload
+
+
+@md.GET('proof')
+@md.requires_global_perms('edge_node', allow_api_keys=True)
+def on_node_proof(request):
+    """Safe local convergence proof; never returns material or credentials."""
+    pools = request.DATA.get("pools") or ["default"]
+    if isinstance(pools, str):
+        pools = [item.strip() for item in pools.split(",") if item.strip()]
+    return readiness.local_node_proof({"pools": pools})
 
 
 # Dynamic segment last: mid-path pk segments are forbidden by the repo's REST

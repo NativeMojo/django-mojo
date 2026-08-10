@@ -194,15 +194,28 @@ def _nginx_check(config_path=None):
 # paths
 # ----------------------------------------------------------------------
 
-def installed_path():
-    return os.path.join(render.edge_root(), "installed.json")
+def installed_path(pool="default"):
+    """Per-pool convergence evidence path.
+
+    The historical root ``installed.json`` remains a read-only fallback for
+    the default pool. New writes always land under ``installed/<pool>.json``.
+    """
+    from mojo.apps.edge import validators
+    pool = validators.validate_pool(pool)
+    return os.path.join(render.edge_root(), "installed", f"{pool}.json")
 
 
-def read_installed():
+def read_installed(pool="default"):
     try:
-        with open(installed_path()) as handle:
+        with open(installed_path(pool)) as handle:
             return json.load(handle)
     except (OSError, ValueError):
+        if pool == "default":
+            try:
+                with open(os.path.join(render.edge_root(), "installed.json")) as handle:
+                    return json.load(handle)
+            except (OSError, ValueError):
+                pass
         return {}
 
 
@@ -231,7 +244,7 @@ def pending_certs(installed=None):
 
 
 def write_installed(generation, excluded=None, www_pending=None,
-                    cert_pending=None):
+                    cert_pending=None, pool="default"):
     """Record what this node installed.
 
     `www_pending` is {vhost id: desired version} for vhosts whose release
@@ -249,10 +262,12 @@ def write_installed(generation, excluded=None, www_pending=None,
             str(key): value for key, value in www_pending.items()}
     if cert_pending:
         payload["cert_pending"] = sorted(cert_pending)
-    tmp = f"{installed_path()}.tmp"
+    path = installed_path(pool)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp"
     with open(tmp, "w") as handle:
         json.dump(payload, handle)
-    os.replace(tmp, installed_path())
+    os.replace(tmp, path)
     return payload
 
 
@@ -423,7 +438,7 @@ def _previous_web_root(previous, vhost_id):
 
 
 def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
-                     previous=None):
+                     previous=None, pool="default"):
     """Build `generations/<generation>/` completely.
 
     Returns `objict(excluded, cert_excluded)`: every vhost left out of the
@@ -460,7 +475,7 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
     by_vhost = {row["vhost"]: row for row in (webapps or [])}
     # What the LAST install already reported as unfetchable. A retry that is
     # still failing logs; only a new failure raises an incident.
-    installed = read_installed()
+    installed = read_installed(pool)
     reported = pending_releases(installed)
     reported_certs = set(pending_certs(installed))
 
@@ -665,7 +680,7 @@ def install(pool="default", force=False):
     payload = render.desired_state(vhosts, webapps=webapps)
     generation = payload["generation"]
 
-    installed = read_installed()
+    installed = read_installed(pool)
     pending = pending_releases(installed)
     cert_pending = pending_certs(installed)
     # A recorded failure DEFEATS the short-circuit on purpose: a node that
@@ -689,7 +704,7 @@ def install(pool="default", force=False):
 
     staged = stage_generation(vhosts, generation, webapps,
                               fetch_failures=fetch_failures,
-                              previous=previous)
+                              previous=previous, pool=pool)
     excluded = staged.excluded
 
     gen_dir = render.generation_dir(generation)
@@ -737,7 +752,7 @@ def install(pool="default", force=False):
         for row in webapps if row["vhost"] in fetch_failures
     }
     write_installed(generation, excluded, www_pending=still_pending,
-                    cert_pending=staged.cert_excluded)
+                    cert_pending=staged.cert_excluded, pool=pool)
     prune_generations()
     www_sync.prune_releases(webapps)
     logit.info(
