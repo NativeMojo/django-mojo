@@ -313,21 +313,25 @@ def test_malformed_forced_password_incident_boundary(opts):
                    "malformed forced-password credential persisted in incident evidence")
 
 
-@th.django_unit_test("private assets use five primary items and scrub every transient secret")
+@th.django_unit_test("private assets use six primary items and scrub every transient secret")
 def test_merged_browser_secret_and_route_contract(opts):
     registry = (ROOT / "mojo/apps/account/admin_portal/assets/features/registry.js").read_text()
     routes = (ROOT / "mojo/apps/account/admin_portal/assets/components/routes.js").read_text()
     people = (ROOT / "mojo/apps/account/admin_portal/assets/features/people/page.js").read_text()
     webapps = (ROOT / "mojo/apps/account/admin_portal/assets/features/webapps/page.js").read_text()
     advanced = (ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/page.js").read_text()
+    advanced_feature = (
+        ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/feature.js").read_text()
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
     classifier = (ROOT / "mojo/helpers/request.py").read_text()
     th.assert_true(
-        "[dashboard, people, webapps, platform, activity, advanced]" in registry,
-        "feature order does not match the five-item product navigation")
-    th.assert_true("navigation: () => []" in (
-        ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/feature.js").read_text(),
-        "Advanced escaped its collapsed Platform disclosure")
+        "[dashboard, people, webapps, advanced, platform, activity]" in registry,
+        "feature order does not match the six-item product navigation")
+    th.assert_true(
+        "route: 'domains'" in advanced_feature
+        and "label: 'Domains & DNS'" in advanced_feature
+        and "route: 'advanced', matches" not in advanced_feature,
+        "Domains is not primary navigation or Advanced escaped Platform disclosure")
     for key in ("subject_type", "subject_id", "subject_model", "inspector", "return"):
         th.assert_true(f"'{key}'" in routes, f"canonical route state omitted {key}")
     th.assert_true("graph=token" not in people,
