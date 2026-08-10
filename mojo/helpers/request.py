@@ -110,6 +110,18 @@ def sensitive_body_label(request):
         return "admin_password"
     if path == f"{API_ROOT}/account/admin/apikey/action":
         return "admin_api_key"
+    if path == f"{API_ROOT}/edge/webapp/link_key":
+        return "webapp_deployment_key"
+    if path == f"{API_ROOT}/dnsman/credential/link":
+        return "dns_provider_credential"
+    if path in (
+            f"{API_ROOT}/dnsman/registrar/quote",
+            f"{API_ROOT}/dnsman/registrar/purchase"):
+        return "registrar_confirmation"
+    if path.startswith(f"{API_ROOT}/dnsman/certificate/material/"):
+        return "certificate_material"
+    if path.startswith(f"{API_ROOT}/edge/material/"):
+        return "certificate_material"
     return None
 
 
