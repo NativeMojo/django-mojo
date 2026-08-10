@@ -22,7 +22,7 @@ def on_setup_readiness(request):
     system_setup.require_request_admin(request)
     section = request.DATA.get("section") or None
     return system_readiness.run(section, {
-        "local_url": f"{'https' if request.is_secure() else 'http'}://{request.get_host()}/api/version",
+        "local_url": system_readiness.trusted_local_api_url(request),
         "timeout": 2.0, "retries": 1,
     })
 
@@ -63,7 +63,8 @@ def on_setup_advance(request):
 def on_setup_choose(request):
     return system_setup.serialize(system_setup.choose(
         request, _operation_id(request), request.DATA.get("step_id"),
-        request.DATA.get("step_version"), request.DATA.get("choice")))
+        request.DATA.get("definition_version"), request.DATA.get("choice_revision"),
+        request.DATA.get("choice")))
 
 
 @md.POST("account/admin/setup/cancel")

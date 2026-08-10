@@ -74,7 +74,7 @@ export async function setupPage() {
       render();
     },
     choose: async (step, choice) => {
-      operation = await api('/api/account/admin/setup/choose', {method: 'POST', body: JSON.stringify({operation: operation.id, step_id: step.id, step_version: step.version, choice})});
+      operation = await api('/api/account/admin/setup/choose', {method: 'POST', body: JSON.stringify({operation: operation.id, step_id: step.id, definition_version: step.definition_version, choice_revision: step.choice_revision, choice})});
       await actions.advance();
     },
     cancel: async () => {

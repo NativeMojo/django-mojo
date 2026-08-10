@@ -62,16 +62,18 @@ def check_request(options=None):
     retries = max(1, int(options.get("retries", 10)))
     delay = max(0, float(options.get("delay", 2.0)))
     last_detail = "no attempt made"
-    for _ in range(retries):
-        try:
-            response = requests.get(url, timeout=timeout)
-            if response.status_code == 200:
-                return
-            last_detail = f"HTTP {response.status_code} from local API"
-        except requests.RequestException as exc:
-            last_detail = exc.__class__.__name__
-        if delay:
-            time.sleep(delay)
+    with requests.Session() as session:
+        session.trust_env = False
+        for _ in range(retries):
+            try:
+                response = session.get(url, timeout=timeout, allow_redirects=False)
+                if response.status_code == 200:
+                    return
+                last_detail = f"HTTP {response.status_code} from local API"
+            except requests.RequestException as exc:
+                last_detail = exc.__class__.__name__
+            if delay:
+                time.sleep(delay)
     raise RuntimeError(last_detail)
 
 

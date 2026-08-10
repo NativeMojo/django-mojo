@@ -16,16 +16,14 @@ from django.utils import timezone
 from mojo import errors as merrors
 from mojo.apps.account.models import SystemSetupOperation
 from mojo.apps.account.services import system_readiness, system_settings
+from mojo.apps.account.services.setup_safety import is_sensitive_name, sanitize
 from mojo.helpers import logit
 from mojo.helpers.request import is_key_backed_session, is_request_user
 
 
-STEP_VERSION = 1
+STEP_DEFINITION_VERSION = 1
 LEASE_SECONDS = 120
 MAX_LOG_ENTRIES = 200
-SENSITIVE_FRAGMENTS = (
-    "secret", "token", "password", "credential", "authorization", "presign",
-    "access_key", "private_key", "session_key")
 
 
 def require_request_admin(request):
@@ -55,42 +53,23 @@ def _assert_bound_origin(request, operation):
             "This setup operation is bound to a different Admin origin")
 
 
-def _safe_value(value, depth=0):
-    if depth > 4:
-        return "[truncated]"
-    if isinstance(value, dict):
-        clean = {}
-        for key, item in list(value.items())[:32]:
-            name = str(key)[:80]
-            if any(fragment in name.lower() for fragment in SENSITIVE_FRAGMENTS):
-                clean[name] = "[redacted]"
-            else:
-                clean[name] = _safe_value(item, depth + 1)
-        return clean
-    if isinstance(value, (list, tuple)):
-        return [_safe_value(item, depth + 1) for item in list(value)[:64]]
-    if isinstance(value, str):
-        return value[:1000]
-    if isinstance(value, (int, float, bool, type(None))):
-        return value
-    return str(value)[:200]
-
-
 def _log(operation, code, message):
     entries = list(operation.operation_log or [])[-(MAX_LOG_ENTRIES - 1):]
-    entries.append({
+    entries.append(sanitize({
         "at": timezone.now().isoformat(),
-        "code": str(code)[:80],
-        "message": str(message)[:400],
-    })
-    operation.operation_log = entries
+        "code": code,
+        "message": message,
+    }))
+    operation.operation_log = sanitize(entries)
 
 
-def _step(step_id, label, kind, choice_schema=None, section=""):
+def _step(step_id, label, kind, choice_schema=None, section="",
+          definition_version=STEP_DEFINITION_VERSION):
     return {
-        "id": step_id, "version": STEP_VERSION, "label": label,
+        "id": step_id, "definition_version": int(definition_version),
+        "choice_revision": 0, "label": label,
         "kind": kind, "section": section, "state": "planned",
-        "choice_schema": _safe_value(choice_schema) if choice_schema else None,
+        "choice_schema": sanitize(choice_schema) if choice_schema else None,
     }
 
 
@@ -117,7 +96,8 @@ def _build_steps(mode, section=""):
             continue
         steps.append(_step(
             f"section:{entry['code']}", f"Repair {entry['label']}", "section",
-            _choice_schema(entry), section=entry["code"]))
+            _choice_schema(entry), section=entry["code"],
+            definition_version=entry["definition_version"]))
     steps.append(_step("final_readiness", "Prove setup readiness", "final", section=section))
     return steps
 
@@ -137,15 +117,15 @@ def options(request):
         entries.append({
             "code": entry["code"], "label": entry["label"],
             "fixable": bool(entry["fix"]),
-            "choice_schema": _safe_value(_choice_schema(entry)),
+            "choice_schema": sanitize(_choice_schema(entry)),
         })
     active = SystemSetupOperation.objects.filter(
         mode="fix", status__in=SystemSetupOperation.ACTIVE_STATUSES).first()
-    return {
+    return sanitize({
         "schema_version": system_readiness.SCHEMA_VERSION,
         "sections": entries,
         "active_fix": serialize(active) if active else None,
-    }
+    })
 
 
 def create(request, mode, section="", replay_key=""):
@@ -210,7 +190,11 @@ def _validate_choice(schema, value):
             raise merrors.ValueException(f"choice.{name} is required")
     clean = {}
     for name, item in value.items():
+        if is_sensitive_name(name):
+            raise merrors.ValueException("Secret choices are not supported by System Setup")
         field = properties.get(name, {})
+        if not isinstance(field, dict):
+            raise merrors.ValueException(f"choice.{name} has an invalid schema")
         field_type = field.get("type")
         if field_type == "string" and not isinstance(item, str):
             raise merrors.ValueException(f"choice.{name} must be a string")
@@ -225,13 +209,28 @@ def _validate_choice(schema, value):
                 item = system_settings.validate_base_url(item)
             except ValueError as exc:
                 raise merrors.ValueException(str(exc))
-        if any(fragment in name.lower() for fragment in SENSITIVE_FRAGMENTS):
-            raise merrors.ValueException("Secret choices are not supported by System Setup")
-        clean[name] = _safe_value(item)
-    return clean
+        clean[name] = sanitize(item)
+    return sanitize(clean)
 
 
-def choose(request, operation_id, step_id, step_version, choice):
+def _expected_definition_version(step):
+    if step.get("kind") == "section":
+        entry = system_readiness.get_section(step.get("section"))
+        return entry.get("definition_version") if entry else None
+    if step.get("kind") in ("identity", "base_url", "readiness", "final"):
+        return STEP_DEFINITION_VERSION
+    return None
+
+
+def _assert_current_definition(step):
+    expected = _expected_definition_version(step)
+    if expected is None or step.get("definition_version") != expected:
+        raise merrors.ValueException(
+            "Setup step definition changed; cancel and start a new operation",
+            status=409, code=409)
+
+
+def choose(request, operation_id, step_id, definition_version, choice_revision, choice):
     require_request_admin(request)
     with transaction.atomic():
         try:
@@ -245,7 +244,10 @@ def choose(request, operation_id, step_id, step_version, choice):
             raise merrors.ValueException("Setup operation has no current step", status=409, code=409)
         steps = list(operation.steps)
         step = dict(steps[operation.cursor])
-        if step.get("id") != step_id or step.get("version") != step_version:
+        _assert_current_definition(step)
+        if (step.get("id") != step_id or
+                step.get("definition_version") != definition_version or
+                step.get("choice_revision") != choice_revision):
             raise merrors.ValueException("Stale or cross-step choice", status=409, code=409)
         if step.get("state") != "waiting_for_choice":
             raise merrors.ValueException("Current step is not waiting for a choice", status=409, code=409)
@@ -254,7 +256,7 @@ def choose(request, operation_id, step_id, step_version, choice):
         if step_id in choices:
             raise merrors.ValueException("Choice has already been supplied", status=409, code=409)
         choices[step_id] = clean
-        step["version"] = int(step["version"]) + 1
+        step["choice_revision"] = int(step["choice_revision"]) + 1
         step["state"] = "planned"
         steps[operation.cursor] = step
         operation.steps = steps
@@ -266,44 +268,43 @@ def choose(request, operation_id, step_id, step_version, choice):
     return operation
 
 
-def _context(operation):
+def _context(operation, actor, local_url):
     return {
         "operation": operation,
-        "actor": operation.created_by,
-        "local_url": f"{operation.bound_origin}/api/version",
+        "actor": actor,
+        "local_url": local_url,
         "timeout": 2.0, "retries": 1,
     }
 
 
-def _execute_planned(operation, step):
+def _execute_planned(operation, step, context):
     kind = step["kind"]
     choice = (operation.choices or {}).get(step["id"], {})
     if kind == "identity":
-        system_settings.installation_identity(operation.created_by)
+        system_settings.installation_identity(context["actor"])
         return {"status": "mutation_attempted"}
     if kind == "base_url":
         system_settings.set_value(
-            operation.created_by, system_settings.BASE_URL, choice["base_url"])
+            context["actor"], system_settings.BASE_URL, choice["base_url"])
         return {"status": "mutation_attempted"}
     if kind == "section":
         entry = system_readiness.get_section(step["section"])
         if entry is None or not entry.get("fix"):
             return {"status": "fail"}
-        entry["fix"](_context(operation), choice)
+        entry["fix"](context, choice)
         return {"status": "mutation_attempted"}
     if kind in ("readiness", "final"):
-        report = system_readiness.run(operation.section or None, _context(operation))
+        report = system_readiness.run(operation.section or None, context)
         return {"status": "proven", "report": report}
     return {"status": "fail"}
 
 
-def _execute_reconcile(operation, step):
+def _execute_reconcile(operation, step, context):
     kind = step["kind"]
     choice = (operation.choices or {}).get(step["id"], {})
     if kind == "identity":
-        identity = system_settings.get_value(system_settings.INSTALLATION_UUID)
-        slug = system_settings.get_value(system_settings.INSTALLATION_SLUG)
-        return {"status": "proven" if identity and slug else "pending"}
+        system_settings.installation_identity(context["actor"])
+        return {"status": "proven"}
     if kind == "base_url":
         return {"status": "proven" if (
             system_settings.get_value(system_settings.BASE_URL) == choice.get("base_url"))
@@ -313,7 +314,7 @@ def _execute_reconcile(operation, step):
         reconcile = entry.get("reconcile") if entry else None
         if not reconcile:
             return {"status": "pending"}
-        outcome = reconcile(_context(operation), choice)
+        outcome = reconcile(context, choice)
         if isinstance(outcome, dict):
             return {"status": outcome.get("status", "pending")}
         return {"status": "proven" if outcome else "pending"}
@@ -321,7 +322,8 @@ def _execute_reconcile(operation, step):
 
 
 def advance(request, operation_id):
-    require_request_admin(request)
+    actor = require_request_admin(request)
+    local_url = system_readiness.trusted_local_api_url(request)
     lease = secrets.token_hex(16)
     now = timezone.now()
     with transaction.atomic():
@@ -337,12 +339,14 @@ def advance(request, operation_id):
                 operation.lease_expires_at > now):
             raise merrors.ValueException("Setup operation is currently advancing", status=409, code=409)
         if operation.cursor >= len(operation.steps):
-            operation.status = "succeeded"
+            operation.status = "succeeded" if (
+                operation.mode == "check" or operation.report.get("overall") == "pass") else "failed"
             operation.finished_at = now
             operation.save(update_fields=["status", "finished_at", "modified"])
             return operation
         steps = list(operation.steps)
         step = dict(steps[operation.cursor])
+        _assert_current_definition(step)
         if step["state"] == "waiting_for_choice":
             return operation
         if step["kind"] == "base_url" and step["id"] not in (operation.choices or {}):
@@ -383,8 +387,9 @@ def advance(request, operation_id):
             "operation_log", "modified"])
 
     try:
-        outcome = (_execute_reconcile(operation, step) if was_attempted
-                   else _execute_planned(operation, step))
+        context = _context(operation, actor, local_url)
+        outcome = (_execute_reconcile(operation, step, context) if was_attempted
+                   else _execute_planned(operation, step, context))
     except Exception as exc:
         logit.error("system_setup", f"step {step['id']} failed ({exc.__class__.__name__})")
         outcome = {"status": "fail"}
@@ -403,17 +408,17 @@ def advance(request, operation_id):
             step["state"] = "reconciling"
             operation.status = "reconciling"
             _log(operation, "step.reconciling", f"Reconciling {step['id']}")
-        elif status in ("proven", "pass", "warn"):
+        elif status == "proven":
             step["state"] = "proven"
             if "report" in outcome:
-                operation.report = _safe_value(outcome["report"])
+                operation.report = sanitize(outcome["report"])
             operation.cursor += 1
             operation.status = "planned"
             _log(operation, "step.proven", f"Proven {step['id']}")
             if operation.cursor >= len(steps):
-                operation.status = "succeeded"
-                if operation.mode == "fix" and operation.report.get("overall") == "fail":
-                    operation.status = "failed"
+                operation.status = "succeeded" if (
+                    operation.mode == "check" or
+                    operation.report.get("overall") == "pass") else "failed"
                 operation.finished_at = timezone.now()
         elif status == "pending":
             step["state"] = "reconciling"
@@ -442,6 +447,12 @@ def cancel(request, operation_id):
         _assert_bound_origin(request, operation)
         if operation.status not in SystemSetupOperation.ACTIVE_STATUSES:
             return operation
+        current = (operation.steps[operation.cursor]
+                   if operation.cursor < len(operation.steps or []) else None)
+        if current and current.get("state") not in ("planned", "waiting_for_choice"):
+            raise merrors.ValueException(
+                "Setup can only be cancelled between steps or while waiting for a choice",
+                status=409, code=409)
         if (operation.lease_owner and operation.lease_expires_at and
                 operation.lease_expires_at > timezone.now()):
             raise merrors.ValueException(
@@ -460,18 +471,18 @@ def serialize(operation):
     current = None
     if operation.cursor < len(operation.steps or []):
         current = operation.steps[operation.cursor]
-    return {
+    return sanitize({
         "id": str(operation.pk),
         "mode": operation.mode,
         "section": operation.section or None,
         "status": operation.status,
         "cursor": operation.cursor,
-        "steps": _safe_value(operation.steps or []),
-        "current_step": _safe_value(current),
-        "choices": _safe_value(operation.choices or {}),
-        "report": _safe_value(operation.report or {}),
-        "log": _safe_value(operation.operation_log or []),
+        "steps": operation.steps or [],
+        "current_step": current,
+        "choices": operation.choices or {},
+        "report": operation.report or {},
+        "log": operation.operation_log or [],
         "created": operation.created.isoformat() if operation.created else None,
         "modified": operation.modified.isoformat() if operation.modified else None,
         "finished_at": operation.finished_at.isoformat() if operation.finished_at else None,
-    }
+    })

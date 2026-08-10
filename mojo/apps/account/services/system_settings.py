@@ -196,11 +196,19 @@ def get_value(key, default=None):
 
 def set_value(actor, key, value):
     """Persist one protected global setting through the only allowed writer."""
-    require_system_admin(actor)
+    actor = require_system_admin(actor)
+    if key in (INSTALLATION_UUID, INSTALLATION_SLUG):
+        raise merrors.PermissionDeniedException(
+            "Installation identity can only be created by its initializer")
     normalized = _normalize_value(key, value)
     from mojo.apps.account.models import Setting
 
     with transaction.atomic():
+        # A protected row may not exist yet, so lock one stable row shared by
+        # every administrator before looking it up. PostgreSQL does not treat
+        # NULLs as equal in Setting's legacy unique_together constraint.
+        from mojo.apps.account.models import User
+        User.objects.select_for_update().order_by("pk").first()
         row = Setting.objects.select_for_update().filter(key=key, group=None).first()
         if row is None:
             row = Setting(key=key, group=None, is_secret=False)
@@ -218,38 +226,64 @@ def set_value(actor, key, value):
             row.value = serialized
             row.is_secret = False
             row.mojo_secrets = None
-        row.push_to_cache()
+        transaction.on_commit(row.push_to_cache)
     return normalized
 
 
-def installation_identity(actor):
-    """Freeze and return ownership identity independent of BASE_URL."""
-    require_system_admin(actor)
+def _validate_identity_pair(current_uuid, current_slug):
+    if bool(current_uuid) != bool(current_slug):
+        raise merrors.ValueException("Stored installation identity is incomplete")
+    if not current_uuid:
+        return None
+    try:
+        identity = str(uuid.UUID(str(current_uuid)))
+    except (ValueError, TypeError, AttributeError):
+        raise merrors.ValueException("Stored installation UUID is invalid")
+    try:
+        slug = _validate_slug(INSTALLATION_SLUG, current_slug)
+    except ValueError as exc:
+        raise merrors.ValueException(str(exc))
+    configured = str(settings.get_static("AWS_MONITORING_NAME", "")).strip().lower()
+    expected = configured or f"mojo-{identity.replace('-', '')[:12]}"
+    if slug != expected:
+        raise merrors.ValueException("Stored installation UUID and slug identify different installations")
+    return {"uuid": identity, "slug": slug}
+
+
+def _initialize_identity(actor):
+    """Create the immutable identity under the shared protected-setting lock."""
+    actor = require_system_admin(actor)
     with transaction.atomic():
-        # Lock one stable global row before reading either absent key. Locking
-        # the earliest superuser works on every supported database and keeps
-        # UUID+slug creation atomic even when two administrators start setup.
         from mojo.apps.account.models import User
-        User.objects.select_for_update().filter(
-            is_active=True, is_superuser=True).order_by("pk").first()
+        from mojo.apps.account.models import Setting
+        User.objects.select_for_update().order_by("pk").first()
         current_uuid = get_value(INSTALLATION_UUID)
         current_slug = get_value(INSTALLATION_SLUG)
-        if current_uuid and current_slug:
-            return {"uuid": str(current_uuid), "slug": str(current_slug)}
+        existing = _validate_identity_pair(current_uuid, current_slug)
+        if existing:
+            return existing
 
         identity = str(uuid.uuid4())
         configured = str(settings.get_static("AWS_MONITORING_NAME", "")).strip().lower()
         slug = configured or f"mojo-{identity.replace('-', '')[:12]}"
-        try:
-            identity = str(uuid.UUID(str(current_uuid or identity)))
-        except (ValueError, TypeError, AttributeError):
-            raise merrors.ValueException("Stored installation UUID is invalid")
-        slug = _validate_slug(INSTALLATION_SLUG, current_slug or slug)
-        if not current_uuid:
-            set_value(actor, INSTALLATION_UUID, identity)
-        if not current_slug:
-            set_value(actor, INSTALLATION_SLUG, slug)
-        return {"uuid": identity, "slug": slug}
+        slug = _validate_slug(INSTALLATION_SLUG, slug)
+        rows = []
+        for key, value in ((INSTALLATION_UUID, identity), (INSTALLATION_SLUG, slug)):
+            row = Setting(key=key, group=None, is_secret=False)
+            row.set_value(value)
+            rows.append(row)
+        Setting.objects.bulk_create(rows)
+        for row in rows:
+            transaction.on_commit(row.push_to_cache)
+        return _validate_identity_pair(identity, slug)
+
+
+def installation_identity(actor):
+    """Validate or create the immutable ownership identity."""
+    actor = require_system_admin(actor)
+    current = _validate_identity_pair(
+        get_value(INSTALLATION_UUID), get_value(INSTALLATION_SLUG))
+    return current or _initialize_identity(actor)
 
 
 def _register_defaults():

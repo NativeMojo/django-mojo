@@ -193,11 +193,12 @@ def test_fix_operation_late_choice(opts):
         f"missing BASE_URL did not pause for choice: {operation.status}"
     step = operation.steps[operation.cursor]
     operation = system_setup.choose(
-        request, operation.pk, step["id"], step["version"],
+        request, operation.pk, step["id"], step["definition_version"],
+        step["choice_revision"],
         {"base_url": "https://setup.example.com"})
     assert operation.status == "planned", f"accepted choice did not resume operation: {operation.status}"
-    assert operation.steps[operation.cursor]["version"] == step["version"] + 1, \
-        "choice did not bump step version to invalidate stale submissions"
+    assert operation.steps[operation.cursor]["choice_revision"] == step["choice_revision"] + 1, \
+        "choice did not bump choice revision to invalidate stale submissions"
 
 
 @th.django_unit_test("stale and cross-step choices are rejected under row lock")
@@ -215,7 +216,8 @@ def test_stale_choice_rejected(opts):
     step = operation.steps[operation.cursor]
     with th.assert_raises(merrors.ValueException):
         system_setup.choose(
-            request, operation.pk, "wrong-step", step["version"],
+            request, operation.pk, "wrong-step", step["definition_version"],
+            step["choice_revision"],
             {"base_url": "https://setup.example.com"})
 
 
@@ -480,7 +482,8 @@ def test_authenticated_admin_setup_resume_smoke(opts):
     chosen = opts.client.post(
         "/api/account/admin/setup/choose",
         json={"operation": operation.id, "step_id": step.id,
-              "step_version": step.version,
+              "definition_version": step.definition_version,
+              "choice_revision": step.choice_revision,
               "choice": {"base_url": "https://setup.invalid"}},
         headers=headers)
     assert chosen.status_code == 200, f"browser late choice failed: {chosen.body}"
@@ -505,3 +508,324 @@ def test_authenticated_admin_setup_resume_smoke(opts):
         f"browser final rerun did not terminate: {final.response.data}"
     assert final.response.data.report.schema_version == 1, \
         f"browser final rerun did not store readiness proof: {final.response.data.report}"
+
+
+@th.django_unit_test("local readiness probe ignores hostile Host destinations")
+def test_local_probe_uses_trusted_loopback(opts):
+    from django.test import RequestFactory
+    from mojo.apps.account.services import system_readiness
+    request = RequestFactory().get(
+        "/api/account/admin/setup/readiness", HTTP_HOST="169.254.169.254",
+        SERVER_PORT="9123")
+    url = system_readiness.trusted_local_api_url(request)
+    assert url == "http://127.0.0.1:9123/api/version", \
+        f"local probe accepted Host-derived destination: {url}"
+
+
+@th.django_unit_test("public probe rejects private metadata and DNS rebinding answers")
+def test_public_probe_rejects_non_global_dns(opts):
+    from unittest import mock
+    from mojo.apps.account.services import system_readiness
+
+    answers = [
+        (2, 1, 6, "", ("93.184.216.34", 443)),
+        (2, 1, 6, "", ("169.254.169.254", 443)),
+    ]
+    with mock.patch.object(system_readiness.socket, "getaddrinfo", return_value=answers), \
+            mock.patch.object(system_readiness, "_PinnedHTTPSConnection") as connector:
+        with th.assert_raises(system_readiness.UnsafePublicProbe):
+            system_readiness.probe_public_api("https://example.com")
+        assert not connector.called, "DNS rebinding answer opened a public probe connection"
+
+    metadata = [(2, 1, 6, "", ("169.254.169.254", 443))]
+    with mock.patch.object(system_readiness.socket, "getaddrinfo", return_value=metadata):
+        with th.assert_raises(system_readiness.UnsafePublicProbe):
+            system_readiness.probe_public_api("https://metadata.example")
+    private = [(2, 1, 6, "", ("10.0.0.7", 443))]
+    with mock.patch.object(system_readiness.socket, "getaddrinfo", return_value=private):
+        with th.assert_raises(system_readiness.UnsafePublicProbe):
+            system_readiness.probe_public_api("https://private.example")
+
+
+@th.django_unit_test("unsafe public pinning is reported pending without a request")
+def test_unsafe_public_probe_reports_pending(opts):
+    from unittest import mock
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import system_readiness, system_settings
+    from mojo.apps.edge.services import sanity
+    actor = User.objects.get(pk=opts.system_setup_admin_id)
+    system_settings.set_value(actor, system_settings.BASE_URL, "https://pending.example.com")
+    ready = [{"name": name, "ok": True, "detail": "ready"}
+             for name, _ in sanity.CHECKS]
+    with mock.patch.object(sanity, "run", return_value=ready), \
+            mock.patch.object(sanity, "check_static_directories"), \
+            mock.patch.object(
+                system_readiness, "probe_public_api",
+                side_effect=system_readiness.UnsafePublicProbe("unsafe")) as probe:
+        rows = system_readiness._core_check({"local_url": "http://127.0.0.1/api/version"})
+    public = [row for row in rows if row["code"] == "django.public_api"]
+    assert len(public) == 1 and public[0]["status"] == "pending", \
+        f"unsafe public pinning was not reported pending: {public!r}"
+    assert probe.call_count == 1, f"unsafe probe path retried unexpectedly: {probe.call_count}"
+
+
+@th.django_unit_test("public probe pins one address and rejects redirects")
+def test_public_probe_is_pinned_and_does_not_redirect(opts):
+    from unittest import mock
+    from mojo.apps.account.services import system_readiness
+
+    connection = mock.Mock()
+    connection.getresponse.return_value.status = 302
+    answers = [(2, 1, 6, "", ("93.184.216.34", 443))]
+    with mock.patch.object(system_readiness.socket, "getaddrinfo", return_value=answers), \
+            mock.patch.object(system_readiness, "_PinnedHTTPSConnection",
+                              return_value=connection) as connector:
+        result = system_readiness.probe_public_api("https://example.com")
+    assert result is False, "redirect response was accepted as public readiness"
+    connector.assert_called_once_with("example.com", 443, "93.184.216.34", 2.0)
+    connection.request.assert_called_once()
+    assert connection.request.call_args.args[1] == "/api/version", \
+        f"public connector followed an unexpected path: {connection.request.call_args}"
+
+
+@th.django_unit_test("protected first writes serialize and publish cache after commit")
+def test_protected_first_write_concurrency_and_cache_commit(opts):
+    from django.db import close_old_connections, transaction
+    from unittest import mock
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.services import system_settings
+    Setting.objects.filter(key=system_settings.BASE_URL, group=None).delete()
+
+    def write(index):
+        close_old_connections()
+        actor = User.objects.get(pk=opts.system_setup_admin_id)
+        try:
+            return system_settings.set_value(
+                actor, system_settings.BASE_URL, f"https://write-{index}.example.com")
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(write, range(2)))
+    count = Setting.objects.filter(key=system_settings.BASE_URL, group=None).count()
+    assert count == 1, f"concurrent protected first write created {count} global rows"
+
+    Setting.objects.filter(key=system_settings.BASE_URL, group=None).delete()
+    actor = User.objects.get(pk=opts.system_setup_admin_id)
+    with mock.patch.object(Setting, "push_to_cache") as publish:
+        try:
+            with transaction.atomic():
+                system_settings.set_value(
+                    actor, system_settings.BASE_URL, "https://rollback.example.com")
+                raise RuntimeError("force rollback")
+        except RuntimeError:
+            pass
+        assert not publish.called, "rolled-back protected value was published to Redis"
+
+
+@th.django_unit_test("installation identity is create-once and validates its pair")
+def test_installation_identity_rejects_overwrite_and_malformed_pair(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.services import system_settings
+    actor = User.objects.get(pk=opts.system_setup_admin_id)
+    Setting.objects.filter(key__in=(
+        system_settings.INSTALLATION_UUID, system_settings.INSTALLATION_SLUG)).delete()
+    identity = system_settings.installation_identity(actor)
+    with th.assert_raises(merrors.PermissionDeniedException):
+        system_settings.set_value(actor, system_settings.INSTALLATION_UUID, identity["uuid"])
+    Setting.objects.filter(key=system_settings.INSTALLATION_SLUG, group=None).delete()
+    with th.assert_raises(merrors.ValueException):
+        system_settings.installation_identity(actor)
+    Setting.objects.filter(key__in=(
+        system_settings.INSTALLATION_UUID, system_settings.INSTALLATION_SLUG)).delete()
+    identity = system_settings.installation_identity(actor)
+    Setting.objects.filter(
+        key=system_settings.INSTALLATION_UUID, group=None).update(value="not-a-uuid")
+    with th.assert_raises(merrors.ValueException):
+        system_settings.installation_identity(actor)
+    Setting.objects.filter(
+        key=system_settings.INSTALLATION_UUID, group=None).update(value=identity["uuid"])
+    Setting.objects.filter(
+        key=system_settings.INSTALLATION_SLUG, group=None).update(value="different-installation")
+    with th.assert_raises(merrors.ValueException):
+        system_settings.installation_identity(actor)
+    Setting.objects.filter(key__in=(
+        system_settings.INSTALLATION_UUID, system_settings.INSTALLATION_SLUG)).delete()
+    system_settings.installation_identity(actor)
+
+
+@th.django_unit_test("one sanitizer redacts direct and durable payloads with hard bounds")
+def test_setup_sanitizer_all_boundaries(opts):
+    import json
+    from mojo import errors as merrors
+    from mojo.apps.account.models import SystemSetupOperation, User
+    from mojo.apps.account.services import setup_safety, system_readiness, system_setup
+    secret = "AKIAIOSFODNN7EXAMPLE"
+
+    def check(context):
+        return system_readiness.result(
+            "test.safe", "warn", f"credential={secret}",
+            details={"ordinary": f"https://user:pass@example.com/file?X-Amz-Signature={secret}",
+                     "large": "x" * 100000})
+
+    system_readiness.register_section("test_safety", "Test safety", check, order=998)
+    direct = system_readiness.run("test_safety", {})
+    encoded = json.dumps(direct)
+    assert secret not in encoded and "user:pass" not in encoded and "X-Amz-Signature" not in encoded, \
+        f"direct readiness response leaked secret material: {encoded[:500]}"
+    assert len(encoded.encode("utf-8")) <= setup_safety.MAX_SERIALIZED_BYTES, \
+        f"direct readiness response exceeded byte cap: {len(encoded)}"
+
+    SystemSetupOperation.objects.all().delete()
+    request = _request(User.objects.get(pk=opts.system_setup_admin_id))
+    operation, _ = system_setup.create(
+        request, "check", section="test_safety", replay_key="safe-persist")
+    operation = system_setup.advance(request, operation.pk)
+    system_setup._log(operation, "provider.note", f"authorization=Bearer {secret}")
+    operation.save(update_fields=["operation_log", "modified"])
+    persisted_log = json.dumps(operation.operation_log)
+    assert secret not in persisted_log, \
+        f"persisted setup log leaked secret material: {persisted_log}"
+    serialized = json.dumps(system_setup.serialize(operation))
+    assert secret not in serialized and "user:pass" not in serialized, \
+        f"persisted/serialized setup payload leaked secret material: {serialized[:500]}"
+    assert len(serialized.encode("utf-8")) <= setup_safety.MAX_SERIALIZED_BYTES, \
+        f"serialized setup operation exceeded byte cap: {len(serialized)}"
+    with th.assert_raises(merrors.ValueException):
+        system_setup._validate_choice({
+            "type": "object", "properties": {"token": {"type": "string"}},
+            "required": ["token"], "additionalProperties": False,
+        }, {"token": "innocent-looking-value"})
+
+
+@th.django_unit_test("step definition version rejects stale choose and advance")
+def test_step_definition_version_is_immutable(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.models import Setting, SystemSetupOperation, User
+    from mojo.apps.account.services import system_settings, system_setup
+    SystemSetupOperation.objects.all().delete()
+    Setting.objects.filter(key=system_settings.BASE_URL, group=None).delete()
+    request = _request(User.objects.get(pk=opts.system_setup_admin_id))
+    operation, _ = system_setup.create(request, "fix", replay_key="definition-choice")
+    operation = system_setup.advance(request, operation.pk)
+    operation = system_setup.advance(request, operation.pk)
+    operation = system_setup.advance(request, operation.pk)
+    steps = list(operation.steps)
+    step = dict(steps[operation.cursor])
+    submitted_definition = step["definition_version"]
+    step["definition_version"] += 1
+    steps[operation.cursor] = step
+    SystemSetupOperation.objects.filter(pk=operation.pk).update(steps=steps)
+    with th.assert_raises(merrors.ValueException):
+        system_setup.choose(
+            request, operation.pk, step["id"], submitted_definition,
+            step["choice_revision"], {"base_url": "https://setup.example.com"})
+    with th.assert_raises(merrors.ValueException):
+        system_setup.advance(request, operation.pk)
+
+
+@th.django_unit_test("resumed mutation is attributed to the advancing superuser")
+def test_resume_uses_current_admin_attribution(opts):
+    from mojo.apps.account.models import SystemSetupOperation, User
+    from mojo.apps.account.services import system_readiness, system_setup
+    SystemSetupOperation.objects.all().delete()
+    seen = []
+
+    def check(context):
+        return system_readiness.result("test.actor", "pass", "Actor test is ready.")
+
+    def fix(context, choice):
+        seen.append(context["actor"].pk)
+
+    system_readiness.register_section(
+        "test_actor", "Test actor", check, fix=fix,
+        reconcile=lambda context, choice: True, order=997)
+    creator = User.objects.get(pk=opts.system_setup_admin_id)
+    operation, _ = system_setup.create(
+        _request(creator), "fix", section="test_actor", replay_key="actor-resume")
+    creator.is_superuser = False
+    creator.save(update_fields=["is_superuser", "modified"])
+    second = User.objects.create_user(
+        username="second-system-admin@test.com", email="second-system-admin@test.com",
+        password="Second_system_Admin_99")
+    second.is_active = True
+    second.is_superuser = True
+    second.save(update_fields=["is_active", "is_superuser", "modified"])
+    try:
+        operation = system_setup.advance(_request(second), operation.pk)
+        assert seen == [second.pk], f"mutation was attributed to stale creator: {seen!r}"
+        assert operation.created_by_id == creator.pk, "audit creator unexpectedly changed"
+    finally:
+        creator.is_superuser = True
+        creator.save(update_fields=["is_superuser", "modified"])
+        second.delete()
+
+
+@th.django_unit_test("uncertain mutation cannot be cancelled with active or expired lease")
+def test_cancel_refuses_uncertain_mutation(opts):
+    from datetime import timedelta
+    from mojo import errors as merrors
+    from mojo.apps.account.models import SystemSetupOperation, User
+    from mojo.apps.account.services import system_setup
+    from django.utils import timezone
+    SystemSetupOperation.objects.all().delete()
+    request = _request(User.objects.get(pk=opts.system_setup_admin_id))
+    operation, _ = system_setup.create(request, "check", replay_key="cancel-uncertain")
+    for state, expiry in (
+            ("mutation_attempted", timezone.now() + timedelta(seconds=60)),
+            ("reconciling", timezone.now() - timedelta(seconds=60))):
+        steps = list(operation.steps)
+        steps[0] = dict(steps[0], state=state)
+        SystemSetupOperation.objects.filter(pk=operation.pk).update(
+            steps=steps, status="reconciling", lease_owner="lease",
+            lease_expires_at=expiry)
+        with th.assert_raises(merrors.ValueException):
+            system_setup.cancel(request, operation.pk)
+
+
+@th.django_unit_test("active lease blocks safe cancellation but expired safe lease does not")
+def test_cancel_obeys_lease_between_steps(opts):
+    from datetime import timedelta
+    from mojo import errors as merrors
+    from mojo.apps.account.models import SystemSetupOperation, User
+    from mojo.apps.account.services import system_setup
+    from django.utils import timezone
+    SystemSetupOperation.objects.all().delete()
+    request = _request(User.objects.get(pk=opts.system_setup_admin_id))
+    operation, _ = system_setup.create(request, "check", replay_key="cancel-lease")
+    SystemSetupOperation.objects.filter(pk=operation.pk).update(
+        lease_owner="lease", lease_expires_at=timezone.now() + timedelta(seconds=60))
+    with th.assert_raises(merrors.ValueException):
+        system_setup.cancel(request, operation.pk)
+    SystemSetupOperation.objects.filter(pk=operation.pk).update(
+        lease_expires_at=timezone.now() - timedelta(seconds=60))
+    cancelled = system_setup.cancel(request, operation.pk)
+    assert cancelled.status == "cancelled", \
+        f"expired lease blocked safe between-step cancellation: {cancelled.status}"
+
+
+@th.django_unit_test("only all-pass proof can succeed a fix operation")
+def test_fix_requires_green_final_proof(opts):
+    from mojo.apps.account.models import SystemSetupOperation, User
+    from mojo.apps.account.services import system_readiness, system_setup
+    request = _request(User.objects.get(pk=opts.system_setup_admin_id))
+    for status in ("warn", "pending", "fail"):
+        code = f"test_proof_{status}"
+        system_readiness.register_section(
+            code, f"Proof {status}",
+            lambda context, value=status: system_readiness.result(
+                f"proof.{value}", value, f"Proof is {value}."), order=996)
+        SystemSetupOperation.objects.all().delete()
+        operation, _ = system_setup.create(
+            request, "fix", section=code, replay_key=f"fix-{status}")
+        operation = system_setup.advance(request, operation.pk)
+        assert operation.status == "failed", \
+            f"fix operation represented {status} proof as success: {operation.status}"
+
+    SystemSetupOperation.objects.all().delete()
+    operation, _ = system_setup.create(
+        request, "check", section="test_proof_warn", replay_key="check-warn")
+    operation = system_setup.advance(request, operation.pk)
+    assert operation.status == "succeeded" and operation.report.get("overall") == "warn", \
+        f"check-mode semantics were conflated with fix proof: {operation.status} {operation.report}"
