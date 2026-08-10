@@ -1,7 +1,7 @@
 import {
   api, apiOnce, badge, FormView, formatDate, h, icon, listData, openModal,
   pageHeader, statusTone, TableView,
-} from './core.js';
+} from '../../core.js';
 
 const DNS_TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'SRV', 'CAA', 'NS'];
 const VHOST_SHAPES = [

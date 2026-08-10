@@ -2,27 +2,16 @@
 
 import mimetypes
 import secrets
-from pathlib import Path
 from urllib.parse import quote
 
 from django.http import HttpResponse, HttpResponseRedirect
 
 import mojo
 from mojo import decorators as md
-from mojo.apps.account.services import admin_portal
+from mojo.apps.account.services import admin_assets, admin_features, admin_portal
 from mojo.helpers.response import JsonResponse
 
 
-_ROOT = Path(__file__).resolve().parents[1] / "admin_portal"
-_PRIVATE_FILES = {
-    "index.html",
-    "assets/admin.css",
-    "assets/app.js",
-    "assets/core.js",
-    "assets/network.js",
-    "assets/pages.js",
-    "assets/setup.js",
-}
 _ADMIN_ROOT = f"/{admin_portal.ADMIN_PATH}"
 _ADMIN_ROOT_SLASH = f"/{admin_portal.ADMIN_PATH}/"
 _ADMIN_ASSET = f"/{admin_portal.ADMIN_PATH}/<path:asset>"
@@ -67,9 +56,9 @@ fetch('/api/account/admin/session',{{method:'POST',headers:{{Authorization:'Bear
 
 
 def _private_file(asset):
-    if asset not in _PRIVATE_FILES:
+    path = admin_assets.asset_path(asset)
+    if path is None:
         return _not_found()
-    path = _ROOT / asset
     try:
         content = path.read_bytes()
     except (OSError, ValueError):
@@ -141,6 +130,16 @@ def on_admin_bootstrap(request):
         for member in memberships if member.group.is_effectively_active()
     ]
     has = request.user.has_permission
+    capabilities = {
+        "setup": bool(request.user.is_superuser),
+        "people": has(["view_users", "manage_users", "admin"]),
+        "groups": has(["view_groups", "manage_groups", "admin"]),
+        "network": has(["view_dns", "manage_dns", "security"]),
+        "manage_network": has(["manage_dns", "security"]),
+        "webapps": has(["view_dns", "manage_dns", "security"]),
+        "manage_webapps": (
+            has("manage_webapp") and has(["manage_dns", "security"])),
+    }
     return {
         "version": mojo.__version__,
         "admin_path": _ADMIN_ROOT_SLASH,
@@ -151,14 +150,6 @@ def on_admin_bootstrap(request):
             "is_superuser": request.user.is_superuser,
         },
         "groups": groups,
-        "capabilities": {
-            "setup": bool(request.user.is_superuser),
-            "people": has(["view_users", "manage_users", "admin"]),
-            "groups": has(["view_groups", "manage_groups", "admin"]),
-            "network": has(["view_dns", "manage_dns", "security"]),
-            "manage_network": has(["manage_dns", "security"]),
-            "webapps": has(["view_dns", "manage_dns", "security"]),
-            "manage_webapps": (
-                has("manage_webapp") and has(["manage_dns", "security"])),
-        },
+        "capabilities": capabilities,
+        "features": admin_features.bootstrap_features(request, capabilities),
     }
