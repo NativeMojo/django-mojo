@@ -123,11 +123,12 @@ def _fleet():
     redis = get_connection()
     keys = JobKeys()
     rows = []
-    truncated = False
-    for index, key in enumerate(redis.scan_iter(match=keys.runner_hb("*"), count=ROW_LIMIT)):
-        if index >= ROW_LIMIT:
-            truncated = True
-            break
+    # Exactly one bounded SCAN page. scan_iter can traverse the entire Redis
+    # keyspace in a worker that outlives the response timeout.
+    cursor, page = redis.scan(
+        cursor=0, match=keys.runner_hb("*"), count=ROW_LIMIT)
+    truncated = bool(cursor) or len(page) > ROW_LIMIT
+    for key in list(page)[:ROW_LIMIT]:
         raw = redis.get(key)
         try:
             row = json.loads(raw.decode() if isinstance(raw, bytes) else raw)

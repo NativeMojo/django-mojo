@@ -236,11 +236,11 @@ AUTH_SAFE_PATHS = {
     "theme.app_title", "theme.auth_provider_name", "theme.logo_url",
     "theme.favicon_url", "theme.hero_image_url", "theme.hero_image_url_light",
     "theme.hero_image_url_dark", "theme.hero_headline", "theme.hero_subheadline",
-    "theme.hero_image_position", "theme.back_to_website_url",
-    "theme.back_to_website_label", "theme.terms_url", "theme.layout",
-    "theme.appearance", "theme.accent_color", "theme.api_base",
-    "theme.success_redirect", "theme.custom_css", "theme.custom_css_url",
-    "login.heading", "login.supporting_copy",
+    "theme.hero_image_position", "theme.back_to_website_label", "theme.layout",
+    "theme.appearance", "theme.accent_color", "theme.custom_css",
+    "login.heading", "login.supporting_copy", "login.methods",
+    "registration.enabled", "registration.methods",
+    "registration.passkey_prompt",
 }
 
 
@@ -265,11 +265,22 @@ def set_auth_safe_fields(actor, patch):
         bucket[name] = value
     from mojo.apps.account.services import auth_config
     auth_config.validate_auth_config(candidate)
-    methods = ((candidate.get("login") or {}).get("methods") or
-               auth_config.DEFAULT_AUTH_CONFIG["login"]["methods"])
-    if "password" not in methods:
+    login = candidate.get("login") or {}
+    login_methods = login.get(
+        "methods", auth_config.DEFAULT_AUTH_CONFIG["login"]["methods"])
+    if "password" not in login_methods:
         raise merrors.ValueException(
             "AUTH_CONFIG must retain password login for administrative recovery")
+    registration = candidate.get("registration") or {}
+    registration_enabled = registration.get(
+        "enabled", auth_config.DEFAULT_AUTH_CONFIG["registration"]["enabled"])
+    if not isinstance(registration_enabled, bool):
+        raise merrors.ValueException("AUTH_CONFIG registration.enabled must be boolean")
+    registration_methods = registration.get(
+        "methods", auth_config.DEFAULT_AUTH_CONFIG["registration"]["methods"])
+    if registration_enabled and not registration_methods:
+        raise merrors.ValueException(
+            "AUTH_CONFIG must retain a registration method while registration is enabled")
     return set_value(actor, AUTH_CONFIG, candidate)
 
 

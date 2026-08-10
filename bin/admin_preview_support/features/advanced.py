@@ -10,7 +10,7 @@ def describe(capabilities):
               "inventory": capabilities["view_advanced_inventory"],
               "security": capabilities["view_advanced_security"],
               "settings": capabilities["view_advanced_settings"]}
-    return {"id": NAME, "enabled": values["view"], "capabilities": values}
+    return {"id": NAME, "enabled": any(values.values()), "capabilities": values}
 
 
 def reset(handler, fixtures, **options):
@@ -28,7 +28,12 @@ def get(handler, parsed):
         "hosting": section({"domains": {"active": 3}, "certificates": 2, "vhosts": 3, "upstreams": 3, "routes": 2}),
         "aws_inventory": section({"configured": True, "resources": {"ec2": [{"id": "i-preview", "state": "running"}], "rds": [], "redis": []}}),
         "network_security": section({"SECURE_SSL_REDIRECT": {"configured": True}}),
-        "settings": section({"auth": {"theme": {"app_title": "DJANGO MOJO", "accent_color": "#6384ff"}}, "edge_topology": {"nodes": ["edge-a", "edge-b"], "pools": ["public-web"]}}),
+        "settings": section({"auth": {
+            "theme": {"app_title": "DJANGO MOJO", "accent_color": "#6384ff"},
+            "login": {"methods": ["password", "passkey", "github"]},
+            "registration": {"enabled": True, "methods": ["password", "github"],
+                             "passkey_prompt": "optional"},
+        }, "edge_topology": {"nodes": ["edge-a", "edge-b"], "pools": ["public-web"]}}),
     }}
 
 

@@ -35,13 +35,14 @@ past `stale_after`. Provider errors are intentionally not exposed.
 The settings endpoint accepts exactly one typed family:
 
 ```json
-{"auth": {"theme.app_title": "Operations", "theme.accent_color": "#112233"}}
+{"auth": {"theme.app_title": "Operations", "theme.accent_color": "#112233", "login.methods": ["password", "passkey"], "registration.enabled": true, "registration.methods": ["password", "github"], "registration.passkey_prompt": "optional"}}
 ```
 
 ```json
 {"edge_topology": {"nodes": ["edge-a", "edge-b"], "pools": ["public-web"]}}
 ```
 
-Auth presentation fields are allowlisted. Login methods, registration policy,
-credentials, arbitrary settings, deploy commands, AWS settings, and KMS
-settings are not writable here.
+Auth appearance and method fields are allowlisted. Login methods must include
+`password`; enabled registration must have at least one method. Navigation,
+redirect, API-base, external CSS, credentials, arbitrary settings, deploy
+commands, AWS settings, and KMS settings are not writable here.

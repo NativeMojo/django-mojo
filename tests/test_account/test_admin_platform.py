@@ -45,7 +45,7 @@ def test_auth_config_generic_protection(opts):
         generic.save()
 
 
-@th.django_unit_test("safe auth writer preserves unknown keys and prevents lockout")
+@th.django_unit_test("safe auth writer supports methods and preserves unknown keys")
 def test_auth_safe_merge(opts):
     from mojo import errors as me
     from mojo.apps.account.models import Setting, User
@@ -56,12 +56,52 @@ def test_auth_safe_merge(opts):
     system_settings.set_value(root, system_settings.AUTH_CONFIG, {
         "future": {"retained": True}, "login": {"methods": ["password", "passkey"]}})
     result = system_settings.set_auth_safe_fields(
-        root, {"theme.app_title": "Platform", "theme.accent_color": "#112233"})
+        root, {
+            "theme.app_title": "Platform", "theme.accent_color": "#112233",
+            "login.methods": ["password", "passkey"],
+            "registration.enabled": True,
+            "registration.methods": ["password", "github"],
+            "registration.passkey_prompt": "optional",
+        })
     assert result["future"] == {"retained": True}
     assert result["login"]["methods"] == ["password", "passkey"]
+    assert result["registration"] == {
+        "enabled": True, "methods": ["password", "github"],
+        "passkey_prompt": "optional",
+    }
     with th.assert_raises(me.ValueException):
         system_settings.set_auth_safe_fields(root, {"login.methods": ["passkey"]})
+    with th.assert_raises(me.ValueException):
+        system_settings.set_auth_safe_fields(root, {
+            "registration.enabled": True, "registration.methods": []})
+    with th.assert_raises(me.ValueException):
+        system_settings.set_auth_safe_fields(root, {
+            "login.methods": ["password", "telepathy"]})
+    with th.assert_raises(me.ValueException):
+        system_settings.set_auth_safe_fields(root, {
+            "registration.enabled": "yes"})
+    disabled = system_settings.set_auth_safe_fields(root, {
+        "registration.enabled": False, "registration.methods": []})
+    assert disabled["registration"]["methods"] == []
+    for path in (
+            "theme.api_base", "theme.success_redirect",
+            "theme.back_to_website_url", "theme.terms_url",
+            "theme.custom_css_url"):
+        with th.assert_raises(me.ValueException):
+            system_settings.set_auth_safe_fields(root, {path: "https://unsafe.test"})
     assert Setting.objects.get(key="AUTH_CONFIG").is_secret is False
+
+
+@th.django_unit_test("fleet collector performs one bounded Redis scan page")
+def test_fleet_single_scan_page(opts):
+    from mojo.apps.account.services import admin_platform
+    redis = mock.Mock()
+    redis.scan.return_value = (42, [])
+    with mock.patch("mojo.helpers.redis.get_connection", return_value=redis):
+        result = admin_platform._fleet()
+    redis.scan.assert_called_once()
+    assert result["truncated"] is True
+    assert not redis.scan_iter.called
 
 
 @th.django_unit_test("safe settings writer requires a live literal superuser")

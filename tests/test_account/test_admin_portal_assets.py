@@ -61,6 +61,8 @@ def test_feature_asset_contracts(opts):
 
     assert "result.token" not in platform and "MOJO_DEPLOY_KEY" not in platform
     assert "apiOnce" in advanced and "refresh-required" in advanced
+    assert "'login.methods'" in advanced and "'registration.methods'" in advanced
+    assert "name === 'password'" in advanced and "Save access methods" in advanced
     assert "class: 'table-wrap', tabindex: '0', role: 'region'" in core
     assert "['ArrowLeft', 'ArrowRight'].includes(event.key)" in core
     assert "canonicalRecordName" in advanced and "sameRecordSet" in advanced

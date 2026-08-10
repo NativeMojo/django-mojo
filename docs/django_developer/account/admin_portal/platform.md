@@ -62,10 +62,12 @@ Settings writes additionally re-read an active literal `account.User`
 superuser.
 
 `AUTH_CONFIG` and `EDGE_EXPECTED_TOPOLOGY` are protected from generic Setting
-create, update, rename, and delete. Advanced's auth writer merges presentation
-fields only, preserves unknown keys, validates the final config, and retains
-password login for administrative recovery. Deploy/AWS/KMS/security settings
-are file-only and read-only.
+create, update, rename, and delete. Advanced's auth writer merges appearance,
+login-method, and registration-method fields only, preserves unknown keys, and
+validates the final config. Login must retain `password` for administrative
+recovery; enabled registration must retain at least one method. Navigation,
+API-base, redirect, and external-CSS URL fields are not writable. Deploy,
+AWS, KMS, and security settings are file-only and read-only.
 
 The migration is `edge.0010_platformdeployment`, directly after
 `edge.0009_webapp_onboarding`. `bin/admin_preview` provides feature-owned,
