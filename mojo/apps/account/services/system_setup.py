@@ -60,7 +60,7 @@ def _log(operation, code, message):
         "code": code,
         "message": message,
     }))
-    operation.operation_log = sanitize(entries)
+    operation.operation_log = entries
 
 
 def _step(step_id, label, kind, choice_schema=None, section="",
@@ -230,6 +230,21 @@ def _assert_current_definition(step):
             status=409, code=409)
 
 
+def _definition_is_current(step):
+    return step.get("definition_version") == _expected_definition_version(step)
+
+
+def _versioned_reconciler(step):
+    if step.get("kind") != "section":
+        return None
+    entry = system_readiness.get_section(step.get("section"))
+    if entry is None:
+        return None
+    if _definition_is_current(step):
+        return entry.get("reconcile")
+    return entry.get("reconciliation_adapters", {}).get(step.get("definition_version"))
+
+
 def choose(request, operation_id, step_id, definition_version, choice_revision, choice):
     require_request_admin(request)
     with transaction.atomic():
@@ -290,13 +305,14 @@ def _execute_planned(operation, step, context):
     if kind == "section":
         entry = system_readiness.get_section(step["section"])
         if entry is None or not entry.get("fix"):
-            return {"status": "fail"}
+            raise system_readiness.DefinitiveSetupFailure(
+                "Registered setup fixer is unavailable")
         entry["fix"](context, choice)
         return {"status": "mutation_attempted"}
     if kind in ("readiness", "final"):
         report = system_readiness.run(operation.section or None, context)
         return {"status": "proven", "report": report}
-    return {"status": "fail"}
+    raise system_readiness.DefinitiveSetupFailure("Unknown setup step")
 
 
 def _execute_reconcile(operation, step, context):
@@ -310,15 +326,17 @@ def _execute_reconcile(operation, step, context):
             system_settings.get_value(system_settings.BASE_URL) == choice.get("base_url"))
             else "pending"}
     if kind == "section":
-        entry = system_readiness.get_section(step["section"])
-        reconcile = entry.get("reconcile") if entry else None
+        reconcile = _versioned_reconciler(step)
         if not reconcile:
             return {"status": "pending"}
         outcome = reconcile(context, choice)
         if isinstance(outcome, dict):
-            return {"status": outcome.get("status", "pending")}
+            status = outcome.get("status", "pending")
+            if status not in ("proven", "pending"):
+                raise ValueError("reconciler returned an unsupported status")
+            return {"status": status}
         return {"status": "proven" if outcome else "pending"}
-    return {"status": "fail"}
+    raise system_readiness.DefinitiveSetupFailure("Unknown setup step")
 
 
 def advance(request, operation_id):
@@ -346,7 +364,10 @@ def advance(request, operation_id):
             return operation
         steps = list(operation.steps)
         step = dict(steps[operation.cursor])
-        _assert_current_definition(step)
+        if not _definition_is_current(step):
+            uncertain = step.get("state") in ("mutation_attempted", "reconciling")
+            if not uncertain or _versioned_reconciler(step) is None:
+                _assert_current_definition(step)
         if step["state"] == "waiting_for_choice":
             return operation
         if step["kind"] == "base_url" and step["id"] not in (operation.choices or {}):
@@ -390,9 +411,12 @@ def advance(request, operation_id):
         context = _context(operation, actor, local_url)
         outcome = (_execute_reconcile(operation, step, context) if was_attempted
                    else _execute_planned(operation, step, context))
-    except Exception as exc:
+    except system_readiness.DefinitiveSetupFailure as exc:
         logit.error("system_setup", f"step {step['id']} failed ({exc.__class__.__name__})")
-        outcome = {"status": "fail"}
+        outcome = {"status": "fail", "exception_class": exc.__class__.__name__}
+    except Exception as exc:
+        logit.error("system_setup", f"step {step['id']} pending ({exc.__class__.__name__})")
+        outcome = {"status": "pending", "exception_class": exc.__class__.__name__}
 
     with transaction.atomic():
         operation = SystemSetupOperation.objects.select_for_update().get(pk=operation_id)
@@ -402,6 +426,9 @@ def advance(request, operation_id):
         step_index = operation.cursor
         step = dict(steps[step_index])
         status = outcome.get("status")
+        if outcome.get("exception_class"):
+            _log(operation, "step.exception",
+                 f"{outcome['exception_class']} left this step {status}")
         operation.lease_owner = ""
         operation.lease_expires_at = None
         if status == "mutation_attempted":

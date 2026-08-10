@@ -60,6 +60,20 @@ keep the code stable and increment the version whenever old persisted steps
 cannot safely run the new implementation. Register sections from
 `AppConfig.ready()` before the first readiness request.
 
+An untyped fixer or reconciler exception is ambiguous after mutation intent is
+durable: Setup logs only its class and leaves the step `reconciling`. A fixer
+may raise `system_readiness.DefinitiveSetupFailure` only when it has proved no
+mutation occurred; that typed exception terminally fails the step. Never use it
+for timeouts or provider 5xx responses.
+
+When incrementing `definition_version`, keep a read-only reconciler for every
+old version that may still be uncertain. Supply
+`reconciliation_adapters={old_version: callable}` at registration or call
+`register_reconciliation_adapter(code, old_version, callable)`. The adapter
+receives the normal context and choice and returns only `proven` or `pending`;
+it must never repeat the mutation. Planned/waiting stale steps remain safely
+cancellable, while an uncertain stale step runs only its exact old adapter.
+
 The public `BASE_URL` probe resolves the hostname, rejects the entire answer
 set if any address is non-global, pins one approved address for the TCP
 connection while preserving TLS SNI/hostname verification and the HTTP Host,
@@ -98,7 +112,9 @@ never derives from `BASE_URL`, so correcting the public hostname cannot orphan
 owned resources.
 The generic protected setter cannot write either identity key. Every identity
 read validates that both values exist, the UUID and slug are well formed, and
-the pair still names the configured installation. All protected writes lock a
+does not reinterpret them through mutable static configuration. Changing
+`AWS_MONITORING_NAME` after the freeze cannot change or invalidate ownership.
+All protected writes lock a
 stable database row even when their `Setting` row is absent, and publish Redis
 only after the database transaction commits.
 
@@ -150,8 +166,11 @@ fully `pass`.
 
 `setup_safety.sanitize()` is the single boundary for direct reports, persisted
 reports, choices/schemas, operation serialization, and log messages. It caps
-depth, item count, string length, and total JSON bytes; redacts secret-shaped
-values as well as names; and removes URL userinfo and query values.
+depth, item count, string length, and total JSON bytes; pre-bounds huge strings
+before parsing; redacts secret-shaped names, known credential formats, and
+unlabeled high-entropy opaque values; and removes URL userinfo and query values.
+Readiness results and logs use fixed schemas rather than accepting arbitrary
+provider payload fields.
 
 Every endpoint revalidates an active literal superuser and refuses API-key or
 group-token sessions. Create binds the browser's same-origin `Origin` header;

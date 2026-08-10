@@ -243,10 +243,6 @@ def _validate_identity_pair(current_uuid, current_slug):
         slug = _validate_slug(INSTALLATION_SLUG, current_slug)
     except ValueError as exc:
         raise merrors.ValueException(str(exc))
-    configured = str(settings.get_static("AWS_MONITORING_NAME", "")).strip().lower()
-    expected = configured or f"mojo-{identity.replace('-', '')[:12]}"
-    if slug != expected:
-        raise merrors.ValueException("Stored installation UUID and slug identify different installations")
     return {"uuid": identity, "slug": slug}
 
 

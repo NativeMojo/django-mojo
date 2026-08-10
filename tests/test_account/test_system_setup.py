@@ -646,13 +646,25 @@ def test_installation_identity_rejects_overwrite_and_malformed_pair(opts):
         system_settings.installation_identity(actor)
     Setting.objects.filter(
         key=system_settings.INSTALLATION_UUID, group=None).update(value=identity["uuid"])
-    Setting.objects.filter(
-        key=system_settings.INSTALLATION_SLUG, group=None).update(value="different-installation")
-    with th.assert_raises(merrors.ValueException):
-        system_settings.installation_identity(actor)
     Setting.objects.filter(key__in=(
         system_settings.INSTALLATION_UUID, system_settings.INSTALLATION_SLUG)).delete()
     system_settings.installation_identity(actor)
+
+
+@th.django_unit_test("frozen installation identity survives static monitoring-name changes")
+def test_installation_identity_ignores_later_static_name(opts):
+    from unittest import mock
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.services import system_settings
+    actor = User.objects.get(pk=opts.system_setup_admin_id)
+    Setting.objects.filter(key__in=(
+        system_settings.INSTALLATION_UUID, system_settings.INSTALLATION_SLUG)).delete()
+    with mock.patch.object(system_settings.settings, "get_static", return_value="first-name"):
+        frozen = system_settings.installation_identity(actor)
+    with mock.patch.object(system_settings.settings, "get_static", return_value="second-name"):
+        reread = system_settings.installation_identity(actor)
+    assert reread == frozen, \
+        f"static monitoring-name change invalidated frozen identity: {frozen!r} -> {reread!r}"
 
 
 @th.django_unit_test("one sanitizer redacts direct and durable payloads with hard bounds")
@@ -662,17 +674,19 @@ def test_setup_sanitizer_all_boundaries(opts):
     from mojo.apps.account.models import SystemSetupOperation, User
     from mojo.apps.account.services import setup_safety, system_readiness, system_setup
     secret = "AKIAIOSFODNN7EXAMPLE"
+    secret_access = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
     def check(context):
         return system_readiness.result(
             "test.safe", "warn", f"credential={secret}",
             details={"ordinary": f"https://user:pass@example.com/file?X-Amz-Signature={secret}",
-                     "large": "x" * 100000})
+                     "value": secret_access, "large": "x" * 100000})
 
     system_readiness.register_section("test_safety", "Test safety", check, order=998)
     direct = system_readiness.run("test_safety", {})
     encoded = json.dumps(direct)
-    assert secret not in encoded and "user:pass" not in encoded and "X-Amz-Signature" not in encoded, \
+    assert (secret not in encoded and secret_access not in encoded and
+            "user:pass" not in encoded and "X-Amz-Signature" not in encoded), \
         f"direct readiness response leaked secret material: {encoded[:500]}"
     assert len(encoded.encode("utf-8")) <= setup_safety.MAX_SERIALIZED_BYTES, \
         f"direct readiness response exceeded byte cap: {len(encoded)}"
@@ -697,6 +711,9 @@ def test_setup_sanitizer_all_boundaries(opts):
             "type": "object", "properties": {"token": {"type": "string"}},
             "required": ["token"], "additionalProperties": False,
         }, {"token": "innocent-looking-value"})
+    huge = setup_safety.sanitize({"value": "A" * 10_000_000})
+    assert huge["value"] == setup_safety.TRUNCATED, \
+        f"huge input was processed instead of pre-bounded: {str(huge)[:100]}"
 
 
 @th.django_unit_test("step definition version rejects stale choose and advance")
@@ -723,6 +740,9 @@ def test_step_definition_version_is_immutable(opts):
             step["choice_revision"], {"base_url": "https://setup.example.com"})
     with th.assert_raises(merrors.ValueException):
         system_setup.advance(request, operation.pk)
+    cancelled = system_setup.cancel(request, operation.pk)
+    assert cancelled.status == "cancelled", \
+        f"planned stale definition could not be cancelled safely: {cancelled.status}"
 
 
 @th.django_unit_test("resumed mutation is attributed to the advancing superuser")
@@ -829,3 +849,125 @@ def test_fix_requires_green_final_proof(opts):
     operation = system_setup.advance(request, operation.pk)
     assert operation.status == "succeeded" and operation.report.get("overall") == "warn", \
         f"check-mode semantics were conflated with fix proof: {operation.status} {operation.report}"
+
+
+@th.django_unit_test("ambiguous fixer and reconciliation errors remain reconciling")
+def test_ambiguous_provider_errors_never_repeat_or_terminalize(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.models import SystemSetupOperation, User
+    from mojo.apps.account.services import system_readiness, system_setup
+    SystemSetupOperation.objects.all().delete()
+    calls = {"fix": 0, "reconcile": 0}
+
+    def check(context):
+        return system_readiness.result("test.ambiguous", "pass", "Provider is ready.")
+
+    def fix(context, choice):
+        calls["fix"] += 1
+        raise RuntimeError("provider secret response must not be logged")
+
+    def reconcile(context, choice):
+        calls["reconcile"] += 1
+        raise ConnectionError("provider status is temporarily unavailable")
+
+    system_readiness.register_section(
+        "test_ambiguous", "Test ambiguous", check, fix=fix,
+        reconcile=reconcile, order=995)
+    request = _request(User.objects.get(pk=opts.system_setup_admin_id))
+    operation, _ = system_setup.create(
+        request, "fix", section="test_ambiguous", replay_key="ambiguous")
+    operation = system_setup.advance(request, operation.pk)
+    assert operation.status == "reconciling" and calls == {"fix": 1, "reconcile": 0}, \
+        f"ambiguous mutation error terminalized or repeated: {operation.status} {calls}"
+    with th.assert_raises(merrors.ValueException):
+        system_setup.create(
+            request, "fix", section="test_ambiguous", replay_key="replacement-one")
+    operation = system_setup.advance(request, operation.pk)
+    assert operation.status == "reconciling" and calls == {"fix": 1, "reconcile": 1}, \
+        f"ambiguous reconciliation error terminalized or retried mutation: {operation.status} {calls}"
+    with th.assert_raises(merrors.ValueException):
+        system_setup.create(
+            request, "fix", section="test_ambiguous", replay_key="replacement-two")
+    encoded_log = str(operation.operation_log)
+    assert "provider secret response" not in encoded_log and "temporarily unavailable" not in encoded_log, \
+        f"ambiguous exception message leaked into operation log: {encoded_log}"
+    assert "RuntimeError" in encoded_log and "ConnectionError" in encoded_log, \
+        f"safe exception class evidence was not logged: {encoded_log}"
+
+
+@th.django_unit_test("stale uncertain definition reconciles through its versioned adapter")
+def test_stale_uncertain_step_uses_versioned_adapter(opts):
+    from mojo.apps.account.models import SystemSetupOperation, User
+    from mojo.apps.account.services import system_readiness, system_setup
+    SystemSetupOperation.objects.all().delete()
+    calls = {"fix": 0, "adapter": 0}
+
+    def check(context):
+        return system_readiness.result("test.adapter", "pass", "Adapter resource exists.")
+
+    def fix(context, choice):
+        calls["fix"] += 1
+
+    def old_reconcile(context, choice):
+        calls["adapter"] += 1
+        return {"status": "proven"}
+
+    system_readiness.register_section(
+        "test_adapter", "Test adapter", check, fix=fix,
+        reconcile=lambda context, choice: True, definition_version=2,
+        reconciliation_adapters={1: old_reconcile}, order=994)
+    request = _request(User.objects.get(pk=opts.system_setup_admin_id))
+    operation, _ = system_setup.create(
+        request, "fix", section="test_adapter", replay_key="old-adapter")
+    steps = list(operation.steps)
+    steps[0] = dict(steps[0], definition_version=1, state="mutation_attempted")
+    SystemSetupOperation.objects.filter(pk=operation.pk).update(
+        steps=steps, status="reconciling")
+    operation = system_setup.advance(request, operation.pk)
+    assert operation.cursor == 1 and operation.status == "planned", \
+        f"old uncertain step did not escape through adapter: {operation.cursor}/{operation.status}"
+    assert calls == {"fix": 0, "adapter": 1}, \
+        f"old adapter path repeated mutation or skipped reconciliation: {calls}"
+
+
+@th.django_unit_test("advance rejects active lease and safely resumes an expired lease")
+def test_advance_lease_guard_and_resume(opts):
+    from datetime import timedelta
+    from django.utils import timezone
+    from mojo import errors as merrors
+    from mojo.apps.account.models import SystemSetupOperation, User
+    from mojo.apps.account.services import system_readiness, system_setup
+    SystemSetupOperation.objects.all().delete()
+    system_readiness.register_section(
+        "test_advance_lease", "Test advance lease",
+        lambda context: system_readiness.result(
+            "test.advance_lease", "pass", "Lease test is ready."), order=993)
+    request = _request(User.objects.get(pk=opts.system_setup_admin_id))
+    operation, _ = system_setup.create(
+        request, "check", section="test_advance_lease", replay_key="advance-lease")
+    SystemSetupOperation.objects.filter(pk=operation.pk).update(
+        lease_owner="live", lease_expires_at=timezone.now() + timedelta(seconds=60))
+    with th.assert_raises(merrors.ValueException):
+        system_setup.advance(request, operation.pk)
+    SystemSetupOperation.objects.filter(pk=operation.pk).update(
+        lease_expires_at=timezone.now() - timedelta(seconds=60))
+    resumed = system_setup.advance(request, operation.pk)
+    assert resumed.status == "succeeded", \
+        f"expired lease did not resume safely: {resumed.status}"
+
+
+@th.django_unit_test("operation log retains only the newest two hundred entries")
+def test_operation_log_prunes_to_two_hundred(opts):
+    from mojo.apps.account.models import SystemSetupOperation, User
+    from mojo.apps.account.services import system_setup
+    SystemSetupOperation.objects.all().delete()
+    request = _request(User.objects.get(pk=opts.system_setup_admin_id))
+    operation, _ = system_setup.create(request, "check", replay_key="log-prune")
+    for index in range(250):
+        system_setup._log(operation, f"event.{index}", f"Event {index}")
+    operation.save(update_fields=["operation_log", "modified"])
+    operation.refresh_from_db()
+    assert len(operation.operation_log) == 200, \
+        f"operation log retained {len(operation.operation_log)} entries instead of 200"
+    assert operation.operation_log[0]["code"] == "event.50", \
+        f"operation log pruned the wrong edge: {operation.operation_log[0]}"

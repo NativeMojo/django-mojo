@@ -149,11 +149,18 @@ Fix steps may remain `reconciling` after a successful mutation. This is
 expected: the next `advance` proves provider state before marking the step
 `proven`. An interrupted `mutation_attempted` step reconciles instead of
 blindly repeating the provider write.
+An unexpected fixer or reconciliation exception leaves the operation active as
+`reconciling`; it does not mean the mutation failed. The safe log includes only
+the exception class. Continue calling `advance` so authoritative reconciliation
+can prove the outcome. Only a server-side typed definitive failure can move the
+step directly to `failed`.
 Neither `mutation_attempted` nor `reconciling` can be cancelled, even when its
 lease has expired: the provider outcome must first be reconciled. If an
 installed upgrade changes a step's registered `definition_version`, both
-choose and advance return `409`; cancel only from a safe state and start a new
-operation.
+choose and advance return `409` for planned/waiting steps; cancel from that safe
+state and start a new operation. An uncertain old-version step cannot be
+cancelled and does not return to its fixer: the server invokes the registered
+read-only reconciliation adapter for that exact version until it is proven.
 
 The operation log is bounded and safe to render as text. It never contains
 credentials or reveal-once secrets. Treat any future secret/provider-specific
@@ -226,8 +233,9 @@ is a successful fix.
 
 Responses and durable operation state share one sanitizer. It enforces bounded
 depth, item count, string length, and total serialized bytes; recognizes
-credential/token/private-key/JWT/AWS-key material even under innocent field
-names; and removes URL userinfo and query values, including presigned queries.
+credential/token/private-key/JWT/AWS-key and unlabeled high-entropy opaque
+material even under innocent field names; pre-bounds huge strings before
+inspection; and removes URL userinfo and query values, including presigned queries.
 Clients should preserve the response shape but tolerate a `"[truncated]"`
 value or `truncated: true` marker at a bounded collection edge.
 

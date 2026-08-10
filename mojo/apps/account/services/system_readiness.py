@@ -19,14 +19,34 @@ _SECTIONS = OrderedDict()
 
 
 def register_section(code, label, check, fix=None, reconcile=None,
-                     choice_schema=None, order=100, definition_version=1):
+                     choice_schema=None, order=100, definition_version=1,
+                     reconciliation_adapters=None):
     if not isinstance(code, str) or not code or not callable(check):
         raise ValueError("readiness sections need a stable code and check callable")
+    current_version = int(definition_version)
+    adapters = {}
+    for version, callback in dict(reconciliation_adapters or {}).items():
+        version = int(version)
+        if version == current_version or not callable(callback):
+            raise ValueError("reconciliation adapters need old versions and callables")
+        adapters[version] = callback
     _SECTIONS[code] = {
         "code": code, "label": str(label), "check": check, "fix": fix,
         "reconcile": reconcile, "choice_schema": choice_schema,
-        "order": int(order), "definition_version": int(definition_version),
+        "order": int(order), "definition_version": current_version,
+        "reconciliation_adapters": adapters,
     }
+
+
+def register_reconciliation_adapter(code, definition_version, reconcile):
+    """Register a read-only reconciler for one persisted old step version."""
+    entry = _SECTIONS.get(code)
+    if entry is None or not callable(reconcile):
+        raise ValueError("reconciliation adapter needs a registered section and callable")
+    version = int(definition_version)
+    if version == entry["definition_version"]:
+        raise ValueError("current definition uses the section's normal reconciler")
+    entry["reconciliation_adapters"][version] = reconcile
 
 
 def sections():
@@ -105,6 +125,12 @@ def run(section=None, context=None):
 
 
 class UnsafePublicProbe(ValueError):
+    pass
+
+
+class DefinitiveSetupFailure(Exception):
+    """A fixer may raise this only when it proved no mutation occurred."""
+
     pass
 
 
