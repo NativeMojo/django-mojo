@@ -649,7 +649,9 @@ class AWSCheckRunner:
 
     def check_email(self):
         from mojo.apps.aws.models import EmailDomain, EmailTemplate, Mailbox
-        from mojo.apps.aws.services.email_ops import audit_email_domain
+        from mojo.apps.aws.services.email_ops import (
+            SES_PRODUCTION_ACCESS_GUIDANCE, audit_email_domain,
+        )
         domains = list(EmailDomain.objects.all().order_by("id")[:100])
         if not domains:
             self._add("email", "warn", "email.domain_missing", "No SES EmailDomain is configured",
@@ -669,9 +671,25 @@ class AWSCheckRunner:
                     domain.pk, persist=False,
                     client_factory=self._email_client_factory(domain),
                 )
-                pending = sorted(key for key, value in report.checks.items() if value is False)
-                self._add("email", "pass" if report.audit_pass else "pending", "email.domain_audit",
+                # SES production access is deliberately outside deployment
+                # convergence.  Treat sandbox mode as a visible warning, not a
+                # PENDING result that pressures automation to submit an AWS
+                # account request.  Every actual domain/DKIM/topic/receiving
+                # check remains deployment readiness state.
+                production_access = report.checks.get("ses_production_access")
+                pending = sorted(
+                    key for key, value in report.checks.items()
+                    if value is False and key != "ses_production_access"
+                )
+                self._add("email", "pass" if not pending else "pending", "email.domain_audit",
                           f"SES audit completed for {domain.name}", {"domain": domain.name, "pending_checks": pending})
+                if production_access is False:
+                    self._add(
+                        "email", "warn", "email.ses_sandbox",
+                        f"SES production access is not enabled for {domain.name}",
+                        {"domain": domain.name, "production_access_enabled": False},
+                        remediation=SES_PRODUCTION_ACCESS_GUIDANCE,
+                    )
                 if self.apply and self._email_has_create_candidates(domain, report):
                     if not self._ensure_mutation_identity("email"):
                         continue

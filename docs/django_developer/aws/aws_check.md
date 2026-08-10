@@ -27,6 +27,23 @@ S3 and SES discovery never mutate provider state. The portal does not invent a
 bucket while a suitable existing private media bucket is available, and it
 never silently adopts an untagged legacy operations topic.
 
+### SES production access is user-controlled
+
+Neither System Setup nor `aws-check` requests SES production access. Sandbox
+status is a visible `WARN`, not a deployment `PENDING` or `FAIL`, and it does
+not prevent the rest of an environment from reaching zero pending readiness.
+`--apply --yes` does not change that rule.
+
+The API hostname, `BASE_URL`, deployment root and selected AWS account are not
+evidence of the intended email identity. The operator must explicitly choose
+an already verified SES domain and a sender on that exact domain; discovery is
+inventory, not authorization. Before requesting production access, the user
+must confirm the public website, Privacy Policy, Terms, email consent and
+unsubscribe behavior, bounce/complaint handling, any SMS consent plus STOP/HELP
+policy, and least-privilege sending permissions. The user then submits the
+request directly in AWS, or explicitly approves a future dedicated Admin
+action. A deployment agent must never submit it as setup remediation.
+
 Provider failures cross the shared bounded provider-call boundary. A provider
 failure detail may contain only `operation`, `provider_code`, `retryable`,
 `mutation_state`, an optional safe `request_id`, and the exact `iam_action` for
@@ -110,7 +127,7 @@ remediation/changed items:
 | `identity` | bounded STS identity using static keys, profile, environment, container or instance/task role |
 | `cron` | recent dispatcher run plus jobs Redis, runner heartbeats and scheduler lock |
 | `s3` | one system-default S3 FileManager, bucket/region/IAM, Public Access Block, CORS and optional sentinel |
-| `email` | SES identity/DKIM/sandbox/topics/receiving audit, outbound Mailbox and shipped templates |
+| `email` | SES identity/DKIM/topics/receiving readiness, non-blocking sandbox warning, outbound Mailbox and shipped templates |
 | `monitoring` | owned SNS topic, exact protected/static allowlist, HTTPS subscription, owned alarms and receiver receipt |
 | `dns` | dnsman ACME directory/account, delegation states, certificate expiry; under `--apply`, bootstraps one domain |
 | `rules` | opt-in create-only CloudWatch and version-drift incident policies |
@@ -391,10 +408,12 @@ AWS supports it:
 | System Setup monitoring convergence/probe | Monitoring audit actions above plus `sns:GetTopicAttributes`, `sns:SetTopicAttributes`, `sns:CreateTopic`, `sns:TagResource`, `sns:Subscribe`, `cloudwatch:PutMetricAlarm`, and `cloudwatch:SetAlarmState` |
 | Versions audit (opt-in) | `rds:DescribeDBClusters`, `rds:DescribeDBInstances`, `rds:DescribeDBEngineVersions`, `rds:DescribeDBMajorEngineVersions`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeCacheEngineVersions` |
 
-Cron, rule, mailbox and template checks use Django database/Redis access rather
-than IAM. The `dns` section talks to dnsman and the ACME hub, not to AWS, so it
-needs no IAM actions of its own. The command never deletes AWS resources, edits
-deployment files, changes DNS, requests SES production access, or sends email.
+`ses:PutAccountDetails` is intentionally absent: no audit or apply mode may
+request SES production access. Cron, rule, mailbox and template checks use
+Django database/Redis access rather than IAM. The `dns` section talks to dnsman
+and the ACME hub, not to AWS, so it needs no IAM actions of its own. The command
+never deletes AWS resources, edits deployment files, changes DNS, requests SES
+production access, or sends email.
 
 ### A different identity: the job runner
 

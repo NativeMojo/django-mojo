@@ -62,6 +62,16 @@ class InvalidConfiguration(Exception):
     pass
 
 
+SES_PRODUCTION_ACCESS_GUIDANCE = (
+    "Do not request SES production access automatically. Before a user submits "
+    "a request, confirm the public website, Privacy Policy, Terms, email consent, "
+    "unsubscribe, bounce and complaint handling, any SMS consent/STOP/HELP policy, "
+    "least-privilege sending permissions, and the exact verified sending domain. "
+    "The user must submit the request in AWS or explicitly approve a dedicated "
+    "Admin action."
+)
+
+
 # Data structures
 @dataclass
 class OnboardResult:
@@ -140,6 +150,19 @@ def generate_audit_recommendations(report) -> List[Dict[str, Any]]:
         status = item.status
         current = str(item.current)
 
+        # Production access is an account-level business/compliance decision,
+        # not a provider resource this reconciler may create.  Surface the
+        # deliberate user action even though the ordinary recommendation path
+        # below is reserved for provider conflicts.
+        if resource == "ses.account.production_access" and status != "ok":
+            recommendations.append({
+                "resource": resource,
+                "severity": "low",
+                "action": "Review SES production-access readiness",
+                "explanation": SES_PRODUCTION_ACCESS_GUIDANCE,
+            })
+            continue
+
         if status != "conflict":
             continue
 
@@ -163,13 +186,6 @@ def generate_audit_recommendations(report) -> List[Dict[str, Any]]:
                 })
 
         # Resource-specific recommendations
-        elif resource == "ses.account.production_access":
-            if not item.desired.get("ProductionAccessEnabled"):
-                recommendation.update({
-                    "action": "Request SES production access",
-                    "explanation": "Your SES account is in sandbox mode. You can only send to verified email addresses. Request production access through AWS console to send to any email."
-                })
-
         elif resource == "ses.identity.verification":
             recommendation.update({
                 "action": "Verify your domain in AWS SES",

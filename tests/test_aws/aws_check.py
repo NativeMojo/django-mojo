@@ -1218,6 +1218,86 @@ def test_email_audit_can_be_strictly_non_persistent(opts):
 
 
 @th.django_unit_test()
+def test_email_sandbox_is_nonblocking_and_user_controlled(opts):
+    from mojo.apps.aws.models import EmailDomain
+    from mojo.apps.aws.services import aws_check, email_ops
+
+    EmailDomain.objects.filter(name="mail-policy.example").delete()
+    domain = EmailDomain.objects.create(
+        name="mail-policy.example", region="us-east-1", status="verified")
+    production_item = SimpleNamespace(
+        resource="ses.account.production_access",
+        desired={"ProductionAccessEnabled": True},
+        current={"ProductionAccessEnabled": False},
+        status="drifted",
+    )
+    audit = SimpleNamespace(
+        domain=domain.name, region="us-east-1", status="drifted", audit_pass=False,
+        checks={"ses_production_access": False, "ses_verified": True,
+                "dkim_verified": True, "notification_topics_ok": True},
+        items=[production_item],
+    )
+    with mock.patch.object(email_ops, "audit_email_domain", return_value=audit), \
+            mock.patch.object(
+                aws_check.AWSCheckRunner, "_email_has_create_candidates",
+                return_value=False):
+        report = aws_check.AWSCheckRunner(apply=True, yes=True).run(["email"])
+
+    domain_audit = next(
+        item for item in report["items"] if item["code"] == "email.domain_audit")
+    sandbox = next(
+        item for item in report["items"] if item["code"] == "email.ses_sandbox")
+    assert domain_audit["status"] == "pass" \
+        and domain_audit["details"]["pending_checks"] == [], \
+        f"SES sandbox must not become deployment PENDING: {domain_audit}"
+    assert sandbox["status"] == "warn", \
+        f"SES sandbox must remain visible without blocking deployment: {sandbox}"
+    guidance = sandbox["remediation"]
+    for phrase in ("Do not request", "public website", "SMS", "exact verified sending domain",
+                   "user must submit"):
+        assert phrase in guidance, f"SES guidance must name the user-controlled gate: {guidance}"
+    assert report["counts"]["pending"] == 0, \
+        f"Production access alone must not prevent zero-PENDING readiness: {report}"
+
+    recommendations = email_ops.generate_audit_recommendations(audit)
+    assert len(recommendations) == 1 \
+        and recommendations[0]["action"] == "Review SES production-access readiness", \
+        f"The operator-facing recommendation must not tell automation to request access: {recommendations}"
+    domain.delete()
+
+
+@th.django_unit_test()
+def test_ses_account_audit_has_no_production_access_mutation(opts):
+    from mojo.helpers.aws import ses_domain
+
+    ses = mock.Mock()
+    ses.get_identity_verification_attributes.return_value = {
+        "VerificationAttributes": {
+            "mail.example": {"VerificationStatus": "Success"},
+        }}
+    ses.get_identity_dkim_attributes.return_value = {"DkimAttributes": {
+        "mail.example": {"DkimEnabled": True, "DkimVerificationStatus": "Success"},
+    }}
+    ses.get_identity_notification_attributes.return_value = {
+        "NotificationAttributes": {"mail.example": {}}}
+    sesv2, sns = mock.Mock(), mock.Mock()
+    sesv2.get_account.return_value = {"ProductionAccessEnabled": False}
+
+    def factory(service, **kwargs):
+        return {"sesv2": sesv2, "sns": sns}[service]
+
+    with mock.patch.object(ses_domain, "_get_ses_client", return_value=ses):
+        report = ses_domain.audit_domain_config(
+            "mail.example", region="us-east-1", desired_topics={},
+            client_factory=factory)
+
+    assert report.checks["ses_production_access"] is False, \
+        "Sandbox state must remain discoverable"
+    assert sesv2.method_calls == [mock.call.get_account()], \
+        f"SES account audit must be read-only, got calls: {sesv2.method_calls}"
+
+
+@th.django_unit_test()
 def test_aws_check_command_json_and_failure_exit(opts):
     from django.core.management import call_command
     from django.core.management.base import CommandError
