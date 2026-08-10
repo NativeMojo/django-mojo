@@ -221,8 +221,8 @@ are documented in the web-developer
 
 The System Setup page is advertised only when bootstrap returns
 `capabilities.setup: true`, which is derived from literal superuser status.
-Its `assets/features/advanced/page.js` module is in the private Admin manifest: the
-browser must first obtain the path-scoped Admin source session described in
+Its `assets/features/platform/page.js` module is in the private Admin manifest:
+the browser must first obtain the path-scoped Admin source session described in
 [Built-in Admin Portal](built_in_admin.md). The source cookie controls delivery
 of the UI bytes; the interactive JWT and endpoint checks remain authoritative
 for every setup read and mutation.
@@ -239,7 +239,8 @@ The Network & Hosting checklist deep-links non-fixable readiness sections to
 the permanent Domains, DNS, Certificates, Vhosts, Routes, or WebApps pages.
 System Setup never calls those mutation APIs on the operator's behalf. In
 particular, deployment-key create/rotate/revoke and the reveal-once token stay
-exclusively on WebApps; neither the Advanced feature nor an operation log reads it.
+exclusively on WebApps; neither the Platform feature nor an operation log reads
+it.
 
 ## REST boundary
 

@@ -81,17 +81,20 @@ built in and stored only in browser local storage. The responsive shell keeps
 keyboard-visible controls, traps focus in modals, restores focus on close, and
 uses text nodes for API data; only the fixed local SVG icon catalog uses HTML.
 
-System Setup is visible only to a literal superuser. Its private
-`assets/features/advanced/page.js` module renders the normalized readiness
+The Platform feature owns the System Setup/readiness/control-plane journey and
+is visible only to a literal superuser. Its private
+`assets/features/platform/page.js` module renders the normalized readiness
 report, durable step progress, typed
 late choices, cancellation, and bounded live log. See
 [System Setup and Readiness](system_setup.md) for the service and security
 contracts.
 
-`assets/features/platform/page.js` is the permanent hosting UI. It does not
+The Advanced feature owns raw Domains, Credentials, DNS, Certificates,
+Upstreams, Vhosts, and Routes. Its `assets/features/advanced/page.js` module is
+the permanent hosting UI. It does not
 create portal-only mutation endpoints. Provider DNS writes are keyed
-single-flight and receive no
-automatic transport retry. Every write is followed by a fresh authoritative
+single-flight and receive no automatic transport retry. Every write is
+followed by a fresh authoritative
 record read; an unconfirmed outcome latches that record set as
 refresh-required until the operator explicitly refreshes it. Vhost creation is
 a four-shape wizard (`api`, `site`, `site_api`, `redirect`); `site_api` routes

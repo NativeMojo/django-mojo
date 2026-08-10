@@ -5,7 +5,7 @@ import people from './people/feature.js';
 import platform from './platform/feature.js';
 import webapps from './webapps/feature.js';
 
-const DESCRIPTORS = Object.freeze([advanced, dashboard, people, activity, platform, webapps]);
+const DESCRIPTORS = Object.freeze([platform, dashboard, people, activity, advanced, webapps]);
 const ROUTES = new Map();
 
 for (const feature of DESCRIPTORS) {

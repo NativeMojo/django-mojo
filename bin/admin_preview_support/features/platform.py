@@ -1,14 +1,10 @@
-from copy import deepcopy
-
-
 NAME = "platform"
 
 
 def describe(capabilities):
-    values = {"view": capabilities["network"], "manage": capabilities["manage_network"]}
-    return {"id": NAME, "enabled": values["view"], "capabilities": values}
+    return {"id": NAME, "enabled": capabilities["setup"],
+            "capabilities": {"setup": capabilities["setup"]}}
 
 
-def reset(handler, fixtures, **options):
-    for name in ("records", "credentials", "vhosts", "routes"):
-        setattr(handler, name, deepcopy(fixtures[name]))
+def reset(handler, fixtures, *, setup_state="idle", **options):
+    handler.setup_operation = fixtures["setup_choice"]() if setup_state == "choice" else None

@@ -13,12 +13,17 @@ ASSETS = ROOT / "mojo/apps/account/admin_portal/assets"
 def test_modular_shell_contract(opts):
     app = (ASSETS / "app.js").read_text()
     registry = (ASSETS / "features/registry.js").read_text()
+    platform = (ASSETS / "features/platform/feature.js").read_text()
+    advanced = (ASSETS / "features/advanced/feature.js").read_text()
     assert "feature.render({ctx: context, route, navigate, signal: renderController.signal})" in app
     assert "controller?.abort()" in app and "page.dispose?.()" in app
     assert "page instanceof Node" in app and "closeAllOverlays()" in app
     assert "features/platform/page.js" not in app and "features/people/page.js" not in app
     for name in ("dashboard", "people", "webapps", "activity", "platform", "advanced"):
         assert f"./{name}/feature.js" in registry
+    assert "routes: ['setup']" in platform and "setupPage(ctx)" in platform
+    assert "const ROUTES = ['domains', 'credentials', 'dns', 'certificates'" in advanced
+    assert "networkPage(ctx, route)" in advanced
 
 
 @th.django_unit_test("shared relationship controls preserve paged REST envelopes")
@@ -46,23 +51,23 @@ def test_overlay_contract(opts):
 
 @th.django_unit_test("feature lanes retain provider-safe hosting workflows")
 def test_feature_asset_contracts(opts):
-    advanced = (ASSETS / "features/advanced/page.js").read_text()
     platform = (ASSETS / "features/platform/page.js").read_text()
+    advanced = (ASSETS / "features/advanced/page.js").read_text()
     webapps = (ASSETS / "features/webapps/page.js").read_text()
     core = (ASSETS / "core.js").read_text()
     app = (ASSETS / "app.js").read_text()
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
 
-    assert "result.token" not in advanced and "MOJO_DEPLOY_KEY" not in advanced
-    assert "apiOnce" in platform and "refresh-required" in platform
+    assert "result.token" not in platform and "MOJO_DEPLOY_KEY" not in platform
+    assert "apiOnce" in advanced and "refresh-required" in advanced
     assert "class: 'table-wrap', tabindex: '0', role: 'region'" in core
     assert "['ArrowLeft', 'ArrowRight'].includes(event.key)" in core
-    assert "canonicalRecordName" in platform and "sameRecordSet" in platform
-    assert "ensureRoute" in platform and "ROUTE_REPAIR_KEY" in platform
-    assert "routeState(await loadRoutes(), desired)" in platform
-    assert "rememberRoute(desired" in platform and "forgetRoute(desired)" in platform
-    assert "result.token = null" in webapps and "quote.token = null" in platform
-    assert "secretPayload.api_secret = ''" in platform
+    assert "canonicalRecordName" in advanced and "sameRecordSet" in advanced
+    assert "ensureRoute" in advanced and "ROUTE_REPAIR_KEY" in advanced
+    assert "routeState(await loadRoutes(), desired)" in advanced
+    assert "rememberRoute(desired" in advanced and "forgetRoute(desired)" in advanced
+    assert "result.token = null" in webapps and "quote.token = null" in advanced
+    assert "secretPayload.api_secret = ''" in advanced
     assert "data-webapp-key" in webapps
     assert "oneTimeSecret(webapp, result, returnFocus)" in webapps
     assert "--setup-state" in preview and "[redacted]" in preview
@@ -70,10 +75,10 @@ def test_feature_asset_contracts(opts):
     assert "Deterministic partial route failure" in preview
     assert "mojo-admin-theme" in app and "focus?.({preventScroll: true})" in app
     for shape in ("api", "site", "site_api", "redirect"):
-        assert f"'{shape}'" in platform
+        assert f"'{shape}'" in advanced
     for endpoint in (
             "/api/dnsman/registrar/purchase", "/api/dnsman/credential/link",
             "/api/dnsman/dns", "/api/dnsman/certificate/request",
             "/api/edge/upstream/declare", "/api/edge/vhost",
             "/api/edge/route"):
-        assert endpoint in platform, f"Platform is missing {endpoint}"
+        assert endpoint in advanced, f"Advanced is missing {endpoint}"

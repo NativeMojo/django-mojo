@@ -52,8 +52,11 @@ token for create/rotate and offers revoke; System Setup only links there.
 
 The packaged portal is divided into six fixed, capability-gated feature lanes:
 Dashboard, People, WebApps, Activity (reserved and disabled until its provider
-enables it), Platform, and Advanced. Bootstrap returns both the stable flat
-`capabilities` object and a namespaced `features` object:
+enables it), Platform, and Advanced. Platform owns System Setup, readiness, and
+the guided control-plane journey. Advanced owns the raw Domains, Credentials,
+DNS, Certificates, Upstreams, Vhosts, Routes, and network resources. Bootstrap
+returns both the stable flat `capabilities` object and a namespaced `features`
+object:
 
 ```json
 {
@@ -61,6 +64,10 @@ enables it), Platform, and Advanced. Bootstrap returns both the stable flat
   "features": {
     "people": {"id": "people", "enabled": true,
                "capabilities": {"users": true, "groups": true}},
+    "platform": {"id": "platform", "enabled": true,
+                 "capabilities": {"setup": true}},
+    "advanced": {"id": "advanced", "enabled": true,
+                 "capabilities": {"view": true, "manage": true}},
     "activity": {"id": "activity", "enabled": false,
                  "capabilities": {"view": false}}
   }

@@ -1,10 +1,7 @@
-"""Platform/network feature capabilities."""
+"""Platform/System Setup feature capabilities."""
 
 
 def describe(request, capabilities):
-    values = {
-        "view": bool(capabilities.get("network")),
-        "manage": bool(capabilities.get("manage_network")),
-    }
-    return {"id": "platform", "enabled": values["view"],
-            "capabilities": values}
+    enabled = bool(capabilities.get("setup"))
+    return {"id": "platform", "enabled": enabled,
+            "capabilities": {"setup": enabled}}

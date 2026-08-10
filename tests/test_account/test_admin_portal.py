@@ -47,6 +47,7 @@ def test_anonymous_delivery_is_gate_only(opts):
     assert client.get("/admin/assets/app.js").status_code == 404
     assert client.get("/admin/assets/features/people/feature.js").status_code == 404
     assert client.get("/admin/assets/features/advanced/page.js").status_code == 404
+    assert client.get("/admin/assets/features/platform/page.js").status_code == 404
 
 
 @th.django_unit_test("interactive JWT creates a path-scoped modular Admin source session")
@@ -65,7 +66,8 @@ def test_authenticated_admin_delivery(opts):
     assert tuple(data.get("features", {})) == (
         "dashboard", "people", "webapps", "activity", "platform", "advanced")
     assert data["features"]["activity"]["enabled"] is False
-    assert data["features"]["platform"]["capabilities"]["manage"] is True
+    assert data["features"]["platform"]["capabilities"]["setup"] is True
+    assert data["features"]["advanced"]["capabilities"]["manage"] is True
 
     opts.client.logout()
     assert "<title>MOJO Admin</title>" in opts.client.get("/admin/").text
