@@ -338,6 +338,8 @@ This prevents non-admin users from escalating their own access.
 | WebApp key status | `GET /api/edge/webapp/key_status?webapp=<id>` | `view_dns`, `manage_dns`, or `security`, plus object access |
 | WebApp key create/rotate | `POST /api/edge/webapp/link_key` | `manage_webapp`, recent interactive auth, plus object access |
 | WebApp key revoke | `POST /api/edge/webapp/revoke_key` | `manage_webapp`, recent interactive auth, plus object access |
+| WebApp onboarding | `/api/edge/webapp/onboarding/{options,create,detail,choose,cancel,workflow}` | `manage_webapp` or `security`, exact group/actor/origin; mutations require interactive auth |
+| WebApp summary v1 | `GET /api/edge/webapp/summary?webapp=<id>` | `view_dns`, `manage_dns`, or `security`, plus object access |
 | Domains and live DNS | `/api/dnsman/domain`, `/api/dnsman/dns*`, `/api/dnsman/registrar/*` | `view_dns` / `manage_dns`; adopt/discover are literal superuser only |
 | DNS provider credentials | `/api/dnsman/credential`, `/api/dnsman/credential/link` | `view_dns` / `manage_dns`; secrets are write-only |
 | Certificates | `/api/dnsman/certificate`, `/api/dnsman/certificate/request` | `view_dns` / `manage_dns`; portal never calls material |

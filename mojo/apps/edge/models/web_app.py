@@ -34,6 +34,32 @@ class WebApp(models.Model, MojoModel):
         max_length=64, db_index=True,
         help_text="Human label for this site. NOT a filesystem path.")
 
+    display_name = models.CharField(
+        max_length=120, blank=True, default="",
+        help_text="Human-facing application name; never a storage or route key.")
+
+    environment = models.CharField(
+        max_length=16,
+        choices=[
+            ("production", "Production"),
+            ("staging", "Staging"),
+            ("preview", "Preview"),
+            ("development", "Development"),
+        ],
+        default="production", db_index=True)
+
+    github_repository = models.CharField(
+        max_length=255, blank=True, default="",
+        help_text="Validated OWNER/REPOSITORY identifier; never a URL.")
+
+    deployment_ref = models.CharField(
+        max_length=255, blank=True, default="main",
+        help_text="Validated branch or tag used by the generated workflow.")
+
+    build_output = models.CharField(
+        max_length=255, blank=True, default="dist",
+        help_text="Validated relative build-output directory.")
+
     vhost = models.OneToOneField(
         "edge.Vhost",
         related_name="web_app",
@@ -84,7 +110,7 @@ class WebApp(models.Model, MojoModel):
         SAVE_PERMS = ["manage_dns", "security"]
         DELETE_PERMS = ["manage_dns", "security"]
         LOG_CHANGES = True
-        SEARCH_FIELDS = ["slug"]
+        SEARCH_FIELDS = ["slug", "display_name", "github_repository"]
         # Every field below is either a promotion decision or an authorization
         # decision wearing a field's clothes.
         #
@@ -109,7 +135,9 @@ class WebApp(models.Model, MojoModel):
             },
             "default": {
                 "fields": [
-                    "id", "created", "modified", "slug", "bucket", "prefix",
+                    "id", "created", "modified", "slug", "display_name",
+                    "environment", "github_repository", "deployment_ref",
+                    "build_output", "bucket", "prefix",
                 ],
                 "graphs": {
                     "group": "basic",
@@ -118,7 +146,10 @@ class WebApp(models.Model, MojoModel):
                 },
             },
             "list": {
-                "fields": ["id", "created", "slug"],
+                "fields": [
+                    "id", "created", "slug", "display_name", "environment",
+                    "github_repository", "deployment_ref", "build_output",
+                ],
                 "graphs": {"current_release": "basic"},
             },
         }

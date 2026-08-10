@@ -23,8 +23,11 @@ def bootstrap(groups):
     }
 
 
-def reset(handler, fixtures, *, key_state="active", setup_state="idle", activity_state="full"):
+def reset(handler, fixtures, *, key_state="active", setup_state="idle",
+          activity_state="full", onboarding_state="idle"):
     """Reset every stateful provider so scenarios never leak across runs."""
     for provider in PROVIDERS:
         provider.reset(handler, fixtures, key_state=key_state,
-                       setup_state=setup_state, activity_state=activity_state)
+                       setup_state=setup_state,
+                       activity_state=activity_state,
+                       onboarding_state=onboarding_state)

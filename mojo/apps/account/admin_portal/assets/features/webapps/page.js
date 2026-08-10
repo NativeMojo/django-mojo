@@ -1,4 +1,4 @@
-import {api, badge, formatDate, h, icon, listData, openModal, pageHeader, TableView} from '../../core.js';
+import {api, apiOnce, badge, formatDate, h, icon, listData, openModal, pageHeader, TableView} from '../../core.js';
 
 function oneTimeSecret(webapp, result, returnFocus) {
   let secret = result.token;
@@ -36,7 +36,9 @@ async function credentialDialog(webapp, reload) {
       const result = await api('/api/edge/webapp/link_key', {method: 'POST', body: JSON.stringify({webapp: webapp.id, action, operation_id: crypto.randomUUID()})});
       close(); await reload();
       const returnFocus = document.querySelector(`[data-webapp-key="${webapp.id}"]`);
-      oneTimeSecret(webapp, result, returnFocus);
+      if (result.token) oneTimeSecret(webapp, result, returnFocus);
+      else openModal({title: `${webapp.slug} secret unavailable`, subtitle: 'The credential mutation has a durable receipt.', returnFocus,
+        content: h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: 'The reveal response was already consumed or lost. The token cannot be recovered; explicitly rotate to receive a new value.'}))});
     } catch (error) { message.textContent = error.message; submit.disabled = false; }
   });
 }
@@ -54,11 +56,192 @@ function revokeCredential(webapp, reload) {
   });
 }
 
+async function workflowDialog(webapp) {
+  const message = h('div', {class: 'form-message', role: 'alert'});
+  const content = h('div', {class: 'wizard-form'}, message);
+  openModal({title: `${webapp.slug} GitHub workflow`, subtitle: 'Versioned, validated inputs and no embedded secrets.', content});
+  try {
+    const result = await api('/api/edge/webapp/onboarding/workflow', {method: 'POST', body: JSON.stringify({webapp: webapp.id})});
+    const text = h('textarea', {class: 'secret', readonly: true, rows: '18', text: result.yaml});
+    content.replaceChildren(h('div', {class: 'callout'}, icon('key'), h('p', {text: 'Save this file at .github/workflows/deploy-webapp.yml and configure MOJO_DEPLOY_KEY separately.'})),
+      text, h('button', {class: 'button primary', onclick: async (event) => {
+        await navigator.clipboard.writeText(text.value); event.currentTarget.textContent = 'Copied';
+      }}, 'Copy workflow'));
+  } catch (error) { message.textContent = error.message; }
+}
+
+function field(label, input, help = '') {
+  return h('label', {class: 'field'}, h('span', {text: label}), input,
+    help ? h('small', {text: help}) : null);
+}
+
+function stepList(operation) {
+  const steps = [['app', 'App'], ['address', 'Address'], ['github', 'Connect GitHub'], ['verify', 'Verify']];
+  const current = steps.findIndex(([id]) => id === operation.cursor);
+  return h('ol', {class: 'onboarding-steps', 'aria-label': 'WebApp onboarding progress'},
+    ...steps.map(([id, label], index) => h('li', {
+      class: index < current || operation.cursor === 'complete' ? 'complete' : index === current ? 'current' : '',
+      'aria-current': index === current ? 'step' : null,
+    }, h('span', {text: index < current || operation.cursor === 'complete' ? '✓' : String(index + 1)}), label)));
+}
+
+async function chooseStep(operation, choice, update, message) {
+  try {
+    const result = await apiOnce('/api/edge/webapp/onboarding/choose', {method: 'POST', body: JSON.stringify({
+      operation: operation.operation_id, revision: operation.revision,
+      step: operation.cursor, choice,
+    })});
+    update(result);
+  } catch (error) {
+    message.textContent = `${error.message}. If the provider may have accepted the request, use “Reconcile status”; do not replay it blindly.`;
+    message.classList.add('refresh-required');
+  }
+}
+
+function addressChoice(operation, ctx, update) {
+  const wrap = h('div', {class: 'wizard-choice'});
+  const message = h('div', {class: 'form-message', role: 'alert'});
+  const label = h('input', {value: 'www', autocomplete: 'off'});
+  const mode = h('select', {}, h('option', {value: 'existing', text: 'Use a managed domain'}),
+    h('option', {value: 'purchase', text: 'Purchase a new domain'}));
+  const choices = h('div');
+  let quote = null;
+  async function renderMode() {
+    choices.replaceChildren();
+    if (mode.value === 'existing') {
+      const domain = h('select', {}, h('option', {value: '', text: 'Select a domain'}));
+      try {
+        listData(await api(`/api/dnsman/domain?group=${encodeURIComponent(ctx.groups?.[0]?.id || '')}`))
+          .filter((row) => row.status === 'active' && row.verified !== false)
+          .forEach((row) => domain.append(h('option', {value: row.id, text: row.name})));
+      } catch (error) { message.textContent = error.message; }
+      choices.append(field('Managed domain', domain), h('button', {class: 'button primary', onclick: () => {
+        if (!domain.value) { message.textContent = 'Select a managed domain.'; return; }
+        chooseStep(operation, {domain: Number(domain.value), label: label.value}, update, message);
+      }}, 'Continue'));
+      return;
+    }
+    const name = h('input', {placeholder: 'example.com', autocomplete: 'off'});
+    const quoteButton = h('button', {class: 'button'}, 'Get live quote');
+    const confirm = h('div');
+    quoteButton.addEventListener('click', async () => {
+      try {
+        quote = await apiOnce('/api/dnsman/registrar/quote', {method: 'POST', body: JSON.stringify({
+          group: ctx.groups?.[0]?.id, domain: name.value, years: 1,
+        })});
+        confirm.replaceChildren(h('div', {class: 'callout warning'}, icon('alert'), h('div', {},
+          h('strong', {text: `${quote.name} — ${quote.price} ${quote.currency}`}),
+          h('p', {text: `Quote expires ${formatDate(quote.expires)}. Type the exact domain and price to authorize the purchase.`}))),
+        field('Confirm domain', h('input', {id: 'purchase-domain', autocomplete: 'off'})),
+        field('Confirm price', h('input', {id: 'purchase-price', inputmode: 'decimal', autocomplete: 'off'})),
+        h('button', {class: 'button danger', onclick: async () => {
+          const payload = {purchase: quote.purchase, confirm_token: quote.token,
+            confirm_domain: confirm.querySelector('#purchase-domain').value,
+            confirm_price: confirm.querySelector('#purchase-price').value, label: label.value};
+          await chooseStep(operation, payload, update, message);
+          quote.token = null; quote = null;
+        }}, 'Purchase and continue'));
+      } catch (error) { message.textContent = error.message; }
+    });
+    choices.append(field('Domain to purchase', name), quoteButton, confirm);
+  }
+  mode.addEventListener('change', renderMode);
+  wrap.append(field('Subdomain', label, 'Apex onboarding is intentionally refused.'), field('Address source', mode), choices, message);
+  renderMode();
+  return wrap;
+}
+
+function githubChoice(operation, update) {
+  const profile = operation.profile || {};
+  const repository = h('input', {value: profile.github_repository || '', placeholder: 'owner/repository', autocomplete: 'off'});
+  const ref = h('input', {value: profile.deployment_ref || 'main', autocomplete: 'off'});
+  const output = h('input', {value: profile.build_output || 'dist', autocomplete: 'off'});
+  const attest = h('input', {type: 'checkbox'});
+  const message = h('div', {class: 'form-message', role: 'alert'});
+  return h('div', {class: 'wizard-choice'},
+    field('Repository', repository, 'Only a repository visible to this group’s GitHub App installation can be verified.'),
+    field('Branch or tag', ref), field('Build output directory', output),
+    h('label', {class: 'check-row'}, attest, h('span', {text: 'Continue with an explicit attestation if GitHub evidence is unavailable'})),
+    h('button', {class: 'button primary', onclick: () => chooseStep(operation, {
+      repository: repository.value, ref: ref.value, output: output.value,
+      attest_unavailable: attest.checked,
+    }, update, message)}, 'Connect and verify'), message);
+}
+
+function wizardChoice(operation, ctx, update) {
+  const message = h('div', {class: 'form-message', role: 'alert'});
+  if (operation.cursor === 'app') return h('div', {class: 'wizard-choice'},
+    h('p', {text: 'Create or adopt the application profile using the frozen values above.'}),
+    h('button', {class: 'button primary', onclick: () => chooseStep(operation, {}, update, message)}, 'Create application'), message);
+  if (operation.cursor === 'address') return addressChoice(operation, ctx, update);
+  if (operation.cursor === 'github') return githubChoice(operation, update);
+  if (operation.cursor === 'verify') return h('div', {class: 'wizard-choice'},
+    h('p', {text: 'Run a DNS-pinned HTTPS request to the owned hostname. Redirects and non-public addresses are refused.'}),
+    h('button', {class: 'button primary', onclick: () => chooseStep(operation, {}, update, message)}, 'Verify HTTPS root'), message);
+  return h('div', {class: 'callout success'}, icon('check'), h('p', {text: 'Onboarding is complete.'}));
+}
+
+function onboardingPanel(initial, ctx, reloadApps) {
+  let operation = initial;
+  const root = h('section', {class: 'panel onboarding-panel'});
+  const update = (next) => { operation = next.operation || next; render(); };
+  async function reconcile() {
+    try { update(await api(`/api/edge/webapp/onboarding/detail?operation=${encodeURIComponent(operation.operation_id)}`)); await reloadApps(); }
+    catch (error) { root.querySelector('.form-message').textContent = error.message; }
+  }
+  function render() {
+    const evidence = Object.entries(operation.evidence || {}).map(([key, value]) =>
+      h('div', {}, h('dt', {text: key}), h('dd', {}, badge(value.status || 'recorded'))));
+    root.replaceChildren(h('div', {class: 'panel-heading'}, h('div', {},
+      h('h2', {text: operation.profile?.display_name || operation.profile?.slug || 'New WebApp'}),
+      h('p', {text: `${operation.status} · revision ${operation.revision}`})),
+      h('button', {class: 'button compact', onclick: reconcile}, icon('refresh'), 'Reconcile status')),
+    stepList(operation), operation.last_error ? h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: operation.last_error})) : null,
+    evidence.length ? h('dl', {class: 'details onboarding-evidence'}, ...evidence) : null,
+    wizardChoice(operation, ctx, update), h('div', {class: 'form-message', role: 'alert'}));
+  }
+  render(); return root;
+}
+
+function startOnboarding(ctx, mount, reloadApps) {
+  const group = h('select', {}, ...(ctx.groups || []).map((row) => h('option', {value: row.id, text: row.name})));
+  const slug = h('input', {placeholder: 'customer-portal', autocomplete: 'off'});
+  const name = h('input', {placeholder: 'Customer portal', autocomplete: 'off'});
+  const environment = h('select', {}, ...['production', 'staging', 'preview', 'development'].map((value) => h('option', {value, text: value})));
+  const repository = h('input', {placeholder: 'owner/repository', autocomplete: 'off'});
+  const ref = h('input', {value: 'main', autocomplete: 'off'});
+  const output = h('input', {value: 'dist', autocomplete: 'off'});
+  const bucket = h('select');
+  const message = h('div', {class: 'form-message', role: 'alert'});
+  const submit = h('button', {class: 'button primary'}, 'Start onboarding');
+  api(`/api/edge/webapp/onboarding/options?group=${encodeURIComponent(group.value)}`).then((data) => {
+    bucket.replaceChildren(...(data.buckets || []).map((value) => h('option', {value, text: value})));
+  }).catch((error) => { message.textContent = error.message; });
+  const content = h('div', {class: 'wizard-form'}, field('Group', group), field('Application slug', slug),
+    field('Display name', name), field('Environment', environment), field('Release bucket', bucket),
+    field('GitHub repository', repository), field('Deployment ref', ref), field('Build output', output),
+    message, h('div', {class: 'form-actions'}, submit));
+  const close = openModal({title: 'Onboard WebApp', subtitle: 'App → Address → Connect GitHub → Verify', content});
+  submit.addEventListener('click', async () => {
+    submit.disabled = true;
+    try {
+      const result = await api('/api/edge/webapp/onboarding/create', {method: 'POST', body: JSON.stringify({
+        group: Number(group.value), slug: slug.value, display_name: name.value,
+        environment: environment.value, bucket: bucket.value,
+        github_repository: repository.value, deployment_ref: ref.value, build_output: output.value,
+      })});
+      close(); mount.replaceChildren(onboardingPanel(result.operation, ctx, reloadApps));
+    } catch (error) { message.textContent = error.message; submit.disabled = false; }
+  });
+}
+
 export async function webappsPage(ctx) {
   const root = h('div', {class: 'page'});
+  const onboarding = h('div', {class: 'onboarding-mount'});
   async function render() {
-    root.replaceChildren(pageHeader('Deployments', 'WebApps', 'Release destinations and their GitHub deployment credentials.'));
-    const panel = h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: 'Applications'}), h('p', {text: 'Manage MOJO_DEPLOY_KEY without exposing unrelated API keys.'}))));
+    root.replaceChildren(pageHeader('Deployments', 'WebApps', 'Durable App → Address → GitHub → Verify onboarding.'), onboarding);
+    const panel = h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: 'Applications'}), h('p', {text: 'Manage onboarding and MOJO_DEPLOY_KEY without exposing unrelated API keys.'})),
+      ctx.capabilities.manage_webapps ? h('button', {class: 'button primary', onclick: () => startOnboarding(ctx, onboarding, render)}, icon('plus'), 'Onboard WebApp') : null));
     root.append(panel);
     try {
       const rows = listData(await api('/api/edge/webapp'));
@@ -74,7 +257,9 @@ export async function webappsPage(ctx) {
         {label: 'Current release', render: (r) => r.current_release ? badge(r.current_release.version || r.current_release.id, 'success') : badge('No release')},
         {label: 'Deploy key', render: (r) => { const status = statuses.get(r.id); return status?.linked && status?.active ? badge('Active', 'success') : status?.last_action === 'revoke' ? badge('Revoked', 'warning') : badge('Missing', 'neutral'); }},
         {label: 'Created', render: (r) => formatDate(r.created)},
-        {label: '', render: (row) => ctx.capabilities.manage_webapps ? h('button', {class: 'button compact', 'data-webapp-key': row.id}, icon('key'), 'Manage key') : null},
+        {label: '', render: (row) => ctx.capabilities.manage_webapps ? h('div', {class: 'row-actions'},
+          h('button', {class: 'button compact', 'data-webapp-key': row.id, onclick: (event) => { event.stopPropagation(); credentialDialog(row, render); }}, icon('key'), 'Manage key'),
+          row.github_repository ? h('button', {class: 'button compact', onclick: (event) => { event.stopPropagation(); workflowDialog(row); }}, 'Workflow') : null) : null},
       ], rows, empty: 'No WebApps are visible in your scope.', onSelect: ctx.capabilities.manage_webapps ? (row) => credentialDialog(row, render) : null}).render());
     } catch (error) { panel.append(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
   }

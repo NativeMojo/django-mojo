@@ -56,9 +56,37 @@ ROUTES = [
     {"id": 72, "path_prefix": "/ws", "modified": "2026-08-09T21:01:00Z", "vhost": {"id": 62, "server_name": "nativemojo.com"}, "upstream": {"id": 52, "name": "realtime"}},
 ]
 WEBAPPS = [
-    {"id": 42, "slug": "mojo-portal", "created": "2026-07-19T10:00:00Z", "current_release": {"id": 18, "version": "8d42ea1"}},
-    {"id": 54, "slug": "docs", "created": "2026-07-30T16:40:00Z", "current_release": None},
+    {"id": 42, "slug": "mojo-portal", "display_name": "MOJO Portal", "environment": "production", "github_repository": "NativeMojo/portal", "deployment_ref": "main", "build_output": "dist", "created": "2026-07-19T10:00:00Z", "current_release": {"id": 18, "version": "8d42ea1"}},
+    {"id": 54, "slug": "docs", "display_name": "Documentation", "environment": "production", "github_repository": "NativeMojo/docs", "deployment_ref": "main", "build_output": "site", "created": "2026-07-30T16:40:00Z", "current_release": None},
 ]
+
+
+def webapp_onboarding_operation(state="address"):
+    cursors = {"address": "address", "github": "github", "verify": "verify",
+               "complete": "complete", "lost_key": "complete"}
+    cursor = cursors.get(state, "address")
+    completed = ["app", "address", "github", "verify"].index(cursor) if cursor != "complete" else 4
+    evidence = {}
+    for key in ["app", "address", "github", "verify"][:completed]:
+        evidence[key] = {"status": "verified"}
+    if state == "lost_key":
+        evidence["deployment_key"] = {"status": "secret_unavailable"}
+    return {
+        "schema_version": 1, "id": 1816,
+        "operation_id": "00000000-0000-4000-8000-000000001816",
+        "status": "succeeded" if cursor == "complete" else "waiting",
+        "cursor": cursor, "revision": completed + 2,
+        "profile": {"slug": "customer-portal", "display_name": "Customer Portal",
+                    "environment": "production", "bucket": "mojo-releases",
+                    "github_repository": "NativeMojo/customer-portal",
+                    "deployment_ref": "main", "build_output": "dist"},
+        "choices": {}, "evidence": evidence,
+        "resources": {"webapp": 42 if completed else None, "domain": 11 if completed > 1 else None,
+                      "certificate": 21 if completed > 1 else None, "vhost": 62 if completed > 1 else None},
+        "attempts": 0, "last_error": "", "activity": [
+            {"at": "2026-08-10T17:00:00Z", "kind": "info",
+             "message": "Application intent reconciled"}],
+    }
 
 
 def readiness_sections():
@@ -128,6 +156,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
     credentials = []
     vhosts = []
     routes = []
+    onboarding_operation = None
 
     def log_message(self, fmt, *args):
         return
@@ -153,11 +182,15 @@ class PreviewHandler(BaseHTTPRequestHandler):
         }
         return states[self.key_state]
 
-    @staticmethod
-    def _safe_payload(payload):
+    @classmethod
+    def _safe_payload(cls, payload):
         hidden = {"api_key", "api_secret", "confirm_token", "token", "password"}
-        return {key: "[redacted]" if key in hidden else value
-                for key, value in payload.items()}
+        if isinstance(payload, dict):
+            return {key: "[redacted]" if key.lower() in hidden else cls._safe_payload(value)
+                    for key, value in payload.items()}
+        if isinstance(payload, list):
+            return [cls._safe_payload(value) for value in payload]
+        return payload
 
     def _record_event(self, path, payload):
         type(self).events.append({"path": path,
@@ -209,6 +242,18 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return self._send({"domains": [{"name": "adopt-me.example", "hosted": True, "registered": False}], "truncated": False})
         if path == "/api/edge/webapp/key_status":
             return self._send({"webapp": 42, "secret_name": "MOJO_DEPLOY_KEY", "status": self._key_status()})
+        if path == "/api/edge/webapp/onboarding/options":
+            return self._send({"schema_version": 1, "buckets": ["mojo-releases"],
+                               "environments": ["production", "staging", "preview", "development"],
+                               "cname_target": "edge.nativemojo.com", "github_connected": True,
+                               "limits": {"attempts": 8, "lease_seconds": 90}})
+        if path == "/api/edge/webapp/onboarding/detail":
+            return self._send(self.onboarding_operation or webapp_onboarding_operation("address"))
+        if path == "/api/edge/webapp/summary":
+            return self._send({"schema_version": 1, "webapp": WEBAPPS[0],
+                               "address": {"hostname": "portal.nativemojo.com", "https_origin": "https://portal.nativemojo.com"},
+                               "onboarding": {"status": "succeeded", "cursor": "complete", "evidence": {}},
+                               "deployment_key": {"linked": True, "active": True}})
         return self._send({"error": "Not found"}, status=404)
 
     def do_GET(self):
@@ -247,6 +292,27 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if path == "/api/edge/webapp/revoke_key":
             type(self).key_state = "revoked"
             return self._send({"webapp": 42, "secret_name": "MOJO_DEPLOY_KEY", "replayed": False, "operation_id": "preview", "status": self._key_status()})
+        if path == "/api/edge/webapp/onboarding/create":
+            type(self).onboarding_operation = webapp_onboarding_operation("address")
+            self.onboarding_operation["profile"].update({
+                key: value for key, value in payload.items()
+                if key in self.onboarding_operation["profile"]})
+            return self._send({"created": True, "operation": self.onboarding_operation})
+        if path == "/api/edge/webapp/onboarding/choose":
+            order = {"app": "address", "address": "github", "github": "verify", "verify": "complete"}
+            current = self.onboarding_operation or webapp_onboarding_operation("address")
+            next_state = order.get(current.get("cursor"), "complete")
+            type(self).onboarding_operation = webapp_onboarding_operation(next_state)
+            return self._send(self.onboarding_operation)
+        if path == "/api/edge/webapp/onboarding/cancel":
+            current = self.onboarding_operation or webapp_onboarding_operation("address")
+            current.update({"status": "cancelled"})
+            type(self).onboarding_operation = current
+            return self._send(current)
+        if path == "/api/edge/webapp/onboarding/workflow":
+            return self._send({"schema_version": 1, "repository": "NativeMojo/portal",
+                               "filename": ".github/workflows/deploy-webapp.yml",
+                               "yaml": "name: Deploy WebApp\npermissions:\n  contents: read\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n"})
         if path == "/api/account/admin/setup/create":
             type(self).setup_operation = setup_planned_operation(payload.get("mode", "fix"))
             return self._send(self.setup_operation)
@@ -328,13 +394,16 @@ def main():
     parser.add_argument("--key-state", choices=("missing", "active", "rotated", "revoked"), default="active")
     parser.add_argument("--setup-state", choices=("idle", "choice"), default="idle")
     parser.add_argument("--activity-state", choices=("full", "empty", "unavailable"), default="full")
+    parser.add_argument("--onboarding-state", choices=("idle", "address", "github", "verify", "complete", "lost_key"), default="idle")
     args = parser.parse_args()
     reset(PreviewHandler, {
         "records": RECORDS, "credentials": CREDENTIALS,
         "vhosts": VHOSTS, "routes": ROUTES,
         "setup_choice": setup_choice_operation,
+        "webapp_onboarding": webapp_onboarding_operation,
     }, key_state=args.key_state, setup_state=args.setup_state,
-        activity_state=args.activity_state)
+       activity_state=args.activity_state,
+       onboarding_state=args.onboarding_state)
     print(f"Admin visual fixture ({args.key_state} key): http://{HOST}:{args.port}/", flush=True)
     try:
         ThreadingHTTPServer((HOST, args.port), PreviewHandler).serve_forever()

@@ -1,1 +1,14 @@
 .credential-status { container-type: inline-size; }
+.onboarding-panel { border-color: var(--accent, #5b6cff); }
+.onboarding-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; list-style: none; margin: 0 0 1.25rem; padding: 0; }
+.onboarding-steps li { display: flex; align-items: center; gap: .45rem; color: var(--muted); font-size: .85rem; }
+.onboarding-steps li span { display: grid; place-items: center; width: 1.65rem; height: 1.65rem; border: 1px solid var(--border); border-radius: 50%; }
+.onboarding-steps li.current { color: var(--text); font-weight: 700; }
+.onboarding-steps li.current span { border-color: var(--accent); color: var(--accent); }
+.onboarding-steps li.complete span { border-color: var(--success); color: var(--success); }
+.wizard-choice, .wizard-form { display: grid; gap: .9rem; }
+.onboarding-evidence { margin-bottom: 1rem; }
+@media (max-width: 540px) {
+  .onboarding-steps { grid-template-columns: 1fr 1fr; }
+  .onboarding-steps li { min-width: 0; }
+}
