@@ -224,6 +224,63 @@ def test_aws_check_provider_paths_keep_exact_denied_actions(opts):
         f"AWS Check CloudWatch denial lost its exact IAM action: {cw_item}"
 
 
+@th.django_unit_test()
+def test_provider_boundary_reports_sts_ses_and_discovery_denials_safely(opts):
+    from botocore.exceptions import ClientError
+    from mojo.apps.aws.services import aws_check
+    from mojo.apps.aws.services.aws_setup import AWSSetupService
+    from mojo.helpers.aws.provider_call import ProviderCallError, ProviderCaller
+
+    sentinel = "credential=SHOULD-NEVER-ESCAPE"
+
+    def denied(operation):
+        return ClientError({
+            "Error": {"Code": "AuthorizationError", "Message": sentinel},
+            "ResponseMetadata": {"HTTPStatusCode": 403, "RequestId": "safe-request-1234"},
+        }, operation)
+
+    logger = mock.Mock()
+    provider = ProviderCaller(logger)
+    sts = mock.Mock()
+    sts.get_caller_identity.side_effect = denied("GetCallerIdentity")
+    identity_report = aws_check.AWSCheckRunner(
+        clients={"sts": sts}, provider=provider).run(["identity"])
+    identity_item = next(row for row in identity_report["items"]
+                         if row["code"] == "sts.denied")
+    assert identity_item["details"]["iam_action"] == "sts:GetCallerIdentity"
+
+    ses = mock.Mock()
+    ses.list_identities.side_effect = denied("ListIdentities")
+    try:
+        AWSSetupService(clients={"ses": ses}, provider=provider).discover_verified_domains()
+    except ProviderCallError as exc:
+        assert exc.detail()["iam_action"] == "ses:ListIdentities", \
+            f"SES denial lost its exact action: {exc.detail()}"
+    else:
+        raise AssertionError("SES discovery denial must cross ProviderCaller")
+
+    action_by_service = {
+        "ec2": "ec2:DescribeInstances",
+        "rds": "rds:DescribeDBInstances",
+        "elasticache": "elasticache:DescribeCacheClusters",
+        "elbv2": "elasticloadbalancing:DescribeTargetGroups",
+    }
+    for service, action in action_by_service.items():
+        clients = _discovery_clients()
+        clients[service].get_paginator.return_value.paginate.side_effect = denied(
+            action.rsplit(":", 1)[-1])
+        runner = aws_check.AWSCheckRunner(clients=clients, provider=provider)
+        runner._desired_alarms()
+        expected_code = ("resources.elbv2_denied" if service == "elbv2"
+                         else "resources.discovery_denied")
+        item = next(row for row in runner.results if row["code"] == expected_code)
+        assert item["details"]["iam_action"] == action, \
+            f"{service} denial lost {action}: {item}"
+        assert sentinel not in str(item), f"{service} leaked the raw provider error"
+    assert sentinel not in str(identity_report) and sentinel not in str(logger.method_calls), \
+        "Raw STS/SES/discovery provider messages must not reach reports or logs"
+
+
 def _setup_admin_identity(email):
     from mojo.apps.account.models import Setting, User
     from mojo.apps.account.services import system_settings
@@ -379,10 +436,14 @@ def test_setup_rejects_public_bucket_without_mutation(opts):
 
 @th.django_unit_test()
 def test_setup_s3_inventory_is_complete_exact_and_fail_closed(opts):
+    from mojo.apps.account.services import system_settings
     from mojo.apps.aws.services.aws_setup import AWSSetupService
 
+    actor = _setup_admin_identity("aws-setup-s3-matrix@test.com")
+    identity = system_settings.read_installation_identity()
     names = ["safe-media", "website-media", "tenant-media", "foreign-media",
-             "unknown-policy", "not-principal", "public-status"]
+             "unknown-policy", "not-principal", "public-status", "wrong-region",
+             "conflicting-tags", "public-acl", "foreign-grant"]
     s3 = _safe_bucket_client("unused")
 
     def list_buckets(**kwargs):
@@ -396,16 +457,35 @@ def test_setup_s3_inventory_is_complete_exact_and_fail_closed(opts):
         {"IndexDocument": {"Suffix": "index.html"}}
         if kwargs["Bucket"] == "website-media" else
         (_ for _ in ()).throw(_missing("GetBucketWebsite", "NoSuchWebsiteConfiguration")))
-    s3.get_bucket_tagging.side_effect = lambda **kwargs: (
-        {"TagSet": [{"Key": "tenant-id", "Value": "other"}]}
-        if kwargs["Bucket"] == "tenant-media" else
-        (_ for _ in ()).throw(_missing("GetBucketTagging", "NoSuchTagSet")))
+    s3.get_bucket_location.side_effect = lambda **kwargs: {
+        "LocationConstraint": (
+            "us-west-2" if kwargs["Bucket"] == "wrong-region" else None)}
+
+    def tagging(**kwargs):
+        if kwargs["Bucket"] == "tenant-media":
+            return {"TagSet": [{"Key": "tenant-id", "Value": "other"}]}
+        if kwargs["Bucket"] == "conflicting-tags":
+            return {"TagSet": [
+                {"Key": "managed-by", "Value": "another-platform"},
+                {"Key": "django-mojo-installation", "Value": identity["uuid"]},
+            ]}
+        raise _missing("GetBucketTagging", "NoSuchTagSet")
+
+    s3.get_bucket_tagging.side_effect = tagging
 
     def acl(**kwargs):
         owner = "foreign-owner" if kwargs["Bucket"] == "foreign-media" else "canonical-owner"
-        return {"Owner": {"ID": owner}, "Grants": [{
+        grant = {
             "Grantee": {"Type": "CanonicalUser", "ID": owner},
-            "Permission": "FULL_CONTROL"}]}
+            "Permission": "FULL_CONTROL"}
+        if kwargs["Bucket"] == "public-acl":
+            grant = {"Grantee": {"Type": "Group", "URI": (
+                "http://acs.amazonaws.com/groups/global/AllUsers")},
+                     "Permission": "READ"}
+        if kwargs["Bucket"] == "foreign-grant":
+            grant = {"Grantee": {"Type": "CanonicalUser", "ID": "other-owner"},
+                     "Permission": "READ"}
+        return {"Owner": {"ID": owner}, "Grants": [grant]}
 
     s3.get_bucket_acl.side_effect = acl
 
@@ -531,6 +611,34 @@ def test_aws_registry_builds_typed_late_choice_operations(opts):
         step["choice_revision"], {"bucket": "existing-media", "adopt_existing": True})
 
     SystemSetupOperation.objects.filter(pk=operation.pk).delete()
+    with mock.patch.object(
+            AWSSetupService, "discover_verified_domains",
+            return_value=["verified.example"]):
+        email, _ = system_setup.create(
+            request, "fix", section="aws_email", replay_key="aws-email-choice")
+    email = system_setup.advance(request, email.pk)
+    step = email.steps[email.cursor]
+    properties = step["choice_schema"]["properties"]
+    assert properties["domain"]["enum"] == ["verified.example"] \
+        and properties["sender"]["format"] == "email", \
+        f"SES setup must expose a verified-domain and typed sender choice: {step}"
+    for forged in (
+            {"domain": "forged.example", "sender": "ops@forged.example"},
+            {"domain": "verified.example", "sender": "not-an-address"}):
+        try:
+            system_setup.choose(
+                request, email.pk, step["id"], step["definition_version"],
+                step["choice_revision"], forged)
+        except Exception:
+            pass
+        else:
+            raise AssertionError(f"Forged SES choice must be rejected: {forged}")
+    system_setup.choose(
+        request, email.pk, step["id"], step["definition_version"],
+        step["choice_revision"],
+        {"domain": "verified.example", "sender": "ops@verified.example"})
+
+    SystemSetupOperation.objects.filter(pk=email.pk).delete()
     topic = "arn:aws:sns:us-east-1:123456789012:django-mojo-owned-operations"
     with mock.patch.object(AWSSetupService, "monitoring_topic_adoption", return_value={
             "topic_arn": topic, "topic_name": "django-mojo-owned-operations"}):
@@ -579,6 +687,13 @@ def test_setup_imports_verified_ses_sender_and_preserves_custom_templates(opts):
     except Exception as exc:
         rejected = exc
     assert rejected is not None, "A sender without a local part must be rejected before persistence"
+    try:
+        AWSSetupService(clients={"ses": ses}).configure_email(
+            actor, "verified.example", "ops@other.example")
+    except Exception:
+        pass
+    else:
+        raise AssertionError("A valid-looking sender on a forged domain must be rejected")
 
 
 @th.django_unit_test()
@@ -662,6 +777,13 @@ def test_monitoring_reconcile_is_repeatable_and_persists_protected_allowlist(opt
     assert cloudwatch.put_metric_alarm.call_count == 4 \
         and alarms[drifted_name]["Threshold"] == 90, \
         "An owned alarm's full desired configuration must be repaired idempotently"
+    alarms[drifted_name]["ActionsEnabled"] = False
+    alarms[drifted_name]["InsufficientDataActions"] = [topic]
+    service.reconcile_monitoring(actor, challenge, cutoff)
+    assert cloudwatch.put_metric_alarm.call_count == 5 \
+        and alarms[drifted_name]["ActionsEnabled"] is True \
+        and alarms[drifted_name]["InsufficientDataActions"] == [], \
+        "Disabled actions and injected insufficient-data actions must be repaired"
     assert cloudwatch.set_alarm_state.call_count == 1, \
         "A resumed ambiguous probe must not replay an already-observed ALARM mutation"
     assert any(row.get("Sid") == "KeepMe" for row in topic_policy["Statement"]), \
@@ -712,7 +834,8 @@ def test_monitoring_proof_requires_delivery_after_this_operation(opts):
         "DatapointsToAlarm": 1, "Threshold": 0,
         "ComparisonOperator": "GreaterThanThreshold",
         "TreatMissingData": "notBreaching", "Dimensions": [],
-        "AlarmActions": [topic], "OKActions": [topic], "StateValue": "OK",
+        "ActionsEnabled": True, "AlarmActions": [topic], "OKActions": [topic],
+        "InsufficientDataActions": [], "StateValue": "OK",
     }
     cloudwatch.describe_alarms.side_effect = lambda **kwargs: {
         "MetricAlarms": [probe] if probe_name in kwargs.get("AlarmNames", []) else []}
@@ -834,6 +957,29 @@ def test_monitoring_refuses_unsafe_publish_policy_before_legacy_adoption(opts):
         raise AssertionError("Unsafe publish grants must block explicit legacy adoption")
     assert not sns.tag_resource.called and not sns.set_topic_attributes.called, \
         "Unsafe legacy policy must remain untouched and unowned"
+    for action in (
+            "sns:SetTopicAttributes", "sns:AddPermission", "sns:RemovePermission",
+            "sns:Subscribe", "sns:GetTopicAttributes", "sns:ListSubscriptions"):
+        policy = {"Statement": [{
+            "Effect": "Allow", "Principal": "*", "Action": action,
+            "Resource": topic}]}
+        assert not _sns_publish_policy_is_safe(
+            policy, "123456789012", "us-east-1", identity["slug"], topic), \
+            f"Public topic authority must block adoption even when it is not Publish: {action}"
+    cross_account = {"Statement": [{
+        "Effect": "Allow",
+        "Principal": {"AWS": "arn:aws:iam::999999999999:root"},
+        "Action": "sns:Subscribe", "Resource": topic}]}
+    assert not _sns_publish_policy_is_safe(
+        cross_account, "123456789012", "us-east-1", identity["slug"], topic), \
+        "Cross-account subscription authority must block adoption"
+    same_account = {"Statement": [{
+        "Effect": "Allow",
+        "Principal": {"AWS": "arn:aws:iam::123456789012:root"},
+        "Action": ["sns:GetTopicAttributes", "sns:Subscribe"], "Resource": topic}]}
+    assert _sns_publish_policy_is_safe(
+        same_account, "123456789012", "us-east-1", identity["slug"], topic), \
+        "Explicit same-account owner grants must remain preservable"
     gov_topic = topic.replace("arn:aws:", "arn:aws-us-gov:")
     gov_policy = {"Statement": [{
         "Effect": "Allow", "Principal": {"Service": "cloudwatch.amazonaws.com"},
@@ -911,6 +1057,71 @@ def test_monitoring_explicit_adoption_corrects_base_url_subscription_once(opts):
         "Subscription correction must preserve the unrelated legacy endpoint"
     assert any(row["Endpoint"].startswith("https://api.example.com") for row in subscriptions), \
         "The current BASE_URL endpoint must be subscribed"
+
+
+@th.django_unit_test()
+def test_monitoring_creates_and_converges_fresh_owned_topic_once(opts):
+    from mojo.apps.account.services import system_settings
+    from mojo.apps.aws.services.aws_setup import AWSSetupService
+
+    actor = _setup_admin_identity("aws-setup-topic-fresh@test.com")
+    identity = system_settings.read_installation_identity()
+    topic = f"arn:aws:sns:us-east-1:123456789012:django-mojo-{identity['slug']}-operations"
+    topics, tags, subscriptions = [], [], []
+    policy = {"Version": "2012-10-17", "Statement": []}
+    sns = mock.Mock()
+    sns.list_topics.side_effect = lambda **kwargs: {"Topics": list(topics)}
+
+    def create_topic(**kwargs):
+        topics.append({"TopicArn": topic})
+        tags.extend(kwargs["Tags"])
+        return {"TopicArn": topic}
+
+    sns.create_topic.side_effect = create_topic
+    sns.list_tags_for_resource.side_effect = lambda **kwargs: {"Tags": list(tags)}
+    sns.get_topic_attributes.side_effect = lambda **kwargs: {
+        "Attributes": {"Policy": __import__("json").dumps(policy)}}
+
+    def set_policy(**kwargs):
+        policy.clear()
+        policy.update(__import__("json").loads(kwargs["AttributeValue"]))
+
+    sns.set_topic_attributes.side_effect = set_policy
+    sns.list_subscriptions_by_topic.side_effect = lambda **kwargs: {
+        "Subscriptions": list(subscriptions)}
+
+    def subscribe(**kwargs):
+        subscriptions.append({
+            "Protocol": kwargs["Protocol"], "Endpoint": kwargs["Endpoint"],
+            "SubscriptionArn": "arn:aws:sns:subscription/fresh"})
+        return {"SubscriptionArn": "arn:aws:sns:subscription/fresh"}
+
+    sns.subscribe.side_effect = subscribe
+    alarms = {}
+    cloudwatch = mock.Mock()
+    cloudwatch.describe_alarms.side_effect = lambda **kwargs: {
+        "MetricAlarms": [alarms[name] for name in kwargs.get("AlarmNames", [])
+                         if name in alarms]}
+
+    def put_alarm(**kwargs):
+        alarms[kwargs["AlarmName"]] = {
+            **{key: value for key, value in kwargs.items() if key != "Tags"},
+            "AlarmArn": ("arn:aws:cloudwatch:us-east-1:123456789012:alarm:"
+                         + kwargs["AlarmName"]), "StateValue": "OK"}
+
+    cloudwatch.put_metric_alarm.side_effect = put_alarm
+    cloudwatch.list_tags_for_resource.side_effect = lambda **kwargs: {"Tags": list(tags)}
+    service = AWSSetupService(clients={
+        "sns": sns, "cloudwatch": cloudwatch, "sts": _setup_sts()})
+    service._desired_monitoring_alarms = lambda cloudwatch: []
+    cutoff = __import__("django.utils.timezone", fromlist=["now"]).now()
+    service.reconcile_monitoring(actor, "1" * 32, cutoff, send_probe=False)
+    service.reconcile_monitoring(actor, "1" * 32, cutoff, send_probe=False)
+    assert sns.create_topic.call_count == 1, "A fresh owned topic must be created once"
+    assert sns.tag_resource.call_count == 0, "Creation tags establish ownership atomically"
+    assert sns.set_topic_attributes.call_count == 1, "The safe topic policy must converge once"
+    assert sns.subscribe.call_count == 1 and cloudwatch.put_metric_alarm.call_count == 1, \
+        "Fresh SNS subscription and probe alarm must converge without replay"
 
 
 @th.django_unit_test()
@@ -1060,24 +1271,44 @@ def test_runner_uses_static_credentials_unless_profile_selected(opts):
 
 
 @th.django_unit_test()
-def test_adopt_bucket_requires_private_public_access_block(opts):
+def test_legacy_cli_adoption_uses_fail_closed_setup_classifier(opts):
     from mojo.apps.aws.services import aws_check
+    from mojo.apps.fileman.models import FileManager
 
-    s3 = mock.Mock()
-    s3.list_buckets.return_value = {"Buckets": [{"Name": "owned-bucket"}]}
-    s3.get_bucket_location.return_value = {"LocationConstraint": "us-west-2"}
-    s3.get_public_access_block.return_value = {
-        "PublicAccessBlockConfiguration": {"BlockPublicAcls": True},
+    _setup_admin_identity("aws-check-cli-adopt@test.com")
+    FileManager.objects.filter(
+        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
+    ).delete()
+    unsafe = _safe_bucket_client("unsafe-owned-bucket")
+    unsafe.get_bucket_acl.return_value = {
+        "Owner": {"ID": "canonical-owner"},
+        "Grants": [{"Grantee": {"Type": "Group", "URI": (
+            "http://acs.amazonaws.com/groups/global/AllUsers")},
+                    "Permission": "READ"}],
     }
-    runner = aws_check.AWSCheckRunner(region="us-west-2", clients={"s3": s3})
+    runner = aws_check.AWSCheckRunner(
+        region="us-east-1", clients={"s3": unsafe, "sts": _setup_sts()})
 
     try:
-        runner._adopt_bucket("owned-bucket")
-    except RuntimeError as exc:
-        assert "public-access block" in str(exc), f"Unexpected adoption error: {exc}"
+        runner._adopt_bucket("unsafe-owned-bucket")
+    except Exception:
+        pass
     else:
-        assert False, "Unsafe bucket adoption should fail"
-    s3.put_bucket_tagging.assert_not_called()
+        assert False, "Legacy --adopt-bucket must reject a public ACL"
+    unsafe.put_bucket_tagging.assert_not_called()
+    unsafe.put_public_access_block.assert_not_called()
+
+    safe = _safe_bucket_client("safe-owned-bucket")
+    cors = []
+    safe.get_bucket_cors.side_effect = lambda **kwargs: {"CORSRules": list(cors)}
+    safe.put_bucket_cors.side_effect = lambda **kwargs: cors.__setitem__(
+        slice(None), kwargs["CORSConfiguration"]["CORSRules"])
+    manager = aws_check.AWSCheckRunner(
+        region="us-east-1", clients={"s3": safe, "sts": _setup_sts()},
+    )._adopt_bucket("safe-owned-bucket")
+    assert manager.backend_url == "s3://safe-owned-bucket" \
+        and manager.supports_direct_upload and not manager.is_public, \
+        "The compatible safe CLI path must create the same private FileManager"
 
 
 @th.django_unit_test()

@@ -446,26 +446,54 @@ def test_setup_delivery_probe_is_evidence_only_after_rules_exist(opts):
 @th.django_unit_test()
 def test_delivery_probe_migration_defaults_existing_rows_to_operational(opts):
     import importlib
+    from django.db import connection, models
+    from django.db.migrations.state import ModelState, ProjectState
     from django.utils import timezone
-    from mojo.apps.aws.models import CloudWatchAlarm, CloudWatchAlarmTransition
+    from mojo.apps.aws.models import CloudWatchAlarmTransition
+    from mojo.apps.aws.services.cloudwatch_alarms import process_notification
+    from mojo.apps.incident.models import Event
 
     migration = importlib.import_module(
         "mojo.apps.aws.migrations.0012_cloudwatchalarmtransition_is_delivery_probe")
     operation = migration.Migration.operations[0]
     assert operation.name == "is_delivery_probe" and operation.field.default is False, \
         "The additive migration must backfill every existing transition as operational"
-    CloudWatchAlarm.objects.filter(alarm_key="9" * 64).delete()
-    alarm = CloudWatchAlarm.objects.create(
-        alarm_key="9" * 64,
-        alarm_arn="arn:aws:cloudwatch:us-east-1:123456789012:alarm:legacy")
-    transition = CloudWatchAlarmTransition.objects.create(
-        alarm=alarm, topic_arn="arn:aws:sns:us-east-1:123456789012:legacy",
-        sns_message_id="pre-migration", old_state="OK", new_state="ALARM",
-        state_changed_at=timezone.now())
-    assert transition.is_delivery_probe is False, \
-        "Existing operational transitions must never be reclassified as setup probes"
-    assert transition.dispatch_status == "complete", \
-        "The additive migration must preserve the existing non-dispatch default"
+    table = "aws_transition_pre_0012_test"
+    from_state = ProjectState()
+    from_state.add_model(ModelState(
+        app_label="aws", name="CloudWatchAlarmTransition",
+        fields=[
+            ("id", models.BigAutoField(primary_key=True)),
+            ("sns_message_id", models.CharField(max_length=128)),
+        ], options={"db_table": table}, bases=(models.Model,)))
+    to_state = from_state.clone()
+    operation.state_forwards("aws", to_state)
+    legacy_model = from_state.apps.get_model("aws", "CloudWatchAlarmTransition")
+    migrated_model = to_state.apps.get_model("aws", "CloudWatchAlarmTransition")
+    try:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.create_model(legacy_model)
+        legacy_model.objects.create(sns_message_id="pre-0012-transition")
+        with connection.schema_editor() as schema_editor:
+            operation.database_forwards("aws", schema_editor, from_state, to_state)
+        historical = migrated_model.objects.get(sns_message_id="pre-0012-transition")
+        assert historical.is_delivery_probe is False, \
+            "Migrating the actual 0011-shaped row through 0012 must backfill false"
+    finally:
+        if table in connection.introspection.table_names():
+            with connection.schema_editor() as schema_editor:
+                schema_editor.delete_model(migrated_model)
+
+    _clear_state()
+    result = process_notification(_envelope(
+        "post-0012-operational",
+        _payload("ALARM", "OK", timezone.now())))
+    transition = CloudWatchAlarmTransition.objects.get(pk=result["transition_id"])
+    assert transition.is_delivery_probe is False and transition.event_id is not None, \
+        "A normal post-migration alarm must still create an operational Event"
+    assert transition.dispatch_status == CloudWatchAlarmTransition.DISPATCH_COMPLETE \
+        and Event.objects.filter(pk=transition.event_id).exists(), \
+        "The restored latest schema must retain normal event/dispatch semantics"
 
 
 @th.django_unit_test()

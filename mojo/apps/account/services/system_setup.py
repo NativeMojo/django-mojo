@@ -10,6 +10,8 @@ import json
 import secrets
 from datetime import timedelta
 
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -209,6 +211,12 @@ def _validate_choice(schema, value):
                 item = system_settings.validate_base_url(item)
             except ValueError as exc:
                 raise merrors.ValueException(str(exc))
+        if field.get("format") == "email":
+            try:
+                validate_email(item)
+            except ValidationError:
+                raise merrors.ValueException(
+                    f"choice.{name} must be a valid email address")
         clean[name] = sanitize(item)
     return sanitize(clean)
 

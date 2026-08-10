@@ -189,8 +189,12 @@ def _sns_publish_policy_is_safe(policy, account, region, slug, topic_arn):
         actions = _actions(statement)
         if "NotAction" in statement or "NotResource" in statement or not actions:
             return False
-        if not any(action in ("*", "sns:*", "sns:publish") for action in actions):
-            continue
+        # A topic policy is an authority boundary, not merely a Publish ACL.
+        # Validate every Allow so adoption cannot preserve a public Subscribe,
+        # SetTopicAttributes, AddPermission, or other administrative foothold.
+        if any(not re.fullmatch(r"sns:(?:\*|[A-Za-z][A-Za-z0-9]*)", action)
+               for action in actions):
+            return False
         if "NotPrincipal" in statement:
             return False
         resources = statement.get("Resource", [])
@@ -221,6 +225,8 @@ def _sns_publish_policy_is_safe(policy, account, region, slug, topic_arn):
                                 or resource.startswith("user/"))):
                     return False
         elif principal.get("Service") == "cloudwatch.amazonaws.com":
+            if actions != ["sns:publish"]:
+                return False
             source_account = _condition_value(
                 statement, "StringEquals", "AWS:SourceAccount")
             source_arn = (_condition_value(statement, "ArnLike", "AWS:SourceArn")
@@ -241,7 +247,7 @@ def _sns_publish_policy_is_safe(policy, account, region, slug, topic_arn):
 _ALARM_COMPARE_FIELDS = (
     "Namespace", "MetricName", "Statistic", "ComparisonOperator", "Threshold",
     "Period", "EvaluationPeriods", "DatapointsToAlarm", "TreatMissingData",
-    "AlarmActions", "OKActions",
+    "ActionsEnabled", "AlarmActions", "OKActions", "InsufficientDataActions",
 )
 
 
@@ -256,7 +262,23 @@ def _alarm_matches(current, desired):
         for row in desired.get("Dimensions", []) if isinstance(row, dict))
     if current_dimensions != desired_dimensions:
         return False
-    return all(current.get(key) == desired.get(key) for key in _ALARM_COMPARE_FIELDS)
+    if not all(current.get(key) == desired.get(key) for key in _ALARM_COMPARE_FIELDS):
+        return False
+    desired_unit = desired.get("Unit")
+    return desired_unit in (None, "", "None") or current.get("Unit") == desired_unit
+
+
+def _complete_alarm_config(alarm, topic_arn):
+    desired = dict(alarm)
+    desired.update({
+        "ActionsEnabled": True,
+        "AlarmActions": [topic_arn],
+        "OKActions": [topic_arn],
+        "InsufficientDataActions": [],
+    })
+    if desired.get("Unit") in (None, "", "None"):
+        desired.pop("Unit", None)
+    return desired
 
 
 class AWSSetupService:
@@ -509,9 +531,8 @@ class AWSSetupService:
             if attempt:
                 raise RuntimeError("Concurrent S3 CORS changes did not converge")
 
-    def adopt_bucket(self, actor, bucket):
+    def _adopt_bucket(self, bucket):
         from mojo.apps.fileman.models import FileManager
-        actor = system_settings.require_system_admin(actor)
         identity = _identity()
         s3 = self.client("s3")
         with transaction.atomic():
@@ -582,6 +603,14 @@ class AWSSetupService:
                 manager.save()
                 manager._update_default()
         return manager
+
+    def adopt_bucket(self, actor, bucket):
+        system_settings.require_system_admin(actor)
+        return self._adopt_bucket(bucket)
+
+    def adopt_bucket_for_cli(self, bucket):
+        """Use the portal's authoritative classifier for confirmed CLI adoption."""
+        return self._adopt_bucket(bucket)
 
     def discover_verified_domains(self):
         ses = self.client("ses")
@@ -859,20 +888,18 @@ class AWSSetupService:
             and row.get("SubscriptionArn") not in (None, "PendingConfirmation")
             for row in subscriptions)
         probe_name = delivery_probe_alarm_name(challenge)
-        probe_desired = {
+        probe_desired = _complete_alarm_config({
             "AlarmName": probe_name, "Namespace": "DjangoMojo/Setup",
             "MetricName": "DeliveryProbe", "Statistic": "Maximum", "Period": 60,
             "EvaluationPeriods": 1, "DatapointsToAlarm": 1, "Threshold": 0,
             "ComparisonOperator": "GreaterThanThreshold",
             "TreatMissingData": "notBreaching", "Dimensions": [],
-            "AlarmActions": [topic_arn], "OKActions": [topic_arn],
-        }
+        }, topic_arn)
         probe = self._converge_alarm(cloudwatch, probe_desired, tags)
 
         desired = self._desired_monitoring_alarms(cloudwatch)
         for alarm in desired:
-            alarm = dict(alarm)
-            alarm.update({"AlarmActions": [topic_arn], "OKActions": [topic_arn]})
+            alarm = _complete_alarm_config(alarm, topic_arn)
             self._converge_alarm(cloudwatch, alarm, tags)
         if send_probe and confirmed:
             alarm_transition, ok_transition = self._probe_evidence(
@@ -948,14 +975,13 @@ class AWSSetupService:
             "cloudwatch.describe_alarms",
             lambda: cloudwatch.describe_alarms(AlarmNames=[probe_name]),
             "cloudwatch:DescribeAlarms").get("MetricAlarms", [])
-        probe_desired = {
+        probe_desired = _complete_alarm_config({
             "AlarmName": probe_name, "Namespace": "DjangoMojo/Setup",
             "MetricName": "DeliveryProbe", "Statistic": "Maximum", "Period": 60,
             "EvaluationPeriods": 1, "DatapointsToAlarm": 1, "Threshold": 0,
             "ComparisonOperator": "GreaterThanThreshold",
             "TreatMissingData": "notBreaching", "Dimensions": [],
-            "AlarmActions": [topic_arn], "OKActions": [topic_arn],
-        }
+        }, topic_arn)
         if not probe or not _alarm_matches(probe[0], probe_desired):
             return False
         probe_tags = self.call(
@@ -967,8 +993,7 @@ class AWSSetupService:
             return False
         desired = self._desired_monitoring_alarms(cloudwatch)
         for alarm in desired:
-            alarm = dict(alarm)
-            alarm.update({"AlarmActions": [topic_arn], "OKActions": [topic_arn]})
+            alarm = _complete_alarm_config(alarm, topic_arn)
             found = self.call(
                 "cloudwatch.describe_alarms",
                 lambda alarm=alarm: cloudwatch.describe_alarms(
@@ -1115,7 +1140,7 @@ def email_choice_schema(context):
         domains = []
     return {"type": "object", "properties": {
         "domain": {"type": "string", "enum": domains},
-        "sender": {"type": "string"},
+        "sender": {"type": "string", "format": "email"},
     }, "required": ["domain", "sender"], "additionalProperties": False}
 
 

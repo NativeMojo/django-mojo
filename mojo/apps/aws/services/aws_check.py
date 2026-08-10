@@ -467,45 +467,14 @@ class AWSCheckRunner:
         return manager
 
     def _adopt_bucket(self, bucket):
-        """Explicitly merge ownership tags after a verified interrupted create."""
-        from mojo.apps.fileman.models import FileManager
-        s3 = self._client("s3")
-        owned_names = {row.get("Name") for row in self._provider_call(
-            "s3.list_buckets", s3.list_buckets,
-            "s3:ListAllMyBuckets").get("Buckets", [])}
-        if bucket not in owned_names:
-            raise RuntimeError("selected credentials do not prove ownership of the exact bucket")
-        location = self._provider_call(
-            "s3.get_bucket_location", lambda: s3.get_bucket_location(Bucket=bucket),
-            "s3:GetBucketLocation").get("LocationConstraint") or "us-east-1"
-        if location != self.region:
-            raise RuntimeError(f"bucket is in {location}, not selected region {self.region}")
-        block = self._provider_call(
-            "s3.get_public_access_block",
-            lambda: s3.get_public_access_block(Bucket=bucket),
-            "s3:GetBucketPublicAccessBlock").get("PublicAccessBlockConfiguration", {})
-        if not all(block.get(key) is True for key in (
-            "BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets",
-        )):
-            raise RuntimeError("bucket adoption requires all public-access block controls")
-        tags = self._bucket_tags(s3, bucket)
-        tags.update({**OWNERSHIP_TAGS, "deployment": self._deployment_slug()})
-        self._provider_call(
-            "s3.put_bucket_tagging",
-            lambda: s3.put_bucket_tagging(Bucket=bucket, Tagging={"TagSet": [
-                {"Key": key, "Value": value} for key, value in sorted(tags.items())
-            ]}), "s3:PutBucketTagging", mutation=True)
-        self._ensure_direct_upload_cors(s3, bucket, SYSTEM_FILEMAN_ALLOWED_ORIGINS)
-        manager = FileManager.objects.create(
-            name="django-mojo system S3", backend_type=FileManager.AWS_S3,
-            backend_url=f"s3://{bucket}", is_active=True, is_default=True,
-            is_public=False, supports_direct_upload=True,
-        )
-        manager.set_aws_region(self.region)
-        manager.set_allowed_origins(SYSTEM_FILEMAN_ALLOWED_ORIGINS)
-        manager.save()
-        manager._update_default()
-        return manager
+        """Adopt through the same fail-closed classifier used by System Setup."""
+        from mojo.apps.aws.services.aws_setup import AWSSetupService
+        return AWSSetupService(
+            clients=self.clients,
+            client_factory=lambda service, region=None: self._client(
+                service, region=region),
+            provider=self.provider, region=self.region,
+        ).adopt_bucket_for_cli(bucket)
 
     def _ensure_direct_upload_cors(self, s3, bucket, origins, current=None):
         """Merge one upload rule without replacing unrelated bucket CORS rules."""
@@ -1276,7 +1245,14 @@ class AWSCheckRunner:
         self.monitoring_ready = True
         created, drifted, conflicts, uncreated = 0, [], [], 0
         for alarm in desired:
-            alarm.update({"AlarmActions": [topic_arn], "OKActions": [topic_arn]})
+            alarm.update({
+                "ActionsEnabled": True,
+                "AlarmActions": [topic_arn],
+                "OKActions": [topic_arn],
+                "InsufficientDataActions": [],
+            })
+            if alarm.get("Unit") in (None, "", "None"):
+                alarm.pop("Unit", None)
             existing = self._provider_call(
                 "cloudwatch.describe_alarms",
                 lambda alarm=alarm: cloudwatch.describe_alarms(
@@ -1293,14 +1269,16 @@ class AWSCheckRunner:
                 if not all(tag_map.get(key) == value for key, value in expected_tags.items()):
                     conflicts.append(alarm["AlarmName"])
                 else:
-                    comparable = ("Namespace", "MetricName", "Statistic", "ComparisonOperator", "Threshold", "Period", "EvaluationPeriods", "DatapointsToAlarm", "TreatMissingData", "AlarmActions", "OKActions")
+                    comparable = ("Namespace", "MetricName", "Statistic", "ComparisonOperator", "Threshold", "Period", "EvaluationPeriods", "DatapointsToAlarm", "TreatMissingData", "ActionsEnabled", "AlarmActions", "OKActions", "InsufficientDataActions")
                     current_dimensions = sorted(
                         (row.get("Name"), row.get("Value")) for row in current.get("Dimensions", [])
                     )
                     desired_dimensions = sorted(
                         (row.get("Name"), row.get("Value")) for row in alarm.get("Dimensions", [])
                     )
-                    if current_dimensions != desired_dimensions or any(
+                    unit_drift = (alarm.get("Unit") not in (None, "", "None")
+                                  and current.get("Unit") != alarm.get("Unit"))
+                    if current_dimensions != desired_dimensions or unit_drift or any(
                         current.get(key) != alarm.get(key) for key in comparable
                     ):
                         drifted.append(alarm["AlarmName"])
