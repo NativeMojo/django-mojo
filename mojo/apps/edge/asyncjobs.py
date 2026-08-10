@@ -109,6 +109,14 @@ def webapp_deploy_orchestrate(job):
     return webapp_deploy.orchestrate(deployment_id)
 
 
+def webapp_onboarding_advance(job):
+    """Advance one leased onboarding operation from durable intent."""
+    from mojo.apps.edge.services import webapp_onboarding
+
+    operation_id = (job.payload or {}).get("operation")
+    return webapp_onboarding.advance(operation_id, owner=job.pk)
+
+
 # ----------------------------------------------------------------------
 # fleet code deploy (maestro item #1458)
 # ----------------------------------------------------------------------

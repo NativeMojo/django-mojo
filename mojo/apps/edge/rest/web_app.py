@@ -28,7 +28,7 @@ def on_release(request, pk=None):
 
 @md.POST('webapp/link_key')
 @md.denies_key_backed_session()
-@md.requires_fresh_auth(300)
+@md.requires_fresh_auth(600)
 @md.requires_params("webapp", "operation_id", "action")
 @md.requires_perms("manage_webapp")
 def on_webapp_link_key(request):

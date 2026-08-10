@@ -329,6 +329,13 @@ VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 RELEASE_PATH_RE = re.compile(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\Z")
 
 SHA256_RE = re.compile(r"^[a-f0-9]{64}\Z")
+GITHUB_REPOSITORY_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9])?/"
+    r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9])?\Z")
+DEPLOYMENT_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}\Z")
+BUILD_OUTPUT_RE = re.compile(
+    r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\Z")
+DISPLAY_NAME_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,120}\Z")
 
 
 def release_buckets():
@@ -368,6 +375,16 @@ def validate_web_app(web_app):
     validate_release_bucket(web_app.bucket or "")
     if not web_app.group_id:
         raise me.ValueException("a web app requires a group")
+    if web_app.display_name and not DISPLAY_NAME_RE.match(web_app.display_name):
+        raise me.ValueException(
+            "display name must be 1-120 printable characters")
+    if web_app.environment not in (
+            "production", "staging", "preview", "development"):
+        raise me.ValueException("unknown WebApp environment")
+    if web_app.github_repository:
+        validate_github_repository(web_app.github_repository)
+    validate_deployment_ref(web_app.deployment_ref)
+    validate_build_output(web_app.build_output)
 
     # The linked vhost must belong to this web app's group, or to a group
     # ABOVE it. Found by the post-build security review: `vhost` is
@@ -392,6 +409,34 @@ def validate_web_app(web_app):
                 "the vhost must belong to this web app's group or a parent "
                 "of it")
     return web_app
+
+
+def validate_github_repository(value):
+    if not isinstance(value, str) or not GITHUB_REPOSITORY_RE.match(value):
+        raise me.ValueException(
+            "GitHub repository must be an OWNER/REPOSITORY identifier")
+    if any(part in (".", "..") for part in value.split("/")):
+        raise me.ValueException("GitHub repository contains an unusable name")
+    return value
+
+
+def validate_deployment_ref(value):
+    if not isinstance(value, str) or not DEPLOYMENT_REF_RE.match(value):
+        raise me.ValueException("deployment ref contains an illegal character")
+    if value.startswith("/") or value.endswith("/") or "//" in value:
+        raise me.ValueException("deployment ref is not usable")
+    if any(part in (".", "..") for part in value.split("/")):
+        raise me.ValueException("deployment ref contains an unusable segment")
+    return value
+
+
+def validate_build_output(value):
+    if not isinstance(value, str) or not BUILD_OUTPUT_RE.match(value):
+        raise me.ValueException(
+            "build output must be a relative directory using safe characters")
+    if any(part in (".", "..") for part in value.split("/")):
+        raise me.ValueException("build output cannot traverse directories")
+    return value
 
 
 def _group_at_or_below(group, owner_group_id):
