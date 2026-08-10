@@ -63,11 +63,15 @@ def deployment_id(value):
 def edge_roster():
     """Freeze only live runners that explicitly consume the edge channel."""
     from mojo.apps import jobs
-    rows = jobs.get_runners(channel="edge") or []
-    return sorted({
+    rows = jobs.get_runners_bounded(
+        channel="edge", limit=MAX_ROSTER, max_scan_pages=16, timeout=1.0) or []
+    roster = sorted({
         _text(row.get("runner_id"), 64) for row in rows
         if row.get("alive") and row.get("runner_id")
-    })[:MAX_ROSTER]
+    })
+    if len(roster) > MAX_ROSTER:
+        raise RuntimeError("runner_roster_overflow")
+    return roster
 
 
 def request_key(source, sha, supplied=None):
@@ -217,17 +221,22 @@ def evidence(value, runner, state, proof=None, detail=None):
         return True
 
 
-def serialize(row):
+_DESIRED_UNSET = object()
+
+
+def serialize(row, desired_commit=_DESIRED_UNSET):
     duration = None
     if row.started:
         duration = ((row.finished or timezone.now()) - row.started).total_seconds()
-    desired = None
-    try:
-        from mojo.apps.edge.services import deploy
-        target = deploy.get_target()
-        desired = (target or {}).get("sha")
-    except Exception:
-        pass
+    desired = desired_commit
+    if desired_commit is _DESIRED_UNSET:
+        desired = None
+        try:
+            from mojo.apps.edge.services import deploy
+            target = deploy.get_target()
+            desired = (target or {}).get("sha")
+        except Exception:
+            pass
     current = sorted({
         str((item.get("proof") or {}).get("platform_sha"))
         for item in (row.node_evidence or []) if isinstance(item, dict)

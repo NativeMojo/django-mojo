@@ -4,11 +4,20 @@ import http.client
 import ipaddress
 import socket
 import ssl
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from urllib.parse import urlsplit
 
 
 class UnsafePublicProbe(ValueError):
     pass
+
+
+MAX_ADDRESSES = 8
+_RESOLVER_POOL = ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="mojo-public-probe-dns")
+_RESOLVER_SLOTS = threading.BoundedSemaphore(4)
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
@@ -24,12 +33,26 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
 
 
-def public_addresses(hostname, port=443):
+def public_addresses(hostname, port=443, timeout=3.0):
     """Resolve once and reject the entire answer set if any address is unsafe."""
+    deadline = time.monotonic() + max(0.05, float(timeout))
+    if not _RESOLVER_SLOTS.acquire(timeout=max(0.05, deadline - time.monotonic())):
+        raise UnsafePublicProbe("hostname resolver capacity unavailable")
     try:
-        answers = socket.getaddrinfo(
-            hostname, port, type=socket.SOCK_STREAM,
-            proto=socket.IPPROTO_TCP)
+        future = _RESOLVER_POOL.submit(
+            socket.getaddrinfo, hostname, port, 0, socket.SOCK_STREAM,
+            socket.IPPROTO_TCP)
+    except Exception:
+        _RESOLVER_SLOTS.release()
+        raise
+    # A timed-out getaddrinfo cannot be killed. Keep its slot until the future
+    # really completes so the executor queue and worker count stay bounded.
+    future.add_done_callback(lambda _future: _RESOLVER_SLOTS.release())
+    try:
+        answers = future.result(timeout=max(0.05, deadline - time.monotonic()))
+    except TimeoutError as exc:
+        future.cancel()
+        raise UnsafePublicProbe("hostname resolution timed out") from exc
     except socket.gaierror as exc:
         raise UnsafePublicProbe("hostname could not be resolved") from exc
     addresses = []
@@ -43,6 +66,8 @@ def public_addresses(hostname, port=443):
             addresses.append(value)
     if not addresses:
         raise UnsafePublicProbe("hostname had no usable address")
+    if len(addresses) > MAX_ADDRESSES:
+        raise UnsafePublicProbe("hostname resolved to too many addresses")
     return addresses
 
 
@@ -54,7 +79,9 @@ def probe_https_root(origin, timeout=3.0, max_body=65536):
             parsed.path not in ("", "/")):
         raise UnsafePublicProbe("probe requires an HTTPS origin")
     port = parsed.port or 443
-    addresses = public_addresses(parsed.hostname, port)
+    deadline = time.monotonic() + max(0.05, float(timeout))
+    addresses = public_addresses(
+        parsed.hostname, port, timeout=max(0.05, deadline - time.monotonic()))
     host_header = parsed.hostname
     if ":" in host_header:
         host_header = f"[{host_header}]"
@@ -63,8 +90,12 @@ def probe_https_root(origin, timeout=3.0, max_body=65536):
 
     last_error = None
     for address in addresses:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            last_error = TimeoutError()
+            break
         connection = _PinnedHTTPSConnection(
-            parsed.hostname, port, address, float(timeout))
+            parsed.hostname, port, address, remaining)
         try:
             connection.request(
                 "GET", "/", headers={
@@ -72,6 +103,8 @@ def probe_https_root(origin, timeout=3.0, max_body=65536):
                     "Connection": "close",
                 })
             response = connection.getresponse()
+            if connection.sock is not None:
+                connection.sock.settimeout(max(0.05, deadline - time.monotonic()))
             body = response.read(int(max_body) + 1)
             if len(body) > int(max_body):
                 return {"ok": False, "status": response.status,

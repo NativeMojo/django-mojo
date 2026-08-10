@@ -100,6 +100,126 @@ class JobManager:
 
         return runners
 
+    def get_runners_bounded(self, channel: str, limit: int = 128,
+                            max_scan_pages: int = 16,
+                            timeout: float = 1.0) -> List[Dict[str, Any]]:
+        """Return one exact live-channel roster or fail closed.
+
+        Unlike ``get_runners()``, this never materializes an unbounded SCAN and
+        never returns a silently truncated answer. It completes the heartbeat
+        key scan within fixed command/key/time caps, pipelines the bounded
+        reads, and raises when completeness cannot be proven.
+        """
+        from mojo.helpers.redis import get_bounded_connection
+        with get_bounded_connection(
+                timeout=timeout, max_connections=2) as client:
+            return self._read_bounded_runners(
+                client, channel, limit, max_scan_pages, timeout)
+
+    def _read_bounded_runners(self, client, channel, limit, max_scan_pages,
+                              timeout):
+        deadline = time.monotonic() + max(0.05, float(timeout))
+        limit = max(1, int(limit))
+        max_keys = max(limit + 1, min(limit * 4, 1024))
+        found = set()
+
+        def complete(value):
+            if isinstance(value, dict):
+                return all(item in (0, "0", b"0") for item in value.values())
+            return value in (0, "0", b"0")
+
+        def add_page(page):
+            found.update(page or [])
+            if len(found) > max_keys:
+                raise RuntimeError("runner_roster_key_overflow")
+
+        max_scan_pages = max(1, int(max_scan_pages))
+        if time.monotonic() >= deadline:
+            raise RuntimeError("runner_roster_timeout")
+        cursor, page = client.scan(
+            cursor=0, match=self.keys.runner_hb("*"), count=limit)
+        pages = 1
+        add_page(page)
+
+        if isinstance(cursor, dict):
+            # RedisCluster returns one cursor per node. Continue each node with
+            # its own target; feeding the cursor dict back as a scalar is not a
+            # valid cluster SCAN call.
+            pending = {
+                name: value for name, value in cursor.items()
+                if value not in (0, "0", b"0")
+            }
+            while pending:
+                if pages >= max_scan_pages:
+                    raise RuntimeError("runner_roster_scan_incomplete")
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("runner_roster_timeout")
+                name = sorted(pending)[0]
+                node = client.get_node(node_name=name)
+                cursors, page = client.scan(
+                    cursor=pending[name], match=self.keys.runner_hb("*"),
+                    count=limit, target_nodes=node)
+                pages += 1
+                add_page(page)
+                value = cursors.get(name, 0) if isinstance(cursors, dict) else cursors
+                if value in (0, "0", b"0"):
+                    pending.pop(name, None)
+                else:
+                    pending[name] = value
+        else:
+            while not complete(cursor):
+                if pages >= max_scan_pages:
+                    raise RuntimeError("runner_roster_scan_incomplete")
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("runner_roster_timeout")
+                cursor, page = client.scan(
+                    cursor=cursor, match=self.keys.runner_hb("*"), count=limit)
+                pages += 1
+                add_page(page)
+
+        if time.monotonic() >= deadline:
+            raise RuntimeError("runner_roster_timeout")
+
+        ordered_keys = sorted(
+            found, key=lambda value: value.decode() if isinstance(value, bytes)
+            else str(value))
+        pipe = client.pipeline(transaction=False)
+        try:
+            for key in ordered_keys:
+                pipe.get(key)
+            raw_rows = pipe.execute()
+        finally:
+            pipe.reset()
+
+        runners = []
+        for raw in raw_rows:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("runner_roster_timeout")
+            try:
+                row = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise RuntimeError("runner_roster_invalid") from exc
+            if channel not in (row.get("channels") or []):
+                continue
+            last_hb = row.get("last_heartbeat")
+            if not last_hb:
+                row["alive"] = False
+            else:
+                try:
+                    observed = datetime.fromisoformat(last_hb)
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError("runner_roster_invalid") from exc
+                if timezone.is_naive(observed):
+                    observed = timezone.make_aware(observed)
+                row["alive"] = (
+                    timezone.now() - observed).total_seconds() < (
+                        getattr(settings, "JOBS_RUNNER_HEARTBEAT_SEC", 5) * 3)
+            runners.append(row)
+        runners.sort(key=lambda row: row.get("runner_id", ""))
+        if len(runners) > limit:
+            raise RuntimeError("runner_roster_overflow")
+        return runners
+
     def get_queue_state(self, channel: str) -> Dict[str, Any]:
         """
         Get queue state for a channel.

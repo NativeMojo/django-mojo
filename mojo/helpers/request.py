@@ -112,6 +112,10 @@ def sensitive_body_label(request):
         return "admin_api_key"
     if path == f"{API_ROOT}/edge/webapp/link_key":
         return "webapp_deployment_key"
+    if method == "POST" and path in (
+            f"{API_ROOT}/edge/webapp/onboarding/choose",
+            f"{API_ROOT}/edge/webapp/onboarding/workflow"):
+        return "webapp_onboarding_secret"
     if path == f"{API_ROOT}/dnsman/credential/link":
         return "dns_provider_credential"
     if path in (

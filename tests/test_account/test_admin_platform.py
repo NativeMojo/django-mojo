@@ -97,11 +97,29 @@ def test_fleet_single_scan_page(opts):
     from mojo.apps.account.services import admin_platform
     redis = mock.Mock()
     redis.scan.return_value = (42, [])
-    with mock.patch("mojo.helpers.redis.get_connection", return_value=redis):
+    redis.pipeline.return_value.execute.return_value = []
+    with mock.patch.object(admin_platform, "_bounded_redis", return_value=redis):
         result = admin_platform._fleet()
     redis.scan.assert_called_once()
     assert result["truncated"] is True
     assert not redis.scan_iter.called
+
+
+@th.django_unit_test("fleet collector pipelines bounded heartbeat reads")
+def test_fleet_pipeline(opts):
+    from mojo.apps.account.services import admin_platform
+    redis = mock.Mock()
+    redis.scan.return_value = (0, ["jobs:runner:a", "jobs:runner:b"])
+    pipe = redis.pipeline.return_value
+    pipe.execute.return_value = [
+        '{"runner_id":"a","channels":["edge"],"last_heartbeat":"now"}',
+        '{"runner_id":"b","channels":["default"],"last_heartbeat":"now"}',
+    ]
+    with mock.patch.object(admin_platform, "_bounded_redis", return_value=redis):
+        result = admin_platform._fleet()
+    assert [row["runner"] for row in result["runners"]] == ["a"]
+    assert pipe.get.call_count == 2
+    assert not redis.get.called, "fleet heartbeat reads were sequential"
 
 
 @th.django_unit_test("safe settings writer requires a live literal superuser")

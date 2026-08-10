@@ -73,16 +73,82 @@ def test_exact_edge_roster(opts):
         {"runner_id": "edge-a-engine", "alive": True},
         {"runner_id": "dead-engine", "alive": False},
     ]
-    with mock.patch("mojo.apps.jobs.get_runners", return_value=rows) as get_runners:
+    with mock.patch(
+            "mojo.apps.jobs.get_runners_bounded",
+            return_value=rows) as get_runners:
         assert platform_deploy.edge_roster() == ["edge-a-engine", "edge-b-engine"]
-    get_runners.assert_called_once_with(channel="edge")
+    get_runners.assert_called_once_with(
+        channel="edge", limit=128, max_scan_pages=16, timeout=1.0)
+
+
+@th.django_unit_test("edge roster overflow fails closed instead of omitting nodes")
+def test_edge_roster_overflow(opts):
+    from mojo.apps.edge.services import platform_deploy
+    with mock.patch(
+            "mojo.apps.jobs.get_runners_bounded",
+            side_effect=RuntimeError("runner_roster_overflow")):
+        with th.assert_raises(RuntimeError):
+            platform_deploy.edge_roster()
+
+
+@th.django_unit_test("bounded runner discovery proves completeness and rejects overflow")
+def test_bounded_runner_discovery(opts):
+    import json
+    from django.utils import timezone
+    from mojo.apps.jobs.manager import JobManager
+
+    client = mock.MagicMock()
+    client.__enter__.return_value = client
+    client.scan.return_value = (0, ["runner:a", "runner:b", "runner:c"])
+    pipe = client.pipeline.return_value
+    pipe.execute.return_value = [json.dumps({
+        "runner_id": name, "channels": ["edge"],
+        "last_heartbeat": timezone.now().isoformat(),
+    }) for name in ("a", "b", "c")]
+    manager = JobManager()
+    with mock.patch(
+            "mojo.helpers.redis.get_bounded_connection",
+            return_value=client):
+        with th.assert_raises(RuntimeError):
+            manager.get_runners_bounded("edge", limit=2)
+    assert pipe.get.call_count == 3
+    assert not client.get.called, "roster heartbeats were not pipelined"
+
+
+@th.django_unit_test("bounded runner discovery advances RedisCluster node cursors")
+def test_bounded_runner_discovery_cluster(opts):
+    import json
+    from django.utils import timezone
+    from mojo.apps.jobs.manager import JobManager
+
+    client = mock.MagicMock()
+    client.__enter__.return_value = client
+    node = object()
+    client.get_node.return_value = node
+    client.scan.side_effect = [
+        ({"node-a": 5, "node-b": 0}, ["runner:a"]),
+        ({"node-a": 0}, ["runner:b"]),
+    ]
+    pipe = client.pipeline.return_value
+    pipe.execute.return_value = [json.dumps({
+        "runner_id": name, "channels": ["edge"],
+        "last_heartbeat": timezone.now().isoformat(),
+    }) for name in ("a", "b")]
+    manager = JobManager()
+    with mock.patch(
+            "mojo.helpers.redis.get_bounded_connection",
+            return_value=client):
+        rows = manager.get_runners_bounded("edge", limit=2, max_scan_pages=3)
+    assert [row["runner_id"] for row in rows] == ["a", "b"]
+    assert client.scan.call_args_list[1].kwargs["cursor"] == 5
+    assert client.scan.call_args_list[1].kwargs["target_nodes"] is node
 
 
 @th.django_unit_test("an empty frozen roster cannot fall back to the local node")
 def test_empty_roster_fails_closed(opts):
     from mojo.apps.edge import asyncjobs
     from mojo.apps.edge.services import deploy, platform_deploy
-    with mock.patch("mojo.apps.jobs.get_runners", return_value=[]):
+    with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=[]):
         row, _ = platform_deploy.create(SHA, source="test")
     deploy.set_target(SHA, deployment_id=row.pk)
     deploy.arm_status(SHA, deployment_id=row.pk)
@@ -102,7 +168,7 @@ def test_empty_roster_fails_closed(opts):
 def test_publish_failure_durable(opts):
     from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.edge.services import deploy
-    with mock.patch("mojo.apps.jobs.get_runners", return_value=[]), \
+    with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=[]), \
          mock.patch("mojo.apps.jobs.publish", side_effect=RuntimeError("redis password=secret")):
         with th.assert_raises(RuntimeError):
             deploy.request_deploy(SHA, actor="test", source="test")
@@ -117,7 +183,7 @@ def test_roster_failure_durable(opts):
     from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.edge.services import deploy
     with mock.patch(
-            "mojo.apps.jobs.get_runners",
+            "mojo.apps.jobs.get_runners_bounded",
             side_effect=RuntimeError("password=roster-sentinel")):
         with th.assert_raises(deploy.DeploymentCoordinationError):
             deploy.request_deploy(SHA, actor="test", source="test")

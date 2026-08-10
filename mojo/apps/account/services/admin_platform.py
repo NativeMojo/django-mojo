@@ -1,6 +1,7 @@
 """Permission-separated, bounded evidence for Admin Platform/Advanced."""
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from contextlib import contextmanager
 from datetime import timedelta
 
 from django.db import connection, transaction
@@ -15,6 +16,20 @@ SCHEMA_VERSION = 1
 COLLECTOR_TIMEOUT = 3.0
 STALE_SECONDS = 600
 ROW_LIMIT = 100
+
+
+def _bounded_redis():
+    from mojo.helpers.redis import get_bounded_connection
+    return get_bounded_connection(timeout=min(1.0, COLLECTOR_TIMEOUT / 2.0))
+
+
+@contextmanager
+def _redis_client():
+    client = _bounded_redis()
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 def _envelope(status, data=None, reason=None):
@@ -99,8 +114,8 @@ def _database():
 
 
 def _redis():
-    from mojo.helpers.redis import get_client
-    return {"reachable": bool(get_client().ping())}
+    with _redis_client() as redis:
+        return {"reachable": bool(redis.ping())}
 
 
 def _api():
@@ -120,17 +135,23 @@ def _api():
 def _fleet():
     import json
     from mojo.apps.jobs.keys import JobKeys
-    from mojo.helpers.redis import get_connection
-    redis = get_connection()
     keys = JobKeys()
     rows = []
-    # Exactly one bounded SCAN page. scan_iter can traverse the entire Redis
-    # keyspace in a worker that outlives the response timeout.
-    cursor, page = redis.scan(
-        cursor=0, match=keys.runner_hb("*"), count=ROW_LIMIT)
-    truncated = bool(cursor) or len(page) > ROW_LIMIT
-    for key in list(page)[:ROW_LIMIT]:
-        raw = redis.get(key)
+    with _redis_client() as redis:
+        # Exactly one bounded SCAN page. scan_iter can traverse the entire
+        # keyspace in a worker that outlives the response timeout.
+        cursor, page = redis.scan(
+            cursor=0, match=keys.runner_hb("*"), count=ROW_LIMIT)
+        truncated = bool(cursor) or len(page) > ROW_LIMIT
+        selected = list(page)[:ROW_LIMIT]
+        pipe = redis.pipeline(transaction=False)
+        try:
+            for key in selected:
+                pipe.get(key)
+            values = pipe.execute()
+        finally:
+            pipe.reset()
+    for raw in values:
         try:
             row = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
         except (TypeError, ValueError):
@@ -150,9 +171,8 @@ def _fleet():
 def _jobs():
     from mojo.apps.jobs.keys import JobKeys
     from mojo.apps.jobs.models import Job
-    from mojo.helpers.redis import get_connection
-    redis = get_connection()
-    scheduler = redis.get(JobKeys().scheduler_lock())
+    with _redis_client() as redis:
+        scheduler = redis.get(JobKeys().scheduler_lock())
     counts = {
         "pending": Job.objects.filter(status="pending").count(),
         "running": Job.objects.filter(status="running").count(),
@@ -180,13 +200,23 @@ def _sanity():
 def _deployments():
     from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.edge.services import deploy, platform_deploy
-    target = deploy.get_target()
-    coordination = deploy.get_status()
+    with _redis_client() as redis:
+        pipe = redis.pipeline(transaction=False)
+        try:
+            pipe.get(deploy.TARGET_KEY)
+            pipe.get(deploy.STATUS_KEY)
+            target_raw, status_raw = pipe.execute()
+        finally:
+            pipe.reset()
+    target = deploy._loads(target_raw)
+    coordination = deploy._loads(status_raw)
     rows = PlatformDeployment.objects.select_related("retry_of").all()[:50]
     status = _platform_deployment_status(rows[0]) if rows else "unconfigured"
     return {
         "_collector_status": status,
-        "items": [platform_deploy.serialize(row) for row in rows], "limit": 50,
+        "items": [platform_deploy.serialize(
+            row, desired_commit=(target or {}).get("sha")) for row in rows],
+        "limit": 50,
         "desired_commit": (target or {}).get("sha"),
         "desired_deployment": (target or {}).get("deployment"),
         "coordination": {
@@ -282,18 +312,20 @@ def _webapps():
 
 def _dashboard_webapps():
     """Small WebApp rollup; Dashboard does not serialize every application."""
-    from collections import Counter
-    from django.db.models import OuterRef, Subquery
+    from django.db.models import Count, OuterRef, Subquery
     from mojo.apps.edge.models import WebApp, WebAppOnboardingOperation
     latest = WebAppOnboardingOperation.objects.filter(
         web_app_id=OuterRef("pk")).order_by("-created").values("status")[:1]
     rows = list(WebApp.objects.annotate(
         onboarding_status=Subquery(latest)).values(
-            "onboarding_status", "api_key__is_active"))
-    total = len(rows)
-    active_keys = sum(row["api_key__is_active"] is True for row in rows)
-    states = dict(Counter(
-        row["onboarding_status"] or "not_started" for row in rows))
+            "onboarding_status", "api_key__is_active").annotate(count=Count("pk")))
+    total = sum(row["count"] for row in rows)
+    active_keys = sum(
+        row["count"] for row in rows if row["api_key__is_active"] is True)
+    states = {}
+    for row in rows:
+        name = row["onboarding_status"] or "not_started"
+        states[name] = states.get(name, 0) + row["count"]
     if total == 0:
         status = "unconfigured"
     elif states.get("failed", 0):
@@ -328,8 +360,12 @@ def _dashboard_deployment():
     row = PlatformDeployment.objects.select_related("retry_of").first()
     if row is None:
         return {"_collector_status": "unconfigured", "items": []}
+    from mojo.apps.edge.services import deploy
+    with _redis_client() as redis:
+        target = deploy._loads(redis.get(deploy.TARGET_KEY))
     return {"_collector_status": _platform_deployment_status(row),
-            "items": [platform_deploy.serialize(row)]}
+            "items": [platform_deploy.serialize(
+                row, desired_commit=(target or {}).get("sha"))]}
 
 
 def _hosting():

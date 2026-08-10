@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from testit import helpers as th
@@ -254,6 +255,63 @@ def test_authenticated_secret_response_and_log_boundary(opts):
         _assert_absent(secrets, json.dumps(logs, default=str), "resulting Log rows")
 
 
+@th.django_unit_test("onboarding credentials are replaced before file logging")
+def test_onboarding_file_log_boundary(opts):
+    from mojo.helpers.response import JsonResponse
+    from mojo.middleware import logging as request_logging
+
+    sentinel = _sentinel("ONBOARDING-FILE")
+    logger = mock.Mock()
+    with mock.patch.object(request_logging, "LOGIT_FILE_ALL", True), \
+            mock.patch.object(request_logging, "LOGIT_DB_ALL", False), \
+            mock.patch.object(request_logging, "LOGGER", logger):
+        middleware = request_logging.LoggerMiddleware(
+            lambda request: JsonResponse({"status": True, "token": sentinel}))
+        for path in (
+                "/api/edge/webapp/onboarding/choose",
+                "/api/edge/webapp/onboarding/workflow"):
+            request = SimpleNamespace(
+                method="POST", path=path, ip="127.0.0.1",
+                _raw_body=f'{{"confirm_token":"{sentinel}"}}')
+            response = middleware(request)
+            th.assert_eq(response.status_code, 200, "middleware fixture failed")
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and logger.info.call_count < 4:
+            time.sleep(0.02)
+    output = json.dumps(logger.info.call_args_list, default=str)
+    th.assert_true(logger.info.call_count >= 4,
+                   "file logger did not observe request and response markers")
+    th.assert_true(sentinel not in output,
+                   "onboarding credential reached the file logger")
+    th.assert_true(output.count("webapp_onboarding_secret") >= 4,
+                   "request/response bodies were not replaced with fixed markers")
+
+
+@th.django_unit_test("malformed forced-password credentials never enter incident metadata")
+def test_malformed_forced_password_incident_boundary(opts):
+    from mojo import errors as me
+    from mojo.apps.account.utils import tokens
+    from mojo.apps.incident.models import Event, Incident
+
+    sentinel = uuid.uuid4().hex
+    raw = f"tp:{sentinel}abcdef"
+    before_event = Event.objects.order_by("-pk").values_list("pk", flat=True).first() or 0
+    before_incident = Incident.objects.order_by("-pk").values_list("pk", flat=True).first() or 0
+    with th.assert_raises(me.ValueException):
+        tokens.verify_forced_password_token(raw)
+    evidence = {
+        "events": list(Event.objects.filter(pk__gt=before_event).values(
+            "metadata", "details")),
+        "incidents": list(Incident.objects.filter(pk__gt=before_incident).values(
+            "metadata", "details")),
+    }
+    th.assert_true(bool(evidence["events"] or evidence["incidents"]),
+                   "malformed credential produced no incident evidence")
+    rendered = json.dumps(evidence, default=str)
+    th.assert_true(raw not in rendered and sentinel not in rendered,
+                   "malformed forced-password credential persisted in incident evidence")
+
+
 @th.django_unit_test("private assets use five primary items and scrub every transient secret")
 def test_merged_browser_secret_and_route_contract(opts):
     registry = (ROOT / "mojo/apps/account/admin_portal/assets/features/registry.js").read_text()
@@ -264,7 +322,7 @@ def test_merged_browser_secret_and_route_contract(opts):
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
     classifier = (ROOT / "mojo/helpers/request.py").read_text()
     th.assert_true(
-        "[dashboard, people, webapps, activity, platform, advanced]" in registry,
+        "[dashboard, people, webapps, platform, activity, advanced]" in registry,
         "feature order does not match the five-item product navigation")
     th.assert_true("navigation: () => []" in (
         ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/feature.js").read_text(),
