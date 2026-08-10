@@ -7,7 +7,7 @@ const ICONS = {advanced: 'settings', domains: 'globe', credentials: 'key', dns: 
 export default {
   id: 'advanced', routes: ROUTES, style: 'assets/features/advanced/styles.css',
   enabled: (ctx) => ctx.features?.advanced?.enabled === true,
-  navigation: () => ROUTES.map((route) => ({route, label: LABELS[route], icon: ICONS[route], section: 'Network & hosting'})),
+  navigation: () => [],
   title: (route) => LABELS[route] || 'Advanced',
   render: ({ctx, route}) => route === 'advanced' ? advancedControlPage(ctx) : networkPage(ctx, route),
 };

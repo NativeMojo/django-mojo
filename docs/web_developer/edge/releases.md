@@ -150,7 +150,8 @@ window fails safely and can be rerun.
 
 Use `POST /api/edge/webapp/revoke_key` with `webapp` and a new `operation_id`
 to deactivate and unlink the credential. Both mutations require a recent
-interactive login and refuse machine-credential sessions.
+interactive login and refuse machine-credential sessions. Link/create/rotate
+uses a 600-second freshness window; revoke uses 300 seconds.
 
 Revoking a key stops future releases and does **not** change what the site is
 currently serving.
@@ -166,6 +167,42 @@ The built-in Admin portal creates sites through App → Address → Connect GitH
 - `POST /api/edge/webapp/onboarding/choose` with the current `revision`
 - `POST /api/edge/webapp/onboarding/cancel`
 
+All onboarding routes require an interactive User session and refuse API keys
+and group tokens. Options and create require `manage_webapp` or `security` in
+the selected effectively active Group. Detail is readable only by the original
+actor while that same Group authority and active ancestry remain current.
+Choose and cancel add a 600-second fresh-auth check; they also require the
+original request origin, and choose must match the returned `revision` and
+current `step`. Revoking the actor's WebApp authority or disabling any Group
+ancestor stops both browser continuation and worker recovery.
+
+Create accepts:
+
+```json
+{
+  "group": 9,
+  "slug": "customer-portal",
+  "display_name": "Customer portal",
+  "environment": "production",
+  "bucket": "edge-releases",
+  "github_repository": "NativeMojo/customer-portal",
+  "deployment_ref": "main",
+  "build_output": "dist"
+}
+```
+
+It returns `created` and a serialized operation. Detail, choose, and cancel
+return the same versioned shape: `schema_version`, `operation_id`, `status`,
+`cursor`, `revision`, safe profile/choices/evidence/activity, related resource
+ids, bounded recovery timing, and timestamps. Internal reconciliation state,
+leases, actor/origin bindings, raw provider errors, and secrets are omitted.
+Post a choice as
+`{"operation":"<uuid>","revision":3,"step":"address","choice":{...}}`.
+Address accepts exactly one concrete non-apex, non-wildcard label. A purchase
+choice additionally carries the one-use `confirm_token`, `confirm_domain`, and
+`confirm_price`; the token is consumed synchronously and never appears in a
+later operation response.
+
 Do not automatically retry `choose`: a provider can accept a mutation and lose
 the response. Reload `detail`; the server reconciles durable intent against
 authoritative inventory. Purchase confirmation remains synchronous and
@@ -175,8 +212,15 @@ fresh-authenticated; the raw quote token is never stored or sent to a worker.
 one WebApp. It can also mint or rotate `MOJO_DEPLOY_KEY` when supplied `action`
 and a fresh `operation_id`; the token appears only on the first successful
 response. A replay returns `delivery: secret_unavailable`, so rotate explicitly
-if the response was lost.
+if the response was lost. The endpoint requires 600-second fresh interactive
+auth and `manage_webapp` or `security` in that WebApp's effectively active
+Group. Its request is `{"webapp":42}` for the secret-free workflow, or adds
+`"action":"mint|rotate"` and `"operation_id":"<uuid>"` for a one-time key
+receipt. The response contains `schema_version:1`, repository, filename, and
+validated YAML, plus `deployment_key` only when a key action was requested.
 
 `GET /api/edge/webapp/summary?webapp=<id>` is the secret-free, group-scoped v1
 read model. It includes profile, public address, onboarding evidence, and
 boolean key readiness—never credentials, certificate keys, or internal state.
+It requires an interactive session plus that WebApp's ordinary object read or
+write authority (`view_dns`, `manage_dns`, or `security`).

@@ -10,6 +10,7 @@
     "assets/components/model.js",
     "assets/components/overlays.js",
     "assets/components/relationship.js",
+    "assets/components/routes.js",
     "assets/components/views.js",
     "assets/features/registry.js"
   ]

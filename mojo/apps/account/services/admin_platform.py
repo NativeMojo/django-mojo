@@ -1,10 +1,12 @@
 """Permission-separated, bounded evidence for Admin Platform/Advanced."""
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from contextlib import contextmanager
 from datetime import timedelta
 
 from django.db import connection, transaction
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from mojo.apps.account.services import system_settings
 from mojo.helpers.settings import settings
@@ -14,6 +16,20 @@ SCHEMA_VERSION = 1
 COLLECTOR_TIMEOUT = 3.0
 STALE_SECONDS = 600
 ROW_LIMIT = 100
+
+
+def _bounded_redis():
+    from mojo.helpers.redis import get_bounded_connection
+    return get_bounded_connection(timeout=min(1.0, COLLECTOR_TIMEOUT / 2.0))
+
+
+@contextmanager
+def _redis_client():
+    client = _bounded_redis()
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 def _envelope(status, data=None, reason=None):
@@ -98,8 +114,8 @@ def _database():
 
 
 def _redis():
-    from mojo.helpers.redis import get_client
-    return {"reachable": bool(get_client().ping())}
+    with _redis_client() as redis:
+        return {"reachable": bool(redis.ping())}
 
 
 def _api():
@@ -119,17 +135,23 @@ def _api():
 def _fleet():
     import json
     from mojo.apps.jobs.keys import JobKeys
-    from mojo.helpers.redis import get_connection
-    redis = get_connection()
     keys = JobKeys()
     rows = []
-    # Exactly one bounded SCAN page. scan_iter can traverse the entire Redis
-    # keyspace in a worker that outlives the response timeout.
-    cursor, page = redis.scan(
-        cursor=0, match=keys.runner_hb("*"), count=ROW_LIMIT)
-    truncated = bool(cursor) or len(page) > ROW_LIMIT
-    for key in list(page)[:ROW_LIMIT]:
-        raw = redis.get(key)
+    with _redis_client() as redis:
+        # Exactly one bounded SCAN page. scan_iter can traverse the entire
+        # keyspace in a worker that outlives the response timeout.
+        cursor, page = redis.scan(
+            cursor=0, match=keys.runner_hb("*"), count=ROW_LIMIT)
+        truncated = bool(cursor) or len(page) > ROW_LIMIT
+        selected = list(page)[:ROW_LIMIT]
+        pipe = redis.pipeline(transaction=False)
+        try:
+            for key in selected:
+                pipe.get(key)
+            values = pipe.execute()
+        finally:
+            pipe.reset()
+    for raw in values:
         try:
             row = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
         except (TypeError, ValueError):
@@ -149,9 +171,8 @@ def _fleet():
 def _jobs():
     from mojo.apps.jobs.keys import JobKeys
     from mojo.apps.jobs.models import Job
-    from mojo.helpers.redis import get_connection
-    redis = get_connection()
-    scheduler = redis.get(JobKeys().scheduler_lock())
+    with _redis_client() as redis:
+        scheduler = redis.get(JobKeys().scheduler_lock())
     counts = {
         "pending": Job.objects.filter(status="pending").count(),
         "running": Job.objects.filter(status="running").count(),
@@ -179,11 +200,23 @@ def _sanity():
 def _deployments():
     from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.edge.services import deploy, platform_deploy
-    target = deploy.get_target()
-    coordination = deploy.get_status()
+    with _redis_client() as redis:
+        pipe = redis.pipeline(transaction=False)
+        try:
+            pipe.get(deploy.TARGET_KEY)
+            pipe.get(deploy.STATUS_KEY)
+            target_raw, status_raw = pipe.execute()
+        finally:
+            pipe.reset()
+    target = deploy._loads(target_raw)
+    coordination = deploy._loads(status_raw)
     rows = PlatformDeployment.objects.select_related("retry_of").all()[:50]
+    status = _platform_deployment_status(rows[0]) if rows else "unconfigured"
     return {
-        "items": [platform_deploy.serialize(row) for row in rows], "limit": 50,
+        "_collector_status": status,
+        "items": [platform_deploy.serialize(
+            row, desired_commit=(target or {}).get("sha")) for row in rows],
+        "limit": 50,
         "desired_commit": (target or {}).get("sha"),
         "desired_deployment": (target or {}).get("deployment"),
         "coordination": {
@@ -258,12 +291,81 @@ def _webapps():
         "matches": row["registrar_provider"] == row["dns_provider"],
         "status": row["status"],
     } for row in operations]
+    summaries = [webapp_onboarding.summary_for(row) for row in rows]
+    if not summaries:
+        status = "unconfigured"
+    elif any(item["onboarding"]["status"] == "failed" for item in summaries):
+        status = "unhealthy"
+    elif any(item["onboarding"]["status"] != "succeeded" or
+             not item["deployment_key"]["active"] for item in summaries):
+        status = "degraded"
+    else:
+        status = "healthy"
     return {
+        "_collector_status": status,
         "summary_contract": 1,
-        "items": [webapp_onboarding.summary_for(row) for row in rows],
+        "items": summaries,
         "registrar_vs_dns": provider_evidence,
         "truncated": WebApp.objects.count() > len(rows),
     }
+
+
+def _dashboard_webapps():
+    """Small WebApp rollup; Dashboard does not serialize every application."""
+    from django.db.models import Count, OuterRef, Subquery
+    from mojo.apps.edge.models import WebApp, WebAppOnboardingOperation
+    latest = WebAppOnboardingOperation.objects.filter(
+        web_app_id=OuterRef("pk")).order_by("-created").values("status")[:1]
+    rows = list(WebApp.objects.annotate(
+        onboarding_status=Subquery(latest)).values(
+            "onboarding_status", "api_key__is_active").annotate(count=Count("pk")))
+    total = sum(row["count"] for row in rows)
+    active_keys = sum(
+        row["count"] for row in rows if row["api_key__is_active"] is True)
+    states = {}
+    for row in rows:
+        name = row["onboarding_status"] or "not_started"
+        states[name] = states.get(name, 0) + row["count"]
+    if total == 0:
+        status = "unconfigured"
+    elif states.get("failed", 0):
+        status = "unhealthy"
+    elif active_keys < total or any(
+            name != "succeeded" and count for name, count in states.items()):
+        status = "degraded"
+    else:
+        status = "healthy"
+    return {"_collector_status": status, "count": total,
+            "active_deployment_keys": active_keys, "onboarding": states}
+
+
+def _platform_deployment_status(row):
+    if row.status == "failed":
+        return "unhealthy"
+    if row.status in ("requested", "canary", "fleet", "partial"):
+        return "degraded"
+    if row.status == "unknown":
+        return "unknown"
+    if row.status == "superseded":
+        return "stale"
+    if row.status in ("verified", "converged"):
+        return "healthy"
+    return "unknown"
+
+
+def _dashboard_deployment():
+    """Return one durable attempt without loading coordination or history."""
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import platform_deploy
+    row = PlatformDeployment.objects.select_related("retry_of").first()
+    if row is None:
+        return {"_collector_status": "unconfigured", "items": []}
+    from mojo.apps.edge.services import deploy
+    with _redis_client() as redis:
+        target = deploy._loads(redis.get(deploy.TARGET_KEY))
+    return {"_collector_status": _platform_deployment_status(row),
+            "items": [platform_deploy.serialize(
+                row, desired_commit=(target or {}).get("sha"))]}
 
 
 def _hosting():
@@ -350,6 +452,96 @@ def advanced_overview(request):
             "network_security": (("view_advanced_security", "manage_advanced", "admin"), _security),
             "settings": (("view_advanced_settings", "manage_advanced", "admin"), _settings),
         }),
+    }
+
+
+_DASHBOARD_STATUS_ORDER = {
+    "healthy": 0,
+    "unconfigured": 1,
+    "stale": 2,
+    "degraded": 3,
+    "unhealthy": 4,
+}
+
+
+def _dashboard_envelope(value, *, empty_is_unconfigured=False):
+    """Normalize one collector without inventing health from missing evidence."""
+    value = dict(value or {})
+    status = value.get("status", "unavailable")
+    if status == "unauthorized":
+        status = "permission_denied"
+    elif status == "unavailable":
+        status = "unknown"
+    elif status == "timeout":
+        status = "degraded"
+    elif status not in _DASHBOARD_STATUS_ORDER:
+        status = "unknown"
+    stale_after = parse_datetime(str(value.get("stale_after") or ""))
+    if status == "healthy" and stale_after and stale_after < timezone.now():
+        status = "stale"
+    data = value.get("data") if isinstance(value.get("data"), dict) else {}
+    if empty_is_unconfigured and status == "healthy" and not data.get("items"):
+        status = "unconfigured"
+    return {
+        "status": status,
+        "observed_at": value.get("observed_at"),
+        "stale_after": value.get("stale_after"),
+        "reason": value.get("reason"),
+        "data": data,
+    }
+
+
+def _attention(request, model_name, permissions):
+    """Count one attention source only after its own permission succeeds."""
+    if not _permitted(request, *permissions):
+        return _envelope("unauthorized", reason="permission_required")
+    def collect():
+        if model_name == "incidents":
+            from mojo.apps.incident.models import Incident
+            count = Incident.objects.exclude(status__in=("resolved", "closed")).count()
+        else:
+            from mojo.apps.incident.models import Ticket
+            count = Ticket.objects.exclude(status__in=("resolved", "closed")).count()
+        return {"_collector_status": "healthy" if count == 0 else "degraded",
+                "_collector_reason": "open_attention" if count else None,
+                "open": count}
+    return _collect(collect)
+
+
+def dashboard_overview(request):
+    """Return the small, independently permissioned Admin landing matrix.
+
+    This intentionally never calls System Setup readiness. Setup is a
+    superuser-only Platform workflow, not an implicit Dashboard dependency.
+    """
+    raw = _section_map(request, {
+        "public_api": (("view_platform", "manage_platform", "admin"), _api),
+        "fleet": (("view_platform", "manage_platform", "admin"), _fleet),
+        "webapps": (("view_dns", "manage_dns", "security", "admin"), _dashboard_webapps),
+        "security": (("view_platform_security", "manage_platform", "admin"), _security),
+        "last_deployment": (("view_platform", "manage_platform", "admin"), _dashboard_deployment),
+    })
+    raw["incidents"] = _attention(
+        request, "incidents", ("view_security", "manage_security", "security", "admin"))
+    raw["tickets"] = _attention(
+        request, "tickets", ("view_security", "manage_security", "security", "admin"))
+    sources = {
+        name: _dashboard_envelope(
+            value, empty_is_unconfigured=name == "last_deployment")
+        for name, value in raw.items()
+    }
+    observable = [
+        item["status"] for item in sources.values()
+        if item["status"] in _DASHBOARD_STATUS_ORDER
+    ]
+    overall = max(
+        observable, key=lambda status: _DASHBOARD_STATUS_ORDER[status]) \
+        if observable else "unknown"
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "overall": overall,
+        "observable_sources": len(observable),
+        "sources": sources,
     }
 
 

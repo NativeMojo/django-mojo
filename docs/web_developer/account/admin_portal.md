@@ -50,8 +50,10 @@ token for create/rotate and offers revoke; System Setup only links there.
 
 ### Modular browser contract
 
-The packaged portal is divided into six fixed, capability-gated feature lanes:
-Dashboard, People, WebApps, Activity, Platform, and Advanced. Activity owns the
+The packaged portal is divided into six fixed, capability-gated feature lanes,
+but primary navigation is exactly Dashboard, People, Web Apps, Platform, and
+Activity. Advanced is a collapsed disclosure under Platform, alongside
+deployments and literal-superuser System Setup. Activity owns the
 bounded Incidents, Events, Logs, and Tickets operator journey. Platform owns
 public/local health, UUID deployment recovery, fleet evidence, System Setup,
 and readiness. Advanced owns bounded hosting/AWS inventory, typed settings,
@@ -82,6 +84,10 @@ Unknown namespaces are not loaded. Malformed server provider output disables
 that namespace. The browser registry likewise imports a fixed set of local
 descriptors; no URL, package name, or module path comes from user or deployment
 settings.
+
+Dashboard consumes `GET /api/account/admin/dashboard`, never Setup readiness.
+Its independently permissioned evidence and status vocabulary are documented
+in the [Dashboard API](admin_portal/dashboard.md).
 
 Feature renderers receive `{ctx, route, navigate, signal}` and return one DOM
 node. Honor the abort signal for fetches and attach a `dispose()` function to

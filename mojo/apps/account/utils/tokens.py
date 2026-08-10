@@ -99,7 +99,9 @@ def _verify(raw_token, expected_kind=None, consume=True):
 
     expected_kind: if provided, the token's kind must match exactly.
     """
-    orig_token = raw_token
+    token_kind = (raw_token.split(":", 1)[0]
+                  if isinstance(raw_token, str) and ":" in raw_token
+                  else "unknown")
     user = None
     try:
         # Parse kind prefix
@@ -154,16 +156,14 @@ def _verify(raw_token, expected_kind=None, consume=True):
     except Exception as err:
         if user:
             user.report_incident(
-                details=f"{user.username} invalid token format (kind={kind})",
+                details=f"{user.username} invalid token format (kind={token_kind})",
                 event_type="token:unknown",
-                error=str(err),
-                level=8, token=orig_token)
+                error_type=type(err).__name__, token_kind=token_kind, level=8)
         else:
             User.class_report_incident(
                 details="invalid token format",
                 event_type="token:unknown",
-                error=str(err),
-                level=8, token=orig_token)
+                error_type=type(err).__name__, token_kind=token_kind, level=8)
         raise merrors.ValueException("Invalid token format")
 
 

@@ -35,10 +35,12 @@ Bundle version 1 is exact:
 | Logs & Metrics | `view_logs`, `manage_logs`, `view_metrics`, `manage_metrics` |
 | System Administration | `manage_settings`, `view_jobs`, `manage_jobs`, `view_taskqueue`, `admin_compliance`, `admin_verify` |
 
-Activity links accept exactly `tab`, `start`, `size`, `sort`, `search`, `date`,
-`user`, `group`, `ip`, `hostname`, `incident`, `model`, and `model_id`.
-Destinations own actor-versus-subject correlation, bounds, deduplication, and
-lane authorization.
+People builds Activity links through the shared route-state contract, using
+`tab`, `size`, `sort`, `subject_type`, `subject_id`, optional `subject_model`,
+and bounded `return`. It does not translate a selected record into legacy
+`user`, `group`, `incident`, `model`, or `model_id` hash keys. Activity owns
+the subject-to-model-filter translation, actor-versus-subject correlation,
+bounds, deduplication, and lane authorization.
 
 The preview provider resets Users, Groups, members, keys, login evidence, and
 all transient actions between launches. Secret dialogs hold plaintext only in

@@ -2,3 +2,12 @@
 .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: 1rem; }
 .platform-evidence .evidence-json { max-height: 22rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .78rem; }
 .deployment-row .form-actions { justify-content: flex-end; }
+.platform-destinations { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.destination-card, .advanced-disclosure { border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
+.destination-card, .advanced-disclosure > summary { display: flex; align-items: center; gap: 12px; padding: 14px; color: inherit; text-decoration: none; cursor: pointer; }
+.destination-card div, .advanced-disclosure summary span { display: grid; flex: 1; gap: 2px; }
+.destination-card span, .advanced-disclosure small { color: var(--muted); font-weight: 400; }
+.advanced-disclosure nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; padding: 0 14px 14px 50px; }
+.advanced-disclosure nav a { padding: 7px 9px; border-radius: 6px; color: var(--muted); text-decoration: none; }
+.advanced-disclosure nav a:hover, .advanced-disclosure nav a:focus-visible { background: var(--surface-2); color: var(--text); }
+@media (max-width: 700px) { .platform-destinations { grid-template-columns: 1fr; } .advanced-disclosure nav { grid-template-columns: 1fr; } }

@@ -116,6 +116,34 @@ def test_public_probe_rejects_mixed_dns(opts):
         "one public answer masked a private rebinding answer"
 
 
+@th.django_unit_test("public verification rejects oversized DNS answers")
+def test_public_probe_rejects_address_overflow(opts):
+    from mojo.apps.edge.services import public_probe
+
+    answers = [
+        (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "",
+         (f"93.184.216.{index}", 443))
+        for index in range(1, public_probe.MAX_ADDRESSES + 2)
+    ]
+    with mock.patch("socket.getaddrinfo", return_value=answers):
+        with th.assert_raises(public_probe.UnsafePublicProbe):
+            public_probe.public_addresses("example.com")
+
+
+@th.django_unit_test("public verification bounds outstanding DNS resolutions")
+def test_public_probe_resolver_capacity(opts):
+    from mojo.apps.edge.services import public_probe
+
+    slots = mock.Mock()
+    slots.acquire.return_value = False
+    pool = mock.Mock()
+    with mock.patch.object(public_probe, "_RESOLVER_SLOTS", slots), \
+            mock.patch.object(public_probe, "_RESOLVER_POOL", pool):
+        with th.assert_raises(public_probe.UnsafePublicProbe):
+            public_probe.public_addresses("example.com", timeout=0.05)
+    pool.submit.assert_not_called()
+
+
 @th.django_unit_test("public verification uses root SNI Host and never follows redirects")
 def test_public_probe_root_contract(opts):
     from mojo.apps.edge.services import public_probe

@@ -4,7 +4,8 @@ NAME = "platform"
 def describe(capabilities):
     values = {"setup": capabilities["setup"], "view": capabilities["view_platform"],
               "manage": capabilities["manage_platform"],
-              "security": capabilities["view_platform_security"]}
+              "security": capabilities["view_platform_security"],
+              "advanced": capabilities["view_advanced"]}
     return {"id": NAME, "enabled": any(values.values()), "capabilities": values}
 
 

@@ -220,8 +220,9 @@ SENSITIVE_KEYS = frozenset({
     "password", "pwd", "new_password", "current_password",
     "temporary_password", "forced_password_token", "rotated_token",
     "secret", "token", "access_token", "refresh_token", "id_token",
-    "api_key", "auth_token", "bearer_token", "authorization",
-    "private_key", "otp", "mfa_code",
+    "api_key", "api_secret", "confirm_token", "auth_token", "bearer_token",
+    "authorization", "private_key", "private_key_pem", "mojo_deploy_key",
+    "otp", "mfa_code",
     "ssn", "credit_card", "card_number", "pin", "cvv",
 })
 

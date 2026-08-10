@@ -216,6 +216,10 @@ provider identity, bounded evidence, a revision, and a short lease. It never
 stores a registrar confirmation token, GitHub installation token, deployment
 key, certificate material, or raw provider error. `WebApp`, `Domain`,
 `Certificate`, and `Vhost` remain authoritative for their resources.
+The model and the WebApp profile fields (`display_name`, `environment`,
+`github_repository`, `deployment_ref`, and `build_output`) land together in
+`edge.0009_webapp_onboarding`, after `edge.0008_webappkeyoperation` and the DNS
+reservation dependency.
 
 The operation is actor-, group-, and origin-bound. Every continuation rechecks
 the active actor, group permission, object scope, and original origin. API keys
@@ -229,8 +233,9 @@ the fresh-auth request consumes the raw one-use confirmation synchronously.
 Workers never receive it. A lost response is recovered from `DomainPurchase`
 and `Domain.metadata.purchase`, not by replaying money movement.
 
-Guided DNS accepts a non-apex label only. It inventories the complete record
-set, adopts an exact CNAME, and refuses mixed, ambiguous, or foreign values.
+Guided DNS accepts exactly one concrete non-apex, non-wildcard label. It
+inventories the complete record set, adopts an exact CNAME, and refuses mixed,
+ambiguous, or foreign values.
 The target is the file-only `EDGE_WEBAPP_CNAME_TARGET`. Certificate selection
 reuses an active exact/wildcard certificate outside its renewal window; private
 material never crosses the onboarding surface.

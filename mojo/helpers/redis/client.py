@@ -120,3 +120,31 @@ def get_connection():
         _CLIENT = redis.Redis(connection_pool=pool)
 
     return _CLIENT
+
+
+def get_bounded_connection(timeout=1.0, max_connections=8):
+    """Return a short-lived Redis client with a hard per-command budget.
+
+    Admin evidence collectors must not inherit the process-wide 60-second
+    socket timeout: their response budget is only a few seconds. This client
+    deliberately has its own small pool so a timed-out collector cannot hold
+    a shared connection.
+    """
+    url = _build_url()
+    timeout = max(0.05, float(timeout))
+    max_connections = max(1, min(int(max_connections), 32))
+    is_cluster = str(settings.get_static("REDIS_CLUSTER", False)).lower() in (
+        "1", "true")
+    if is_cluster:
+        return RedisCluster.from_url(
+            url, decode_responses=True,
+            socket_connect_timeout=timeout, socket_timeout=timeout,
+            max_connections=max_connections,
+            read_from_replicas=str(settings.get_static(
+                "REDIS_READ_FROM_REPLICAS", "1")) in ("1", "true", "True"),
+            reinitialize_steps=5)
+    pool = redis.ConnectionPool.from_url(
+        url, decode_responses=True,
+        socket_connect_timeout=timeout, socket_timeout=timeout,
+        max_connections=max_connections)
+    return redis.Redis(connection_pool=pool)

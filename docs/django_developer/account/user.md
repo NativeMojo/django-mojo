@@ -33,6 +33,10 @@ class User(MojoSecrets, AbstractBaseUser, MojoModel):
 | `auth_key` | TextField | Per-user JWT signing key |
 | `requires_password_change` | BooleanField | Server-managed durable temporary-password state; indexed and never REST-writable |
 
+`account.0051_user_requires_password_change`, directly after
+`account.0050_systemsetupoperation`, adds this field with a safe `False`
+default for existing users.
+
 ### Avatar relation contract
 
 `User.validate_avatar_file()` requires an active, completed, groupless File
@@ -51,17 +55,23 @@ scope (`group=None`) even when the request carries an ambient group.
 ```python
 class RestMeta:
     LOG_CHANGES = True
-    VIEW_PERMS = ["view_users", "manage_users", "owner"]
-    SAVE_PERMS = ["manage_users", "owner"]
+    VIEW_PERMS = ["view_users", "manage_users", "users", "owner"]
+    SAVE_PERMS = ["manage_users", "users", "owner"]
     OWNER_FIELD = "self"           # owner = user is themselves
     NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
     NO_SAVE_FIELDS = ["auth_key", "last_activity", "is_dob_verified", "requires_password_change"]
-    SEARCH_FIELDS = ["username", "email", "display_name"]
+    SEARCH_FIELDS = ["username", "email", "display_name", "phone_number"]
     POST_SAVE_ACTIONS = ["send_invite", "disable", "reactivate"]
     GRAPHS = {
-        "basic": {"fields": ["id", "uuid", "display_name", "username", "last_activity", "is_active", "requires_password_change"]},
-        "default": {"fields": ["id", "display_name", "username", "email", "phone_number",
-                               "permissions", "metadata", "is_active", "requires_mfa",
+        "basic": {"fields": ["id", "uuid", "display_name", "username", "last_login",
+                             "last_activity", "is_active", "is_email_verified",
+                             "is_phone_verified", "is_dob_verified",
+                             "requires_password_change"]},
+        "default": {"fields": ["id", "uuid", "first_name", "last_name", "display_name",
+                               "username", "email", "phone_number", "last_login",
+                               "last_activity", "permissions", "metadata", "is_active",
+                               "is_superuser", "is_email_verified", "is_phone_verified",
+                               "is_dob_verified", "dob", "requires_mfa",
                                "requires_password_change", "has_passkey"]},
         "full": {}
     }

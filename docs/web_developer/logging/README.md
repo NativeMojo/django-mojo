@@ -30,6 +30,19 @@ incident/group ids without `geo_ip`; Ticket exposes scalar relationship ids and
 minimal labels without nested User/Group objects. Use those scalars for deep
 links rather than client-side joins.
 
+The exact search columns are:
+
+| Source | `search` columns |
+|---|---|
+| Log | `kind`, `method`, `path`, `ip`, `username`, `log`, `model_name` |
+| Event and Incident | `category`, `title`, `details`, `source_ip`, `hostname`, `model_name` |
+| Ticket | `title`, `description`, `status`, `category` |
+
+WebApp onboarding `choose` and `workflow` POST bodies are never available in
+request/response logs. They can carry a registrar confirmation token or a
+reveal-once deployment key, so the server replaces the complete bodies with a
+fixed sensitive marker before database or file logging.
+
 Do not use `/api/incident/stats` to build Activity counts. It is not the
 permission-scoped list authority. Request a size-one page from each source and
 use that envelope's `count` instead.

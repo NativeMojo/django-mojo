@@ -1,4 +1,7 @@
 import {api, badge, h, icon, pageHeader, statusTone} from '../../core.js';
+import {openInspector} from '../../components/overlays.js';
+import {activityHref, decodeRouteState, returnLocation, routeHref} from '../../components/routes.js';
+import {permissionDeniedState} from '../../components/views.js';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
 const DEEP_LINKS = {
@@ -184,29 +187,68 @@ function evidenceCard(name, section) {
     h('pre', {class: 'evidence-json', text: JSON.stringify(data, null, 2)}));
 }
 
+function platformDestinations(ctx) {
+  const advanced = ctx.features?.advanced?.enabled === true;
+  return h('section', {class: 'platform-destinations'},
+    ctx.capabilities.setup ? h('a', {class: 'destination-card', href: routeHref('setup')},
+      icon('settings'), h('div', {}, h('strong', {text: 'System Setup'}),
+        h('span', {text: 'Check or repair installation dependencies as a literal superuser.'})), icon('chevron')) : null,
+    advanced ? h('details', {class: 'advanced-disclosure'},
+      h('summary', {}, icon('settings'), h('span', {}, h('strong', {text: 'Advanced'}),
+        h('small', {text: 'Raw network, hosting, inventory, and protected settings'})), icon('chevron')),
+      h('nav', {'aria-label': 'Advanced resources'},
+        ...[
+          ['advanced', 'Overview'], ['domains', 'Domains'], ['credentials', 'Credentials'],
+          ['dns', 'DNS records'], ['certificates', 'Certificates'], ['upstreams', 'Upstreams'],
+          ['vhosts', 'Vhosts'], ['routes', 'Routes'],
+        ].map(([route, label]) => h('a', {href: routeHref(route), text: label})))) : null);
+}
+
+function openDeployment(row) {
+  const content = h('div', {class: 'deployment-inspector'},
+    h('dl', {class: 'details'},
+      h('div', {}, h('dt', {text: 'Commit'}), h('dd', {class: 'mono', text: row.sha})),
+      h('div', {}, h('dt', {text: 'Status'}), h('dd', {text: row.status})),
+      h('div', {}, h('dt', {text: 'Source'}), h('dd', {text: row.source || 'unknown'})),
+      h('div', {}, h('dt', {text: 'Framework'}), h('dd', {text: row.framework_version || 'unknown'}))),
+    h('a', {class: 'related-record', href: activityHref('events', {}, {
+      search: row.id, return: returnLocation(),
+    })}, h('strong', {text: 'Related deployment activity'}), icon('chevron')));
+  openInspector({title: `Deployment · ${row.sha?.slice(0, 10) || row.id}`, subtitle: row.id, content, wide: true});
+}
+
 export async function platformPage(ctx, route = 'platform') {
   const root = h('div', {class: 'page'});
   async function load() {
+    if (!ctx.features?.platform?.capabilities?.view) {
+      root.replaceChildren(pageHeader('Control plane', 'Platform', 'Platform health is independently permissioned.'),
+        permissionDeniedState('Your role cannot read Platform health or deployments.'), platformDestinations(ctx));
+      return;
+    }
     const report = await api('/api/account/admin/platform');
     const sections = report.sections || {};
     const deployments = sections.deployments?.data?.items || [];
-    const actions = (row) => ctx.capabilities.manage_platform ? h('div', {class: 'form-actions'},
-      ...['retry', 'verify', 'converge'].map((action) => h('button', {class: 'button compact', onclick: async (event) => {
+    const actions = (row) => ctx.capabilities.manage_platform ?
+      ['retry', 'verify', 'converge'].map((action) => h('button', {class: 'button compact', onclick: async (event) => {
         event.currentTarget.disabled = true;
         try { await api(`/api/account/admin/platform/deploy/${action}`, {method: 'POST', body: JSON.stringify({deployment: row.id})}); await load(); }
         catch (error) { root.prepend(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
-      }}, action === 'retry' ? 'Retry same SHA' : action.replace(/^./, (value) => value.toUpperCase())))) : null;
+      }}, action === 'retry' ? 'Retry same SHA' : action.replace(/^./, (value) => value.toUpperCase()))) : [];
     if (route === 'deployments') {
       root.replaceChildren(pageHeader('Platform control plane', 'Deployments', 'Immutable attempts, UUID-bound proof, and same-SHA recovery actions.'),
         ...deployments.map((row) => h('section', {class: 'panel deployment-row'},
           h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {class: 'mono', text: row.sha}), h('p', {text: row.id})), badge(row.status, statusTone(row.status))),
-          h('p', {text: `${row.frozen_roster?.length || 0} frozen edge runner(s) · ${row.node_evidence?.length || 0} current proof row(s)`}), actions(row))),
+          h('p', {text: `${row.frozen_roster?.length || 0} frozen edge runner(s) · ${row.node_evidence?.length || 0} current proof row(s)`}),
+          h('div', {class: 'form-actions'}, h('button', {class: 'button compact', onclick: () => openDeployment(row)}, 'Inspect'), ...actions(row)))),
         ...(!deployments.length ? [h('div', {class: 'empty'}, h('p', {text: 'No platform deployment attempts have been recorded.'}))] : []));
+      const inspector = decodeRouteState().state.inspector;
+      const linked = inspector && deployments.find((row) => String(row.id) === String(inspector));
+      if (linked) openDeployment(linked);
       return;
     }
     root.replaceChildren(pageHeader('Platform control plane', 'Platform health', 'Bounded evidence for API, fleet, data services, certificates, security, and WebApps.', [
       h('button', {class: 'button ghost', onclick: load}, icon('refresh'), 'Refresh evidence'),
-    ]), h('div', {class: 'health-grid'}, ...Object.entries(sections).filter(([name]) => name !== 'deployments').map(([name, section]) => evidenceCard(name, section))));
+    ]), platformDestinations(ctx), h('div', {class: 'health-grid'}, ...Object.entries(sections).filter(([name]) => name !== 'deployments').map(([name, section]) => evidenceCard(name, section))));
   }
   try { await load(); } catch (error) { root.replaceChildren(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
   return root;

@@ -904,6 +904,12 @@ def get_runners(channel=None):
     return manager.get_runners(channel)
 
 
+def get_runners_bounded(channel, limit=128, max_scan_pages=16, timeout=1.0):
+    from .manager import get_manager
+    return get_manager().get_runners_bounded(
+        channel, limit=limit, max_scan_pages=max_scan_pages, timeout=timeout)
+
+
 def get_sysinfo(runner_id=None, timeout=5.0):
     """
     Collect host system info from one or all active runners.

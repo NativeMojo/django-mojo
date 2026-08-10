@@ -269,7 +269,10 @@ def _create_event_dict(details, title=None, category="api_error", level=1, reque
     from mojo.helpers.logit import sanitize_dict
 
     processed_kwargs = {}
-    for k, v in kwargs.items():
+    # Sanitize the complete mapping first. Sensitive scalar kwargs (for
+    # example token="...") used to bypass the dict-only branch below and were
+    # persisted verbatim in Event metadata.
+    for k, v in sanitize_dict(kwargs).items():
         if k not in event_data:
             if isinstance(v, dict):
                 processed_kwargs[k] = sanitize_dict(v)

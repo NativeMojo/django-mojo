@@ -211,6 +211,11 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 ### AWS
 
 - `AWS_DEFAULT_REGION`
+- `ADMIN_AWS_INVENTORY_ENABLED` — **file-only**
+  (`settings.get_static`), bool, default `False`. Opts the built-in Admin
+  Advanced API into one bounded EC2, RDS, and ElastiCache inventory page.
+  When false the section reports `unconfigured`. It never creates or mutates
+  resources and omits network endpoints and IP addresses.
 - `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` — **file-only**
   (`settings.get_static`, `kind="list"`), default `[]`. Exact SNS topic ARN
   allowlist for `/api/aws/cloudwatch/sns/alarm`; missing/empty denies all.
@@ -512,6 +517,12 @@ reasoning: [edge README](../edge/README.md#settings),
 - `FILEMAN_USE_SHORTLINKS` — global default for wrapping File/FileRendition
   download URLs in `/s/<code>` short links (default `True`). See
   [fileman shortlinks](../fileman/shortlinks.md).
+
+### FORCED
+
+- `FORCED_PASSWORD_TOKEN_TTL` — DB-backed integer seconds, default `600`.
+  Lifetime of the single-use `tp:` credential returned after a temporary-
+  password login. See [User administrator temporary passwords](../account/user.md#administrator-temporary-passwords).
 
 ### FRESH
 

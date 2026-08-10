@@ -1,1 +1,23 @@
-.kpi-grid { view-transition-name: admin-dashboard-kpis; }
+.dashboard-body, .dashboard-section, .attention-panel, .deployment-panel { display: grid; gap: 14px; }
+.dashboard-answer { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 20px; border: 1px solid var(--line); border-left: 4px solid var(--muted); border-radius: 11px; background: var(--surface); }
+.dashboard-answer.success { border-left-color: var(--success); }
+.dashboard-answer.warning { border-left-color: var(--warning); }
+.dashboard-answer.danger { border-left-color: var(--danger); }
+.dashboard-answer span, .dashboard-source header span { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.dashboard-answer strong { display: block; margin: 2px 0; font-size: clamp(24px, 3vw, 36px); text-transform: capitalize; }
+.dashboard-answer p, .dashboard-source p, .section-title p { margin: 0; color: var(--muted); }
+.dashboard-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.dashboard-source { display: grid; align-content: start; gap: 9px; min-width: 0; padding: 15px; border: 1px solid var(--line); border-top: 3px solid var(--muted); border-radius: 11px; background: var(--surface); }
+.dashboard-source.success { border-top-color: var(--success); }
+.dashboard-source.warning { border-top-color: var(--warning); }
+.dashboard-source.danger { border-top-color: var(--danger); }
+.dashboard-source header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dashboard-source > strong { overflow: hidden; font-size: 22px; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-source small { color: var(--muted); }
+.dashboard-source .button { justify-self: start; margin-top: auto; }
+.dashboard-lower { grid-template-columns: 2fr 1fr; align-items: start; }
+.attention-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.section-title h2 { margin: 0; font-size: 16px; }
+@media (max-width: 980px) { .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dashboard-lower { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .dashboard-answer { align-items: stretch; flex-direction: column; } .dashboard-grid, .attention-grid { grid-template-columns: 1fr; } .section-title { align-items: start; flex-direction: column; gap: 2px; } }
