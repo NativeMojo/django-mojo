@@ -31,6 +31,6 @@ def expected_topology(key, value):
         raise ValueError(f"{key} exceeds the supported fleet size")
     clean_nodes = [node_id(item) for item in nodes]
     clean_pools = [node_id(item) for item in pools]
-    if len(set(clean_nodes)) != len(clean_nodes) or len(set(clean_pools)) != len(clean_pools):
-        raise ValueError(f"{key} nodes and pools must not contain duplicates")
-    return {"nodes": sorted(clean_nodes), "pools": sorted(clean_pools)}
+    # Package A's protected-setting contract is canonicalizing: repeated UI
+    # selections round-trip as one sorted identity rather than failing a save.
+    return {"nodes": sorted(set(clean_nodes)), "pools": sorted(set(clean_pools))}

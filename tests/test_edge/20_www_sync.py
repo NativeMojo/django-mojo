@@ -537,7 +537,7 @@ def test_install_degrades_then_heals(opts):
         with open(os.path.join(second_link, "index.html"), "rb") as handle:
             assert handle.read() == FILES_V1["index.html"], \
                 "the stale-served bytes are not the ones it served before"
-        installed = installer.read_installed()
+        installed = installer.read_installed(POOL)
         assert installed.get("www_pending") == {str(opts.vhost.pk): "live2"}, \
             (f"the pending fetch was not recorded: "
              f"{installed.get('www_pending')}")
@@ -560,7 +560,7 @@ def test_install_degrades_then_heals(opts):
         with open(os.path.join(third_link, "index.html"), "rb") as handle:
             assert handle.read() == FILES_V2["index.html"], \
                 "the healed web root does not serve the new bytes"
-        assert not installer.read_installed().get("www_pending"), \
+        assert not installer.read_installed(POOL).get("www_pending"), \
             "a healed node still reports a pending fetch"
         assert os.path.isdir(v1_dir), \
             "the previous release was pruned — rollback would need a download"

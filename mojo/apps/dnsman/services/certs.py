@@ -647,14 +647,23 @@ def cleanup_challenges(domain, planted):
     """
     from mojo.apps.dnsman.services import dns, record_reservations
 
-    for reservation, record_name, digests in planted:
+    for planted_record in planted:
+        # The two-tuple form is the public helper's pre-reservation contract
+        # and remains useful to provider-adapter callers/tests. Issuance itself
+        # always supplies the durable three-tuple.
+        if len(planted_record) == 3:
+            reservation, record_name, digests = planted_record
+        else:
+            reservation = None
+            record_name, digests = planted_record
         try:
-            dns.clear_record(
-                domain, "TXT", record_name, list(digests),
-                reservation=reservation)
-            record_reservations.release(reservation)
+            kwargs = {"reservation": reservation} if reservation is not None else {}
+            dns.clear_record(domain, "TXT", record_name, list(digests), **kwargs)
+            if reservation is not None:
+                record_reservations.release(reservation)
         except Exception as err:
-            record_reservations.mark_cleanup_pending(reservation, err)
+            if reservation is not None:
+                record_reservations.mark_cleanup_pending(reservation, err)
             logit.error(
                 f"dnsman: could not remove challenge record {record_name} "
                 f"on {domain.name}: {err}")

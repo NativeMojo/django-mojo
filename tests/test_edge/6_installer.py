@@ -335,7 +335,7 @@ def test_real_config_failure_reverts(opts):
             "nginx was reloaded despite the real-config test failing — the "
             "node would now be serving broken config")
 
-        installed = json.load(open(installer.installed_path()))
+        installed = json.load(open(installer.installed_path(_pool("happy"))))
         assert installed["generation"] == first.generation, \
             "installed.json advanced past a generation that never loaded"
     finally:
@@ -412,7 +412,7 @@ def test_tenant_material_failure_excludes(opts):
         assert good_vhost.pk not in result.excluded, \
             "a healthy vhost was excluded"
 
-        installed = json.load(open(installer.installed_path()))
+        installed = json.load(open(installer.installed_path(_pool("exclude"))))
         assert opts.vhost.pk in installed["excluded"], \
             "installed.json does not record the exclusion — it is invisible"
     finally:

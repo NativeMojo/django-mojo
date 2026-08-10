@@ -105,23 +105,27 @@ def test_webapp_key_lifecycle_metadata(opts):
     from mojo.apps.edge.models import WebAppKeyOperation
     from mojo.apps.edge.services import readiness, webapp_keys
 
-    missing = readiness.check_webapp_keys({})[0]
+    def mine():
+        return next(row for row in readiness.check_webapp_keys({})
+                    if row["code"] == f"webapp.key.{opts.webapp.pk}")
+
+    missing = mine()
     assert missing["status"] == "pending", "a missing deploy key was reported green"
     linked, api_key, token, rotated = webapp_keys.link(opts.webapp)
-    active = readiness.check_webapp_keys({})[0]
+    active = mine()
     assert active["status"] == "pass", "an active deploy key was not green"
     assert token not in str(active), "readiness leaked the reveal-once deployment token"
     rotated = webapp_keys.link_once(
         linked, WebAppKeyOperation.ACTION_ROTATE, None,
         "00000000-0000-0000-0000-000000000023")
-    rotated_ready = readiness.check_webapp_keys({})[0]
+    rotated_ready = mine()
     assert rotated_ready["status"] == "pass", "a rotated active key was not green"
     assert rotated_ready["details"]["last_action"] == \
         WebAppKeyOperation.ACTION_ROTATE, "readiness lost the safe rotation receipt"
     assert rotated["token"] not in str(rotated_ready), \
         "readiness recovered a rotated reveal-once token"
     webapp_keys.revoke_once(linked, None, "00000000-0000-0000-0000-000000000024")
-    revoked = readiness.check_webapp_keys({})[0]
+    revoked = mine()
     assert revoked["status"] == "warn", "a revoked deploy key was not distinguished"
     assert revoked["details"]["last_action"] == WebAppKeyOperation.ACTION_REVOKE, \
         "readiness lost the non-secret revoke receipt"
