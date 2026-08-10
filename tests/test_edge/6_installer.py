@@ -151,7 +151,7 @@ def _exit(patches, root):
 
 @th.django_unit_test("a clean install stages, validates, swaps and reloads")
 def test_install_happy_path(opts):
-    from mojo.apps.edge.services import installer, readiness, render
+    from mojo.apps.edge.services import installer, render
     from mojo.apps.dnsman.models import Certificate
 
     root = _root(opts)
@@ -189,7 +189,7 @@ def test_install_happy_path(opts):
 @th.django_unit_test("two assigned pools are served by one combined atomic generation")
 def test_install_two_pools_combines_serving_state(opts):
     from mojo.apps.dnsman.models import Certificate
-    from mojo.apps.edge.services import installer, render
+    from mojo.apps.edge.services import installer, readiness, render
 
     declare_pools(["alpha", "beta"])
     alpha_domain = make_domain(group=opts.group)
