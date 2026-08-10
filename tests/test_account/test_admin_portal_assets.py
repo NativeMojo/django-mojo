@@ -12,6 +12,7 @@ ASSETS = ROOT / "mojo/apps/account/admin_portal/assets"
 @th.django_unit_test("Admin shell owns lifecycle while features own pages")
 def test_modular_shell_contract(opts):
     app = (ASSETS / "app.js").read_text()
+    styles = (ASSETS / "admin.css").read_text()
     registry = (ASSETS / "features/registry.js").read_text()
     platform = (ASSETS / "features/platform/feature.js").read_text()
     advanced = (ASSETS / "features/advanced/feature.js").read_text()
@@ -31,6 +32,10 @@ def test_modular_shell_contract(opts):
     assert "ctx.capabilities.network || ctx.capabilities.manage_network" in advanced, \
         "Domains & DNS sidebar visibility is not permission-gated"
     assert "networkPage(ctx, route)" in advanced and "advancedControlPage(ctx)" in advanced
+    assert "src: 'assets/mojo-logo.png'" in app and "brand-mark', text: 'M'" not in app, \
+        "Admin shell did not replace the placeholder badge with the Mojo logo"
+    assert ".brand-mark{display:block;width:32px;height:32px;object-fit:contain" in styles, \
+        "Admin logo has no stable sidebar sizing contract"
 
 
 @th.django_unit_test("shared relationship controls preserve paged REST envelopes")
