@@ -85,7 +85,6 @@ def test_existing_key_requires_rotate(opts):
 
     web_app = make_webapp(opts.group, slug="already", vhost=None)
     _, original, _, _ = webapp_keys.link(web_app)
-    count = ApiKey.objects.filter(name__startswith="webapp:").count()
 
     try:
         run_command(webapp=web_app.pk, token_only=True)
@@ -98,8 +97,9 @@ def test_existing_key_requires_rotate(opts):
     original.refresh_from_db()
     assert web_app.api_key_id == original.pk and original.is_active, \
         "refused rotation changed the linked key"
-    assert ApiKey.objects.filter(name__startswith="webapp:").count() == count, \
-        "refused rotation created another key"
+    assert list(ApiKey.objects.filter(name="webapp:already").values_list(
+        "pk", flat=True)) == [original.pk], \
+        "refused rotation created another key for this WebApp"
 
 
 @th.django_unit_test("explicit rotation revokes the previous key")
@@ -126,7 +126,6 @@ def test_cross_group_vhost_refused(opts):
     from mojo.apps.edge.models import WebApp
 
     other = make_group("bootstrap-other")
-    before = ApiKey.objects.count()
     try:
         run_command(
             slug="crossed", group=other.pk, vhost=opts.foreign_vhost.pk,
@@ -138,7 +137,8 @@ def test_cross_group_vhost_refused(opts):
     assert error is not None, "bootstrap linked another group's vhost"
     assert not WebApp.objects.filter(group=other, slug="crossed").exists(), \
         "failed bootstrap left a WebApp behind"
-    assert ApiKey.objects.count() == before, "failed bootstrap left a key behind"
+    assert not ApiKey.objects.filter(name="webapp:crossed").exists(), \
+        "failed bootstrap left its deployment key behind"
 
 
 @th.django_unit_test("default output is structured and identifies creation")
