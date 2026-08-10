@@ -122,9 +122,12 @@ When `requires_password_change` is set, every successful login or token-reissue
 path returns `data.requires_password_change=true`, a `tp:`
 `forced_password_token`, and the basic User graph. It returns no access,
 refresh, MFA, or group token. Submit the one-time credential to
-`POST /api/auth/password/forced` with `new_password`; on success the response
-is the ordinary JWT login package. Do not persist the temporary password or
-the `tp:` credential in browser storage, telemetry, downloads, or logs.
+`POST /api/auth/password/forced` as
+`{"token":"tp:...","new_password":"a new strong password"}`. The route is
+public but requires that short-lived credential, is geofence checked, and is
+limited to 10 attempts per IP per 600 seconds. On success the response is the
+ordinary JWT login package. Do not persist the temporary password or the `tp:`
+credential in browser storage, telemetry, downloads, or logs.
 
 Attempts to set these fields without the required permission return `403`.
 
@@ -173,8 +176,8 @@ GET /api/user?search=alice&is_active=true&sort=-created&start=0&size=20
 
 | Graph | Fields |
 |---|---|
-| `basic` | id, uuid, display_name, username, last_activity, is_active, requires_password_change, avatar |
-| `default` | id, uuid, display_name, username, email, phone_number, permissions, metadata, is_active, requires_mfa, requires_password_change, has_passkey, avatar, org |
+| `basic` | id, uuid, display_name, username, last_login, last_activity, is_active, is_email_verified, is_phone_verified, is_dob_verified, requires_password_change, avatar |
+| `default` | id, uuid, first_name, last_name, display_name, username, email, phone_number, last_login, last_activity, permissions, metadata, is_active, is_superuser, is_email_verified, is_phone_verified, is_dob_verified, dob, requires_mfa, requires_password_change, has_passkey, avatar, org |
 | `full` | All fields |
 
 ```

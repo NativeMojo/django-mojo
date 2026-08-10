@@ -51,8 +51,8 @@ token for create/rotate and offers revoke; System Setup only links there.
 ### Modular browser contract
 
 The packaged portal is divided into six fixed, capability-gated feature lanes,
-but primary navigation is exactly Dashboard, People, Web Apps, Activity, and
-Platform. Advanced is a collapsed disclosure under Platform, alongside
+but primary navigation is exactly Dashboard, People, Web Apps, Platform, and
+Activity. Advanced is a collapsed disclosure under Platform, alongside
 deployments and literal-superuser System Setup. Activity owns the
 bounded Incidents, Events, Logs, and Tickets operator journey. Platform owns
 public/local health, UUID deployment recovery, fleet evidence, System Setup,

@@ -36,6 +36,7 @@
 - [Admin People](admin_portal/people.md) — Operator workflows for Users, Groups, access, sign-ins, and API keys
 - [Group API](group.md) — Groups, membership, permissions
 - [Admin Portal API Guide](admin_portal.md) — Building admin consoles (users, groups, secure settings)
+- [Admin Dashboard API](admin_portal/dashboard.md) — Permission-separated health and attention sources, status semantics, and cross-feature links
 - [System Setup API](system_setup.md) — Superuser-only readiness, durable Fix Setup operations, late choices, resume, Origin binding, and protected settings
 - [Platform and Advanced APIs](admin_portal/platform.md) — Global health, UUID deployment recovery, bounded inventory, and typed settings
 - [API Keys](api_keys.md) — Long-lived tokens for programmatic access

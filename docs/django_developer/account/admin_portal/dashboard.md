@@ -1,7 +1,7 @@
 # Admin Dashboard integration contract
 
 The built-in Admin has five primary navigation items, in this order:
-Dashboard, People, Web Apps, Activity, and Platform. System Setup, deployments,
+Dashboard, People, Web Apps, Platform, and Activity. System Setup, deployments,
 and the collapsed Advanced raw-resource disclosure are destinations inside
 Platform; they are not additional primary navigation.
 
@@ -12,6 +12,17 @@ Incidents, and open Tickets. Each source checks its own permission before its
 collector runs. A denied source is `permission_denied`, a collector failure is
 `unknown`, missing configuration is `unconfigured`, old evidence is `stale`,
 actionable evidence is `degraded`, and a proven failure is `unhealthy`.
+
+| Source | Global read authority |
+|---|---|
+| Public API, fleet, last deployment | `view_platform`, `manage_platform`, `admin` |
+| Web Apps | `view_dns`, `manage_dns`, `security`, `admin` |
+| Detection posture (`security`) | `view_platform_security`, `manage_platform`, `admin` |
+| Open Incidents and Tickets | `view_security`, `manage_security`, `security`, `admin` |
+
+The endpoint itself first requires Admin source access (`view_admin`,
+`manage_users`, or `admin`); those source grants do not bypass the per-row
+checks above.
 
 `overall` is computed only from observable sources. Permission-denied and
 unknown sources never become healthy and never contribute a guessed state. If

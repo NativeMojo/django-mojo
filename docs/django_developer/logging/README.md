@@ -27,6 +27,17 @@ metadata, payloads, credential material, device ids, or user-agent strings to
 those fields; search/filter/count behavior is an information surface even when
 the corresponding value is absent from a graph.
 
+The landed allowlists are exact: Log searches `kind`, `method`, `path`, `ip`,
+`username`, `log`, and `model_name`; Event and Incident search `category`,
+`title`, `details`, `source_ip`, `hostname`, and `model_name`; Ticket searches
+`title`, `description`, `status`, and `category`.
+
+Credential-bearing Admin and onboarding routes are classified by path before
+request parsing. In particular, WebApp onboarding `choose` and `workflow`
+POSTs replace both request and response bodies with a fixed marker in database
+and file logs; confirmation tokens and reveal-once deployment keys never enter
+`requests.log` even when broad debug logging is enabled.
+
 Ticket `created` and `modified` are indexed because the center pages and sorts
 on both. The schema change is owned by incident migration `0038`. Generate any
 successor migration with `bin/create_testproject` and inspect the operations

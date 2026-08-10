@@ -16,9 +16,13 @@ shared secret. Behavior:
 | Push | Response |
 |---|---|
 | To the deploy branch (`EDGE_DEPLOY_BRANCH`, default `main`) | `202` — `{"status": true, "queued": true, "sha": "<head sha>"}` |
-| To the deploy branch while a deploy is in flight | `202` — `{"queued": false}`; the new commit is **recorded** and deployed when the in-flight deploy reaches its terminal (never a second concurrent deploy) |
-| To any other branch, a `ping`, any non-push event, or a branch deletion | `200` — `{"ignored": true, "reason": ...}` |
-| While Redis is unreachable | `503` — nothing recorded, nothing deployed |
+| To the deploy branch while a deploy is in flight | `202` — `{"status":true,"queued":false,"sha":"<head sha>"}`; the new commit is **recorded** and deployed when the in-flight deploy reaches its terminal (never a second concurrent deploy) |
+| To any other branch, a `ping`, any non-push event, or a branch deletion | `200` — `{"status":true,"ignored":true,"reason":"..."}` |
+| While the runner roster, Redis coordination, or queue publication is unavailable | `503` — no blind deploy starts; the durable attempt is retained as `failed` with a classified reason |
+
+The frozen edge roster must be complete within its bounded discovery budget.
+Roster overflow or an incomplete Redis scan fails the attempt closed; the
+orchestrator never treats a truncated node list as the fleet.
 
 The deployed commit is always the **payload's head SHA** — never a branch name
 resolved later.
@@ -37,12 +41,16 @@ A member-level `manage_deploy` grant does **not** qualify, with or without a
 API keys are refused. `sha` accepts 7-40 hex characters (case-insensitive; a
 branch name is a `400`).
 
-Responses match the webhook: `202` with `queued` true/false, `503` when
-coordination state is unavailable.
+Responses match the webhook: `202` with `status`, `queued`, and normalized
+`sha`; `503` when coordination state is unavailable. The trigger response does
+not reveal the internal deployment UUID.
 
 ## Observing a deploy
 
-There is no polling endpoint for deploy progress — the durable record is the
-incident stream (`category "edge_deploy"`): level 7 for a canary failure,
+This external trigger has no polling endpoint. Operators with dedicated global
+Platform access observe the durable UUID journal through
+`GET /api/account/admin/platform`, whose `deployments` section carries bounded
+transition and per-runner evidence. The incident stream (`category
+"edge_deploy"`) remains the alerting trail: level 7 for a canary failure,
 timeout, or a node that failed to converge. Operational state on a node is
 readable with `manage.py deploy_status get`.

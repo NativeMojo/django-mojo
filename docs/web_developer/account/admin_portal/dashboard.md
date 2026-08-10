@@ -1,11 +1,12 @@
 # Admin Dashboard API
 
 The packaged Admin uses exactly five primary destinations: Dashboard, People,
-Web Apps, Activity, and Platform. Deployments, literal-superuser System Setup,
+Web Apps, Platform, and Activity. Deployments, literal-superuser System Setup,
 and a collapsed Advanced resource list live under Platform.
 
-`GET /api/account/admin/dashboard` requires ordinary Admin source access and
-returns independently permissioned source envelopes:
+`GET /api/account/admin/dashboard` requires the same global source-access grant
+as the built-in Admin (`view_admin`, `manage_users`, or `admin`). It then checks
+each source independently before collecting it and returns:
 
 ```json
 {
@@ -31,7 +32,7 @@ readiness API.
 |---|---|
 | Public API, fleet, last deployment | `view_platform`, `manage_platform`, `admin` |
 | Web Apps | `view_dns`, `manage_dns`, `security`, `admin` |
-| Detection posture | `view_platform_security`, `manage_platform`, `admin` |
+| Detection posture (`security`) | `view_platform_security`, `manage_platform`, `admin` |
 | Open Incidents and Tickets | `view_security`, `manage_security`, `security`, `admin` |
 
 Packaged cross-links use one canonical hash state for `subject_type`,

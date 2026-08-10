@@ -28,6 +28,19 @@ Overview sections have this stable shape:
 }
 ```
 
+Platform returns sections `api`, `fleet`, `jobs`, `sanity`, `database`,
+`redis`, `deployments`, `certificates`, `security`, and `webapps`. Advanced
+returns `hosting`, `aws_inventory`, `network_security`, and `settings`.
+Permission is checked per section, so a caller admitted to the endpoint can
+still receive `unauthorized` for a narrower section.
+
+The three deployment actions accept `{"deployment":"<uuid>"}`. Retry returns
+`{"schema_version":1,"queued":true|false,"deployment":{...}}`; verify and
+converge return the same version plus the serialized `deployment`. A deployment
+contains its UUID, SHA, source, status, frozen runner roster, bounded
+transitions and latest-per-runner evidence, desired/current commits, and
+timing. It never contains a raw idempotency key or provider exception.
+
 Render `unhealthy`, `unauthorized`, `unavailable`, `timeout`, and
 `unconfigured` distinctly. Never infer health from absence or retain evidence
 past `stale_after`. Provider errors are intentionally not exposed.
@@ -46,3 +59,6 @@ Auth appearance and method fields are allowlisted. Login methods must include
 `password`; enabled registration must have at least one method. Navigation,
 redirect, API-base, external CSS, credentials, arbitrary settings, deploy
 commands, AWS settings, and KMS settings are not writable here.
+On success settings returns
+`{"schema_version":1,"saved":true,"value":{...}}` with the complete saved
+typed family.
