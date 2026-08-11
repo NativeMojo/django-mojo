@@ -16,6 +16,31 @@ EDGE_PERMS = ["view_dns", "manage_dns"]
 API_HOSTNAME = "api.edge-tests.internal"
 
 
+def declare_edge_runner(runner_id="edge-test-engine"):
+    """Publish one fresh, short-lived edge runner for deploy receiver tests."""
+    import json
+    import time
+
+    from mojo.apps.jobs.keys import JobKeys
+    from mojo.helpers import dates
+    from mojo.helpers.redis import get_client
+
+    client = get_client()
+    keys = JobKeys()
+    client.zadd(keys.runner_registry("edge"), {runner_id: time.time()})
+    client.expire(keys.runner_registry("edge"), 30)
+    client.set(keys.runner_hb(runner_id), json.dumps({
+        "runner_id": runner_id,
+        "hostname": "test-host",
+        "channels": ["edge"],
+        "jobs_processed": 0,
+        "jobs_failed": 0,
+        "started": dates.utcnow().isoformat(),
+        "last_heartbeat": dates.utcnow().isoformat(),
+    }), ex=15)
+    return runner_id
+
+
 def unique_email(prefix):
     return f"{prefix}_{_uuid.uuid4().hex[:8]}@edge.test"
 

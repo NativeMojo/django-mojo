@@ -10,7 +10,7 @@ import json
 from unittest import mock
 
 from testit import helpers as th
-from tests.test_edge._helpers import with_setting
+from tests.test_edge._helpers import declare_edge_runner, with_setting
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -115,6 +115,7 @@ def test_request_deploy_rule(opts):
 
     deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
     Job.objects.filter(func=deploy.DEPLOY_ORCHESTRATE_JOB).delete()
+    declare_edge_runner()
 
     th.assert_true(deploy.request_deploy(SHA_A, actor="github:one"),
                    "the first request must start a deploy")

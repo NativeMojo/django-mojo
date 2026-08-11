@@ -22,7 +22,9 @@ from unittest import mock
 import requests as rq
 from testit import helpers as th
 
-from tests.test_edge._helpers import login, make_group_member, make_user
+from tests.test_edge._helpers import (
+    declare_edge_runner, login, make_group_member, make_user,
+)
 
 SECRET = "testit-deploy-hook-3f9c"
 SHA_1 = "d" * 40
@@ -98,6 +100,7 @@ def test_webhook_deploy_flow(opts):
     from mojo.apps.edge.services import deploy
     from mojo.apps.jobs.models import Job
 
+    declare_edge_runner()
     with th.server_settings(GITHUB_WEBHOOK_SECRET=SECRET):
         resp = _signed_post(opts, _push(SHA_1))
         th.assert_eq(resp.status_code, 202,
@@ -174,6 +177,7 @@ def test_manual_deploy_allowed(opts):
 
     deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
     Job.objects.filter(func=deploy.DEPLOY_ORCHESTRATE_JOB).delete()
+    declare_edge_runner()
 
     login(opts, opts.op_email, opts.op_password)
     resp = opts.client.post("/api/edge/deploy", dict(sha="not-a-sha"))
