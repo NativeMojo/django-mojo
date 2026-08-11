@@ -1024,12 +1024,19 @@ field-local validation; one bad subfield is omitted rather than retrying the
 whole deterministic event. Sudo command context projects
 only a strict server-owned command family (or `unknown`) and one constant
 redaction marker. Raw executable/path, command digest, argument count, generic
-arguments, and per-token digests remain receipt-only.
+arguments, and per-token digests remain receipt-only. System-service kinds
+(`system.service_error`, `system.oom`) project only a validated failed-unit
+name (or `kernel`) and a bounded `failure_kind`; the raw journal message stays
+receipt-only.
 Raw secrets never enter Event metadata/title/details or ordinary logs.
 
 Source-bearing SSH, reliably attributed sudo, and known web kinds populate
-`Event.source_ip`. Sensor fingerprints include each projected identity scalar,
-so an aggregate cannot misrepresent interleaved IP/host/method/status values.
+`Event.source_ip`. For `web.probe` and `web.denied`, sensor fingerprints
+include each projected identity scalar, so an aggregate cannot misrepresent
+interleaved IP/host/method/status values. `web.error` fingerprints omit
+source/peer IP by design — one server fault hits every client at once, so its
+aggregate deliberately collapses across callers — and its `Event.source_ip`
+holds only a latest-occurrence witness, not an actor attribution.
 For a count-one web Event, occurrence-specific values remain top-level. For a
 count greater than one, every volatile value appears only under
 `last_occurrence_sample`, with `semantics="last_occurrence"` and
