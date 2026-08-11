@@ -147,7 +147,7 @@ trusted_pip() {
 # install latest, so releases are never missed. Either way a failure is loud.
 
 log "Installing project dependencies..."
-trusted_pip pip install -r requirements.txt \
+trusted_pip pip install -r "${PROJ_PATH}/requirements.txt" \
     || die "dependency install failed — refusing to restart with an incomplete environment"
 
 if [ -n "$FRAMEWORK" ]; then

@@ -189,6 +189,8 @@ echo "post_deploy.sh: --framework pins the install; bare upgrades; deps come FIR
 setup_env
 run_post_deploy --framework 9.9.9 >/dev/null 2>&1
 assert_eq "$?" 0 "--framework run exits 0"
+assert_in_log "CMD pip install -r $PROJ/requirements.txt" \
+    "requirements install uses an absolute path that survives the trusted helper cwd"
 assert_in_log "CMD pip install django-mojo==9.9.9" "pinned install argv"
 assert_order "CMD pip install -r" "CMD pip install django-mojo==9.9.9" \
     "requirements install precedes the framework pin"
