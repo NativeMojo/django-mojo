@@ -205,6 +205,12 @@ unlabeled high-entropy opaque values; and removes URL userinfo and query values.
 Readiness results and logs use fixed schemas rather than accepting arbitrary
 provider payload fields.
 
+The depth budget includes the framework envelope without consuming ordinary
+scalar check details or choice enum values; genuinely deeper provider-owned
+structures still truncate. The Admin translates durable internal states into
+operator labels (`Applying changes`, `Verifying changes`, and `Complete`) and
+shows an explicit terminal statement when changes were applied and verified.
+
 Every endpoint revalidates an active literal superuser and refuses API-key or
 group-token sessions. Create binds the browser's same-origin `Origin` header;
 advance, choose, and cancel must present that exact origin. This operation-local

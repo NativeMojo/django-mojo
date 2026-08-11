@@ -280,6 +280,12 @@ inspection; and removes URL userinfo and query values, including presigned queri
 Clients should preserve the response shape but tolerate a `"[truncated]"`
 value or `truncated: true` marker at a bounded collection edge.
 
+The framework envelope is included in that bound without consuming ordinary
+scalar check details or choice enum values. Deeper provider-owned structures
+still truncate. The packaged Admin presents `mutation_attempted`,
+`reconciling`, and `proven` as `Applying changes`, `Verifying changes`, and
+`Complete`, then states explicitly when changes were applied and verified.
+
 ## AWS sections and choices
 
 AWS integration adds four section codes to `options`:

@@ -6,7 +6,11 @@ import re
 from urllib.parse import urlsplit, urlunsplit
 
 
-MAX_DEPTH = 5
+# A serialized readiness report reaches depth six at ordinary scalar evidence
+# and a serialized operation reaches depth seven at choice enum values. Keep
+# both framework-owned envelopes usable while still cutting off deeper provider
+# structures.
+MAX_DEPTH = 7
 MAX_ITEMS = 256
 MAX_STRING_BYTES = 1000
 MAX_INPUT_CHARACTERS = 8192
