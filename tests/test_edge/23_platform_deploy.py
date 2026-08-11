@@ -165,6 +165,30 @@ def test_bounded_connection_primary_override(opts):
         "explicit primary-only safety read inherited replica settings"
 
 
+@th.django_unit_test("released fleets are reconciled into terminal UUID proof")
+def test_reconcile_released_fleet(opts):
+    from datetime import timedelta
+    from django.utils import timezone
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import platform_deploy
+
+    PlatformDeployment.objects.filter(status="fleet").delete()
+    row = PlatformDeployment.objects.create(
+        sha=SHA, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=["mv1-engine", "mv2-engine"], status="fleet",
+        transitions=[])
+    PlatformDeployment.objects.filter(pk=row.pk).update(
+        modified=timezone.now() - timedelta(
+            seconds=platform_deploy.FLEET_PROOF_GRACE + 1))
+    result = mock.Mock(status=PlatformDeployment.STATUS_CONVERGED)
+    with mock.patch.object(
+            platform_deploy, "verify", return_value=result) as verify:
+        changed = platform_deploy.reconcile_stale()
+    verify.assert_called_once_with(row.pk)
+    assert changed == 1, \
+        "the released fleet was not closed from restarted-runner proof"
+
+
 @th.django_unit_test("stale declared heartbeats fail roster discovery closed")
 def test_bounded_runner_discovery_rejects_stale_heartbeat(opts):
     import json

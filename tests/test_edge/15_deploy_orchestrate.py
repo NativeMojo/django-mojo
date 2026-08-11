@@ -246,6 +246,11 @@ def test_canary_success_flow(opts):
                  "orchestration must use the durable frozen roster, never a live re-read")
     th.assert_eq(deploy.get_status(), None,
                  "the multi-node terminal must delete the status")
+    deployment.refresh_from_db()
+    th.assert_eq(deployment.status, "fleet",
+                 "canary proof was mislabeled as healthy fleet verification")
+    th.assert_true(deployment.finished is None,
+                   "fleet dispatch became terminal before restarted-node proof")
 
 
 @th.django_unit_test("canary timeout: failed + incident, fleet untouched")

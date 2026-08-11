@@ -370,7 +370,7 @@ installer can be unit-tested but cannot be exercised on a node.
 | `EDGE_RELEASE_FETCH_TIMEOUT` | `60` | Per-attempt connect/read timeout for a node's release GET (static) |
 | `EDGE_RELEASE_FETCH_BUDGET` | `300` | Wall-clock ceiling for one release's fetch; the rest resumes next converge (static) |
 | `EDGE_POOLS` | `["default"]` | Pools the convergence sweep covers |
-| `EDGE_NODE_ID` | *(unset)* | Required file-only stable identity used in safe fleet proof |
+| `EDGE_NODE_ID` | current hostname | Optional file-only stable-identity override used in safe fleet proof |
 | `EDGE_NGINX_TEST_CMD` | `["sudo","-n","nginx","-t"]` | Root check, no arguments |
 | `EDGE_NGINX_STAGED_TEST_CMD` | `["nginx","-e","stderr","-t","-c"]` | Staged check, **unprivileged** (`-e stderr` suppresses the default-error-log alert) |
 | `EDGE_NGINX_RELOAD_CMD` | `["sudo","-n","systemctl","reload","nginx"]` | Constant argv |
@@ -423,7 +423,10 @@ node → verify `installed.json` fleet-wide → then delete the old path.
 
 ## Fleet readiness and convergence proof
 
-`EDGE_NODE_ID` is a required file-only stable node identity.
+Node identity defaults to django-mojo's normalized cross-platform hostname,
+the same identity used by the job runner. `EDGE_NODE_ID` is an optional
+file-only override for containers or platforms whose hostnames are ephemeral
+or duplicated.
 `EDGE_EXPECTED_TOPOLOGY` is the protected System Setup inventory of every
 expected node and pool. Readiness discovers only live runners that consume the
 `edge` channel, asks those exact runners for safe proof, and compares every

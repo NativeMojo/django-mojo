@@ -85,17 +85,37 @@ class Command(BaseCommand):
         record = platform_deploy.get(deployment_id)
         if record is None or record.sha != sha:
             raise CommandError("deployment UUID does not belong to --sha")
+
+        # A success signal releases the rest of the fleet. Build and persist
+        # every fallible piece of durable proof BEFORE exposing that signal in
+        # Redis. Previously set_status() landed first; a later proof failure
+        # made update.sh roll the canary back after the orchestrator had
+        # already released the fleet.
+        runner_id = deploy.local_runner_id()
+        proof = None
+        if state == deploy.STATUS_DEPLOYING:
+            from mojo.apps.edge.services import readiness
+            try:
+                proof = {
+                    "sha": sha, "deployment": deployment_id,
+                    "node": readiness.local_node_proof(),
+                }
+            except Exception:
+                raise CommandError("local node proof unavailable") from None
+            if not platform_deploy.evidence(
+                    deployment_id, runner_id, state, proof=proof, detail={}):
+                raise CommandError(
+                    "local runner is not in the deployment roster")
+
         if deploy.set_status(
                 state, sha, detail=options.get("detail"),
                 deployment_id=deployment_id):
-            from mojo.apps.edge.services import readiness
-            platform_deploy.evidence(
-                deployment_id, deploy.local_runner_id(), state,
-                proof={"sha": sha, "deployment": deployment_id,
-                       "node": readiness.local_node_proof()},
-                detail={"phase": deploy.failure_phase(options.get("detail"))
-                        if state == deploy.STATUS_FAILED else ""})
             if state == deploy.STATUS_FAILED:
+                # Failure is fail-safe: publish it even when optional local
+                # proof cannot be collected, then durably close the attempt.
+                platform_deploy.evidence(
+                    deployment_id, runner_id, state,
+                    detail={"phase": deploy.failure_phase(options.get("detail"))})
                 platform_deploy.transition(
                     deployment_id, "failed",
                     {"phase": deploy.failure_phase(options.get("detail")),

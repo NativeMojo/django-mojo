@@ -186,8 +186,9 @@ the contract above:
 
 Job runners are nodes in the fleet, not a separate operator concept. System
 Setup filters heartbeat discovery to runners consuming the `edge` channel and
-targets only those runner ids for proof. Each response reports the file-only
-`EDGE_NODE_ID`, installed django-mojo version, and per-pool generation evidence.
+targets only those runner ids for proof. Each response reports the normalized
+system hostname (or optional file-only `EDGE_NODE_ID` override), installed
+django-mojo version, and per-pool generation evidence.
 The protected `EDGE_EXPECTED_TOPOLOGY` is the expected inventory; every declared
 node/pool pair must answer and match before deployment readiness is green.
 
@@ -199,6 +200,12 @@ The index query reads at most the configured roster limit plus one entry;
 overflow, an empty roster, a missing, malformed, mismatched, stale, or
 implausibly future-dated declaration, or a timeout fails platform and WebApp
 deployments closed.
+
+A canary success remains `fleet` while restarted runners repopulate their
+heartbeats. The five-minute reconciler waits through the restart grace period,
+then collects UUID/SHA proof from every frozen runner and closes the attempt as
+`converged`, `partial`, or `unknown`; canary proof alone is never reported as
+healthy fleet convergence.
 
 Job engines synchronously register before initialization succeeds, refresh each
 consumed-channel index before their heartbeat document, prune expired entries,

@@ -313,8 +313,12 @@ def _deploy_terminal(sha, me, framework, released, deployment_id):
 
     deploy.clear_status(deployment_id)
     if released and framework:
+        # Canary proof releases the fleet, but it is not fleet convergence.
+        # Keep the row active until the delayed reconciler collects UUID/SHA
+        # proof from every restarted runner.
         platform_deploy.transition(
-            deployment_id, "verified", {"canary_proven": True})
+            deployment_id, "fleet", {"canary_proven": True,
+                                      "verification": "pending"})
         _publish_deploy_node(
             me, sha, framework, migrate=False,
             deployment_id=deployment_id)

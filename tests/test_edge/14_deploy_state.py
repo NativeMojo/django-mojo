@@ -180,6 +180,50 @@ def test_deploy_status_command(opts):
     deploy.clear_status(other.pk)
 
 
+@th.django_unit_test("deploy_status persists proof before exposing canary success")
+def test_deploy_status_proof_precedes_success(opts):
+    import uuid
+
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy, platform_deploy, readiness
+
+    runner = deploy.local_runner_id()
+    row = PlatformDeployment.objects.create(
+        sha=SHA_C, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[runner], transitions=[])
+    deploy.set_target(SHA_C, actor="test", deployment_id=row.pk)
+    deploy.arm_status(SHA_C, deployment_id=row.pk)
+
+    with mock.patch.object(
+            readiness, "local_node_proof",
+            side_effect=RuntimeError("proof failed")):
+        with th.assert_raises(CommandError):
+            call_command(
+                "deploy_status", "set", "deploying", sha=SHA_C,
+                deployment=str(row.pk))
+    status = deploy.get_status()
+    th.assert_eq(status["state"], deploy.STATUS_MIGRATING,
+                 "proof failure announced canary success to the orchestrator")
+
+    order = []
+    with mock.patch.object(
+            readiness, "local_node_proof", return_value={"node_id": "test"}), \
+         mock.patch.object(
+             platform_deploy, "evidence",
+             side_effect=lambda *a, **k: order.append("proof") or True), \
+         mock.patch.object(
+             deploy, "set_status",
+             side_effect=lambda *a, **k: order.append("status") or True):
+        call_command(
+            "deploy_status", "set", "deploying", sha=SHA_C,
+            deployment=str(row.pk))
+    th.assert_eq(order, ["proof", "status"],
+                 f"success escaped before durable proof: {order}")
+    deploy.clear_status(row.pk)
+
+
 @th.django_unit_test(
     "deploy_status command: one legacy empty-UUID lease can finish the upgrade")
 def test_deploy_status_legacy_upgrade_bridge(opts):

@@ -29,8 +29,20 @@ def _aggregate(code, label, counts, remediation, details=None):
 
 
 def local_node_id():
+    """Return the stable proof identity, defaulting to the job host identity.
+
+    Ordinary hosts already have a cross-platform identity through
+    ``socket.gethostname()`` in the job engine. Requiring every project to
+    repeat that value as EDGE_NODE_ID made safe deployment proof fail after a
+    successful install. Keep the file-only setting as an override for
+    containers and platforms whose hostnames are ephemeral or duplicated.
+    """
     from mojo.apps.edge.settings_validators import node_id
-    return node_id(settings.get_static("EDGE_NODE_ID", ""))
+    configured = settings.get_static("EDGE_NODE_ID", "")
+    if configured:
+        return node_id(configured)
+    from mojo.apps.jobs.job_engine import host_channel
+    return node_id(host_channel())
 
 
 def local_node_proof(data=None):
@@ -198,7 +210,8 @@ def check_fleet(context):
             if len(rows) < DETAIL_LIMIT:
                 rows.append(system_readiness.result(
                     f"fleet.node.{node}", "pending", f"Node {node} did not provide edge proof.",
-                    "Start its edge-channel runner and verify EDGE_NODE_ID."))
+                    "Start its edge-channel runner and verify its hostname or "
+                    "EDGE_NODE_ID override matches the expected topology."))
             continue
         if proof.get("django_mojo_version") != mojo.__version__:
             counts["fail"] += 1

@@ -16,6 +16,7 @@ MAX_TRANSITIONS = 64
 MAX_EVIDENCE = 128
 MAX_TEXT = 320
 EVIDENCE_TTL = 600
+FLEET_PROOF_GRACE = 120
 
 
 def _text(value, limit=MAX_TEXT):
@@ -342,19 +343,35 @@ def converge(value):
 
 
 def reconcile_stale():
-    """Durably close active rows whose Redis lease/crash backstop vanished."""
+    """Verify released fleets, then close abandoned coordination attempts."""
     from datetime import timedelta
     from mojo.apps.edge.services import deploy
 
-    cutoff = timezone.now() - timedelta(seconds=max(60, deploy.status_ttl()))
-    active = PlatformDeployment.objects.filter(
-        status__in=PlatformDeployment.ACTIVE_STATUSES,
-        modified__lt=cutoff).values_list("pk", flat=True)[:100]
+    now = timezone.now()
+    cutoff = now - timedelta(seconds=max(60, deploy.status_ttl()))
+    proof_cutoff = now - timedelta(seconds=FLEET_PROOF_GRACE)
+    active = list(PlatformDeployment.objects.filter(
+        status__in=PlatformDeployment.ACTIVE_STATUSES).order_by("modified")[:100])
     changed = 0
     current = deploy.get_status()
-    for pk in active:
-        if not current or current.get("deployment") != str(pk):
+    for row in active:
+        if current and current.get("deployment") == str(row.pk):
+            continue
+        if (row.status == PlatformDeployment.STATUS_FLEET
+                and row.modified < proof_cutoff):
+            try:
+                result = verify(row.pk)
+            except Exception:
+                # A transient jobs/Redis failure leaves the row active for the
+                # next bounded sweep; it must not become a false terminal.
+                continue
+            changed += int(result is not None and result.status in {
+                PlatformDeployment.STATUS_CONVERGED,
+                PlatformDeployment.STATUS_PARTIAL,
+                PlatformDeployment.STATUS_UNKNOWN,
+            })
+        elif row.modified < cutoff:
             changed += int(transition(
-                pk, PlatformDeployment.STATUS_UNKNOWN,
+                row.pk, PlatformDeployment.STATUS_UNKNOWN,
                 {"reason": "coordination_lease_expired"}))
     return changed

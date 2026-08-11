@@ -276,6 +276,25 @@ def test_local_node_proof_no_secret_shape(opts):
         f"proof exposed credential material: {proof}"
 
 
+@th.django_unit_test("node proof identity defaults to the normalized job hostname")
+def test_local_node_id_automatic_with_optional_override(opts):
+    from mojo.apps.edge.services import readiness
+
+    with mock.patch.object(
+            readiness.settings, "get_static", return_value=""), \
+         mock.patch(
+            "mojo.apps.jobs.job_engine.host_channel",
+            return_value="cross-platform-node"):
+        assert readiness.local_node_id() == "cross-platform-node", \
+            "an ordinary host still required project-owned EDGE_NODE_ID config"
+
+    explicit = with_setting(
+        "EDGE_NODE_ID", "Stable_Override",
+        lambda: readiness.local_node_id())
+    assert explicit == "stable_override", \
+        "the file-only override did not win over automatic hostname identity"
+
+
 @th.django_unit_test("vhost and route changes publish after commit with one generation key")
 def test_convergence_publication_is_post_commit_and_idempotent(opts):
     import hashlib
