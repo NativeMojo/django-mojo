@@ -185,8 +185,8 @@ export async function settingsPage(ctx, signal) {
       const renderChips = () => chips.replaceChildren(...categories.map((name) => h('button', {type: 'button', class: name === active ? 'active' : '', 'aria-pressed': name === active ? 'true' : 'false', onclick: () => { active = name; renderChips(); render(); }}, name)));
       search.addEventListener('input', render); renderChips(); render();
       root.replaceChildren(pageHeader('Configuration', 'Settings', 'Understand effective configuration and change only the runtime values django-mojo supports.'),
-        report.setup_incomplete ? h('div', {class: 'callout'}, icon('alert'), h('div', {}, h('strong', {text: 'Installation setup is incomplete'}), h('p', {text: 'Finish the required installation choices before tuning ongoing configuration.'})), h('a', {class: 'button compact', href: routeHref('setup')}, 'Continue Setup')) : null,
-        statusText ? h('div', {class: 'settings-success', role: 'status', text: statusText}) : null,
+        ...(report.setup_incomplete ? [h('div', {class: 'callout'}, icon('alert'), h('div', {}, h('strong', {text: 'Installation setup is incomplete'}), h('p', {text: 'Finish the required installation choices before tuning ongoing configuration.'})), h('a', {class: 'button compact', href: routeHref('setup')}, 'Continue Setup'))] : []),
+        ...(statusText ? [h('div', {class: 'settings-success', role: 'status', text: statusText})] : []),
         h('div', {class: 'settings-toolbar'}, h('label', {class: 'search'}, icon('search'), search), chips), grid);
     } catch (error) { if (error?.name !== 'AbortError' && error?.code !== 'fresh_auth_required') root.replaceChildren(errorState(error, load)); }
   }
