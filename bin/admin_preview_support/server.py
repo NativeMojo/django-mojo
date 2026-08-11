@@ -1,6 +1,7 @@
 """Loopback-only deterministic support server for the Admin preview."""
 
 import argparse
+import email.utils
 import http.client
 import ipaddress
 import json
@@ -27,7 +28,10 @@ MAX_REQUEST_BODY = 2 * 1024 * 1024
 MAX_RESPONSE_BODY = 8 * 1024 * 1024
 PROXY_TIMEOUT = 10
 PROXY_METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}
-PROXY_PATHS = ("/api/", "/auth", "/register", "/passkey", "/static/")
+PROXY_PREFIXES = ("/api/", "/static/")
+PROXY_ROUTES = ("/auth", "/register", "/passkey")
+PREVIEW_SESSION_TTL = 8 * 60 * 60
+PREVIEW_SESSION_CAP = 32
 
 
 class PreviewProxyError(Exception):
@@ -272,10 +276,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
     api_keys = []
     permission_bundles = {}
     upstream = None
-    preview_token = None
     preview_port = None
-    upstream_cookies = {}
-    upstream_cookie_lock = threading.Lock()
+    preview_sessions = {}
+    preview_session_lock = threading.Lock()
 
     def log_message(self, fmt, *args):
         return
@@ -300,15 +303,28 @@ class PreviewHandler(BaseHTTPRequestHandler):
         port = type(self).preview_port
         return {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
 
-    def _preview_cookie_ok(self):
+    def _request_preview_token(self):
         cookie = SimpleCookie()
         try:
             cookie.load(self.headers.get("Cookie", ""))
         except Exception:
-            return False
+            return None
         token = cookie.get(PREVIEW_COOKIE)
-        return token is not None and secrets.compare_digest(
-            token.value, type(self).preview_token or "")
+        return token.value if token is not None else None
+
+    def _preview_cookie_ok(self):
+        token = self._request_preview_token()
+        if not token:
+            return False
+        now = time.time()
+        with type(self).preview_session_lock:
+            session = type(self).preview_sessions.get(token)
+            if session is None or now - session["seen"] > PREVIEW_SESSION_TTL:
+                type(self).preview_sessions.pop(token, None)
+                return False
+            session["seen"] = now
+        self.preview_session_token = token
+        return True
 
     def _proxy_gate(self):
         host = self.headers.get("Host", "").lower()
@@ -325,8 +341,13 @@ class PreviewHandler(BaseHTTPRequestHandler):
             raise PreviewProxyError("Preview mutations require a same-origin browser request")
 
     def _proxy_allowed(self, path):
-        return any(path == prefix or path.startswith(prefix)
-                   for prefix in PROXY_PATHS)
+        if (not path.startswith("/") or "%" in path or "\\" in path or
+                "//" in path or any(part in (".", "..") for part in path.split("/"))):
+            return False
+        if path == "/api" or any(path.startswith(prefix) for prefix in PROXY_PREFIXES):
+            return True
+        return any(path == route or path.startswith(route + "/")
+                   for route in PROXY_ROUTES)
 
     def _proxy_body(self):
         transfer = self.headers.get("Transfer-Encoding", "").lower()
@@ -352,15 +373,48 @@ class PreviewHandler(BaseHTTPRequestHandler):
             headers["Origin"] = upstream["origin"]
         if self.headers.get("Referer"):
             headers["Referer"] = upstream["origin"] + "/"
-        with type(self).upstream_cookie_lock:
-            if type(self).upstream_cookies:
-                headers["Cookie"] = "; ".join(
-                    f"{name}={value}" for name, value in
-                    sorted(type(self).upstream_cookies.items()))
+        cookies = self._cookies_for_request(self.path)
+        if cookies:
+            headers["Cookie"] = "; ".join(
+                f"{name}={value}" for name, value in sorted(cookies.items()))
         return headers
 
+    def _cookies_for_request(self, path):
+        token = getattr(self, "preview_session_token", None)
+        if not token:
+            return {}
+        now = time.time()
+        upstream = type(self).upstream
+        request_path = urlparse(path).path
+        selected = {}
+        with type(self).preview_session_lock:
+            session = type(self).preview_sessions.get(token)
+            if not session:
+                return {}
+            for cookie_key, record in list(session["cookies"].items()):
+                if record["expires"] is not None and record["expires"] <= now:
+                    session["cookies"].pop(cookie_key, None)
+                    continue
+                domain = record["domain"]
+                if not (upstream["hostname"] == domain or
+                        upstream["hostname"].endswith("." + domain)):
+                    continue
+                cookie_path = record["path"]
+                if request_path == cookie_path or request_path.startswith(
+                        cookie_path.rstrip("/") + "/"):
+                    current = selected.get(record["name"])
+                    if current is None or len(cookie_path) > len(current["path"]):
+                        selected[record["name"]] = record
+        return {name: record["value"] for name, record in selected.items()}
+
     def _remember_upstream_cookies(self, response):
-        found = {}
+        token = getattr(self, "preview_session_token", None)
+        if not token:
+            return
+        upstream = type(self).upstream
+        request_path = urlparse(self.path).path
+        default_path = request_path.rsplit("/", 1)[0] or "/"
+        found = []
         for name, value in response.getheaders():
             if name.lower() != "set-cookie":
                 continue
@@ -370,10 +424,38 @@ class PreviewHandler(BaseHTTPRequestHandler):
             except Exception:
                 continue
             for key, morsel in cookie.items():
-                found[key] = morsel.value
+                domain = (morsel["domain"] or upstream["hostname"]).lstrip(".").lower()
+                if not (upstream["hostname"] == domain or
+                        upstream["hostname"].endswith("." + domain)):
+                    continue
+                expires = None
+                if morsel["max-age"]:
+                    try:
+                        expires = time.time() + int(morsel["max-age"])
+                    except ValueError:
+                        continue
+                elif morsel["expires"]:
+                    try:
+                        expires = email.utils.parsedate_to_datetime(
+                            morsel["expires"]).timestamp()
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                cookie_path = morsel["path"] or default_path
+                if not cookie_path.startswith("/"):
+                    continue
+                record = {"name": key, "value": morsel.value, "domain": domain,
+                          "path": cookie_path, "expires": expires}
+                found.append(((key, domain, cookie_path), record))
         if found:
-            with type(self).upstream_cookie_lock:
-                type(self).upstream_cookies.update(found)
+            with type(self).preview_session_lock:
+                session = type(self).preview_sessions.get(token)
+                if not session:
+                    return
+                for key, record in found:
+                    if record["expires"] is not None and record["expires"] <= time.time():
+                        session["cookies"].pop(key, None)
+                    else:
+                        session["cookies"][key] = record
 
     def _proxy(self):
         try:
@@ -444,8 +526,22 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return self._send("Not found", "text/plain", 404)
         headers = None
         if type(self).upstream:
+            token = self._request_preview_token()
+            now = time.time()
+            with type(self).preview_session_lock:
+                session = type(self).preview_sessions.get(token)
+                if session is None or now - session["seen"] > PREVIEW_SESSION_TTL:
+                    token = secrets.token_urlsafe(32)
+                    type(self).preview_sessions[token] = {"seen": now, "cookies": {}}
+                else:
+                    session["seen"] = now
+                expired = sorted(type(self).preview_sessions.items(),
+                                 key=lambda item: item[1]["seen"])
+                while len(expired) > PREVIEW_SESSION_CAP:
+                    old_token, _ = expired.pop(0)
+                    type(self).preview_sessions.pop(old_token, None)
             headers = {"Set-Cookie": (
-                f"{PREVIEW_COOKIE}={type(self).preview_token}; Path=/; "
+                f"{PREVIEW_COOKIE}={token}; Path=/; "
                 "HttpOnly; SameSite=Strict")}
         return self._send(target.read_bytes(), mimetypes.guess_type(
             target.name)[0] or "application/octet-stream", headers=headers)
@@ -830,8 +926,7 @@ def main():
     PreviewHandler.upstream = upstream
     PreviewHandler.setup_behavior = args.setup_state
     PreviewHandler.preview_port = args.port
-    PreviewHandler.preview_token = secrets.token_urlsafe(32) if upstream else None
-    PreviewHandler.upstream_cookies = {}
+    PreviewHandler.preview_sessions = {}
     if upstream:
         print(f"Admin live QA: http://localhost:{args.port}/admin/ -> {upstream['origin']}", flush=True)
         print("Password authentication is supported; external OAuth callbacks are not bridged.", flush=True)

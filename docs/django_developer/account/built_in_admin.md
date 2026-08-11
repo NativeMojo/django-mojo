@@ -164,8 +164,10 @@ bin/admin_preview --port 8766 --upstream https://api.example.com
 Open `http://localhost:8766/admin/` and use the installation's normal password
 flow. The bridge accepts only one public HTTPS hostname origin, checks every DNS
 answer on every request, pins the TLS peer while retaining hostname
-verification, bounds traffic, and never follows redirects. A process-only
-HttpOnly preview cookie plus Host/Origin/fetch-metadata checks gates proxy
-traffic. Upstream cookies remain inside the preview process and are never set
-on localhost. No credential is accepted on the command line and headers/bodies
-are not logged. External OAuth callbacks are intentionally not bridged.
+verification, bounds traffic, and never follows redirects. Each preview browser
+receives an unguessable HttpOnly token; Host/Origin/fetch-metadata checks gate
+every proxied request. That token owns a separate, path/domain/expiry-aware
+upstream cookie jar inside the preview process, and upstream cookies are never
+set on localhost. No credential is accepted on the command line and
+headers/bodies are not logged. External OAuth callbacks are intentionally not
+bridged.

@@ -2,6 +2,7 @@
 
 import socket
 import sys
+from email.message import Message
 from pathlib import Path
 from unittest import mock
 
@@ -70,7 +71,8 @@ def test_live_location_rewrite_contract(opts):
 def test_live_proxy_source_contract(opts):
     source = (ROOT / "bin/admin_preview_support/server.py").read_text()
     for value in (
-            "secrets.compare_digest", "Sec-Fetch-Site", "Preview mutations require a same-origin",
+            "preview_sessions", "PREVIEW_SESSION_CAP", "Sec-Fetch-Site",
+            "Preview mutations require a same-origin",
             "resolve_public_addresses", "PinnedHTTPSConnection", "server_hostname=self.host",
             "getpeername", "MAX_REQUEST_BODY", "MAX_RESPONSE_BODY", "response.getheaders()"):
         assert value in source, f"live preview omitted the {value} boundary"
@@ -78,6 +80,59 @@ def test_live_proxy_source_contract(opts):
         "an upstream Set-Cookie can escape into the localhost browser namespace"
     assert "--upstream" in source and "Password authentication is supported" in source, \
         "the live QA command or its authentication boundary is missing"
+
+
+@th.django_unit_test("live preview route allowlist is canonical and boundary-aware")
+def test_live_proxy_route_gate(opts):
+    server = _server()
+    handler = object.__new__(server.PreviewHandler)
+    for path in ("/auth", "/auth/step", "/register", "/passkey/start", "/api/user", "/static/app.js"):
+        assert handler._proxy_allowed(path), f"required live-preview route was refused: {path}"
+    for path in ("/authentication", "/registering", "/passkeys", "/api/%2e%2e/auth",
+                 "/auth/../api", "//api/user", "/api\\user"):
+        assert not handler._proxy_allowed(path), f"non-canonical live-preview route was accepted: {path}"
+
+
+@th.django_unit_test("live preview sessions and upstream cookies stay browser-isolated")
+def test_live_proxy_session_cookie_isolation(opts):
+    server = _server()
+    server.PreviewHandler.preview_port = 8766
+    server.PreviewHandler.upstream = {
+        "origin": "https://api.mojoverify.com",
+        "hostname": "api.mojoverify.com",
+        "port": 443,
+    }
+    now = server.time.time()
+    server.PreviewHandler.preview_sessions = {
+        "browser-a": {"seen": now, "cookies": {}},
+        "browser-b": {"seen": now, "cookies": {}},
+    }
+
+    handler = object.__new__(server.PreviewHandler)
+    handler.command = "GET"
+    handler.path = "/auth/continue"
+    handler.headers = Message()
+    handler.headers["Host"] = "localhost:8766"
+    handler.headers["Cookie"] = f"{server.PREVIEW_COOKIE}=browser-a"
+    handler.headers["Sec-Fetch-Site"] = "same-origin"
+    handler._proxy_gate()
+    assert handler.preview_session_token == "browser-a", \
+        "the validated browser session was not bound to its request"
+
+    response = mock.Mock()
+    response.getheaders.return_value = [
+        ("Set-Cookie", "session=upstream-a; Path=/auth; Max-Age=3600; Secure; HttpOnly"),
+    ]
+    handler._remember_upstream_cookies(response)
+    assert handler._cookies_for_request("/auth/step") == {"session": "upstream-a"}, \
+        "a matching scoped upstream cookie was not retained server-side"
+    assert handler._cookies_for_request("/api/user") == {}, \
+        "an upstream cookie escaped its declared Path scope"
+
+    other = object.__new__(server.PreviewHandler)
+    other.preview_session_token = "browser-b"
+    assert other._cookies_for_request("/auth/step") == {}, \
+        "one preview browser received another browser's upstream session cookie"
 
 
 @th.django_unit_test("Admin 440 and busy states are explicit and finally-safe")
