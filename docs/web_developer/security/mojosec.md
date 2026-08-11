@@ -117,6 +117,9 @@ protocol/TLS, ports, byte counts and upstream measurements, and a strict
 server-owned sudo command family (or
 `unknown`) plus one constant redaction marker. Raw executable/path, command
 digest, argument count, generic arguments, and per-token digests never project.
+For system events (`system.service_error`, `system.oom`) the projection
+carries only the validated failed-unit name and failure kind; raw journal
+message text never projects.
 The native nginx stream never collects bodies, cookies, the Authorization
 header, or arbitrary headers. Bounded request targets, referrers, user agents,
 and sudo commands can still contain untrusted sensitive text, but those raw

@@ -243,6 +243,41 @@ def test_mojosec_web_projection_is_rich_scrubbed_and_aggregate_truthful(opts):
 
 
 @th.django_unit_test()
+def test_system_kind_projection_names_unit_and_failure_kind(opts):
+    from mojo.apps.incident.services.mojosec_evidence import project
+
+    failure = project("system.service_error", {
+        "unit": "api.service", "failure_kind": "exit-code", "priority": 4,
+        "message": "api.service: Failed with result 'exit-code'.",
+    })
+    th.assert_eq(failure["evidence"],
+                 {"unit": "api.service", "failure_kind": "exit-code"},
+                 "the central Event must name the failed unit and failure kind, "
+                 "and nothing else")
+    th.assert_eq(failure["source_ip"], None,
+                 "system kinds carry no actor address to promote")
+
+    oom = project("system.oom", {
+        "unit": "kernel",
+        "message": "Out of memory: Killed process 21437 (gunicorn)",
+    })
+    th.assert_eq(oom["evidence"], {"unit": "kernel"},
+                 "kernel OOM projection must carry the kernel attribution only")
+
+    for bad_unit in ("nodots", "../x.service", 7, None):
+        result = project("system.service_error", {
+            "unit": bad_unit, "failure_kind": "exit-code",
+        })
+        th.assert_true("unit" not in result["evidence"],
+                       f"malformed unit {bad_unit!r} must be omitted from projection")
+    malformed_kind = project("system.service_error", {
+        "unit": "api.service", "failure_kind": "Exit Code!",
+    })
+    th.assert_true("failure_kind" not in malformed_kind["evidence"],
+                   "a failure kind outside systemd's result vocabulary must be omitted")
+
+
+@th.django_unit_test()
 def test_mojosec_local_session_projection_is_distinct_from_remote_login(opts):
     from mojo.apps.incident.services.mojosec_evidence import project
 

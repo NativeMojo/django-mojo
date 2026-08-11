@@ -781,6 +781,157 @@ def test_rpm_ownership_is_rebuilt_for_every_slow_scan(opts):
 
 
 @th.django_unit_test()
+def test_system_service_error_requires_pid1_failure_and_collapses_by_unit(opts):
+    from mojo.mojosec.detectors import detect_journal
+    from mojo.mojosec.events import fingerprint
+
+    kex_noise = (
+        "error: kex_exchange_identification: Connection closed by remote host",
+        "error: kex_exchange_identification: read: Connection reset by peer",
+        'error: kex_exchange_identification: client sent invalid protocol '
+        'identifier "GET / HTTP/1.1"',
+    )
+    for message in kex_noise:
+        record = {
+            "SYSLOG_IDENTIFIER": "sshd", "_UID": "0", "_COMM": "sshd",
+            "_EXE": "/usr/sbin/sshd", "_SYSTEMD_UNIT": "sshd.service",
+            "PRIORITY": "3", "MESSAGE": message,
+        }
+        th.assert_eq(detect_journal(record), None,
+                     "routine err-level daemon lines must not become service failures")
+
+    failure = {
+        "_PID": "1", "_UID": "0", "_COMM": "systemd",
+        "SYSLOG_IDENTIFIER": "systemd", "_SYSTEMD_UNIT": "init.scope",
+        "PRIORITY": "4", "MESSAGE": "api.service: Failed with result 'exit-code'.",
+        "__REALTIME_TIMESTAMP": "1786190400000000",
+    }
+    fired = detect_journal(failure)
+    th.assert_eq(fired["kind"], "system.service_error",
+                 "a PID 1 unit-failure declaration must fire a service failure")
+    th.assert_eq(fired["severity"], "high",
+                 "genuine unit failures must stay high severity")
+    th.assert_eq(fired["aggregate"], True,
+                 "unit failures must aggregate so restart loops collapse")
+    th.assert_eq(fired["attributes"]["unit"], "api.service",
+                 "the failed unit must be named, not systemd's init.scope bookkeeping unit")
+    th.assert_eq(fired["attributes"]["failure_kind"], "exit-code",
+                 "the systemd result vocabulary must reach evidence as failure_kind")
+    th.assert_true("Failed with result" in fired["attributes"].get("message", ""),
+                   "the bounded failure message must stay in evidence")
+    repeat = detect_journal(dict(failure, __REALTIME_TIMESTAMP="1786190460000000"))
+    th.assert_eq(fired["fingerprint"], repeat["fingerprint"],
+                 "repeats of one unit failure must share one aggregation key")
+    th.assert_eq(fired["fingerprint"],
+                 fingerprint("system.service_error", ("api.service", "exit-code")),
+                 "the fingerprint must be (unit, failure_kind) with no volatile message text")
+
+    entered = detect_journal(dict(
+        failure, MESSAGE="api.service: Unit entered failed state."))
+    th.assert_eq((entered["kind"], entered["attributes"]["failure_kind"]),
+                 ("system.service_error", "failed"),
+                 "the mid-era entered-failed-state wording must fire with kind 'failed'")
+    legacy = detect_journal(dict(
+        failure, MESSAGE="Unit api.service entered failed state."))
+    th.assert_eq(legacy["attributes"]["unit"], "api.service",
+                 "the pre-230 legacy failure wording must still name the unit")
+    scope_unit = detect_journal(dict(
+        failure, MESSAGE="session-42.scope: Failed with result 'timeout'."))
+    th.assert_eq((scope_unit["attributes"]["unit"], scope_unit["attributes"]["failure_kind"]),
+                 ("session-42.scope", "timeout"),
+                 "non-service unit types must be accepted by the failure grammar")
+    drifted = detect_journal(dict(
+        failure, MESSAGE="api.service has gone belly-up.",
+        MESSAGE_ID="d9b373ed55a64feb8242e02dbe79ffcf", UNIT="api.service"))
+    th.assert_eq((drifted["attributes"]["unit"], drifted["attributes"]["failure_kind"]),
+                 ("api.service", "unknown"),
+                 "the unit-failed MESSAGE_ID fallback must survive future wording drift")
+
+    for mutation in (
+            dict(failure, _PID="200"),
+            dict(failure, _UID="1000"),
+            dict(failure, MESSAGE="api.service: Main process exited, "
+                                  "code=exited, status=1/FAILURE"),
+            dict(failure, MESSAGE="Failed to start LSB: api daemon."),
+            dict(failure, _PID="4242", _COMM="myapp",
+                 SYSLOG_IDENTIFIER="myapp", _SYSTEMD_UNIT="myapp.service",
+                 MESSAGE="api.service: Failed with result 'exit-code'."),
+            dict(failure, MESSAGE="api.service has gone belly-up.",
+                 MESSAGE_ID="d9b373ed55a64feb8242e02dbe79ffcf", UNIT="../etc"),
+            dict(failure, MESSAGE="api.service has gone belly-up.",
+                 MESSAGE_ID="d9b373ed55a64feb8242e02dbe79ffcf"),
+    ):
+        th.assert_eq(detect_journal(mutation), None,
+                     "anything but a PID 1 root unit-failure declaration must fail closed")
+
+
+@th.django_unit_test()
+def test_system_oom_is_kernel_transport_only_and_single_fire(opts):
+    from mojo.mojosec.detectors import detect_journal
+
+    kill_line = (
+        "Out of memory: Killed process 21437 (gunicorn) total-vm:1482912kB, "
+        "anon-rss:1201234kB, file-rss:0kB, shmem-rss:0kB, UID:1001 "
+        "pgtables:2891kB oom_score_adj:0"
+    )
+    genuine = detect_journal({
+        "SYSLOG_IDENTIFIER": "kernel", "_TRANSPORT": "kernel",
+        "PRIORITY": "3", "MESSAGE": kill_line,
+    })
+    th.assert_eq(genuine["kind"], "system.oom",
+                 "a kernel-transport OOM kill line must fire the critical OOM event")
+    th.assert_eq(genuine["severity"], "critical",
+                 "kernel OOM kills must stay critical")
+    th.assert_eq(genuine["aggregate"], False,
+                 "a kernel OOM kill is a discrete incident, never aggregated away")
+    th.assert_eq(genuine["attributes"]["unit"], "kernel",
+                 "kernel-origin OOM evidence must attribute to the kernel")
+    memcg = detect_journal({
+        "SYSLOG_IDENTIFIER": "kernel", "_TRANSPORT": "kernel", "PRIORITY": "3",
+        "MESSAGE": "Memory cgroup out of memory: Killed process 991 (api) "
+                   "total-vm:100kB, anon-rss:90kB",
+    })
+    th.assert_eq(memcg["kind"], "system.oom",
+                 "cgroup OOM kill lines must fire like global kills")
+
+    app_text = {
+        "SYSLOG_IDENTIFIER": "myapp", "_SYSTEMD_UNIT": "myapp.service",
+        "_TRANSPORT": "journal", "PRIORITY": "6",
+        "MESSAGE": "watchdog: killed process tree for job 7",
+    }
+    th.assert_eq(detect_journal(app_text), None,
+                 "application text echoing OOM phrases must never fire a critical event")
+    th.assert_eq(detect_journal(dict(app_text, PRIORITY="3")), None,
+                 "the err-level catch-all is gone: app text stays silent at priority 3")
+    forged = detect_journal({
+        "SYSLOG_IDENTIFIER": "kernel", "_TRANSPORT": "syslog",
+        "PRIORITY": "3", "MESSAGE": kill_line,
+    })
+    th.assert_eq(forged, None,
+                 "a forged kernel identifier without kernel transport must fail closed")
+
+    for detail_line in (
+            "oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=/,"
+            "mems_allowed=0,task=gunicorn,pid=21437,uid=1001",
+            "python3 invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE"
+            "|__GFP_COMP), order=0, oom_score_adj=0",
+    ):
+        record = {"SYSLOG_IDENTIFIER": "kernel", "_TRANSPORT": "kernel",
+                  "PRIORITY": "3", "MESSAGE": detail_line}
+        th.assert_eq(detect_journal(record), None,
+                     "one kernel OOM kill must fire exactly one event, not one per log line")
+
+    routed = detect_journal({
+        "_PID": "1", "_UID": "0", "_COMM": "systemd",
+        "SYSLOG_IDENTIFIER": "systemd", "_SYSTEMD_UNIT": "init.scope",
+        "PRIORITY": "4", "MESSAGE": "api.service: Failed with result 'oom-kill'.",
+    })
+    th.assert_eq((routed["kind"], routed["attributes"]["failure_kind"]),
+                 ("system.service_error", "oom-kill"),
+                 "PID 1's oom-kill unit failure must route to service_error, not system.oom")
+
+
+@th.django_unit_test()
 def test_incomplete_fim_scan_emits_only_overflow_until_reconciled(opts):
     from mojo.mojosec.collectors.fim import FimCollector
 

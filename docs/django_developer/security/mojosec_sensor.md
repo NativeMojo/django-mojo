@@ -18,7 +18,7 @@ package from a root-owned working directory with safe-path mode:
 
 | Collector | Retained | Intentionally omitted |
 |---|---|---|
-| journald | accepted SSH logins, failed SSH authentication, sudo commands/failures, non-SSH PAM session opens, systemd/kernel failures and OOM activity | routine PAM close chatter and ordinary service notices |
+| journald | accepted SSH logins, failed SSH authentication, sudo commands/failures, non-SSH PAM session opens, systemd unit-failure declarations (PID 1), kernel out-of-memory kills | routine PAM close chatter, ordinary and err-level daemon log lines, kernel non-OOM errors, and userspace text echoing failure/OOM phrases |
 | structured nginx log | known exploit-path probes, 401/403 denials, and 5xx responses; bounded raw request target, referrer, and user agent in root-only sensor state and the protected central receipt | ordinary 2xx/3xx/404/499 traffic, User-Agent-only suspicion, bodies, cookies, authorization, arbitrary headers, and raw log lines |
 | immutable tiered integrity | 60-second host/config FIM, six-hour boot/system-binary FIM, RPM verification, and system-Python package integrity under the packaged `al2023-web-v2` profile | application release trees, MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
 
@@ -270,6 +270,18 @@ Journald collection never uses `journalctl --lines` tail semantics. It streams
 forward from the committed `--after-cursor`, stopping at both a record and byte
 ceiling, and commits only the last cursor it processed. Per-record parse or
 detector failures increment the malformed count and do not abort the burst.
+
+System events use kernel-owned anchors. `system.service_error` fires only for
+PID 1-authored unit-failure declarations — the record must carry `_PID=1` and
+`_UID=0`, and the message must match systemd's failure grammar (`<unit>: Failed
+with result '<r>'.` and the older entered-failed-state forms), or carry
+systemd's published unit-failed `MESSAGE_ID` with a validated `UNIT=` field as
+wording-drift armor. The event names the failed unit itself (never
+`init.scope`) and is fingerprinted by `(unit, failure_kind)` so repeats
+collapse into one aggregate; the bounded message stays in evidence only.
+`system.oom` fires only for `_TRANSPORT=kernel` OOM kill lines — one critical
+event per kill — and a caller-controlled syslog identifier never opens the
+system branch, extending the trusted-source doctrine below.
 
 Only successful Linux audit-transport `USER_START`/`USER_LOGIN` records for
 the trusted legacy sshd executable or AL2023 split

@@ -44,6 +44,19 @@ _TOKEN_CONTEXT = {"activate", "invite", "magic", "password", "recover", "reset",
 _REQUEST_ID = re.compile(r"^[a-f0-9]{32}$")
 _HTTP_PROTOCOL = re.compile(r"^HTTP/(?:0\.9|1\.0|1\.1|2(?:\.0)?|3(?:\.0)?)$")
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9._-]{1,96}$")
+_UNIT_NAME = (
+    r"[A-Za-z0-9@:.\\_-]{1,128}"
+    r"\.(?:service|socket|target|device|mount|automount|swap|path|timer|slice|scope)"
+)
+_UNIT_FAILURE = re.compile(
+    r"^(?P<unit>" + _UNIT_NAME + r"): "
+    r"(?:Failed with result '(?P<result>[a-z0-9-]{1,64})'\.|Unit entered failed state\.)$")
+_UNIT_FAILURE_LEGACY = re.compile(r"^Unit (?P<unit>" + _UNIT_NAME + r") entered failed state\.$")
+_UNIT_FIELD = re.compile(r"^" + _UNIT_NAME + r"$")
+# systemd's public SD_MESSAGE_UNIT_FAILED catalog id: wording-drift armor for
+# the PID 1 failure grammar above. Only read after the kernel-owned _PID/_UID
+# proof, with the caller-attachable UNIT= field validated against _UNIT_FIELD.
+_UNIT_FAILED_MESSAGE_ID = "d9b373ed55a64feb8242e02dbe79ffcf"
 
 
 class DetectorError(ValueError):
@@ -309,22 +322,40 @@ def detect_journal(record, attribution=None):
     if not 0 <= priority <= 7:
         raise DetectorError("journal priority must be an integer from 0 to 7")
     lowered = message.lower()
-    if identifier in ("kernel", "systemd") or unit.endswith(".service"):
-        if "out of memory" in lowered or "oom-kill" in lowered or "killed process" in lowered:
-            return observation(
-                "system.oom", "critical", "Kernel out-of-memory action detected",
-                attributes=build_evidence(
-                    "system.oom", {"unit": unit, "message": message}),
-                fingerprint_values=(unit, bounded_text(message, 128)),
-                aggregate=False, recommendation="review", observed_at=observed_at,
-            )
-        if priority <= 3 or "failed with result" in lowered or "entered failed state" in lowered:
+    if str(record.get("_TRANSPORT") or "") == "kernel" and (
+            "out of memory" in lowered or "killed process" in lowered):
+        # The kernel emits exactly one "Killed process" line per victim; the
+        # oom-kill: detail line and invoked-oom-killer header no longer match,
+        # so one kill is one critical event. _TRANSPORT is journald-owned.
+        return observation(
+            "system.oom", "critical", "Kernel out-of-memory action detected",
+            attributes=build_evidence(
+                "system.oom", {"unit": unit, "message": message}),
+            fingerprint_values=(unit, "oom"),
+            aggregate=False, recommendation="review", observed_at=observed_at,
+        )
+    if (str(record.get("_PID") or "") == "1" and
+            canonical_uid(record.get("_UID")) == 0):
+        # Only PID 1's own unit-failure declarations count as a service
+        # failure; caller-controlled identifiers never open this branch.
+        match = _UNIT_FAILURE.fullmatch(message) or _UNIT_FAILURE_LEGACY.fullmatch(message)
+        failed_unit = ""
+        failure_kind = ""
+        if match:
+            failed_unit = match.group("unit")
+            failure_kind = match.groupdict().get("result") or "failed"
+        elif (str(record.get("MESSAGE_ID") or "").lower() == _UNIT_FAILED_MESSAGE_ID and
+              _UNIT_FIELD.fullmatch(str(record.get("UNIT") or ""))):
+            failed_unit = str(record["UNIT"])
+            failure_kind = "unknown"
+        if failed_unit:
             return observation(
                 "system.service_error", "high", "System service reported a failure",
                 attributes=build_evidence("system.service_error", {
-                    "unit": unit, "priority": priority, "message": message,
+                    "unit": failed_unit, "priority": priority, "message": message,
+                    "failure_kind": failure_kind,
                 }),
-                fingerprint_values=(unit, bounded_text(message, 128)),
+                fingerprint_values=(failed_unit, failure_kind),
                 aggregate=True, recommendation="review", observed_at=observed_at,
             )
     return None
