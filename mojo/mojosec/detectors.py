@@ -53,10 +53,12 @@ _UNIT_FAILURE = re.compile(
     r"(?:Failed with result '(?P<result>[a-z0-9-]{1,64})'\.|Unit entered failed state\.)$")
 _UNIT_FAILURE_LEGACY = re.compile(r"^Unit (?P<unit>" + _UNIT_NAME + r") entered failed state\.$")
 _UNIT_FIELD = re.compile(r"^" + _UNIT_NAME + r"$")
-# systemd's public SD_MESSAGE_UNIT_FAILED catalog id: wording-drift armor for
-# the PID 1 failure grammar above. Only read after the kernel-owned _PID/_UID
-# proof, with the caller-attachable UNIT= field validated against _UNIT_FIELD.
-_UNIT_FAILED_MESSAGE_ID = "d9b373ed55a64feb8242e02dbe79ffcf"
+# systemd's SD_MESSAGE_UNIT_FAILURE_RESULT catalog id - the id unit_log_failure
+# attaches to the "Failed with result '%s'." declaration (sd-messages.h,
+# src/core/unit.c). Wording-drift armor for the PID 1 failure grammar above,
+# read only after the kernel-owned _PID/_UID proof, with the caller-attachable
+# UNIT= field validated against _UNIT_FIELD.
+_UNIT_FAILED_MESSAGE_ID = "d9b373ed55a64feb8242e02dbe79a49c"
 
 
 class DetectorError(ValueError):

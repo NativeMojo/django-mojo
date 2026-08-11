@@ -882,7 +882,7 @@ def test_system_service_error_requires_pid1_failure_and_collapses_by_unit(opts):
                  "non-service unit types must be accepted by the failure grammar")
     drifted = detect_journal(dict(
         failure, MESSAGE="api.service has gone belly-up.",
-        MESSAGE_ID="d9b373ed55a64feb8242e02dbe79ffcf", UNIT="api.service"))
+        MESSAGE_ID="d9b373ed55a64feb8242e02dbe79a49c", UNIT="api.service"))
     th.assert_eq((drifted["attributes"]["unit"], drifted["attributes"]["failure_kind"]),
                  ("api.service", "unknown"),
                  "the unit-failed MESSAGE_ID fallback must survive future wording drift")
@@ -897,9 +897,9 @@ def test_system_service_error_requires_pid1_failure_and_collapses_by_unit(opts):
                  SYSLOG_IDENTIFIER="myapp", _SYSTEMD_UNIT="myapp.service",
                  MESSAGE="api.service: Failed with result 'exit-code'."),
             dict(failure, MESSAGE="api.service has gone belly-up.",
-                 MESSAGE_ID="d9b373ed55a64feb8242e02dbe79ffcf", UNIT="../etc"),
+                 MESSAGE_ID="d9b373ed55a64feb8242e02dbe79a49c", UNIT="../etc"),
             dict(failure, MESSAGE="api.service has gone belly-up.",
-                 MESSAGE_ID="d9b373ed55a64feb8242e02dbe79ffcf"),
+                 MESSAGE_ID="d9b373ed55a64feb8242e02dbe79a49c"),
     ):
         th.assert_eq(detect_journal(mutation), None,
                      "anything but a PID 1 root unit-failure declaration must fail closed")
