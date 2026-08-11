@@ -797,6 +797,30 @@ def test_setup_sanitizer_all_boundaries(opts):
         f"129+ character opaque secret-shaped value was not redacted: {opaque}"
 
 
+@th.django_unit_test("Setup safety preserves bounded report detail leaves")
+def test_setup_safety_preserves_report_detail_leaves(opts):
+    from mojo.apps.account.services import setup_safety
+
+    report = setup_safety.sanitize({
+        "schema_version": 1,
+        "sections": [{
+            "code": "aws_s3", "checks": [{
+                "code": "aws.bucket.cors",
+                "details": {"bucket": "existing-media", "rule_count": 1},
+            }],
+        }],
+    })
+    details = report["sections"][0]["checks"][0]["details"]
+    assert details == {"bucket": "existing-media", "rule_count": 1}, \
+        f"ordinary Setup evidence was truncated by envelope depth: {report!r}"
+
+    too_deep = "leaf"
+    for _ in range(setup_safety.MAX_DEPTH + 2):
+        too_deep = {"nested": too_deep}
+    assert setup_safety.TRUNCATED in str(setup_safety.sanitize(too_deep)), \
+        "the Setup sanitizer no longer bounds genuinely deep structures"
+
+
 @th.django_unit_test("step definition version rejects stale choose and advance")
 def test_step_definition_version_is_immutable(opts):
     from mojo import errors as merrors

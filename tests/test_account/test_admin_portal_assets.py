@@ -166,6 +166,9 @@ def test_webapp_onboarding_asset_contract(opts):
         "Setup does not turn legacy S3 choices into a clear existing-bucket journey"
     assert "current.kind === 'base_url'" in platform, \
         "the detected BASE_URL explanation can leak into unrelated Setup choices"
+    assert "Changes applied and verified" in platform and "Applying changes" in platform \
+        and "Verifying changes" in platform, \
+        "Setup exposes internal mutation states instead of a clear Fix outcome"
     assert "networkChecklist" not in platform and "Advanced resources" not in platform, \
         "Platform or Setup still renders a duplicate resource directory"
     assert "Technical details" in platform and "Return to Dashboard" in platform, \

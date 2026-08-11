@@ -11,6 +11,14 @@ const DEEP_LINKS = {
   webapp_keys: ['#/webapps', 'Manage WebApp keys'],
 };
 const READINESS_SEVERITY = ['fail', 'pending', 'warn', 'pass'];
+const STEP_STATE_LABELS = {
+  planned: 'Up next',
+  waiting_for_choice: 'Needs input',
+  mutation_attempted: 'Applying changes',
+  reconciling: 'Verifying changes',
+  proven: 'Complete',
+  failed: 'Needs attention',
+};
 
 function operatorChecks(checks = []) {
   return checks.filter((check) => check.code !== 'django.static_directories' &&
@@ -146,8 +154,14 @@ function operationView(operation, actions, suggestions) {
   const cancellable = !terminal && !['mutation_attempted', 'reconciling'].includes(current?.state);
   const stepRows = (operation.steps || []).map((step, index) => h('li', {class: index === operation.cursor ? 'active' : ''},
     h('span', {class: `step-marker ${statusTone(step.state)}`}, step.state === 'proven' ? icon('check') : String(index + 1)),
-    h('span', {text: step.label}), badge(step.state.replaceAll('_', ' '), statusTone(step.state))));
+    h('span', {text: step.label}), badge(STEP_STATE_LABELS[step.state] || step.state.replaceAll('_', ' '), statusTone(step.state))));
   const returnTarget = restoreReturnLocation(decodeRouteState().state.return) || routeHref('dashboard');
+  const terminalOutcome = operation.status === 'succeeded'
+    ? ['Changes applied and verified', 'Setup reran authoritative readiness checks and confirmed this operation.']
+    : operation.status === 'failed'
+      ? ['Setup could not verify every change', 'Review the remaining checks below for the exact next action.']
+      : operation.status === 'cancelled'
+        ? ['Setup operation cancelled', 'No further steps will run for this operation.'] : null;
   return h('section', {class: 'panel setup-operation'},
     h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: `${operation.mode === 'fix' ? 'Fix' : 'Check'} operation`}),
       h('p', {text: current ? current.label : 'Operation finished'})), badge(operation.status.replaceAll('_', ' '), statusTone(operation.status))),
@@ -155,6 +169,9 @@ function operationView(operation, actions, suggestions) {
     h('div', {class: 'operation-layout'},
       h('ol', {class: 'step-list'}, ...stepRows),
       h('div', {class: 'operation-main'}, choiceForm(operation, actions, suggestions),
+        terminalOutcome ? h('div', {class: `running-state ${statusTone(operation.status)}`},
+          operation.status === 'succeeded' ? icon('check') : icon('activity'),
+          h('div', {}, h('strong', {text: terminalOutcome[0]}), h('p', {text: terminalOutcome[1]}))) : null,
         !terminal && operation.status !== 'waiting_for_choice' ? h('div', {class: 'running-state'}, icon('activity'), h('div', {}, h('strong', {text: 'Reconciling authoritative state'}), h('p', {text: 'The operation advances one durable step at a time. It is safe to close and resume.'}))) : null,
         h('div', {class: 'form-actions'}, cancellable ? h('button', {class: 'button ghost', onclick: actions.cancel}, 'Cancel operation') : null,
           terminal ? h('a', {class: 'button ghost', href: returnTarget}, 'Return to Dashboard') : null,
