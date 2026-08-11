@@ -11,6 +11,7 @@ from .collectors.nginx import MAX_STRUCTURED_LINE_BYTES
 
 CONFIG_VERSION = 1
 MAX_CONFIG_BYTES = 256 * 1024
+CANONICAL_CONFIG_PATH = "/etc/mojosec/config.json"
 
 DEFAULTS = {
     "version": CONFIG_VERSION,
@@ -355,6 +356,38 @@ def build_config(supplied):
     return validate_config(_merge(DEFAULTS, expanded))
 
 
+def validate_effective_config(value):
+    """Validate one already-expanded, root-owned runtime artifact."""
+    try:
+        config = validate_config(value)
+    except ConfigError:
+        raise
+    except ValueError as err:
+        raise ConfigError(str(err)) from err
+    profile_name = config["profile"]
+    if not profile_name:
+        return config
+    from .profiles import resolve_profile
+    try:
+        profile = resolve_profile(profile_name)
+    except ValueError as err:
+        raise ConfigError(str(err)) from err
+
+    fim = config["collectors"]["fim"]
+    if fim["enabled"] is not True:
+        raise ConfigError("effective profile must enable immutable FIM collection")
+    if fim["targets"] != []:
+        raise ConfigError("effective profile FIM targets must remain tier-owned")
+    if fim["tiers"] != profile["tiers"]:
+        raise ConfigError("effective profile does not match its immutable FIM tiers")
+
+    expected_rpm = _copy(profile["rpm"])
+    expected_rpm["enabled"] = True
+    if config["collectors"]["rpm"] != expected_rpm:
+        raise ConfigError("effective profile does not match its immutable RPM graph")
+    return config
+
+
 def _security_problems(info, require_root):
     problems = []
     if not stat.S_ISREG(info.st_mode):
@@ -366,10 +399,8 @@ def _security_problems(info, require_root):
     return problems
 
 
-def load_config(path, require_root=None):
-    """Open, validate, and parse one immutable descriptor view of config."""
-    if require_root is None:
-        require_root = os.geteuid() == 0
+def _read_config(path, require_root):
+    """Parse one descriptor after applying every filesystem safety check."""
     try:
         flags = os.O_RDONLY
         if hasattr(os, "O_NOFOLLOW"):
@@ -403,4 +434,16 @@ def load_config(path, require_root=None):
     finally:
         if descriptor is not None:
             os.close(descriptor)
-    return build_config(supplied)
+    return supplied
+
+
+def load_config(path, require_root=None):
+    """Load untrusted desired policy, expanding a named profile once."""
+    if require_root is None:
+        require_root = os.geteuid() == 0
+    return build_config(_read_config(path, require_root))
+
+
+def load_effective_config(path):
+    """Load the root-owned canonical runtime artifact without re-expansion."""
+    return validate_effective_config(_read_config(path, True))
