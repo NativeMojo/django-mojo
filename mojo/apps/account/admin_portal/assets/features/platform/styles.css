@@ -1,6 +1,14 @@
 .setup-flow { view-transition-name: admin-platform-setup; }
 .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: 1rem; }
-.platform-evidence .evidence-json { max-height: 22rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .78rem; }
+.platform-evidence { display: grid; align-content: start; gap: 0; overflow: hidden; }
+.evidence-summary { display: grid; gap: 6px; padding: 20px 24px 22px; min-height: 7.5rem; }
+.evidence-summary strong { font-size: clamp(1.25rem, 2vw, 1.65rem); line-height: 1.2; letter-spacing: -.025em; }
+.evidence-summary p { margin: 0; color: var(--muted); line-height: 1.5; }
+.evidence-disclosure { border-top: 1px solid var(--line); }
+.evidence-disclosure > summary { display: flex; align-items: center; gap: 8px; padding: 12px 24px; color: var(--muted); cursor: pointer; font-weight: 650; list-style: none; }
+.evidence-disclosure > summary::-webkit-details-marker { display: none; }
+.evidence-disclosure > summary:hover, .evidence-disclosure > summary:focus-visible { color: var(--text); background: var(--surface-2); }
+.platform-evidence .evidence-json { margin: 0; padding: 18px 24px 22px; max-height: 22rem; overflow: auto; border-top: 1px solid var(--line); background: var(--surface-2); white-space: pre-wrap; overflow-wrap: anywhere; font-size: .78rem; }
 .deployment-row .form-actions { justify-content: flex-end; }
 .platform-destinations { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .destination-card, .advanced-disclosure { border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }

@@ -153,6 +153,8 @@ def test_webapp_onboarding_asset_contract(opts):
         "WebApp onboarding silently fell back to the first visible group"
     assert "Domains & DNS" in platform and "Add domains and manage the public records" in platform, \
         "Platform still buries domain management under Advanced"
+    assert "evidenceSummary" in platform and "View raw evidence" in platform, \
+        "Platform still exposes raw evidence instead of a professional summary-first card"
     assert ".row-actions" in webapp_styles and "gap: .5rem" in webapp_styles, \
         "WebApp table actions have no stable spacing contract"
     assert "Technical details" in webapps and "].filter(Boolean)" in webapps, \

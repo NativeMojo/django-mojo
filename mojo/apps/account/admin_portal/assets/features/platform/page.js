@@ -224,14 +224,43 @@ export async function setupPage(ctx, signal = null) {
   return root;
 }
 
+function evidenceSummary(name, data) {
+  if (name === 'api') return data.configured
+    ? [`django-mojo ${data.probe?.version || data.django_mojo_version || 'observed'}`, data.public_origin || 'Public API configured']
+    : ['Public API not configured', 'Set the protected BASE_URL in System Setup.'];
+  if (name === 'fleet') {
+    const rows = data.runners || [];
+    return [`${rows.length} live edge runner${rows.length === 1 ? '' : 's'}`,
+      rows.length ? rows.map((row) => row.runner).join(' · ') : 'No current edge heartbeat evidence.'];
+  }
+  if (name === 'jobs') {
+    const jobs = data.jobs || {};
+    return [`${jobs.pending || 0} pending · ${jobs.running || 0} running`,
+      `${jobs.failed || 0} recorded failures · Scheduler ${data.scheduler_active ? 'active' : 'inactive'}`];
+  }
+  if (name === 'sanity') {
+    const checks = data.checks || []; const passing = checks.filter((row) => row.ok).length;
+    return [`${passing} of ${checks.length} checks passing`, checks.filter((row) => !row.ok).map((row) => row.name).join(' · ') || 'Core application checks passed.'];
+  }
+  if (name === 'database') return [data.reachable ? 'Database reachable' : 'Database unavailable', data.vendor || 'No vendor evidence'];
+  if (name === 'redis') return [data.reachable ? 'Redis reachable' : 'Redis unavailable', 'Cache and coordination service'];
+  if (name === 'certificates') return [`${data.counts?.active || 0} active certificates`, `${data.expiring_within_30_days || 0} expiring within 30 days`];
+  if (name === 'security') return [`${data.open_incidents?.count ?? '—'} open incidents`, data.monitoring_delivery?.present ? 'Monitoring delivery observed' : 'Monitoring delivery proof is missing'];
+  if (name === 'webapps') return [`${data.items?.length || 0} Web Apps`, data.truncated ? 'Additional applications were omitted from this bounded view.' : 'All applications included.'];
+  return ['Evidence available', 'Open the response only when troubleshooting.'];
+}
+
 function evidenceCard(name, section) {
   const title = name.replaceAll('_', ' ').replace(/^./, (value) => value.toUpperCase());
   const data = section?.data || {};
+  const [value, detail] = evidenceSummary(name, data);
   return h('section', {class: 'panel platform-evidence'},
     h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: title}),
       h('p', {text: section?.reason || `Observed ${section?.observed_at ? formatDate(section.observed_at) : 'now'}`})),
       badge(String(section?.status || 'unavailable').toUpperCase(), statusTone(section?.status))),
-    h('pre', {class: 'evidence-json', text: JSON.stringify(data, null, 2)}));
+    h('div', {class: 'evidence-summary'}, h('strong', {text: value}), h('p', {text: detail})),
+    h('details', {class: 'evidence-disclosure'}, h('summary', {}, icon('activity'), h('span', {text: 'View raw evidence'})),
+      h('pre', {class: 'evidence-json', text: JSON.stringify(data, null, 2)})));
 }
 
 function platformDestinations(ctx) {
