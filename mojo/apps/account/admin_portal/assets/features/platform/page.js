@@ -1,4 +1,4 @@
-import {api, apiOnce, badge, formatDate, h, icon, pageHeader, statusTone} from '../../core.js';
+import {api, apiOnce, badge, formatDate, h, icon, listData, pageHeader, statusTone} from '../../core.js';
 import {openBusy, openInspector} from '../../components/overlays.js';
 import {activityHref, decodeRouteState, restoreReturnLocation, returnLocation, routeHref} from '../../components/routes.js';
 import {errorState, loadingState, permissionDeniedState} from '../../components/views.js';
@@ -10,6 +10,25 @@ const DEEP_LINKS = {
   edge_fleet: ['#/vhosts', 'Open hosting configuration'],
   webapp_keys: ['#/webapps', 'Manage WebApp keys'],
 };
+const READINESS_SEVERITY = ['fail', 'pending', 'warn', 'pass'];
+
+function operatorChecks(checks = []) {
+  return checks.filter((check) => check.code !== 'django.static_directories' &&
+    (check.code !== 'django.local_request' || check.details?.target_source === 'configured_static'));
+}
+
+function operatorReport(report) {
+  if (!report?.sections) return report;
+  const summary = {pass: 0, warn: 0, fail: 0, pending: 0};
+  const sections = report.sections.map((section) => {
+    const checks = operatorChecks(section.checks);
+    checks.forEach((check) => { if (check.status in summary) summary[check.status] += 1; });
+    const status = READINESS_SEVERITY.find((value) => checks.some((check) => check.status === value)) || 'pass';
+    return {...section, checks, status};
+  }).filter((section) => section.checks.length);
+  const overall = READINESS_SEVERITY.find((value) => summary[value]) || 'pass';
+  return {...report, sections, summary, overall};
+}
 
 function checkAction(section, check, config, actions) {
   if (['pass', 'pending'].includes(check.status)) return null;
@@ -70,11 +89,19 @@ async function suggestedBaseUrl(signal) {
   } catch (_error) { return ''; }
 }
 
-function choiceField(name, spec, required, suggestions) {
+function isS3Choice(step) {
+  return step?.id === 'section:aws_s3' || step?.section === 'aws_s3';
+}
+
+function choiceField(name, spec, required, suggestions, current) {
   const id = `choice-${name}`;
-  const label = name.replaceAll('_', ' ').replace(/^./, (value) => value.toUpperCase());
+  const s3 = isS3Choice(current);
+  const label = s3 && name === 'bucket' ? 'Existing S3 bucket'
+    : s3 && name === 'adopt_existing' ? 'Use this bucket for private system media'
+      : name.replaceAll('_', ' ').replace(/^./, (value) => value.toUpperCase());
   if (spec.type === 'boolean') {
-    const input = h('input', {id, name, type: 'checkbox', checked: spec.enum?.length === 1 ? Boolean(spec.enum[0]) : false});
+    const input = h('input', {id, name, type: 'checkbox', required: required || null,
+      checked: spec.enum?.length === 1 ? Boolean(spec.enum[0]) : false});
     return {name, input, node: h('label', {class: 'check-field'}, input, h('span', {text: label}))};
   }
   if (Array.isArray(spec.enum)) {
@@ -94,18 +121,21 @@ function choiceForm(operation, actions, suggestions) {
   const schema = current?.choice_schema;
   if (operation.status !== 'waiting_for_choice' || !schema?.properties) return null;
   const required = new Set(schema.required || []);
-  const fields = Object.entries(schema.properties).map(([name, spec]) => choiceField(name, spec, required.has(name), suggestions));
+  const fields = Object.entries(schema.properties).map(([name, spec]) => choiceField(name, spec, required.has(name), suggestions, current));
   const unavailable = fields.some((field) => field.input.tagName === 'SELECT' && field.input.disabled);
   const message = h('div', {class: 'form-message', role: 'alert'}, unavailable ? 'No suitable existing resource was discovered. Repair provider access, then cancel and rerun this section.' : '');
-  const button = h('button', {class: 'button primary', type: 'submit', disabled: unavailable}, icon('check'), 'Save and continue');
+  const button = h('button', {class: 'button primary', type: 'submit', disabled: unavailable}, icon('check'),
+    isS3Choice(current) ? 'Use this bucket' : 'Save and continue');
   return h('form', {class: 'setup-choice', onsubmit: async (event) => {
     event.preventDefault(); button.disabled = true; message.textContent = '';
     const choice = {};
     fields.forEach(({name, input}) => { choice[name] = input.type === 'checkbox' ? input.checked : input.value; });
     try { await actions.choose(current, choice); } catch (error) { message.textContent = error.message; button.disabled = unavailable; }
-  }}, h('div', {class: 'choice-intro'}, h('strong', {text: current.label}), h('p', {text: suggestions.base_url
-    ? `Confirm the detected public API address ${suggestions.base_url}. It is saved only after you continue.`
-    : 'Only the choice fields declared by the setup service are accepted. Secrets are never collected here.'})),
+  }}, h('div', {class: 'choice-intro'}, h('strong', {text: current.label}), h('p', {text: isS3Choice(current)
+    ? 'Choose an existing bucket from this AWS account. Setup verifies it before making changes, preserves its objects and unrelated configuration, and configures the private media access django-mojo needs.'
+    : current.kind === 'base_url' && suggestions.base_url
+      ? `Confirm the detected public API address ${suggestions.base_url}. It is saved only after you continue.`
+      : 'Only the choice fields declared by the setup service are accepted. Secrets are never collected here.'})),
   ...fields.map((field) => field.node), message, button);
 }
 
@@ -140,7 +170,28 @@ export async function setupPage(ctx, signal = null) {
   let routeFocusApplied = false;
   const suggestions = {base_url: ''};
 
-  async function refreshReport() { report = await api('/api/account/admin/setup/readiness', {signal}); render(); }
+  async function prepareChoice() {
+    const current = operation?.current_step;
+    const bucket = current?.choice_schema?.properties?.bucket;
+    if (operation?.status !== 'waiting_for_choice' || !isS3Choice(current) || Array.isArray(bucket?.enum)) return;
+    let names = [];
+    try {
+      names = listData(await api('/api/aws/s3/bucket', {signal}))
+        .map((row) => typeof row === 'string' ? row : row?.name)
+        .filter((name) => typeof name === 'string' && name.length)
+        .sort((left, right) => left.localeCompare(right));
+    } catch (_error) { /* The empty enum renders actionable provider guidance. */ }
+    operation = {...operation, current_step: {...current, choice_schema: {
+      ...current.choice_schema,
+      properties: {...current.choice_schema.properties,
+        bucket: {...bucket, type: 'string', enum: [...new Set(names)]},
+        adopt_existing: {type: 'boolean', enum: [true]},
+      },
+      required: [...new Set([...(current.choice_schema.required || []), 'bucket', 'adopt_existing'])],
+    }}};
+  }
+
+  async function refreshReport() { report = operatorReport(await api('/api/account/admin/setup/readiness', {signal})); render(); }
 
   function wait(milliseconds) {
     return new Promise((resolve) => {
@@ -153,17 +204,20 @@ export async function setupPage(ctx, signal = null) {
     if (driving || !operation || TERMINAL.has(operation.status)) return;
     driving = true; cancelled = false;
     try {
+      await prepareChoice();
+      render();
       for (let count = 0; count < 80 && !cancelled && !signal?.aborted; count += 1) {
         if (TERMINAL.has(operation.status) || operation.status === 'waiting_for_choice') break;
         busy?.update({title: operation.mode === 'fix' ? 'Repairing System Setup' : 'Checking System Setup',
           detail: operation.current_step?.label || 'Reconciling authoritative state',
           progress: operation.steps?.length ? Math.round((operation.cursor / operation.steps.length) * 100) : null});
         operation = await api('/api/account/admin/setup/advance', {method: 'POST', signal, body: JSON.stringify({operation: operation.id})});
-        if (operation.report?.sections) report = operation.report;
+        if (operation.report?.sections) report = operatorReport(operation.report);
+        await prepareChoice();
         render();
         if (!TERMINAL.has(operation.status) && operation.status !== 'waiting_for_choice') await wait(250);
       }
-      if (operation?.report?.sections) report = operation.report;
+      if (operation?.report?.sections) report = operatorReport(operation.report);
       if (TERMINAL.has(operation?.status)) await refreshReport();
     } finally { driving = false; render(); }
   }
@@ -194,7 +248,7 @@ export async function setupPage(ctx, signal = null) {
             if (!reconciled) throw new Error(`${error.message} The result is uncertain; refresh Setup before trying again.`);
             operation = await api(`/api/account/admin/setup/detail?operation=${encodeURIComponent(reconciled.id)}`, {signal});
           }
-          render(); await drive(busy);
+          await prepareChoice(); render(); await drive(busy);
           if (TERMINAL.has(operation?.status)) replayKey = null;
         });
     },
@@ -204,7 +258,7 @@ export async function setupPage(ctx, signal = null) {
           operation: operation.id, step_id: step.id, definition_version: step.definition_version,
           choice_revision: step.choice_revision, choice,
         })});
-        render(); await drive(busy);
+        await prepareChoice(); render(); await drive(busy);
       });
     },
     cancel: async () => {
@@ -244,7 +298,10 @@ export async function setupPage(ctx, signal = null) {
       api('/api/account/admin/setup/readiness', {signal}),
       suggestedBaseUrl(signal),
     ]);
-    operation = options.active_fix || null; render();
+    report = operatorReport(report);
+    operation = options.active_fix || null;
+    await prepareChoice();
+    render();
     if (operation && !TERMINAL.has(operation.status) && operation.status !== 'waiting_for_choice') {
       await runAction('Resuming System Setup', operation.current_step?.label || 'Reconciling the active operation', drive);
     }

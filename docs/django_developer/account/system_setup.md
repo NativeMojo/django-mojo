@@ -256,12 +256,15 @@ particular, deployment-key create/rotate/revoke and the reveal-once token stay
 exclusively on WebApps; neither the Platform feature nor an operation log reads
 it.
 
-The local-request row records how its loopback destination was chosen without
-returning a raw configured URL. `configured_static` means
-`SYSTEM_SETUP_LOCAL_API_URL` supplied it, `request_server_port` means the
-current request's server port supplied it, and `default_80` is the bounded
-fallback. Remediation names the deployment setting only when changing it could
-actually repair the selected target.
+Node-local listener proof is not installation readiness. Inferred loopback
+targets (`request_server_port` and `default_80`) remain internal sanity inputs
+and never produce an Admin Setup row or affect its aggregate status. An
+explicit `SYSTEM_SETUP_LOCAL_API_URL` still produces the bounded
+`django.local_request` diagnostic because the deployment deliberately declared
+that listener contract. Setup also ignores missing `STATICFILES_DIRS` and
+`STATIC_ROOT`: packaged Admin assets do not depend on those paths, optional
+source directories are project-owned, and the deployment's normal
+`collectstatic` step creates its output when static serving is actually used.
 
 The packaged driver treats create/check/fix/choose/cancel as single-flight user
 intents. It shows a full-screen non-dismissible busy state, updates progress
@@ -272,6 +275,15 @@ skeleton rows. A lost fix-create response is reconciled through
 automatically repeats an uncertain mutation. HTTP 440 clears busy state before
 showing the explicit step-up prompt, so reauthentication cannot be trapped
 under the busy layer.
+
+The S3 choice is an existing-resource journey, not a generic JSON-schema form.
+The current backend supplies its conservative safe-candidate enum. During a
+rolling upgrade only, if an older backend supplies the legacy unbounded string
+schema, the packaged client reads the already-authorized global S3 inventory
+and turns it into a selector; the Setup service still rediscovers and validates
+the exact selection before mutation. Copy explicitly tells the operator that
+adoption preserves objects and unrelated configuration. The BASE_URL suggestion
+is rendered only for the `base_url` step and can never label an AWS choice.
 
 ## REST boundary
 
@@ -298,7 +310,9 @@ new provider setup belongs in a registered readiness section, not in a view.
 `manage.py sanity_check` preserves its ordered fail-fast output and exit
 behavior. It is a thin adapter over `edge.services.sanity`, which checks Django
 apps, database, migrations, Redis, and a real local HTTP request. The readiness
-service additionally reports configured static directories and `BASE_URL`.
+service additionally reports the durable public `BASE_URL`; it deliberately
+does not promote optional static paths or an inferred local listener to
+operator readiness.
 
 ## Migration and tests
 

@@ -213,8 +213,9 @@ def test_platform_preview_truth_axes(opts):
         assert value in platform, f"preview omitted the secure-posture {value} state"
     assert 'check("django.base_url", "fail"' in setup, \
         "preview cannot render the check-specific missing BASE_URL repair"
-    assert 'check("django.local_request", "pass"' in setup, \
-        "preview cannot distinguish local listener health from BASE_URL configuration"
+    assert 'check("django.local_request", "pass"' in setup and "operatorChecks" in \
+        (ASSETS / "features/platform/page.js").read_text(), \
+        "preview cannot exercise compatibility filtering for legacy local-listener noise"
 
 
 @th.django_unit_test("preview covers Settings provenance, duplicate, delay, error, and 440")
