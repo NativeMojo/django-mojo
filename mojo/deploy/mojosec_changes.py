@@ -28,9 +28,17 @@ import zipfile
 JOURNAL_PATH = "/var/lib/mojosec/expected-change-journal.json"
 LOCK_PATH = "/var/lib/mojosec/expected-change-journal.lock"
 MANIFEST_PATH = "/etc/mojosec/expected_changes.json"
-MAX_BYTES = 256 * 1024
+# One operation may legitimately carry 4,096 exact paths plus a bounded
+# before-change digest for each path. Keep only a generous corruption guard;
+# the path count and approved-root checks are the meaningful security bounds.
+MAX_BYTES = 20 * 1024 * 1024
 MAX_OPERATIONS = 128
+# Caller-declared config changes stay narrowly scoped. Package paths are
+# derived from bounded pip reports and wheel RECORDs, so they get a much wider
+# secondary corruption ceiling; the 20 MiB serialized-state bound normally
+# binds first.
 MAX_PATHS = 4096
+MAX_PACKAGE_PATHS = 65536
 # Active operations are held locally by the sensor for this whole ceiling,
 # plus its bounded post-completion correlation window. Keep producer TTLs
 # coherent with that delivery hold instead of promising day-long operations.
@@ -88,10 +96,12 @@ def _contained(path, root):
         return False
 
 
-def validate_paths(paths, allowed_roots=None):
+def validate_paths(paths, allowed_roots=None, max_paths=MAX_PATHS):
     roots = tuple(allowed_roots or (_GENERAL_ROOTS + _HOME_ROOTS))
-    if not isinstance(paths, (list, tuple)) or not paths:
-        raise ChangeError("trusted change requires 1-4096 exact paths")
+    if (not isinstance(paths, (list, tuple)) or not paths or
+            not isinstance(max_paths, int) or isinstance(max_paths, bool) or
+            max_paths < 1):
+        raise ChangeError(f"trusted change requires 1-{max_paths} exact paths")
     result = []
     seen = set()
     for path in paths:
@@ -110,8 +120,8 @@ def validate_paths(paths, allowed_roots=None):
             raise ChangeError(f"trusted-change path is outside an approved host destination: {path}")
         if path in seen:
             continue
-        if len(result) >= MAX_PATHS:
-            raise ChangeError("trusted change requires 1-4096 exact paths")
+        if len(result) >= max_paths:
+            raise ChangeError(f"trusted change requires 1-{max_paths} exact paths")
         seen.add(path)
         result.append(path)
     return result
@@ -304,7 +314,7 @@ def _prepare_pip_change(child):
     paths = _installed_record_paths({name for name, _version in expected}, scheme)
     for wheel in wheels:
         paths.extend(_wheel_record_paths(wheel, scheme))
-    paths = validate_paths(paths) if paths else []
+    paths = validate_paths(paths, max_paths=MAX_PACKAGE_PATHS) if paths else []
     install = [pip, "install", "--no-deps"] + wheels
     return temporary, paths, install
 
@@ -461,7 +471,8 @@ class ChangeJournal:
         if (set(value) != {"schema", "version", "entries"} or
                 value["schema"] != "mojosec.expected_changes" or
                 value["version"] not in (1, 2) or
-                not isinstance(value["entries"], list) or len(value["entries"]) > MAX_PATHS):
+                not isinstance(value["entries"], list) or
+                len(value["entries"]) > MAX_PACKAGE_PATHS):
             raise ChangeError("expected-change v2 envelope is invalid")
         now = _timestamp(_now())
         value["entries"] = [entry for entry in value["entries"]
@@ -489,7 +500,7 @@ class ChangeJournal:
         return len(expired)
 
     def begin(self, operation_id, operation_kind, paths, deployment_id=None,
-              ttl_seconds=900):
+              ttl_seconds=900, max_paths=MAX_PATHS):
         if (not isinstance(operation_id, str) or not _IDENTITY.fullmatch(operation_id) or
                 not isinstance(operation_kind, str) or not _IDENTITY.fullmatch(operation_kind)):
             raise ChangeError("trusted-change operation identity is invalid")
@@ -499,7 +510,7 @@ class ChangeJournal:
         if (not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool) or
                 not 1 <= ttl_seconds <= MAX_TTL_SECONDS):
             raise ChangeError("trusted-change TTL is out of bounds")
-        exact = validate_paths(paths, self.allowed_roots)
+        exact = validate_paths(paths, self.allowed_roots, max_paths=max_paths)
         before = {path: _snapshot(path) for path in exact}
         descriptor = self._locked()
         try:
@@ -571,7 +582,7 @@ class ChangeJournal:
                 if key not in keys:
                     manifest["entries"].append(entry)
                     keys.add(key)
-            if len(manifest["entries"]) > MAX_PATHS:
+            if len(manifest["entries"]) > MAX_PACKAGE_PATHS:
                 raise ChangeError("expected-change entry bound was exceeded")
             del journal["operations"][operation_id]
             _atomic_write(self.manifest_path, manifest)
@@ -686,7 +697,7 @@ def main(argv=None):
                 journal.begin(
                     args.operation_id, "system-python-packages", paths,
                     deployment_id=args.deployment_id or None,
-                    ttl_seconds=args.ttl)
+                    ttl_seconds=args.ttl, max_paths=MAX_PACKAGE_PATHS)
                 try:
                     done = subprocess.run(install, check=False)
                     if done.returncode != 0:

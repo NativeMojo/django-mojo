@@ -162,8 +162,12 @@ starting one child mutation, and complete or abort from that child's result.
 System pip changes are derived from bounded installer output plus incoming and
 installed wheel `RECORD` paths; ordinary deploy, node setup, and certificate
 sync declare their exact systemd/cron/nginx/lineage destinations. Repeated
-destinations are deduplicated before enforcing the 4,096 unique-path ceiling.
-A failed or aborted producer leaves its observed changes unexplained.
+destinations are deduplicated before bounds are enforced. Caller-declared
+changes retain the 4,096 unique-path ceiling. System-package paths are instead
+derived from bounded pip reports and wheel records and use a 65,536-path
+secondary corruption ceiling; root-only journal and manifest state fail closed
+at 20 MiB. Approved roots remain mandatory for every path. A failed or aborted
+producer leaves its observed changes unexplained.
 
 The current root-owned 0600 envelope is
 `{"schema":"mojosec.expected_changes","version":2,"entries":[...]}`. Version

@@ -8,8 +8,8 @@ import re
 import stat
 
 
-MAX_BYTES = 256 * 1024
-MAX_ENTRIES = 4096
+MAX_BYTES = 20 * 1024 * 1024
+MAX_ENTRIES = 65536
 _DIGEST_RE = re.compile(r"^[a-f0-9]{64}$")
 _DEPLOYMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _OPERATION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")

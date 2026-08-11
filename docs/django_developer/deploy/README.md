@@ -702,11 +702,14 @@ before one child mutation, completes only on success, and aborts failure so the
 sensor still reports those bytes as unexplained. Pip resolution is bounded and
 uses incoming plus installed wheel `RECORD` paths, including exact installer
 metadata and generated scripts/bytecode; it never diffs an arbitrary
-site-packages scope. Repeated parent destinations are deduplicated before the
-4,096-path safety ceiling is enforced, so the bound applies to unique host
-paths rather than wheel traversal artifacts. The v2 manifest adds operation
-identity/kind/completion time. Events are durable immediately and wait no more
-than 120 seconds for a late matching annotation.
+site-packages scope. Repeated parent destinations are deduplicated before
+bounds are enforced. Caller-declared host changes retain a 4,096-path ceiling;
+package paths mechanically derived from bounded installer and wheel metadata
+use a 65,536-path secondary corruption ceiling, with the 20 MiB serialized
+state bound normally binding first. Journal and manifest state remain
+root-only. The v2
+manifest adds operation identity/kind/completion time. Events are durable
+immediately and wait no more than 120 seconds for a late matching annotation.
 
 Roll out the producer-capable package before selecting the integrity profile:
 deploy the helper and exercise normal deploy, node setup, and certificate

@@ -244,7 +244,9 @@ def test_change_scope_rejects_application_trees_and_outside_paths(opts):
 
 @th.django_unit_test()
 def test_change_scope_bounds_unique_paths_after_deduplication(opts):
-    from mojo.deploy.mojosec_changes import ChangeError, MAX_PATHS, validate_paths
+    from mojo.deploy.mojosec_changes import (
+        ChangeError, MAX_PACKAGE_PATHS, MAX_PATHS, validate_paths,
+    )
 
     repeated = ["/usr/local/bin/mojo-tool"] * (MAX_PATHS + 1)
     th.assert_eq(
@@ -254,6 +256,70 @@ def test_change_scope_bounds_unique_paths_after_deduplication(opts):
     distinct = [f"/usr/local/bin/mojo-tool-{index}" for index in range(MAX_PATHS + 1)]
     with th.assert_raises(ChangeError):
         validate_paths(distinct)
+    th.assert_eq(
+        len(validate_paths(distinct, max_paths=MAX_PACKAGE_PATHS)), MAX_PATHS + 1,
+        "mechanically derived package paths must not inherit the declared-path ceiling")
+
+
+@th.django_unit_test()
+def test_change_journal_fits_bounded_wheel_evidence(opts):
+    from mojo.deploy.mojosec_changes import (
+        ChangeError, ChangeJournal, MAX_BYTES, MAX_PACKAGE_PATHS,
+    )
+
+    with tempfile.TemporaryDirectory() as root:
+        journal = ChangeJournal(
+            journal_path=os.path.join(root, "journal.json"),
+            lock_path=os.path.join(root, "journal.lock"),
+            manifest_path=os.path.join(root, "expected.json"),
+            allowed_roots=[root],
+        )
+        component = "package_destination_" + ("x" * 100)
+        paths = [os.path.join(root, f"{component}_{index:04d}")
+                 for index in range(5000)]
+        with th.assert_raises(ChangeError):
+            journal.begin("declared-too-broad", "rendered-config", paths)
+        journal.begin(
+            "large-wheel", "pip-package-change", paths,
+            max_paths=MAX_PACKAGE_PATHS)
+        size = os.path.getsize(journal.journal_path)
+        th.assert_true(size > 256 * 1024 and size <= MAX_BYTES,
+                       "valid wheel evidence must fit above the old 256 KiB cap")
+
+        long_tail = "/".join(["y" * 200] * 15)
+        oversized = [os.path.join(root, long_tail, f"{index:04d}")
+                     for index in range(4096)]
+        with mock.patch("mojo.deploy.mojosec_changes._snapshot", return_value=None):
+            with th.assert_raises(ChangeError):
+                journal.begin(
+                    "oversized-wheel", "pip-package-change", oversized,
+                    max_paths=MAX_PACKAGE_PATHS)
+
+
+@th.django_unit_test()
+def test_expected_change_reader_accepts_large_bounded_manifests(opts):
+    from mojo.mojosec.expected_changes import MAX_BYTES, load_manifest
+
+    with tempfile.TemporaryDirectory() as root:
+        manifest_path = os.path.join(root, "expected.json")
+        entries = [{
+            "path": f"/usr/local/lib/python3.12/site-packages/large_package/{index:04d}/"
+                    + ("module_name_" * 8) + ".py",
+            "change": "modified", "sha256": "a" * 64,
+            "expires_at": "2099-01-01T00:00:00Z",
+            "deployment_id": "large-package-deploy",
+        } for index in range(3000)]
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump({
+                "schema": "mojosec.expected_changes", "version": 1,
+                "entries": entries,
+            }, handle)
+        os.chmod(manifest_path, 0o600)
+        size = os.path.getsize(manifest_path)
+        th.assert_true(size > 256 * 1024 and size < MAX_BYTES,
+                       "fixture must exercise the old reader-size failure")
+        th.assert_eq(len(load_manifest(manifest_path, require_root=False)), len(entries),
+                     "the sensor must read every entry the producer can write")
 
 
 @th.django_unit_test()
