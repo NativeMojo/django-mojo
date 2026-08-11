@@ -167,6 +167,57 @@ def test_mojosec_web_projection_is_rich_scrubbed_and_aggregate_truthful(opts):
                    "remote_port" not in projected,
                    "invalid projected subfields must be omitted independently without raising")
 
+    non_strings = dict(
+        attributes,
+        request_uri={"hidden": "path-secret"}, path=["path-list-secret"],
+        user_agent=["ua-list-secret"],
+        referrer={"hidden": "https://ref.invalid/referrer-secret"},
+        host=["host-secret.invalid"], method={"hidden": "METHOD-SECRET"},
+        request_id=["request-id-secret"], scheme={"hidden": "scheme-secret"},
+        protocol=["protocol-secret"], tls_protocol={"hidden": "tls-secret"},
+    )
+    projected = project("web.denied", non_strings, count=1,
+                        last_seen="2026-08-11T02:44:00Z")["evidence"]
+    encoded = json.dumps(projected, sort_keys=True)
+    for secret in ("path-secret", "path-list-secret", "ua-list-secret",
+                   "referrer-secret", "host-secret", "METHOD-SECRET",
+                   "request-id-secret", "scheme-secret", "protocol-secret",
+                   "tls-secret"):
+        th.assert_true(secret not in encoded,
+                       f"non-string textual web evidence leaked {secret} into Event")
+    for field in ("path", "user_agent", "referrer", "referrer_origin", "host",
+                  "method", "request_id", "scheme", "protocol", "tls_protocol"):
+        th.assert_true(field not in projected,
+                       f"non-string textual web field {field} must be omitted")
+    no_fallback = project("web.denied", dict(
+        attributes, request_uri={}, path="/must-not-fallback"), count=1,
+        last_seen="2026-08-11T02:44:00Z")["evidence"]
+    th.assert_true("path" not in no_fallback,
+                   "a present non-string request_uri must not fall back to another field")
+
+    too_many = dict(
+        attributes,
+        upstream_status=",".join(str(200 + index) for index in range(9)),
+        upstream_response_time=",".join("0.1" for unused in range(9)),
+        upstream_bytes_received=",".join(str(index) for index in range(9)),
+    )
+    projected = project("web.denied", too_many, count=1,
+                        last_seen="2026-08-11T02:44:00Z")["evidence"]
+    th.assert_true("upstream_status" not in projected and
+                   "upstream_response_time_ms" not in projected and
+                   "upstream_bytes_received" not in projected,
+                   "nine-member numeric lists must be omitted rather than truncated")
+    hyphen_overflow = project("web.denied", dict(
+        attributes, upstream_status="-,-,-,-,-,-,-,-,200"), count=1,
+        last_seen="2026-08-11T02:44:00Z")["evidence"]
+    th.assert_true("upstream_status" not in hyphen_overflow,
+                   "the eight-member cap must count '-' placeholders too")
+    mixed = project("web.denied", dict(
+        attributes, upstream_response_time="-,0.1,-,0.2"), count=1,
+        last_seen="2026-08-11T02:44:00Z")["evidence"]
+    th.assert_eq(mixed["upstream_response_time_ms"], [100, 200],
+                 "mixed '-' upstream retries below the cap must preserve numeric members")
+
     secrets = (
         "eyJhbGciOiJIUzI1NiJ9.abcdefghijk.signature123",
         "-----BEGIN PRIVATE KEY-----", "AKIAABCDEFGHIJKLMNOP",
@@ -180,6 +231,15 @@ def test_mojosec_web_projection_is_rich_scrubbed_and_aggregate_truthful(opts):
     for secret in secrets:
         th.assert_true(secret not in encoded,
                        f"the UA display leaked adversarial secret class {secret[:12]}")
+
+    controls = "Mozilla/5.0 safe\u202eevil zero\u200bwidth isolate\u2066text\u2069"
+    display = project("web.denied", dict(attributes, user_agent=controls), count=1,
+                      last_seen="2026-08-11T02:44:00Z")["evidence"]["user_agent"]["display"]
+    for character in ("\u202e", "\u200b", "\u2066", "\u2069"):
+        th.assert_true(character not in display,
+                       "UA display must remove Unicode format and bidi controls")
+    th.assert_in("Mozilla/5.0 safe evil zero width isolate text", display,
+                 "UA display should retain readable text after format-control removal")
 
 
 @th.django_unit_test()

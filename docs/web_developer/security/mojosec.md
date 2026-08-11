@@ -117,7 +117,9 @@ digest, argument count, generic arguments, and per-token digests never project.
 The native nginx stream never collects bodies, cookies, the Authorization
 header, or arbitrary headers. Bounded request targets, referrers, user agents,
 and sudo commands can still contain untrusted sensitive text, but those raw
-values remain in the protected receipt and never project verbatim to Event.
+values remain in the protected receipt. Event receives only centrally
+validated and scrubbed forms; malformed or non-string textual fields are
+omitted rather than stringified.
 
 ### Native sensor evidence limits and attribution
 

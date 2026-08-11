@@ -221,6 +221,17 @@ def test_ssh_session_overlay_fallback_freshness_and_ambiguity(opts):
     )
     th.assert_eq(ssh_session(split)["source_ip"], "192.0.2.8",
                  "the deployed split-OpenSSH audit executable must establish attribution")
+    matching_types = dict(split, _AUDIT_TYPE="1112")
+    th.assert_eq(ssh_session(matching_types)["audit_session"], 77,
+                 "matching audit type name and number must remain compatible")
+    th.assert_eq(ssh_session(dict(split, _AUDIT_TYPE="1105")), None,
+                 "contradictory allowed audit type name and number must fail closed")
+    th.assert_eq(ssh_session(dict(
+        split, AUDIT_TYPE_NAME="USER_START", _AUDIT_TYPE="1112")), None,
+        "contradictory audit type-name aliases must fail closed")
+    th.assert_eq(ssh_session(dict(
+        split, _AUDIT_TYPE="1112", AUDIT_TYPE="1105")), None,
+        "contradictory audit type-number aliases must fail closed")
     mutations = (
         ("_TRANSPORT", "journal"), ("_AUDIT_TYPE_NAME", "USER_AUTH"),
         ("_UID", "1000"), ("_BOOT_ID", "bad"),
@@ -437,6 +448,7 @@ def test_nginx_rich_measurements_and_latest_aggregate_sample(opts):
     from mojo.mojosec.detectors import DetectorError
     for field, value in (("remote_port", "0"), ("request_length", "-1"),
                          ("request_id", "A" * 32),
-                         ("upstream_bytes_received", "1,broken")):
+                         ("upstream_bytes_received", "1,broken"),
+                         ("upstream_status", ",".join(["500"] * 9))):
         with th.assert_raises(DetectorError):
             detect_nginx(dict(base, **{field: value}))

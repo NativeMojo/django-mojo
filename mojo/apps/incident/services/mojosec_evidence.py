@@ -6,6 +6,7 @@ import ipaddress
 import math
 import re
 import shlex
+import unicodedata
 import urllib.parse
 
 
@@ -81,11 +82,15 @@ def _tty(value):
 
 
 def _method(value):
+    if not isinstance(value, str):
+        return None
     value = _text(value, 32).upper()
     return value if _METHOD.fullmatch(value) else None
 
 
 def _host(value):
+    if not isinstance(value, str):
+        return None
     value = _text(value, 512).strip().rstrip(".").lower()
     if not value or any(char in value for char in "/\\@?#"):
         return None
@@ -101,6 +106,8 @@ def _host(value):
 
 
 def _safe_path(value):
+    if not isinstance(value, str):
+        return None
     raw = _text(value, 2048)
     try:
         path = urllib.parse.urlsplit(raw).path
@@ -131,6 +138,8 @@ def _safe_path(value):
 
 
 def _referrer_origin(value):
+    if not isinstance(value, str):
+        return None
     try:
         parsed = urllib.parse.urlsplit(_text(value, 2048))
     except ValueError:
@@ -154,6 +163,8 @@ def _referrer_origin(value):
 
 
 def _referrer(value):
+    if not isinstance(value, str):
+        return None
     origin = _referrer_origin(value)
     if origin is None:
         return None
@@ -173,11 +184,14 @@ def _sanitize_url(match):
 
 
 def _user_agent_display(value):
+    if not isinstance(value, str):
+        return None
     value = _text(value, 1536)
     if not value:
         return None
-    value = "".join(character if ord(character) >= 32 and ord(character) != 127 else " "
-                    for character in value)
+    value = "".join(
+        " " if unicodedata.category(character) in ("Cc", "Cf") else character
+        for character in value)
     value = re.sub(r"https?://[^\s]+", _sanitize_url, value, flags=re.I)
     value = re.sub(
         r"(?i)(authorization\s*[:=]\s*(?:basic|bearer)?\s*)[^\s,;]+",
@@ -200,6 +214,8 @@ def _user_agent_display(value):
 
 
 def _user_agent(value):
+    if not isinstance(value, str):
+        return None
     raw = _text(value, 2048)
     if not raw:
         return None
@@ -217,8 +233,13 @@ def _user_agent(value):
 
 
 def _numbers(value, minimum, maximum, scale=1):
+    if not isinstance(value, str) or len(value) > 256:
+        return None
+    items = re.split(r"\s*[,;:]\s*", value)
+    if len(items) > 8:
+        return None
     values = []
-    for item in re.split(r"\s*[,;:]\s*", _text(value, 256))[:8]:
+    for item in items:
         if not item or item == "-":
             continue
         try:
@@ -232,8 +253,13 @@ def _numbers(value, minimum, maximum, scale=1):
 
 
 def _integers(value, minimum, maximum):
+    if not isinstance(value, str) or len(value) > 256:
+        return None
+    items = re.split(r"\s*[,;:]\s*", value)
+    if len(items) > 8:
+        return None
     values = []
-    for item in re.split(r"\s*[,;:]\s*", _text(value, 256))[:8]:
+    for item in items:
         if not item or item == "-":
             continue
         number = _integer(item, minimum, maximum)
@@ -257,6 +283,8 @@ def _integer(value, minimum, maximum):
 
 
 def _token(value, pattern=_SAFE_TOKEN):
+    if not isinstance(value, str):
+        return None
     value = _text(value, 96)
     return value if pattern.fullmatch(value) else None
 
@@ -368,8 +396,12 @@ def project(kind, attributes, count=1, last_seen=None):
             evidence["host"] = host
         if status is not None and 100 <= status <= 599:
             evidence["status"] = status
-        evidence["path"] = _safe_path(
-            attributes.get("request_uri") or attributes.get("path"))
+        raw_path = attributes.get("request_uri")
+        if raw_path in (None, ""):
+            raw_path = attributes.get("path")
+        path = _safe_path(raw_path)
+        if path:
+            evidence["path"] = path
         upstream = _integers(attributes.get("upstream_status"), 100, 599)
         if upstream:
             evidence["upstream_status"] = upstream

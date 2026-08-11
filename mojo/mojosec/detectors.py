@@ -174,7 +174,7 @@ def _systemd_user_session(record, session, attribution):
         record.get("_AUDIT_LOGINUID", record.get("AUDIT_LOGINUID")))
     context = audit_context(record)
     unit = str(record.get("_SYSTEMD_UNIT") or "")
-    if (target_uid is None or opener_uid is None or producer_uid != 0 or
+    if (target_uid is None or opener_uid != 0 or producer_uid != 0 or
             not producer_pid or str(record.get("_COMM") or "") != "(systemd)" or
             str(record.get("_EXE") or "") != "/usr/lib/systemd/systemd" or
             unit != f"user@{target_uid}.service" or audit_loginuid != target_uid or

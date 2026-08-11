@@ -229,7 +229,8 @@ def test_systemd_user_session_open_is_local_rich_and_exact(opts):
             ("_UID", "80"), ("_PID", "0"), ("_COMM", "systemd"),
             ("_EXE", "/tmp/systemd"), ("_SYSTEMD_UNIT", "user@81.service"),
             ("_AUDIT_LOGINUID", "81"), ("_BOOT_ID", "bad"),
-            ("_AUDIT_SESSION", "4294967295")):
+            ("_AUDIT_SESSION", "4294967295"),
+            ("MESSAGE", record["MESSAGE"].replace("by (uid=0)", "by (uid=1)"))):
         th.assert_eq(detect_journal(dict(record, **{field: value})), None,
                      f"mutating authoritative PAM field {field} must fail closed")
 

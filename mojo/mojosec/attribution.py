@@ -21,8 +21,7 @@ _MESSAGE_TTY = re.compile(r"(?:^|;)\s*TTY=(?P<tty>[^ ;]+)")
 _WHO_LINE = re.compile(
     r"^(?P<user>\S+)\s+(?P<tty>\S+)\s+(?P<date>\d{4}-\d{2}-\d{2})\s+"
     r"(?P<time>\d{2}:\d{2})(?:\s+(?:\([^)]*\)|\S+))?\s*$")
-_AUDIT_TYPES = {"USER_START", "USER_LOGIN"}
-_AUDIT_TYPE_NUMBERS = {"1105", "1112"}
+_AUDIT_TYPE_MAP = {"USER_START": "1105", "USER_LOGIN": "1112"}
 _SSH_AUDIT_EXES = {
     "/usr/sbin/sshd", "/usr/bin/sshd",
     "/usr/libexec/openssh/sshd-session",
@@ -117,10 +116,25 @@ def trusted_journal_source(record, service):
 def ssh_session(record):
     if str(record.get("_TRANSPORT") or "") != "audit":
         return None
-    audit_type = str(record.get("_AUDIT_TYPE_NAME") or
-                     record.get("AUDIT_TYPE_NAME") or "").upper()
-    audit_number = str(record.get("_AUDIT_TYPE") or record.get("AUDIT_TYPE") or "")
-    if audit_type not in _AUDIT_TYPES and audit_number not in _AUDIT_TYPE_NUMBERS:
+    type_names = {
+        str(record.get(key)).upper() for key in ("_AUDIT_TYPE_NAME", "AUDIT_TYPE_NAME")
+        if record.get(key) not in (None, "")
+    }
+    type_numbers = {
+        str(record.get(key)) for key in ("_AUDIT_TYPE", "AUDIT_TYPE")
+        if record.get(key) not in (None, "")
+    }
+    if len(type_names) > 1 or len(type_numbers) > 1:
+        return None
+    audit_type = next(iter(type_names), "")
+    audit_number = next(iter(type_numbers), "")
+    if not audit_type and not audit_number:
+        return None
+    if audit_type and audit_type not in _AUDIT_TYPE_MAP:
+        return None
+    if audit_number and audit_number not in _AUDIT_TYPE_MAP.values():
+        return None
+    if audit_type and audit_number and _AUDIT_TYPE_MAP[audit_type] != audit_number:
         return None
     if str(record.get("_UID", "")) != "0":
         return None

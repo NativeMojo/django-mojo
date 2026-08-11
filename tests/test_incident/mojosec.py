@@ -101,6 +101,22 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
         },
     })
     batch["events"].append(sudo_event)
+    poisoned_event = copy.deepcopy(batch["events"][1])
+    poisoned_event.update({
+        "id": "6" * 64, "kind": "web.error", "severity": "warning",
+        "summary": "Web request returned a server error", "count": 1,
+        "recommendation": "review",
+        "attributes": {
+            "source_ip": "198.51.100.61", "status": 500,
+            "request_uri": {"hidden": "receipt-path-secret"},
+            "user_agent": ["receipt-ua-secret"],
+            "referrer": {"hidden": "https://ref.invalid/receipt-referrer-secret"},
+            "host": ["receipt-host-secret.invalid"],
+            "method": {"hidden": "RECEIPT-METHOD-SECRET"},
+            "request_id": ["receipt-request-id-secret"],
+        },
+    })
+    batch["events"].append(poisoned_event)
     body = gzip.compress(json.dumps(batch).encode("utf-8"))
     _use_apikey(opts, opts.mojosec_token)
     response = opts.client.post(
@@ -113,13 +129,13 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
                  f"an enrolled MojoSec key should ingest a gzip batch: {response.response}")
     th.assert_eq(response.response.schema, "mojosec.ack",
                  "the receiver must return the shared acknowledgement schema without wrappers")
-    th.assert_eq(len(response.response.results), 3,
+    th.assert_eq(len(response.response.results), 4,
                  "the receiver must acknowledge every event in the batch")
     th.assert_eq(
-        MojoSecReceipt.objects.filter(sensor_id=SENSOR_ID, publish_state="published").count(), 3,
+        MojoSecReceipt.objects.filter(sensor_id=SENSOR_ID, publish_state="published").count(), 4,
         "accepted acknowledgements must have durable published receipts")
     th.assert_eq(
-        Event.objects.filter(metadata__mojosec__sensor_id=SENSOR_ID).count(), 3,
+        Event.objects.filter(metadata__mojosec__sensor_id=SENSOR_ID).count(), 4,
         "the batch should create one bounded central Event projection per wire event")
 
     probe = Event.objects.get(metadata__mojosec__event_id="e" * 64)
@@ -127,6 +143,8 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
     receipt = MojoSecReceipt.objects.get(wire_event_id="e" * 64)
     sudo_receipt = MojoSecReceipt.objects.get(wire_event_id="0" * 64)
     sudo_projected = Event.objects.get(metadata__mojosec__event_id="0" * 64)
+    poisoned_receipt = MojoSecReceipt.objects.get(wire_event_id="6" * 64)
+    poisoned_projected = Event.objects.get(metadata__mojosec__event_id="6" * 64)
     th.assert_eq(probe.source_ip, "198.51.100.7",
                  "an eligible detector kind should promote its validated source IP")
     th.assert_eq(login.source_ip, "192.0.2.20",
@@ -144,6 +162,20 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
     th.assert_true("must-stay-protected" not in projected and
                    "must-not-project" not in projected,
                    "raw request secrets must never enter Event metadata")
+    th.assert_eq(
+        poisoned_receipt.replay_features["event"]["attributes"]["request_uri"],
+        {"hidden": "receipt-path-secret"},
+        "protected receipts must retain protocol-valid non-string raw evidence")
+    th.assert_eq(
+        poisoned_receipt.replay_features["event"]["attributes"]["user_agent"],
+        ["receipt-ua-secret"],
+        "protected receipts must preserve the original raw UA value")
+    poisoned_visible = json.dumps(poisoned_projected.metadata, sort_keys=True)
+    for secret in ("receipt-path-secret", "receipt-ua-secret",
+                   "receipt-referrer-secret", "receipt-host-secret",
+                   "RECEIPT-METHOD-SECRET", "receipt-request-id-secret"):
+        th.assert_true(secret not in poisoned_visible,
+                       f"central projection stringified non-string raw field {secret}")
     th.assert_in(sudo_secret, sudo_receipt.replay_features["event"]["attributes"]["command"],
                  "bounded raw sudo context must remain only in the protected receipt")
     sudo_visible = json.dumps(sudo_projected.metadata, sort_keys=True)
