@@ -4,7 +4,8 @@ The built-in Admin separates platform operations into two feature-owned lanes.
 **Platform** owns public API and local sanity proof, deployment history, fleet,
 jobs/scheduler, database, Redis, certificate/security evidence, the public
 WebApp summary contract, and System Setup. **Advanced** owns hosting inventory,
-bounded opt-in AWS inventory, raw network controls, and typed settings. Platform
+bounded opt-in AWS inventory and raw network controls. Ongoing configuration
+has one first-class [Settings](settings.md) home. Platform
 is an operational evidence surface, not another directory: ongoing Domains &
 DNS and WebApp work stays in those first-class destinations, while Advanced is
 one expert-diagnostics link rather than an expanded resource menu.
@@ -66,23 +67,24 @@ claim a currently healthy site is down. Registrar-versus-DNS provider evidence
 comes from the durable onboarding operation. No deployment key or provider
 secret enters the Platform response.
 
-## Permissions and settings
+## Permissions and owner APIs
 
 Reads use dedicated global grants: `view_platform`, `view_platform_security`,
 `view_advanced`, `view_advanced_inventory`, `view_advanced_security`, and
 `view_advanced_settings`; the corresponding manage grant or `admin` also
 passes. Writes require `manage_platform` or `manage_advanced`, reject API-key
 and group-token sessions, and require authentication no older than 600 seconds.
-Settings writes additionally re-read an active literal `account.User`
-superuser.
+Typed AUTH_CONFIG/topology owner writes additionally re-read an active literal
+`account.User` superuser.
 
-`AUTH_CONFIG` and `EDGE_EXPECTED_TOPOLOGY` are protected from generic Setting
-create, update, rename, and delete. Advanced's auth writer merges appearance,
+`AUTH_CONFIG` and `EDGE_EXPECTED_TOPOLOGY` are protected from generic global
+Setting create, update, rename, and delete. Their compatibility writer merges appearance,
 login-method, and registration-method fields only, preserves unknown keys, and
 validates the final config. Login must retain `password` for administrative
 recovery; enabled registration must retain at least one method. Navigation,
 API-base, redirect, and external-CSS URL fields are not writable. Deploy,
-AWS, KMS, and security settings are file-only and read-only.
+AWS, KMS, and security settings are owner-managed or file-only. Advanced no
+longer renders a duplicate typed form; Settings is the browser UI home.
 
 The migration is `edge.0010_platformdeployment`, directly after
 `edge.0009_webapp_onboarding`. `bin/admin_preview` provides feature-owned,

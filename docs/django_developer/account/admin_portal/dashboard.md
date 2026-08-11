@@ -1,7 +1,7 @@
 # Admin Dashboard integration contract
 
-The built-in Admin has six primary navigation items, in this order: Dashboard,
-People, Web Apps, Domains & DNS, Platform, and Activity. Domains & DNS appears
+The built-in Admin has seven primary navigation items, in this order: Dashboard,
+Web Apps, Domains & DNS, People, Activity, Platform, and Settings. Domains & DNS appears
 only with DNS read/manage authority and owns ongoing domain and public-record
 work. System Setup and deployments are destinations inside Platform; Advanced
 is one expert-diagnostics destination rather than a raw-resource directory.
@@ -22,7 +22,7 @@ actionable evidence is `degraded`, and a proven failure is `unhealthy`.
 | Open Incidents and Tickets | `view_security`, `manage_security`, `security`, `admin` |
 
 The endpoint itself first requires Admin source access (`view_admin`,
-`manage_users`, or `admin`); those source grants do not bypass the per-row
+`manage_users`, `manage_settings`, or `admin`); those source grants do not bypass the per-row
 checks above.
 
 `overall` is computed only from observable sources. Permission-denied and

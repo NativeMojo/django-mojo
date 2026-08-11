@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from .gallery import bootstrap, reset
-from .features import activity, advanced, platform
+from .features import activity, advanced, platform, settings
 from .features import dashboard
 
 
@@ -573,6 +573,10 @@ class PreviewHandler(BaseHTTPRequestHandler):
         return payload
 
     def _record_event(self, path, payload):
+        if path == "/api/account/admin/settings" and isinstance(payload, dict):
+            payload = {key: ("[redacted]" if key == "value" else value)
+                       for key, value in payload.items()
+                       if key in {"action", "key", "value"}}
         type(self).events.append({"path": path,
                                   "payload": self._safe_payload(payload)})
 
@@ -586,7 +590,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if activity_response is not None:
             status, payload = activity_response
             return self._send(payload, status=status)
-        for provider in (dashboard, platform, advanced):
+        for provider in (dashboard, platform, advanced, settings):
             response = provider.get(self, parsed)
             if response is not None:
                 status, payload = response
@@ -709,7 +713,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         payload = self._read_body()
         self._record_event(path, payload)
-        for provider in (platform, advanced):
+        for provider in (platform, advanced, settings):
             response = provider.post(self, path, payload)
             if response is not None:
                 status, body = response
@@ -907,6 +911,7 @@ def main():
     parser.add_argument("--activity-state", choices=("full", "empty", "unavailable"), default="full")
     parser.add_argument("--dashboard-state", choices=("healthy", "degraded", "denied", "unknown"), default="healthy")
     parser.add_argument("--onboarding-state", choices=("idle", "address", "github", "verify", "complete", "lost_key"), default="idle")
+    parser.add_argument("--settings-state", choices=("normal", "duplicate", "invalid", "delay", "error", "fresh"), default="normal")
     parser.add_argument("--upstream", help="Public HTTPS django-mojo origin for live QA")
     args = parser.parse_args()
     upstream = None
@@ -926,7 +931,8 @@ def main():
     }, key_state=args.key_state, setup_state=args.setup_state,
        activity_state=args.activity_state,
        dashboard_state=args.dashboard_state,
-       onboarding_state=args.onboarding_state)
+       onboarding_state=args.onboarding_state,
+       settings_state=args.settings_state)
     PreviewHandler.upstream = upstream
     PreviewHandler.setup_behavior = args.setup_state
     PreviewHandler.preview_port = args.port

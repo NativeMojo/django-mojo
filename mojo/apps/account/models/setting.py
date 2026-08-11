@@ -124,12 +124,24 @@ class Setting(MojoSecrets, MojoModel):
 
     def _protected_keys_involved(self):
         from mojo.apps.account.services import system_settings
-        keys = {self.key}
+        from mojo.apps.account.services import admin_settings
+        scopes = {(self.key, self.group_id)}
         if self.pk:
-            original = Setting.objects.filter(pk=self.pk).values_list("key", flat=True).first()
+            original = Setting.objects.filter(pk=self.pk).values_list(
+                "key", "group_id").first()
             if original:
-                keys.add(original)
-        return [key for key in keys if system_settings.is_protected_setting(key)]
+                scopes.add(original)
+        protected = []
+        for key, group_id in scopes:
+            # Preserve the existing system-settings protection exactly: those
+            # owner-only keys are protected in every scope.  The new Admin
+            # catalog protection is deliberately narrower and owns only the
+            # global row, so compatible group-scoped rows remain available.
+            if system_settings.is_protected_setting(key):
+                protected.append(key)
+            elif group_id is None and admin_settings.is_catalog_protected(key):
+                protected.append(key)
+        return protected
 
     def _reject_protected_write(self, rest=False):
         protected = self._protected_keys_involved()

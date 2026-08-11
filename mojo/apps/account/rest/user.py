@@ -1289,7 +1289,7 @@ def on_email_change_request(request):
     the change request. The current email is NOT changed until the confirm
     step is completed.
     """
-    if not settings.get("ALLOW_EMAIL_CHANGE", True):
+    if not settings.get("ALLOW_EMAIL_CHANGE", True, kind="bool"):
         raise merrors.PermissionDeniedException("Email change is not allowed")
 
     import re
@@ -1652,7 +1652,7 @@ def on_phone_change_request(request):
     from mojo.apps.account.utils import tokens as tok_utils
     from mojo.apps import phonehub
 
-    if not settings.get("ALLOW_PHONE_CHANGE", True):
+    if not settings.get("ALLOW_PHONE_CHANGE", True, kind="bool"):
         raise merrors.PermissionDeniedException("Phone number change is not allowed")
 
     user = request.user
@@ -1795,7 +1795,7 @@ def on_username_change(request):
     the step-up gate (no current_password — passwordless passkey/SMS accounts
     must be able to change their username too).
     """
-    if not settings.get("ALLOW_USERNAME_CHANGE", True):
+    if not settings.get("ALLOW_USERNAME_CHANGE", True, kind="bool"):
         raise merrors.PermissionDeniedException("Username change is not allowed")
 
     user = request.user
@@ -1874,7 +1874,7 @@ def on_account_deactivate(request):
     Step 1: Send a confirmation email with a short-lived dv: token.
     The account is NOT deactivated until the token is confirmed.
     """
-    if not settings.get("ALLOW_SELF_DEACTIVATION", True):
+    if not settings.get("ALLOW_SELF_DEACTIVATION", True, kind="bool"):
         raise merrors.PermissionDeniedException("Account deactivation is not allowed")
 
     user = request.user

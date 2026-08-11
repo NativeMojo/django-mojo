@@ -1,9 +1,9 @@
 """Foundation gallery and reset coordination for the Admin preview."""
 
-from .features import activity, advanced, dashboard, people, platform, webapps
+from .features import activity, advanced, dashboard, people, platform, settings, webapps
 
 
-PROVIDERS = (dashboard, people, webapps, activity, platform, advanced)
+PROVIDERS = (dashboard, people, webapps, activity, platform, advanced, settings)
 
 
 def bootstrap(groups):
@@ -20,6 +20,8 @@ def bootstrap(groups):
         "view_platform_security": True, "view_advanced": True,
         "manage_advanced": True, "view_advanced_inventory": True,
         "view_advanced_security": True, "view_advanced_settings": True,
+        "settings": True, "catalog_write": True,
+        "settings_owner_display": True, "settings_owner_edit": True,
     }
     return {
         "version": "1.9.0", "admin_path": "/", "groups": groups,
@@ -33,11 +35,12 @@ def bootstrap(groups):
 
 def reset(handler, fixtures, *, key_state="active", setup_state="idle",
           activity_state="full", onboarding_state="idle",
-          dashboard_state="healthy"):
+          dashboard_state="healthy", settings_state="normal"):
     """Reset every stateful provider so scenarios never leak across runs."""
     for provider in PROVIDERS:
         provider.reset(handler, fixtures, key_state=key_state,
                        setup_state=setup_state,
                        activity_state=activity_state,
                        dashboard_state=dashboard_state,
-                       onboarding_state=onboarding_state)
+                       onboarding_state=onboarding_state,
+                       settings_state=settings_state)

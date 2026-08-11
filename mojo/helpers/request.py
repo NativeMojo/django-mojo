@@ -110,6 +110,8 @@ def sensitive_body_label(request):
         return "admin_password"
     if path == f"{API_ROOT}/account/admin/apikey/action":
         return "admin_api_key"
+    if path == f"{API_ROOT}/account/admin/settings":
+        return "admin_settings"
     if path == f"{API_ROOT}/edge/webapp/link_key":
         return "webapp_deployment_key"
     if method == "POST" and path in (

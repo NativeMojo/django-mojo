@@ -22,7 +22,7 @@ def on_admin_platform(request):
 
 
 @md.GET("account/admin/dashboard")
-@md.requires_global_perms("view_admin", "manage_users", "admin")
+@md.requires_global_perms("view_admin", "manage_users", "manage_settings", "admin")
 def on_admin_dashboard(request):
     return _admin_platform.dashboard_overview(request)
 

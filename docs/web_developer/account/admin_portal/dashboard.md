@@ -1,14 +1,14 @@
 # Admin Dashboard API
 
-The packaged Admin uses six primary destinations: Dashboard, People, Web Apps,
-Domains & DNS, Platform, and Activity. Domains & DNS is permission-gated by
+The packaged Admin uses seven primary destinations: Dashboard, Web Apps,
+Domains & DNS, People, Activity, Platform, and Settings. Domains & DNS is permission-gated by
 DNS read/manage authority because it is an ongoing application control, not a
 setup-only surface. Deployments and literal-superuser System Setup live under
 Platform; Advanced is one expert-diagnostics destination rather than a
 resource list.
 
 `GET /api/account/admin/dashboard` requires the same global source-access grant
-as the built-in Admin (`view_admin`, `manage_users`, or `admin`). It then checks
+as the built-in Admin (`view_admin`, `manage_users`, `manage_settings`, or `admin`). It then checks
 each source independently before collecting it and returns:
 
 ```json

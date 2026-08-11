@@ -6,7 +6,8 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1] / "admin_portal"
 FEATURES = (
-    "dashboard", "people", "webapps", "activity", "platform", "advanced")
+    "dashboard", "people", "webapps", "activity", "platform", "advanced",
+    "settings")
 
 
 def _read_json(path):

@@ -49,6 +49,7 @@ def test_anonymous_delivery_is_gate_only(opts):
     assert client.get("/admin/assets/features/advanced/page.js").status_code == 404
     assert client.get("/admin/assets/features/platform/page.js").status_code == 404
     assert client.get("/admin/assets/features/activity/page.js").status_code == 404
+    assert client.get("/admin/assets/features/settings/page.js").status_code == 404
 
 
 @th.django_unit_test("interactive JWT creates a path-scoped modular Admin source session")
@@ -65,7 +66,8 @@ def test_authenticated_admin_delivery(opts):
     data = bootstrap.json.get("data") or {}
     assert data.get("capabilities", {}).get("manage_network") is True, data
     assert tuple(data.get("features", {})) == (
-        "dashboard", "people", "webapps", "activity", "platform", "advanced"), data.get("features")
+        "dashboard", "people", "webapps", "activity", "platform", "advanced",
+        "settings"), data.get("features")
     assert data["features"]["activity"] == {
         "id": "activity", "enabled": True,
         "capabilities": {
@@ -75,6 +77,7 @@ def test_authenticated_admin_delivery(opts):
     }, data["features"]["activity"]
     assert data["features"]["platform"]["capabilities"]["setup"] is True, data["features"]["platform"]
     assert data["features"]["advanced"]["capabilities"]["manage"] is True, data["features"]["advanced"]
+    assert data["features"]["settings"]["capabilities"]["owner_edit"] is True, data["features"]["settings"]
 
     opts.client.logout()
     assert "<title>MOJO Admin</title>" in opts.client.get("/admin/").text, "Admin shell unavailable"
@@ -82,6 +85,7 @@ def test_authenticated_admin_delivery(opts):
                   "assets/features/advanced/page.js",
                   "assets/features/platform/page.js",
                   "assets/features/activity/page.js",
+                  "assets/features/settings/page.js",
                   "assets/components/relationship.js"):
         response = opts.client.get(f"/admin/{asset}")
         assert response.status_code == 200, f"private asset unavailable: {asset}"

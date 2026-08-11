@@ -181,3 +181,21 @@ def test_platform_preview_truth_axes(opts):
         "preview cannot render the check-specific missing BASE_URL repair"
     assert 'check("django.local_request", "pass"' in setup, \
         "preview cannot distinguish local listener health from BASE_URL configuration"
+
+
+@th.django_unit_test("preview covers Settings provenance, duplicate, delay, error, and 440")
+def test_settings_preview_states(opts):
+    server = (ROOT / "bin/admin_preview_support/server.py").read_text()
+    provider = (ROOT / "bin/admin_preview_support/features/settings.py").read_text()
+    gallery = (ROOT / "bin/admin_preview_support/gallery.py").read_text()
+    for state in ("normal", "duplicate", "invalid", "delay", "error", "fresh"):
+        assert f'"{state}"' in server or f'"{state}"' in provider, \
+            f"preview cannot render the {state} Settings state"
+    for source in ("database", "deployment", "duplicate_override", "invalid"):
+        assert source in provider, f"preview omitted Settings provenance {source}"
+    assert "settings" in gallery and "settings_owner_edit" in gallery, \
+        "the deterministic bootstrap fixed roster omitted Settings"
+    assert "payload.get(\"value\")" in provider and "handler.setting_entries" in provider, \
+        "Settings preview cannot render set/clear outcomes"
+    assert 'path == "/api/account/admin/settings"' in server and 'key == "value"' in server, \
+        "Settings preview events can retain submitted values"

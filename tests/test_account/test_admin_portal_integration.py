@@ -313,7 +313,7 @@ def test_malformed_forced_password_incident_boundary(opts):
                    "malformed forced-password credential persisted in incident evidence")
 
 
-@th.django_unit_test("private assets use six primary items and scrub every transient secret")
+@th.django_unit_test("private assets use seven primary items and scrub every transient secret")
 def test_merged_browser_secret_and_route_contract(opts):
     registry = (ROOT / "mojo/apps/account/admin_portal/assets/features/registry.js").read_text()
     routes = (ROOT / "mojo/apps/account/admin_portal/assets/components/routes.js").read_text()
@@ -325,8 +325,8 @@ def test_merged_browser_secret_and_route_contract(opts):
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
     classifier = (ROOT / "mojo/helpers/request.py").read_text()
     th.assert_true(
-        "[dashboard, people, webapps, advanced, platform, activity]" in registry,
-        "feature order does not match the six-item product navigation")
+        "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry,
+        "feature order does not match the seven-item product navigation")
     th.assert_true(
         "route: 'domains'" in advanced_feature
         and "label: 'Domains & DNS'" in advanced_feature

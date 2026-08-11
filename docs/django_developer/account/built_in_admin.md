@@ -19,7 +19,8 @@ MOJO_ADMIN_COOKIE_NAME = "mojo_admin"
 MOJO_ADMIN_COOKIE_SECURE = True    # defaults to not DEBUG
 ```
 
-An interactive JWT user needs a global `view_admin`, `manage_users`, or
+An interactive JWT user needs a global `view_admin`, `manage_users`,
+`manage_settings`, or
 `admin` permission (superusers pass automatically). API keys and group-scoped
 tokens cannot create an Admin source session.
 
@@ -49,16 +50,16 @@ authority for every data read and mutation.
 The portal is native HTML, CSS, and ES modules packaged inside `mojo`. The
 shell owns authentication, theme, navigation, routing, stale-render
 cancellation, overlay cleanup, and heading focus. A fixed registry imports the
-six feature namespaces `dashboard`, `people`, `webapps`, `activity`,
-`platform`, and `advanced`; there is no runtime plugin discovery or
+seven feature namespaces `dashboard`, `people`, `webapps`, `activity`,
+`platform`, `advanced`, and `settings`; there is no runtime plugin discovery or
 settings-based module import. Each descriptor declares its routes, navigation,
 stylesheet, title, capability check, and one
 `render({ctx, route, navigate, signal})` function. Render must resolve to
 exactly one DOM `Node`; an optional `node.dispose()` releases feature-local
 listeners or work.
 
-Primary navigation is Dashboard, People, Web Apps, Domains & DNS, Platform,
-and Activity. Domains & DNS is permission-gated and stays beside Web Apps
+Primary navigation is Dashboard, Web Apps, Domains & DNS, People, Activity,
+Platform, and Settings. Domains & DNS is permission-gated and stays beside Web Apps
 because domains and public records are ongoing application controls. Platform
 contains deployments, literal-superuser System Setup, and one link to Advanced
 expert diagnostics; it does not duplicate a resource directory. See
@@ -103,10 +104,10 @@ late choices, cancellation, and bounded live log. See
 contracts.
 
 See [Platform and Advanced Admin controls](admin_portal/platform.md) for the
-dedicated permissions, bounded evidence contract, and typed settings boundary.
+dedicated permissions and bounded evidence contract.
 
 The Advanced feature owns the first-class Domains & DNS destination plus
-read-only hosting/AWS inventory, typed safe settings, and raw Credentials,
+read-only hosting/AWS inventory and raw Credentials,
 Certificates,
 Upstreams, Vhosts, and Routes. Its `assets/features/advanced/page.js` module is
 the permanent hosting UI. It does not
@@ -118,6 +119,12 @@ refresh-required until the operator explicitly refreshes it. Vhost creation is
 a four-shape wizard (`api`, `site`, `site_api`, `redirect`); `site_api` routes
 are created sequentially so a partial result can be repaired without replaying
 successful rows.
+
+The Settings feature owns ongoing framework configuration and the typed
+AUTH_CONFIG/expected-fleet browser controls. See
+[Admin Settings catalog](admin_portal/settings.md). Advanced remains reachable
+from Platform for expert diagnostics but has no sidebar entry and no duplicate
+settings form.
 
 The People feature owns the complete User and Group operator journey. Its
 capabilities are issued by the backend per operation (view/manage Users,

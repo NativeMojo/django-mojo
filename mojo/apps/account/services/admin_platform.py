@@ -506,7 +506,6 @@ def advanced_overview(request):
             "hosting": (("view_advanced", "manage_advanced", "admin"), _hosting),
             "aws_inventory": (("view_advanced_inventory", "manage_advanced", "admin"), _aws_inventory),
             "network_security": (("view_advanced_security", "manage_advanced", "admin"), _security),
-            "settings": (("view_advanced_settings", "manage_advanced", "admin"), _settings),
         }),
     }
 

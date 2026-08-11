@@ -8,6 +8,8 @@ class AppConfig(BaseAppConfig):
         # Import the protected-setting registry at startup so downstream apps
         # can extend one stable boundary from their own AppConfig.ready().
         from mojo.apps.account.services import system_settings  # noqa: F401
+        from mojo.apps.account.services import admin_settings
+        admin_settings.register_core_descriptors()
         from mojo.helpers.settings import settings
         if settings.is_app_installed("django.contrib.admin"):
             self.unregister_apps()

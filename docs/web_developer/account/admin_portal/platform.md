@@ -30,7 +30,8 @@ Overview sections have this stable shape:
 
 Platform returns sections `api`, `fleet`, `jobs`, `sanity`, `database`,
 `redis`, `deployments`, `certificates`, `security`, and `webapps`. Advanced
-returns `hosting`, `aws_inventory`, `network_security`, and `settings`.
+returns `hosting`, `aws_inventory`, and `network_security`. The curated
+[Settings API](settings.md) owns effective configuration and typed UI controls.
 Permission is checked per section, so a caller admitted to the endpoint can
 still receive `unauthorized` for a narrower section.
 

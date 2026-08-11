@@ -30,12 +30,21 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### ALLOW
 
-- `ALLOW_EMAIL_CHANGE`
-- `ALLOW_PHONE_CHANGE`
+- `ALLOW_EMAIL_CHANGE` — dynamic boolean, default `True`; Admin Settings can
+  manage a global non-secret override.
+- `ALLOW_PHONE_CHANGE` — dynamic boolean, default `True`; Admin Settings can
+  manage a global non-secret override.
 - `ALLOW_PHONE_LOGIN`
-- `ALLOW_SELF_DEACTIVATION`
+- `ALLOW_SELF_DEACTIVATION` — dynamic boolean, default `True`; Admin Settings
+  can manage a global non-secret override.
 - `ALLOW_USER_REGISTRATION`
-- `ALLOW_USERNAME_CHANGE`
+- `ALLOW_USERNAME_CHANGE` — dynamic boolean, default `True`; Admin Settings can
+  manage a global non-secret override.
+
+These four Admin-managed values are read with `kind="bool"`, so stored JSON
+`false` remains false. The catalog uses the existing `account.Setting` table,
+protects only global rows from alternate writers, and preserves supported
+group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings.md).
 
 ### ALLOWED
 
@@ -934,7 +943,9 @@ restart. See
 ### WEBAPP
 
 - `WEBAPP_AUTH_PATH`
-- `WEBAPP_BASE_URL`
+- `WEBAPP_BASE_URL` — dynamic public origin. Admin Settings can manage one
+  canonical public-HTTPS global override; existing group-scoped rows remain
+  available through the generic Setting API and group inheritance.
 
 ### WEBHOOK
 

@@ -101,7 +101,7 @@ def on_admin_asset(request, asset=None):
 
 @md.POST("account/admin/session")
 @md.denies_key_backed_session()
-@md.requires_global_perms("view_admin", "manage_users", "admin")
+@md.requires_global_perms("view_admin", "manage_users", "manage_settings", "admin")
 def on_admin_session(request):
     session_id = admin_portal.issue(request)
     if session_id is None:
@@ -122,7 +122,7 @@ def on_admin_session_revoke(request):
 
 @md.GET("account/admin/bootstrap")
 @md.denies_key_backed_session()
-@md.requires_global_perms("view_admin", "manage_users", "admin")
+@md.requires_global_perms("view_admin", "manage_users", "manage_settings", "admin")
 def on_admin_bootstrap(request):
     memberships = request.user.members.filter(is_active=True).select_related("group")
     groups = [
@@ -130,6 +130,8 @@ def on_admin_bootstrap(request):
         for member in memberships if member.group.is_effectively_active()
     ]
     has = request.user.has_permission
+    permissions = request.user.permissions if isinstance(request.user.permissions, dict) else {}
+    exact = lambda key: bool(request.user.is_superuser or permissions.get(key) is True)
     capabilities = {
         "setup": bool(request.user.is_superuser),
         "people": has(["view_users", "manage_users", "admin"]),
@@ -160,6 +162,13 @@ def on_admin_bootstrap(request):
             "view_advanced_security", "manage_advanced", "admin"]),
         "view_advanced_settings": has([
             "view_advanced_settings", "manage_advanced", "admin"]),
+        "settings": any(exact(key) for key in (
+            "manage_settings", "view_advanced_settings", "manage_advanced", "admin")),
+        "catalog_write": exact("manage_settings") or exact("admin"),
+        "settings_owner_display": any(exact(key) for key in (
+            "view_advanced_settings", "manage_advanced", "admin")),
+        "settings_owner_edit": bool(request.user.is_superuser and (
+            exact("manage_advanced") or exact("admin"))),
     }
     return {
         "version": mojo.__version__,

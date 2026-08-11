@@ -20,10 +20,10 @@ def test_modular_shell_contract(opts):
     assert "controller?.abort()" in app and "page.dispose?.()" in app
     assert "page instanceof Node" in app and "closeAllOverlays()" in app
     assert "features/platform/page.js" not in app and "features/people/page.js" not in app
-    for name in ("dashboard", "people", "webapps", "activity", "platform", "advanced"):
+    for name in ("dashboard", "people", "webapps", "activity", "platform", "advanced", "settings"):
         assert f"./{name}/feature.js" in registry
-    assert "[dashboard, people, webapps, advanced, platform, activity]" in registry, \
-        "Domains & DNS is not positioned beside Web Apps in primary navigation"
+    assert "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry, \
+        "primary navigation does not follow the approved operator journey"
     assert "routes: ['platform', 'deployments', 'setup']" in platform
     assert "setupPage(ctx, signal)" in platform and "platformPage(ctx, route)" in platform
     assert "const ROUTES = ['advanced', 'domains', 'credentials', 'dns', 'certificates'" in advanced
@@ -80,6 +80,7 @@ def test_overlay_contract(opts):
 def test_feature_asset_contracts(opts):
     platform = (ASSETS / "features/platform/page.js").read_text()
     advanced = (ASSETS / "features/advanced/page.js").read_text()
+    settings = (ASSETS / "features/settings/page.js").read_text()
     webapps = (ASSETS / "features/webapps/page.js").read_text()
     core = (ASSETS / "core.js").read_text()
     app = (ASSETS / "app.js").read_text()
@@ -87,8 +88,8 @@ def test_feature_asset_contracts(opts):
 
     assert "result.token" not in platform and "MOJO_DEPLOY_KEY" not in platform
     assert "apiOnce" in advanced and "refresh-required" in advanced
-    assert "'login.methods'" in advanced and "'registration.methods'" in advanced
-    assert "name === 'password'" in advanced and "Save access methods" in advanced
+    assert "'login.methods'" in settings and "'registration.methods'" in settings
+    assert "name === 'password'" in settings and "Save authentication settings" in settings
     assert "class: 'table-wrap', tabindex: '0', role: 'region'" in core
     assert "['ArrowLeft', 'ArrowRight'].includes(event.key)" in core
     assert "canonicalRecordName" in advanced and "sameRecordSet" in advanced

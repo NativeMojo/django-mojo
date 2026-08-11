@@ -1,0 +1,90 @@
+# Admin Settings catalog
+
+The built-in Admin's Settings feature is the single ongoing-configuration
+surface for runtime values django-mojo intentionally exposes. It is a curated
+view over the existing `account.Setting` table and
+`mojo.helpers.settings.settings`; it does not add another model, store, or
+resolution system.
+
+## Registry and provenance
+
+`account.services.admin_settings.Descriptor` is an immutable, opt-in contract.
+Account registers core rows from `AccountConfig.ready()`, while dnsman, edge,
+and AWS register their own rows from their application `ready()` methods. Identical
+registration is idempotent and a conflicting definition fails at startup.
+Optional applications simply omit their section when absent.
+
+Every descriptor declares its stable key, category, friendly description,
+type, constraints, default, resolver, raw/effective semantics, sensitivity,
+scope, writability, owner, and change behavior. Provenance follows the real
+resolver: dynamic Redis/database/deployment/default, protected database-only,
+static deployment-only, merged AUTH_CONFIG, or computed posture. Static rows
+report only that an ignored database shadow exists. Configured-only rows return
+a boolean state. Responses omit paths, environment names, raw ignored values,
+exceptions, and secret material.
+
+## Writers and ownership
+
+`GET /api/account/admin/settings` returns schema version 1, ordered categories,
+and catalog entries. `POST /api/account/admin/settings` accepts exactly one of:
+
+```json
+{"action":"set","key":"ALLOW_EMAIL_CHANGE","value":false}
+```
+
+```json
+{"action":"clear","key":"ALLOW_EMAIL_CHANGE"}
+```
+
+The catalog writer owns only the four `ALLOW_*` booleans and global
+`WEBAPP_BASE_URL`. Booleans are strict JSON booleans. The WebApp address is
+canonicalized to one public HTTPS hostname origin. Values are global,
+non-secret, validated, and immediate. Generic `Setting` writes cannot create,
+change, rename, move, or delete a catalog-owned global row. Existing
+group-scoped rows remain compatible; a move across the global boundary checks
+both original and target key/scope.
+
+PostgreSQL permits duplicate `(key, NULL)` rows under the legacy constraint.
+The catalog reports `duplicate_override`, refuses Set, and offers one Clear
+operation. Clear locks and removes every global duplicate atomically. Set and
+Clear publish Redis `hset`/`hdel` only from `transaction.on_commit`; rollback
+cannot change cache state. Audit contains actor id, key, action, and fixed
+source only—never values or request bodies.
+
+Mutation requires an interactive non-key session, authentication within 600
+seconds, and a freshly reread active literal User with exact global
+`manage_settings` or `admin` (or literal superuser). `manage_settings` also
+admits Admin source/bootstrap. Literal `permissions.admin` is an exact grant,
+not a wildcard; only `is_superuser` is a wildcard.
+
+BASE_URL remains focused-Setup-owned; identity is immutable; DNS certificate
+knobs are display/owner-only; file-only rows instruct the operator to change
+Django production settings and deploy. `AUTH_CONFIG` and
+`EDGE_EXPECTED_TOPOLOGY` keep the existing
+`POST /api/account/admin/advanced/settings` typed writer and active literal
+superuser plus `manage_advanced`/`admin` authority. That endpoint remains for
+compatibility, but Settings is its only browser UI home.
+
+The generic `/api/settings` remains for uncataloged and supported group-scoped
+rows. Its existing permission holders can read non-secret Setting values, so
+the catalog adds no confidential mutable value and does not claim to redact
+that legacy surface.
+
+## Browser contract
+
+Settings is first-class navigation after Platform. The default is compact
+search, optional category chips, and summary cards. Each card shows friendly
+name, effective status/value, source, and at most one primary action. Exact
+keys, provenance, semantics, and constraints stay under closed Technical
+details. One editor opens at a time and becomes a bottom sheet on narrow
+screens. Fleet topology uses explicit node/pool tokens, never comma-separated
+text.
+
+Database overrides have typed dirty/save/clear states. Owner-managed and
+deployment-only rows never look generically editable. Missing Setup produces
+one Continue Setup callout. Mutations use the shared non-retrying API,
+skeleton, fullscreen busy lease, explicit feedback, and HTTP 440 recent-auth
+prompt; the operator selects the mutation again after reauthentication.
+
+Deterministic preview states are available with `bin/admin_preview
+--settings-state normal|duplicate|invalid|delay|error|fresh`.

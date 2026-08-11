@@ -1127,7 +1127,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if not isinstance(value, dict):
             raise merrors.ValueException("change_username requires a body with a username")
         self._require_fresh_auth()
-        if not settings.get("ALLOW_USERNAME_CHANGE", True):
+        if not settings.get("ALLOW_USERNAME_CHANGE", True, kind="bool"):
             raise merrors.PermissionDeniedException("Username change is not allowed")
 
         new_username = (value.get("username") or "").lower().strip()

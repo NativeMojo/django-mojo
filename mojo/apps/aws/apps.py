@@ -9,7 +9,13 @@ class AppConfig(BaseAppConfig):
         from mojo.apps.account.services import system_settings
         from mojo.apps.aws.services import aws_setup
         from mojo.apps.aws.settings_validators import monitoring_topic_arns
+        from mojo.apps.account.services.admin_settings import Descriptor, register_descriptor
 
         system_settings.register_protected_setting(
             system_settings.MONITORING_TOPICS, monitoring_topic_arns)
         aws_setup.register_sections()
+        register_descriptor(Descriptor(
+            "EMAIL_DELIVERY_POSTURE", "Email delivery", "Email",
+            "System sender and shipped authentication-template readiness.", "object",
+            resolver="email_posture", writable="owner", owner="System Setup",
+            change_behavior="setup", owner_route="setup?focus=aws_email"))

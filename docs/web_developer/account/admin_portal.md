@@ -8,7 +8,8 @@ developers building a custom internal console.
 The built-in portal defaults to `/admin/` and uses the hosted Bouncer auth
 pages. It provides System Setup/readiness, a system overview, User and Group
 management, permanent Domains/Credentials/DNS/Certificates/Upstreams/Vhosts/
-Routes pages, an Activity center for Incidents, Events, Logs, and Tickets, and
+Routes pages, a curated [Settings catalog](admin_portal/settings.md), an
+Activity center for Incidents, Events, Logs, and Tickets, and
 WebApp `MOJO_DEPLOY_KEY` management with light, dark, and system themes.
 Domains & DNS is a first-class Platform and WebApps destination: operators can
 register an existing domain or buy a new one before selecting it during WebApp
@@ -32,7 +33,8 @@ POST /api/account/admin/session
 Authorization: Bearer <interactive-user-jwt>
 ```
 
-The caller needs a global `view_admin`, `manage_users`, or `admin` grant. API
+The caller needs a global `view_admin`, `manage_users`, `manage_settings`, or
+`admin` grant. API
 keys and group-scoped tokens are refused. Normal portal data calls continue to
 send the JWT and are authorized by each endpoint's own permissions.
 
@@ -78,15 +80,15 @@ on localhost. External OAuth callbacks are not supported. Deterministic fixture
 mode remains the correct way to exercise write, busy, 440, error, and
 ambiguous-response states without mutating a live installation.
 
-The packaged portal is divided into six fixed, capability-gated feature lanes.
-Primary navigation is Dashboard, People, Web Apps, Domains & DNS, Platform,
-and Activity. Domains & DNS appears only with DNS read/manage authority;
+The packaged portal is divided into seven fixed, capability-gated feature lanes.
+Primary navigation is Dashboard, Web Apps, Domains & DNS, People, Activity,
+Platform, and Settings. Domains & DNS appears only with DNS read/manage authority;
 Advanced is one expert-diagnostics destination from Platform, alongside
 deployments and literal-superuser System Setup. Activity owns the
 bounded Incidents, Events, Logs, and Tickets operator journey. Platform owns
 public/local health, UUID deployment recovery, fleet evidence, System Setup,
 and readiness. Platform does not duplicate Domains & DNS or expand Advanced's
-resource directory. Advanced owns bounded hosting/AWS inventory, typed settings,
+resource directory. Advanced owns bounded hosting/AWS inventory,
 and the raw Domains, Credentials,
 DNS, Certificates, Upstreams, Vhosts, Routes, and network resources. Bootstrap
 returns both the stable flat `capabilities` object and a namespaced `features`
@@ -94,7 +96,7 @@ object:
 
 ```json
 {
-  "capabilities": {"people": true, "network": true},
+  "capabilities": {"people": true, "network": true, "settings": true},
   "features": {
     "people": {"id": "people", "enabled": true,
                "capabilities": {"users": true, "groups": true}},
@@ -102,6 +104,9 @@ object:
                  "capabilities": {"setup": true}},
     "advanced": {"id": "advanced", "enabled": true,
                  "capabilities": {"view": true, "manage": true}},
+    "settings": {"id": "settings", "enabled": true,
+                 "capabilities": {"view": true, "catalog_write": true,
+                                  "owner_display": true, "owner_edit": true}},
     "activity": {"id": "activity", "enabled": true,
                  "capabilities": {"view_logs": true,
                                   "view_security": true,
@@ -424,8 +429,12 @@ The secure settings API is intended for admin portals and configuration consoles
 
 `BASE_URL`, `MOJO_INSTALLATION_UUID`, `MOJO_INSTALLATION_SLUG`,
 `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`, and `EDGE_EXPECTED_TOPOLOGY` are protected
-system keys. Generic settings create/update/rename/delete requests refuse them
-for every caller, including superusers. Configure them through System Setup.
+system keys. Generic settings create/update/rename/delete requests refuse their
+rows in every scope for every caller, including superusers. Configure them
+through their dedicated owner. The curated
+[Admin Settings API](admin_portal/settings.md) adds global-row-only protection
+for its five allowlisted overrides, checks both original and target scope during
+moves, and preserves the generic endpoint's supported group-scoped rows.
 
 ### Endpoints
 
@@ -436,6 +445,10 @@ for every caller, including superusers. Configure them through System Setup.
 | `GET` | `/api/settings/<id>` | Get one setting |
 | `POST` | `/api/settings/<id>` | Update setting |
 | `DELETE` | `/api/settings/<id>` | Delete setting |
+
+Legacy holders of these model permissions can read every non-secret Setting
+row returned by their scope. The curated catalog adds no confidential mutable
+values and does not make this generic read surface more private.
 
 Enforcement-bearing keys registered with a write validator (most `GEOFENCE_*`
 keys, plus app-registered keys) reject malformed values with a readable `400`
