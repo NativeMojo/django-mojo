@@ -38,8 +38,10 @@ and catalog entries. `POST /api/account/admin/settings` accepts exactly one of:
 
 The catalog writer owns only the four `ALLOW_*` booleans and global
 `WEBAPP_BASE_URL`. Booleans are strict JSON booleans. The WebApp address is
-canonicalized to one public HTTPS hostname origin. Values are global,
-non-secret, validated, and immediate. Generic `Setting` writes cannot create,
+canonicalized to one public HTTPS hostname origin. IP literals, browser-style
+numeric IP forms, localhost, and private/special-use hostname suffixes are
+refused. Values are global, non-secret, validated, and immediate. Generic
+`Setting` writes cannot create,
 change, rename, move, or delete a catalog-owned global row. Existing
 group-scoped rows remain compatible; a move across the global boundary checks
 both original and target key/scope.

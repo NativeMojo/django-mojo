@@ -28,7 +28,7 @@ Catalog mutations accept only:
 ```
 
 ```json
-{"action":"set","key":"WEBAPP_BASE_URL","value":"https://apps.example.com"}
+{"action":"set","key":"WEBAPP_BASE_URL","value":"https://apps.mojoverify.com"}
 ```
 
 ```json
@@ -36,7 +36,9 @@ Catalog mutations accept only:
 ```
 
 Only four self-service booleans and the global default WebApp public HTTPS
-origin are catalog-writable initially. Values are non-secret. Clear is
+origin are catalog-writable initially. IP literals, browser-style numeric IP
+forms, localhost, and private/special-use hostname suffixes are refused.
+Values are non-secret. Clear is
 idempotent, removes every conflicting global override, and reveals the
 deployment/default source. API keys and group tokens are refused, recent auth
 is 600 seconds, and HTTP 440 requires explicit reauthentication without write

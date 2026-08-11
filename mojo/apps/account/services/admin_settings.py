@@ -29,6 +29,13 @@ MUTABLE_KEYS = frozenset({
     "ALLOW_EMAIL_CHANGE", "ALLOW_PHONE_CHANGE", "ALLOW_USERNAME_CHANGE",
     "ALLOW_SELF_DEACTIVATION", "WEBAPP_BASE_URL",
 })
+NON_PUBLIC_HOST_SUFFIXES = frozenset({
+    "alt", "arpa", "corp", "home", "internal", "invalid", "lan", "local",
+    "localdomain", "localhost", "onion", "test",
+})
+NON_PUBLIC_HOSTS = frozenset({
+    "example", "example.com", "example.net", "example.org",
+})
 
 
 @dataclass(frozen=True)
@@ -102,6 +109,8 @@ def _global_rows(key, *, lock=False):
 
 
 def _parse_row(row):
+    if row.is_secret:
+        return {"configured": True}
     value = row.get_value()
     if not isinstance(value, str):
         return value
@@ -175,6 +184,14 @@ def _email_posture_state(descriptor, rows):
 def _resolve(descriptor, rows=None, cached=_NO_CACHE):
     rows = _global_rows(descriptor.key) if rows is None else rows
     duplicate = len(rows) > 1
+    # A duplicate is ambiguous regardless of whatever Redis last cached.  A
+    # legacy secret row is configuration metadata only: never decrypt it and
+    # never let a cached plaintext value become the catalog's effective value.
+    if duplicate:
+        return None, "duplicate_override", False, True
+    if rows and rows[0].is_secret:
+        return {"configured": True}, "secret_override", \
+            descriptor.resolver == "static", False
     resolver = {
         "static": _static_state,
         "protected": _protected_state,
@@ -203,8 +220,12 @@ def catalog(*, capabilities=None):
             key__in=rows_by_key, group=None).order_by("key", "pk"):
         rows_by_key[row.key].append(row)
     cached = {}
-    dynamic_keys = [descriptor.key for descriptor in descriptor_rows
-                    if descriptor.resolver == "dynamic"]
+    dynamic_keys = [
+        descriptor.key for descriptor in descriptor_rows
+        if descriptor.resolver == "dynamic"
+        and len(rows_by_key[descriptor.key]) <= 1
+        and not any(row.is_secret for row in rows_by_key[descriptor.key])
+    ]
     redis = Setting._redis()
     if redis and dynamic_keys:
         try:
@@ -236,7 +257,10 @@ def catalog(*, capabilities=None):
                 descriptor.writable == "owner" and capabilities.get("owner_edit")),
         })
         entries.append(row)
-    from mojo.apps.account.services import system_settings
+    base_url_rows = rows_by_key.get("BASE_URL", [])
+    setup_incomplete = (
+        len(base_url_rows) != 1 or base_url_rows[0].is_secret or
+        not bool(_parse_row(base_url_rows[0])))
     return {
         "schema_version": SCHEMA_VERSION,
         "capabilities": {
@@ -244,7 +268,7 @@ def catalog(*, capabilities=None):
             "owner_display": bool(capabilities.get("owner_display")),
             "owner_edit": bool(capabilities.get("owner_edit")),
         },
-        "setup_incomplete": not bool(system_settings.get_value(system_settings.BASE_URL)),
+        "setup_incomplete": setup_incomplete,
         # Optional applications own their descriptors, so their category must
         # disappear with them rather than advertising an empty destination.
         "sections": _section_names(descriptor_rows),
@@ -276,7 +300,20 @@ def normalize_webapp_origin(value):
     labels = hostname.split(".")
     valid_labels = all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
                        for label in labels)
-    if address is not None or hostname == "localhost" or len(labels) < 2 or not valid_labels:
+    reserved = (
+        hostname in NON_PUBLIC_HOSTS or
+        any(hostname == suffix or hostname.endswith(f".{suffix}")
+            for suffix in NON_PUBLIC_HOST_SUFFIXES) or
+        any(hostname.endswith(f".{suffix}") for suffix in (
+            "example.com", "example.net", "example.org"))
+    )
+    # Browser and libc URL parsers accept abbreviated/octal/hex IPv4 spellings
+    # such as 127.1, 0177.0.0.1, and 0x7f.0.0.1.  Requiring a real public DNS
+    # suffix keeps those forms from bypassing ipaddress's canonical parser.
+    public_suffix = bool(re.fullmatch(
+        r"(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})", labels[-1]))
+    if (address is not None or reserved or len(labels) < 2 or
+            not valid_labels or not public_suffix):
         raise merrors.ValueException("WEBAPP_BASE_URL must be a public HTTPS origin")
     return urlunsplit(("https", hostname, "", "", ""))
 
@@ -341,7 +378,7 @@ def set_override(actor, key, value):
         if len(rows) > 1:
             raise merrors.ValueException(
                 "Conflicting global overrides must be cleared before setting a value")
-        serialized = json.dumps(value)
+        serialized = value if isinstance(value, str) else json.dumps(value)
         if rows:
             Setting.objects.filter(pk=rows[0].pk).update(
                 value=serialized, is_secret=False, mojo_secrets=None,

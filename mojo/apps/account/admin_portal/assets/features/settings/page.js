@@ -53,7 +53,7 @@ function openCatalogEditor(row, mutate) {
   const initial = row.effective_value;
   const control = row.value_type === 'boolean'
     ? h('input', {type: 'checkbox', checked: initial === true})
-    : h('input', {type: 'url', value: typeof initial === 'string' ? initial : '', autocomplete: 'url', placeholder: 'https://app.example.com'});
+    : h('input', {type: 'url', value: typeof initial === 'string' ? initial : '', autocomplete: 'url', placeholder: 'https://app.your-domain.com'});
   const message = h('div', {class: 'form-message', role: 'alert'});
   const save = h('button', {class: 'button primary', type: 'button', disabled: true}, 'Save change');
   const dirty = () => {

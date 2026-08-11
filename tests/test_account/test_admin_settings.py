@@ -155,6 +155,7 @@ def test_settings_writer_validation(opts):
     from mojo import errors as me
     from mojo.apps.account.models import Setting, User
     from mojo.apps.account.services import admin_settings
+    from mojo.helpers.settings import settings as runtime_settings
     actor = User.objects.get(pk=opts.settings_admin)
     denied = User.objects.get(pk=opts.settings_denied)
     with mock.patch.object(admin_settings, "_audit"):
@@ -162,18 +163,29 @@ def test_settings_writer_validation(opts):
             admin_settings.set_override(denied, "ALLOW_EMAIL_CHANGE", False)
         with th.assert_raises(me.ValueException):
             admin_settings.set_override(actor, "ALLOW_EMAIL_CHANGE", "false")
-        with th.assert_raises(me.ValueException):
-            admin_settings.set_override(actor, "WEBAPP_BASE_URL", "http://localhost:8000")
-        with th.assert_raises(me.ValueException):
-            admin_settings.set_override(actor, "WEBAPP_BASE_URL", "https://127.0.0.1")
+        refused = (
+            "http://localhost:8000", "https://localhost", "https://admin.localhost",
+            "https://127.0.0.1", "https://127.1", "https://0177.0.0.1",
+            "https://0x7f.0.0.1", "https://service.local",
+            "https://service.internal", "https://service.test",
+            "https://service.invalid", "https://service.onion",
+            "https://home.arpa", "https://sub.example.com",
+        )
+        for origin in refused:
+            with th.assert_raises(me.ValueException):
+                admin_settings.set_override(actor, "WEBAPP_BASE_URL", origin)
         saved = admin_settings.set_override(
-            actor, "WEBAPP_BASE_URL", "https://Apps.Example.COM/")
-    assert saved == "https://apps.example.com", \
+            actor, "WEBAPP_BASE_URL", "https://Apps.MojoVerify.COM/")
+        stored = Setting.objects.get(key="WEBAPP_BASE_URL", group=None)
+        assert stored.value == saved and not stored.is_secret, \
+            "the catalog writer JSON-encoded a string override"
+        assert runtime_settings.get("WEBAPP_BASE_URL") == saved, \
+            "SettingsHelper did not return the normalized submitted origin exactly"
+        admin_settings.clear_override(actor, "WEBAPP_BASE_URL")
+    assert saved == "https://apps.mojoverify.com", \
         f"the WebApp origin was not canonicalized: {saved!r}"
-    assert Setting.objects.filter(
-        key="WEBAPP_BASE_URL", group=None, is_secret=False).count() == 1, \
-        "the catalog writer did not persist one non-secret global row"
-    Setting.objects.filter(key="WEBAPP_BASE_URL").delete()
+    assert not Setting.objects.filter(key="WEBAPP_BASE_URL", group=None).exists(), \
+        "the writer regression did not clean up its global override"
 
 
 @th.django_unit_test("catalog reports duplicate state without exposing sensitive values")
@@ -191,6 +203,8 @@ def test_settings_catalog_redaction(opts):
     rows = {row["key"]: row for row in report["entries"]}
     assert rows[key]["source"] == "duplicate_override" and not rows[key]["can_write"], \
         "duplicate global overrides did not fail closed"
+    assert rows[key]["effective_value"] is None, \
+        "an ambiguous duplicate override exposed a cached or arbitrary effective value"
     assert rows["KMS_KEY_ID"]["effective_value"] in (
         {"configured": True}, {"configured": False}), \
         "a sensitive deployment setting exposed more than configured state"
@@ -207,6 +221,37 @@ def test_settings_catalog_redaction(opts):
         "a configured sensitive setting exposed its value or lost provenance"
     assert "raw_value" not in rows[key], "the catalog exposed raw ignored override material"
     Setting.objects.filter(key=key).delete()
+    Setting.objects.bulk_create([
+        Setting(key=key, value="must-not-be-read", is_secret=True),
+        Setting(key="BASE_URL", value="also-must-not-be-read", is_secret=True),
+    ])
+    original_get_value = Setting.get_value
+
+    def guarded_get_value(row):
+        assert not row.is_secret, "the catalog attempted to decrypt a legacy secret row"
+        return original_get_value(row)
+
+    requested_cache_keys = []
+
+    def cache_values(redis_key, keys):
+        requested_cache_keys.extend(keys)
+        return [None] * len(keys)
+
+    redis = mock.Mock()
+    redis.hmget.side_effect = cache_values
+    with mock.patch.object(Setting, "_redis", return_value=redis), \
+            mock.patch.object(Setting, "get_value", guarded_get_value):
+        report = admin_settings.catalog(capabilities={
+            "catalog_write": True, "owner_display": True, "owner_edit": False})
+    row = {item["key"]: item for item in report["entries"]}[key]
+    assert row["effective_value"] == {"configured": True} and \
+        row["source"] == "secret_override", \
+        "a legacy secret row returned anything beyond configured metadata"
+    assert key not in requested_cache_keys, \
+        "the catalog requested a cached plaintext value for a legacy secret row"
+    assert report["setup_incomplete"] is True, \
+        "a legacy secret BASE_URL row was treated as valid Setup configuration"
+    Setting.objects.filter(key__in=(key, "BASE_URL")).delete()
 
 
 @th.django_unit_test("Settings mutations require fresh human global authority")
