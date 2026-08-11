@@ -765,9 +765,10 @@ def test_reconcile_limit(opts):
     older = _recon_page(opts, "limit_older", "# Older\n\nRECONLIMITA body.\n")
     newer = _recon_page(opts, "limit_newer", "# Newer\n\nRECONLIMITB body.\n")
 
-    # Park both ahead of every real page so the DESC ordering is deterministic
-    # even while other modules are writing pages in parallel.
-    base = timezone.now() + timedelta(days=1)
+    # Park both beyond every simulated test instant so the global DESC slice
+    # stays deterministic while modules share this database.  In particular,
+    # the adoption-backfill case above deliberately uses now + 30 days.
+    base = timezone.now() + timedelta(days=3650)
     Page.objects.filter(pk=older.pk).update(modified=base)
     Page.objects.filter(pk=newer.pk).update(modified=base + timedelta(seconds=5))
     when = base + timedelta(seconds=700)
