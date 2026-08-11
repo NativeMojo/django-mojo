@@ -69,6 +69,8 @@ def edge_roster():
         _text(row.get("runner_id"), 64) for row in rows
         if row.get("alive") and row.get("runner_id")
     })
+    if not roster:
+        raise RuntimeError("runner_roster_empty")
     if len(roster) > MAX_ROSTER:
         raise RuntimeError("runner_roster_overflow")
     return roster

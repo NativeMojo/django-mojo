@@ -361,6 +361,12 @@ class RedisAdapter:
         """
         return self.get_client().zrem(key, member)
 
+    def zremrangebyscore(self, key: str, min_score: float,
+                         max_score: float) -> int:
+        """Remove sorted-set members whose scores are in the range."""
+        return self.get_client().zremrangebyscore(
+            key, min_score, max_score)
+
     def zrangebyscore(self, key: str, min_score: float, max_score: float, limit: Optional[int] = None) -> List[str]:
         """
         Return members in a sorted set within the given scores.

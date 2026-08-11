@@ -105,14 +105,16 @@ class JobManager:
                             timeout: float = 1.0) -> List[Dict[str, Any]]:
         """Return one exact live-channel roster or fail closed.
 
-        Unlike ``get_runners()``, this never materializes an unbounded SCAN and
-        never returns a silently truncated answer. It completes the heartbeat
-        key scan within fixed command/key/time caps, pipelines the bounded
-        reads, and raises when completeness cannot be proven.
+        Unlike ``get_runners()``, this never scans the shared Redis keyspace.
+        Engines timestamp their ids in one dedicated index per channel, so
+        unrelated app keys and unrelated runners cannot make a small roster
+        look incomplete. The legacy ``max_scan_pages`` argument remains
+        accepted for caller compatibility.
         """
         from mojo.helpers.redis import get_bounded_connection
         with get_bounded_connection(
-                timeout=timeout, max_connections=2) as client:
+                timeout=timeout, max_connections=2,
+                read_from_replicas=False) as client:
             return self._read_bounded_runners(
                 client, channel, limit, max_scan_pages, timeout)
 
@@ -120,104 +122,79 @@ class JobManager:
                               timeout):
         deadline = time.monotonic() + max(0.05, float(timeout))
         limit = max(1, int(limit))
-        max_keys = max(limit + 1, min(limit * 4, 1024))
-        found = set()
-
-        def complete(value):
-            if isinstance(value, dict):
-                return all(item in (0, "0", b"0") for item in value.values())
-            return value in (0, "0", b"0")
-
-        def add_page(page):
-            found.update(page or [])
-            if len(found) > max_keys:
-                raise RuntimeError("runner_roster_key_overflow")
-
-        max_scan_pages = max(1, int(max_scan_pages))
+        # Kept in the signature because downstream callers already pass it.
+        # Discovery no longer has pages: one dedicated index query is exact.
+        del max_scan_pages
         if time.monotonic() >= deadline:
             raise RuntimeError("runner_roster_timeout")
-        cursor, page = client.scan(
-            cursor=0, match=self.keys.runner_hb("*"), count=limit)
-        pages = 1
-        add_page(page)
-
-        if isinstance(cursor, dict):
-            # RedisCluster returns one cursor per node. Continue each node with
-            # its own target; feeding the cursor dict back as a scalar is not a
-            # valid cluster SCAN call.
-            pending = {
-                name: value for name, value in cursor.items()
-                if value not in (0, "0", b"0")
-            }
-            while pending:
-                if pages >= max_scan_pages:
-                    raise RuntimeError("runner_roster_scan_incomplete")
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("runner_roster_timeout")
-                name = sorted(pending)[0]
-                node = client.get_node(node_name=name)
-                cursors, page = client.scan(
-                    cursor=pending[name], match=self.keys.runner_hb("*"),
-                    count=limit, target_nodes=node)
-                pages += 1
-                add_page(page)
-                value = cursors.get(name, 0) if isinstance(cursors, dict) else cursors
-                if value in (0, "0", b"0"):
-                    pending.pop(name, None)
-                else:
-                    pending[name] = value
-        else:
-            while not complete(cursor):
-                if pages >= max_scan_pages:
-                    raise RuntimeError("runner_roster_scan_incomplete")
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("runner_roster_timeout")
-                cursor, page = client.scan(
-                    cursor=cursor, match=self.keys.runner_hb("*"), count=limit)
-                pages += 1
-                add_page(page)
-
+        heartbeat_ttl = max(
+            1, int(getattr(settings, "JOBS_RUNNER_HEARTBEAT_SEC", 5))) * 3
+        now = time.time()
+        found = client.zrangebyscore(
+            self.keys.runner_registry(channel),
+            now - heartbeat_ttl, now + heartbeat_ttl,
+            start=0, num=limit + 1)
+        future_count = client.zcount(
+            self.keys.runner_registry(channel),
+            f"({now + heartbeat_ttl}", "+inf")
         if time.monotonic() >= deadline:
             raise RuntimeError("runner_roster_timeout")
+        if future_count:
+            raise RuntimeError("runner_roster_invalid")
+        if len(found or []) > limit:
+            raise RuntimeError("runner_roster_overflow")
 
-        ordered_keys = sorted(
-            found, key=lambda value: value.decode() if isinstance(value, bytes)
-            else str(value))
+        runner_ids = []
+        for value in found or []:
+            try:
+                runner_id = value.decode() if isinstance(value, bytes) else str(value)
+            except (UnicodeDecodeError, ValueError, TypeError) as exc:
+                raise RuntimeError("runner_roster_invalid") from exc
+            if not runner_id or len(runner_id) > 128:
+                raise RuntimeError("runner_roster_invalid")
+            runner_ids.append(runner_id)
+        runner_ids.sort()
         pipe = client.pipeline(transaction=False)
         try:
-            for key in ordered_keys:
-                pipe.get(key)
+            for runner_id in runner_ids:
+                pipe.get(self.keys.runner_hb(runner_id))
             raw_rows = pipe.execute()
         finally:
             pipe.reset()
+        if len(raw_rows) != len(runner_ids):
+            raise RuntimeError("runner_roster_invalid")
 
         runners = []
-        for raw in raw_rows:
+        for runner_id, raw in zip(runner_ids, raw_rows):
             if time.monotonic() >= deadline:
                 raise RuntimeError("runner_roster_timeout")
             try:
                 row = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
             except (TypeError, ValueError, AttributeError) as exc:
                 raise RuntimeError("runner_roster_invalid") from exc
-            if channel not in (row.get("channels") or []):
-                continue
+            if row.get("runner_id") != runner_id:
+                raise RuntimeError("runner_roster_invalid")
+            channels = row.get("channels")
+            if (not isinstance(channels, list)
+                    or not all(isinstance(item, str) and item
+                               for item in channels)
+                    or channel not in channels):
+                raise RuntimeError("runner_roster_invalid")
             last_hb = row.get("last_heartbeat")
             if not last_hb:
-                row["alive"] = False
-            else:
-                try:
-                    observed = datetime.fromisoformat(last_hb)
-                except (TypeError, ValueError) as exc:
-                    raise RuntimeError("runner_roster_invalid") from exc
-                if timezone.is_naive(observed):
-                    observed = timezone.make_aware(observed)
-                row["alive"] = (
-                    timezone.now() - observed).total_seconds() < (
-                        getattr(settings, "JOBS_RUNNER_HEARTBEAT_SEC", 5) * 3)
+                raise RuntimeError("runner_roster_invalid")
+            try:
+                observed = datetime.fromisoformat(last_hb)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("runner_roster_invalid") from exc
+            if timezone.is_naive(observed):
+                observed = timezone.make_aware(observed)
+            age = (timezone.now() - observed).total_seconds()
+            if not -heartbeat_ttl < age < heartbeat_ttl:
+                raise RuntimeError("runner_roster_invalid")
+            row["alive"] = True
             runners.append(row)
         runners.sort(key=lambda row: row.get("runner_id", ""))
-        if len(runners) > limit:
-            raise RuntimeError("runner_roster_overflow")
         return runners
 
     def get_queue_state(self, channel: str) -> Dict[str, Any]:

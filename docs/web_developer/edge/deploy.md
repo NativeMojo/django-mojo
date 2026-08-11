@@ -20,9 +20,18 @@ shared secret. Behavior:
 | To any other branch, a `ping`, any non-push event, or a branch deletion | `200` — `{"status":true,"ignored":true,"reason":"..."}` |
 | While the runner roster, Redis coordination, or queue publication is unavailable | `503` — no blind deploy starts; the durable attempt is retained as `failed` with a classified reason |
 
-The frozen edge roster must be complete within its bounded discovery budget.
-Roster overflow or an incomplete Redis scan fails the attempt closed; the
-orchestrator never treats a truncated node list as the fleet.
+The frozen edge roster must be non-empty and complete within its bounded
+discovery budget. Runners maintain a dedicated time-windowed index for each
+consumed channel, so unrelated Redis key volume and non-edge workers do not
+affect discovery. Platform triggers return `503` for roster overflow or a
+missing, malformed, mismatched, stale, or implausibly future-dated declaration;
+WebApp promotion restores its prior release. In both paths the attempt fails
+closed, and the orchestrator never treats a truncated node list as the fleet.
+
+After upgrading from a framework release that predates the channel indexes,
+restart every job engine and wait for one heartbeat before the first deploy.
+The engines populate and prune the indexes themselves; do not seed Redis by
+hand.
 
 The deployed commit is always the **payload's head SHA** — never a branch name
 resolved later.

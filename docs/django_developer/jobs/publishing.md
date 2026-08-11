@@ -426,6 +426,18 @@ runners = jobs.get_runners(channel=None)
 # Returns list of dicts with runner info and heartbeat data
 ```
 
+Fleet safety paths use `jobs.get_runners_bounded(channel, limit=128,
+timeout=1.0)`. Engines maintain one timestamped runner index per consumed
+channel, so this bounded form reads at most `limit + 1` recent ids from the
+Redis primary and pipelines only their heartbeat documents; it does not scan
+unrelated Redis keys or count runners on other channels. Missing, malformed,
+mismatched, stale, or implausibly future-dated declarations, overflow, and
+timeout raise rather than returning a possibly incomplete roster. Registry keys
+have a bounded expiry so channels abandoned by crashed runners do not
+accumulate. Existing `get_runners()` callers are unchanged. The legacy
+`max_scan_pages` argument remains accepted by the bounded form for compatibility
+but no longer affects discovery.
+
 ### get_sysinfo()
 
 ```python

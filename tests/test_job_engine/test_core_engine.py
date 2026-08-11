@@ -117,6 +117,11 @@ def test_engine_initialization(opts):
     assert not engine.running, f"Expected engine.running to be False, got {engine.running}"
     assert not engine.is_initialized, f"Expected engine.is_initialized to be False, got {engine.is_initialized}"
 
+    registry_keys = [
+        engine.keys.runner_registry(channel) for channel in engine.channels]
+    for registry_key in registry_keys:
+        engine.redis.zadd(registry_key, {"stale-engine": time.time() - 999})
+
     # Initialize
     engine.initialize()
 
@@ -124,9 +129,31 @@ def test_engine_initialization(opts):
     assert engine.running, f"Expected engine.running to be True after initialize(), got {engine.running}"
     assert engine.start_time is not None, f"Expected engine.start_time to be set after initialize(), got {engine.start_time}"
 
+    # No polling: initialization cannot return before the first heartbeat and
+    # every consumed-channel registry entry are visible.
+    score = engine.redis.zscore(registry_keys[0], engine.runner_id)
+    heartbeat = engine.redis.get(engine.keys.runner_hb(engine.runner_id))
+    assert score is not None, \
+        "engine heartbeat did not register the runner in the dedicated roster"
+    assert heartbeat, \
+        "registered runner did not publish its heartbeat document"
+    for registry_key in registry_keys:
+        assert engine.redis.zscore(registry_key, engine.runner_id) is not None, \
+            "engine did not register in every consumed channel"
+        assert engine.redis.zscore(registry_key, "stale-engine") is None, \
+            "heartbeat did not prune an expired registry member"
+        assert 0 < engine.redis.get_client().ttl(registry_key) \
+            <= engine.heartbeat_interval * 6, \
+            "runner registry key did not receive a bounded crash expiry"
+
     # Clean up
     engine.stop()
     assert not engine.running, f"Expected engine.running to be False after stop(), got {engine.running}"
+    for registry_key in registry_keys:
+        assert engine.redis.zscore(registry_key, engine.runner_id) is None, \
+            "graceful stop left the runner in a channel roster"
+    assert engine.redis.get(engine.keys.runner_hb(engine.runner_id)) is None, \
+        "graceful stop left the runner heartbeat document behind"
 
 
 @th.django_unit_test()
@@ -403,6 +430,10 @@ def test_redis_key_patterns(opts):
     runner_id = "test_runner_123"
     hb_key = keys.runner_hb(runner_id)
     assert f"runner:{runner_id}:hb" in hb_key, f"Expected 'runner:{runner_id}:hb' in '{hb_key}'"
+
+    registry_key = keys.runner_registry(opts.test_channel)
+    assert registry_key.endswith(f"runner_registry:{opts.test_channel}"), \
+        f"Expected runner registry key, got '{registry_key}'"
 
     ctl_key = keys.runner_ctl(runner_id)
     assert f"runner:{runner_id}:ctl" in ctl_key, f"Expected 'runner:{runner_id}:ctl' in '{ctl_key}'"

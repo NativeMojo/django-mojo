@@ -179,6 +179,10 @@ class JobKeys:
         """
         return f"{self.prefix}:runner:{runner_id}:hb"
 
+    def runner_registry(self, channel: str) -> str:
+        """Get the timestamped active-runner registry for one channel."""
+        return f"{self.prefix}:runner_registry:{channel}"
+
     def scheduler_lock(self) -> str:
         """
         Get the scheduler leadership lock key.

@@ -190,3 +190,20 @@ targets only those runner ids for proof. Each response reports the file-only
 `EDGE_NODE_ID`, installed django-mojo version, and per-pool generation evidence.
 The protected `EDGE_EXPECTED_TOPOLOGY` is the expected inventory; every declared
 node/pool pair must answer and match before deployment readiness is green.
+
+Deployment roster discovery reads the channel's dedicated timestamped runner
+index from the Redis primary, then pipelines the corresponding TTL heartbeat
+documents. It never scans the shared Redis keyspace, so unrelated cache, queue,
+or non-edge runner volume cannot consume the roster's bounded discovery budget.
+The index query reads at most the configured roster limit plus one entry;
+overflow, an empty roster, a missing, malformed, mismatched, stale, or
+implausibly future-dated declaration, or a timeout fails platform and WebApp
+deployments closed.
+
+Job engines synchronously register before initialization succeeds, refresh each
+consumed-channel index before their heartbeat document, prune expired entries,
+refresh a bounded expiry on each index key, and remove their own entries on
+graceful shutdown. A crashed engine ages out of discovery after three heartbeat
+intervals, and an abandoned one-runner channel index expires. When upgrading from a release that
+predates these indexes, restart every job engine and wait for one heartbeat
+before triggering the first deploy; no manual Redis seeding is required.

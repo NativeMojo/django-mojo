@@ -75,7 +75,9 @@ def publish_or_restore(deployment_id):
 def _alive_edge_runners():
     from mojo.apps import jobs
 
-    rows = jobs.get_runners(channel=EDGE_CHANNEL) or []
+    rows = jobs.get_runners_bounded(
+        channel=EDGE_CHANNEL, limit=128, max_scan_pages=16,
+        timeout=1.0) or []
     return sorted({
         row.get("runner_id") for row in rows
         if row.get("alive") and row.get("runner_id")
@@ -231,12 +233,19 @@ def orchestrate(deployment_id):
                       "verified release has no vhost fleet target")
         return "live:no-vhost"
 
-    runners = _alive_edge_runners()
+    try:
+        runners = _alive_edge_runners()
+        roster_error = False
+    except Exception:
+        runners = []
+        roster_error = True
     deployment.status = STATUS_DEPLOYING
     deployment.started = deployment.started or timezone.now()
     deployment.save(update_fields=["status", "started", "modified"])
 
-    if not runners:
+    if roster_error:
+        outcome, rows = "runner-roster-unavailable", []
+    elif not runners:
         outcome, rows = "no-active-runners", []
     else:
         targets = _publish_targets(deployment, runners)

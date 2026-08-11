@@ -93,55 +93,157 @@ def test_edge_roster_overflow(opts):
 
 @th.django_unit_test("bounded runner discovery proves completeness and rejects overflow")
 def test_bounded_runner_discovery(opts):
-    import json
-    from django.utils import timezone
     from mojo.apps.jobs.manager import JobManager
 
     client = mock.MagicMock()
     client.__enter__.return_value = client
-    client.scan.return_value = (0, ["runner:a", "runner:b", "runner:c"])
+    client.zcount.return_value = 0
+    client.zrangebyscore.return_value = ["a", "b", "c"]
     pipe = client.pipeline.return_value
-    pipe.execute.return_value = [json.dumps({
-        "runner_id": name, "channels": ["edge"],
-        "last_heartbeat": timezone.now().isoformat(),
-    }) for name in ("a", "b", "c")]
     manager = JobManager()
     with mock.patch(
             "mojo.helpers.redis.get_bounded_connection",
             return_value=client):
         with th.assert_raises(RuntimeError):
             manager.get_runners_bounded("edge", limit=2)
-    assert pipe.get.call_count == 3
-    assert not client.get.called, "roster heartbeats were not pipelined"
+    assert not pipe.get.called, \
+        "overflowing runner index should fail before heartbeat reads"
 
 
-@th.django_unit_test("bounded runner discovery advances RedisCluster node cursors")
-def test_bounded_runner_discovery_cluster(opts):
+@th.django_unit_test("bounded runner discovery ignores unrelated Redis keyspace size")
+def test_bounded_runner_discovery_does_not_scan_global_keyspace(opts):
     import json
     from django.utils import timezone
     from mojo.apps.jobs.manager import JobManager
 
     client = mock.MagicMock()
     client.__enter__.return_value = client
-    node = object()
-    client.get_node.return_value = node
-    client.scan.side_effect = [
-        ({"node-a": 5, "node-b": 0}, ["runner:a"]),
-        ({"node-a": 0}, ["runner:b"]),
-    ]
+    client.zcount.return_value = 0
+    client.zrangebyscore.return_value = [b"mv1-engine", b"mv2-engine"]
+    client.scan.side_effect = AssertionError(
+        "runner discovery must not scan the shared Redis keyspace")
     pipe = client.pipeline.return_value
     pipe.execute.return_value = [json.dumps({
         "runner_id": name, "channels": ["edge"],
         "last_heartbeat": timezone.now().isoformat(),
-    }) for name in ("a", "b")]
+    }) for name in ("mv1-engine", "mv2-engine")]
+    manager = JobManager()
+    with mock.patch(
+            "mojo.helpers.redis.get_bounded_connection",
+            return_value=client) as get_connection:
+        rows = manager.get_runners_bounded(
+            "edge", limit=2, max_scan_pages=1)
+    assert [row["runner_id"] for row in rows] == [
+        "mv1-engine", "mv2-engine"], \
+        "dedicated roster lookup did not return both healthy edge runners"
+    assert not client.scan.called, \
+        "runner discovery still depends on unrelated Redis keyspace pages"
+    assert get_connection.call_args.kwargs["read_from_replicas"] is False, \
+        "fleet safety discovery allowed a replica-lagged roster read"
+    assert client.zrangebyscore.call_args.args[0].endswith(
+        "runner_registry:edge"), \
+        "edge discovery read a global rather than channel-specific index"
+
+
+@th.django_unit_test("bounded Redis safety reads can require the cluster primary")
+def test_bounded_connection_primary_override(opts):
+    from mojo.helpers.redis import client as redis_client
+
+    def setting(name, default=None):
+        if name == "REDIS_CLUSTER":
+            return True
+        if name == "REDIS_READ_FROM_REPLICAS":
+            return "1"
+        return default
+
+    with mock.patch.object(redis_client.settings, "get_static",
+                           side_effect=setting), \
+         mock.patch.object(redis_client.RedisCluster,
+                           "from_url") as from_url:
+        redis_client.get_bounded_connection(read_from_replicas=False)
+    assert from_url.call_args.kwargs["read_from_replicas"] is False, \
+        "explicit primary-only safety read inherited replica settings"
+
+
+@th.django_unit_test("stale declared heartbeats fail roster discovery closed")
+def test_bounded_runner_discovery_rejects_stale_heartbeat(opts):
+    import json
+    from datetime import timedelta
+    from django.utils import timezone
+    from mojo.apps.jobs.manager import JobManager
+
+    client = mock.MagicMock()
+    client.__enter__.return_value = client
+    client.zcount.return_value = 0
+    client.zrangebyscore.return_value = ["mv1-engine"]
+    client.pipeline.return_value.execute.return_value = [json.dumps({
+        "runner_id": "mv1-engine", "channels": ["edge"],
+        "last_heartbeat": (timezone.now() - timedelta(minutes=1)).isoformat(),
+    })]
+    with mock.patch(
+            "mojo.helpers.redis.get_bounded_connection",
+            return_value=client):
+        with th.assert_raises(RuntimeError):
+            JobManager().get_runners_bounded("edge")
+
+
+@th.django_unit_test("malformed declared heartbeats fail roster discovery closed")
+def test_bounded_runner_discovery_rejects_malformed_heartbeat(opts):
+    import json
+    from django.utils import timezone
+    from mojo.apps.jobs.manager import JobManager
+
+    client = mock.MagicMock()
+    client.__enter__.return_value = client
+    client.zcount.return_value = 0
+    client.zrangebyscore.return_value = ["mv1-engine"]
+    client.pipeline.return_value.execute.return_value = [json.dumps({
+        "runner_id": "mv1-engine", "channels": "edge",
+        "last_heartbeat": timezone.now().isoformat(),
+    })]
+    with mock.patch(
+            "mojo.helpers.redis.get_bounded_connection",
+            return_value=client):
+        with th.assert_raises(RuntimeError):
+            JobManager().get_runners_bounded("edge")
+
+
+@th.django_unit_test("future registry timestamps fail roster discovery closed")
+def test_bounded_runner_discovery_rejects_future_score(opts):
+    from mojo.apps.jobs.manager import JobManager
+
+    client = mock.MagicMock()
+    client.__enter__.return_value = client
+    client.zrangebyscore.return_value = []
+    client.zcount.return_value = 1
+    with mock.patch(
+            "mojo.helpers.redis.get_bounded_connection",
+            return_value=client):
+        with th.assert_raises(RuntimeError):
+            JobManager().get_runners_bounded("edge")
+
+
+@th.django_unit_test("bounded runner discovery rejects a missing heartbeat document")
+def test_bounded_runner_discovery_missing_heartbeat(opts):
+    import json
+    from django.utils import timezone
+    from mojo.apps.jobs.manager import JobManager
+
+    client = mock.MagicMock()
+    client.__enter__.return_value = client
+    client.zcount.return_value = 0
+    client.zrangebyscore.return_value = ["a", "b"]
+    pipe = client.pipeline.return_value
+    pipe.execute.return_value = [json.dumps({
+        "runner_id": "a", "channels": ["edge"],
+        "last_heartbeat": timezone.now().isoformat(),
+    }), None]
     manager = JobManager()
     with mock.patch(
             "mojo.helpers.redis.get_bounded_connection",
             return_value=client):
-        rows = manager.get_runners_bounded("edge", limit=2, max_scan_pages=3)
-    assert [row["runner_id"] for row in rows] == ["a", "b"]
-    assert client.scan.call_args_list[1].kwargs["cursor"] == 5
-    assert client.scan.call_args_list[1].kwargs["target_nodes"] is node
+        with th.assert_raises(RuntimeError):
+            manager.get_runners_bounded("edge", limit=2, max_scan_pages=3)
 
 
 @th.django_unit_test("an empty frozen roster cannot fall back to the local node")
@@ -150,6 +252,8 @@ def test_empty_roster_fails_closed(opts):
     from mojo.apps.edge.services import deploy, platform_deploy
     with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=[]):
         row, _ = platform_deploy.create(SHA, source="test")
+    assert row.status == "failed"
+    assert row.detail["reason"] == "roster_unavailable"
     deploy.set_target(SHA, deployment_id=row.pk)
     deploy.arm_status(SHA, deployment_id=row.pk)
     job = mock.Mock(payload={"deployment": str(row.pk)}, runner_id="local-engine")
@@ -168,7 +272,8 @@ def test_empty_roster_fails_closed(opts):
 def test_publish_failure_durable(opts):
     from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.edge.services import deploy
-    with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=[]), \
+    with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=[{
+            "runner_id": "edge-engine", "alive": True}]), \
          mock.patch("mojo.apps.jobs.publish", side_effect=RuntimeError("redis password=secret")):
         with th.assert_raises(RuntimeError):
             deploy.request_deploy(SHA, actor="test", source="test")
@@ -220,7 +325,9 @@ def test_journal_restmeta_is_immutable(opts):
 @th.django_unit_test("verification refuses proof for another deployment UUID")
 def test_verify_uuid_mismatch(opts):
     from mojo.apps.edge.services import platform_deploy
-    row, _ = platform_deploy.create(SHA, source="test")
+    with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=[{
+            "runner_id": "edge-a-engine", "alive": True}]):
+        row, _ = platform_deploy.create(SHA, source="test")
     row.frozen_roster = ["edge-a-engine"]
     row.save(update_fields=["frozen_roster"])
     response = {"status": "success", "result": {

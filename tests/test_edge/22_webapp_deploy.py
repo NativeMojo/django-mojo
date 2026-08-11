@@ -90,6 +90,23 @@ def test_active_fleet_success(opts):
     assert deployment.targets == targets, "active-runner snapshot was not retained"
 
 
+@th.django_unit_test("WebApp fleet discovery uses the bounded edge roster")
+def test_webapp_roster_is_bounded(opts):
+    from mojo.apps.edge.services import webapp_deploy
+
+    rows = [
+        {"runner_id": "edge-b-engine", "alive": True},
+        {"runner_id": "edge-a-engine", "alive": True},
+    ]
+    with mock.patch(
+            "mojo.apps.jobs.get_runners_bounded",
+            return_value=rows) as get_runners:
+        runners = webapp_deploy._alive_edge_runners()
+    assert runners == ["edge-a-engine", "edge-b-engine"]
+    get_runners.assert_called_once_with(
+        channel="edge", limit=128, max_scan_pages=16, timeout=1.0)
+
+
 @th.django_unit_test("a partial fleet failure restores and converges the prior release")
 def test_partial_failure_rolls_back(opts):
     from mojo.apps.edge.services import webapp_deploy
@@ -142,6 +159,28 @@ def test_no_active_runners_rolls_back(opts):
     assert result == "rolled_back", result
     assert opts.webapp.current_release_id == opts.v1.pk
     assert deployment.status == "rolled_back"
+
+
+@th.django_unit_test("an unavailable WebApp roster restores desired state")
+def test_unavailable_roster_rolls_back(opts):
+    from mojo.apps.edge.services import webapp_deploy
+
+    opts.webapp.current_release = opts.v1
+    opts.webapp.save()
+    opts.v1.status = "live"
+    opts.v1.save()
+    deployment = _promote_without_publish(opts.webapp, opts.v2)
+    with mock.patch.object(
+            webapp_deploy, "_alive_edge_runners",
+            side_effect=RuntimeError("runner_roster_invalid")):
+        result = webapp_deploy.orchestrate(deployment.pk)
+
+    opts.webapp.refresh_from_db()
+    deployment.refresh_from_db()
+    assert result == "rolled_back", result
+    assert opts.webapp.current_release_id == opts.v1.pk
+    assert deployment.status == "rolled_back"
+    assert "runner-roster-unavailable" in deployment.detail
 
 
 @th.django_unit_test("a failed old deployment never rolls back a newer release")

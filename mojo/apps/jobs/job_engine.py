@@ -166,6 +166,15 @@ class JobEngine:
         self.start_time = dates.utcnow()
         self.stop_event.clear()
 
+        # A runner must be discoverable before initialization succeeds and
+        # before startup hooks or job consumption can begin.
+        try:
+            self._publish_heartbeat()
+        except Exception:
+            self.running = False
+            self.is_initialized = False
+            raise
+
         # Start heartbeat thread
         self._start_heartbeat()
 
@@ -262,6 +271,12 @@ class JobEngine:
             self.control_thread.join(timeout=5.0)
 
         # Clean up Redis keys
+        for channel in sorted(set(self.channels)):
+            try:
+                self.redis.zrem(
+                    self.keys.runner_registry(channel), self.runner_id)
+            except Exception as e:
+                logger.warning(f"Failed to remove runner registry entry: {e}")
         try:
             self.redis.delete(self.keys.runner_hb(self.runner_id))
         except Exception as e:
@@ -359,20 +374,9 @@ class JobEngine:
 
     def _heartbeat_loop(self):
         """Heartbeat thread main loop."""
-        hb_key = self.keys.runner_hb(self.runner_id)
-
         while self.running and not self.stop_event.is_set():
             try:
-                # Update heartbeat with TTL
-                self.redis.set(hb_key, json.dumps({
-                    'runner_id': self.runner_id,
-                    'hostname': socket.gethostname(),
-                    'channels': self.channels,
-                    'jobs_processed': self.jobs_processed,
-                    'jobs_failed': self.jobs_failed,
-                    'started': self.start_time.isoformat(),
-                    'last_heartbeat': dates.utcnow().isoformat()
-                }), ex=self.heartbeat_interval * 3)  # TTL = 3x interval
+                self._publish_heartbeat()
 
                 # Touch visibility timeout for active jobs to prevent premature reaping
                 try:
@@ -396,6 +400,30 @@ class JobEngine:
                 if self.stop_event.is_set():
                     break
                 time.sleep(1)
+
+    def _publish_heartbeat(self):
+        """Publish one fail-closed heartbeat and its channel indexes."""
+        now = time.time()
+        stale_before = now - (self.heartbeat_interval * 3)
+        # Declare the runner in every channel first. If the heartbeat write
+        # then fails, discovery sees a missing/stale declared document and
+        # fails closed instead of silently omitting a live runner.
+        for channel in sorted(set(self.channels)):
+            registry = self.keys.runner_registry(channel)
+            self.redis.zremrangebyscore(registry, "-inf", stale_before)
+            self.redis.zadd(registry, {self.runner_id: now})
+            # Shared channel keys stay alive while any runner refreshes them;
+            # abandoned one-runner channel keys disappear after a crash.
+            self.redis.expire(registry, self.heartbeat_interval * 6)
+        self.redis.set(self.keys.runner_hb(self.runner_id), json.dumps({
+            'runner_id': self.runner_id,
+            'hostname': socket.gethostname(),
+            'channels': self.channels,
+            'jobs_processed': self.jobs_processed,
+            'jobs_failed': self.jobs_failed,
+            'started': self.start_time.isoformat(),
+            'last_heartbeat': dates.utcnow().isoformat()
+        }), ex=self.heartbeat_interval * 3)  # TTL = 3x interval
 
     def _start_control_listener(self):
         """Start the control channel listener thread."""
