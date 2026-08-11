@@ -123,21 +123,21 @@ report shape is:
 {
   "schema_version": 1,
   "generated_at": "2026-08-10T03:00:00+00:00",
-  "overall": "warn",
-  "summary": {"pass": 6, "warn": 1, "fail": 0, "pending": 0},
+  "overall": "fail",
+  "summary": {"pass": 6, "warn": 0, "fail": 1, "pending": 0},
   "sections": [
     {
       "code": "django",
       "label": "Django installation",
-      "status": "warn",
-      "fixable": false,
+      "status": "fail",
+      "fixable": true,
       "checks": [
         {
-          "code": "django.static_directories",
-          "status": "warn",
-          "explanation": "One or more configured static directories are not present.",
-          "remediation": "Create the configured directories and run collectstatic.",
-          "fixable": false,
+          "code": "django.base_url",
+          "status": "fail",
+          "explanation": "The public API address is not configured.",
+          "remediation": "Configure the canonical public HTTPS API origin.",
+          "fixable": true,
           "required_choice": null
         }
       ]
@@ -150,11 +150,14 @@ Aggregate status uses the severity order `fail`, `pending`, `warn`, then
 `pass`. `GET readiness` returns this report directly. A check operation stores
 the same shape in `operation.report`.
 
-`django.local_request.details.target_source`, when present, is exactly one of
-`configured_static`, `request_server_port`, or `default_80`. It explains which
-validated loopback target was selected without exposing a raw configured URL;
-remediation names `SYSTEM_SETUP_LOCAL_API_URL` only when changing that
-deployment setting can repair the selected target.
+`django.local_request` is returned only when the deployment explicitly sets
+`SYSTEM_SETUP_LOCAL_API_URL`; its bounded `details.target_source` is then
+`configured_static`. Request-port and port-80 guesses are node diagnostics, not
+operator readiness, and are omitted. Missing `STATICFILES_DIRS`/`STATIC_ROOT`
+also produce no Setup check: they are optional deployment inputs and normal
+`collectstatic` owns output creation when static serving is enabled. The
+packaged browser filters these two legacy rows too, so it remains accurate when
+temporarily pointed at an older live backend.
 
 ## Fix and resume
 
@@ -313,7 +316,14 @@ per-WebApp `webapp`, `linked`, `active`, and `last_action` detail appears only
 for non-green rows. Neither shape contains token material.
 
 Render the server-returned `choice_schema`; do not build a second discovery UI.
-The current choice objects are:
+The packaged Admin presents S3 as an existing-bucket selector with a clear
+affirmative action and explains that objects and unrelated configuration are
+preserved. For rolling-upgrade compatibility only, when an older backend omits
+the bucket enum, the client reads the already-authorized
+`GET /api/aws/s3/bucket` inventory to populate the selector. The Setup service
+still rediscovers and validates the exact choice before changing it; a current
+backend's empty safe-candidate enum remains empty and is never replaced by raw
+inventory. The current choice objects are:
 
 ```json
 {"bucket":"existing-media","adopt_existing":true}

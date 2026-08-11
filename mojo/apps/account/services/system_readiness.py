@@ -306,6 +306,8 @@ def _core_check(context):
         "local request": ("The local API answered over HTTP.", "Restore the local application listener and /api/version route."),
     }
     for item in sanity.run(sanity_options):
+        if item["name"] == "local request" and local_source != "configured_static":
+            continue
         explanation, remediation = messages[item["name"]]
         if not item["ok"]:
             explanation = f"{item['name'].title()} is not ready."
@@ -317,16 +319,6 @@ def _core_check(context):
             "django." + item["name"].replace(" ", "_"),
             "pass" if item["ok"] else "fail", explanation, remediation,
             details=details))
-
-    try:
-        sanity.check_static_directories({})
-        rows.append(result("django.static_directories", "pass",
-                           "Configured static directories are present."))
-    except RuntimeError:
-        rows.append(result(
-            "django.static_directories", "warn",
-            "One or more configured static directories are not present.",
-            "Create the configured directories and run collectstatic."))
 
     base_url = system_settings.get_value(system_settings.BASE_URL)
     try:

@@ -562,6 +562,43 @@ def test_local_probe_target_provenance(opts):
         f"durable Setup operations dropped target provenance: {context!r}"
 
 
+@th.django_unit_test("Setup omits inferred local-listener and optional static-directory noise")
+def test_operator_readiness_omits_inferred_node_noise(opts):
+    from unittest import mock
+    from mojo.apps.account.services import system_readiness, system_settings
+    from mojo.apps.edge.services import sanity
+
+    results = [
+        {"name": name, "ok": name != "local request", "detail": "ready"}
+        for name, _ in sanity.CHECKS
+    ]
+    with mock.patch.object(sanity, "run", return_value=results), \
+            mock.patch.object(
+                sanity, "check_static_directories",
+                side_effect=AssertionError("Setup inspected optional static paths")), \
+            mock.patch.object(
+                system_settings, "get_value", return_value="https://api.example.com"), \
+            mock.patch.object(system_readiness, "probe_public_api", return_value=True):
+        inferred = system_readiness._core_check({
+            "local_url": "http://127.0.0.1:443/api/version",
+            "local_source": "request_server_port",
+        })
+        configured = system_readiness._core_check({
+            "local_url": "http://127.0.0.1:8000/api/version",
+            "local_source": "configured_static",
+        })
+
+    inferred_codes = {row["code"] for row in inferred}
+    assert "django.local_request" not in inferred_codes, \
+        f"an inferred node-local probe still affected operator readiness: {inferred!r}"
+    assert "django.static_directories" not in inferred_codes, \
+        f"optional static source directories still affected operator readiness: {inferred!r}"
+    configured_local = [
+        row for row in configured if row["code"] == "django.local_request"]
+    assert len(configured_local) == 1 and configured_local[0]["status"] == "fail", \
+        f"an explicitly configured node-local target lost its diagnostic: {configured!r}"
+
+
 @th.django_unit_test("public probe rejects private metadata and DNS rebinding answers")
 def test_public_probe_rejects_non_global_dns(opts):
     from unittest import mock

@@ -158,6 +158,14 @@ def test_webapp_onboarding_asset_contract(opts):
         "Platform still exposes raw evidence instead of a professional summary-first card"
     assert "Configure BASE_URL" in platform and "check.code === 'django.base_url'" in platform, \
         "Setup does not attach BASE_URL repair to the exact failing check"
+    assert "operatorChecks" in platform and "django.static_directories" in platform \
+        and "configured_static" in platform, \
+        "Setup does not hide legacy inferred listener/static noise from live targets"
+    assert "/api/aws/s3/bucket" in platform and "Existing S3 bucket" in platform \
+        and "Use this bucket" in platform and "preserves its objects" in platform, \
+        "Setup does not turn legacy S3 choices into a clear existing-bucket journey"
+    assert "current.kind === 'base_url'" in platform, \
+        "the detected BASE_URL explanation can leak into unrelated Setup choices"
     assert "networkChecklist" not in platform and "Advanced resources" not in platform, \
         "Platform or Setup still renders a duplicate resource directory"
     assert "Technical details" in platform and "Return to Dashboard" in platform, \
