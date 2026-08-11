@@ -39,12 +39,14 @@ readiness API.
 | Open Incidents and Tickets | `view_security`, `manage_security`, `security`, `admin` |
 
 Packaged cross-links use one canonical hash state for `subject_type`,
-`subject_id`, `subject_model`, `inspector`, Activity filters, and `return`.
-Unknown keys are rejected by Activity rather than broadening a filtered query.
-Actionable cards also use bounded `focus`: missing Public API configuration
-opens Setup on `django.base_url`, fleet evidence focuses Platform's fleet card,
-and incident/ticket cards open their exact Activity tab. Ignored, resolved, and
-closed incidents never contribute to the open-attention count.
+`subject_id`, `subject_model`, `inspector`, Activity filters, bounded `focus`,
+and bounded `return`. Unknown keys are rejected by Activity rather than
+broadening a filtered query. Missing Public API configuration opens Setup on
+`django.base_url`, fleet evidence focuses Platform's fleet card, and
+incident/ticket cards open their exact Activity tab. At terminal Setup state,
+the return action restores the validated target or falls back to Dashboard.
+Ignored, resolved, and closed incidents never contribute to the open-attention
+count.
 
 Secret reveal endpoints are exceptions by exact route and response. All later
 status/detail/list/aggregate responses remain non-reveal, and request/response

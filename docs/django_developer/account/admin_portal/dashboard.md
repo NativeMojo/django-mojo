@@ -35,9 +35,11 @@ Cross-feature hashes use `assets/components/routes.js`. It is the canonical
 encoder/decoder for Activity tab and filters, subject type/id/model, inspector
 identity, bounded focus, and bounded return location. Public API configuration
 focuses Setup's `django.base_url` row, fleet focuses Platform's fleet evidence,
-and incident/ticket cards open the exact Activity tab. Use `routeHref()` or
-`activityHref()`; do not concatenate a second query vocabulary in a feature
-package.
+and incident/ticket cards open the exact Activity tab. When a focused Setup
+journey reaches a terminal state, its return action restores the validated
+bounded target; a missing or rejected target falls back to Dashboard. Use
+`routeHref()` or `activityHref()`; do not concatenate a second query vocabulary
+in a feature package.
 
 Ignored, resolved, and closed incidents are terminal. One shared predicate
 excludes them from the security roster and every Platform/Dashboard open count.
