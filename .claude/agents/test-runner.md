@@ -18,8 +18,8 @@ You run the django-mojo test suite and handle results intelligently.
    - Whole suite (`bin/run_tests --agent`) only when the item's tier is `full` — shared
      framework code, model/migration changes, ≥3 apps, or an unclear blast radius (see
      "What counts as `full` in this repo").
-   - `--full` (whole suite **plus** opt-in `requires_extra` modules) only for pre-publish,
-     or when the change altered what `--full` selects.
+   - `--all` (whole suite **plus** opt-in `requires_extra` modules) only for pre-publish,
+     or when the change altered what `--all` selects.
    - **Do not repeat a run the calling session already did.** If it verified the scope
      after its last commit, say so and skip — one verification run, not one per agent.
    - ALWAYS use `--agent` — it writes structured data to `testproject/var/test_failures.json`
@@ -75,7 +75,7 @@ Some modules and tests are marked `requires_extra` and skipped by default:
 - `requires_extra: ["extended"]` — correct but non-critical coverage (deep edge-case
   matrices, feature-internal variants)
 
-To include them: `bin/run_tests --agent --full` (implies both `slow` and `extended`).
+To include them: `bin/run_tests --agent --all` (implies both `slow` and `extended`).
 
 Note: whole-skipped modules appear in `modules` with a `skipped_reason` and are counted
 in the top-level `total`/`skipped`, so the top-level rollup always equals the sum of the

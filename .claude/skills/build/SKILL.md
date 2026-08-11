@@ -34,7 +34,7 @@ Read `CLAUDE.md` for conventions. Read the item file in `planning/confirmed/`.
     `git stash -u`, re-run that one test, `git stash pop` — seconds, and it settles
     attribution where the doubt actually is.
   - **`full`** → baseline BEFORE the first edit: `bin/run_tests --agent` (NOT
-    `--full` unless the user asks), read `testproject/var/test_failures.json`, and
+    `--all` unless the user asks), read `testproject/var/test_failures.json`, and
     record total/passed/failed + any pre-existing failures in the item's `## Notes`.
     Not all-green → STOP and tell the user; do not build on red unless they say to.
   **Ordering in a shared tree:** run the claim (`scripts/start.sh`, Workflow

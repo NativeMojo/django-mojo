@@ -566,21 +566,28 @@ def test_env_key_does_not_inherit_scheme(opts):
         f"an opaque env key must not inherit the MCP entry's Bearer, got {settings.scheme!r}")
 
 
-@th.unit_test("maestro reporter: a --full run reports under its own suite")
-def test_full_run_gets_own_suite(opts):
-    """A --full run answers a different question than a default one. Sharing a
+@th.unit_test("maestro reporter: an --all run reports under the durable full suite")
+def test_all_run_gets_full_suite(opts):
+    """An --all run answers a different question than a default one. Sharing a
     suite would let the next default run report green over a red extended
-    module — the failure would vanish from the board without being fixed."""
+    module — the failure would vanish from the board without being fixed. The
+    suite stays named 'full' so historical status retains one durable identity."""
     from testit import maestro
 
     with _Env(MAESTRO_URL="https://m.example.com", MAESTRO_API_KEY="k"):
         default = maestro.setup(_opts())
-        full = maestro.setup(_opts(full=True))
-        named = maestro.setup(_opts(full=True, config_data={"maestro": {"suite": "mine"}}))
+        all_tiers = maestro.setup(_opts(all=True))
+        named = maestro.setup(_opts(all=True, config_data={"maestro": {"suite": "mine"}}))
+    with _Env(MAESTRO_URL="https://m.example.com", MAESTRO_API_KEY="k",
+              MAESTRO_SUITE="from-env"):
+        env_named = maestro.setup(_opts(all=True))
 
     assert default.suite is None, f"a default run should not name a suite, got {default.suite!r}"
-    assert full.suite == "full", f"a --full run should report as 'full', got {full.suite!r}"
-    assert named.suite == "mine", "an explicit suite must still win over --full"
+    assert all_tiers.suite == "full", (
+        f"an --all run should report as durable suite 'full', got {all_tiers.suite!r}"
+    )
+    assert named.suite == "mine", "an explicit suite must still win over --all"
+    assert env_named.suite == "from-env", "MAESTRO_SUITE must still win over --all"
 
 
 # ---------------------------------------------------------------------------
@@ -899,9 +906,9 @@ def test_partial_runs_refused(opts):
         assert runner._push_refused(clean) is None, (
             "a complete unfiltered run must be reportable")
 
-        wide = _opts(test_modules=[], ignore_modules=[], extra_list=["slow"], full=True)
+        wide = _opts(test_modules=[], ignore_modules=[], extra_list=["slow"], all=True)
         assert runner._push_refused(wide) is None, (
-            "--extra/--full is a complete run of a wider tier and must still report")
+            "--extra/--all is a complete run of a wider tier and must still report")
 
         filtered = _opts(test_modules=["test_helpers"], ignore_modules=[])
         assert runner._push_refused(filtered) is not None, (

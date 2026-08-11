@@ -96,11 +96,11 @@ State the version and the one-line reason. Then, before writing anything:
   suite are green. `bin/run_tests --agent` is the normal pre-publish ceiling.
   If it was already run on this exact HEAD, say so and skip it rather than
   burning time twice.
-- **`--full` is a last resort, never an automatic release gate.** Run it only
+- **`--all` is a last resort, never an automatic release gate.** Run it only
   when the user explicitly authorizes it in the current task and the release
   contains serious core-system changes or narrower tests cannot establish
   correctness. A request to release, publish, or perform pre-publish
-  validation does not authorize `--full`.
+  validation does not authorize `--all`.
 - A red suite **stops the release** — report it and stop. Do not decide for the
   user that a failure is a flake; a failure that passes in isolation is still
   worth their yes before shipping.

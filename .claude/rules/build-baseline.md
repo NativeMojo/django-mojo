@@ -18,10 +18,10 @@ Three different things used to all get called "the full suite". They are not the
 |---|---|---|
 | **scoped run** | `bin/run_tests --agent -t <module> [-t <module>]` | Only the named modules. |
 | **whole suite** | `bin/run_tests --agent` | Every module in the default tier. |
-| **`--full`** | `bin/run_tests --agent --full` | Whole suite **plus** opt-in modules (`requires_extra`). |
+| **all-tier run** | `bin/run_tests --agent --all` | Whole suite **plus** opt-in modules (`requires_extra`). |
 
-Never write "full suite" when you mean the whole-suite run — `--full` is a different,
-heavier thing. Say "whole suite" or "`--full`".
+Never write "full suite" when you mean the whole-suite run — `--all` is a different,
+heavier thing. Say "whole suite" or "all-tier run".
 
 ## The rule
 
@@ -102,11 +102,11 @@ A baseline answers exactly one question: *was this failure already there?* Below
 `full` keeps its up-front baseline because attributing a red *whole suite* after the
 fact is neither cheap nor unambiguous.
 
-## When to run `--full`
+## When to run `--all`
 
 - The user explicitly asks (e.g. pre-publish validation).
-- You changed **what `--full` selects** — i.e. you added or moved a `requires_extra` tag.
-- Otherwise `--full` is not part of routine work, and failures that appear only under it
+- You changed **what `--all` selects** — i.e. you added or moved a `requires_extra` tag.
+- Otherwise `--all` is not part of routine work, and failures that appear only under it
   are out of scope for a normal build unless the user asks.
 
 ## Notes

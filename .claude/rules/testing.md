@@ -23,8 +23,8 @@ Before writing any test, read `docs/django_developer/testit/Overview.md`. This i
 - Always use `--agent` flag — read `testproject/var/test_failures.json` for diagnostics, never parse terminal output
 - The work item's verification tier decides what runs; see `.claude/rules/build-baseline.md`
   for the tiers, picking the modules for a `targeted` run, and what counts as `full` here
-- Use `--full` to include opt-in modules (`requires_extra` — `slow` and `extended`) — needed
-  for pre-publish validation, or when you changed what `--full` selects
+- Use `--all` to include opt-in modules (`requires_extra` — `slow` and `extended`) — needed
+  for pre-publish validation, or when you changed what `--all` selects
 - Never use `--plain` — it disables the rich progress UI and parallel execution
 
 ## Rules

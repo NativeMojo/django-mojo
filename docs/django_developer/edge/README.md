@@ -396,7 +396,7 @@ hand-written nginx block (row vs conf).
 render injection, golden files, desired state, and the installer.
 
 `7_nginx_real.py` feeds the generated configuration to a **real** `nginx -t`
-under `--extra extended` (or `--full`). It **skips** when nginx is absent.
+under `--extra extended` (or `--all`). It **skips** when nginx is absent.
 
 That skip is not optional. django-mojo's suite runs inside every project that
 uses the framework, so a test that fails on a missing binary turns all of them

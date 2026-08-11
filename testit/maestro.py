@@ -338,11 +338,11 @@ def setup(opts):
         except (TypeError, ValueError):
             timeout = DEFAULT_TIMEOUT
 
-        # A `--full` run is a different question than a default run — it adds
+        # An `--all` run is a different question than a default run — it adds
         # the opt-in tiers — so it gets its own suite. Sharing one would let a
         # later default run report green over a red extended module.
         suite = _first(os.environ.get("MAESTRO_SUITE"), block.get("suite"))
-        if suite is None and getattr(opts, "full", False):
+        if suite is None and getattr(opts, "all", False):
             suite = "full"
 
         return objict(

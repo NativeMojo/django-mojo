@@ -4,6 +4,77 @@ Tests for testit runner module config loading and parallel infrastructure.
 from testit import helpers as th
 
 
+@th.unit_test("runner options: --all selects every opt-in tier")
+def test_all_selects_opt_in_tiers(opts):
+    from testit.runner import setup_parser
+
+    parsed = setup_parser(["--all"])
+
+    assert parsed.all is True, "--all should set opts.all for downstream consumers"
+    assert parsed.extra_list == ["slow", "extended"], (
+        f"--all should select both built-in opt-in tiers, got {parsed.extra_list!r}"
+    )
+
+
+@th.unit_test("runner options: --all preserves explicit extras without expanding duplicates")
+def test_all_preserves_explicit_extras(opts):
+    from testit.runner import setup_parser
+
+    parsed = setup_parser(["--all", "--extra", "custom,slow,slow"])
+
+    assert parsed.extra_list == ["custom", "slow", "slow", "extended"], (
+        "Explicit --extra values and duplicates should be preserved while --all adds "
+        f"only missing built-in tiers, got {parsed.extra_list!r}"
+    )
+    assert parsed.extra == "custom,slow,slow,extended", (
+        f"The legacy comma-joined extra value should match extra_list, got {parsed.extra!r}"
+    )
+
+
+@th.unit_test("runner options: retired --full is hidden and selects no opt-in tiers")
+def test_full_is_hidden_compatibility_noop(opts):
+    import io
+    from contextlib import redirect_stdout
+    from testit.runner import setup_parser
+
+    output = io.StringIO()
+    try:
+        with redirect_stdout(output):
+            setup_parser(["--help"])
+    except SystemExit as error:
+        assert error.code == 0, f"--help should exit successfully, got {error.code}"
+
+    parsed = setup_parser(["--full"])
+
+    assert "--all" in output.getvalue(), "Public help should advertise --all"
+    assert "--full" not in output.getvalue(), "Retired --full should be hidden from help"
+    assert parsed.all is False, "Compatibility --full must not set opts.all"
+    assert parsed.extra_list == [], (
+        f"Compatibility --full should run the default tier, got extras {parsed.extra_list!r}"
+    )
+
+
+@th.unit_test("runner options: JSON config cannot enable --all")
+def test_all_has_no_json_config_key(opts):
+    import json
+    import os
+    import tempfile
+    from testit.runner import setup_parser
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
+        json.dump({"all": True}, handle)
+        config_path = handle.name
+    try:
+        parsed = setup_parser(["--config", config_path])
+    finally:
+        os.unlink(config_path)
+
+    assert parsed.all is False, "The public --all selector must remain CLI-only"
+    assert parsed.extra_list == [], (
+        f"An unsupported JSON all key must not select opt-in tiers, got {parsed.extra_list!r}"
+    )
+
+
 @th.django_unit_test("TESTIT config: loads from __init__.py")
 def test_config_loads(opts):
     from testit.runner import _load_module_config

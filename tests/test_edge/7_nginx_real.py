@@ -1,7 +1,7 @@
 """
 Feed the generated configuration to a REAL nginx.
 
-Opt-in (`--extra extended`, or `--full`), because it needs nginx on the host.
+Opt-in (`--extra extended`, or `--all`), because it needs nginx on the host.
 
 **Skips when nginx is absent.** django-mojo's suite runs inside every project
 that uses the framework, so a test that fails on a missing binary turns those

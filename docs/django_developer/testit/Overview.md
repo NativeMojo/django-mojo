@@ -35,7 +35,7 @@ tests/
     __init__.py
     oauth.py
     oauth_apple.py
-  test_security/     # bouncer, device tracking, PII   (serial, opt-in: --full)
+  test_security/     # bouncer, device tracking, PII   (serial, opt-in: --all)
     __init__.py
     bouncer.py
     device_tracking.py
@@ -83,7 +83,7 @@ Use `bin/run_tests` — it handles starting and stopping the test server automat
 - Run modules in parallel (default 4 threads):
   `./bin/run_tests -j 6`
 - Include opt-in modules (slow/pre-publish tests):
-  `./bin/run_tests --full`
+  `./bin/run_tests --all`
 - Force plain text output and disable the rich progress UI:
   `./bin/run_tests --plain`
 - Write structured test report for LLM agents:
@@ -185,7 +185,7 @@ Every discovered value can be overridden, so CI can point a run somewhere else:
 | Server URL | `MAESTRO_URL` | `maestro.url` | *discovered* |
 | API key | `MAESTRO_API_KEY` | **never from config** | *discovered* |
 | Project id | `MAESTRO_PROJECT` | `maestro.project` | *discovered* |
-| Suite name | `MAESTRO_SUITE` | `maestro.suite` | `"full"` for `--full`, else server-side `"default"` |
+| Suite name | `MAESTRO_SUITE` | `maestro.suite` | `"full"` for `--all`, else server-side `"default"` |
 | Your version | `MAESTRO_VERSION` | `maestro.version` | *(omitted)* |
 | Timeout (s) | `MAESTRO_TIMEOUT` | `maestro.timeout` | `5.0` |
 | Send failure detail | — | `maestro.diagnostics` | `true` |
@@ -196,7 +196,7 @@ The **key is never read from a config file** — those are committed, and a key 
 
 **Partial runs are not reported.** maestro treats the latest push per suite as the project's status, so a run that is not the suite's verdict would overwrite a real result with a fragment. Refused: `-t` and `--ignore` runs, and any run cut short by `-s` or the abort key. In practice this means the iteration loop — run one module, fix, run it again — never touches the board; only a whole-suite run does.
 
-`--extra`/`--full` runs *are* reported: they are complete runs of a wider tier. A `--full` run reports as **suite `full`** automatically, so its larger totals never alternate with the default tier's — without that, a default run passing after a red `--full` would report green over an extended-module failure and the failure would vanish from the board without being fixed.
+`--extra`/`--all` runs *are* reported: they are complete runs of a wider tier. An `--all` run reports as **suite `full`** automatically, preserving the durable suite identity while keeping its larger totals separate from the default tier's. Without that separation, a default run passing after a red `--all` would report green over an extended-module failure and the failure would vanish from the board without being fixed.
 
 **What leaves the machine.** The payload is the contract and nothing more: counters, per-suite stats, and — unless `maestro.diagnostics` is `false` — the first 50 failures with their **assertion messages and tracebacks**. Read that literally: `th.assert_eq` interpolates the actual and expected values into its message, so a failing assertion about a token, password or customer record sends that value to the configured server. Set `"diagnostics": false` to report green/red and counts only. The server error-log tail (`server_log_tail`) and test source (`test_source`) are never sent at any setting.
 
@@ -204,13 +204,17 @@ Only `https` is allowed, except to a loopback host — the request carries a bea
 
 ### Tiers — default, `slow`, `extended`
 
-Two opt-in tiers; `--full` turns on both.
+Two opt-in tiers; `--all` turns on both.
 
 ```bash
 ./bin/run_tests                        # default tier only
-./bin/run_tests --full                 # + slow + extended
+./bin/run_tests --all                  # + slow + extended
 ./bin/run_tests --extra extended       # + just one tier
 ```
+
+The retired `--full` spelling remains accepted as a hidden compatibility shim,
+but it runs the ordinary default tier. Use `--all` when every opt-in tier is
+intended.
 
 | Tier | Tag | Meaning |
 |---|---|---|
@@ -304,7 +308,7 @@ TESTIT = {
 TESTIT = {
     "requires_apps": ["mojo.apps.account"],
     "serial": True,
-    "requires_extra": ["slow"],              # skipped unless --full or --extra slow
+    "requires_extra": ["slow"],              # skipped unless --all or --extra slow
 }
 ```
 
@@ -393,7 +397,7 @@ Supported keys:
 | `serial` | `False` | Force this module to run sequentially, after all parallel modules complete. Use for modules that rely on signals bound to the main thread. **Not** needed merely because a module calls `th.server_settings()` — `testit/server_lock.py` handles that hazard without giving up parallelism. |
 | `requires_apps` | `[]` | List of Django app labels. The module is skipped entirely if any listed app is not in `INSTALLED_APPS`. |
 | `server_settings` | `{}` | **Reserved — not implemented.** The key is accepted by the config loader and then ignored; the runner never applies it. Use `th.server_settings()` inside the tests that need an override. |
-| `requires_extra` | `[]` | List of `--extra` flags. The module is skipped unless at least one flag is present. Use `["slow"]` or `["extended"]` for opt-in modules included by `--full` — see Tiers above. |
+| `requires_extra` | `[]` | List of `--extra` flags. The module is skipped unless at least one flag is present. Use `["slow"]` or `["extended"]` for opt-in modules included by `--all` — see Tiers above. |
 
 All keys are optional. A missing `__init__.py` or a missing `TESTIT` assignment uses defaults (parallel, no app requirements).
 

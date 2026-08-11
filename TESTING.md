@@ -24,7 +24,7 @@ Use `bin/run_tests` — it starts the server, runs the suite, and stops the serv
 
 ```bash
 ./bin/run_tests                        # whole suite, default tier only
-./bin/run_tests --full                 # whole suite + every opt-in tier (slow, extended)
+./bin/run_tests --all                  # whole suite + every opt-in tier (slow, extended)
 ./bin/run_tests --agent                # write structured report to testproject/var/test_failures.json
 ./bin/run_tests -t test_accounts       # run one module
 ./bin/run_tests -t test_accounts.login # run one test file
@@ -58,9 +58,9 @@ If you need to control the server directly:
 
 Server runs on `http://127.0.0.1:5555`. Redis is started automatically if not already running.
 
-## Tiers — what runs by default, and what needs `--full`
+## Tiers — what runs by default, and what needs `--all`
 
-Two opt-in tiers. `--full` turns on both.
+Two opt-in tiers. `--all` turns on both.
 
 | Tier | Tag | Meaning |
 |---|---|---|
@@ -121,7 +121,7 @@ Tests live in `tests/` at the repo root, organised by module:
 tests/
 ├── test_accounts/      # auth, login, tokens, sessions
 ├── test_helpers/       # crypto, settings, content_guard, etc.
-├── test_security/      # route security audit (opt-in: --full)
+├── test_security/      # route security audit (opt-in: --all)
 └── ...
 ```
 

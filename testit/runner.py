@@ -179,8 +179,8 @@ _DEFAULT_CONFIG = objict(
     requires_extra=[],
 )
 
-# Opt-in tiers that --full turns on. See setup_parser for what each one means.
-FULL_EXTRAS = ("slow", "extended")
+# Opt-in tiers that --all turns on. See setup_parser for what each one means.
+ALL_EXTRAS = ("slow", "extended")
 
 
 # ---------------------------------------------------------------------------
@@ -436,8 +436,12 @@ def setup_parser(argv=None):
                         help="Write structured failure report to var/test_failures.json for LLM agents")
     parser.add_argument("--plain", action="store_true",
                         help="Force plain text output (no rich progress UI)")
-    parser.add_argument("--full", action="store_true",
+    parser.add_argument("--all", action="store_true",
                         help="Include every opt-in tier (same as --extra slow,extended)")
+    # Compatibility only: old commands keep running the ordinary default
+    # suite, but the retired spelling no longer selects opt-in tiers or appears
+    # in help.
+    parser.add_argument("--full", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--maestro", action="store_true",
                         help="Warn if this run cannot be reported to maestro "
                              "(reporting is automatic when maestro is installed)")
@@ -459,15 +463,15 @@ def setup_parser(argv=None):
 
     # Normalize extras for both config defaults and CLI input.
     extra_values = _normalize_extra_value(opts.extra)
-    if opts.full:
-        # --full means "everything", so it must imply every opt-in tier. Two
+    if opts.all:
+        # --all means "everything", so it must imply every opt-in tier. Two
         # tiers exist because they mean different things and are chosen on
         # different grounds:
         #   slow     — expensive or only meaningful before a release
         #   extended — correct and cheap enough, but not a critical contract
         # Overloading one word for both would make "why is this opt-in?"
         # unanswerable from the tag alone.
-        for tier in FULL_EXTRAS:
+        for tier in ALL_EXTRAS:
             if tier not in extra_values:
                 extra_values.append(tier)
     opts.extra_list = extra_values
