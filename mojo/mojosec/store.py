@@ -256,6 +256,7 @@ class Store:
     def _enqueue(self, event, now=None):
         now = now if now is not None else time.time()
         if self.db.execute("SELECT 1 FROM events WHERE id = ?", (event["id"],)).fetchone():
+            self._increment("deduped_events")
             return False
         current = self.db.execute("SELECT COUNT(*) AS count FROM events").fetchone()["count"]
         maximum = self.delivery_config["max_spool_events"]
@@ -632,6 +633,7 @@ class Store:
         return {
             "spooled_events": events,
             "pending_aggregates": aggregates,
+            "deduped_events": int(self.get_meta("deduped_events", 0)),
             "dropped_capacity": int(self.get_meta("dropped_capacity", 0)),
             "dropped_aggregate_capacity": int(self.get_meta("dropped_aggregate_capacity", 0)),
             "aggregate_evicted_for_priority": int(self.get_meta("aggregate_evicted_for_priority", 0)),

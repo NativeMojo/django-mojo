@@ -448,6 +448,12 @@ def detect_nginx(record):
         "source_ip", "peer_ip", "method", "status", "host",
         "upstream_status",
     )
+    if kind == "web.error":
+        # One server fault hits every client at once; address identity
+        # multiplies one incident into per-client aggregates without
+        # adding signal. Probe/denied stay per-actor keys: there the
+        # address is the identity being screened (probe feeds block_ip).
+        scalar_fields = ("method", "status", "host", "upstream_status")
     fingerprints = evidence_fingerprint(attributes, scalar_fields) + (fingerprint_path,)
     return observation(
         kind, severity, summary, attributes=attributes,

@@ -255,8 +255,14 @@ The collector accepts lines up to a fixed 256 KiB derived from four default
 overhead. Larger lines fail closed; accepted fields still pass through the
 smaller per-kind evidence budget before persistence/transmission.
 High-entropy path segments still use a shared token marker for aggregation.
-Every Event-visible IP, host, method, status, and path participates in the
-fingerprint, so interleaved identities do not collapse into a misleading row.
+Aggregation identity is per kind. `web.probe` and `web.denied` keep the client
+and peer IP in the fingerprint alongside host, method, status, and path — the
+address is the actor being screened (probe feeds `block_ip`), so interleaved
+identities do not collapse into a misleading row. `web.error` is keyed by
+method, status, host, upstream status, and tokenized path only: one server
+fault hits every client at once, so one outage grows one aggregate row per
+failure shape instead of one per client, while the client address remains in
+the evidence as the latest-occurrence sample.
 
 ### Journald and FIM traversal
 

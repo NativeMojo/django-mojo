@@ -99,10 +99,13 @@ retryable. The receiver derives central categories and severity; a host
 RuleSet such as `mojosec.web.probe` may promote the Event to an Incident and
 run a handler. Host severity cannot raise the server-owned level. Known
 source-bearing SSH, reliably attributed sudo, and web kinds populate the
-Event's canonical source IP; their sensor fingerprints include projected
-identity scalars so interleaved callers/hosts/methods/statuses do not collapse.
-The source alone still performs no action: only an exact active central
-RuleSet may create an Incident or run a handler.
+Event's canonical source IP; for `web.probe` and `web.denied` the sensor
+fingerprint includes the caller identity, so interleaved callers/hosts/
+methods/statuses do not collapse. `web.error` events instead aggregate across
+callers — one outage is one growing event per failure shape — and their
+`Event.source_ip` carries a single latest-occurrence sample: a witness of the
+failure, not an actor attribution. The source alone still performs no action:
+only an exact active central RuleSet may create an Incident or run a handler.
 
 Raw bounded request targets, referrers, user agents, and sudo command context
 are retained only in the protected `MojoSecReceipt.replay_features` audit
