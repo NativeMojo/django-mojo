@@ -56,7 +56,21 @@ function readinessStrip(report) {
     ...['pass', 'warn', 'fail', 'pending'].map((key) => h('div', {class: 'readiness-stat'}, h('strong', {text: String(summary[key] || 0)}), h('span', {text: key}))));
 }
 
-function choiceField(name, spec, required) {
+async function suggestedBaseUrl(signal) {
+  if (window.location.protocol === 'https:') return window.location.origin;
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)) return '';
+  try {
+    const response = await fetch('/__preview__/context', {
+      signal, credentials: 'same-origin', cache: 'no-store', headers: {Accept: 'application/json'},
+    });
+    if (!response.ok) return '';
+    const value = (await response.json())?.data?.suggested_base_url;
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && parsed.origin === value ? value : '';
+  } catch (_error) { return ''; }
+}
+
+function choiceField(name, spec, required, suggestions) {
   const id = `choice-${name}`;
   const label = name.replaceAll('_', ' ').replace(/^./, (value) => value.toUpperCase());
   if (spec.type === 'boolean') {
@@ -71,16 +85,16 @@ function choiceField(name, spec, required) {
     return {name, input, node: h('label', {class: 'field'}, h('span', {text: label}), input)};
   }
   const type = spec.format === 'email' ? 'email' : spec.format === 'https-origin' ? 'url' : 'text';
-  const input = h('input', {id, name, type, required: required || null, autocomplete: 'off'});
+  const input = h('input', {id, name, type, value: suggestions[name], required: required || null, autocomplete: 'off'});
   return {name, input, node: h('label', {class: 'field'}, h('span', {text: label}), input)};
 }
 
-function choiceForm(operation, actions) {
+function choiceForm(operation, actions, suggestions) {
   const current = operation.current_step;
   const schema = current?.choice_schema;
   if (operation.status !== 'waiting_for_choice' || !schema?.properties) return null;
   const required = new Set(schema.required || []);
-  const fields = Object.entries(schema.properties).map(([name, spec]) => choiceField(name, spec, required.has(name)));
+  const fields = Object.entries(schema.properties).map(([name, spec]) => choiceField(name, spec, required.has(name), suggestions));
   const unavailable = fields.some((field) => field.input.tagName === 'SELECT' && field.input.disabled);
   const message = h('div', {class: 'form-message', role: 'alert'}, unavailable ? 'No suitable existing resource was discovered. Repair provider access, then cancel and rerun this section.' : '');
   const button = h('button', {class: 'button primary', type: 'submit', disabled: unavailable}, icon('check'), 'Save and continue');
@@ -89,11 +103,13 @@ function choiceForm(operation, actions) {
     const choice = {};
     fields.forEach(({name, input}) => { choice[name] = input.type === 'checkbox' ? input.checked : input.value; });
     try { await actions.choose(current, choice); } catch (error) { message.textContent = error.message; button.disabled = unavailable; }
-  }}, h('div', {class: 'choice-intro'}, h('strong', {text: current.label}), h('p', {text: 'Only the choice fields declared by the setup service are accepted. Secrets are never collected here.'})),
+  }}, h('div', {class: 'choice-intro'}, h('strong', {text: current.label}), h('p', {text: suggestions.base_url
+    ? `Confirm the detected public API address ${suggestions.base_url}. It is saved only after you continue.`
+    : 'Only the choice fields declared by the setup service are accepted. Secrets are never collected here.'})),
   ...fields.map((field) => field.node), message, button);
 }
 
-function operationView(operation, actions) {
+function operationView(operation, actions, suggestions) {
   const current = operation.current_step;
   const progress = operation.steps?.length ? Math.round((operation.cursor / operation.steps.length) * 100) : 100;
   const terminal = TERMINAL.has(operation.status);
@@ -108,7 +124,7 @@ function operationView(operation, actions) {
     h('div', {class: 'operation-progress'}, h('progress', {max: '100', value: progress, 'aria-label': 'Setup progress'}), h('span', {text: `${progress}%`})),
     h('div', {class: 'operation-layout'},
       h('ol', {class: 'step-list'}, ...stepRows),
-      h('div', {class: 'operation-main'}, choiceForm(operation, actions),
+      h('div', {class: 'operation-main'}, choiceForm(operation, actions, suggestions),
         !terminal && operation.status !== 'waiting_for_choice' ? h('div', {class: 'running-state'}, icon('activity'), h('div', {}, h('strong', {text: 'Reconciling authoritative state'}), h('p', {text: 'The operation advances one durable step at a time. It is safe to close and resume.'}))) : null,
         h('div', {class: 'form-actions'}, cancellable ? h('button', {class: 'button ghost', onclick: actions.cancel}, 'Cancel operation') : null,
           terminal ? h('a', {class: 'button ghost', href: returnTarget}, 'Return to Dashboard') : null,
@@ -122,6 +138,7 @@ export async function setupPage(ctx, signal = null) {
   let report; let options; let operation; let driving = false; let cancelled = false;
   let activeAction = false; let replayKey = null; let actionError = null;
   let routeFocusApplied = false;
+  const suggestions = {base_url: ''};
 
   async function refreshReport() { report = await api('/api/account/admin/setup/readiness', {signal}); render(); }
 
@@ -207,7 +224,7 @@ export async function setupPage(ctx, signal = null) {
       ]),
       actionError ? errorState(actionError) : null,
       report ? readinessStrip(report) : null,
-      operation ? operationView(operation, actions) : null,
+      operation ? operationView(operation, actions, suggestions) : null,
       reportView(report, options, actions),
     ].filter(Boolean));
     const focus = decodeRouteState().state.focus;
@@ -222,9 +239,10 @@ export async function setupPage(ctx, signal = null) {
 
   render();
   try {
-    [options, report] = await Promise.all([
+    [options, report, suggestions.base_url] = await Promise.all([
       api('/api/account/admin/setup/options', {signal}),
       api('/api/account/admin/setup/readiness', {signal}),
+      suggestedBaseUrl(signal),
     ]);
     operation = options.active_fix || null; render();
     if (operation && !TERMINAL.has(operation.status) && operation.status !== 'waiting_for_choice') {

@@ -135,6 +135,40 @@ def test_live_proxy_session_cookie_isolation(opts):
         "one preview browser received another browser's upstream session cookie"
 
 
+@th.django_unit_test("live preview suggests its validated upstream as Setup BASE_URL")
+def test_live_preview_base_url_suggestion(opts):
+    server = _server()
+    server.PreviewHandler.preview_port = 8766
+    server.PreviewHandler.upstream = {
+        "origin": "https://api.mojoverify.com",
+        "hostname": "api.mojoverify.com",
+        "port": 443,
+    }
+    server.PreviewHandler.preview_sessions = {
+        "browser-a": {"seen": server.time.time(), "cookies": {}},
+    }
+    handler = object.__new__(server.PreviewHandler)
+    handler.command = "GET"
+    handler.path = "/__preview__/context"
+    handler.headers = Message()
+    handler.headers["Host"] = "localhost:8766"
+    handler.headers["Cookie"] = f"{server.PREVIEW_COOKIE}=browser-a"
+    handler.headers["Sec-Fetch-Site"] = "same-origin"
+    handler._send = mock.Mock()
+
+    handler._serve_preview_context()
+
+    handler._send.assert_called_once_with({
+        "schema_version": 1,
+        "suggested_base_url": "https://api.mojoverify.com",
+    })
+    platform = (ASSETS / "features/platform/page.js").read_text()
+    assert "/__preview__/context" in platform and "suggestedBaseUrl" in platform, \
+        "System Setup does not discover the live preview's validated API origin"
+    assert "suggestions[name]" in platform, \
+        "the detected public API origin is not offered in the Setup choice field"
+
+
 @th.django_unit_test("Admin 440 and busy states are explicit and finally-safe")
 def test_admin_feedback_contract(opts):
     core = (ASSETS / "core.js").read_text()

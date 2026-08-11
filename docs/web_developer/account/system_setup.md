@@ -47,6 +47,13 @@ reconciled from `options.active_fix` with the retained replay key; the browser
 never automatically retries an uncertain mutation. It never shells out, calls a
 management command, or repeats setup service logic in JavaScript.
 
+When BASE_URL is the pending choice, the page proposes the current origin for
+a direct HTTPS Admin session. The local live-QA bridge proposes its already
+validated and pinned upstream through a gate-protected local context endpoint,
+so `http://localhost` is never mistaken for the public API. The value remains a
+prefill only: the operator submits it through the unchanged `choose` request,
+and the server performs its normal protected validation before saving it.
+
 There is no duplicate Network & Hosting directory. Each failing row has at most
 one action: configure its durable Setup choice, open the first-class owner, or
 change a deployment setting. `django.base_url` is the only Django check that
