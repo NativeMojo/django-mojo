@@ -209,6 +209,9 @@ python3 "${PROJ_PATH}/bin/manage.py" collectstatic --noinput \
 # deploy here, before anything touches /etc.
 
 log "Rendering node templates into var/deploy..."
+# This unchanged argv is also the first-upgrade nginx runtime repair hook:
+# the newly installed Python module converges and verifies the persistent
+# spill paths before this old-inode shell can reach MojoSec or nginx reload.
 python3 -m mojo.deploy render --dest "$DEPLOY_DIR" \
         --project-path "$PROJ_PATH" --app-user "$APP_USER" \
         --web-user "$WEB_USER" --workers "$ASGI_WORKERS" \

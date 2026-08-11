@@ -635,6 +635,18 @@ def test_include_graph_staged(opts):
             "the remap belongs only in staging/")
 
         harness = open(os.path.join(current, "nginx.conf")).read()
+        from mojo.deploy.nginx_runtime import TEMP_PATHS
+        declared_generation = render.generation_dir(os.path.basename(current))
+        staged_base_text = open(staged_base).read()
+        for directive, leaf in TEMP_PATHS:
+            scratch = os.path.join(current, "tmp", leaf)
+            assert os.path.isdir(scratch), (
+                f"staged nginx scratch leaf is missing for {directive}: {scratch}")
+            declaration = f"{directive} {declared_generation}/tmp/{leaf};"
+            assert harness.count(directive) == 0, (
+                f"staging harness duplicated the scratch owner for {directive}")
+            assert staged_base_text.count(declaration) == 1, (
+                f"staged http base must declare {declaration!r} exactly once")
         assert "/staging/http.d/*.conf" in harness, \
             "the harness does not include staging/http.d — the staged check " \
             "would still parse the privileged listens"

@@ -110,6 +110,8 @@ setup_env() {
     echo "01 * * * * root run-parts /etc/cron.hourly" > "$TMP/cron_etc/0hourly"
     # A conf.d vhost this project once shipped and has since declared retired.
     mkdir -p "$TMP/nginx_etc/conf.d"
+    echo "# persistent framework runtime contract" > \
+        "$TMP/nginx_etc/conf.d/00_django_mojo_runtime.conf"
     echo "# superseded vhost" > "$TMP/nginx_etc/conf.d/stale-old.conf"
     printf '# names this project retired\ncron.d/2certbot\nconf.d/stale-old.conf\n' \
         > "$PROJ/aws/node_retired.conf"
@@ -223,6 +225,8 @@ assert_in_log "CMD systemctl restart mojo-asgi" "app restarted"
 assert_in_log "CMD curl .*http://127.0.0.1/api/version" \
     "the probe targets the default PROBE_URL"
 assert_file "$TMP/nginx_etc/nginx.conf" "nginx.conf landed in the NGINX_ETC seam"
+assert_file "$TMP/nginx_etc/conf.d/00_django_mojo_runtime.conf" \
+    "a forward-installed runtime fragment survives an older shell rollback"
 assert_file "$TMP/nginx_etc/sec.d/hardening.conf" "sec.d hardening landed"
 for v in probe.conf app.conf; do
     assert_file "$TMP/nginx_etc/conf.d/$v" "vhost $v converged into conf.d"

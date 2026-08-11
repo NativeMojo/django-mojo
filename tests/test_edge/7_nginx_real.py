@@ -19,6 +19,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
+import urllib.request
 from unittest import mock
 
 from testit import TestitSkip
@@ -176,7 +178,10 @@ def test_real_nginx_accepts_every_kind(opts):
                         "the real nginx harness did not include enriched MojoSec observe logging")
                 for target, body in ((name, text),
                                      (f"staging/{name}",
-                                      render.render_staged_variant(text))):
+                                      render.render_staged_variant(
+                                          text,
+                                          temp_root=os.path.join(gen_dir, "tmp")
+                                          if name == "http.d/00_base.conf" else None))):
                     path = os.path.join(gen_dir, target)
                     os.makedirs(os.path.dirname(path), exist_ok=True)
                     with open(path, "w") as handle:
@@ -189,7 +194,9 @@ def test_real_nginx_accepts_every_kind(opts):
             # lines are validated on-node by the post-swap root check). There
             # is no test-only wrapper here — a wrapper would have meant this
             # never validated the real thing.
-            os.makedirs(os.path.join(gen_dir, "tmp"), exist_ok=True)
+            from mojo.deploy.nginx_runtime import TEMP_PATHS
+            for _directive, leaf in TEMP_PATHS:
+                os.makedirs(os.path.join(gen_dir, "tmp", leaf), exist_ok=True)
             harness_path = os.path.join(gen_dir, "nginx.conf")
             with open(harness_path, "w") as handle:
                 handle.write(render.render_nginx_harness(GENERATION))
@@ -208,4 +215,119 @@ def test_real_nginx_accepts_every_kind(opts):
         assert "conflicting server name" not in output, (
             f"nginx reported a server_name collision:\n{output}")
     finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.requires_extra("extended")
+@th.django_unit_test("the production spill contract accepts a body larger than memory")
+def test_production_temp_contract_spills_request_body(opts):
+    """Exercise the permanent HTTP-context paths, not Edge's staging paths.
+
+    The production outage passed every staged ``nginx -t`` because only the
+    generation-local harness declared writable temp paths.  This test forces
+    nginx to spill a real proxied request body through the production mapping.
+    """
+    import http.server
+    import socket
+
+    from mojo.deploy import nginx_runtime
+
+    binary = _nginx_binary()
+    if not binary:
+        raise TestitSkip(
+            "nginx is not installed — skipping the forced request-body spill")
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            size = int(self.headers.get("Content-Length", "0"))
+            received = self.rfile.read(size)
+            body = str(len(received)).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args):
+            return
+
+    def free_port():
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        return port
+
+    root = tempfile.mkdtemp(prefix="edge-spill-")
+    upstream_port = free_port()
+    nginx_port = free_port()
+    upstream = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", upstream_port), Handler)
+    thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    thread.start()
+    process = None
+    try:
+        runtime_root = os.path.join(root, "runtime")
+        for _directive, leaf in nginx_runtime.TEMP_PATHS:
+            os.makedirs(os.path.join(runtime_root, leaf), mode=0o700,
+                        exist_ok=True)
+        config = os.path.join(root, "nginx.conf")
+        error_log = os.path.join(root, "error.log")
+        with open(config, "w") as handle:
+            handle.write("\n".join([
+                f"pid {root}/nginx.pid;",
+                f"error_log {error_log} notice;",
+                "events { worker_connections 32; }",
+                "http {",
+                "    client_body_buffer_size 1;",
+                nginx_runtime.render_http_fragment(runtime_root, indent="    ").rstrip(),
+                "    server {",
+                f"        listen 127.0.0.1:{nginx_port};",
+                "        location / {",
+                f"            proxy_pass http://127.0.0.1:{upstream_port};",
+                "        }",
+                "    }",
+                "}",
+                "",
+            ]))
+        process = subprocess.Popen(
+            [binary, "-c", config, "-p", root, "-g", "daemon off;"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _attempt in range(50):
+            if process.poll() is not None:
+                break
+            try:
+                with urllib.request.urlopen(
+                        f"http://127.0.0.1:{nginx_port}/", timeout=0.1):
+                    pass
+            except Exception:
+                pass
+            try:
+                with socket.create_connection(
+                        ("127.0.0.1", nginx_port), timeout=0.1):
+                    break
+            except OSError:
+                import time
+                time.sleep(0.05)
+
+        payload = b"x" * (128 * 1024)
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{nginx_port}/", data=payload, method="POST")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            received = response.read().decode()
+        assert received == str(len(payload)), (
+            f"upstream received {received!r}, expected {len(payload)} bytes")
+        errors = open(error_log).read() if os.path.exists(error_log) else ""
+        assert "Permission denied" not in errors, (
+            f"nginx could not spill the request body through the runtime tree:\n{errors}")
+    finally:
+        if process is not None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=5)
         shutil.rmtree(root, ignore_errors=True)

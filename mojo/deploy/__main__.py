@@ -157,9 +157,47 @@ def cmd_locate(args):
 
 
 def cmd_render(args):
+    # This is intentionally inside the command.  A running old post_deploy
+    # shell reaches the newly installed module through this unchanged argv,
+    # which makes the first framework upgrade self-healing.
+    project = args.project_path.rstrip("/") or "/"
+    canonical_dest = os.path.join(project, "var", "deploy")
+    # Avoid importing tempfile on the pre-Django production path: test seams
+    # are accepted only for a project explicitly rooted beneath the process's
+    # temporary directory (the shell/unit harness shape), never a deployed tree.
+    requested_test_seams = os.environ.get("MOJO_DEPLOY_TEST_SEAMS") == "1"
+    real_project = os.path.realpath(project)
+    temp_root = os.path.realpath(os.environ.get("TMPDIR") or "/tmp")
+    try:
+        beneath_temp = os.path.commonpath((real_project, temp_root)) == temp_root
+    except ValueError:
+        beneath_temp = False
+    test_seams = requested_test_seams and beneath_temp
+    host_deploy = (os.path.realpath(os.getcwd()) == os.path.realpath(project)
+                   or test_seams)
+    if (os.geteuid() == 0 and host_deploy and
+            os.path.normpath(args.dest) == canonical_dest):
+        from mojo.deploy.nginx_runtime import NginxRuntimeError, converge
+        nginx_etc = os.environ.get("NGINX_ETC", "/etc/nginx")
+        runtime_root = os.environ.get(
+            "MOJO_NGINX_RUNTIME_ROOT", "/var/lib/django-mojo/nginx")
+        # Alternate roots are test-only seams. A real host deploy may not
+        # redirect privileged persistent state through its environment.
+        if not test_seams and (
+                nginx_etc != "/etc/nginx" or
+                runtime_root != "/var/lib/django-mojo/nginx"):
+            print("mojo.deploy render: refusing redirected nginx runtime "
+                  "paths for a production project", file=sys.stderr)
+            return 1
+        try:
+            converge(args.web_user, nginx_etc=nginx_etc, root=runtime_root)
+        except NginxRuntimeError as err:
+            print("mojo.deploy render: nginx runtime convergence failed: %s"
+                  % err, file=sys.stderr)
+            return 1
+
     context = build_context(args.project_path, args.app_user,
                             args.web_user, args.workers)
-    project = args.project_path.rstrip("/") or "/"
     overrides = read_overrides(project)
     rendered = 0
     overlaid = 0
