@@ -8,6 +8,10 @@ import time
 
 from .aggregation import merge, should_flush
 from .attribution import merge_session
+from .disposition import (
+    LOCAL_ONLY_DIAGNOSTIC_PATH, diagnostic_override, is_local_only,
+    observed_timestamp,
+)
 from .protocol import canonical_json, make_event
 
 
@@ -18,6 +22,8 @@ ANNOTATION_GRACE_SECONDS = 120
 # The producer caps an active operation at 15 minutes. Retain exact active
 # paths for that ceiling plus the five-minute post-completion match window.
 ANNOTATION_MAX_GRACE_SECONDS = 20 * 60
+LOCAL_ONLY_RECONCILE_LIMIT = 256
+SATURATING_COUNTER_MAX = 2 ** 63 - 1
 
 
 class StoreError(RuntimeError):
@@ -39,14 +45,20 @@ def _private_directory(path):
 
 
 class Store:
-    def __init__(self, state_dir, sensor_id, aggregation_config, delivery_config):
+    def __init__(self, state_dir, sensor_id, aggregation_config, delivery_config,
+                 local_only_diagnostic_path=LOCAL_ONLY_DIAGNOSTIC_PATH):
         _private_directory(state_dir)
         self.sensor_id = sensor_id
         self.aggregation_config = aggregation_config
         self.delivery_config = delivery_config
+        self.local_only_diagnostic_path = local_only_diagnostic_path
+        self.local_only_diagnostic = {"active": False, "until": "", "error": ""}
+        self._local_only_diagnostic_ids = set()
         self.path = os.path.join(state_dir, "state.sqlite3")
         self.db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         self.db.row_factory = sqlite3.Row
+        self.db.create_function(
+            "mojosec_local_only", 1, self._sqlite_local_only, deterministic=True)
         try:
             self._create_schema()
         except Exception:
@@ -216,6 +228,45 @@ class Store:
     def _increment(self, key, amount=1):
         self.set_meta(key, int(self.get_meta(key, 0)) + amount)
 
+    def _increment_saturating(self, key, amount=1):
+        current = self.get_meta(key, 0)
+        if not isinstance(current, int) or isinstance(current, bool) or current < 0:
+            current = 0
+        self.set_meta(key, min(SATURATING_COUNTER_MAX, current + max(0, amount)))
+
+    @staticmethod
+    def _sqlite_local_only(payload):
+        try:
+            return int(is_local_only(json.loads(payload), wire=True))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return 0
+
+    def _record_local_only(self, found, diagnostic):
+        self._increment_saturating("local_only_observed")
+        seen = observed_timestamp(found)
+        current = self.get_meta("local_only_last_seen")
+        if seen is not None and (not isinstance(current, str) or seen > current):
+            self.set_meta("local_only_last_seen", seen)
+        if diagnostic["active"]:
+            event = make_event(self.sensor_id, found)
+            if self._enqueue(event):
+                self._local_only_diagnostic_ids.add(event["id"])
+                self._increment_saturating("local_only_diagnostic_delivered")
+        else:
+            self._increment_saturating("local_only_suppressed")
+
+    def _reconcile_local_only(self):
+        rows = self.db.execute(
+            "SELECT id, payload FROM events WHERE mojosec_local_only(payload) = 1 "
+            "ORDER BY created, id LIMIT ?", (LOCAL_ONLY_RECONCILE_LIMIT,)
+        ).fetchall()
+        rows = [row for row in rows if row["id"] not in self._local_only_diagnostic_ids]
+        if not rows:
+            return 0
+        self.db.executemany("DELETE FROM events WHERE id = ?", ((row["id"],) for row in rows))
+        self._increment_saturating("local_only_suppressed", len(rows))
+        return len(rows)
+
     def load_ssh_sessions(self, now=None):
         cutoff = (now if now is not None else time.time()) - SSH_SESSION_TTL_SECONDS
         rows = self.db.execute(
@@ -319,7 +370,10 @@ class Store:
         self._enqueue(event, now=now)
         self.db.execute("DELETE FROM aggregates WHERE fingerprint = ?", (aggregate["fingerprint"],))
 
-    def _ingest_one(self, observation, now):
+    def _ingest_one(self, observation, now, diagnostic=None):
+        if is_local_only(observation, wire=False):
+            self._record_local_only(observation, diagnostic or self.local_only_diagnostic)
+            return
         if not observation.get("aggregate"):
             self._enqueue(make_event(self.sensor_id, observation), now=now)
             return
@@ -364,8 +418,10 @@ class Store:
         now = time.time()
         self.db.execute("BEGIN IMMEDIATE")
         try:
+            diagnostic = diagnostic_override(self.local_only_diagnostic_path, now=now)
+            self.local_only_diagnostic = diagnostic
             for found in observations:
-                self._ingest_one(found, now)
+                self._ingest_one(found, now, diagnostic=diagnostic)
             if ssh_sessions is not None:
                 self._record_ssh_sessions(ssh_sessions, now)
             self._flush_due(now)
@@ -447,10 +503,29 @@ class Store:
         return changed
 
     def pending_batch(self, max_events, max_bytes):
-        rows = self.db.execute(
-            "SELECT id, payload FROM events WHERE next_attempt <= ? ORDER BY created LIMIT ?",
-            (time.time(), max_events),
-        ).fetchall()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self._reconcile_local_only()
+            due = self.db.execute(
+                "SELECT id, payload, created FROM events WHERE next_attempt <= ? "
+                "AND mojosec_local_only(payload) = 0 ORDER BY created LIMIT ?",
+                (time.time(), max_events),
+            ).fetchall()
+            diagnostic = []
+            if self._local_only_diagnostic_ids:
+                placeholders = ",".join("?" for unused in self._local_only_diagnostic_ids)
+                diagnostic = self.db.execute(
+                    f"SELECT id, payload, created FROM events "
+                    f"WHERE next_attempt <= ? AND id IN ({placeholders})",
+                    (time.time(), *sorted(self._local_only_diagnostic_ids)),
+                ).fetchall()
+            rows = sorted(
+                [*due, *diagnostic], key=lambda row: (row["created"], row["id"])
+            )[:max_events]
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
         events = []
         used = 1024
         for row in rows:
@@ -479,6 +554,7 @@ class Store:
                 status_value = result["status"]
                 if status_value in ("accepted", "duplicate", "rejected"):
                     self.db.execute("DELETE FROM events WHERE id = ?", (event_id,))
+                    self._local_only_diagnostic_ids.discard(event_id)
                     self._increment(f"delivery_{status_value}")
                     continue
                 row = self.db.execute("SELECT attempts FROM events WHERE id = ?", (event_id,)).fetchone()
@@ -639,4 +715,10 @@ class Store:
             "delivery_duplicate": int(self.get_meta("delivery_duplicate", 0)),
             "delivery_rejected": int(self.get_meta("delivery_rejected", 0)),
             "delivery_retry": int(self.get_meta("delivery_retry", 0)),
+            "local_only_observed": int(self.get_meta("local_only_observed", 0)),
+            "local_only_diagnostic_delivered": int(self.get_meta(
+                "local_only_diagnostic_delivered", 0)),
+            "local_only_suppressed": int(self.get_meta("local_only_suppressed", 0)),
+            "local_only_last_seen": self.get_meta("local_only_last_seen"),
+            "local_only_diagnostic": dict(self.local_only_diagnostic),
         }

@@ -236,6 +236,68 @@ def test_systemd_user_session_open_is_local_rich_and_exact(opts):
 
 
 @th.django_unit_test()
+def test_local_only_classifier_requires_the_complete_coherent_tuple(opts):
+    import copy
+
+    from mojo.mojosec.detectors import detect_journal
+    from mojo.mojosec.disposition import is_local_only
+    from mojo.mojosec.protocol import make_event
+
+    record = {
+        "_UID": "0", "_PID": "4123", "_COMM": "(systemd)",
+        "_EXE": "/usr/lib/systemd/systemd", "_SYSTEMD_UNIT": "user@80.service",
+        "_BOOT_ID": "b" * 32, "_AUDIT_SESSION": "44", "_AUDIT_LOGINUID": "80",
+        "__REALTIME_TIMESTAMP": "1786190400000000",
+        "MESSAGE": "pam_unix(systemd-user:session): session opened for user www(uid=80) by (uid=0)",
+    }
+    found = detect_journal(record)
+    th.assert_true(is_local_only(found, wire=False),
+                   "the detector's complete trusted observation must classify local-only")
+    wire = make_event("sensor-classifier", found)
+    th.assert_true(is_local_only(wire, wire=True),
+                   "the same semantic tuple must classify in validated wire shape")
+    attributed = copy.deepcopy(wire)
+    attributed["attributes"].update({
+        "attribution_provenance": "audit_session", "source_ip": "192.0.2.80",
+    })
+    th.assert_true(is_local_only(attributed, wire=True),
+                   "exact audit-session attribution with a canonical IP remains local-only")
+
+    mutations = []
+    for field, value in (
+            ("kind", "auth.ssh_login"), ("severity", "warning"),
+            ("summary", "PAM session opened"), ("recommendation", "review"),
+            ("count", 2)):
+        changed = copy.deepcopy(wire)
+        changed[field] = value
+        mutations.append((field, changed))
+    for field, value in (
+            ("service", "sshd"), ("target_user", "bad user"),
+            ("target_uid", 81), ("opener_uid", 1), ("producer_uid", 1),
+            ("producer_pid", 0), ("producer_comm", "systemd"),
+            ("producer_exe", "/tmp/systemd"), ("systemd_unit", "user@81.service"),
+            ("boot_id", "bad"), ("audit_session", -1), ("audit_loginuid", 81),
+            ("attribution_provenance", "who")):
+        changed = copy.deepcopy(wire)
+        changed["attributes"][field] = value
+        mutations.append((field, changed))
+    missing = copy.deepcopy(wire)
+    del missing["attributes"]["producer_exe"]
+    mutations.append(("missing producer_exe", missing))
+    extra = copy.deepcopy(wire)
+    extra["attributes"]["message"] = "trusted-looking extra"
+    mutations.append(("extra evidence", extra))
+    contradictory = copy.deepcopy(wire)
+    contradictory["attributes"].update({
+        "attribution_provenance": "none", "source_ip": "192.0.2.1",
+    })
+    mutations.append(("contradictory source", contradictory))
+    for label, changed in mutations:
+        th.assert_true(not is_local_only(changed, wire=True),
+                       f"near-match {label} must retain ordinary fleet delivery")
+
+
+@th.django_unit_test()
 def test_journal_collector_streams_forward_without_tail_skips(opts):
     import mojo.mojosec.collectors.journal as journal_module
 

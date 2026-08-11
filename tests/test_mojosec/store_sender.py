@@ -3,6 +3,7 @@ import gzip
 import json
 import os
 import tempfile
+from unittest import mock
 
 from testit import helpers as th
 
@@ -297,6 +298,26 @@ def _observation(source="192.0.2.1", aggregate=True):
     )
 
 
+def _local_systemd_user_observation():
+    from mojo.mojosec.events import observation
+
+    return observation(
+        "auth.session_open", "info", "PAM service session opened",
+        attributes={
+            "attribution_provenance": "none",
+            "service": "systemd-user", "target_user": "www", "target_uid": 80,
+            "opener_uid": 0, "producer_uid": 0, "producer_pid": 4123,
+            "producer_comm": "(systemd)",
+            "producer_exe": "/usr/lib/systemd/systemd",
+            "systemd_unit": "user@80.service", "boot_id": "b" * 32,
+            "audit_session": 44, "audit_loginuid": 80,
+        },
+        fingerprint_values=("systemd-user", "www", "2026-08-08T12:00:00Z"),
+        aggregate=False, recommendation="none",
+        observed_at="2026-08-08T12:00:00Z",
+    )
+
+
 class _AckTransport:
     def __init__(self):
         self.calls = []
@@ -319,6 +340,94 @@ class _PartialAckTransport:
             "results": [{"id": batch["events"][0]["id"], "status": "accepted"}],
         }
         return 200, json.dumps(response).encode("utf-8")
+
+
+@th.django_unit_test()
+def test_exact_systemd_user_lifecycle_is_local_only_and_cursor_atomic(opts):
+    from mojo.mojosec.store import Store
+
+    with tempfile.TemporaryDirectory() as root:
+        store = Store(root, "sensor-test", AGGREGATION, DELIVERY)
+        try:
+            store.ingest(
+                [_local_systemd_user_observation()],
+                cursor_key="journal", cursor="cursor-local-only",
+            )
+            stats = store.stats()
+            th.assert_eq(stats["spooled_events"], 0,
+                         "the exact trusted systemd-user lifecycle must stay off the fleet spool")
+            th.assert_eq(stats["local_only_observed"], 1,
+                         "local suppression must remain measurable as an observed occurrence")
+            th.assert_eq(stats["local_only_suppressed"], 1,
+                         "default local-only handling must count one suppressed occurrence")
+            th.assert_eq(store.get_meta("cursor:journal"), "cursor-local-only",
+                         "local counters and the collector cursor must commit atomically")
+        finally:
+            store.close()
+
+
+@th.django_unit_test()
+def test_local_only_diagnostic_and_stale_reconciliation_are_bounded(opts):
+    import copy
+    import datetime
+
+    import mojo.mojosec.store as store_module
+    from mojo.mojosec.protocol import make_event
+
+    with tempfile.TemporaryDirectory() as root:
+        large_delivery = dict(DELIVERY, max_spool_events=1000, critical_reserve_events=100)
+        store = store_module.Store(root, "sensor-test", AGGREGATION, large_delivery)
+        try:
+            with mock.patch.object(store_module, "diagnostic_override", return_value={
+                    "active": True, "until": "2026-08-08T12:30:00Z", "error": ""}):
+                store.ingest([_local_systemd_user_observation()])
+            th.assert_eq(store.stats()["local_only_diagnostic_delivered"], 1,
+                         "diagnostic delivery counts only an original ingestion that spooled")
+            th.assert_eq(len(store.pending_batch(10, 65536)), 1,
+                         "an admitted diagnostic must survive same-process stale reconciliation")
+        finally:
+            store.close()
+
+    with tempfile.TemporaryDirectory() as root:
+        store = store_module.Store(root, "sensor-test", AGGREGATION, DELIVERY)
+        try:
+            store.ingest([_local_systemd_user_observation()])
+            store.set_meta("local_only_observed", 2 ** 63 - 1)
+            store.set_meta("local_only_suppressed", 2 ** 63 - 1)
+            older = _local_systemd_user_observation()
+            older["observed_at"] = "2026-08-08T11:00:00Z"
+            store.ingest([older])
+            saturated = store.stats()
+            th.assert_eq(saturated["local_only_observed"], 2 ** 63 - 1,
+                         "local observed counters must saturate instead of overflowing")
+            th.assert_eq(saturated["local_only_suppressed"], 2 ** 63 - 1,
+                         "local suppressed counters must saturate instead of overflowing")
+            th.assert_eq(saturated["local_only_last_seen"], "2026-08-08T12:00:00Z",
+                         "last_seen must remain the maximum validated observation time")
+        finally:
+            store.close()
+
+    with tempfile.TemporaryDirectory() as root:
+        large_delivery = dict(DELIVERY, max_spool_events=1000, critical_reserve_events=100)
+        store = store_module.Store(root, "sensor-test", AGGREGATION, large_delivery)
+        try:
+            base = _local_systemd_user_observation()
+            started = datetime.datetime(2026, 8, 8, 12, tzinfo=datetime.timezone.utc)
+            for index in range(store_module.LOCAL_ONLY_RECONCILE_LIMIT + 44):
+                found = copy.deepcopy(base)
+                found["observed_at"] = (
+                    started + datetime.timedelta(seconds=index)).isoformat().replace("+00:00", "Z")
+                found["fingerprint"] = f"{index:064x}"
+                store._enqueue(make_event("sensor-test", found), now=index + 1)
+            store._enqueue(make_event("sensor-test", _observation(aggregate=False)), now=999)
+            pending = store.pending_batch(10, 65536)
+            th.assert_eq([item["kind"] for item in pending], ["web.probe"],
+                         "bounded stale cleanup must not starve a later ordinary event")
+            th.assert_eq(store.stats()["local_only_suppressed"],
+                         store_module.LOCAL_ONLY_RECONCILE_LIMIT,
+                         "one sender pass must reconcile only the fixed stale-row ceiling")
+        finally:
+            store.close()
 
 
 @th.django_unit_test()

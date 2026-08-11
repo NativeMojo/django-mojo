@@ -22,6 +22,27 @@ def _golden_batch():
     return batch
 
 
+def _local_only_event(event_id="9" * 64):
+    event = copy.deepcopy(_golden_batch()["events"][0])
+    event.update({
+        "id": event_id, "kind": "auth.session_open", "severity": "info",
+        "summary": "PAM service session opened", "count": 1,
+        "recommendation": "none",
+        "attributes": {
+            "attribution_provenance": "none", "service": "systemd-user",
+            "target_user": "www", "target_uid": 80, "opener_uid": 0,
+            "producer_uid": 0, "producer_pid": 4123,
+            "producer_comm": "(systemd)",
+            "producer_exe": "/usr/lib/systemd/systemd",
+            "systemd_unit": "user@80.service", "boot_id": "b" * 32,
+            "audit_session": 44, "audit_loginuid": 80,
+        },
+    })
+    event["first_seen"] = event["observed_at"]
+    event["last_seen"] = event["observed_at"]
+    return event
+
+
 def _use_apikey(opts, token):
     opts.client.logout()
     opts.client.bearer = "apikey"
@@ -240,6 +261,99 @@ def test_mojosec_replay_is_idempotent_and_digest_conflicts_reject(opts):
     conflict = mojosec.ingest_batch(key, changed)
     th.assert_eq(conflict["results"][0]["status"], "rejected",
                  "one event id must never be accepted with a different canonical digest")
+
+
+@th.django_unit_test()
+def test_exact_local_only_receipts_are_eventless_idempotent_and_race_safe(opts):
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models import Event, Incident, MojoSecReceipt
+    from mojo.apps.incident.services import mojosec
+
+    key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+    batch = _golden_batch()
+    batch["events"] = [_local_only_event()]
+    event_count = Event.objects.count()
+    incident_count = Incident.objects.count()
+
+    first = mojosec.ingest_batch(key, batch)
+    second = mojosec.ingest_batch(key, batch)
+    th.assert_eq(first["results"][0]["status"], "accepted",
+                 "the first exact local-only identity must durably accept")
+    th.assert_eq(second["results"][0]["status"], "duplicate",
+                 "a published local-only identity must replay as duplicate")
+    receipt = MojoSecReceipt.objects.get(api_key=key, wire_event_id="9" * 64)
+    th.assert_true(receipt.event_id is None and receipt.incident_id is None,
+                   "a new local-only receipt must never create or link public evidence")
+    th.assert_eq(receipt.handler_state, MojoSecReceipt.HANDLER_NONE,
+                 "local-only terminal receipts must never enter handler dispatch")
+    th.assert_eq(receipt.replay_features["feature_schema"], "local_only_receipt_v1",
+                 "local-only receipts need a distinct non-learning compatibility schema")
+    th.assert_eq(Event.objects.count(), event_count,
+                 "local-only central acceptance must create no Event")
+    th.assert_eq(Incident.objects.count(), incident_count,
+                 "local-only central acceptance must create no Incident")
+
+    pending_event = Event.objects.create(
+        category="mojosec.auth.session_open", scope="mojosec", level=2,
+        title="pre-race local event")
+    pending_wire = _local_only_event("8" * 64)
+    pending = MojoSecReceipt.objects.create(
+        api_key=key, event=pending_event, sensor_id=SENSOR_ID,
+        wire_event_id=pending_wire["id"],
+        payload_digest=mojosec._payload_digest(pending_wire),
+        replay_features={"feature_schema": "replay_features_v1", "event": pending_wire},
+        publish_state=MojoSecReceipt.PUBLISH_PENDING,
+        handler_state=MojoSecReceipt.HANDLER_PENDING,
+    )
+    batch["events"] = [pending_wire]
+    converted = mojosec.ingest_batch(key, batch)
+    pending.refresh_from_db()
+    th.assert_eq(converted["results"][0]["status"], "accepted",
+                 "an identical unpublished receipt must atomically terminalize")
+    th.assert_eq(pending.event_id, pending_event.pk,
+                 "pending compatibility conversion must preserve its Event pointer and row")
+    th.assert_eq(pending.publish_state, MojoSecReceipt.PUBLISH_PUBLISHED,
+                 "pending compatibility conversion must close publication under its row lock")
+    th.assert_eq(pending.handler_state, MojoSecReceipt.HANDLER_NONE,
+                 "pending compatibility conversion must close handler dispatch")
+    th.assert_true(Event.objects.filter(pk=pending_event.pk).exists(),
+                   "compatibility conversion must never delete historical Event evidence")
+
+    historical_event = Event.objects.create(
+        category="mojosec.auth.session_open", scope="mojosec", level=2,
+        title="published historical local event")
+    historical_wire = _local_only_event("7" * 64)
+    historical = MojoSecReceipt.objects.create(
+        api_key=key, event=historical_event, sensor_id=SENSOR_ID,
+        wire_event_id=historical_wire["id"],
+        payload_digest=mojosec._payload_digest(historical_wire),
+        replay_features={"feature_schema": "replay_features_v1", "event": historical_wire},
+        publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
+        handler_state=MojoSecReceipt.HANDLER_DISPATCHED,
+    )
+    batch["events"] = [historical_wire]
+    replayed = mojosec.ingest_batch(key, batch)
+    historical.refresh_from_db()
+    th.assert_eq(replayed["results"][0]["status"], "duplicate",
+                 "historical published evidence must remain a duplicate")
+    th.assert_eq(historical.event_id, historical_event.pk,
+                 "historical published Event pointers must remain untouched")
+    th.assert_eq(historical.handler_state, MojoSecReceipt.HANDLER_DISPATCHED,
+                 "historical handler state must never be rewritten")
+
+    batch["events"] = [pending_wire]
+    changed = copy.deepcopy(batch)
+    changed["events"][0]["attributes"]["producer_pid"] = 9999
+    conflict = mojosec.ingest_batch(key, changed)
+    th.assert_eq(conflict["results"][0]["status"], "rejected",
+                 "a local-only identity reused for different evidence must reject")
+
+    batch["events"] = [_local_only_event("6" * 64)]
+    with mock.patch.object(mojosec, "_accept_local_only",
+                           side_effect=RuntimeError("database unavailable")):
+        retry = mojosec.ingest_batch(key, batch)
+    th.assert_eq(retry["results"][0]["status"], "retry",
+                 "local-only persistence failure must retain sender retry semantics")
 
 
 @th.django_unit_test()

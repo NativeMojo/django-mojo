@@ -182,6 +182,9 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
         "schema": "mojosec.status", "version": 1, "state": "running",
         "sensor_id": "i-test", "updated_at": now, "spooled_events": 3,
         "delivery_accepted": 2,
+        "local_only_observed": 12, "local_only_diagnostic_delivered": 0,
+        "local_only_suppressed": 12, "local_only_last_seen": now,
+        "local_only_diagnostic": {"active": False, "until": "", "error": ""},
         "collectors": {"journal": {"ok": True}, "nginx": {"ok": True}},
         "delivery": {"sent": 1, "accepted": 1, "retry": 0},
         "config": {
@@ -233,6 +236,28 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
                            "open('/etc/mojosec/credential" in command)]
     th.assert_eq(secret_commands, [],
                  f"check_node must never open or print the credential: {secret_commands}")
+
+
+@th.django_unit_test()
+def test_mojosec_local_only_status_shape_is_fail_closed(opts):
+    from mojo.deploy import check_node as cn
+
+    valid = {
+        "local_only_observed": 3, "local_only_diagnostic_delivered": 1,
+        "local_only_suppressed": 2, "local_only_last_seen": "2026-08-11T12:00:00Z",
+        "local_only_diagnostic": {"active": False, "until": "", "error": ""},
+    }
+    th.assert_true(cn._valid_local_only_status(valid),
+                   "fixed informational counters and override state must validate")
+    for field, value in (
+            ("local_only_observed", -1),
+            ("local_only_diagnostic_delivered", True),
+            ("local_only_suppressed", "2"),
+            ("local_only_last_seen", 1234),
+            ("local_only_diagnostic", {"active": False, "error": ""})):
+        changed = dict(valid, **{field: value})
+        th.assert_true(not cn._valid_local_only_status(changed),
+                       f"malformed local-only status field {field} must fail node checks")
 
 
 @th.django_unit_test()

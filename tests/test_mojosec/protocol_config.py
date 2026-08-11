@@ -63,6 +63,92 @@ def test_protocol_rejects_unknown_and_unbounded_event_data(opts):
 
 
 @th.django_unit_test()
+def test_local_only_diagnostic_sidecar_is_exact_bounded_and_not_protocol_config(opts):
+    import datetime
+    import types
+
+    import mojo.mojosec.disposition as disposition
+    from mojo.mojosec.config import DEFAULTS
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    with tempfile.TemporaryDirectory() as root:
+        path = os.path.join(root, "local_only_diagnostic.json")
+
+        def write(value):
+            with open(path, "w", encoding="utf-8") as handle:
+                if isinstance(value, str):
+                    handle.write(value)
+                else:
+                    json.dump(value, handle)
+            os.chmod(path, 0o600)
+
+        real_fstat = disposition.os.fstat
+
+        def root_fstat(descriptor):
+            info = real_fstat(descriptor)
+            return types.SimpleNamespace(
+                st_mode=info.st_mode, st_uid=0, st_gid=0,
+                st_size=info.st_size, st_mtime=info.st_mtime,
+            )
+
+        active_until = now + datetime.timedelta(minutes=10)
+        write({
+            "schema": "mojosec.local_only_diagnostic", "version": 1,
+            "until": active_until.isoformat(),
+        })
+        with mock.patch.object(disposition.os, "fstat", side_effect=root_fstat):
+            active = disposition.diagnostic_override(path, now=now)
+        th.assert_eq(active["active"], True,
+                     "one exact root-owned sidecar may temporarily deliver diagnostics")
+        th.assert_eq(active["error"], "",
+                     "a safe active sidecar must expose no status error")
+
+        os.chmod(path, 0o640)
+        with mock.patch.object(disposition.os, "fstat", side_effect=root_fstat):
+            unsafe = disposition.diagnostic_override(path, now=now)
+        th.assert_eq(unsafe["error"], "sidecar_unsafe",
+                     "group-readable diagnostic policy must fail closed")
+        os.chmod(path, 0o600)
+        link = os.path.join(root, "diagnostic-link.json")
+        os.symlink(path, link)
+        linked = disposition.diagnostic_override(link, now=now)
+        th.assert_eq(linked["error"], "sidecar_unreadable",
+                     "O_NOFOLLOW must reject a diagnostic sidecar symlink")
+
+        write('{"schema":"mojosec.local_only_diagnostic","version":1,'
+              '"version":1,"until":"2026-08-11T12:00:00Z"}')
+        with mock.patch.object(disposition.os, "fstat", side_effect=root_fstat):
+            duplicate = disposition.diagnostic_override(path, now=now)
+        th.assert_eq(duplicate["error"], "sidecar_malformed",
+                     "duplicate JSON fields must fail closed with a fixed bounded status")
+
+        write({
+            "schema": "mojosec.local_only_diagnostic", "version": 1,
+            "until": (now + datetime.timedelta(hours=2)).isoformat(),
+        })
+        with mock.patch.object(disposition.os, "fstat", side_effect=root_fstat):
+            future = disposition.diagnostic_override(path, now=now)
+        th.assert_eq(future["error"], "sidecar_until_too_late",
+                     "an override may never outlive one hour from its descriptor mtime")
+
+        write({
+            "schema": "mojosec.local_only_diagnostic", "version": 2,
+            "until": active_until.isoformat(),
+        })
+        with mock.patch.object(disposition.os, "fstat", side_effect=root_fstat):
+            newer = disposition.diagnostic_override(path, now=now)
+        th.assert_eq(newer, {"active": False, "until": "", "error": ""},
+                     "an unsupported sidecar version must be ignored, not interpreted")
+        th.assert_true("local_only_diagnostic" not in DEFAULTS,
+                       "the emergency sidecar must not become effective configuration")
+
+        with open(_golden_path(), encoding="utf-8") as handle:
+            batch = json.load(handle)
+        th.assert_true("local_only_diagnostic" not in batch,
+                       "the emergency sidecar must not extend the wire protocol")
+
+
+@th.django_unit_test()
 def test_receiver_projects_only_safe_expected_change_annotation(opts):
     from mojo.apps.incident.services.mojosec import _expected_change_projection
 

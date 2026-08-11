@@ -297,6 +297,35 @@ audit-session map, never `who`. Each `auth.sudo_command` describes one sudo
 invocation; commands subsequently entered inside `sudo -s` are not observed by
 this journal detector.
 
+That one complete `systemd-user` lifecycle tuple is server-owned
+`local_only`: the sensor advances its journal cursor and increments saturated
+`local_only_observed`/`local_only_suppressed` counters in the same SQLite
+transaction, but does not aggregate or spool it. Missing, extra, malformed, or
+contradictory fields—including `who` attribution—remain ordinary fleet
+evidence. Sender selection also reconciles a bounded number of matching rows
+left by older sensor versions while continuing past them to later ordinary
+events. `local_only_last_seen` is the maximum validated observation time; a
+reconciliation pass never substitutes its wall-clock time.
+
+For short diagnostics only, a root operator may create
+`/etc/mojosec/local_only_diagnostic.json`. This is not desired/effective
+configuration and does not change protocol v1. The file must be a root:root
+regular file at exact mode `0600`, at most 512 bytes, opened with `O_NOFOLLOW`,
+with no duplicate JSON keys, and contain exactly:
+
+```json
+{"schema":"mojosec.local_only_diagnostic","version":1,"until":"2026-08-11T20:30:00Z"}
+```
+
+`until` must be timezone-aware and no later than one hour after the file's
+mtime; delivery is active only while current time is strictly before it.
+Missing, expired, unsafe, malformed, and far-future files preserve suppression.
+The public status exposes only fixed `active`/`until`/bounded error state plus
+the three counters; it never exposes sidecar bytes. The diagnostic-delivered
+counter counts only original observations admitted to the spool during an
+active override. Remove the sidecar after diagnosis; queued diagnostics from a
+prior process are treated as stale local-only rows.
+
 On POSIX platforms FIM opens every path component relative to an already-open
 directory descriptor with `O_NOFOLLOW`; files are hashed through that same
 descriptor and checked again afterward. Enumeration is streaming and bounded
@@ -519,6 +548,18 @@ evidence returns `rejected`. A receipt is acknowledged `accepted` only after
 its bounded Event projection has completed central publication and any required
 exact-RuleSet handler has a durably queued outbox job. Incomplete publication
 or queueing returns `retry`.
+
+After protocol and digest validation, the receiver applies the same exact
+local-only classifier before Event construction. A new match becomes a
+published, handler-none, eventless receipt with the non-learning
+`local_only_receipt_v1` compatibility schema: first delivery is `accepted`,
+then identical delivery is `duplicate`. If an older publisher already completed
+the identity, its receipt/Event/Incident are historical evidence and remain
+untouched. If the same digest is still pending, the receipt row is locked,
+terminalized, and its existing nullable Event pointer/row is preserved without
+publication or handler dispatch. A different digest rejects. These receipts
+cannot be feedback exemplars, explicit replay/shadow inputs, metric candidates,
+or quota consumers.
 
 `MojoSecReceipt` is an internal durable outbox/audit model, not writable browser
 CRUD state. Its unique key is

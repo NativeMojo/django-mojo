@@ -126,6 +126,43 @@ def test_mojosec_policy_validator_is_bounded_and_non_executable(opts):
 
 
 @th.django_unit_test()
+def test_local_only_compatibility_receipts_never_enter_learning(opts):
+    from mojo.apps.incident.models import MojoSecReceipt
+    from mojo.apps.incident.services import mojosec_learning
+    from mojo.helpers import dates
+
+    local = MojoSecReceipt.objects.create(
+        api_key=opts.learning_api_key, event=None,
+        sensor_id=f"{PREFIX}_sensor", wire_event_id="d" * 64,
+        payload_digest="e" * 64, publish_state="published",
+        published_at=dates.utcnow(), handler_state="none",
+        replay_features={
+            "feature_schema": "local_only_receipt_v1",
+            "schema": "mojosec.batch", "version": 1,
+            "sensor_id": f"{PREFIX}_sensor", "policy_revision": "",
+            "event_id": "d" * 64, "kind": "auth.session_open",
+            "disposition": "local_only",
+        },
+    )
+    with th.assert_raises(mojosec_learning.MojoSecLearningError):
+        mojosec_learning.create_feedback(
+            opts.learning_author, "benign_noise", receipt_id=local.pk,
+            note=f"{PREFIX} local-only must reject")
+    proposal = mojosec_learning.create_policy_proposal(
+        opts.learning_author, _policy(), summary=f"{PREFIX} local-only replay")
+    with th.assert_raises(mojosec_learning.MojoSecLearningError):
+        mojosec_learning.evaluate_proposal(
+            opts.learning_author, proposal.pk, receipt_ids=[local.pk])
+
+    metrics = mojosec_learning.detector_metrics(opts.learning_author, days=30, limit=1)
+    th.assert_true(
+        "auth.session_open" not in metrics["detectors"],
+        "local-only compatibility rows must be filtered before selection and quotas")
+    th.assert_eq(metrics["receipt_rows_sampled"], 1,
+                 "a newer local-only row must not crowd ordinary evidence out of a small quota")
+
+
+@th.django_unit_test()
 def test_mojosec_feedback_exact_subject_and_reversal_chain(opts):
     from mojo.apps.incident.models import (
         MojoSecDetectorFeedback, MojoSecDetectorFeedbackHead)

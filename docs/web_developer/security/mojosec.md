@@ -160,6 +160,25 @@ informational local PAM service session—not an SSH login—and can use only ex
 audit-session attribution. A sudo event records one sudo invocation; it does
 not claim to capture commands later typed inside `sudo -s`.
 
+The one complete root-produced `systemd-user` PAM lifecycle is retained as
+local sensor health rather than fleet incident evidence. Exact matches normally
+create no batch item, central Event, Incident, notification, RuleSet handler, or
+public evidence. Near matches remain ordinary events: the exception does not
+cover missing/extra fields, aggregates, count greater than one, noncanonical
+identity, `who` attribution, or conflicting source/session data. Sensor status
+adds informational observed/suppressed/diagnostic-delivered counters, last
+observation time, and fixed diagnostic-override state. The root-only emergency
+sidecar is host operations state—not an API, framework setting, desired policy
+field, or protocol field.
+
+A compatibility delivery of the exact class produces only a published,
+handler-none `MojoSecReceipt` with `feature_schema=local_only_receipt_v1` and no
+new Event. First receipt is `accepted`, identical replay is `duplicate`, and a
+same-ID/different-digest delivery is `rejected`. Existing published historical
+evidence is never rewritten or deleted. Local-only receipts are rejected as
+feedback and explicit replay/shadow exemplars and are filtered before learning
+candidate selection, stratification, and quotas.
+
 For count-one web Events, occurrence fields are direct evidence. For an
 aggregate count greater than one, volatile fields exist only in
 `last_occurrence_sample`, explicitly labeled `semantics: "last_occurrence"`

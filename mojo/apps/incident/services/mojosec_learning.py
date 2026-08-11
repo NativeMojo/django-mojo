@@ -8,7 +8,9 @@ from django.db import transaction
 
 from mojo.helpers import dates
 from mojo.helpers.settings import settings
-from mojo.apps.incident.services.mojosec import KIND_POLICY, UNKNOWN_KIND_POLICY
+from mojo.apps.incident.services.mojosec import (
+    KIND_POLICY, LOCAL_ONLY_REPLAY_SCHEMA, UNKNOWN_KIND_POLICY,
+)
 
 
 POLICY_SCHEMA = "mojosec.policy-proposal.v1"
@@ -154,6 +156,8 @@ def validate_manual_exemplar(value):
 
 def _receipt_snapshot(receipt):
     features = receipt.replay_features if isinstance(receipt.replay_features, dict) else {}
+    if features.get("feature_schema") == LOCAL_ONLY_REPLAY_SCHEMA:
+        raise MojoSecLearningError("local-only receipts cannot become feedback exemplars")
     event_features = features.get("event") if isinstance(features.get("event"), dict) else {}
     kind = str(event_features.get("kind") or "")[:64]
     if not kind:
@@ -487,6 +491,9 @@ def evaluate_proposal(author, proposal_id, mode="replay", receipt_ids=None, limi
             raise MojoSecLearningError(
                 "every receipt_id must identify retained published evidence")
         rows = [rows_by_id[value] for value in normalized_ids]
+        if any(row.get("replay_features", {}).get("feature_schema") ==
+               LOCAL_ONLY_REPLAY_SCHEMA for row in rows):
+            raise MojoSecLearningError("local-only receipts cannot be replayed")
         result = evaluate_features(content, rows)
         if result["sample_count"] != len(rows):
             raise MojoSecLearningError("every receipt_id must contain replay_features_v1")
@@ -523,11 +530,14 @@ def detector_metrics(author, days=30, limit=1000):
     candidate_limit = min(MAX_METRIC_CANDIDATES, max(limit, limit * 4))
     receipt_candidates = list(MojoSecReceipt.objects.filter(
         created__gte=cutoff, publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
+        replay_features__feature_schema=REPLAY_SCHEMA,
     ).order_by("-created", "-id").values(
         "id", "api_key_id", "sensor_id", "payload_digest",
         "replay_features")[:candidate_limit])
     head_candidates = list(MojoSecDetectorFeedbackHead.objects.filter(
         modified__gte=cutoff, current__isnull=False,
+    ).exclude(
+        current__receipt__replay_features__feature_schema=LOCAL_ONLY_REPLAY_SCHEMA,
     ).select_related("current").order_by("-modified", "-id")[:candidate_limit])
     for head in head_candidates:
         head.current.assert_integrity()

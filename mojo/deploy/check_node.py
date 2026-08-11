@@ -696,6 +696,50 @@ def _protected_mojosec_log_path(log_path):
     return log_path == "/var/log/nginx/mojosec.json.log"
 
 
+def _valid_local_only_status(status):
+    counts = (
+        status.get("local_only_observed"),
+        status.get("local_only_diagnostic_delivered"),
+        status.get("local_only_suppressed"),
+    ) if isinstance(status, dict) else ()
+    diagnostic = status.get("local_only_diagnostic") if isinstance(status, dict) else None
+    last_seen = status.get("local_only_last_seen") if isinstance(status, dict) else None
+    last_seen_ok = last_seen is None
+    if isinstance(last_seen, str):
+        try:
+            last_seen_ok = datetime.datetime.fromisoformat(
+                last_seen.replace("Z", "+00:00")).tzinfo is not None
+        except ValueError:
+            last_seen_ok = False
+    until_ok = False
+    if isinstance(diagnostic, dict):
+        until = diagnostic.get("until")
+        if until == "":
+            until_ok = diagnostic.get("active") is False
+        elif isinstance(until, str):
+            try:
+                until_ok = datetime.datetime.fromisoformat(
+                    until.replace("Z", "+00:00")).tzinfo is not None
+            except ValueError:
+                until_ok = False
+    return bool(
+        len(counts) == 3 and
+        all(isinstance(value, int) and not isinstance(value, bool) and
+            0 <= value <= 2 ** 63 - 1
+            for value in counts) and
+        last_seen_ok and
+        isinstance(diagnostic, dict) and
+        set(diagnostic) == {"active", "until", "error"} and
+        isinstance(diagnostic.get("active"), bool) and
+        until_ok and diagnostic.get("error") in {
+            "", "sidecar_unreadable", "sidecar_unsafe", "sidecar_too_large",
+            "sidecar_malformed", "sidecar_until_too_late",
+        } and
+        (not diagnostic.get("active") or diagnostic.get("error") == "") and
+        (diagnostic.get("error") == "" or diagnostic.get("until") == "")
+    )
+
+
 def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
     active = run("systemctl is-active mojosec.service 2>&1")[1]
     enabled = run("systemctl is-enabled mojosec.service 2>&1")[1]
@@ -788,7 +832,8 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
             "p=json.load(open(path));"
             "keys=('schema','version','sensor_id','state','updated_at',"
             "'spooled_events','delivery_accepted','collectors','delivery','config',"
-            "'integrity');"
+            "'integrity','local_only_observed','local_only_diagnostic_delivered',"
+            "'local_only_suppressed','local_only_last_seen','local_only_diagnostic');"
             "print(json.dumps({k:p.get(k) for k in keys},separators=(',',':')))"
         )
         command = f"{sudo}python3 -c {q(projection)}"
@@ -798,7 +843,8 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
         except (TypeError, json.JSONDecodeError):
             status = None
         if (not isinstance(status, dict) or status.get("schema") != "mojosec.status" or
-                status.get("version") != 1 or status.get("state") != "running"):
+                status.get("version") != 1 or status.get("state") != "running" or
+                not _valid_local_only_status(status)):
             report.fail("mojosec", "public status malformed",
                         "bounded status JSON is absent, stale-schema, or not running")
         else:
