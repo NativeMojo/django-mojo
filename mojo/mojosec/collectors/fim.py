@@ -257,6 +257,18 @@ class FimCollector:
         }
 
     def diff(self, baseline, scan):
+        current = scan["snapshot"]
+        if not scan["complete"]:
+            # A partial snapshot against the retained baseline re-derives the
+            # same changes every interval with fresh event ids. Report only
+            # that the scan could not finish; the next complete scan reconciles.
+            return [observation(
+                "fim.overflow", "critical", "Filesystem integrity scan was incomplete",
+                attributes={"profile": self.profile, "tier": self.tier,
+                            "entries": len(current)},
+                fingerprint_values=(self.profile, self.tier), aggregate=False,
+                recommendation="review",
+            )]
         observations = []
         manifest_error = ""
         try:
@@ -264,8 +276,7 @@ class FimCollector:
         except ExpectedChangeError as err:
             expected = []
             manifest_error = str(err)[:256]
-        current = scan["snapshot"]
-        paths = set(current) | (set(baseline) if scan["complete"] else set())
+        paths = set(current) | set(baseline)
         for path in sorted(paths):
             before = baseline.get(path)
             after = current.get(path)
@@ -295,14 +306,6 @@ class FimCollector:
                 attributes=attributes,
                 fingerprint_values=(path, change, canonical_json(after or {})),
                 aggregate=False, recommendation="review",
-            ))
-        if not scan["complete"]:
-            observations.append(observation(
-                "fim.overflow", "critical", "Filesystem integrity scan was incomplete",
-                attributes={"profile": self.profile, "tier": self.tier,
-                            "entries": len(current)},
-                fingerprint_values=(self.profile, self.tier), aggregate=False,
-                recommendation="review",
             ))
         if manifest_error:
             observations.append(observation(
