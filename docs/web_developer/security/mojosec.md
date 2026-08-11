@@ -90,7 +90,7 @@ Statuses are per event:
 |---|---|
 | `accepted` | Remove from the local spool. |
 | `duplicate` | Remove; the same event was already published. |
-| `rejected` | Remove; the evidence is permanently invalid or conflicts with the ID. |
+| `rejected` | Remove; the evidence is permanently invalid or conflicts with the ID. Also covers storage-impossible input (NUL/lone-surrogate text in `policy_revision`, an event, or a field the database rejects) and evidence pruned by retention before publication — each with a distinguishing `reason`. |
 | `retry` | Keep and retry with bounded backoff. |
 
 Missing result IDs, malformed acknowledgements, and non-2xx responses are also
@@ -190,6 +190,10 @@ Errors use a small unwrapped JSON object: `{"error": "reason"}`.
 
 Valid batches always return `200`; persistence or central-publication failures
 are represented by per-event `retry` results rather than a batch-level 5xx.
+Input the database can never store (NUL or lone-surrogate code points) and
+receipts whose projected evidence was already pruned by retention return
+per-event `rejected` — terminal, so the sensor frees the spool slot — never
+`retry`.
 
 ## Learning API
 

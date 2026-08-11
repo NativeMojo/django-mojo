@@ -330,3 +330,38 @@ def test_cli_help_imports_without_django_settings(opts):
                  f"MojoSec CLI must work before Django settings exist: {done.stderr}")
     th.assert_in("run", done.stdout,
                  f"MojoSec CLI help must expose its service command: {done.stdout}")
+
+
+@th.django_unit_test()
+def test_protocol_unstorable_text_detection_and_ack_statuses_frozen(opts):
+    from mojo.mojosec import protocol
+
+    unstorable = (
+        "bad" + chr(0),
+        {"key" + chr(0): "value"},
+        {"key": "value" + chr(0)},
+        ["fine", ["nested" + chr(0)]],
+        "lone surrogate \udcff",
+        {"key": ["\ud800 leading"]},
+    )
+    for value in unstorable:
+        th.assert_true(protocol.has_unstorable_text(value),
+                       f"{value!r} cannot be stored by PostgreSQL and must be detected")
+    storable = (
+        "plain ascii", "unicode 雪 and astral \U0001f600 text", "",
+        0, 7, True, None, 1.5,
+        {"key": "value"}, ["a", 1, None, {"nested": "ok"}],
+        json.loads('"\\ud83d\\ude00"'),
+    )
+    for value in storable:
+        th.assert_true(not protocol.has_unstorable_text(value),
+                       f"{value!r} is storable and must not be rejected")
+
+    th.assert_eq(protocol.ACK_STATUSES, ("accepted", "duplicate", "rejected", "retry"),
+                 "the ack status vocabulary is a deployed-sensor compat contract - "
+                 "terminal outcomes must reuse 'rejected', never a new status")
+    with th.assert_raises(protocol.ProtocolError):
+        protocol.validate_ack({
+            "schema": protocol.ACK_SCHEMA, "version": protocol.PROTOCOL_VERSION,
+            "results": [{"id": "a" * 64, "status": "dead"}],
+        })

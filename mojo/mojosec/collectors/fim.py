@@ -6,6 +6,7 @@ import os
 import stat
 
 from ..events import observation
+from ..evidence import safe_text
 from ..expected_changes import ExpectedChangeError, load_manifest, annotation
 from ..profiles import PRIVATE_TREES
 from ..protocol import canonical_json
@@ -290,7 +291,10 @@ class FimCollector:
                 change = "modified"
             entry = after or before or {}
             attributes = {
-                "path": path[:2048], "change": change,
+                # The reported path is normalized (surrogateescape bytes become
+                # storable text); the fingerprint below keeps the raw path so
+                # event identity and dedup are unchanged.
+                "path": safe_text(path)[:2048], "change": change,
                 "kind": entry.get("kind", "unknown"),
             }
             for field in (

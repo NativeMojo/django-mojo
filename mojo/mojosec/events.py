@@ -8,7 +8,10 @@ from .protocol import SEVERITIES, normalize_timestamp, utc_now
 
 
 def bounded_text(value, limit):
-    value = str(value or "").replace("\x00", "").strip()
+    # Normalize NUL and lone surrogates so every summary and bounded field is
+    # storable by construction on the receiving side.
+    value = str(value or "").replace("\x00", "")
+    value = value.encode("utf-8", errors="replace").decode("utf-8").strip()
     return value[:limit]
 
 

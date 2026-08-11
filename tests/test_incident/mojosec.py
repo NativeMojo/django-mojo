@@ -590,3 +590,268 @@ def test_mojosec_receipt_pruning_keeps_pending_outbox_rows(opts):
                    "pending outbox rows must never be removed by age retention")
     th.assert_true(MojoSecReceipt.objects.filter(pk=queued.pk).exists(),
                    "queued handler work must never be removed by age retention")
+
+
+@th.django_unit_test()
+def test_mojosec_poison_batch_is_terminally_rejected(opts):
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models import MojoSecReceipt
+    from mojo.apps.incident.services import mojosec
+
+    key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+
+    poisoned = _golden_batch()
+    poisoned["policy_revision"] = "rev" + chr(0)
+    with mock.patch.object(mojosec, "logger") as log:
+        ack = mojosec.ingest_batch(key, poisoned)
+    th.assert_eq([row["status"] for row in ack["results"]],
+                 ["rejected"] * len(poisoned["events"]),
+                 "a poisoned policy_revision must terminally reject every event, never retry")
+    th.assert_true(all("policy_revision" in row["reason"] for row in ack["results"]),
+                   "the terminal rejection must name the poisoned batch field")
+    poison_ids = [event["id"] for event in poisoned["events"]]
+    th.assert_eq(MojoSecReceipt.objects.filter(
+        api_key=key, wire_event_id__in=poison_ids).count(), 0,
+        "a poisoned batch must create no receipt rows at all")
+    th.assert_eq(log.warning.call_count, 1,
+                 "a poisoned batch must write one warning line, not one per event")
+    th.assert_eq(log.exception.call_count, 0,
+                 "a poisoned batch must never write a stack trace")
+
+    with mock.patch.object(mojosec, "logger") as log:
+        again = mojosec.ingest_batch(key, poisoned)
+    th.assert_eq([row["status"] for row in again["results"]],
+                 ["rejected"] * len(poisoned["events"]),
+                 "re-sending the poison batch must be statelessly terminal, never retry")
+
+    batch = _golden_batch()
+    template = batch["events"][0]
+    nul_event = copy.deepcopy(template)
+    nul_event["id"] = "5d" * 32
+    nul_event["summary"] = "bad summary " + chr(0)
+    surrogate_event = copy.deepcopy(template)
+    surrogate_event["id"] = "6d" * 32
+    surrogate_event["attributes"] = dict(
+        surrogate_event["attributes"], note="bad attribute \udcff")
+    clean_event = copy.deepcopy(template)
+    clean_event["id"] = "7e" * 32
+    batch["events"] = [nul_event, surrogate_event, clean_event]
+    with mock.patch.object(mojosec, "logger") as log:
+        mixed = mojosec.ingest_batch(key, batch)
+    th.assert_eq([row["status"] for row in mixed["results"]],
+                 ["rejected", "rejected", "accepted"],
+                 "per-event poison must reject only the unstorable events")
+    th.assert_true(all("unstorable" in row["reason"]
+                       for row in mixed["results"][:2]),
+                   "per-event rejections must carry the unstorable-text reason")
+    th.assert_eq(MojoSecReceipt.objects.filter(
+        api_key=key, wire_event_id__in=["5d" * 32, "6d" * 32]).count(), 0,
+        "poison events must not persist receipt rows")
+    th.assert_true(MojoSecReceipt.objects.filter(
+        api_key=key, wire_event_id="7" * 64).exists(),
+        "the clean event beside poison must still be accepted and persisted")
+    th.assert_eq(log.exception.call_count, 0,
+                 "per-event poison must never write stack traces")
+
+
+@th.django_unit_test()
+def test_mojosec_storage_errors_ack_rejected_not_retry(opts):
+    from django.db import DataError
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.services import mojosec
+
+    key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+    batch = _golden_batch()
+    batch["events"] = [copy.deepcopy(batch["events"][0])]
+    batch["events"][0]["id"] = "8" * 64
+
+    with mock.patch.object(mojosec, "_create_receipt",
+                           side_effect=DataError("bad value")), \
+            mock.patch.object(mojosec, "logger") as log:
+        ack = mojosec.ingest_batch(key, batch)
+    th.assert_eq(ack["results"][0]["status"], "rejected",
+                 "a value-domain storage error must map to a terminal rejection")
+    th.assert_eq(ack["results"][0]["reason"], "event could not be stored",
+                 "the storage-error rejection must carry its reason")
+    th.assert_eq(log.exception.call_count, 0,
+                 "value-domain storage errors must log one line, not a stack trace")
+
+    with mock.patch.object(mojosec, "_create_receipt",
+                           side_effect=RuntimeError("transient outage")):
+        control = mojosec.ingest_batch(key, batch)
+    th.assert_eq(control["results"][0]["status"], "retry",
+                 "genuinely transient failures must keep today's retry behavior")
+
+
+@th.django_unit_test()
+def test_mojosec_handler_attempt_cap_dead_letters(opts):
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models import MojoSecReceipt, RuleSet
+    from mojo.apps.incident.services import mojosec
+    from mojo.helpers import dates
+    from mojo.helpers.settings import settings
+
+    key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+    cap = settings.get_static("MOJOSEC_HANDLER_MAX_ATTEMPTS", 100, kind="int")
+    rule = RuleSet.objects.create(
+        category="mojosec.auth.ssh_failure", name="Receiver test cap",
+        handler="notify://security", priority=50)
+    now = dates.utcnow()
+
+    def receipt_at(event_id, digest, attempts):
+        return MojoSecReceipt.objects.create(
+            api_key=key, sensor_id=SENSOR_ID, wire_event_id=event_id,
+            payload_digest=digest, rule_set=rule,
+            publish_state=MojoSecReceipt.PUBLISH_PUBLISHED, published_at=now,
+            handler_state=MojoSecReceipt.HANDLER_FAILED,
+            handler_attempts=attempts, handler_job_id="e" * 32,
+            replay_features={"event": {}})
+
+    capped = receipt_at("a1" * 32, "a2" * 32, cap)
+    below = receipt_at("b1" * 32, "b2" * 32, cap - 1)
+
+    with mock.patch.object(RuleSet, "run_handler", return_value=True) as run:
+        mojosec.replay_handler_outbox()
+    capped.refresh_from_db()
+    below.refresh_from_db()
+    th.assert_eq(capped.handler_state, MojoSecReceipt.HANDLER_DEAD,
+                 "a receipt at the attempt cap must be swept to the terminal dead state")
+    th.assert_eq(below.handler_state, MojoSecReceipt.HANDLER_DISPATCHED,
+                 "a receipt below the cap must still be re-dispatched")
+    dispatched_pks = {call.kwargs["idempotency_prefix"]
+                      for call in run.call_args_list}
+    th.assert_true(all(f"mojosec:{capped.pk}:" not in prefix
+                       for prefix in dispatched_pks),
+                   "the dead-lettered receipt must never reach run_handler again")
+
+    failing = receipt_at("c1" * 32, "c2" * 32, 0)
+    with mock.patch.object(RuleSet, "run_handler",
+                           side_effect=RuntimeError("jobs.publish down")):
+        mojosec.replay_handler_outbox()
+    failing.refresh_from_db()
+    th.assert_eq(failing.handler_state, MojoSecReceipt.HANDLER_FAILED,
+                 "a failing cron replay must return the receipt to the capped loop")
+    th.assert_eq(failing.handler_attempts, 1,
+                 "cron replays that fail must consume the attempt budget the cap is sized for")
+
+    with mock.patch.object(RuleSet, "run_handler", return_value=True):
+        mojosec.replay_handler_outbox()
+    capped.refresh_from_db()
+    th.assert_eq(capped.handler_state, MojoSecReceipt.HANDLER_DEAD,
+                 "later cron passes must leave the dead row untouched")
+
+    replay_batch = _golden_batch()
+    replay_batch["events"] = [copy.deepcopy(replay_batch["events"][0])]
+    replay_batch["events"][0]["id"] = capped.wire_event_id
+    MojoSecReceipt.objects.filter(pk=capped.pk).update(
+        payload_digest=mojosec._payload_digest(replay_batch["events"][0]))
+    with mock.patch.object(RuleSet, "run_handler", return_value=True) as run:
+        replay = mojosec.ingest_batch(key, replay_batch)
+    th.assert_eq(replay["results"][0]["status"], "duplicate",
+                 "replaying a dead receipt's event must ack duplicate without dispatching")
+    th.assert_eq(run.call_count, 0,
+                 "a dead receipt replay must never dispatch its handler")
+
+
+@th.django_unit_test()
+def test_mojosec_stale_queued_handler_recovers(opts):
+    from datetime import timedelta
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models import MojoSecReceipt, RuleSet
+    from mojo.apps.incident.services import mojosec
+    from mojo.helpers import dates
+
+    key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+    rule = RuleSet.objects.create(
+        category="mojosec.auth.ssh_failure", name="Receiver test stale queue",
+        handler="notify://security", priority=50)
+    now = dates.utcnow()
+
+    def queued_receipt(event_id, digest):
+        return MojoSecReceipt.objects.create(
+            api_key=key, sensor_id=SENSOR_ID, wire_event_id=event_id,
+            payload_digest=digest, rule_set=rule,
+            publish_state=MojoSecReceipt.PUBLISH_PUBLISHED, published_at=now,
+            handler_state=MojoSecReceipt.HANDLER_QUEUED,
+            handler_job_id="f" * 32, replay_features={"event": {}})
+
+    stale = queued_receipt("d1" * 32, "d2" * 32)
+    fresh = queued_receipt("e1" * 32, "e2" * 32)
+    MojoSecReceipt.objects.filter(pk=stale.pk).update(
+        modified=now - timedelta(seconds=3600))
+
+    with mock.patch.object(RuleSet, "run_handler", return_value=True):
+        mojosec.replay_handler_outbox()
+    stale.refresh_from_db()
+    fresh.refresh_from_db()
+    th.assert_eq(stale.handler_state, MojoSecReceipt.HANDLER_DISPATCHED,
+                 "a queued receipt whose dispatch job vanished must be recovered by age")
+    th.assert_eq(fresh.handler_state, MojoSecReceipt.HANDLER_QUEUED,
+                 "recently queued receipts must be left for their live dispatch job")
+
+    broken = queued_receipt("f1" * 32, "f2" * 32)
+    MojoSecReceipt.objects.filter(pk=broken.pk).update(
+        modified=now - timedelta(seconds=3600))
+    with mock.patch.object(RuleSet, "run_handler",
+                           side_effect=RuntimeError("still down")):
+        mojosec.replay_handler_outbox()
+    broken.refresh_from_db()
+    th.assert_eq(broken.handler_state, MojoSecReceipt.HANDLER_FAILED,
+                 "a failed stale-queue recovery must enter the capped retry loop")
+    th.assert_eq(broken.handler_attempts, 1,
+                 "a failed stale-queue recovery must consume the attempt budget")
+
+
+@th.django_unit_test()
+def test_mojosec_pruned_event_receipt_terminates(opts):
+    from datetime import timedelta
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models import MojoSecReceipt
+    from mojo.apps.incident.services import mojosec
+    from mojo.helpers import dates
+
+    key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+    now = dates.utcnow()
+    batch = _golden_batch()
+    batch["events"] = [copy.deepcopy(batch["events"][0])]
+    batch["events"][0]["id"] = "9a" * 32
+    digest = mojosec._payload_digest(batch["events"][0])
+
+    orphan = MojoSecReceipt.objects.create(
+        api_key=key, sensor_id=SENSOR_ID, wire_event_id="9a" * 32,
+        payload_digest=digest, event=None, replay_features={"event": {}})
+    MojoSecReceipt.objects.filter(pk=orphan.pk).update(
+        created=now - timedelta(days=2))
+
+    with mock.patch.object(mojosec, "logger") as log:
+        ack = mojosec.ingest_batch(key, batch)
+    th.assert_eq(ack["results"][0]["status"], "rejected",
+                 "a receipt whose Event was pruned must terminally reject, never retry")
+    th.assert_true("pruned" in ack["results"][0]["reason"],
+                   "the pruned-evidence rejection must carry its reason")
+    orphan.refresh_from_db()
+    th.assert_eq(orphan.publish_state, MojoSecReceipt.PUBLISH_DEAD,
+                 "the pruned-evidence receipt must reach the terminal dead state")
+    th.assert_eq(log.exception.call_count, 0,
+                 "the pruned-evidence path must not write stack traces")
+
+    swept = MojoSecReceipt.objects.create(
+        api_key=key, sensor_id=SENSOR_ID, wire_event_id="9b" * 32,
+        payload_digest="9c" * 32, event=None, replay_features={"event": {}})
+    MojoSecReceipt.objects.filter(pk=swept.pk).update(
+        created=now - timedelta(days=2))
+    mojosec.replay_handler_outbox()
+    swept.refresh_from_db()
+    th.assert_eq(swept.publish_state, MojoSecReceipt.PUBLISH_DEAD,
+                 "the cron must terminalize pruned-event receipts that never re-POST")
+
+    survivor = MojoSecReceipt.objects.create(
+        api_key=key, sensor_id=SENSOR_ID, wire_event_id="9d" * 32,
+        payload_digest="9e" * 32, event=None, replay_features={"event": {}})
+    mojosec.prune_receipts(now=now + timedelta(days=52))
+    th.assert_true(not MojoSecReceipt.objects.filter(pk=orphan.pk).exists(),
+                   "aged-out dead receipts must be pruned")
+    th.assert_true(not MojoSecReceipt.objects.filter(pk=swept.pk).exists(),
+                   "cron-swept dead receipts must be pruned once aged")
+    th.assert_true(MojoSecReceipt.objects.filter(pk=survivor.pk).exists(),
+                   "live pending receipts must survive the dead-row prune")
