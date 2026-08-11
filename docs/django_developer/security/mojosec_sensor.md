@@ -20,7 +20,7 @@ package from a root-owned working directory with safe-path mode:
 |---|---|---|
 | journald | accepted SSH logins, failed SSH authentication, sudo commands/failures, non-SSH PAM session opens, systemd/kernel failures and OOM activity | routine PAM close chatter and ordinary service notices |
 | structured nginx log | known exploit-path probes, 401/403 denials, and 5xx responses; bounded raw request target, referrer, and user agent in root-only sensor state and the protected central receipt | ordinary 2xx/3xx/404/499 traffic, User-Agent-only suspicion, bodies, cookies, authorization, arbitrary headers, and raw log lines |
-| immutable tiered integrity | 60-second host/config FIM, six-hour boot/system-binary FIM, RPM verification, and system-Python package integrity under the packaged `al2023-web-v1` profile | application release trees, MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
+| immutable tiered integrity | 60-second host/config FIM, six-hour boot/system-binary FIM, RPM verification, and system-Python package integrity under the packaged `al2023-web-v2` profile | application release trees, MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
 
 Sudo evidence retains bounded raw command context only in the root-owned sensor
 spool and protected central receipt: actor, target user, TTY, audit context,
@@ -102,7 +102,7 @@ The app/fleet desired-policy source contains no endpoint, identity, or secret:
 ```json
 {
   "version": 1,
-  "profile": "al2023-web-v1",
+  "profile": "al2023-web-v2",
   "policy_revision": "prod-2026-08-08",
   "poll_seconds": 5,
   "collectors": {
@@ -139,7 +139,7 @@ The app/fleet desired-policy source contains no endpoint, identity, or secret:
 }
 ```
 
-The recommended AL2023 policy selects the immutable `al2023-web-v1` profile by
+The recommended AL2023 policy selects the immutable `al2023-web-v2` profile by
 name. Its fast tier covers `/etc` (excluding `/etc/mojosec`), exact root and
 `ec2-user` persistence locations, cron/at/cloud-init scripts, local executables,
 and `/usr/local/lib` including system Python site-packages. Its slow tier covers
@@ -148,6 +148,16 @@ strictly parsed package drift. Profile paths and bounds cannot be overridden by
 desired policy: changing the graph requires a new packaged profile name and
 digest. Legacy custom FIM targets remain supported only when no profile is
 selected.
+
+`al2023-web-v1` remains packaged for baseline identity and rollback, but must
+not be used for a new AL2023 baseline. Its cloud-init script target descends
+through `/var/lib/cloud/instance`, a mutable symlink that descriptor-safe
+traversal refuses. V2 removes only that redundant descendant and retains
+recursive script-content coverage through `/var/lib/cloud/instances`. It does
+not follow or separately attest the mutable alias metadata. Existing v1 state
+remains active until the operator explicitly selects v2, completes every
+preview tier, and initializes the exact v2 digest; mismatch is visible digest
+drift and never an implicit rebaseline.
 
 The unit uses `ProtectHome=tmpfs` and exact read-only binds for the approved
 root and `ec2-user` SSH, user-systemd, local-bin, AWS config, and shell startup
@@ -184,7 +194,7 @@ Events are then delivered whether or not an annotation arrives. Malformed
 manifests emit a visible `fim.expected_change_error`; they never block expiry
 delivery.
 
-Deploy the producer-capable package before activating `al2023-web-v1`. During
+Deploy the producer-capable package before activating `al2023-web-v2`. During
 that first stage the profile stays inactive while normal deploy, node setup,
 and certificate operations prove the stable helper path. Then preview every
 integrity tier and initialize only its exact digest. Rollback selects a
@@ -371,7 +381,7 @@ without nginx reopen or a stalled cursor. Copy/truncate has a narrow inherent
 writer race, so compare generated probe IDs/counts across the forced rotation
 and investigate any unexplained gap. `maxsize 50M` is evaluated by logrotate's
 timer/command, not continuously.
-For `al2023-web-v1`, perform this on a disposable AL2023 node after its
+For `al2023-web-v2`, perform this on a disposable AL2023 node after its
 producer-first rollout. Confirm the initialized `fast`, `slow`, and `rpm`
 tiers, their 60-second/six-hour schedules, the system Python RPM/non-RPM
 partition, and the `ProtectHome=tmpfs` exact-bind mount probe. Also create,

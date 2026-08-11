@@ -572,7 +572,7 @@ def test_standard_profile_is_immutable_bounded_and_covers_system_python(opts):
     from mojo.mojosec.config import build_config
     from mojo.mojosec.profiles import PRIVATE_TREES, resolve_profile
 
-    profile = resolve_profile("al2023-web-v1")
+    profile = resolve_profile("al2023-web-v2")
     th.assert_eq(len(profile["digest"]), 64,
                  "the immutable profile must carry one deterministic SHA-256 identity")
     th.assert_eq(profile["tiers"]["fast"]["interval_seconds"], 60,
@@ -594,12 +594,65 @@ def test_standard_profile_is_immutable_bounded_and_covers_system_python(opts):
     config = build_config({
         "sensor_id": "profile-test",
         "endpoint": "https://example.invalid/api/incident/mojosec/batch",
-        "profile": "al2023-web-v1",
+        "profile": "al2023-web-v2",
     })
     th.assert_eq(set(config["collectors"]["fim"]["tiers"]), {"fast", "slow"},
                  "selecting the profile name must resolve the packaged graph")
     th.assert_true(config["collectors"]["rpm"]["enabled"],
                    "the standard profile must monitor the imported system Python environment")
+
+
+@th.django_unit_test()
+def test_al2023_v2_uses_canonical_cloud_instance_tree_without_following_alias(opts):
+    from mojo.mojosec.collectors.fim import FimCollector
+    from mojo.mojosec.profiles import resolve_profile
+
+    v1 = resolve_profile("al2023-web-v1")
+    v2 = resolve_profile("al2023-web-v2")
+    th.assert_eq(v1["digest"],
+                 "6a45b233ae8dd87e77456d88a037ea435e6e9240d07884814fae4a23d30f3e0e",
+                 "the retained v1 profile must keep its published immutable identity")
+    th.assert_eq(v2["digest"],
+                 "1cb26a911e1a2c2418d5a6428c873bc4118a39c8731c4d8442d7c4f7f3cbd14f",
+                 "the v2 profile graph must keep its published immutable identity")
+    v1_paths = [target["path"] for target in v1["tiers"]["fast"]["targets"]]
+    v2_paths = [target["path"] for target in v2["tiers"]["fast"]["targets"]]
+    th.assert_true("/var/lib/cloud/instance/scripts" in v1_paths,
+                   "v1 must remain byte-stable for retained baselines and rollback")
+    th.assert_true("/var/lib/cloud/instance/scripts" not in v2_paths,
+                   "v2 must remove the descendant of AL2023's mutable instance alias")
+    th.assert_true("/var/lib/cloud/instances" in v2_paths,
+                   "v2 must retain canonical recursive cloud-init instance coverage")
+
+    with tempfile.TemporaryDirectory() as root:
+        root = os.path.realpath(root)
+        cloud = os.path.join(root, "cloud")
+        instances = os.path.join(cloud, "instances")
+        instance = os.path.join(cloud, "instance")
+        scripts = os.path.join(instances, "i-test", "scripts")
+        os.makedirs(scripts)
+        script = os.path.join(scripts, "part-001")
+        with open(script, "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\necho ready\n")
+        os.symlink(os.path.join("instances", "i-test"), instance)
+
+        alias_scan = FimCollector({
+            "targets": [{"path": os.path.join(instance, "scripts"), "recursive": True}],
+            "max_entries": 100, "max_file_bytes": 1024 * 1024, "max_depth": 16,
+        }).scan()
+        th.assert_eq(alias_scan["complete"], False,
+                     "descriptor-safe traversal must fail closed at the instance symlink")
+        th.assert_true(script not in alias_scan["snapshot"],
+                       "a symlink-descendant target must never be followed into a baseline")
+
+        canonical_scan = FimCollector({
+            "targets": [{"path": instances, "recursive": True}],
+            "max_entries": 100, "max_file_bytes": 1024 * 1024, "max_depth": 16,
+        }).scan()
+        th.assert_eq(canonical_scan["complete"], True,
+                     "the canonical cloud-init instances tree must scan completely")
+        th.assert_true(script in canonical_scan["snapshot"],
+                       "canonical recursive coverage must retain cloud-init script bytes")
 
 
 @th.django_unit_test()

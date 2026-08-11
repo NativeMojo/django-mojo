@@ -180,13 +180,16 @@ def test_effective_profile_requires_exact_packaged_fim_and_rpm_graph(opts):
 
     supplied = {
         "version": 1,
-        "profile": "al2023-web-v1",
+        "profile": "al2023-web-v2",
         "sensor_id": "prod-web-i-0123456789abcdef0",
         "endpoint": "https://incident.example/api/incident/mojosec/batch",
     }
     effective = build_config(supplied)
     th.assert_eq(validate_effective_config(copy.deepcopy(effective)), effective,
                  "the exact packaged profile graph must be a valid effective artifact")
+    v1_effective = build_config(dict(supplied, profile="al2023-web-v1"))
+    th.assert_eq(v1_effective["profile"], "al2023-web-v1",
+                 "published v1 policy selection must remain valid for rollback compatibility")
 
     mutations = (
         (("collectors", "fim", "targets"), [{"path": "/etc", "recursive": True}]),
@@ -220,7 +223,7 @@ def test_effective_config_loader_is_root_required_and_descriptor_safe(opts):
 
     effective = build_config({
         "version": 1,
-        "profile": "al2023-web-v1",
+        "profile": "al2023-web-v2",
         "sensor_id": "prod-web-i-0123456789abcdef0",
         "endpoint": "https://incident.example/api/incident/mojosec/batch",
     })

@@ -36,12 +36,25 @@ def test_profile_activation_is_all_tier_atomic_and_keeps_rollback_state(opts):
                      "one exclusive transaction must select only a complete profile generation")
 
         second = {"name": "al2023-web-v2", "version": 2, "digest": "b" * 64}
+        second_keys = {
+            tier: f"al2023-web-v2:{'b' * 64}:{tier}"
+            for tier in ("fast", "slow", "rpm")
+        }
+        drifted = store.fim_profile_health(second, second_keys)
+        th.assert_eq(store.active_fim_profile(), first,
+                     "selecting v2 in desired config must not mutate an active v1 baseline")
+        th.assert_eq(drifted["active"], False,
+                     "v2 must remain inactive before the explicit activation ceremony")
+        th.assert_eq(drifted["digest_drift"], True,
+                     "a configured-v2 versus active-v1 mismatch must fail closed as digest drift")
         second_scans = {
             tier: {"tier": tier, "baseline_key": f"al2023-web-v2:{'b' * 64}:{tier}",
                    "complete": True, "snapshot": {f"/{tier}-2": {"kind": "file"}}}
             for tier in ("fast", "slow", "rpm")
         }
         store.activate_fim_profile(second, second_scans, reason="upgrade")
+        th.assert_eq(store.active_fim_profile(), second,
+                     "only explicit complete activation may select the v2 generation")
         rolled_back = store.rollback_fim_profile("a" * 64)
         th.assert_eq(rolled_back, first,
                      "rollback must select an intact retained name+digest generation")

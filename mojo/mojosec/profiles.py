@@ -93,7 +93,25 @@ AL2023_WEB_V1 = {
 }
 
 
-PROFILES = {AL2023_WEB_V1["name"]: AL2023_WEB_V1}
+def _al2023_web_v2():
+    """Return the AL2023 graph without the cloud-init symlink descendant."""
+    profile = json.loads(json.dumps(AL2023_WEB_V1))
+    profile["name"] = "al2023-web-v2"
+    profile["version"] = 2
+    profile["tiers"]["fast"]["targets"] = [
+        target for target in profile["tiers"]["fast"]["targets"]
+        if target["path"] != "/var/lib/cloud/instance/scripts"
+    ]
+    return profile
+
+
+AL2023_WEB_V2 = _al2023_web_v2()
+
+
+PROFILES = {
+    AL2023_WEB_V1["name"]: AL2023_WEB_V1,
+    AL2023_WEB_V2["name"]: AL2023_WEB_V2,
+}
 
 
 class ProfileError(ValueError):
@@ -168,4 +186,5 @@ def resolve_profile(name):
 
 # Import-time validation makes an accidental edit fail in tests and packaging,
 # before a mutable deployment can ever select the new graph.
-resolve_profile("al2023-web-v1")
+for _profile_name in PROFILES:
+    resolve_profile(_profile_name)

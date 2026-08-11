@@ -164,7 +164,7 @@ def test_named_profile_is_expanded_once_into_effective_config(opts):
 
     desired = {
         "version": 1,
-        "profile": "al2023-web-v1",
+        "profile": "al2023-web-v2",
         "policy_revision": "fleet-profile-r1",
     }
     enrollment = {
@@ -182,7 +182,7 @@ def test_named_profile_is_expanded_once_into_effective_config(opts):
     with mock.patch.object(deploy, "_read_json_file", side_effect=read):
         config, payload, _ = deploy._prepare_effective_config()
 
-    profile = resolve_profile("al2023-web-v1")
+    profile = resolve_profile("al2023-web-v2")
     th.assert_eq(config["collectors"]["fim"]["tiers"], profile["tiers"],
                  "effective preparation must preserve every immutable profile FIM tier")
     th.assert_eq(config["collectors"]["rpm"], dict(profile["rpm"], enabled=True),
