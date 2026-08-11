@@ -409,6 +409,53 @@ def test_fim_baseline_and_event_are_updated_atomically(opts):
 
 
 @th.django_unit_test()
+def test_incomplete_fim_scan_never_advances_baseline_and_queues_one_overflow(opts):
+    from mojo.mojosec.events import observation
+    from mojo.mojosec.store import Store
+
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        store = Store(root, "sensor-test", AGGREGATION, DELIVERY)
+        try:
+            baseline = {"/etc/example": {"kind": "file", "sha256": "a" * 64}}
+            store.record_fim_scan("profile", baseline, [], complete=True)
+            th.assert_true(store.fim_initialized("profile"),
+                           "a complete first scan must initialize the FIM baseline")
+
+            partial = {"/etc/example": {"kind": "file", "sha256": "b" * 64}}
+            for index in range(3):
+                overflow = observation(
+                    "fim.overflow", "critical", "Filesystem integrity scan was incomplete",
+                    attributes={"profile": "profile", "tier": "fast", "entries": 1},
+                    fingerprint_values=("profile", "fast"), aggregate=False,
+                    observed_at=f"2026-08-11T00:00:0{index}Z",
+                )
+                store.record_fim_scan("profile", partial, [overflow], complete=False)
+
+            th.assert_eq(store.load_fim_baseline("profile"), baseline,
+                         "an incomplete scan must never advance the persistent baseline")
+            th.assert_true(store.fim_initialized("profile"),
+                           "incomplete scans must not clear the initialized marker")
+            th.assert_eq(store.stats()["spooled_events"], 3,
+                         "each incomplete interval must queue exactly its one overflow event")
+
+            changed = {"/etc/example": {"kind": "file", "sha256": "c" * 64}}
+            change = observation(
+                "fim.change", "high", "Targeted filesystem integrity change",
+                attributes={"path": "/etc/example", "change": "modified"},
+                fingerprint_values=("/etc/example", "modified", "c" * 64),
+                aggregate=False, observed_at="2026-08-11T00:01:00Z",
+            )
+            store.record_fim_scan("profile", changed, [change], complete=True)
+            th.assert_eq(store.load_fim_baseline("profile"), changed,
+                         "the next complete scan must advance the baseline with its evidence")
+            th.assert_eq(store.stats()["spooled_events"], 4,
+                         "the complete reconcile scan must queue its change event")
+        finally:
+            store.close()
+
+
+@th.django_unit_test()
 def test_sender_gzips_batches_and_removes_only_acknowledged_events(opts):
     from mojo.mojosec.sender import Sender
     from mojo.mojosec.store import Store

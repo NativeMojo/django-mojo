@@ -778,3 +778,88 @@ def test_rpm_ownership_is_rebuilt_for_every_slow_scan(opts):
                  "the next slow scan must query ownership again after package changes")
     th.assert_eq(len(calls), 2,
                  "RPM ownership cache and its query budget must be scan-local")
+
+
+@th.django_unit_test()
+def test_incomplete_fim_scan_emits_only_overflow_until_reconciled(opts):
+    from mojo.mojosec.collectors.fim import FimCollector
+
+    with tempfile.TemporaryDirectory() as root:
+        root = os.path.realpath(root)
+        watched = os.path.join(root, "watched")
+        os.mkdir(watched)
+        for index in range(10):
+            with open(os.path.join(watched, f"file-{index}.conf"), "w", encoding="utf-8") as handle:
+                handle.write(f"content {index}\n")
+
+        bounded = FimCollector({
+            "targets": [{"path": watched, "recursive": True}],
+            "max_entries": 4, "max_file_bytes": 1024 * 1024, "max_depth": 16,
+        })
+        partial = bounded.scan()
+        th.assert_eq(partial["complete"], False,
+                     "a scan capped below the tree size must report itself incomplete")
+        th.assert_true(len(partial["snapshot"]) > 0,
+                       "the capped scan must still carry a non-empty partial snapshot")
+
+        observations = bounded.diff({}, partial)
+        th.assert_eq([item["kind"] for item in observations], ["fim.overflow"],
+                     "an incomplete scan must yield exactly one overflow and zero change events")
+        th.assert_eq(observations[0]["severity"], "critical",
+                     "the incomplete-scan overflow signal must stay critical")
+        th.assert_eq(observations[0]["attributes"]["entries"], len(partial["snapshot"]),
+                     "the overflow evidence must report the partial snapshot size")
+
+        for _ in range(3):
+            repeat = bounded.diff({}, partial)
+            th.assert_eq([item["kind"] for item in repeat], ["fim.overflow"],
+                         "every interval of a persistently incomplete scan must emit only the overflow")
+
+        manifest_path = os.path.join(root, "expected.json")
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        with_manifest = FimCollector({
+            "targets": [{"path": watched, "recursive": True}],
+            "max_entries": 4, "max_file_bytes": 1024 * 1024, "max_depth": 16,
+        }, expected_changes_path=manifest_path)
+        noisy = with_manifest.scan()
+        th.assert_eq(noisy["complete"], False,
+                     "the manifest-bearing collector must also overflow at the same cap")
+        th.assert_eq([item["kind"] for item in with_manifest.diff({}, noisy)], ["fim.overflow"],
+                     "a malformed manifest must stay silent while the scan is incomplete")
+
+        adequate = FimCollector({
+            "targets": [{"path": watched, "recursive": True}],
+            "max_entries": 100, "max_file_bytes": 1024 * 1024, "max_depth": 16,
+        })
+        baseline_scan = adequate.scan()
+        th.assert_eq(baseline_scan["complete"], True,
+                     "an adequately bounded scan over the fixture must complete")
+        baseline = baseline_scan["snapshot"]
+
+        modified_path = os.path.join(watched, "file-0.conf")
+        deleted_path = os.path.join(watched, "file-1.conf")
+        with open(modified_path, "w", encoding="utf-8") as handle:
+            handle.write("changed content\n")
+        os.remove(deleted_path)
+
+        rescan = adequate.scan()
+        th.assert_eq(rescan["complete"], True,
+                     "the reconcile fixture scan must complete")
+        fake_incomplete = dict(rescan)
+        fake_incomplete["complete"] = False
+        th.assert_eq([item["kind"] for item in adequate.diff(baseline, fake_incomplete)],
+                     ["fim.overflow"],
+                     "real pending changes must stay withheld while a scan is incomplete")
+
+        reconciled = adequate.diff(baseline, rescan)
+        th.assert_true(all(item["kind"] == "fim.change" for item in reconciled),
+                       "a complete reconcile scan must emit only change events, no overflow")
+        changes = {item["attributes"]["path"]: item["attributes"]["change"]
+                   for item in reconciled}
+        th.assert_eq(changes.get(modified_path), "modified",
+                     "the first complete scan must report the modification deferred while incomplete")
+        th.assert_eq(changes.get(deleted_path), "deleted",
+                     "the first complete scan must report the deletion deferred while incomplete")
+        th.assert_true("created" not in changes.values(),
+                       "a reconcile against the retained baseline must not invent created paths")
