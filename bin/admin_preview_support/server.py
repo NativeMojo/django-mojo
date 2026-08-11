@@ -518,6 +518,18 @@ class PreviewHandler(BaseHTTPRequestHandler):
         except (OSError, ssl.SSLError, http.client.HTTPException, ValueError):
             return self._send({"error": "Upstream request failed"}, status=502)
 
+    def _serve_preview_context(self):
+        try:
+            if not type(self).upstream:
+                raise PreviewProxyError("Live preview context is unavailable")
+            self._proxy_gate()
+            return self._send({
+                "schema_version": 1,
+                "suggested_base_url": type(self).upstream["origin"],
+            })
+        except PreviewProxyError as error:
+            return self._send({"error": str(error)}, status=403)
+
     def _serve_admin(self, parsed):
         if parsed.path in ("/", "/admin", "/admin/"):
             target = ROOT / "index.html"
@@ -689,6 +701,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
             if parsed.path == "/":
                 return self._send("", "text/plain", 302,
                                   {"Location": "/admin/"})
+            if parsed.path == "/__preview__/context":
+                return self._serve_preview_context()
             if parsed.path in ("/admin", "/admin/") or parsed.path.startswith("/admin/assets/"):
                 return self._serve_admin(parsed)
             return self._proxy()

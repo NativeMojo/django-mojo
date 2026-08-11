@@ -238,6 +238,15 @@ BASE_URL, while unrelated Django failures never claim the section can fix them.
 Check codes, bounded details, and the operation log stay under closed Technical
 details disclosures.
 
+The BASE_URL choice is prefilled from a trustworthy browser context. A direct
+HTTPS Admin session proposes its own origin. The local live-QA bridge instead
+returns the public upstream origin that it already parsed, DNS-validated, and
+pinned; the bridge context endpoint is protected by the same Host, browser
+session, and same-origin gate as proxied requests. This is only a suggestion:
+the operator must continue, and the existing protected writer canonicalizes
+and validates the value before persisting it. An arbitrary request `Host`
+header is never stored automatically.
+
 There is no duplicate Network & Hosting resource directory in Setup. A failed
 row may have at most one exact action: configure its durable Setup choice, open
 its first-class owner (Domains & DNS or Web Apps), or change a named deployment
