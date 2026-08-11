@@ -1,4 +1,4 @@
-import {api, badge, h, icon, pageHeader, statusTone} from '../../core.js';
+import {api, badge, formatDate, h, icon, pageHeader, statusTone} from '../../core.js';
 import {openInspector} from '../../components/overlays.js';
 import {activityHref, decodeRouteState, returnLocation, routeHref} from '../../components/routes.js';
 import {permissionDeniedState} from '../../components/views.js';
@@ -111,7 +111,7 @@ function operationView(operation, actions) {
         !terminal && operation.status !== 'waiting_for_choice' ? h('div', {class: 'running-state'}, icon('activity'), h('div', {}, h('strong', {text: 'Reconciling authoritative state'}), h('p', {text: 'The operation advances one durable step at a time. It is safe to close and resume.'}))) : null,
         h('div', {class: 'form-actions'}, cancellable ? h('button', {class: 'button ghost', onclick: actions.cancel}, 'Cancel operation') : null))),
     h('details', {class: 'operation-log', open: true}, h('summary', {text: 'Live operation log'}),
-      h('ol', {}, ...(operation.log || []).map((entry) => h('li', {}, h('time', {text: new Date(entry.at).toLocaleTimeString()}), h('span', {text: entry.message}))))));
+      h('ol', {}, ...(operation.log || []).map((entry) => h('li', {}, h('time', {text: formatDate(entry.at)}), h('span', {text: entry.message}))))));
 }
 
 export async function setupPage() {
@@ -182,7 +182,7 @@ function evidenceCard(name, section) {
   const data = section?.data || {};
   return h('section', {class: 'panel platform-evidence'},
     h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: title}),
-      h('p', {text: section?.reason || `Observed ${section?.observed_at ? new Date(section.observed_at).toLocaleString() : 'now'}`})),
+      h('p', {text: section?.reason || `Observed ${section?.observed_at ? formatDate(section.observed_at) : 'now'}`})),
       badge(String(section?.status || 'unavailable').toUpperCase(), statusTone(section?.status))),
     h('pre', {class: 'evidence-json', text: JSON.stringify(data, null, 2)}));
 }

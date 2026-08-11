@@ -126,8 +126,12 @@ export function listData(payload) {
 }
 
 export function formatDate(value) {
-  if (!value) return 'Never';
-  const date = new Date(value);
+  if (value == null || value === '' || value === false) return 'Never';
+  let input = value;
+  const text = typeof value === 'string' ? value.trim() : '';
+  const numeric = typeof value === 'number' ? value : /^-?\d+(?:\.\d+)?$/.test(text) ? Number(text) : null;
+  if (numeric != null && Number.isFinite(numeric)) input = Math.abs(numeric) < 100000000000 ? numeric * 1000 : numeric;
+  const date = new Date(input);
   return Number.isNaN(date.valueOf()) ? String(value) : date.toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'});
 }
 

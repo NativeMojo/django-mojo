@@ -52,6 +52,21 @@ def test_relationship_component_contract(opts):
     assert "setCustomValidity" in relationship and "type: 'hidden'" in relationship
 
 
+@th.django_unit_test("Admin dates accept epoch seconds and ISO timestamps")
+def test_datetime_contract(opts):
+    core = (ASSETS / "core.js").read_text()
+    platform = (ASSETS / "features/platform/page.js").read_text()
+    preview = (ROOT / "bin/admin_preview_support/features/platform.py").read_text()
+    assert "Math.abs(numeric) < 100000000000" in core and "numeric * 1000" in core, \
+        "the shared date formatter does not normalize Unix epoch seconds"
+    assert "new Date(entry.at)" not in platform, \
+        "the Setup operation log bypasses the shared epoch/ISO date formatter"
+    assert "new Date(section.observed_at)" not in platform, \
+        "Platform evidence bypasses the shared epoch/ISO date formatter"
+    assert "observed_at=1786384800" in preview, \
+        "the visual preview does not exercise a production-shaped epoch timestamp"
+
+
 @th.django_unit_test("nested overlays scrub route state and restore focus")
 def test_overlay_contract(opts):
     overlays = (ASSETS / "components/overlays.js").read_text()

@@ -24,10 +24,12 @@ def get(handler, parsed):
     if parsed.path != "/api/account/admin/platform":
         return None
     now = "2026-08-10T18:00:00Z"
-    section = lambda data, status="healthy": {"status": status, "observed_at": now,
-                                               "stale_after": "2026-08-10T18:10:00Z", "data": data}
+    section = lambda data, status="healthy", observed_at=now: {
+        "status": status, "observed_at": observed_at,
+        "stale_after": "2026-08-10T18:10:00Z", "data": data}
     return 200, {"schema_version": 1, "sections": {
-        "api": section({"django_mojo_version": "1.9.0", "configured": True}),
+        "api": section({"django_mojo_version": "1.9.0", "configured": True},
+                       observed_at=1786384800),
         "fleet": section({"channel": "edge", "runners": [{"runner": "edge-a-engine", "alive": True}, {"runner": "edge-b-engine", "alive": True}]}),
         "database": section({"reachable": True, "vendor": "postgresql"}),
         "redis": section({"reachable": True}),
