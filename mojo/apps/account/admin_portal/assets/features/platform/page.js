@@ -1,7 +1,7 @@
-import {api, badge, formatDate, h, icon, pageHeader, statusTone} from '../../core.js';
-import {openInspector} from '../../components/overlays.js';
+import {api, apiOnce, badge, formatDate, h, icon, pageHeader, statusTone} from '../../core.js';
+import {openBusy, openInspector} from '../../components/overlays.js';
 import {activityHref, decodeRouteState, returnLocation, routeHref} from '../../components/routes.js';
-import {permissionDeniedState} from '../../components/views.js';
+import {errorState, loadingState, permissionDeniedState} from '../../components/views.js';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
 const DEEP_LINKS = {
@@ -114,53 +114,94 @@ function operationView(operation, actions) {
       h('ol', {}, ...(operation.log || []).map((entry) => h('li', {}, h('time', {text: formatDate(entry.at)}), h('span', {text: entry.message}))))));
 }
 
-export async function setupPage() {
-  const root = h('div', {class: 'page'});
+export async function setupPage(ctx, signal = null) {
+  const root = h('div', {class: 'page'}, loadingState('Loading System Setup'));
   let report; let options; let operation; let driving = false; let cancelled = false;
+  let activeAction = false; let replayKey = null; let actionError = null;
 
-  async function refreshReport() { report = await api('/api/account/admin/setup/readiness'); render(); }
+  async function refreshReport() { report = await api('/api/account/admin/setup/readiness', {signal}); render(); }
 
-  async function drive() {
+  function wait(milliseconds) {
+    return new Promise((resolve) => {
+      const timeout = setTimeout(resolve, milliseconds);
+      signal?.addEventListener('abort', () => { clearTimeout(timeout); resolve(); }, {once: true});
+    });
+  }
+
+  async function drive(busy = null) {
     if (driving || !operation || TERMINAL.has(operation.status)) return;
     driving = true; cancelled = false;
     try {
-      for (let count = 0; count < 80 && !cancelled; count += 1) {
+      for (let count = 0; count < 80 && !cancelled && !signal?.aborted; count += 1) {
         if (TERMINAL.has(operation.status) || operation.status === 'waiting_for_choice') break;
-        operation = await api('/api/account/admin/setup/advance', {method: 'POST', body: JSON.stringify({operation: operation.id})});
+        busy?.update({title: operation.mode === 'fix' ? 'Repairing System Setup' : 'Checking System Setup',
+          detail: operation.current_step?.label || 'Reconciling authoritative state',
+          progress: operation.steps?.length ? Math.round((operation.cursor / operation.steps.length) * 100) : null});
+        operation = await api('/api/account/admin/setup/advance', {method: 'POST', signal, body: JSON.stringify({operation: operation.id})});
         if (operation.report?.sections) report = operation.report;
         render();
-        if (!TERMINAL.has(operation.status) && operation.status !== 'waiting_for_choice') await new Promise((resolve) => setTimeout(resolve, 250));
+        if (!TERMINAL.has(operation.status) && operation.status !== 'waiting_for_choice') await wait(250);
       }
       if (operation?.report?.sections) report = operation.report;
       if (TERMINAL.has(operation?.status)) await refreshReport();
     } finally { driving = false; render(); }
   }
 
+  async function runAction(title, detail, task) {
+    if (activeAction || signal?.aborted) return;
+    activeAction = true; actionError = null;
+    const busy = openBusy({title, detail}); render();
+    try { await task(busy); }
+    catch (error) {
+      if (error?.code !== 'fresh_auth_required') actionError = error;
+    } finally {
+      busy.close(); activeAction = false; render();
+    }
+  }
+
   const actions = {
     create: async (mode, section = '') => {
-      operation = await api('/api/account/admin/setup/create', {method: 'POST', body: JSON.stringify({mode, section, replay_key: crypto.randomUUID()})});
-      render(); await drive();
+      await runAction(mode === 'fix' ? 'Repairing System Setup' : 'Checking System Setup',
+        section ? `Preparing ${section.replaceAll('_', ' ')}` : 'Preparing the durable operation', async (busy) => {
+          replayKey = replayKey || crypto.randomUUID();
+          try {
+            operation = await apiOnce('/api/account/admin/setup/create', {method: 'POST', signal, body: JSON.stringify({mode, section, replay_key: replayKey})});
+          } catch (error) {
+            if (signal?.aborted || error?.code === 'fresh_auth_required') throw error;
+            options = await api('/api/account/admin/setup/options', {signal});
+            const reconciled = mode === 'fix' ? options.active_fix : null;
+            if (!reconciled) throw new Error(`${error.message} The result is uncertain; refresh Setup before trying again.`);
+            operation = await api(`/api/account/admin/setup/detail?operation=${encodeURIComponent(reconciled.id)}`, {signal});
+          }
+          render(); await drive(busy);
+          if (TERMINAL.has(operation?.status)) replayKey = null;
+        });
     },
     choose: async (step, choice) => {
-      operation = await api('/api/account/admin/setup/choose', {method: 'POST', body: JSON.stringify({
-        operation: operation.id, step_id: step.id, definition_version: step.definition_version,
-        choice_revision: step.choice_revision, choice,
-      })});
-      render(); await drive();
+      await runAction('Saving Setup choice', step.label, async (busy) => {
+        operation = await apiOnce('/api/account/admin/setup/choose', {method: 'POST', signal, body: JSON.stringify({
+          operation: operation.id, step_id: step.id, definition_version: step.definition_version,
+          choice_revision: step.choice_revision, choice,
+        })});
+        render(); await drive(busy);
+      });
     },
     cancel: async () => {
-      cancelled = true;
-      operation = await api('/api/account/admin/setup/cancel', {method: 'POST', body: JSON.stringify({operation: operation.id})});
-      render();
+      await runAction('Cancelling Setup operation', 'Waiting for the durable cancellation result', async () => {
+        cancelled = true;
+        operation = await apiOnce('/api/account/admin/setup/cancel', {method: 'POST', signal, body: JSON.stringify({operation: operation.id})});
+        replayKey = null; render();
+      });
     },
   };
 
   function render() {
     root.replaceChildren(...[
       pageHeader('Installation control plane', 'System Setup', 'Configure a new installation, repair partial setup, and prove every dependency from one place.', [
-        h('button', {class: 'button ghost', disabled: driving, onclick: () => actions.create('check')}, icon('refresh'), 'Run all checks'),
-        h('button', {class: 'button primary', disabled: driving || (operation && !TERMINAL.has(operation.status)), onclick: () => actions.create('fix')}, icon('settings'), 'Fix all'),
+        h('button', {class: 'button ghost', disabled: activeAction || driving, onclick: () => actions.create('check')}, icon('refresh'), 'Run all checks'),
+        h('button', {class: 'button primary', disabled: activeAction || driving || (operation && !TERMINAL.has(operation.status)), onclick: () => actions.create('fix')}, icon('settings'), 'Fix all'),
       ]),
+      actionError ? errorState(actionError) : null,
       report ? readinessStrip(report) : null,
       operation ? operationView(operation, actions) : null,
       networkChecklist(report),
@@ -170,10 +211,16 @@ export async function setupPage() {
 
   render();
   try {
-    [options, report] = await Promise.all([api('/api/account/admin/setup/options'), api('/api/account/admin/setup/readiness')]);
+    [options, report] = await Promise.all([
+      api('/api/account/admin/setup/options', {signal}),
+      api('/api/account/admin/setup/readiness', {signal}),
+    ]);
     operation = options.active_fix || null; render();
-    if (operation && !TERMINAL.has(operation.status) && operation.status !== 'waiting_for_choice') drive();
-  } catch (error) { root.append(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
+    if (operation && !TERMINAL.has(operation.status) && operation.status !== 'waiting_for_choice') {
+      await runAction('Resuming System Setup', operation.current_step?.label || 'Reconciling the active operation', drive);
+    }
+  } catch (error) { root.replaceChildren(errorState(error)); }
+  root.dispose = () => { cancelled = true; };
   return root;
 }
 

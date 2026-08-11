@@ -1,11 +1,13 @@
 import {api, h, icon} from './core.js';
-import {closeAllOverlays} from './components/overlays.js';
+import {clearBusy, closeAllOverlays, openModal} from './components/overlays.js';
 import {decodeRouteState, routeHref} from './components/routes.js';
+import {loadingState} from './components/views.js';
 import {featureForRoute, installFeatureStyles, navigationFor} from './features/registry.js';
 
 const app = document.getElementById('app');
 let context = null; let content = null; let navigation = null; let title = null;
 let generation = 0; let controller = null; let dispose = null;
+let reauthClose = null;
 
 function routeName() { return decodeRouteState().route; }
 
@@ -45,7 +47,7 @@ function mountShell() {
     navigation, h('div', {class: 'sidebar-footer'}, h('span', {text: `django-mojo ${context.version}`})));
   sidebar.addEventListener('click', (event) => { if (event.target.closest('a')) sidebar.classList.remove('open'); });
   title = h('div', {class: 'topbar-title', text: 'Admin'});
-  content = h('div', {id: 'page-content', class: 'content'}, h('div', {class: 'loading', text: 'Loading…'}));
+  content = h('div', {id: 'page-content', class: 'content'}, loadingState('Loading Admin'));
   const theme = document.documentElement.dataset.theme;
   const main = h('main', {class: 'main'}, h('header', {class: 'topbar'},
     h('button', {class: 'mobile-menu', 'aria-label': 'Toggle navigation', 'aria-expanded': 'false', onclick: (event) => {
@@ -67,7 +69,7 @@ async function render() {
   const renderController = new AbortController(); controller = renderController;
   if (typeof dispose === 'function') { try { dispose(); } finally { dispose = null; } }
   closeAllOverlays(); refreshNavigation(route); title.textContent = feature.title(route, context);
-  content.replaceChildren(h('div', {class: 'loading', role: 'status', text: 'Loading…'}));
+  content.replaceChildren(loadingState(`Loading ${feature.title(route, context)}`));
   const page = await feature.render({ctx: context, route, navigate, signal: renderController.signal});
   if (!(page instanceof Node)) throw new Error(`Admin feature ${feature.id} must render exactly one Node`);
   if (renderController.signal.aborted || current !== generation) { page.dispose?.(); return; }
@@ -84,10 +86,30 @@ async function start() {
 }
 
 function showFatal(error) {
+  if (error?.code === 'fresh_auth_required') return;
   controller?.abort(); dispose?.(); closeAllOverlays();
   const adminPath = `/${location.pathname.split('/').filter(Boolean)[0] || 'admin'}/`;
   app.replaceChildren(h('div', {class: 'fatal'}, icon('alert'), h('h1', {text: 'Admin could not load'}), h('p', {text: error.message}), h('a', {class: 'button primary', href: `/auth?redirect=${encodeURIComponent(adminPath)}`}, 'Sign in again')));
 }
 
+function showFreshAuth() {
+  controller?.abort(); clearBusy();
+  if (reauthClose) return;
+  const returnTo = location.pathname + location.search + location.hash;
+  const cancel = h('button', {class: 'button ghost', type: 'button'}, 'Cancel');
+  const proceed = h('button', {class: 'button primary', type: 'button', autofocus: true}, 'Continue');
+  const contentNode = h('div', {},
+    h('p', {class: 'modal-copy', text: 'Your session is still active. Confirm your identity again before this protected change can continue.'}),
+    h('div', {class: 'form-actions'}, cancel, proceed));
+  reauthClose = openModal({title: 'Recent authentication required', content: contentNode,
+    dismissible: false, onClose: () => { reauthClose = null; }});
+  cancel.addEventListener('click', () => reauthClose?.());
+  proceed.addEventListener('click', () => {
+    reauthClose?.();
+    location.assign(`/auth?redirect=${encodeURIComponent(returnTo)}&force_reauth=1`);
+  });
+}
+
 window.addEventListener('hashchange', () => render().catch(showFatal));
+window.addEventListener('mojo-admin:fresh-auth', showFreshAuth);
 start().catch(showFatal);

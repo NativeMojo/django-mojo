@@ -25,7 +25,7 @@ def test_modular_shell_contract(opts):
     assert "[dashboard, people, webapps, advanced, platform, activity]" in registry, \
         "Domains & DNS is not positioned beside Web Apps in primary navigation"
     assert "routes: ['platform', 'deployments', 'setup']" in platform
-    assert "setupPage(ctx)" in platform and "platformPage(ctx, route)" in platform
+    assert "setupPage(ctx, signal)" in platform and "platformPage(ctx, route)" in platform
     assert "const ROUTES = ['advanced', 'domains', 'credentials', 'dns', 'certificates'" in advanced
     assert "route: 'domains'" in advanced and "label: 'Domains & DNS'" in advanced, \
         "the permanent Domains & DNS control is missing from the sidebar"

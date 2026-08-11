@@ -61,6 +61,22 @@ token for create/rotate and offers revoke; System Setup only links there.
 
 ### Modular browser contract
 
+Framework developers can QA the packaged Admin source against a real
+installation without deploying it:
+
+```bash
+bin/admin_preview --port 8766 --upstream https://api.example.com
+```
+
+Open `http://localhost:8766/admin/` and use normal password sign-in. The bridge
+accepts no token/API-key argument and logs no traffic. It is limited to the
+fixed public HTTPS origin, validates every DNS answer, pins TLS connections,
+keeps upstream cookies server-side, and gates every proxied request with a
+process-only HttpOnly cookie plus same-origin browser metadata. External OAuth
+callbacks are not supported. Deterministic fixture mode remains the correct way
+to exercise write, busy, 440, error, and ambiguous-response states without
+mutating a live installation.
+
 The packaged portal is divided into six fixed, capability-gated feature lanes.
 Primary navigation is Dashboard, People, Web Apps, Domains & DNS, Platform,
 and Activity. Domains & DNS appears only with DNS read/manage authority;

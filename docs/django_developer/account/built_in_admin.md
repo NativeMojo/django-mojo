@@ -78,10 +78,14 @@ The full-envelope API helper preserves `data`, `results`, `items`, `count`,
 metadata. The relationship control URL-encodes searches, filters, graph names,
 and detail identifiers; debounces search, cancels stale requests, supports
 paging and keyboard listbox behavior, and posts only its selected id through a
-hidden input. The ordinary API wrapper still refreshes an expired JWT once,
-renews the source session, and handles HTTP `440` by returning through Bouncer
-with `force_reauth=1`; that flag suppresses the ordinary silent-refresh path,
-which cannot make an old `auth_time` fresh.
+hidden input. The ordinary API wrapper still refreshes an expired JWT once and
+renews the source session. HTTP `440` now opens an explicit recent-auth prompt:
+Cancel preserves the still-valid session and page, while Continue returns
+through Bouncer with `force_reauth=1` and the exact Admin route/hash. That flag
+suppresses the ordinary silent-refresh path, which cannot make an old
+`auth_time` fresh. Route and Setup loads use reduced-motion-aware skeletons;
+stateful Setup calls hold a tokenized, non-dismissible busy layer and release
+it on completion, rejection, abort, or the 440 prompt.
 
 The Hybrid visual density is intentional: 13px base text, 11–12px tables and
 forms, 21px page titles, and 20px KPI values. Light, dark, and system themes are
@@ -145,7 +149,23 @@ support server, foundation gallery, and resettable feature providers. Use
 `--key-state missing|active|rotated|revoked` to exercise the four WebApp
 deployment-key presentations, `--onboarding-state
 idle|address|github|verify|complete|lost_key` for WebApp onboarding,
-`--setup-state idle|choice` for resumable Setup,
+`--setup-state idle|choice|delay|error|fresh|ambiguous` for resumable Setup and
+its busy/error/440/lost-response states,
 `--dashboard-state healthy|degraded|denied|unknown` for Dashboard source states,
 and `--port` when parallel work needs isolation. Every launch resets mutable
 provider state before serving.
+
+To QA local Admin source against a real installation without deploying it:
+
+```bash
+bin/admin_preview --port 8766 --upstream https://api.example.com
+```
+
+Open `http://localhost:8766/admin/` and use the installation's normal password
+flow. The bridge accepts only one public HTTPS hostname origin, checks every DNS
+answer on every request, pins the TLS peer while retaining hostname
+verification, bounds traffic, and never follows redirects. A process-only
+HttpOnly preview cookie plus Host/Origin/fetch-metadata checks gates proxy
+traffic. Upstream cookies remain inside the preview process and are never set
+on localhost. No credential is accepted on the command line and headers/bodies
+are not logged. External OAuth callbacks are intentionally not bridged.

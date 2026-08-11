@@ -1,4 +1,4 @@
-import {openModal} from './components/overlays.js';
+import {clearBusy, openModal} from './components/overlays.js';
 import {RelationshipSelect} from './components/relationship.js';
 
 export {openModal};
@@ -57,6 +57,13 @@ export function h(tag, attrs = {}, ...children) {
 
 function authHeader() { return window.MojoAuth?.getAuthHeader?.(); }
 
+export class FreshAuthRequired extends Error {
+  constructor(path) {
+    super('Recent authentication is required to continue.');
+    this.name = 'FreshAuthRequired'; this.code = 'fresh_auth_required'; this.path = path;
+  }
+}
+
 async function renewSourceSession() {
   const header = authHeader();
   if (!header?.startsWith('Bearer ')) return false;
@@ -78,9 +85,10 @@ async function requestPayload(path, options = {}, retry = true) {
     return requestPayload(path, options, false);
   }
   if (response.status === 440) {
-    const next = encodeURIComponent(location.pathname + location.hash);
-    location.assign(`/auth?redirect=${next}&force_reauth=1`);
-    throw new Error('Fresh authentication required');
+    const error = new FreshAuthRequired(path);
+    clearBusy();
+    window.dispatchEvent(new CustomEvent('mojo-admin:fresh-auth', {detail: {error}}));
+    throw error;
   }
   let payload = {};
   try { payload = await response.json(); } catch (_) { payload = {}; }

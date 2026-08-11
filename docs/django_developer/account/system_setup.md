@@ -242,6 +242,16 @@ particular, deployment-key create/rotate/revoke and the reveal-once token stay
 exclusively on WebApps; neither the Platform feature nor an operation log reads
 it.
 
+The packaged driver treats create/check/fix/choose/cancel as single-flight user
+intents. It shows a full-screen non-dismissible busy state, updates progress
+from the durable cursor, and releases the busy lease in `finally` on success,
+error, abort, navigation, or recent-auth interruption. Initial reads use
+skeleton rows. A lost fix-create response is reconciled through
+`options.active_fix` while retaining the original replay key; the client never
+automatically repeats an uncertain mutation. HTTP 440 clears busy state before
+showing the explicit step-up prompt, so reauthentication cannot be trapped
+under the busy layer.
+
 ## REST boundary
 
 `mojo.apps.account.rest.system_setup` exposes the service without duplicating

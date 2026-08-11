@@ -1,4 +1,6 @@
 const STACK = [];
+const BUSY = new Map();
+let busyNode = null;
 const FOCUSABLE = 'button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])';
 
 function element(tag, attrs = {}, ...children) {
@@ -18,7 +20,10 @@ function activeEntry() { return STACK[STACK.length - 1]; }
 function keydown(event) {
   const entry = activeEntry();
   if (!entry) return;
-  if (event.key === 'Escape') { event.preventDefault(); entry.close(); return; }
+  if (event.key === 'Escape') {
+    if (entry.dismissible) { event.preventDefault(); entry.close(); }
+    return;
+  }
   if (event.key !== 'Tab') return;
   const focusable = [...entry.panel.querySelectorAll(FOCUSABLE)].filter((node) => node.offsetParent !== null);
   if (!focusable.length) { event.preventDefault(); entry.heading.focus(); return; }
@@ -30,7 +35,7 @@ function keydown(event) {
   }
 }
 
-function openOverlay({kind = 'modal', title, subtitle = '', content, danger = false, wide = false, onClose = () => {}, returnFocus = null}) {
+function openOverlay({kind = 'modal', title, subtitle = '', content, danger = false, wide = false, dismissible = true, onClose = () => {}, returnFocus = null}) {
   const layer = document.getElementById('portal-layer');
   if (!layer) throw new Error('Admin overlay layer is unavailable');
   const previous = returnFocus || document.activeElement;
@@ -40,10 +45,10 @@ function openOverlay({kind = 'modal', title, subtitle = '', content, danger = fa
     class: `${kind} ${danger ? 'danger-modal' : ''} ${wide ? 'wide' : ''}`,
     role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': headingId, tabindex: '-1',
   }, element('header', {}, element('div', {}, heading, subtitle ? element('p', {text: subtitle}) : null),
-  element('button', {class: 'icon-button', type: 'button', 'aria-label': 'Close'}, '×')),
+  dismissible ? element('button', {class: 'icon-button', type: 'button', 'aria-label': 'Close'}, '×') : null),
   element('div', {class: `${kind}-body`}, content));
   const scrim = element('div', {class: `scrim ${kind}-scrim`}, panel);
-  const entry = {panel, heading, previous, scrim, closed: false};
+  const entry = {panel, heading, previous, scrim, dismissible, closed: false};
   entry.close = ({restore = true} = {}) => {
     if (entry.closed) return;
     entry.closed = true;
@@ -54,15 +59,17 @@ function openOverlay({kind = 'modal', title, subtitle = '', content, danger = fa
       scrim.remove();
       if (!STACK.length) {
         document.removeEventListener('keydown', keydown);
-        document.body.classList.remove('locked');
+        if (!BUSY.size) document.body.classList.remove('locked');
       }
       const next = activeEntry();
       if (next) next.panel.removeAttribute('aria-hidden');
       if (restore && previous?.isConnected) previous.focus?.({preventScroll: true});
     }
   };
-  panel.querySelector('button[aria-label="Close"]').addEventListener('click', () => entry.close());
-  scrim.addEventListener('click', (event) => { if (event.target === scrim && activeEntry() === entry) entry.close(); });
+  panel.querySelector('button[aria-label="Close"]')?.addEventListener('click', () => entry.close());
+  scrim.addEventListener('click', (event) => {
+    if (dismissible && event.target === scrim && activeEntry() === entry) entry.close();
+  });
   const current = activeEntry();
   if (current) current.panel.setAttribute('aria-hidden', 'true');
   STACK.push(entry); layer.append(scrim);
@@ -84,6 +91,49 @@ export function openInspector(options) {
 
 export function closeAllOverlays() {
   [...STACK].reverse().forEach((entry) => entry.close({restore: false}));
+}
+
+function renderBusy() {
+  const layer = document.getElementById('portal-layer');
+  if (!layer) return;
+  if (!BUSY.size) {
+    busyNode?.remove(); busyNode = null;
+    document.getElementById('app')?.removeAttribute('inert');
+    if (!STACK.length) document.body.classList.remove('locked');
+    return;
+  }
+  const state = [...BUSY.values()].at(-1);
+  if (!busyNode) {
+    busyNode = element('div', {class: 'busy-scrim'},
+      element('section', {class: 'busy-panel', role: 'status', 'aria-live': 'polite', 'aria-busy': 'true'},
+        element('span', {class: 'busy-spinner', 'aria-hidden': 'true'}),
+        element('strong', {class: 'busy-title'}), element('p', {class: 'busy-detail'}),
+        element('progress', {class: 'busy-progress', max: '100'})));
+    layer.prepend(busyNode);
+  }
+  busyNode.querySelector('.busy-title').textContent = state.title;
+  busyNode.querySelector('.busy-detail').textContent = state.detail || 'Please wait. This operation is still running.';
+  const progress = busyNode.querySelector('.busy-progress');
+  if (Number.isFinite(state.progress)) { progress.value = state.progress; progress.hidden = false; }
+  else { progress.removeAttribute('value'); progress.hidden = false; }
+  document.getElementById('app')?.setAttribute('inert', '');
+  document.body.classList.add('locked');
+}
+
+export function openBusy({title = 'Working…', detail = '', progress = null} = {}) {
+  const token = crypto.randomUUID();
+  const state = {title, detail, progress};
+  BUSY.set(token, state); renderBusy();
+  let closed = false;
+  return {
+    token,
+    update(next = {}) { if (closed || !BUSY.has(token)) return; Object.assign(state, next); renderBusy(); },
+    close() { if (closed) return; closed = true; BUSY.delete(token); renderBusy(); },
+  };
+}
+
+export function clearBusy() {
+  BUSY.clear(); renderBusy();
 }
 
 export function confirmAction({title, copy, confirmLabel = 'Confirm', danger = false, requireReason = false, reasonLabel = 'Reason'}) {

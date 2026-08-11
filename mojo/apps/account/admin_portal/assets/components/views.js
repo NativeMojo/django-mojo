@@ -1,6 +1,14 @@
 import {formatDate, h, icon} from '../core.js';
 
-export function loadingState(message = 'Loading…') { return h('div', {class: 'loading state-view', role: 'status'}, h('span', {text: message})); }
+export function skeletonState(message = 'Loading…', rows = 5) {
+  return h('div', {class: 'loading skeleton-state state-view', role: 'status', 'aria-label': message},
+    h('span', {class: 'sr-only', text: message}),
+    h('div', {class: 'skeleton skeleton-heading', 'aria-hidden': 'true'}),
+    ...Array.from({length: rows}, (_, index) => h('div', {
+      class: `skeleton skeleton-row skeleton-row-${(index % 3) + 1}`, 'aria-hidden': 'true',
+    })));
+}
+export function loadingState(message = 'Loading…') { return skeletonState(message); }
 export function emptyState(title = 'Nothing here yet', copy = '') { return h('div', {class: 'empty state-view'}, h('strong', {text: title}), copy ? h('p', {text: copy}) : null); }
 export function errorState(error, retry = null) {
   return h('div', {class: 'error-state state-view', role: 'alert'}, icon('alert'), h('strong', {text: 'This view could not load'}), h('p', {text: error?.message || String(error || 'Unknown error')}), retry ? h('button', {class: 'button compact', onclick: retry}, 'Retry') : null);

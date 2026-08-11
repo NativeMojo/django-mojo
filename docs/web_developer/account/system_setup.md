@@ -19,8 +19,11 @@ users, and permission-only non-superusers receive `403`.
 | `POST` | `/api/account/admin/setup/cancel` | Cancel between steps |
 
 Operation creation and all advance/choose/cancel calls require authentication
-within 600 seconds. HTTP `440 reauth_required` means return through Bouncer with
-`force_reauth=1`, then retry. Mutable calls also require the same browser
+within 600 seconds. HTTP `440 reauth_required` means request explicit operator
+confirmation and return through Bouncer with `force_reauth=1`; do not present
+it as a logout. The existing session remains valid and Cancel may preserve the
+page. After step-up, reconcile the durable operation before continuing. Mutable
+calls also require the same browser
 `Origin` that created the operation. Do not synthesize or forward a different
 Origin.
 
@@ -36,7 +39,11 @@ the literal superuser.
 The packaged page is a thin client for this protocol. It supports running or
 fixing all sections or one section, resumes `active_fix`, renders late choices
 from the returned JSON schema, shows durable step progress and the bounded live
-log, and displays the final readiness rerun. It never shells out, calls a
+log, and displays the final readiness rerun. Initial reads use skeleton rows;
+mutations use one non-dismissible busy layer and disable duplicate actions.
+Every failure becomes visible operator feedback. A lost fix-create response is
+reconciled from `options.active_fix` with the retained replay key; the browser
+never automatically retries an uncertain mutation. It never shells out, calls a
 management command, or repeats setup service logic in JavaScript.
 
 `hosting_dns`, `hosting_vhosts`, `edge_fleet`, and `webapp_keys` render as a

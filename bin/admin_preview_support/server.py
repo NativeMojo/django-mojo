@@ -1,11 +1,19 @@
 """Loopback-only deterministic support server for the Admin preview."""
 
 import argparse
+import http.client
+import ipaddress
 import json
 import mimetypes
+import secrets
+import socket
+import ssl
+import threading
+import time
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from .gallery import bootstrap, reset
 from .features import activity, advanced, platform
@@ -14,6 +22,94 @@ from .features import dashboard
 
 ROOT = Path(__file__).resolve().parents[2] / "mojo/apps/account/admin_portal"
 HOST = "127.0.0.1"
+PREVIEW_COOKIE = "mojo_admin_preview"
+MAX_REQUEST_BODY = 2 * 1024 * 1024
+MAX_RESPONSE_BODY = 8 * 1024 * 1024
+PROXY_TIMEOUT = 10
+PROXY_METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}
+PROXY_PATHS = ("/api/", "/auth", "/register", "/passkey", "/static/")
+
+
+class PreviewProxyError(Exception):
+    """Stable local proxy refusal which never includes upstream details."""
+
+
+def parse_upstream(value):
+    parsed = urlparse(value)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise PreviewProxyError("Upstream must be one public HTTPS hostname origin") from error
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or
+            parsed.password or parsed.path not in ("", "/") or parsed.query or
+            parsed.fragment or port not in (None, 443)):
+        raise PreviewProxyError("Upstream must be one public HTTPS hostname origin")
+    try:
+        hostname = parsed.hostname.rstrip(".").encode("idna").decode("ascii").lower()
+    except UnicodeError as error:
+        raise PreviewProxyError("Upstream must be one public HTTPS hostname origin") from error
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None or hostname == "localhost" or "." not in hostname:
+        raise PreviewProxyError("Upstream must be one public HTTPS hostname origin")
+    return {"origin": f"https://{hostname}", "hostname": hostname, "port": 443}
+
+
+def resolve_public_addresses(hostname, port=443):
+    try:
+        answers = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as error:
+        raise PreviewProxyError("Upstream hostname could not be resolved") from error
+    addresses = []
+    for family, _, _, _, sockaddr in answers:
+        if family not in (socket.AF_INET, socket.AF_INET6):
+            continue
+        text = sockaddr[0]
+        try:
+            address = ipaddress.ip_address(text)
+        except ValueError as error:
+            raise PreviewProxyError("Upstream DNS returned an invalid address") from error
+        if getattr(address, "ipv4_mapped", None) is not None or not address.is_global:
+            raise PreviewProxyError("Upstream DNS returned a non-public address")
+        normalized = str(address)
+        if normalized not in addresses:
+            addresses.append(normalized)
+    if not addresses:
+        raise PreviewProxyError("Upstream hostname has no public address")
+    return addresses
+
+
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, hostname, address, port=443, timeout=PROXY_TIMEOUT):
+        super().__init__(hostname, port=port, timeout=timeout,
+                         context=ssl.create_default_context())
+        self.pinned_address = address
+
+    def connect(self):
+        raw = socket.create_connection((self.pinned_address, self.port), self.timeout)
+        try:
+            self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+            peer = ipaddress.ip_address(self.sock.getpeername()[0])
+            expected = ipaddress.ip_address(self.pinned_address)
+            if peer != expected:
+                raise PreviewProxyError("Upstream peer did not match the pinned address")
+        except Exception:
+            raw.close()
+            raise
+
+
+def rewrite_location(value, upstream_origin, local_origin):
+    if not value:
+        return value
+    absolute = urljoin(upstream_origin + "/", value)
+    parsed = urlparse(absolute)
+    if f"{parsed.scheme}://{parsed.netloc}" != upstream_origin:
+        return value
+    return local_origin + (parsed.path or "/") + (
+        f"?{parsed.query}" if parsed.query else "") + (
+        f"#{parsed.fragment}" if parsed.fragment else "")
 
 USERS = [
     {"id": 1, "uuid": "11111111-1111-4111-8111-111111111111", "display_name": "Ian Smith", "email": "ian@example.com", "username": "ian@example.com", "phone_number": "+14155550101", "is_active": True, "is_email_verified": True, "is_phone_verified": True, "requires_password_change": False, "last_login": "2026-08-10T16:44:00Z", "last_activity": "2026-08-10T17:02:00Z", "permissions": {"manage_users": True, "manage_groups": True, "custom_operator": True}, "created": "2026-07-12T18:10:00Z"},
@@ -163,6 +259,7 @@ def setup_complete_operation(mode="fix"):
 class PreviewHandler(BaseHTTPRequestHandler):
     key_state = "active"
     setup_operation = None
+    setup_behavior = "idle"
     events = []
     records = []
     credentials = []
@@ -174,11 +271,17 @@ class PreviewHandler(BaseHTTPRequestHandler):
     members = []
     api_keys = []
     permission_bundles = {}
+    upstream = None
+    preview_token = None
+    preview_port = None
+    upstream_cookies = {}
+    upstream_cookie_lock = threading.Lock()
 
     def log_message(self, fmt, *args):
         return
 
-    def _send(self, body, content_type="application/json", status=200):
+    def _send(self, body, content_type="application/json", status=200,
+              headers=None):
         if isinstance(body, (dict, list)):
             body = json.dumps({"status": True, "data": body}, default=str).encode()
         elif isinstance(body, str):
@@ -187,8 +290,165 @@ class PreviewHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _local_origins(self):
+        port = type(self).preview_port
+        return {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+
+    def _preview_cookie_ok(self):
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+        except Exception:
+            return False
+        token = cookie.get(PREVIEW_COOKIE)
+        return token is not None and secrets.compare_digest(
+            token.value, type(self).preview_token or "")
+
+    def _proxy_gate(self):
+        host = self.headers.get("Host", "").lower()
+        allowed_hosts = {urlparse(value).netloc for value in self._local_origins()}
+        if host not in allowed_hosts or not self._preview_cookie_ok():
+            raise PreviewProxyError("Preview request gate rejected the request")
+        fetch_site = self.headers.get("Sec-Fetch-Site", "").lower()
+        if fetch_site and fetch_site not in {"same-origin", "none"}:
+            raise PreviewProxyError("Preview request gate rejected the request")
+        origin = self.headers.get("Origin")
+        if origin and origin not in self._local_origins():
+            raise PreviewProxyError("Preview request gate rejected the request")
+        if self.command not in {"GET", "HEAD"} and origin not in self._local_origins():
+            raise PreviewProxyError("Preview mutations require a same-origin browser request")
+
+    def _proxy_allowed(self, path):
+        return any(path == prefix or path.startswith(prefix)
+                   for prefix in PROXY_PATHS)
+
+    def _proxy_body(self):
+        transfer = self.headers.get("Transfer-Encoding", "").lower()
+        if transfer:
+            raise PreviewProxyError("Chunked preview requests are not supported")
+        try:
+            size = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError as error:
+            raise PreviewProxyError("Invalid request size") from error
+        if size < 0 or size > MAX_REQUEST_BODY:
+            raise PreviewProxyError("Preview request body is too large")
+        return self.rfile.read(size) if size else None
+
+    def _proxy_headers(self):
+        upstream = type(self).upstream
+        headers = {"Host": upstream["hostname"], "Accept": self.headers.get("Accept", "*/*")}
+        for name in ("Accept-Language", "Content-Type", "Authorization",
+                     "User-Agent", "X-CSRFToken"):
+            value = self.headers.get(name)
+            if value:
+                headers[name] = value
+        if self.headers.get("Origin"):
+            headers["Origin"] = upstream["origin"]
+        if self.headers.get("Referer"):
+            headers["Referer"] = upstream["origin"] + "/"
+        with type(self).upstream_cookie_lock:
+            if type(self).upstream_cookies:
+                headers["Cookie"] = "; ".join(
+                    f"{name}={value}" for name, value in
+                    sorted(type(self).upstream_cookies.items()))
+        return headers
+
+    def _remember_upstream_cookies(self, response):
+        found = {}
+        for name, value in response.getheaders():
+            if name.lower() != "set-cookie":
+                continue
+            cookie = SimpleCookie()
+            try:
+                cookie.load(value)
+            except Exception:
+                continue
+            for key, morsel in cookie.items():
+                found[key] = morsel.value
+        if found:
+            with type(self).upstream_cookie_lock:
+                type(self).upstream_cookies.update(found)
+
+    def _proxy(self):
+        try:
+            if self.command not in PROXY_METHODS:
+                raise PreviewProxyError("Preview method is not allowed")
+            parsed = urlparse(self.path)
+            if parsed.scheme or parsed.netloc:
+                raise PreviewProxyError("Absolute proxy request targets are not allowed")
+            if not self._proxy_allowed(parsed.path):
+                raise PreviewProxyError("Preview path is not allowed")
+            self._proxy_gate()
+            body = self._proxy_body()
+            upstream = type(self).upstream
+            addresses = resolve_public_addresses(upstream["hostname"], upstream["port"])
+            response = None
+            last_error = None
+            for address in addresses:
+                connection = PinnedHTTPSConnection(upstream["hostname"], address,
+                                                   upstream["port"])
+                try:
+                    connection.request(self.command, self.path, body=body,
+                                       headers=self._proxy_headers())
+                    response = connection.getresponse()
+                    break
+                except (OSError, ssl.SSLError, http.client.HTTPException) as error:
+                    last_error = error
+                    connection.close()
+            if response is None:
+                raise PreviewProxyError("Upstream request failed") from last_error
+            declared = response.getheader("Content-Length")
+            if declared and int(declared) > MAX_RESPONSE_BODY:
+                response.close()
+                raise PreviewProxyError("Upstream response body is too large")
+            payload = response.read(MAX_RESPONSE_BODY + 1)
+            if len(payload) > MAX_RESPONSE_BODY:
+                raise PreviewProxyError("Upstream response body is too large")
+            self._remember_upstream_cookies(response)
+            local_origin = f"http://{self.headers['Host']}"
+            response_headers = {}
+            for name in ("Content-Type", "Cache-Control", "Pragma", "Expires",
+                         "ETag", "Last-Modified", "Content-Disposition",
+                         "WWW-Authenticate", "Content-Security-Policy",
+                         "Referrer-Policy", "X-Content-Type-Options"):
+                value = response.getheader(name)
+                if value:
+                    response_headers[name] = value
+            location = response.getheader("Location")
+            if location:
+                response_headers["Location"] = rewrite_location(
+                    location, upstream["origin"], local_origin)
+            return self._send(payload, response_headers.pop(
+                "Content-Type", "application/octet-stream"), response.status,
+                response_headers)
+        except PreviewProxyError as error:
+            return self._send({"error": str(error)}, status=403)
+        except (OSError, ssl.SSLError, http.client.HTTPException, ValueError):
+            return self._send({"error": "Upstream request failed"}, status=502)
+
+    def _serve_admin(self, parsed):
+        if parsed.path in ("/", "/admin", "/admin/"):
+            target = ROOT / "index.html"
+        else:
+            relative = parsed.path.removeprefix("/admin/").lstrip("/")
+            target = (ROOT / relative).resolve()
+            if ROOT.resolve() not in target.parents:
+                return self._send("Not found", "text/plain", 404)
+        if not target.is_file():
+            return self._send("Not found", "text/plain", 404)
+        headers = None
+        if type(self).upstream:
+            headers = {"Set-Cookie": (
+                f"{PREVIEW_COOKIE}={type(self).preview_token}; Path=/; "
+                "HttpOnly; SameSite=Strict")}
+        return self._send(target.read_bytes(), mimetypes.guess_type(
+            target.name)[0] or "application/octet-stream", headers=headers)
 
     def _key_status(self):
         states = {
@@ -235,7 +495,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             active = self.setup_operation
             if active and active.get("status") in {"succeeded", "failed", "cancelled"}:
                 active = None
-            return self._send({"schema_version": 1, "active_fix": active, "sections": [{"code": row["code"], "label": row["label"], "fixable": row["code"] in {"aws_s3", "aws_email", "aws_monitoring"}, "choice_schema": None} for row in readiness_sections()]})
+            return self._send({"schema_version": 1, "active_fix": active, "sections": [{"code": row["code"], "label": row["label"], "fixable": row["code"] in {"django", "aws_s3", "aws_email", "aws_monitoring"}, "choice_schema": None} for row in readiness_sections()]})
         if path == "/api/account/admin/setup/readiness":
             sections = readiness_sections()
             wanted = parse_qs(parsed.query).get("section", [None])[0]
@@ -247,6 +507,10 @@ class PreviewHandler(BaseHTTPRequestHandler):
                     summary[item["status"]] += 1
             overall = "fail" if summary["fail"] else "pending" if summary["pending"] else "warn" if summary["warn"] else "pass"
             return self._send({"schema_version": 1, "overall": overall, "summary": summary, "sections": sections})
+        if path == "/api/account/admin/setup/detail":
+            if not self.setup_operation:
+                return self._send({"error": "Setup operation not found"}, status=404)
+            return self._send(self.setup_operation)
         fixtures = {
             "/api/user": self.users, "/api/group": self.groups,
             "/api/group/member": self.members, "/api/group/apikey": self.api_keys,
@@ -317,20 +581,18 @@ class PreviewHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if type(self).upstream:
+            if parsed.path == "/":
+                return self._send("", "text/plain", 302,
+                                  {"Location": "/admin/"})
+            if parsed.path in ("/admin", "/admin/") or parsed.path.startswith("/admin/assets/"):
+                return self._serve_admin(parsed)
+            return self._proxy()
         if parsed.path == "/__preview__/events":
             return self._send(self.events)
         if parsed.path.startswith("/api/"):
             return self._api(parsed)
-        if parsed.path in ("/", "/admin", "/admin/"):
-            target = ROOT / "index.html"
-        else:
-            relative = parsed.path.removeprefix("/admin/").lstrip("/")
-            target = (ROOT / relative).resolve()
-            if ROOT.resolve() not in target.parents:
-                return self._send("Not found", "text/plain", 404)
-        if not target.is_file():
-            return self._send("Not found", "text/plain", 404)
-        self._send(target.read_bytes(), mimetypes.guess_type(target.name)[0] or "application/octet-stream")
+        return self._serve_admin(parsed)
 
     def _read_body(self):
         size = int(self.headers.get("Content-Length", "0"))
@@ -342,6 +604,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return {}
 
     def do_POST(self):
+        if type(self).upstream:
+            return self._proxy()
         path = urlparse(self.path).path
         payload = self._read_body()
         self._record_event(path, payload)
@@ -432,8 +696,19 @@ class PreviewHandler(BaseHTTPRequestHandler):
                     return self._send(row)
         if path == "/api/account/admin/setup/create":
             type(self).setup_operation = setup_planned_operation(payload.get("mode", "fix"))
+            if self.setup_behavior == "delay":
+                time.sleep(1.25)
+            if self.setup_behavior == "error":
+                type(self).setup_operation = None
+                return self._send({"error": "Deterministic Setup failure"}, status=503)
+            if self.setup_behavior == "fresh":
+                return self._send({"error": "Fresh authentication required"}, status=440)
+            if self.setup_behavior == "ambiguous":
+                return self._send({"error": "Deterministic lost Setup response"}, status=503)
             return self._send(self.setup_operation)
         if path == "/api/account/admin/setup/advance":
+            if self.setup_behavior == "delay":
+                time.sleep(1.25)
             type(self).setup_operation = setup_complete_operation((self.setup_operation or {}).get("mode", "fix"))
             return self._send(self.setup_operation)
         if path == "/api/account/admin/setup/choose":
@@ -491,6 +766,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
         return self._send({"saved": True, "id": 999})
 
     def do_PUT(self):
+        if type(self).upstream:
+            return self._proxy()
         path = urlparse(self.path).path
         payload = self._read_body()
         self._record_event(path, payload)
@@ -501,6 +778,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
         return self._send({"saved": True})
 
     def do_DELETE(self):
+        if type(self).upstream:
+            return self._proxy()
         path = urlparse(self.path).path
         self._read_body()
         if path.startswith("/api/group/apikey/"):
@@ -511,16 +790,32 @@ class PreviewHandler(BaseHTTPRequestHandler):
             type(self).api_keys = [row for row in self.api_keys if row["id"] != pk]
         return self._send({"deleted": True})
 
+    def do_PATCH(self):
+        if type(self).upstream:
+            return self._proxy()
+        return self._send({"error": "Not found"}, status=404)
+
+    def do_HEAD(self):
+        return self.do_GET()
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=5608)
     parser.add_argument("--key-state", choices=("missing", "active", "rotated", "revoked"), default="active")
-    parser.add_argument("--setup-state", choices=("idle", "choice"), default="idle")
+    parser.add_argument("--setup-state", choices=("idle", "choice", "delay", "error", "fresh", "ambiguous"), default="idle")
     parser.add_argument("--activity-state", choices=("full", "empty", "unavailable"), default="full")
     parser.add_argument("--dashboard-state", choices=("healthy", "degraded", "denied", "unknown"), default="healthy")
     parser.add_argument("--onboarding-state", choices=("idle", "address", "github", "verify", "complete", "lost_key"), default="idle")
+    parser.add_argument("--upstream", help="Public HTTPS django-mojo origin for live QA")
     args = parser.parse_args()
+    upstream = None
+    if args.upstream:
+        try:
+            upstream = parse_upstream(args.upstream)
+            resolve_public_addresses(upstream["hostname"], upstream["port"])
+        except PreviewProxyError as error:
+            parser.error(str(error))
     reset(PreviewHandler, {
         "records": RECORDS, "credentials": CREDENTIALS,
         "vhosts": VHOSTS, "routes": ROUTES,
@@ -532,7 +827,16 @@ def main():
        activity_state=args.activity_state,
        dashboard_state=args.dashboard_state,
        onboarding_state=args.onboarding_state)
-    print(f"Admin visual fixture ({args.key_state} key): http://{HOST}:{args.port}/", flush=True)
+    PreviewHandler.upstream = upstream
+    PreviewHandler.setup_behavior = args.setup_state
+    PreviewHandler.preview_port = args.port
+    PreviewHandler.preview_token = secrets.token_urlsafe(32) if upstream else None
+    PreviewHandler.upstream_cookies = {}
+    if upstream:
+        print(f"Admin live QA: http://localhost:{args.port}/admin/ -> {upstream['origin']}", flush=True)
+        print("Password authentication is supported; external OAuth callbacks are not bridged.", flush=True)
+    else:
+        print(f"Admin visual fixture ({args.key_state} key): http://{HOST}:{args.port}/", flush=True)
     try:
         ThreadingHTTPServer((HOST, args.port), PreviewHandler).serve_forever()
     except KeyboardInterrupt:
