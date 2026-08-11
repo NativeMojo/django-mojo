@@ -712,7 +712,7 @@ sensor; invalid policy keeps the prior canonical file and service.
 | `/etc/systemd/system/mojosec.service` | root-owned packaged unit, Python safe-path launch, runs as root with systemd hardening |
 | `/usr/local/lib/mojosec/mojosec_changes.py` | root-owned stable producer helper used before pip replaces site-packages |
 
-The recommended desired policy sets `"profile":"al2023-web-v1"`. The profile
+The recommended desired policy sets `"profile":"al2023-web-v2"`. The profile
 is packaged and immutable: fast host/config/home/cloud-init/local-library
 coverage runs each minute, slow boot and system-binary coverage runs every six
 hours, and RPM verification includes the isolated system Python's constrained
@@ -721,6 +721,15 @@ private/control state. Profile activation is an explicit
 `baseline-preview` → `baseline-initialize --confirm-digest <digest>` ceremony;
 ordinary service startup never blesses the first scan. `check_node` fails an
 active digest without initialized fast, slow, and RPM baselines.
+
+`al2023-web-v1` is retained only for existing baseline identity and rollback.
+Do not select it for a new AL2023 baseline: its
+`/var/lib/cloud/instance/scripts` target descends through cloud-init's mutable
+`instance` symlink, which descriptor-safe traversal correctly refuses. V2
+removes that redundant alias descendant and retains recursive content coverage
+through `/var/lib/cloud/instances`. An existing v1 deployment stays on v1 until
+an operator selects v2, records a complete preview, and explicitly initializes
+the exact v2 digest; profile mismatch fails closed and never rebaselines.
 
 Post-deploy, `node_setup`, and `certbot_sync` route monitored host changes
 through the stable expected-change helper. The helper declares exact paths
@@ -740,7 +749,7 @@ immediately and wait no more than 120 seconds for a late matching annotation.
 Roll out the producer-capable package before selecting the integrity profile:
 deploy the helper and exercise normal deploy, node setup, and certificate
 operations while the profile remains inactive. Only then select
-`al2023-web-v1`, preview all tiers, and initialize the exact previewed digest.
+`al2023-web-v2`, preview all tiers, and initialize the exact previewed digest.
 This keeps the first active integrity baseline from coinciding with a framework
 upgrade that has no producer. A rollback either selects a retained initialized
 profile digest or turns enrollment off; it never silently creates a replacement
@@ -807,7 +816,7 @@ run ordinary `post_deploy`. Do not run another deploy during a disposable
 canary started with a temporary CLI/environment override; the next deploy
 correctly returns to the enrolled lifecycle. Observe never bans locally.
 
-For `al2023-web-v1`, use a disposable enrolled AL2023 node. First deploy the
+For `al2023-web-v2`, use a disposable enrolled AL2023 node. First deploy the
 producer-capable package with no profile selected and exercise its normal
 deploy, node setup, and certificate paths. Then select the profile, record the
 complete `baseline-preview`, and initialize only the digest it prints. Require
