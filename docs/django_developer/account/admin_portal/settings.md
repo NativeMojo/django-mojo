@@ -16,12 +16,18 @@ Optional applications simply omit their section when absent.
 
 Every descriptor declares its stable key, category, friendly description,
 type, constraints, default, resolver, raw/effective semantics, sensitivity,
-scope, writability, owner, and change behavior. Provenance follows the real
+scope, writability, owner, and change behavior. The fixed category order is
+General, Sign-in & registration, Users, Email, Domains & DNS, Edge & Web Apps,
+and Security & operations; categories owned by absent optional applications
+are omitted. Provenance follows the real
 resolver: dynamic Redis/database/deployment/default, protected database-only,
 static deployment-only, merged AUTH_CONFIG, or computed posture. Static rows
 report only that an ignored database shadow exists. Configured-only rows return
-a boolean state. Responses omit paths, environment names, raw ignored values,
-exceptions, and secret material.
+`{"configured": true|false}`. A legacy secret global row is never decrypted and
+is excluded from the Redis lookup; it reports only configured state with source
+`secret_override`. A secret BASE_URL does not satisfy Setup completeness.
+Responses omit paths, environment names, raw ignored values, exceptions, and
+secret material.
 
 ## Writers and ownership
 
@@ -40,8 +46,9 @@ The catalog writer owns only the four `ALLOW_*` booleans and global
 `WEBAPP_BASE_URL`. Booleans are strict JSON booleans. The WebApp address is
 canonicalized to one public HTTPS hostname origin. IP literals, browser-style
 numeric IP forms, localhost, and private/special-use hostname suffixes are
-refused. Values are global, non-secret, validated, and immediate. Generic
-`Setting` writes cannot create,
+refused, as are credentials, paths, query strings, fragments, and non-443
+ports. Reserved example domains are not valid production origins. Values are
+global, non-secret, validated, and immediate. Generic `Setting` writes cannot create,
 change, rename, move, or delete a catalog-owned global row. Existing
 group-scoped rows remain compatible; a move across the global boundary checks
 both original and target key/scope.
@@ -50,8 +57,11 @@ PostgreSQL permits duplicate `(key, NULL)` rows under the legacy constraint.
 The catalog reports `duplicate_override`, refuses Set, and offers one Clear
 operation. Clear locks and removes every global duplicate atomically. Set and
 Clear publish Redis `hset`/`hdel` only from `transaction.on_commit`; rollback
-cannot change cache state. Audit contains actor id, key, action, and fixed
-source only—never values or request bodies.
+cannot change cache state. Setting a single legacy secret catalog row replaces
+it with the validated non-secret value; Clear removes it. The POST body is
+classified `admin_settings` before view dispatch so generic request logging
+stores only the fixed sensitivity marker. Audit contains actor id, key, action,
+and fixed source only—never values or request bodies.
 
 Mutation requires an interactive non-key session, authentication within 600
 seconds, and a freshly reread active literal User with exact global

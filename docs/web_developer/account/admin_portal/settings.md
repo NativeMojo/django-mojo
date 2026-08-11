@@ -5,9 +5,15 @@ django-mojo's existing database-backed settings system.
 
 | Method | Route | Authority |
 |---|---|---|
-| `GET` | `/api/account/admin/settings` | exact global Settings or owner-display authority |
-| `POST` | `/api/account/admin/settings` | fresh interactive `manage_settings`/`admin` |
-| `POST` | `/api/account/admin/advanced/settings` | fresh interactive `manage_advanced`/`admin` plus literal superuser; typed compatibility owner |
+| `GET` | `/api/account/admin/settings` | exact global `manage_settings`, `view_advanced_settings`, `manage_advanced`, or `admin`; literal superuser also passes |
+| `POST` | `/api/account/admin/settings` | fresh interactive `manage_settings`/`admin`; literal superuser also passes |
+| `POST` | `/api/account/admin/advanced/settings` | fresh interactive `manage_advanced`/`admin` gate plus active literal superuser; typed compatibility owner |
+
+`manage_settings` also admits the Admin source session and bootstrap. Catalog
+write and owner-display capabilities are separate: a manage-settings-only user
+does not receive AUTH_CONFIG or topology owner rows. Literal
+`permissions.admin` is an exact grant for these listed gates, not a backend
+permission wildcard; `User.is_superuser` is the wildcard.
 
 The GET response has `schema_version`, ordered `sections`, and server-owned
 `entries`. Each entry supplies friendly label, description, type, constraints,
@@ -15,11 +21,19 @@ effective value/status, source, scope, owner, change behavior, and capability
 booleans. Sensitive deployment settings expose only
 `{"configured":true|false}`. Arbitrary Django settings, paths, environment
 names, ignored raw values, provider responses, and exceptions are omitted.
+The fixed order is General, Sign-in & registration, Users, Email, Domains &
+DNS, Edge & Web Apps, and Security & operations; sections from absent optional
+applications are omitted.
 
 Sources include `database_cache`, `database`, `deployment`, `default`,
-`computed`, merged `database+deployment+defaults`, `invalid`, and
-`duplicate_override`. A duplicate is fail-closed, not a random first-row
-winner.
+`computed`, merged `database+deployment+defaults`, `invalid`,
+`secret_override`, and `duplicate_override`. A legacy secret global row is
+never decrypted or requested from Redis and returns only
+`{"configured":true}`; a secret BASE_URL leaves Setup incomplete. A duplicate
+is fail-closed, not a random first-row winner. Dynamic rows resolve through
+Redis/database before deployment/default; protected rows use their dedicated
+database owner; static rows remain deployment-only and only flag an ignored
+database shadow; AUTH_CONFIG is merged; posture rows are computed.
 
 Catalog mutations accept only:
 
@@ -35,21 +49,41 @@ Catalog mutations accept only:
 {"action":"clear","key":"WEBAPP_BASE_URL"}
 ```
 
+Set returns the normalized value; Clear returns the number of removed global
+rows (including every duplicate):
+
+```json
+{"schema_version":1,"saved":true,"key":"ALLOW_PHONE_CHANGE","effective_value":false}
+```
+
+```json
+{"schema_version":1,"cleared":true,"key":"WEBAPP_BASE_URL","removed":2}
+```
+
 Only four self-service booleans and the global default WebApp public HTTPS
 origin are catalog-writable initially. IP literals, browser-style numeric IP
 forms, localhost, and private/special-use hostname suffixes are refused.
-Values are non-secret. Clear is
-idempotent, removes every conflicting global override, and reveals the
-deployment/default source. API keys and group tokens are refused, recent auth
-is 600 seconds, and HTTP 440 requires explicit reauthentication without write
-replay.
+Credentials, paths, query strings, fragments, non-443 ports, and reserved
+example domains are also refused. Values are non-secret. Set refuses ambiguous
+duplicates. Clear is idempotent, removes every conflicting global override,
+and reveals the deployment/default source. Setting one legacy secret row
+replaces it with the validated non-secret value. API keys and group tokens are
+refused, recent auth is 600 seconds, and HTTP 440 requires explicit
+reauthentication without write replay.
 
 Public API address routes to focused System Setup. Identity is immutable.
 Email, monitoring, and DNS/certificate rows route to their real owner. Brand,
 authentication, and expected fleet remain typed calls to the compatibility
 Advanced writer, although their only built-in UI home is Settings. Topology
-uses arrays of node and pool strings.
+uses arrays of node and pool strings. Installation identity rows are read-only;
+secure posture, KMS state, and the local Setup probe are deployment/file-only
+and expose guidance rather than an editor.
 
 The generic `/api/settings` remains unchanged for uncataloged and supported
 group-scoped rows. Existing holders of its model permissions can read
 non-secret values; do not place confidential mutable data in this catalog.
+Catalog protection applies only to the five global allowlisted overrides and
+checks both sides of a scope/key move; compatible group-scoped rows remain on
+the generic API. POST request bodies are classified `admin_settings` before
+dispatch, and mutation audit records actor id, key, action, and a fixed source
+without recording the submitted value.
