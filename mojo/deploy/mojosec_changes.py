@@ -90,9 +90,10 @@ def _contained(path, root):
 
 def validate_paths(paths, allowed_roots=None):
     roots = tuple(allowed_roots or (_GENERAL_ROOTS + _HOME_ROOTS))
-    if not isinstance(paths, (list, tuple)) or not paths or len(paths) > MAX_PATHS:
+    if not isinstance(paths, (list, tuple)) or not paths:
         raise ChangeError("trusted change requires 1-4096 exact paths")
     result = []
+    seen = set()
     for path in paths:
         if (not isinstance(path, str) or not os.path.isabs(path) or "\x00" in path or
                 os.path.normpath(path) != path or path == "/"):
@@ -107,8 +108,12 @@ def validate_paths(paths, allowed_roots=None):
             raise ChangeError("MojoSec runtime state is never trusted-change scope")
         if not any(_contained(path, root) for root in roots):
             raise ChangeError(f"trusted-change path is outside an approved host destination: {path}")
-        if path not in result:
-            result.append(path)
+        if path in seen:
+            continue
+        if len(result) >= MAX_PATHS:
+            raise ChangeError("trusted change requires 1-4096 exact paths")
+        seen.add(path)
+        result.append(path)
     return result
 
 

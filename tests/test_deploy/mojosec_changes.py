@@ -243,6 +243,20 @@ def test_change_scope_rejects_application_trees_and_outside_paths(opts):
 
 
 @th.django_unit_test()
+def test_change_scope_bounds_unique_paths_after_deduplication(opts):
+    from mojo.deploy.mojosec_changes import ChangeError, MAX_PATHS, validate_paths
+
+    repeated = ["/usr/local/bin/mojo-tool"] * (MAX_PATHS + 1)
+    th.assert_eq(
+        validate_paths(repeated), ["/usr/local/bin/mojo-tool"],
+        "repeated exact paths must be deduplicated before enforcing the safety bound")
+
+    distinct = [f"/usr/local/bin/mojo-tool-{index}" for index in range(MAX_PATHS + 1)]
+    with th.assert_raises(ChangeError):
+        validate_paths(distinct)
+
+
+@th.django_unit_test()
 def test_post_deploy_producers_use_stable_child_lifecycle(opts):
     """Every packaged host producer must enter through the helper's `run`
     lifecycle, whose nonzero child path aborts instead of annotating."""
