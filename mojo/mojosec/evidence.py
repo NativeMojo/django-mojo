@@ -64,7 +64,7 @@ FIELD_POLICIES["web.error"] = FIELD_POLICIES["web.probe"]
 FIELD_POLICIES["web.denied"] = FIELD_POLICIES["web.probe"]
 
 
-def _safe_text(value):
+def safe_text(value):
     if value is None:
         return ""
     if not isinstance(value, str):
@@ -75,7 +75,7 @@ def _safe_text(value):
 
 
 def digest_text(value):
-    return hashlib.sha256(_safe_text(value).encode("utf-8")).hexdigest()
+    return hashlib.sha256(safe_text(value).encode("utf-8")).hexdigest()
 
 
 def _prefix(value, byte_limit):
@@ -90,7 +90,7 @@ def _fits(value):
 
 
 def _add_text(result, key, value, byte_limit):
-    value = _safe_text(value)
+    value = safe_text(value)
     raw = value.encode("utf-8")
     truncated = len(raw) > byte_limit
     prefix = _prefix(value, byte_limit)

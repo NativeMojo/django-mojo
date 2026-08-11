@@ -781,6 +781,46 @@ def test_rpm_ownership_is_rebuilt_for_every_slow_scan(opts):
 
 
 @th.django_unit_test()
+def test_fim_paths_with_undecodable_bytes_stay_deliverable(opts):
+    from mojo.mojosec.collectors.fim import FimCollector
+    from mojo.mojosec.events import bounded_text
+    from mojo.mojosec.protocol import make_event, validate_event
+
+    collector = FimCollector({"targets": []})
+    bad_path = b"/etc/bad-\xff".decode("utf-8", "surrogateescape")
+    sibling_path = b"/etc/bad-\xfe".decode("utf-8", "surrogateescape")
+
+    def one_change(path):
+        scan = {"snapshot": {path: {"kind": "file", "size": 1}}, "complete": True}
+        found = collector.diff({}, scan)
+        th.assert_eq(len(found), 1,
+                     "one created path must yield exactly one FIM change")
+        return found[0]
+
+    first = one_change(bad_path)
+    second = one_change(sibling_path)
+    try:
+        first["attributes"]["path"].encode("utf-8")
+    except UnicodeEncodeError:
+        th.assert_true(False,
+                       "a surrogateescape filesystem path must be normalized into "
+                       "storable evidence, not shipped raw")
+    event = make_event("sensor-test", first)
+    validate_event(event)
+    th.assert_true(first["fingerprint"] != second["fingerprint"],
+                   "paths differing only in invalid bytes must keep distinct event "
+                   "identities via the raw-path fingerprint")
+
+    normalized = bounded_text("summary \udcff tail", 64)
+    try:
+        normalized.encode("utf-8")
+    except UnicodeEncodeError:
+        th.assert_true(False,
+                       "bounded_text must normalize lone surrogates so every summary "
+                       "is storable by construction")
+
+
+@th.django_unit_test()
 def test_system_service_error_requires_pid1_failure_and_collapses_by_unit(opts):
     from mojo.mojosec.detectors import detect_journal
     from mojo.mojosec.events import fingerprint
@@ -842,7 +882,7 @@ def test_system_service_error_requires_pid1_failure_and_collapses_by_unit(opts):
                  "non-service unit types must be accepted by the failure grammar")
     drifted = detect_journal(dict(
         failure, MESSAGE="api.service has gone belly-up.",
-        MESSAGE_ID="d9b373ed55a64feb8242e02dbe79ffcf", UNIT="api.service"))
+        MESSAGE_ID="d9b373ed55a64feb8242e02dbe79a49c", UNIT="api.service"))
     th.assert_eq((drifted["attributes"]["unit"], drifted["attributes"]["failure_kind"]),
                  ("api.service", "unknown"),
                  "the unit-failed MESSAGE_ID fallback must survive future wording drift")
@@ -857,9 +897,9 @@ def test_system_service_error_requires_pid1_failure_and_collapses_by_unit(opts):
                  SYSLOG_IDENTIFIER="myapp", _SYSTEMD_UNIT="myapp.service",
                  MESSAGE="api.service: Failed with result 'exit-code'."),
             dict(failure, MESSAGE="api.service has gone belly-up.",
-                 MESSAGE_ID="d9b373ed55a64feb8242e02dbe79ffcf", UNIT="../etc"),
+                 MESSAGE_ID="d9b373ed55a64feb8242e02dbe79a49c", UNIT="../etc"),
             dict(failure, MESSAGE="api.service has gone belly-up.",
-                 MESSAGE_ID="d9b373ed55a64feb8242e02dbe79ffcf"),
+                 MESSAGE_ID="d9b373ed55a64feb8242e02dbe79a49c"),
     ):
         th.assert_eq(detect_journal(mutation), None,
                      "anything but a PID 1 root unit-failure declaration must fail closed")

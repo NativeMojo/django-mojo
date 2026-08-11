@@ -538,6 +538,19 @@ its bounded Event projection has completed central publication and any required
 exact-RuleSet handler has a durably queued outbox job. Incomplete publication
 or queueing returns `retry`.
 
+`rejected` is also the terminal answer for input the receiver's storage can
+never hold and for work that can never succeed: a batch whose
+`policy_revision` contains unstorable text (NUL or lone-surrogate code
+points) rejects every event with one log line and zero database work; an
+individual event containing unstorable text is rejected before persistence;
+a value-domain storage error (`DataError`/`UnicodeEncodeError`) that slips
+past the pre-scan maps to `rejected` instead of an endless retry; and a
+pending receipt whose projected Event was pruned by retention is rejected
+with reason "event evidence was pruned before publication". Deployed sensors
+already treat `rejected` as terminal — the spool row is freed — so none of
+this requires a sensor upgrade, and genuinely transient failures keep the
+`retry` behavior unchanged.
+
 `MojoSecReceipt` is an internal durable outbox/audit model, not writable browser
 CRUD state. Its unique key is
 `(api_key, wire_event_id)`. It retains the API key and projected Event links,
@@ -586,9 +599,23 @@ marks the receipt dispatched. Request replay and the five-minute
 `replay_mojosec_handler_outbox` cron recover pending/failed work. An accepted
 acknowledgement is never sent while required dispatch lacks a durable queue row.
 
+Both receipt state machines carry a terminal `dead` value. The replay cron
+enforces `MOJOSEC_HANDLER_MAX_ATTEMPTS` (default 100, roughly eight hours of
+continuous failure): a published receipt whose `handler_attempts` reaches the
+cap is swept to `handler_state=dead` and never re-dispatched or logged again.
+The same cron recovers `queued` receipts whose dispatch job vanished (job
+prune, expiry, or a Redis restart): any receipt still queued after
+`MOJOSEC_HANDLER_QUEUED_STALE_SECONDS` (default 1800) is dispatched inline,
+which is idempotency-safe against a late-running original job. It also sweeps
+pending receipts whose Event FK was nulled by event retention (at least one
+day old) to `publish_state=dead`. Dead-lettering an extreme outage is
+recoverable by deliberate bulk surgery — reset `handler_state` to `failed`
+for the affected rows and the cron resumes them.
+
 Published receipt rows are retained for `MOJOSEC_RECEIPT_RETENTION_DAYS`
-(default 45, minimum 7) and pruned daily. Pending publication and incomplete
-handler-outbox receipts are never removed by that retention job.
+(default 45, minimum 7) and pruned daily; `dead` receipt rows age out on the
+same retention clock. Live pending publication and incomplete handler-outbox
+receipts are never removed by that retention job.
 
 ## Human feedback and offline policy evaluation
 

@@ -8,21 +8,25 @@ class MojoSecReceipt(models.Model, MojoModel):
 
     PUBLISH_PENDING = "pending"
     PUBLISH_PUBLISHED = "published"
+    PUBLISH_DEAD = "dead"
     PUBLISH_STATES = (
         (PUBLISH_PENDING, "Pending"),
         (PUBLISH_PUBLISHED, "Published"),
+        (PUBLISH_DEAD, "Dead"),
     )
     HANDLER_NONE = "none"
     HANDLER_PENDING = "pending"
     HANDLER_QUEUED = "queued"
     HANDLER_DISPATCHED = "dispatched"
     HANDLER_FAILED = "failed"
+    HANDLER_DEAD = "dead"
     HANDLER_STATES = (
         (HANDLER_NONE, "No handler"),
         (HANDLER_PENDING, "Pending"),
         (HANDLER_QUEUED, "Queued"),
         (HANDLER_DISPATCHED, "Dispatched"),
         (HANDLER_FAILED, "Failed"),
+        (HANDLER_DEAD, "Dead"),
     )
 
     created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)

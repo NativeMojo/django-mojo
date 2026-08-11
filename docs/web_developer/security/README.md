@@ -708,6 +708,8 @@ See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-ana
 | `HEALTH_DISK_CRIT` | `85` | Disk % threshold |
 | `OSSEC_SECRET` | `None` | Legacy OSSEC shared secret; unset/empty disables the endpoints |
 | `MOJOSEC_RECEIPT_RETENTION_DAYS` | `45` | Published MojoSec receipt retention; minimum 7 days |
+| `MOJOSEC_HANDLER_MAX_ATTEMPTS` | `100` | Handler dispatch attempts before a MojoSec receipt is dead-lettered |
+| `MOJOSEC_HANDLER_QUEUED_STALE_SECONDS` | `1800` | Age after which a queued MojoSec receipt's vanished dispatch job is recovered |
 | `MOJOSEC_LEARNING_EVALUATION_RETENTION_DAYS` | `90` | Offline replay/shadow summary retention; clamped to 30–3,650 days |
 | `LLM_HANDLER_API_KEY` | `None` | Claude API key (enables LLM agent) |
 | `LLM_HANDLER_MODEL` | (auto-detect) | Claude model for LLM agent. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |

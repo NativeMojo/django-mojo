@@ -6,8 +6,8 @@ import re
 import zlib
 import datetime
 
-from django.db import IntegrityError, transaction
-from django.db.models import F
+from django.db import DataError, IntegrityError, transaction
+from django.db.models import F, Q
 
 from mojo.helpers import dates, logit
 from mojo.helpers.settings import settings
@@ -318,7 +318,15 @@ def _publish_receipt(receipt):
             if locked.publish_state == MojoSecReceipt.PUBLISH_PUBLISHED:
                 return locked, False
             if locked.event_id is None:
-                raise RuntimeError("event projection is unavailable")
+                # The Event projection was pruned by retention; publication can
+                # never succeed. Terminal, idempotent, and never a traceback.
+                if locked.publish_state != MojoSecReceipt.PUBLISH_DEAD:
+                    locked.publish_state = MojoSecReceipt.PUBLISH_DEAD
+                    locked.last_error = "event was pruned before publication"
+                    locked.publish_attempts += 1
+                    locked.save(update_fields=[
+                        "publish_state", "last_error", "publish_attempts", "modified"])
+                return locked, False
             publication = locked.event.publish(
                 use_catchall=False,
                 dispatch_handlers=False,
@@ -348,6 +356,14 @@ def _publish_receipt(receipt):
     return locked, True
 
 
+def _handler_attempt_cap():
+    return settings.get_static("MOJOSEC_HANDLER_MAX_ATTEMPTS", 100, kind="int")
+
+
+def _handler_queued_stale_seconds():
+    return settings.get_static("MOJOSEC_HANDLER_QUEUED_STALE_SECONDS", 1800, kind="int")
+
+
 def _handler_job_key(receipt):
     return f"mojosec-handler:{receipt.pk}"
 
@@ -362,9 +378,14 @@ def _queue_handler(receipt):
     from mojo.apps.incident.models import MojoSecReceipt
 
     if receipt.handler_state in (
-            MojoSecReceipt.HANDLER_NONE, MojoSecReceipt.HANDLER_DISPATCHED):
+            MojoSecReceipt.HANDLER_NONE, MojoSecReceipt.HANDLER_DISPATCHED,
+            MojoSecReceipt.HANDLER_DEAD):
         return True
     if receipt.handler_state == MojoSecReceipt.HANDLER_FAILED and receipt.handler_job_id:
+        if receipt.handler_attempts >= _handler_attempt_cap():
+            # Dead-lettered by attempt budget: the replay cron sweeps the state
+            # to dead; re-POSTs must not dispatch or fail the ack.
+            return True
         try:
             return _dispatch_receipt_handlers(receipt.pk)
         except Exception:
@@ -393,7 +414,8 @@ def _dispatch_receipt_handlers(receipt_id):
 
     receipt = MojoSecReceipt.objects.select_related(
         "event", "rule_set", "incident").get(pk=receipt_id)
-    if receipt.handler_state == MojoSecReceipt.HANDLER_DISPATCHED:
+    if receipt.handler_state in (
+            MojoSecReceipt.HANDLER_DISPATCHED, MojoSecReceipt.HANDLER_DEAD):
         return True
     if receipt.rule_set_id is None or not receipt.rule_set.handler:
         MojoSecReceipt.objects.filter(pk=receipt.pk).update(
@@ -424,10 +446,34 @@ def dispatch_mojosec_receipt(job):
 
 
 def ingest_batch(api_key, batch):
+    if protocol.has_unstorable_text(batch["policy_revision"]):
+        # Every event in the batch would fail on this one field; one line,
+        # zero database work, and the sensor frees its spool slots.
+        logger.warning(
+            "MojoSec batch from sensor %s carried an unstorable policy_revision; "
+            "rejecting %s event(s)", batch["sensor_id"], len(batch["events"]))
+        return {
+            "schema": protocol.ACK_SCHEMA,
+            "version": protocol.PROTOCOL_VERSION,
+            "results": [
+                {"id": sensor_event["id"], "status": "rejected",
+                 "reason": "policy_revision contains unstorable text"}
+                for sensor_event in batch["events"]
+            ],
+        }
     results = []
     for sensor_event in batch["events"]:
-        digest = _payload_digest(sensor_event)
         try:
+            if protocol.has_unstorable_text(sensor_event):
+                logger.warning(
+                    "MojoSec event %s contains unstorable text; rejected",
+                    sensor_event["id"])
+                results.append({
+                    "id": sensor_event["id"], "status": "rejected",
+                    "reason": "event contains unstorable text",
+                })
+                continue
+            digest = _payload_digest(sensor_event)
             receipt, created = _create_receipt(api_key, batch, sensor_event, digest)
             if receipt.payload_digest != digest:
                 results.append({
@@ -443,6 +489,12 @@ def ingest_batch(api_key, batch):
                     "reason": "central publication failed",
                 })
                 continue
+            if receipt.publish_state == receipt.PUBLISH_DEAD:
+                results.append({
+                    "id": sensor_event["id"], "status": "rejected",
+                    "reason": "event evidence was pruned before publication",
+                })
+                continue
             receipt.refresh_from_db()
             if not _queue_handler(receipt):
                 results.append({
@@ -453,6 +505,14 @@ def ingest_batch(api_key, batch):
             status = "duplicate" if was_published or not did_publish else "accepted"
             result = {"id": sensor_event["id"], "status": status}
             results.append(result)
+        except (DataError, UnicodeEncodeError) as err:
+            # Value-domain storage failures can never succeed on retry.
+            logger.warning("MojoSec event %s could not be stored: %s",
+                           sensor_event["id"], str(err)[:MAX_ERROR])
+            results.append({
+                "id": sensor_event["id"], "status": "rejected",
+                "reason": "event could not be stored",
+            })
         except Exception:
             logger.exception("MojoSec receipt processing failed for %s", sensor_event["id"])
             results.append({
@@ -477,26 +537,54 @@ def prune_receipts(job=None, now=None):
     deleted, _ = MojoSecReceipt.objects.filter(
         publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
         handler_state__in=(
-            MojoSecReceipt.HANDLER_NONE, MojoSecReceipt.HANDLER_DISPATCHED),
+            MojoSecReceipt.HANDLER_NONE, MojoSecReceipt.HANDLER_DISPATCHED,
+            MojoSecReceipt.HANDLER_DEAD),
         published_at__lt=cutoff,
     ).delete()
+    dead_deleted, _ = MojoSecReceipt.objects.filter(
+        publish_state=MojoSecReceipt.PUBLISH_DEAD,
+        modified__lt=cutoff,
+    ).delete()
     if job is not None and hasattr(job, "add_log"):
-        job.add_log(f"Pruned {deleted} expired MojoSec receipt rows")
-    return deleted
+        job.add_log(f"Pruned {deleted} expired and {dead_deleted} dead "
+                    "MojoSec receipt rows")
+    return deleted + dead_deleted
 
 
 def replay_handler_outbox(job=None, limit=100):
     from mojo.apps.incident.models import MojoSecReceipt
 
-    receipts = MojoSecReceipt.objects.filter(
+    cap = _handler_attempt_cap()
+    stale = _handler_queued_stale_seconds()
+    now = dates.utcnow()
+    dead_handlers = MojoSecReceipt.objects.filter(
         publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
         handler_state__in=(
-            MojoSecReceipt.HANDLER_PENDING, MojoSecReceipt.HANDLER_FAILED),
+            MojoSecReceipt.HANDLER_PENDING, MojoSecReceipt.HANDLER_QUEUED,
+            MojoSecReceipt.HANDLER_FAILED),
+        handler_attempts__gte=cap,
+    ).update(handler_state=MojoSecReceipt.HANDLER_DEAD, modified=now)
+    dead_publishes = MojoSecReceipt.objects.filter(
+        publish_state=MojoSecReceipt.PUBLISH_PENDING,
+        event__isnull=True,
+        created__lt=now - dates.timedelta(days=1),
+    ).update(
+        publish_state=MojoSecReceipt.PUBLISH_DEAD,
+        last_error="event was pruned before publication", modified=now)
+    receipts = MojoSecReceipt.objects.filter(
+        publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
+        handler_attempts__lt=cap,
+    ).filter(
+        Q(handler_state__in=(
+            MojoSecReceipt.HANDLER_PENDING, MojoSecReceipt.HANDLER_FAILED)) |
+        Q(handler_state=MojoSecReceipt.HANDLER_QUEUED,
+          modified__lt=now - dates.timedelta(seconds=stale)),
     ).order_by("modified")[:limit]
     replayed = 0
     for receipt in receipts:
         try:
-            if receipt.handler_state == MojoSecReceipt.HANDLER_FAILED:
+            if receipt.handler_state in (
+                    MojoSecReceipt.HANDLER_FAILED, MojoSecReceipt.HANDLER_QUEUED):
                 _dispatch_receipt_handlers(receipt.pk)
                 replayed += 1
             elif _queue_handler(receipt):
@@ -504,5 +592,7 @@ def replay_handler_outbox(job=None, limit=100):
         except Exception:
             logger.exception("MojoSec handler replay failed for receipt %s", receipt.pk)
     if job is not None and hasattr(job, "add_log"):
-        job.add_log(f"Replayed {replayed} MojoSec handler outbox rows")
+        job.add_log(
+            f"Replayed {replayed} MojoSec handler outbox rows; dead-lettered "
+            f"{dead_handlers} capped handlers and {dead_publishes} unpublishable receipts")
     return replayed

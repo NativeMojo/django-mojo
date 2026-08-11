@@ -57,6 +57,31 @@ def event_id(sensor_id, kind, fingerprint, first_seen):
     return hashlib.sha256(material).hexdigest()
 
 
+def has_unstorable_text(value):
+    """True when any string inside value cannot be stored by PostgreSQL.
+
+    NUL code points are rejected by text columns and jsonb; lone surrogates
+    (which json.loads happily produces from escapes, and surrogateescape
+    decoding produces from raw bytes) are rejected by jsonb. Wire validation
+    stays permissive so sensors never wedge on their own spooled data; the
+    receiver calls this to terminally reject what its storage cannot hold.
+    """
+    if isinstance(value, str):
+        if "\x00" in value:
+            return True
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return True
+        return False
+    if isinstance(value, dict):
+        return any(has_unstorable_text(key) or has_unstorable_text(child)
+                   for key, child in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(has_unstorable_text(child) for child in value)
+    return False
+
+
 def _require_keys(value, required, optional, label):
     if not isinstance(value, dict):
         raise ProtocolError(f"{label} must be an object")
