@@ -4,7 +4,9 @@ import argparse
 import json
 import sys
 
-from .config import ConfigError, load_config
+from .config import (
+    CANONICAL_CONFIG_PATH, ConfigError, load_config, load_effective_config,
+)
 from .output import read_status
 
 
@@ -13,7 +15,7 @@ def build_parser():
         prog="python -m mojo.mojosec",
         description="MojoSec host security sensor",
     )
-    parser.add_argument("--config", default="/etc/mojosec/config.json",
+    parser.add_argument("--config", default=CANONICAL_CONFIG_PATH,
                         help="strict JSON config (default: %(default)s)")
     parser.add_argument("command", nargs="?", default="run",
                         choices=("run", "once", "check", "status",
@@ -33,7 +35,10 @@ def _print_json(value):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        config = load_config(args.config)
+        if args.config == CANONICAL_CONFIG_PATH:
+            config = load_effective_config(args.config)
+        else:
+            config = load_config(args.config)
         if args.command == "check":
             _print_json({"ok": True, "sensor_id": config["sensor_id"],
                          "version": config["version"]})

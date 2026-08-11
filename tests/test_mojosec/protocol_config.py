@@ -1,4 +1,5 @@
 import copy
+import io
 import json
 import os
 import subprocess
@@ -169,6 +170,145 @@ def test_config_security_is_checked_on_the_descriptor_that_is_parsed(opts):
         os.chmod(path, 0o640)
         with th.assert_raises(ConfigError):
             load_config(path, require_root=False)
+
+
+@th.django_unit_test()
+def test_effective_profile_requires_exact_packaged_fim_and_rpm_graph(opts):
+    from mojo.mojosec.config import (
+        ConfigError, build_config, validate_effective_config,
+    )
+
+    supplied = {
+        "version": 1,
+        "profile": "al2023-web-v1",
+        "sensor_id": "prod-web-i-0123456789abcdef0",
+        "endpoint": "https://incident.example/api/incident/mojosec/batch",
+    }
+    effective = build_config(supplied)
+    th.assert_eq(validate_effective_config(copy.deepcopy(effective)), effective,
+                 "the exact packaged profile graph must be a valid effective artifact")
+
+    mutations = (
+        (("collectors", "fim", "targets"), [{"path": "/etc", "recursive": True}]),
+        (("collectors", "fim", "tiers", "fast", "interval_seconds"), 61),
+        (("collectors", "rpm", "interpreter"), "/usr/local/bin/python3"),
+        (("collectors", "rpm", "max_packages"), 9999),
+        (("collectors", "rpm", "max_file_bytes"), 1024),
+    )
+    for keys, replacement in mutations:
+        changed = copy.deepcopy(effective)
+        parent = changed
+        for key in keys[:-1]:
+            parent = parent[key]
+        parent[keys[-1]] = replacement
+        with th.assert_raises(ConfigError):
+            validate_effective_config(changed)
+
+    for collectors in (
+            {"fim": {"targets": [{"path": "/etc", "recursive": True}]}},
+            {"fim": {"tiers": {}}},
+            {"rpm": {"max_packages": 9999}}):
+        desired = dict(supplied, collectors=collectors)
+        with th.assert_raises(ConfigError):
+            build_config(desired)
+
+
+@th.django_unit_test()
+def test_effective_config_loader_is_root_required_and_descriptor_safe(opts):
+    import mojo.mojosec.config as config_module
+    from mojo.mojosec.config import ConfigError, build_config, load_effective_config
+
+    effective = build_config({
+        "version": 1,
+        "profile": "al2023-web-v1",
+        "sensor_id": "prod-web-i-0123456789abcdef0",
+        "endpoint": "https://incident.example/api/incident/mojosec/batch",
+    })
+    with tempfile.TemporaryDirectory() as root:
+        path = os.path.join(root, "config.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(effective, handle)
+        os.chmod(path, 0o600)
+
+        real_open = config_module.os.open
+        real_fstat = config_module.os.fstat
+        opened = []
+
+        def tracked_open(open_path, flags):
+            opened.append((open_path, flags))
+            return real_open(open_path, flags)
+
+        def owned_fstat(uid):
+            def inspect(descriptor):
+                values = list(real_fstat(descriptor))
+                values[4] = uid
+                return os.stat_result(values)
+            return inspect
+
+        with mock.patch.object(config_module.os, "open", side_effect=tracked_open), \
+                mock.patch.object(config_module.os, "fstat", side_effect=owned_fstat(0)):
+            loaded = load_effective_config(path)
+        th.assert_eq(loaded, effective,
+                     "the root-owned effective artifact must load without policy expansion")
+        th.assert_eq(len(opened), 1,
+                     "effective loading must check and parse one already-opened inode")
+        th.assert_true(opened[0][1] & getattr(os, "O_NOFOLLOW", 0),
+                       "effective loading must refuse a symlink at descriptor open")
+
+        with th.assert_raises(TypeError):
+            load_effective_config(path, require_root=False)
+        with mock.patch.object(config_module.os, "fstat", side_effect=owned_fstat(501)):
+            with th.assert_raises(ConfigError):
+                load_effective_config(path)
+
+        os.chmod(path, 0o640)
+        with mock.patch.object(config_module.os, "fstat", side_effect=owned_fstat(0)):
+            with th.assert_raises(ConfigError):
+                load_effective_config(path)
+        os.chmod(path, 0o600)
+
+        link = os.path.join(root, "config-link.json")
+        os.symlink(path, link)
+        with th.assert_raises(ConfigError):
+            load_effective_config(link)
+
+        invalid_payloads = (
+            b'{"version":1,"version":1}',
+            b'{"value":NaN}',
+            b"{" + (b" " * config_module.MAX_CONFIG_BYTES) + b"}",
+        )
+        for payload in invalid_payloads:
+            with open(path, "wb") as handle:
+                handle.write(payload)
+            os.chmod(path, 0o600)
+            with mock.patch.object(config_module.os, "fstat", side_effect=owned_fstat(0)):
+                with th.assert_raises(ConfigError):
+                    load_effective_config(path)
+
+
+@th.django_unit_test()
+def test_cli_uses_effective_loader_only_for_exact_canonical_path(opts):
+    import mojo.mojosec.__main__ as cli
+
+    config = {
+        "sensor_id": "prod-web-i-0123456789abcdef0",
+        "version": 1,
+    }
+    output = io.StringIO()
+    with mock.patch.object(cli, "load_effective_config", return_value=config) as effective, \
+            mock.patch.object(cli, "load_config", return_value=config) as desired, \
+            mock.patch.object(cli.sys, "stdout", output):
+        th.assert_eq(cli.main(["check"]), 0,
+                     "the omitted service path must use the canonical effective artifact")
+        th.assert_eq(cli.main(["--config", cli.CANONICAL_CONFIG_PATH, "check"]), 0,
+                     "the explicit service path must use the canonical effective artifact")
+        alias = "/etc/mojosec/./config.json"
+        th.assert_eq(cli.main(["--config", alias, "check"]), 0,
+                     "an alternate spelling remains valid only as caller policy")
+
+    th.assert_eq(effective.call_count, 2,
+                 "only omitted and exact canonical paths may use effective loading")
+    desired.assert_called_once_with(alias)
 
 
 @th.django_unit_test()

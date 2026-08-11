@@ -21,11 +21,12 @@ from mojo.deploy.mojosec_nginx import (
     trusted_proxy_cidrs,
 )
 from mojo.mojosec.collectors.nginx import MAX_STRUCTURED_LINE_BYTES
+from mojo.mojosec.config import CANONICAL_CONFIG_PATH
 
 
 SERVICE = "mojosec.service"
 SERVICE_PATH = "/etc/systemd/system/mojosec.service"
-CONFIG_PATH = "/etc/mojosec/config.json"
+CONFIG_PATH = CANONICAL_CONFIG_PATH
 DESIRED_CONFIG_PATH = "/opt/api/var/mojosec.json"
 ENROLLMENT_PATH = "/etc/mojosec/enrollment.json"
 STATE_DIR = "/var/lib/mojosec"
@@ -530,8 +531,8 @@ def _converge_nginx(enabled, log_path, proxy_cidrs, nginx_path,
 def _audit_config(path=None):
     path = path or CONFIG_PATH
     _lstat_regular(path, mode=0o600)
-    from mojo.mojosec.config import load_config
-    config = load_config(path, require_root=True)
+    from mojo.mojosec.config import load_effective_config
+    config = load_effective_config(path)
     if config["state_dir"] != STATE_DIR or config["credential_path"] != CREDENTIAL_PATH:
         raise DeployError("MojoSec config must use the deployment state/credential paths")
     if config["status_path"] != STATUS_PATH:
@@ -679,13 +680,13 @@ def _prepare_effective_config():
         "deployment_mode": enrollment["mode"],
         "deployment_criticality": enrollment["criticality"],
     }
-    from mojo.mojosec.config import build_config
+    from mojo.mojosec.config import build_config, validate_effective_config
     config = build_config(supplied)
     effective_payload = json.dumps(
         config, sort_keys=True, separators=(",", ":")).encode("utf-8")
     config["config_provenance"]["effective_sha256"] = hashlib.sha256(
         effective_payload).hexdigest()
-    config = build_config(config)
+    config = validate_effective_config(config)
     payload = (json.dumps(config, sort_keys=True, separators=(",", ":")) + "\n").encode(
         "utf-8")
     return config, payload, enrollment

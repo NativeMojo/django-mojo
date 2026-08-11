@@ -155,6 +155,79 @@ def test_desired_policy_cannot_override_root_enrollment_or_log_boundary(opts):
 
 
 @th.django_unit_test()
+def test_named_profile_is_expanded_once_into_effective_config(opts):
+    from mojo.deploy import mojosec as deploy
+    import mojo.mojosec.config as config_module
+    import mojo.mojosec.__main__ as cli
+    from mojo.mojosec.config import load_effective_config
+    from mojo.mojosec.profiles import resolve_profile
+
+    desired = {
+        "version": 1,
+        "profile": "al2023-web-v1",
+        "policy_revision": "fleet-profile-r1",
+    }
+    enrollment = {
+        "version": 1,
+        "sensor_id": "prod-web-i-0123456789abcdef0",
+        "endpoint": "https://incident.example/api/incident/mojosec/batch",
+        "fim_allowed_roots": ["/etc"],
+        "trusted_proxy_cidrs": [],
+    }
+
+    def read(path, *args, **kwargs):
+        value = desired if path == deploy.DESIRED_CONFIG_PATH else enrollment
+        return value, json.dumps(value, sort_keys=True).encode("utf-8")
+
+    with mock.patch.object(deploy, "_read_json_file", side_effect=read):
+        config, payload, _ = deploy._prepare_effective_config()
+
+    profile = resolve_profile("al2023-web-v1")
+    th.assert_eq(config["collectors"]["fim"]["tiers"], profile["tiers"],
+                 "effective preparation must preserve every immutable profile FIM tier")
+    th.assert_eq(config["collectors"]["rpm"], dict(profile["rpm"], enabled=True),
+                 "effective preparation must preserve the complete immutable RPM graph")
+    th.assert_eq(json.loads(payload), config,
+                 "persisted canonical bytes must contain the validated effective config")
+
+    with tempfile.TemporaryDirectory() as root:
+        path = os.path.join(root, "config.json")
+        with open(path, "wb") as handle:
+            handle.write(payload)
+        os.chmod(path, 0o600)
+        real_fstat = config_module.os.fstat
+
+        def root_fstat(descriptor):
+            values = list(real_fstat(descriptor))
+            values[4] = 0
+            return os.stat_result(values)
+
+        with mock.patch.object(config_module.os, "fstat", side_effect=root_fstat):
+            loaded = load_effective_config(path)
+            with mock.patch.object(deploy, "_lstat_regular"):
+                audited = deploy._audit_config(path)
+            th.assert_eq(loaded, config,
+                         "descriptor loading must preserve the exact prepared artifact")
+            th.assert_eq(audited, config,
+                         "deployment audit must validate without re-expanding the profile")
+
+            for argv in (["check"], ["--config", path, "check"]):
+                output = io.StringIO()
+                with mock.patch.object(cli, "CANONICAL_CONFIG_PATH", path), \
+                        mock.patch.object(cli.sys, "stdout", output):
+                    th.assert_eq(cli.main(argv), 0,
+                                 "implicit and explicit canonical CLI checks must accept the artifact")
+                th.assert_eq(json.loads(output.getvalue())["sensor_id"], config["sensor_id"],
+                             "CLI check must report the prepared sensor identity")
+
+            alias = os.path.join(root, ".", "config.json")
+            with mock.patch.object(cli, "CANONICAL_CONFIG_PATH", path), \
+                    mock.patch.object(cli.sys, "stderr", io.StringIO()):
+                th.assert_eq(cli.main(["--config", alias, "check"]), 2,
+                             "a canonical-path alias must remain untrusted caller policy")
+
+
+@th.django_unit_test()
 def test_unit_is_privileged_isolated_and_never_bans(opts):
     from mojo.deploy import mojosec as deploy
 
