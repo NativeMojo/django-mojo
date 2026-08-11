@@ -23,8 +23,10 @@ def get(handler, parsed):
     sources = {
         "public_api": source(data={"configured": True, "public_origin": "https://api.nativemojo.com", "probe": {"version": "1.9.0", "http_status": 200}}),
         "fleet": source(data={"runners": [{"runner": "edge-a-engine"}, {"runner": "edge-b-engine"}]}),
-        "webapps": source(data={"count": 2, "active_deployment_keys": 2,
-                                "onboarding": {"succeeded": 2}}),
+        "webapps": source(data={"count": 2, "configured_origins": 2,
+                                "current_health": {"healthy": 2},
+                                "deployment_keys": {"active": 1, "inactive": 1},
+                                "onboarding": {"not_started": 1, "succeeded": 1}}),
         "security": source(data={"open_incidents": {"count": 0}}),
         "last_deployment": source(data={"items": [{"id": "18180000-0000-4000-8000-000000000001", "sha": "8" * 40, "status": "succeeded"}]}),
         "incidents": source(data={"open": 0}),

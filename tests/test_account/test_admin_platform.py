@@ -124,6 +124,75 @@ def test_fleet_roster_projection(opts):
     assert result["_collector_status"] == "healthy"
 
 
+@th.django_unit_test("ignored incidents are excluded from every open rollup")
+def test_open_incident_predicate(opts):
+    from mojo.apps.account.services import admin_platform
+    from mojo.apps.incident.models import Incident
+    category = "admin-platform-open-contract"
+    Incident.objects.filter(category=category).delete()
+    for status in ("new", "investigating", "ignored", "resolved", "closed"):
+        Incident.objects.create(category=category, status=status)
+    statuses = set(admin_platform._open_incidents().filter(
+        category=category).values_list("status", flat=True))
+    Incident.objects.filter(category=category).delete()
+    assert statuses == {"new", "investigating"}, \
+        f"terminal incidents leaked into the open predicate: {statuses!r}"
+
+
+@th.django_unit_test("WebApp current health is independent from onboarding history")
+def test_webapp_current_health_axes(opts):
+    from mojo.apps.account.services import admin_platform
+    healthy_not_started = [{
+        "onboarding": {"status": "not_started"},
+        "deployment_key": {"active": False},
+        "current_health": {"status": "healthy"},
+    }]
+    unknown_succeeded = [{
+        "onboarding": {"status": "succeeded"},
+        "deployment_key": {"active": True},
+        "current_health": {"status": "unknown"},
+    }]
+    assert admin_platform._webapp_collector_status(healthy_not_started) == "healthy", \
+        "historical onboarding incorrectly degraded current public health"
+    assert admin_platform._webapp_collector_status(unknown_succeeded) == "degraded", \
+        "historical success incorrectly made unknown current health green"
+    assert admin_platform._webapp_collector_status(
+        healthy_not_started, truncated=True) == "degraded", \
+        "a capped WebApp collector can still report unprobed rows as green"
+
+
+@th.django_unit_test("WebApp probe uses the pinned no-redirect public collector")
+def test_webapp_current_probe_contract(opts):
+    from mojo.apps.account.services import admin_platform
+    from mojo.apps.edge.services import public_probe
+    summary = {"address": {"https_origin": "https://app.example.com"}}
+    with mock.patch.object(public_probe, "probe_https_root", return_value={
+            "ok": True, "status": 200, "redirected": False}) as probe:
+        result = admin_platform._probe_webapp(summary)
+    probe.assert_called_once_with(
+        "https://app.example.com", timeout=1.5, max_body=65536)
+    assert result["status"] == "healthy" and result["http_status"] == 200, \
+        f"current WebApp proof was not freshness-bearing health: {result!r}"
+    assert result.get("observed_at") and result.get("stale_after"), \
+        f"current WebApp proof omitted freshness bounds: {result!r}"
+
+
+@th.django_unit_test("security evidence names each disabled secure control")
+def test_security_disabled_posture(opts):
+    from mojo.apps.account.services import admin_platform
+    values = {
+        "SECURE_SSL_REDIRECT": False, "SESSION_COOKIE_SECURE": True,
+        "CSRF_COOKIE_SECURE": False, "SECURE_HSTS_SECONDS": 0,
+    }
+    with mock.patch.object(admin_platform.settings, "get_static",
+                           side_effect=lambda key, default=None: values.get(key, default)):
+        posture = admin_platform._secure_posture()
+    assert posture["disabled"] == ["https_redirect", "csrf_cookie_secure", "hsts"], \
+        f"disabled security controls were not explicit: {posture!r}"
+    assert set(posture["controls"].values()) <= {True, False}, \
+        f"security posture exposed values beyond booleans: {posture!r}"
+
+
 @th.django_unit_test("safe settings writer requires a live literal superuser")
 def test_auth_writer_literal_superuser(opts):
     from mojo import errors as me

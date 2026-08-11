@@ -3,9 +3,8 @@
 The built-in Admin has six primary navigation items, in this order: Dashboard,
 People, Web Apps, Domains & DNS, Platform, and Activity. Domains & DNS appears
 only with DNS read/manage authority and owns ongoing domain and public-record
-work. System Setup, deployments, and the collapsed Advanced raw-resource
-disclosure are destinations inside Platform; they are not additional primary
-navigation.
+work. System Setup and deployments are destinations inside Platform; Advanced
+is one expert-diagnostics destination rather than a raw-resource directory.
 
 Dashboard answers two questions only: can customers use the system, and can
 operators detect failures? `GET /api/account/admin/dashboard` returns a small
@@ -34,8 +33,14 @@ Setup readiness. Its Setup link is rendered only when bootstrap publishes
 
 Cross-feature hashes use `assets/components/routes.js`. It is the canonical
 encoder/decoder for Activity tab and filters, subject type/id/model, inspector
-identity, and bounded return location. Use `routeHref()` or `activityHref()`;
-do not concatenate a second query vocabulary in a feature package.
+identity, bounded focus, and bounded return location. Public API configuration
+focuses Setup's `django.base_url` row, fleet focuses Platform's fleet evidence,
+and incident/ticket cards open the exact Activity tab. Use `routeHref()` or
+`activityHref()`; do not concatenate a second query vocabulary in a feature
+package.
+
+Ignored, resolved, and closed incidents are terminal. One shared predicate
+excludes them from the security roster and every Platform/Dashboard open count.
 
 Secret-bearing request and response bodies are classified before views run.
 This includes People password and API-key actions, WebApp deployment-key

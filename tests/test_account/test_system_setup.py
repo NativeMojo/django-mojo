@@ -524,6 +524,44 @@ def test_local_probe_uses_trusted_loopback(opts):
         f"local probe accepted Host-derived destination: {url}"
 
 
+@th.django_unit_test("local readiness target preserves bounded provenance")
+def test_local_probe_target_provenance(opts):
+    from django.conf import settings as django_settings
+    from django.test import RequestFactory
+    from mojo.apps.account.services import system_readiness, system_setup
+
+    sentinel = object()
+    previous = getattr(django_settings, "SYSTEM_SETUP_LOCAL_API_URL", sentinel)
+    try:
+        django_settings.SYSTEM_SETUP_LOCAL_API_URL = ""
+        request = RequestFactory().get("/api/account/admin/setup/readiness", SERVER_PORT="9123")
+        request_target = system_readiness.trusted_local_api_target(request)
+        default_target = system_readiness.trusted_local_api_target()
+        django_settings.SYSTEM_SETUP_LOCAL_API_URL = "http://[::1]:8123"
+        configured_target = system_readiness.trusted_local_api_target(request)
+    finally:
+        if previous is sentinel:
+            delattr(django_settings, "SYSTEM_SETUP_LOCAL_API_URL")
+        else:
+            django_settings.SYSTEM_SETUP_LOCAL_API_URL = previous
+
+    assert request_target == {
+        "url": "http://127.0.0.1:9123/api/version", "source": "request_server_port"}, \
+        f"request-port provenance was lost: {request_target!r}"
+    assert default_target == {
+        "url": "http://127.0.0.1:80/api/version", "source": "default_80"}, \
+        f"default-port provenance was lost: {default_target!r}"
+    assert configured_target == {
+        "url": "http://[::1]:8123/api/version", "source": "configured_static"}, \
+        f"static-target provenance was lost: {configured_target!r}"
+    assert system_readiness.trusted_local_api_url(request).endswith("/api/version"), \
+        "the existing string API no longer returns a URL"
+    context = system_setup._context(object(), object(), request_target)
+    assert context["local_source"] == "request_server_port" and \
+        context["local_url"] == request_target["url"], \
+        f"durable Setup operations dropped target provenance: {context!r}"
+
+
 @th.django_unit_test("public probe rejects private metadata and DNS rebinding answers")
 def test_public_probe_rejects_non_global_dns(opts):
     from unittest import mock

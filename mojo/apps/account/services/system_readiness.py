@@ -15,6 +15,7 @@ from mojo.helpers.settings import settings
 
 SCHEMA_VERSION = 1
 STATUSES = ("pass", "warn", "fail", "pending")
+LOCAL_API_SOURCES = ("configured_static", "request_server_port", "default_80")
 _SECTIONS = OrderedDict()
 
 
@@ -235,8 +236,8 @@ def probe_public_api_details(origin, timeout=2.0):
         connection.close()
 
 
-def trusted_local_api_url(request=None):
-    """Build the local probe destination without consulting the Host header."""
+def trusted_local_api_target(request=None):
+    """Return the validated local probe URL and its bounded provenance."""
     configured = str(settings.get_static("SYSTEM_SETUP_LOCAL_API_URL", "") or "").strip()
     if configured:
         parsed = urlsplit(configured)
@@ -252,15 +253,26 @@ def trusted_local_api_url(request=None):
         display = f"[{address}]" if address.version == 6 else str(address)
         default_port = 443 if parsed.scheme == "https" else 80
         netloc = display if port in (None, default_port) else f"{display}:{port}"
-        return f"{parsed.scheme}://{netloc}/api/version"
+        return {
+            "url": f"{parsed.scheme}://{netloc}/api/version",
+            "source": "configured_static",
+        }
     raw_port = request.META.get("SERVER_PORT", "") if request is not None else ""
+    valid_request_port = False
     try:
         port = int(raw_port)
+        valid_request_port = 1 <= port <= 65535
     except (TypeError, ValueError):
         port = 80
+    source = "request_server_port" if request is not None and valid_request_port else "default_80"
     if not 1 <= port <= 65535:
         port = 80
-    return f"http://127.0.0.1:{port}/api/version"
+    return {"url": f"http://127.0.0.1:{port}/api/version", "source": source}
+
+
+def trusted_local_api_url(request=None):
+    """String-compatible local probe destination for existing callers."""
+    return trusted_local_api_target(request)["url"]
 
 
 def _core_check(context):
@@ -274,6 +286,18 @@ def _core_check(context):
         "retries": context.get("retries", 1),
         "delay": 0,
     }
+    local_source = context.get("local_source")
+    local_remediation = {
+        "configured_static": (
+            "Change the SYSTEM_SETUP_LOCAL_API_URL deployment setting or restore "
+            "that loopback listener, then rerun."),
+        "request_server_port": (
+            "Restore the application listener on this request's server port and "
+            "the /api/version route, then rerun."),
+        "default_80": (
+            "Set SYSTEM_SETUP_LOCAL_API_URL for this deployment or restore the "
+            "loopback listener on port 80, then rerun."),
+    }
     messages = {
         "django apps": ("Django applications loaded successfully.", "Repair the Django installation and restart the service."),
         "database": ("The database answered a query.", "Check database connectivity and credentials."),
@@ -285,9 +309,14 @@ def _core_check(context):
         explanation, remediation = messages[item["name"]]
         if not item["ok"]:
             explanation = f"{item['name'].title()} is not ready."
+        remediation = local_remediation.get(local_source, remediation) \
+            if item["name"] == "local request" else remediation
+        details = {"target_source": local_source} \
+            if item["name"] == "local request" and local_source in LOCAL_API_SOURCES else None
         rows.append(result(
             "django." + item["name"].replace(" ", "_"),
-            "pass" if item["ok"] else "fail", explanation, remediation))
+            "pass" if item["ok"] else "fail", explanation, remediation,
+            details=details))
 
     try:
         sanity.check_static_directories({})

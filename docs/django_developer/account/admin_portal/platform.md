@@ -4,7 +4,10 @@ The built-in Admin separates platform operations into two feature-owned lanes.
 **Platform** owns public API and local sanity proof, deployment history, fleet,
 jobs/scheduler, database, Redis, certificate/security evidence, the public
 WebApp summary contract, and System Setup. **Advanced** owns hosting inventory,
-bounded opt-in AWS inventory, raw network controls, and typed settings.
+bounded opt-in AWS inventory, raw network controls, and typed settings. Platform
+is an operational evidence surface, not another directory: ongoing Domains &
+DNS and WebApp work stays in those first-class destinations, while Advanced is
+one expert-diagnostics link rather than an expanded resource menu.
 
 ## Deployment journal
 
@@ -39,15 +42,27 @@ collector runs.
 
 The API probe pins public DNS to a global address, follows no redirects, caps
 the response body, and reports latency, HTTP status, and version. Local sanity
-reports migration status. Jobs evidence distinguishes edge runner heartbeats
+reports migration status and the bounded local-target source:
+`configured_static`, `request_server_port`, or `default_80`. The report never
+returns the raw deployment setting. Jobs evidence distinguishes edge runner heartbeats
 from scheduler leadership. Security evidence distinguishes absent/stale cron
-heartbeats and monitoring-delivery proof from healthy evidence and includes a
-capped open-incident roster. AWS inventory is file-opt-in, uses bounded SDK
+heartbeats and monitoring-delivery proof from healthy evidence, names disabled
+HTTPS redirect/secure-cookie/HSTS controls as boolean posture, and includes a
+capped open-incident roster. Ignored, resolved, and closed incidents are
+terminal and excluded from both the roster and every Dashboard/Platform count.
+AWS inventory is file-opt-in, uses bounded SDK
 timeouts and one capped page per service, omits endpoints/IPs, and never creates
 EC2, RDS, or ElastiCache resources.
 
 The WebApp lane consumes only `webapp_onboarding.summary_for()` schema version
-1 and redacted onboarding evidence. Registrar-versus-DNS provider evidence
+1 and redacted onboarding evidence, then independently probes each configured
+HTTPS origin with the existing DNS-pinned, no-redirect public probe. The
+collector is capped at 24 applications, four workers, 1.5 seconds per probe,
+and a 2.5-second collector deadline. Each result carries `observed_at` and
+`stale_after`; timeout, unsafe, missing, and unknown evidence never becomes
+green. Current public health, configured origin, historical onboarding state,
+and deployment-key state are separate axes, so `not_started` history does not
+claim a currently healthy site is down. Registrar-versus-DNS provider evidence
 comes from the durable onboarding operation. No deployment key or provider
 secret enters the Platform response.
 

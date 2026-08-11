@@ -81,11 +81,12 @@ ambiguous-response states without mutating a live installation.
 The packaged portal is divided into six fixed, capability-gated feature lanes.
 Primary navigation is Dashboard, People, Web Apps, Domains & DNS, Platform,
 and Activity. Domains & DNS appears only with DNS read/manage authority;
-Advanced remains a collapsed disclosure under Platform, alongside
+Advanced is one expert-diagnostics destination from Platform, alongside
 deployments and literal-superuser System Setup. Activity owns the
 bounded Incidents, Events, Logs, and Tickets operator journey. Platform owns
 public/local health, UUID deployment recovery, fleet evidence, System Setup,
-and readiness. Advanced owns bounded hosting/AWS inventory, typed settings,
+and readiness. Platform does not duplicate Domains & DNS or expand Advanced's
+resource directory. Advanced owns bounded hosting/AWS inventory, typed settings,
 and the raw Domains, Credentials,
 DNS, Certificates, Upstreams, Vhosts, Routes, and network resources. Bootstrap
 returns both the stable flat `capabilities` object and a namespaced `features`

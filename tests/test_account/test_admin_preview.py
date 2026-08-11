@@ -167,3 +167,17 @@ def test_setup_preview_states(opts):
         assert f'"{state}"' in source, f"preview cannot render the {state} Setup state"
     assert "Deterministic lost Setup response" in source and "Deterministic Setup failure" in source, \
         "preview failure states do not have stable non-secret messages"
+
+
+@th.django_unit_test("preview covers independent WebApp health and secure posture")
+def test_platform_preview_truth_axes(opts):
+    platform = (ROOT / "bin/admin_preview_support/features/platform.py").read_text()
+    setup = (ROOT / "bin/admin_preview_support/server.py").read_text()
+    for value in ("current_health", "configured_origins", "not_started", "deployment_keys"):
+        assert value in platform, f"preview omitted the WebApp {value} axis"
+    for value in ("https_redirect", "csrf_cookie_secure", "hsts", '"disabled"'):
+        assert value in platform, f"preview omitted the secure-posture {value} state"
+    assert 'check("django.base_url", "fail"' in setup, \
+        "preview cannot render the check-specific missing BASE_URL repair"
+    assert 'check("django.local_request", "pass"' in setup, \
+        "preview cannot distinguish local listener health from BASE_URL configuration"

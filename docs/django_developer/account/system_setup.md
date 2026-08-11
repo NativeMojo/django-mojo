@@ -230,17 +230,29 @@ for every setup read and mutation.
 The page is an operation driver, not an alternate setup implementation. It
 loads `options` and `readiness` together, resumes `active_fix`, and advances one
 durable step at a time until the service returns a choice or terminal state.
-It renders the server-provided choice schema, supports all/one-section check
-and fix actions, exposes cancellation only when the service allows it, and
-finishes by rendering the stored final readiness rerun. The live log is shown
-only as text.
+It renders the server-provided choice schema, exposes one primary Fix all
+journey plus scoped checks, exposes cancellation only when the service allows
+it, and finishes by rendering the stored final readiness rerun. A repair action
+belongs to the exact failed check: only `django.base_url` offers Configure
+BASE_URL, while unrelated Django failures never claim the section can fix them.
+Check codes, bounded details, and the operation log stay under closed Technical
+details disclosures.
 
-The Network & Hosting checklist deep-links non-fixable readiness sections to
-the permanent Domains, DNS, Certificates, Vhosts, Routes, or WebApps pages.
-System Setup never calls those mutation APIs on the operator's behalf. In
+There is no duplicate Network & Hosting resource directory in Setup. A failed
+row may have at most one exact action: configure its durable Setup choice, open
+its first-class owner (Domains & DNS or Web Apps), or change a named deployment
+setting. System Setup never calls those owners' mutation APIs on the operator's
+behalf. In
 particular, deployment-key create/rotate/revoke and the reveal-once token stay
 exclusively on WebApps; neither the Platform feature nor an operation log reads
 it.
+
+The local-request row records how its loopback destination was chosen without
+returning a raw configured URL. `configured_static` means
+`SYSTEM_SETUP_LOCAL_API_URL` supplied it, `request_server_port` means the
+current request's server port supplied it, and `default_80` is the bounded
+fallback. Remediation names the deployment setting only when changing it could
+actually repair the selected target.
 
 The packaged driver treats create/check/fix/choose/cancel as single-flight user
 intents. It shows a full-screen non-dismissible busy state, updates progress

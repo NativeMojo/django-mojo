@@ -60,8 +60,8 @@ listeners or work.
 Primary navigation is Dashboard, People, Web Apps, Domains & DNS, Platform,
 and Activity. Domains & DNS is permission-gated and stays beside Web Apps
 because domains and public records are ongoing application controls. Platform
-contains deployments, literal-superuser System Setup, and one collapsed
-Advanced disclosure for raw resources. See
+contains deployments, literal-superuser System Setup, and one link to Advanced
+expert diagnostics; it does not duplicate a resource directory. See
 [Dashboard integration](admin_portal/dashboard.md) for the permissioned source
 matrix and canonical cross-feature route state.
 

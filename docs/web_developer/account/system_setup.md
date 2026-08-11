@@ -36,20 +36,24 @@ the literal superuser.
 
 ## Built-in page behavior
 
-The packaged page is a thin client for this protocol. It supports running or
-fixing all sections or one section, resumes `active_fix`, renders late choices
-from the returned JSON schema, shows durable step progress and the bounded live
-log, and displays the final readiness rerun. Initial reads use skeleton rows;
+The packaged page is a thin client for this protocol. It presents one primary
+Fix all journey plus scoped checks, resumes `active_fix`, renders late choices
+from the returned JSON schema, shows durable step progress, and displays the
+final readiness rerun. Check codes and the bounded operation log stay under
+closed Technical details disclosures. Initial reads use skeleton rows;
 mutations use one non-dismissible busy layer and disable duplicate actions.
 Every failure becomes visible operator feedback. A lost fix-create response is
 reconciled from `options.active_fix` with the retained replay key; the browser
 never automatically retries an uncertain mutation. It never shells out, calls a
 management command, or repeats setup service logic in JavaScript.
 
-`hosting_dns`, `hosting_vhosts`, `edge_fleet`, and `webapp_keys` render as a
-Network & Hosting checklist with links to permanent Admin pages. Those links do
-not grant authority and Setup does not invoke the linked mutation APIs. WebApp
-deployment-key tokens are never accepted, read, or rendered on this page.
+There is no duplicate Network & Hosting directory. Each failing row has at most
+one action: configure its durable Setup choice, open the first-class owner, or
+change a deployment setting. `django.base_url` is the only Django check that
+offers Configure BASE_URL; the rest never inherit a misleading section-wide
+Fix action. Owner links do not grant authority and Setup does not invoke their
+mutation APIs. WebApp deployment-key tokens are never accepted, read, or
+rendered on this page.
 
 ## Request schemas
 
@@ -138,6 +142,12 @@ report shape is:
 Aggregate status uses the severity order `fail`, `pending`, `warn`, then
 `pass`. `GET readiness` returns this report directly. A check operation stores
 the same shape in `operation.report`.
+
+`django.local_request.details.target_source`, when present, is exactly one of
+`configured_static`, `request_server_port`, or `default_80`. It explains which
+validated loopback target was selected without exposing a raw configured URL;
+remediation names `SYSTEM_SETUP_LOCAL_API_URL` only when changing that
+deployment setting can repair the selected target.
 
 ## Fix and resume
 

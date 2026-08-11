@@ -1,6 +1,6 @@
 """Permission-separated, bounded evidence for Admin Platform/Advanced."""
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, wait
 from contextlib import contextmanager
 from datetime import timedelta
 
@@ -16,6 +16,11 @@ SCHEMA_VERSION = 1
 COLLECTOR_TIMEOUT = 3.0
 STALE_SECONDS = 600
 ROW_LIMIT = 100
+WEBAPP_LIMIT = 24
+WEBAPP_WORKERS = 4
+WEBAPP_PROBE_TIMEOUT = 1.5
+WEBAPP_COLLECTOR_DEADLINE = 2.5
+INCIDENT_TERMINAL_STATUSES = ("ignored", "resolved", "closed")
 
 
 def _bounded_redis():
@@ -164,15 +169,17 @@ def _jobs():
 def _sanity():
     from mojo.apps.account.services import system_readiness
     from mojo.apps.edge.services import sanity
+    local_target = system_readiness.trusted_local_api_target()
     results = sanity.run({
-        "url": system_readiness.trusted_local_api_url(),
+        "url": local_target["url"],
         "timeout": 1.0, "retries": 1, "delay": 0,
     })
     rows = [{"name": row.get("name"), "ok": bool(row.get("ok"))}
             for row in results[:16]]
     return {"_collector_status": "healthy" if rows and all(
                 row["ok"] for row in rows) else "unhealthy",
-            "checks": rows, "migration_check": next((
+            "checks": rows, "local_target_source": local_target["source"],
+            "migration_check": next((
                 row["ok"] for row in rows if row["name"] == "migrations"), False)}
 
 
@@ -233,8 +240,10 @@ def _security():
         is_delivery_probe=True).order_by("-created").values(
             "created", "dispatch_status", "new_state").first()
     probe_age = int((timezone.now() - probe["created"]).total_seconds()) if probe else None
-    open_rows = Incident.objects.exclude(status__in=("resolved", "closed")).order_by(
+    open_incidents = _open_incidents()
+    open_rows = open_incidents.order_by(
         "-priority", "-created").values("id", "priority", "status", "category")[:25]
+    secure_posture = _secure_posture()
     values.update({
         "cron_heartbeat": {"present": bool(beat), "state": (beat or {}).get("state"),
                            "age_seconds": age},
@@ -243,8 +252,8 @@ def _security():
                                 "age_seconds": probe_age,
                                 "status": probe["dispatch_status"] if probe else None,
                                 "state": probe["new_state"] if probe else None},
-        "open_incidents": {"count": Incident.objects.exclude(
-            status__in=("resolved", "closed")).count(), "items": list(open_rows)},
+        "open_incidents": {"count": open_incidents.count(), "items": list(open_rows)},
+        "secure_posture": secure_posture,
     })
     secure_keys = ("SECURE_SSL_REDIRECT", "SESSION_COOKIE_SECURE", "CSRF_COOKIE_SECURE")
     posture_ok = all(values[key]["configured"] for key in secure_keys)
@@ -258,10 +267,64 @@ def _security():
     return {"_collector_status": "healthy" if healthy else "unhealthy", **values}
 
 
-def _webapps():
+def _open_incidents():
+    from mojo.apps.incident.models import Incident
+    return Incident.objects.exclude(status__in=INCIDENT_TERMINAL_STATUSES)
+
+
+def _secure_posture():
+    controls = {
+        "https_redirect": bool(settings.get_static("SECURE_SSL_REDIRECT", False)),
+        "session_cookie_secure": bool(settings.get_static("SESSION_COOKIE_SECURE", False)),
+        "csrf_cookie_secure": bool(settings.get_static("CSRF_COOKIE_SECURE", False)),
+        "hsts": bool(settings.get_static("SECURE_HSTS_SECONDS", 0)),
+    }
+    return {"controls": controls,
+            "disabled": [name for name, enabled in controls.items() if not enabled]}
+
+
+def _probe_webapp(summary):
+    from mojo.apps.edge.services import public_probe
+    observed = timezone.now()
+    origin = (summary.get("address") or {}).get("https_origin")
+    base = {
+        "observed_at": observed.isoformat(),
+        "stale_after": (observed + timedelta(seconds=STALE_SECONDS)).isoformat(),
+    }
+    if not origin:
+        return {**base, "status": "not_configured", "reason": "origin_missing"}
+    try:
+        proof = public_probe.probe_https_root(
+            origin, timeout=WEBAPP_PROBE_TIMEOUT, max_body=65536)
+    except public_probe.UnsafePublicProbe:
+        return {**base, "status": "unknown", "reason": "unsafe_destination"}
+    except Exception:
+        return {**base, "status": "unknown", "reason": "probe_unavailable"}
+    if proof.get("ok"):
+        return {**base, "status": "healthy", "http_status": proof.get("status")}
+    if proof.get("status") is not None:
+        return {**base, "status": "unhealthy", "reason": "http_failure",
+                "http_status": proof.get("status")}
+    return {**base, "status": "unknown", "reason": "probe_unavailable"}
+
+
+def _webapp_collector_status(summaries, truncated=False):
+    if not summaries:
+        return "unconfigured"
+    statuses = [item["current_health"]["status"] for item in summaries]
+    if "unhealthy" in statuses:
+        return "unhealthy"
+    if "unknown" in statuses or "not_configured" in statuses:
+        return "degraded"
+    return "degraded" if truncated else "healthy"
+
+
+def _webapp_evidence():
     from mojo.apps.edge.models import WebApp, WebAppOnboardingOperation
     from mojo.apps.edge.services import webapp_onboarding
-    rows = list(WebApp.objects.select_related("vhost", "api_key").all()[:50])
+    rows = list(WebApp.objects.select_related("vhost", "api_key").all()[:WEBAPP_LIMIT + 1])
+    truncated = len(rows) > WEBAPP_LIMIT
+    rows = rows[:WEBAPP_LIMIT]
     operations = WebAppOnboardingOperation.objects.exclude(
         registrar_provider="").values(
             "registrar_provider", "dns_provider", "status")[:ROW_LIMIT]
@@ -271,51 +334,65 @@ def _webapps():
         "status": row["status"],
     } for row in operations]
     summaries = [webapp_onboarding.summary_for(row) for row in rows]
-    if not summaries:
-        status = "unconfigured"
-    elif any(item["onboarding"]["status"] == "failed" for item in summaries):
-        status = "unhealthy"
-    elif any(item["onboarding"]["status"] != "succeeded" or
-             not item["deployment_key"]["active"] for item in summaries):
-        status = "degraded"
-    else:
-        status = "healthy"
+    pool = ThreadPoolExecutor(max_workers=WEBAPP_WORKERS)
+    futures = {pool.submit(_probe_webapp, item): item for item in summaries}
+    done, pending = wait(futures, timeout=WEBAPP_COLLECTOR_DEADLINE)
+    for future in done:
+        futures[future]["current_health"] = future.result()
+    observed = timezone.now()
+    for future in pending:
+        future.cancel()
+        futures[future]["current_health"] = {
+            "status": "unknown", "reason": "collector_deadline",
+            "observed_at": observed.isoformat(),
+            "stale_after": (observed + timedelta(seconds=STALE_SECONDS)).isoformat(),
+        }
+    pool.shutdown(wait=False, cancel_futures=True)
+
+    health = {}
+    onboarding = {}
+    active_keys = 0
+    configured_origins = 0
+    for item in summaries:
+        health_status = item["current_health"]["status"]
+        health[health_status] = health.get(health_status, 0) + 1
+        onboarding_status = item["onboarding"]["status"]
+        onboarding[onboarding_status] = onboarding.get(onboarding_status, 0) + 1
+        active_keys += int(item["deployment_key"]["active"])
+        configured_origins += int(bool(item["address"].get("https_origin")))
+    if truncated:
+        health["not_probed"] = 1
+    status = _webapp_collector_status(summaries, truncated=truncated)
     return {
         "_collector_status": status,
         "summary_contract": 1,
         "items": summaries,
+        "rollup": {
+            "count": len(summaries), "configured_origins": configured_origins,
+            "not_probed": 1 if truncated else 0,
+            "current_health": health, "onboarding": onboarding,
+            "deployment_keys": {"active": active_keys,
+                                "inactive": len(summaries) - active_keys},
+        },
         "registrar_vs_dns": provider_evidence,
-        "truncated": WebApp.objects.count() > len(rows),
+        "truncated": truncated,
+        "limits": {"items": WEBAPP_LIMIT, "workers": WEBAPP_WORKERS,
+                   "per_probe_seconds": WEBAPP_PROBE_TIMEOUT,
+                   "collector_seconds": WEBAPP_COLLECTOR_DEADLINE},
     }
+
+
+def _webapps():
+    return _webapp_evidence()
 
 
 def _dashboard_webapps():
     """Small WebApp rollup; Dashboard does not serialize every application."""
-    from django.db.models import Count, OuterRef, Subquery
-    from mojo.apps.edge.models import WebApp, WebAppOnboardingOperation
-    latest = WebAppOnboardingOperation.objects.filter(
-        web_app_id=OuterRef("pk")).order_by("-created").values("status")[:1]
-    rows = list(WebApp.objects.annotate(
-        onboarding_status=Subquery(latest)).values(
-            "onboarding_status", "api_key__is_active").annotate(count=Count("pk")))
-    total = sum(row["count"] for row in rows)
-    active_keys = sum(
-        row["count"] for row in rows if row["api_key__is_active"] is True)
-    states = {}
-    for row in rows:
-        name = row["onboarding_status"] or "not_started"
-        states[name] = states.get(name, 0) + row["count"]
-    if total == 0:
-        status = "unconfigured"
-    elif states.get("failed", 0):
-        status = "unhealthy"
-    elif active_keys < total or any(
-            name != "succeeded" and count for name, count in states.items()):
-        status = "degraded"
-    else:
-        status = "healthy"
-    return {"_collector_status": status, "count": total,
-            "active_deployment_keys": active_keys, "onboarding": states}
+    evidence = _webapp_evidence()
+    rollup = dict(evidence["rollup"])
+    rollup["_collector_status"] = evidence["_collector_status"]
+    rollup["truncated"] = evidence["truncated"]
+    return rollup
 
 
 def _platform_deployment_status(row):
@@ -476,8 +553,7 @@ def _attention(request, model_name, permissions):
         return _envelope("unauthorized", reason="permission_required")
     def collect():
         if model_name == "incidents":
-            from mojo.apps.incident.models import Incident
-            count = Incident.objects.exclude(status__in=("resolved", "closed")).count()
+            count = _open_incidents().count()
         else:
             from mojo.apps.incident.models import Ticket
             count = Ticket.objects.exclude(status__in=("resolved", "closed")).count()

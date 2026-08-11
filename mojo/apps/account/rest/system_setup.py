@@ -21,8 +21,10 @@ def on_setup_options(request):
 def on_setup_readiness(request):
     system_setup.require_request_admin(request)
     section = request.DATA.get("section") or None
+    local_target = system_readiness.trusted_local_api_target(request)
     return system_readiness.run(section, {
-        "local_url": system_readiness.trusted_local_api_url(request),
+        "local_url": local_target["url"],
+        "local_source": local_target["source"],
         "timeout": 2.0, "retries": 1,
     })
 

@@ -8,7 +8,7 @@ const LABELS = {
   incidents: 'Open incidents', tickets: 'Open tickets',
 };
 const LINKS = {
-  public_api: ['platform', 'Open Platform'], fleet: ['platform', 'Open Platform'],
+  public_api: ['setup', 'Configure API'], fleet: ['platform', 'View fleet'],
   webapps: ['webapps', 'Open Web Apps'], security: ['activity', 'Open Activity'],
   last_deployment: ['deployments', 'Open deployments'],
   incidents: ['activity', 'Open incidents'], tickets: ['activity', 'Open tickets'],
@@ -45,8 +45,10 @@ function sourceValue(name, source) {
 
 function sourceLink(name) {
   const [route, label] = LINKS[name];
-  const state = name === 'incidents' ? {tab: 'incidents'}
-    : name === 'tickets' ? {tab: 'tickets'} : {};
+  const state = name === 'public_api' ? {focus: 'django.base_url', return: routeHref('dashboard')}
+    : name === 'fleet' ? {focus: 'fleet', return: routeHref('dashboard')}
+    : name === 'incidents' ? {tab: 'incidents', return: routeHref('dashboard')}
+    : name === 'tickets' ? {tab: 'tickets', return: routeHref('dashboard')} : {};
   return h('a', {class: 'button ghost compact', href: routeHref(route, state)}, label);
 }
 

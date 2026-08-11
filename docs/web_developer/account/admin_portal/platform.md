@@ -34,6 +34,22 @@ returns `hosting`, `aws_inventory`, `network_security`, and `settings`.
 Permission is checked per section, so a caller admitted to the endpoint can
 still receive `unauthorized` for a narrower section.
 
+`sanity.data.local_target_source` is one of `configured_static`,
+`request_server_port`, or `default_80`; no raw local setting is serialized.
+Security returns boolean secure-posture controls plus the names of disabled
+HTTPS redirect, secure-cookie, and HSTS controls. Its open incident count and
+rows exclude `ignored`, `resolved`, and `closed` using the same predicate as
+the Dashboard.
+
+`webapps.data` keeps four facts independent: configured HTTPS origins,
+freshness-bearing current public health, historical onboarding status, and
+deployment-key active/inactive state. Current health uses a DNS-pinned HTTPS
+root probe, follows no redirect, and is bounded to 24 rows, four workers, 1.5
+seconds per row, and a 2.5-second collector deadline. Each row supplies
+`observed_at` and `stale_after`; missing, unsafe, timed-out, and unknown proof
+never becomes healthy. Historical `not_started` alone does not degrade a
+currently healthy origin.
+
 The three deployment actions accept `{"deployment":"<uuid>"}`. Retry returns
 `{"schema_version":1,"queued":true|false,"deployment":{...}}`; verify and
 converge return the same version plus the serialized `deployment`. A deployment

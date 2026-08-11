@@ -2,6 +2,7 @@ const ROUTE_KEYS = new Set([
   'tab', 'search', 'start', 'size', 'sort', 'status', 'category', 'level', 'kind',
   'date_from', 'date_to', 'subject_type', 'subject_id', 'subject_model',
   'inspector', 'return', 'domain', 'vhost', 'webapp', 'deployment',
+  'focus',
 ]);
 
 function safeRoute(value) {

@@ -1,6 +1,6 @@
 import {api, apiOnce, badge, formatDate, h, icon, pageHeader, statusTone} from '../../core.js';
 import {openBusy, openInspector} from '../../components/overlays.js';
-import {activityHref, decodeRouteState, returnLocation, routeHref} from '../../components/routes.js';
+import {activityHref, decodeRouteState, restoreReturnLocation, returnLocation, routeHref} from '../../components/routes.js';
 import {errorState, loadingState, permissionDeniedState} from '../../components/views.js';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
@@ -11,25 +11,41 @@ const DEEP_LINKS = {
   webapp_keys: ['#/webapps', 'Manage WebApp keys'],
 };
 
+function checkAction(section, check, config, actions) {
+  if (['pass', 'pending'].includes(check.status)) return null;
+  if (check.code === 'django.base_url' && check.fixable) {
+    return h('button', {class: 'button compact', onclick: () => actions.create('fix', 'django')}, 'Configure BASE_URL');
+  }
+  if (check.fixable && config.fixable) {
+    return h('button', {class: 'button compact', onclick: () => actions.create('fix', section.code)}, 'Fix');
+  }
+  const deepLink = DEEP_LINKS[section.code];
+  if (deepLink) return h('a', {class: 'button ghost compact', href: deepLink[0]}, deepLink[1]);
+  if (check.code === 'django.local_request' && ['configured_static', 'default_80'].includes(check.details?.target_source)) {
+    return h('span', {class: 'owner-guidance', text: 'Change deployment setting'});
+  }
+  return null;
+}
+
 function reportView(report, options, actions) {
   if (!report?.sections?.length) return h('div', {class: 'empty'}, h('p', {text: 'Run checks to create a readiness report.'}));
   const byCode = new Map((options?.sections || []).map((entry) => [entry.code, entry]));
   return h('div', {class: 'setup-sections'}, ...report.sections.map((section) => {
     const config = byCode.get(section.code) || {};
-    const deepLink = DEEP_LINKS[section.code];
     const sectionActions = h('div', {class: 'section-actions'},
-      h('button', {class: 'button ghost compact', onclick: () => actions.create('check', section.code)}, icon('refresh'), 'Check'),
-      config.fixable ? h('button', {class: 'button compact', onclick: () => actions.create('fix', section.code)}, icon('settings'), 'Fix') : null,
-      deepLink ? h('a', {class: 'button ghost compact', href: deepLink[0]}, deepLink[1]) : null);
-    return h('section', {class: 'panel setup-section', 'data-section': section.code},
+      h('button', {class: 'button ghost compact', onclick: () => actions.create('check', section.code)}, icon('refresh'), 'Check'));
+    return h('section', {class: 'panel setup-section', 'data-section': section.code, 'data-focus': section.code},
       h('div', {class: 'panel-heading'}, h('div', {}, h('div', {class: 'heading-line'}, h('h2', {text: section.label}), badge(section.status.toUpperCase(), statusTone(section.status))),
         h('p', {text: `${section.checks.length} readiness checks`})), sectionActions),
       h('div', {class: 'check-list'}, ...section.checks.map((check) =>
-        h('article', {class: 'check-row'},
+        h('article', {class: 'check-row', 'data-check': check.code, 'data-focus': check.code},
           h('div', {class: `status-dot ${statusTone(check.status)}`, title: check.status}),
           h('div', {}, h('strong', {text: check.explanation}), check.remediation ? h('p', {text: check.remediation}) : null,
-            h('small', {class: 'mono', text: check.code})),
-          badge(check.status.toUpperCase(), statusTone(check.status))))));
+            h('details', {class: 'check-technical'}, h('summary', {text: 'Technical details'}),
+              h('small', {class: 'mono', text: check.code}),
+              check.details ? h('pre', {class: 'evidence-json', text: JSON.stringify(check.details, null, 2)}) : null)),
+          h('div', {class: 'check-actions'}, badge(check.status.toUpperCase(), statusTone(check.status)),
+            checkAction(section, check, config, actions))))));
   }));
 }
 
@@ -38,22 +54,6 @@ function readinessStrip(report) {
   return h('section', {class: 'readiness-strip', 'aria-label': 'Readiness summary'},
     h('div', {class: 'readiness-overall'}, h('span', {text: 'Overall readiness'}), badge(String(report?.overall || 'pending').toUpperCase(), statusTone(report?.overall))),
     ...['pass', 'warn', 'fail', 'pending'].map((key) => h('div', {class: 'readiness-stat'}, h('strong', {text: String(summary[key] || 0)}), h('span', {text: key}))));
-}
-
-function networkChecklist(report) {
-  const map = new Map((report?.sections || []).map((section) => [section.code, section]));
-  const rows = [
-    ['hosting_dns', 'Domains & DNS', '#/domains', 'globe'],
-    ['hosting_vhosts', 'Vhosts & routes', '#/vhosts', 'deploy'],
-    ['edge_fleet', 'Fleet convergence', '#/vhosts', 'activity'],
-    ['webapp_keys', 'WebApp deploy keys', '#/webapps', 'key'],
-  ];
-  return h('section', {class: 'panel checklist-panel'},
-    h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: 'Network & Hosting'}), h('p', {text: 'The shortest path from readiness evidence to the permanent control.'}))),
-    h('div', {class: 'checklist-grid'}, ...rows.map(([code, label, href, iconName]) => {
-      const section = map.get(code); const status = section?.status || 'pending';
-      return h('a', {class: 'checklist-link', href}, icon(iconName), h('div', {}, h('strong', {text: label}), h('span', {text: section ? `${section.checks.length} checks` : 'Awaiting report'})), badge(status.toUpperCase(), statusTone(status)));
-    })));
 }
 
 function choiceField(name, spec, required) {
@@ -101,6 +101,7 @@ function operationView(operation, actions) {
   const stepRows = (operation.steps || []).map((step, index) => h('li', {class: index === operation.cursor ? 'active' : ''},
     h('span', {class: `step-marker ${statusTone(step.state)}`}, step.state === 'proven' ? icon('check') : String(index + 1)),
     h('span', {text: step.label}), badge(step.state.replaceAll('_', ' '), statusTone(step.state))));
+  const returnTarget = restoreReturnLocation(decodeRouteState().state.return) || routeHref('dashboard');
   return h('section', {class: 'panel setup-operation'},
     h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: `${operation.mode === 'fix' ? 'Fix' : 'Check'} operation`}),
       h('p', {text: current ? current.label : 'Operation finished'})), badge(operation.status.replaceAll('_', ' '), statusTone(operation.status))),
@@ -109,8 +110,10 @@ function operationView(operation, actions) {
       h('ol', {class: 'step-list'}, ...stepRows),
       h('div', {class: 'operation-main'}, choiceForm(operation, actions),
         !terminal && operation.status !== 'waiting_for_choice' ? h('div', {class: 'running-state'}, icon('activity'), h('div', {}, h('strong', {text: 'Reconciling authoritative state'}), h('p', {text: 'The operation advances one durable step at a time. It is safe to close and resume.'}))) : null,
-        h('div', {class: 'form-actions'}, cancellable ? h('button', {class: 'button ghost', onclick: actions.cancel}, 'Cancel operation') : null))),
-    h('details', {class: 'operation-log', open: true}, h('summary', {text: 'Live operation log'}),
+        h('div', {class: 'form-actions'}, cancellable ? h('button', {class: 'button ghost', onclick: actions.cancel}, 'Cancel operation') : null,
+          terminal ? h('a', {class: 'button ghost', href: returnTarget}, 'Return to Dashboard') : null,
+          operation.status === 'succeeded' ? h('a', {class: 'button primary', href: routeHref('webapps')}, 'Onboard WebApp') : null))),
+    h('details', {class: 'operation-log'}, h('summary', {text: 'Technical details'}),
       h('ol', {}, ...(operation.log || []).map((entry) => h('li', {}, h('time', {text: formatDate(entry.at)}), h('span', {text: entry.message}))))));
 }
 
@@ -118,6 +121,7 @@ export async function setupPage(ctx, signal = null) {
   const root = h('div', {class: 'page'}, loadingState('Loading System Setup'));
   let report; let options; let operation; let driving = false; let cancelled = false;
   let activeAction = false; let replayKey = null; let actionError = null;
+  let routeFocusApplied = false;
 
   async function refreshReport() { report = await api('/api/account/admin/setup/readiness', {signal}); render(); }
 
@@ -204,9 +208,16 @@ export async function setupPage(ctx, signal = null) {
       actionError ? errorState(actionError) : null,
       report ? readinessStrip(report) : null,
       operation ? operationView(operation, actions) : null,
-      networkChecklist(report),
       reportView(report, options, actions),
     ].filter(Boolean));
+    const focus = decodeRouteState().state.focus;
+    const target = focus ? root.querySelector(`[data-focus="${CSS.escape(focus)}"]`) : null;
+    if (target && !routeFocusApplied) requestAnimationFrame(() => {
+      routeFocusApplied = true;
+      target.tabIndex = -1; target.focus({preventScroll: false});
+    });
+    const choice = root.querySelector('.setup-choice');
+    if (choice && !choice.contains(document.activeElement)) requestAnimationFrame(() => choice.querySelector('input, select, button')?.focus({preventScroll: true}));
   }
 
   render();
@@ -245,43 +256,53 @@ function evidenceSummary(name, data) {
   if (name === 'database') return [data.reachable ? 'Database reachable' : 'Database unavailable', data.vendor || 'No vendor evidence'];
   if (name === 'redis') return [data.reachable ? 'Redis reachable' : 'Redis unavailable', 'Cache and coordination service'];
   if (name === 'certificates') return [`${data.counts?.active || 0} active certificates`, `${data.expiring_within_30_days || 0} expiring within 30 days`];
-  if (name === 'security') return [`${data.open_incidents?.count ?? '—'} open incidents`, data.monitoring_delivery?.present ? 'Monitoring delivery observed' : 'Monitoring delivery proof is missing'];
-  if (name === 'webapps') return [`${data.items?.length || 0} Web Apps`, data.truncated ? 'Additional applications were omitted from this bounded view.' : 'All applications included.'];
+  if (name === 'security') {
+    const disabled = data.secure_posture?.disabled || [];
+    return [`${data.open_incidents?.count ?? '—'} open incidents`, disabled.length
+      ? `Disabled controls: ${disabled.map((value) => value.replaceAll('_', ' ')).join(' · ')}`
+      : (data.monitoring_delivery?.present ? 'Secure redirect, cookies, HSTS, and monitoring are enabled.' : 'Monitoring delivery proof is missing')];
+  }
+  if (name === 'webapps') {
+    const rollup = data.rollup || {};
+    const health = rollup.current_health || {};
+    return [`${health.healthy || 0} of ${rollup.configured_origins || 0} configured origins healthy`,
+      `${rollup.count || 0} apps · ${rollup.deployment_keys?.active || 0} active deploy keys · ${rollup.onboarding?.succeeded || 0} completed onboarding`];
+  }
   return ['Evidence available', 'Open the response only when troubleshooting.'];
+}
+
+function evidenceOwner(name) {
+  if (name === 'fleet') return [routeHref('platform', {focus: 'fleet'}), 'View fleet'];
+  if (name === 'webapps') return [routeHref('webapps'), 'Open Web Apps'];
+  if (name === 'security') return [activityHref('incidents'), 'Open incidents'];
+  if (name === 'api') return [routeHref('setup', {focus: 'django.base_url', return: returnLocation()}), 'Configure API'];
+  return null;
 }
 
 function evidenceCard(name, section) {
   const title = name.replaceAll('_', ' ').replace(/^./, (value) => value.toUpperCase());
   const data = section?.data || {};
   const [value, detail] = evidenceSummary(name, data);
-  return h('section', {class: 'panel platform-evidence'},
+  const owner = evidenceOwner(name);
+  return h('section', {class: 'panel platform-evidence', 'data-focus': name, tabindex: '-1'},
     h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: title}),
       h('p', {text: section?.reason || `Observed ${section?.observed_at ? formatDate(section.observed_at) : 'now'}`})),
       badge(String(section?.status || 'unavailable').toUpperCase(), statusTone(section?.status))),
-    h('div', {class: 'evidence-summary'}, h('strong', {text: value}), h('p', {text: detail})),
+    h('div', {class: 'evidence-summary'}, h('strong', {text: value}), h('p', {text: detail}),
+      owner ? h('a', {class: 'button ghost compact evidence-owner', href: owner[0]}, owner[1]) : null),
     h('details', {class: 'evidence-disclosure'}, h('summary', {}, icon('activity'), h('span', {text: 'View raw evidence'})),
       h('pre', {class: 'evidence-json', text: JSON.stringify(data, null, 2)})));
 }
 
 function platformDestinations(ctx) {
   const advanced = ctx.features?.advanced?.enabled === true;
-  const network = ctx.capabilities.network || ctx.capabilities.manage_network;
   return h('section', {class: 'platform-destinations'},
     ctx.capabilities.setup ? h('a', {class: 'destination-card', href: routeHref('setup')},
       icon('settings'), h('div', {}, h('strong', {text: 'System Setup'}),
         h('span', {text: 'Check or repair installation dependencies as a literal superuser.'})), icon('chevron')) : null,
-    network ? h('a', {class: 'destination-card', href: routeHref('domains')},
-      icon('globe'), h('div', {}, h('strong', {text: 'Domains & DNS'}),
-        h('span', {text: 'Add domains and manage the public records your WebApps use.'})), icon('chevron')) : null,
-    advanced ? h('details', {class: 'advanced-disclosure'},
-      h('summary', {}, icon('settings'), h('span', {}, h('strong', {text: 'Advanced'}),
-        h('small', {text: 'Raw network, hosting, inventory, and protected settings'})), icon('chevron')),
-      h('nav', {'aria-label': 'Advanced resources'},
-        ...[
-          ['advanced', 'Overview'], ['domains', 'Domains'], ['credentials', 'Credentials'],
-          ['dns', 'DNS records'], ['certificates', 'Certificates'], ['upstreams', 'Upstreams'],
-          ['vhosts', 'Vhosts'], ['routes', 'Routes'],
-        ].map(([route, label]) => h('a', {href: routeHref(route), text: label})))) : null);
+    advanced ? h('a', {class: 'destination-card', href: routeHref('advanced')},
+      icon('settings'), h('div', {}, h('strong', {text: 'Advanced diagnostics'}),
+        h('span', {text: 'Open bounded hosting and inventory evidence for expert troubleshooting.'})), icon('chevron')) : null);
 }
 
 function openDeployment(row) {
@@ -329,6 +350,9 @@ export async function platformPage(ctx, route = 'platform') {
     root.replaceChildren(pageHeader('Platform control plane', 'Platform health', 'Bounded evidence for API, fleet, data services, certificates, security, and WebApps.', [
       h('button', {class: 'button ghost', onclick: load}, icon('refresh'), 'Refresh evidence'),
     ]), platformDestinations(ctx), h('div', {class: 'health-grid'}, ...Object.entries(sections).filter(([name]) => name !== 'deployments').map(([name, section]) => evidenceCard(name, section))));
+    const focus = decodeRouteState().state.focus;
+    const target = focus ? root.querySelector(`[data-focus="${CSS.escape(focus)}"]`) : null;
+    if (target) requestAnimationFrame(() => target.focus({preventScroll: false}));
   }
   try { await load(); } catch (error) { root.replaceChildren(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
   return root;

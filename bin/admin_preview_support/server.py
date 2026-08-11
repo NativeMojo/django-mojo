@@ -209,9 +209,13 @@ def readiness_sections():
         return {"code": code, "status": status, "explanation": explanation, "remediation": remediation, "fixable": fixable}
 
     return [
-        section("django", "Django installation", "pass", [
+        section("django", "Django installation", "fail", [
             check("django.apps", "pass", "Django applications loaded successfully."),
             check("django.database", "pass", "The database answered a query."),
+            check("django.local_request", "pass", "The local API answered over HTTP.",
+                  fixable=False),
+            check("django.base_url", "fail", "The public BASE_URL is not configured safely.",
+                  "Choose the canonical public HTTPS origin in Fix Setup.", True),
             check("django.public_api", "pass", "The public API health probe succeeded."),
         ]),
         section("aws_identity", "AWS identity", "pass", [check("aws.identity", "pass", "AWS account 123456789012 in us-west-2 is active.")]),

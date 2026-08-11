@@ -35,8 +35,34 @@ def get(handler, parsed):
         "redis": section({"reachable": True}),
         "deployments": section({"items": handler.platform_deployments, "limit": 50}),
         "certificates": section({"counts": {"active": 1, "issuing": 1}, "expiring_within_30_days": 0}),
-        "security": section({"SECURE_SSL_REDIRECT": {"configured": True}}),
-        "webapps": section({"summary_contract": 1, "items": [], "registrar_vs_dns": []}),
+        "security": section({
+            "open_incidents": {"count": 0, "items": []},
+            "monitoring_delivery": {"present": True},
+            "secure_posture": {"controls": {
+                "https_redirect": False, "session_cookie_secure": True,
+                "csrf_cookie_secure": False, "hsts": False,
+            }, "disabled": ["https_redirect", "csrf_cookie_secure", "hsts"]},
+        }, "unhealthy"),
+        "webapps": section({
+            "summary_contract": 1,
+            "rollup": {"count": 2, "configured_origins": 2,
+                       "current_health": {"healthy": 2},
+                       "onboarding": {"not_started": 1, "succeeded": 1},
+                       "deployment_keys": {"active": 1, "inactive": 1}},
+            "items": [
+                {"webapp": {"id": 42, "slug": "mojo-portal"},
+                 "address": {"https_origin": "https://portal.nativemojo.com"},
+                 "onboarding": {"status": "not_started"},
+                 "deployment_key": {"linked": True, "active": True},
+                 "current_health": {"status": "healthy", "http_status": 200,
+                                    "observed_at": now, "stale_after": "2026-08-10T18:10:00Z"}},
+                {"webapp": {"id": 54, "slug": "docs"},
+                 "address": {"https_origin": "https://docs.nativemojo.com"},
+                 "onboarding": {"status": "succeeded"},
+                 "deployment_key": {"linked": False, "active": False},
+                 "current_health": {"status": "healthy", "http_status": 200,
+                                    "observed_at": now, "stale_after": "2026-08-10T18:10:00Z"}},
+            ], "registrar_vs_dns": [], "truncated": False}),
     }}
 
 

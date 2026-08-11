@@ -4,6 +4,7 @@
 .evidence-summary { display: grid; gap: 6px; padding: 20px 24px 22px; min-height: 7.5rem; }
 .evidence-summary strong { font-size: clamp(1.25rem, 2vw, 1.65rem); line-height: 1.2; letter-spacing: -.025em; }
 .evidence-summary p { margin: 0; color: var(--muted); line-height: 1.5; }
+.evidence-owner { justify-self: start; margin-top: 8px; }
 .evidence-disclosure { border-top: 1px solid var(--line); }
 .evidence-disclosure > summary { display: flex; align-items: center; gap: 8px; padding: 12px 24px; color: var(--muted); cursor: pointer; font-weight: 650; list-style: none; }
 .evidence-disclosure > summary::-webkit-details-marker { display: none; }
@@ -11,11 +12,13 @@
 .platform-evidence .evidence-json { margin: 0; padding: 18px 24px 22px; max-height: 22rem; overflow: auto; border-top: 1px solid var(--line); background: var(--surface-2); white-space: pre-wrap; overflow-wrap: anywhere; font-size: .78rem; }
 .deployment-row .form-actions { justify-content: flex-end; }
 .platform-destinations { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.destination-card, .advanced-disclosure { border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
-.destination-card, .advanced-disclosure > summary { display: flex; align-items: center; gap: 12px; padding: 14px; color: inherit; text-decoration: none; cursor: pointer; }
-.destination-card div, .advanced-disclosure summary span { display: grid; flex: 1; gap: 2px; }
-.destination-card span, .advanced-disclosure small { color: var(--muted); font-weight: 400; }
-.advanced-disclosure nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; padding: 0 14px 14px 50px; }
-.advanced-disclosure nav a { padding: 7px 9px; border-radius: 6px; color: var(--muted); text-decoration: none; }
-.advanced-disclosure nav a:hover, .advanced-disclosure nav a:focus-visible { background: var(--surface-2); color: var(--text); }
-@media (max-width: 700px) { .platform-destinations { grid-template-columns: 1fr; } .advanced-disclosure nav { grid-template-columns: 1fr; } }
+.destination-card { border: 1px solid var(--line); border-radius: 11px; background: var(--surface); display: flex; align-items: center; gap: 12px; padding: 14px; color: inherit; text-decoration: none; cursor: pointer; }
+.destination-card div { display: grid; flex: 1; gap: 2px; }
+.destination-card span { color: var(--muted); font-weight: 400; }
+.check-actions { display: grid; justify-items: end; gap: 8px; }
+.check-technical { margin-top: 8px; color: var(--muted); font-size: .8rem; }
+.check-technical summary { cursor: pointer; }
+.check-technical .evidence-json { max-width: 34rem; margin: 8px 0 0; white-space: pre-wrap; }
+.owner-guidance { color: var(--muted); font-size: .8rem; font-weight: 650; }
+[data-focus]:focus { outline: 3px solid color-mix(in srgb, var(--accent) 38%, transparent); outline-offset: 3px; }
+@media (max-width: 700px) { .platform-destinations { grid-template-columns: 1fr; } .check-row { align-items: start; } .check-actions { justify-items: start; grid-column: 2; } }

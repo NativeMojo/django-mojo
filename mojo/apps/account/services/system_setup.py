@@ -323,11 +323,12 @@ def choose(request, operation_id, step_id, definition_version, choice_revision, 
     return operation
 
 
-def _context(operation, actor, local_url):
+def _context(operation, actor, local_target):
     return {
         "operation": operation,
         "actor": actor,
-        "local_url": local_url,
+        "local_url": local_target["url"],
+        "local_source": local_target["source"],
         "timeout": 2.0, "retries": 1,
     }
 
@@ -394,7 +395,7 @@ def _execute_reconcile(operation, step, context):
 
 def advance(request, operation_id):
     actor = require_request_admin(request)
-    local_url = system_readiness.trusted_local_api_url(request)
+    local_target = system_readiness.trusted_local_api_target(request)
     lease = secrets.token_hex(16)
     now = timezone.now()
     with transaction.atomic():
@@ -461,7 +462,7 @@ def advance(request, operation_id):
             "operation_log", "modified"])
 
     try:
-        context = _context(operation, actor, local_url)
+        context = _context(operation, actor, local_target)
         outcome = (_execute_reconcile(operation, step, context) if was_attempted
                    else _execute_planned(operation, step, context))
     except system_readiness.DefinitiveSetupFailure as exc:

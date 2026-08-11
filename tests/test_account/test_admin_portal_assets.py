@@ -151,10 +151,16 @@ def test_webapp_onboarding_asset_contract(opts):
         "domain discovery and purchase are not bound to the selected WebApp group"
     assert "ctx.groups?.[0]?.id" not in webapps, \
         "WebApp onboarding silently fell back to the first visible group"
-    assert "Domains & DNS" in platform and "Add domains and manage the public records" in platform, \
-        "Platform still buries domain management under Advanced"
+    assert "Add domains and manage the public records" not in platform, \
+        "Platform duplicates the first-class Domains & DNS destination"
     assert "evidenceSummary" in platform and "View raw evidence" in platform, \
         "Platform still exposes raw evidence instead of a professional summary-first card"
+    assert "Configure BASE_URL" in platform and "check.code === 'django.base_url'" in platform, \
+        "Setup does not attach BASE_URL repair to the exact failing check"
+    assert "networkChecklist" not in platform and "Advanced resources" not in platform, \
+        "Platform or Setup still renders a duplicate resource directory"
+    assert "Technical details" in platform and "Return to Dashboard" in platform, \
+        "Setup does not keep technical evidence quiet or preserve the operator journey"
     assert ".row-actions" in webapp_styles and "gap: .5rem" in webapp_styles, \
         "WebApp table actions have no stable spacing contract"
     assert "Technical details" in webapps and "].filter(Boolean)" in webapps, \
