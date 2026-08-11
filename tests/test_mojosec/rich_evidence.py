@@ -401,9 +401,95 @@ def test_evidence_byte_budget_unicode_poison_and_truthful_fingerprints(opts):
         "status": 502, "method": "POST", "request_uri": "/same",
         "source_ip": "192.0.2.1", "host": "two.example",
     })
-    th.assert_true(len({first["fingerprint"], second["fingerprint"],
-                        third["fingerprint"]}) == 3,
-                   "interleaved IP, host, method, and status identities must not collapse")
+    th.assert_eq(first["fingerprint"], second["fingerprint"],
+                 "web.error identity is the failure shape, so client address alone must not split it")
+    th.assert_true(third["fingerprint"] not in (first["fingerprint"], second["fingerprint"]),
+                   "distinct web.error status, method, and host identities must not collapse")
+    denied_one = detect_nginx({
+        "status": 403, "method": "GET", "request_uri": "/private",
+        "source_ip": "192.0.2.1", "host": "one.example",
+    })
+    denied_two = detect_nginx({
+        "status": 403, "method": "GET", "request_uri": "/private",
+        "source_ip": "192.0.2.2", "host": "one.example",
+    })
+    th.assert_true(denied_one["fingerprint"] != denied_two["fingerprint"],
+                   "web.denied stays per-actor: distinct client identities must not collapse")
+
+
+@th.django_unit_test()
+def test_web_error_collapses_client_ips_probes_stay_per_actor(opts):
+    from mojo.mojosec.detectors import detect_nginx
+    from mojo.mojosec.store import Store
+
+    clients = ["192.0.2.10", "192.0.2.11", "192.0.2.12", "198.51.100.7",
+               "203.0.113.9", "2001:db8::1"]
+    errors = []
+    for index, client in enumerate(clients):
+        record = {
+            "time": "2026-08-11T02:44:00Z", "status": 503, "method": "GET",
+            "request_uri": "/api/orders", "remote_addr": client,
+            "host": "api.example", "upstream_status": "-",
+        }
+        if index == 1:
+            record["peer_addr"] = "10.0.0.9"
+        errors.append(detect_nginx(record))
+    th.assert_eq(len({item["fingerprint"] for item in errors}), 1,
+                 "one failing endpoint must map every client, IPv6 and proxied included, "
+                 "to one aggregation key")
+    for item, client in zip(errors, clients):
+        th.assert_eq(item["attributes"]["source_ip"], client,
+                     "collapsing the aggregation key must not strip the per-client "
+                     "source from evidence")
+
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        store = Store(root, "sensor-test", AGGREGATION, DELIVERY)
+        try:
+            store.ingest(errors)
+            stats = store.stats()
+            th.assert_eq(stats["pending_aggregates"], 1,
+                         "many clients of one server fault must occupy one aggregate row")
+            th.assert_eq(stats["spooled_events"], 0,
+                         "below flush_count one outage must stay in its aggregation window")
+            row = store._aggregate_row(errors[0]["fingerprint"])
+            th.assert_eq(row["count"], len(clients),
+                         "the single aggregate row must count every client occurrence")
+            th.assert_eq(row["observation"]["attributes"].get("source_ip"), clients[-1],
+                         "the aggregate payload must retain the latest-occurrence sample source")
+        finally:
+            store.close()
+
+    storm_aggregation = dict(AGGREGATION, flush_count=2)
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        storm = Store(root, "sensor-test", storm_aggregation, DELIVERY)
+        try:
+            storm.ingest(errors)
+            stats = storm.stats()
+            th.assert_eq(stats["spooled_events"], 1,
+                         "same-second window restarts must dedupe to one spooled event")
+            th.assert_eq(stats["deduped_events"], 2,
+                         "same-second window restarts must be counted, never silent")
+        finally:
+            storm.close()
+
+    probes = [detect_nginx({
+        "time": "2026-08-11T02:44:00Z", "status": 404, "method": "GET",
+        "request_uri": "/wp-login.php", "remote_addr": client,
+        "host": "api.example",
+    }) for client in clients]
+    th.assert_eq(len({item["fingerprint"] for item in probes}), len(clients),
+                 "probe identity is the actor: distinct client IPs must stay distinct")
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        probe_store = Store(root, "sensor-test", AGGREGATION, DELIVERY)
+        try:
+            probe_store.ingest(probes)
+            th.assert_eq(probe_store.stats()["pending_aggregates"], len(clients),
+                         "per-actor probe aggregation must keep one row per client")
+        finally:
+            probe_store.close()
 
 
 @th.django_unit_test()
