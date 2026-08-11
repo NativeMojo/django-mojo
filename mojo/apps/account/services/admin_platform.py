@@ -133,39 +133,18 @@ def _api():
 
 
 def _fleet():
-    import json
-    from mojo.apps.jobs.keys import JobKeys
-    keys = JobKeys()
-    rows = []
-    with _redis_client() as redis:
-        # Exactly one bounded SCAN page. scan_iter can traverse the entire
-        # keyspace in a worker that outlives the response timeout.
-        cursor, page = redis.scan(
-            cursor=0, match=keys.runner_hb("*"), count=ROW_LIMIT)
-        truncated = bool(cursor) or len(page) > ROW_LIMIT
-        selected = list(page)[:ROW_LIMIT]
-        pipe = redis.pipeline(transaction=False)
-        try:
-            for key in selected:
-                pipe.get(key)
-            values = pipe.execute()
-        finally:
-            pipe.reset()
-    for raw in values:
-        try:
-            row = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
-        except (TypeError, ValueError):
-            continue
-        if "edge" not in (row.get("channels") or []):
-            continue
-        rows.append({
-            "runner": str(row.get("runner_id") or "")[:64],
-            "channels": sorted({str(item)[:64]
-                                for item in (row.get("channels") or [])})[:32],
-            "last_heartbeat": str(row.get("last_heartbeat") or "")[:64],
-        })
+    from mojo.apps import jobs
+    runners = jobs.get_runners_bounded(
+        "edge", limit=ROW_LIMIT,
+        timeout=min(1.0, COLLECTOR_TIMEOUT / 2.0))
+    rows = [{
+        "runner": str(row.get("runner_id") or "")[:64],
+        "channels": sorted({str(item)[:64]
+                            for item in (row.get("channels") or [])})[:32],
+        "last_heartbeat": str(row.get("last_heartbeat") or "")[:64],
+    } for row in runners]
     return {"_collector_status": "healthy" if rows else "unhealthy",
-            "channel": "edge", "runners": rows, "truncated": truncated}
+            "channel": "edge", "runners": rows, "truncated": False}
 
 
 def _jobs():

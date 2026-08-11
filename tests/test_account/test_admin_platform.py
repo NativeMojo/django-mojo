@@ -96,34 +96,32 @@ def test_auth_safe_merge(opts):
     system_settings.set_value(root, system_settings.AUTH_CONFIG, {})
 
 
-@th.django_unit_test("fleet collector performs one bounded Redis scan page")
-def test_fleet_single_scan_page(opts):
+@th.django_unit_test("fleet collector uses the exact bounded edge registry")
+def test_fleet_exact_bounded_registry(opts):
     from mojo.apps.account.services import admin_platform
-    redis = mock.Mock()
-    redis.scan.return_value = (42, [])
-    redis.pipeline.return_value.execute.return_value = []
-    with mock.patch.object(admin_platform, "_bounded_redis", return_value=redis):
+    with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=[]) as roster:
         result = admin_platform._fleet()
-    redis.scan.assert_called_once()
-    assert result["truncated"] is True
-    assert not redis.scan_iter.called
+    roster.assert_called_once_with("edge", limit=100, timeout=1.0)
+    assert result["runners"] == []
+    assert result["truncated"] is False, \
+        "the exact registry was incorrectly described as a partial SCAN page"
 
 
-@th.django_unit_test("fleet collector pipelines bounded heartbeat reads")
-def test_fleet_pipeline(opts):
+@th.django_unit_test("fleet collector preserves the exact live edge roster")
+def test_fleet_roster_projection(opts):
     from mojo.apps.account.services import admin_platform
-    redis = mock.Mock()
-    redis.scan.return_value = (0, ["jobs:runner:a", "jobs:runner:b"])
-    pipe = redis.pipeline.return_value
-    pipe.execute.return_value = [
-        '{"runner_id":"a","channels":["edge"],"last_heartbeat":"now"}',
-        '{"runner_id":"b","channels":["default"],"last_heartbeat":"now"}',
+    rows = [
+        {"runner_id": "mv1-engine", "channels": ["edge", "default"],
+         "last_heartbeat": "2026-08-11T14:55:22+00:00"},
+        {"runner_id": "mv2-engine", "channels": ["edge"],
+         "last_heartbeat": "2026-08-11T14:55:25+00:00"},
     ]
-    with mock.patch.object(admin_platform, "_bounded_redis", return_value=redis):
+    with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=rows):
         result = admin_platform._fleet()
-    assert [row["runner"] for row in result["runners"]] == ["a"]
-    assert pipe.get.call_count == 2
-    assert not redis.get.called, "fleet heartbeat reads were sequential"
+    assert [row["runner"] for row in result["runners"]] == [
+        "mv1-engine", "mv2-engine"], \
+        "the Admin fleet rollup dropped a live edge runner"
+    assert result["_collector_status"] == "healthy"
 
 
 @th.django_unit_test("safe settings writer requires a live literal superuser")
