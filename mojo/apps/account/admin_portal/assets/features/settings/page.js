@@ -44,7 +44,7 @@ function tokenEditor(label, values) {
   const add = () => { const value = input.value.trim(); if (!value || current.includes(value)) return; current.push(value); input.value = ''; render(); input.dispatchEvent(new Event('change', {bubbles: true})); };
   input.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ',') { event.preventDefault(); add(); } });
   const node = h('div', {class: 'settings-token-editor'}, list, h('div', {class: 'settings-token-add'}, input,
-    h('button', {class: 'button compact', type: 'button', onclick: add}, 'Add'));
+    h('button', {class: 'button compact', type: 'button', onclick: add}, 'Add')));
   render();
   return {node, value: () => current};
 }
