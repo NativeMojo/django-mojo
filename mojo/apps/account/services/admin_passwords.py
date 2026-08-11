@@ -13,7 +13,7 @@ from mojo.apps.shortlink import maybe_shorten_url
 from mojo.helpers import crypto
 
 
-def _target(user_id):
+def _target(request, user_id):
     try:
         user_id = int(user_id)
     except (TypeError, ValueError):
@@ -21,12 +21,19 @@ def _target(user_id):
     user = User.objects.filter(pk=user_id).first()
     if user is None:
         raise merrors.ValueException("User not found")
+    # A subordinate admin must never recover a superuser: the revealed temporary
+    # password (or the reset link) would hand the caller a session more
+    # privileged than their own. Superuser recovery stays superuser-only — the
+    # same bright line ApiKey.validate_acting_user draws on superuser targets.
+    caller = getattr(request, "user", None)
+    if user.is_superuser and not getattr(caller, "is_superuser", False):
+        raise merrors.PermissionDeniedException()
     return user
 
 
 def send_reset_link(request, user_id):
     """Send the selected user an administrator-issued password-reset link."""
-    user = _target(user_id)
+    user = _target(request, user_id)
     if not user.email:
         raise merrors.ValueException("The selected user has no email address")
     token = tokens.generate_password_reset_token(user)
@@ -45,7 +52,7 @@ def send_reset_link(request, user_id):
 
 def issue_temporary_password(request, user_id):
     """Set and reveal one generated temporary password exactly once."""
-    target = _target(user_id)
+    target = _target(request, user_id)
     with transaction.atomic():
         user = User.objects.select_for_update().filter(pk=target.pk).first()
         if user is None:

@@ -9,13 +9,16 @@ from testit import helpers as th
 EMAIL = "forced-password@test.com"
 PASSWORD = "Initial-forced-password-19!"
 ADMIN_EMAIL = "forced-password-admin@test.com"
+ADMIN_PASSWORD = "Forced-password-admin-49!"
+DELEGATE_EMAIL = "forced-password-delegate@test.com"
 
 
 @th.django_unit_setup()
 def setup_forced_password(opts):
     from mojo.apps.account.models import User
 
-    User.objects.filter(email__in=[EMAIL, ADMIN_EMAIL]).delete()
+    User.objects.filter(
+        email__in=[EMAIL, ADMIN_EMAIL, DELEGATE_EMAIL]).delete()
     user = User.objects.create_user(username=EMAIL, email=EMAIL, password=PASSWORD)
     user.is_active = True
     user.is_email_verified = True
@@ -23,7 +26,7 @@ def setup_forced_password(opts):
     opts.user_id = user.pk
     admin = User.objects.create_user(
         username=ADMIN_EMAIL, email=ADMIN_EMAIL,
-        password="Forced-password-admin-49!")
+        password=ADMIN_PASSWORD)
     admin.is_active = True
     admin.is_superuser = True
     admin.save()
@@ -62,6 +65,51 @@ def test_admin_temporary_password_semantics(opts):
         "temporary issuance must invalidate all existing JWTs"
     assert target_disconnects == [(user.pk, request)], \
         "temporary issuance must disconnect the target exactly once"
+
+
+@th.django_unit_test("admin password recovery refuses a superuser target from a non-superuser caller")
+def test_admin_password_recovery_refuses_superuser_target(opts):
+    """A delegated (manage_users) admin must not recover a superuser account.
+
+    Regression for the privilege-escalation where issuing a temporary password
+    (revealed to the caller) or a reset link for a superuser let a subordinate
+    admin seize a session more privileged than their own.
+    """
+    from mojo import errors as merrors
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import admin_passwords
+
+    superuser = User.objects.get(pk=opts.admin_id)
+    victim_auth_key = superuser.get_auth_key()
+
+    User.objects.filter(email=DELEGATE_EMAIL).delete()
+    delegate = User.objects.create_user(
+        username=DELEGATE_EMAIL, email=DELEGATE_EMAIL,
+        password="Delegate-admin-59!")
+    delegate.is_active = True
+    delegate.is_superuser = False
+    delegate.permissions = {"manage_users": True}
+    delegate.save()
+    request = SimpleNamespace(user=delegate)
+
+    for label, action in (
+            ("temporary password", admin_passwords.issue_temporary_password),
+            ("reset link", admin_passwords.send_reset_link)):
+        try:
+            action(request, superuser.pk)
+        except merrors.PermissionDeniedException:
+            pass
+        else:
+            assert False, \
+                f"a non-superuser admin must be refused when issuing a {label} for a superuser"
+
+    superuser.refresh_from_db()
+    assert superuser.get_auth_key() == victim_auth_key, \
+        "a refused recovery must not rotate the superuser's auth key (no session takeover)"
+    assert superuser.requires_password_change is False, \
+        "a refused recovery must not force a password change on the superuser"
+    assert superuser.check_password(ADMIN_PASSWORD), \
+        "a refused recovery must leave the superuser's password intact"
 
 
 @th.django_unit_test("temporary-password credentials are short-lived, typed, and single use")
