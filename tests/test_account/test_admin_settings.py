@@ -169,7 +169,8 @@ def test_settings_writer_validation(opts):
             "https://0x7f.0.0.1", "https://service.local",
             "https://service.internal", "https://service.test",
             "https://service.invalid", "https://service.onion",
-            "https://home.arpa", "https://sub.example.com",
+            "https://home.arpa", "https://service.example",
+            "https://sub.example.com",
         )
         for origin in refused:
             with th.assert_raises(me.ValueException):

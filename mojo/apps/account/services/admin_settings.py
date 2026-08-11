@@ -30,7 +30,7 @@ MUTABLE_KEYS = frozenset({
     "ALLOW_SELF_DEACTIVATION", "WEBAPP_BASE_URL",
 })
 NON_PUBLIC_HOST_SUFFIXES = frozenset({
-    "alt", "arpa", "corp", "home", "internal", "invalid", "lan", "local",
+    "alt", "arpa", "corp", "example", "home", "internal", "invalid", "lan", "local",
     "localdomain", "localhost", "onion", "test",
 })
 NON_PUBLIC_HOSTS = frozenset({
