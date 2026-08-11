@@ -92,6 +92,19 @@ def test_config_loads(opts):
                     "test_job_engine should require mojo.apps.jobs")
 
 
+@th.django_unit_test("TESTIT config: edge integration state is isolated")
+def test_edge_config_is_serial(opts):
+    from testit.runner import _load_module_config
+    import os
+
+    test_root = os.path.dirname(os.path.dirname(__file__))
+    config = _load_module_config(os.path.join(test_root, "test_edge"))
+
+    th.assert_true(
+        config.serial is True,
+        "test_edge patches process-wide reporters and settings, so it must be serial")
+
+
 @th.django_unit_test("TESTIT config: defaults when no TESTIT defined")
 def test_config_defaults(opts):
     from testit.runner import _load_module_config
