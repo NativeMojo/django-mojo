@@ -29,6 +29,20 @@ def test_nginx_security_log_is_rich_bounded_json(opts):
             '"upstream_response_time":"$upstream_response_time"'):
         th.assert_in(required, text,
                      f"the protected security stream omitted approved evidence {required}")
+    for required in (
+            '"request_id":"$request_id"', '"scheme":"$scheme"',
+            '"protocol":"$server_protocol"', '"tls_protocol":"$ssl_protocol"',
+            '"tls_cipher":"$ssl_cipher"', '"remote_port":"$remote_port"',
+            '"peer_port":"$realip_remote_port"', '"server_port":"$server_port"',
+            '"request_length":"$request_length"', '"response_bytes":"$bytes_sent"',
+            '"response_body_bytes":"$body_bytes_sent"',
+            '"upstream_connect_time":"$upstream_connect_time"',
+            '"upstream_header_time":"$upstream_header_time"',
+            '"upstream_response_length":"$upstream_response_length"',
+            '"upstream_bytes_received":"$upstream_bytes_received"',
+            '"upstream_bytes_sent":"$upstream_bytes_sent"'):
+        th.assert_in(required, text,
+                     f"the protected security stream omitted approved rich field {required}")
     for forbidden in ("http_cookie", "http_authorization", "request_body"):
         th.assert_true(forbidden not in text,
                        f"the security stream leaked forbidden field {forbidden}")

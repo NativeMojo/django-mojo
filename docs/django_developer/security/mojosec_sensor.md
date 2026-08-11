@@ -209,6 +209,14 @@ The detector recognizes these field names:
 | upstream result/timing | `upstream_status`, `upstream_response_time` |
 | approved diagnostic headers | `referrer`/`referer`, `user_agent` |
 
+The generated stream also supplies `request_id`, `scheme`, `protocol`,
+`tls_protocol`, `tls_cipher`, client/direct-peer/server ports,
+`request_length`, `response_bytes`, `response_body_bytes`, upstream
+connect/header/response times, and upstream response-length/received/sent byte
+measurements. Ports and counters are range checked. Optional upstream values
+accept at most eight entries; empty and `-` entries mean “not observed,”
+including mixed retry chains.
+
 The timestamp is optional but, when present, must be timezone-aware ISO-8601.
 The dedicated root-only stream deliberately carries the bounded raw request
 target, referrer, and user agent so the protected central receipt can support
@@ -224,10 +232,9 @@ at 1,536 bytes each; a raw sudo command has the same 2,048-byte cap (its
 working directory and executable path are each capped at 512 bytes). A
 retained truncated value gains
 `<field>_truncated: true` and `<field>_sha256`; lower-priority fields may be
-omitted once the total budget is full. The generated nginx stream writes
-`request_uri`, `host`, `referrer`, `user_agent`, `request_time`,
-`upstream_status`, `upstream_response_time`, `remote_addr`, and `peer_addr`
-(along with the timestamp, method, and status).
+omitted once the total budget is full. The generated nginx stream writes all
+fields in the table above plus the identity, protocol, port, byte, and
+upstream measurements just listed.
 Both standard and Edge nginx write this protected ingress stream to the
 root-precreated `/var/log/nginx/mojosec.json.log` at mode `0600`; nginx's root
 master opens the descriptor before workers drop privilege. The Edge staged
@@ -249,14 +256,19 @@ ceiling, and commits only the last cursor it processed. Per-record parse or
 detector failures increment the malformed count and do not abort the burst.
 
 Only successful Linux audit-transport `USER_START`/`USER_LOGIN` records for
-the trusted sshd executable, root UID, and `terminal=ssh` establish an exact
+the trusted legacy sshd executable or AL2023 split
+`/usr/libexec/openssh/sshd-session`, root UID, and `terminal=ssh` establish an exact
 `(boot_id, audit_session)` mapping. Accepted-looking user journal text cannot.
 The entire poll is overlaid before detection, so sudo may correlate to an SSH
 record later in the same poll. A match also requires the same actor and a
 compatible TTY. Mappings persist in SQLite for at most 30 days and 4,096 rows.
 Conflicting actor, TTY, or address for one key creates a sticky ambiguous
 tombstone that cannot restabilize, including after restart.
-When no exact audit-session mapping is available, `who` may attribute sudo
+Journal parsing likewise requires the exact root-owned legacy sshd tuple, the
+exact split-sshd tuple, or an exact `/usr/bin/sudo`/`/usr/sbin/sudo` tuple with
+the real canonical invoking UID and an optional `session-<id>.scope`; a
+caller-controlled syslog identifier is never authoritative. When no exact
+audit-session mapping is available, portable plain `/usr/bin/who` may attribute sudo
 only for one unique, fresh (five-minute) exact actor-plus-TTY row; stale,
 reused, or ambiguous rows produce no source attribution. Sudo evidence records
 `attribution_provenance` as `audit_session`, `who`, or `none`; only the first
@@ -266,6 +278,14 @@ includes bounded actor, target, TTY, audit identity, working directory, raw
 command, executable, digest, and attribution provenance.
 The `who` subprocess runs in a fixed C locale with a two-second timeout and
 strict 128 KiB/4,096-line streaming caps; timeout or overflow fails closed.
+
+`auth.session_open` is not another SSH-login event. The initial trusted form is
+the exact AL2023 `systemd-user` PAM tuple, and its informational level-2
+evidence records target/opener/producer UIDs, producer PID/executable/unit,
+boot/audit/loginuid and available TTY. It accepts a source only from the exact
+audit-session map, never `who`. Each `auth.sudo_command` describes one sudo
+invocation; commands subsequently entered inside `sudo -s` are not observed by
+this journal detector.
 
 On POSIX platforms FIM opens every path component relative to an already-open
 directory descriptor with `O_NOFOLLOW`; files are hashed through that same

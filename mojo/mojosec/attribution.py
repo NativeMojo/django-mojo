@@ -23,10 +23,12 @@ _WHO_LINE = re.compile(
     r"(?P<time>\d{2}:\d{2})(?:\s+(?:\([^)]*\)|\S+))?\s*$")
 _AUDIT_TYPES = {"USER_START", "USER_LOGIN"}
 _AUDIT_TYPE_NUMBERS = {"1105", "1112"}
-_TRUSTED_EXES = {
-    "sshd": {"/usr/sbin/sshd", "/usr/bin/sshd"},
-    "sudo": {"/usr/bin/sudo", "/usr/sbin/sudo"},
+_SSH_AUDIT_EXES = {
+    "/usr/sbin/sshd", "/usr/bin/sshd",
+    "/usr/libexec/openssh/sshd-session",
 }
+_SUDO_EXES = {"/usr/bin/sudo", "/usr/sbin/sudo"}
+_SUDO_UNIT = re.compile(r"^session-[0-9]+\.scope$")
 
 
 def canonical_user(value):
@@ -41,6 +43,14 @@ def canonical_tty(value):
     if not _TTY.fullmatch(value) or ".." in value:
         return ""
     return value
+
+
+def canonical_uid(value):
+    value = str(value or "")
+    if not re.fullmatch(r"0|[1-9][0-9]{0,9}", value):
+        return None
+    uid = int(value)
+    return uid if 0 <= uid < 4294967295 else None
 
 
 def audit_context(record):
@@ -81,15 +91,27 @@ def _audit_value(message, name):
 
 def trusted_journal_source(record, service):
     """Require kernel/journald-owned identity fields for auth text parsing."""
-    if service not in _TRUSTED_EXES or str(record.get("_UID", "")) != "0":
-        return False
     exe = str(record.get("_EXE") or "")
     comm = str(record.get("_COMM") or "")
     unit = str(record.get("_SYSTEMD_UNIT") or "")
-    return bool(
-        exe in _TRUSTED_EXES[service] or
-        comm == service and unit in ("", service + ".service")
-    )
+    uid = canonical_uid(record.get("_UID"))
+    if service == "sshd":
+        if uid != 0:
+            return False
+        if comm == "sshd-session":
+            return bool(
+                exe == "/usr/libexec/openssh/sshd-session" and
+                unit == "sshd.service")
+        if comm != "sshd" or unit not in ("", "sshd.service"):
+            return False
+        # Some legacy journal exports omit _EXE. Compatibility is restricted
+        # to the otherwise exact root-owned legacy tuple.
+        return exe in ("", "/usr/sbin/sshd", "/usr/bin/sshd")
+    if service == "sudo":
+        return bool(
+            uid is not None and comm == "sudo" and exe in _SUDO_EXES and
+            (not unit or _SUDO_UNIT.fullmatch(unit)))
+    return False
 
 
 def ssh_session(record):
@@ -105,7 +127,7 @@ def ssh_session(record):
     message = str(record.get("MESSAGE") or "")
     if (_audit_value(message, "res").lower() != "success" or
             _audit_value(message, "terminal").lower() != "ssh" or
-            _audit_value(message, "exe") not in _TRUSTED_EXES["sshd"]):
+            _audit_value(message, "exe") not in _SSH_AUDIT_EXES):
         return None
     context = audit_context(record)
     actor = canonical_user(_audit_value(message, "acct"))
@@ -173,9 +195,7 @@ def _who_output(command):
 
 def load_who_sessions(now=None, command=None):
     """Return strict `who` candidates; failures merely disable fallback."""
-    payload = _who_output(command or [
-        "/usr/bin/who", "--ips", "--time-format=iso",
-    ])
+    payload = _who_output(command or ["/usr/bin/who"])
     if payload is None:
         return []
     try:
@@ -255,7 +275,7 @@ class AttributionResolver:
             self.new_sessions.append(merged)
         return self.new_sessions
 
-    def resolve(self, record, actor, tty):
+    def resolve(self, record, actor, tty, allow_who=True):
         actor = canonical_user(actor)
         tty = canonical_tty(tty)
         context = audit_context(record)
@@ -269,7 +289,7 @@ class AttributionResolver:
             # Never let a looser TTY snapshot overwrite a conflict/mismatch.
             return "", "none", context
 
-        if not actor or not tty or record_time(record) is None:
+        if not allow_who or not actor or not tty or record_time(record) is None:
             return "", "none", context
         if self.who_sessions is None:
             self.who_sessions = load_who_sessions()

@@ -7,7 +7,9 @@ import shlex
 import urllib.parse
 
 from .events import bounded_text, observation, valid_ip
-from .attribution import audit_context, canonical_tty, trusted_journal_source
+from .attribution import (
+    audit_context, canonical_tty, canonical_uid, trusted_journal_source,
+)
 from .evidence import build_evidence, digest_text, fingerprint_values as evidence_fingerprint
 
 
@@ -21,7 +23,9 @@ _SUDO_COMMAND = re.compile(
 _SUDO_PWD = re.compile(r"(?:^|;)\s*PWD=(?P<pwd>[^;]+)")
 _SUDO_TTY = re.compile(r"(?:^|;)\s*TTY=(?P<tty>[^;]+)")
 _SESSION_OPEN = re.compile(
-    r"pam_unix\((?P<service>[^:]+):session\): session opened for user (?P<user>[^ (]+)", re.I)
+    r"^pam_unix\((?P<service>[^:]+):session\): session opened for user "
+    r"(?P<user>[^ (]+)\(uid=(?P<target_uid>[0-9]+)\) by "
+    r"(?:[^()]*)\(uid=(?P<opener_uid>[0-9]+)\)$", re.I)
 
 _PROBE_MARKERS = (
     "/wp-admin", "/wp-login", "/wp-content", "/xmlrpc.php", "/phpmyadmin",
@@ -37,6 +41,9 @@ _HEX_SEGMENT = re.compile(r"^[a-f0-9]{16,}$", re.I)
 _TOKEN_SEGMENT = re.compile(r"^[A-Za-z0-9_-]{20,}$")
 _DIGIT_SEGMENT = re.compile(r"^\d{6,}$")
 _TOKEN_CONTEXT = {"activate", "invite", "magic", "password", "recover", "reset", "token", "verify"}
+_REQUEST_ID = re.compile(r"^[a-f0-9]{32}$")
+_HTTP_PROTOCOL = re.compile(r"^HTTP/(?:0\.9|1\.0|1\.1|2(?:\.0)?|3(?:\.0)?)$")
+_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9._-]{1,96}$")
 
 
 class DetectorError(ValueError):
@@ -102,6 +109,93 @@ def _journal_time(record):
         return value.isoformat().replace("+00:00", "Z")
     except (TypeError, ValueError, OSError):
         return None
+
+
+def _canonical_int(value, minimum, maximum, field, optional=False):
+    if optional and value in (None, "", "-"):
+        return None
+    try:
+        if isinstance(value, bool) or isinstance(value, float):
+            raise ValueError
+        text = str(value)
+        if not re.fullmatch(r"0|[1-9][0-9]*", text):
+            raise ValueError
+        number = int(text)
+    except (TypeError, ValueError, OverflowError) as err:
+        raise DetectorError(f"nginx {field} must be an integer") from err
+    if not minimum <= number <= maximum:
+        raise DetectorError(f"nginx {field} must be from {minimum} to {maximum}")
+    return number
+
+
+def _canonical_number_list(value, minimum, maximum, field, integer=False):
+    if value in (None, "", "-"):
+        return ""
+    items = re.split(r"\s*[,;:]\s*", str(value))
+    if len(items) > 8:
+        raise DetectorError(f"nginx {field} must contain at most 8 values")
+    result = []
+    for item in items:
+        if item in ("", "-"):
+            continue
+        try:
+            if integer:
+                if not re.fullmatch(r"0|[1-9][0-9]*", item):
+                    raise ValueError
+                number = int(item)
+            else:
+                number = float(item)
+        except (TypeError, ValueError, OverflowError) as err:
+            raise DetectorError(f"nginx {field} contains an invalid number") from err
+        if (not integer and not math.isfinite(number)) or not minimum <= number <= maximum:
+            raise DetectorError(f"nginx {field} contains an out-of-range number")
+        result.append(str(number) if integer else item)
+    return ",".join(result)
+
+
+def _optional_token(value, field, pattern=_SAFE_TOKEN):
+    if value in (None, "", "-"):
+        return ""
+    value = str(value)
+    if not pattern.fullmatch(value):
+        raise DetectorError(f"nginx {field} is invalid")
+    return value
+
+
+def _systemd_user_session(record, session, attribution):
+    service = session.group("service").lower()
+    if service != "systemd-user":
+        return None
+    target_uid = canonical_uid(session.group("target_uid"))
+    opener_uid = canonical_uid(session.group("opener_uid"))
+    producer_uid = canonical_uid(record.get("_UID"))
+    producer_pid = canonical_uid(record.get("_PID"))
+    audit_loginuid = canonical_uid(
+        record.get("_AUDIT_LOGINUID", record.get("AUDIT_LOGINUID")))
+    context = audit_context(record)
+    unit = str(record.get("_SYSTEMD_UNIT") or "")
+    if (target_uid is None or opener_uid is None or producer_uid != 0 or
+            not producer_pid or str(record.get("_COMM") or "") != "(systemd)" or
+            str(record.get("_EXE") or "") != "/usr/lib/systemd/systemd" or
+            unit != f"user@{target_uid}.service" or audit_loginuid != target_uid or
+            not context["boot_id"] or context["audit_session"] is None):
+        return None
+    source_ip = ""
+    provenance = "none"
+    if attribution is not None:
+        source_ip, provenance, context = attribution.resolve(
+            record, session.group("user"), context.get("tty"), allow_who=False)
+    values = {
+        "source_ip": source_ip, "attribution_provenance": provenance,
+        "service": service, "target_user": session.group("user"),
+        "target_uid": target_uid, "opener_uid": opener_uid,
+        "producer_uid": producer_uid, "producer_pid": producer_pid,
+        "producer_comm": record.get("_COMM"), "producer_exe": record.get("_EXE"),
+        "systemd_unit": unit, "boot_id": context.get("boot_id"),
+        "audit_session": context.get("audit_session"),
+        "audit_loginuid": audit_loginuid, "tty": context.get("tty"),
+    }
+    return build_evidence("auth.session_open", values)
 
 
 def detect_journal(record, attribution=None):
@@ -191,16 +285,17 @@ def detect_journal(record, attribution=None):
                 aggregate=True, recommendation="review", observed_at=observed_at,
             )
 
-    session = _SESSION_OPEN.search(message)
-    if session and session.group("service").lower() not in ("sshd", "sudo"):
-        attributes = build_evidence("auth.session_open", {
-            "service": session.group("service"), "user": session.group("user"),
-        })
+    session = _SESSION_OPEN.fullmatch(message)
+    if session:
+        attributes = _systemd_user_session(record, session, attribution)
+    else:
+        attributes = None
+    if attributes is not None:
         return observation(
-            "auth.session_open", "high", "Host login session opened",
+            "auth.session_open", "info", "PAM service session opened",
             attributes=attributes,
             fingerprint_values=(session.group("service"), session.group("user"), observed_at or ""),
-            aggregate=False, recommendation="review", observed_at=observed_at,
+            aggregate=False, recommendation="none", observed_at=observed_at,
         )
 
     priority = record.get("PRIORITY", 7)
@@ -293,17 +388,43 @@ def detect_nginx(record):
         "upstream_status": record.get("upstream_status"),
         "upstream_response_time": record.get("upstream_response_time"),
     }
-    request_time = record.get("request_time")
-    if request_time is not None and request_time != "":
-        try:
-            if isinstance(request_time, bool):
-                raise ValueError
-            seconds = float(request_time)
-        except (TypeError, ValueError) as err:
-            raise DetectorError("nginx request_time must be a finite number") from err
-        if not math.isfinite(seconds) or not 0 <= seconds <= 3600:
-            raise DetectorError("nginx request_time must be from 0 to 3600 seconds")
-        evidence_values["request_time"] = str(request_time)
+    for field in ("remote_port", "peer_port", "server_port"):
+        value = _canonical_int(record.get(field), 1, 65535, field, optional=True)
+        if value is not None:
+            evidence_values[field] = value
+    for field in ("request_length", "response_bytes", "response_body_bytes"):
+        value = _canonical_int(record.get(field), 0, 2 ** 63 - 1, field, optional=True)
+        if value is not None:
+            evidence_values[field] = value
+    request_id = _optional_token(record.get("request_id"), "request_id", _REQUEST_ID)
+    if request_id:
+        evidence_values["request_id"] = request_id
+    scheme = _optional_token(record.get("scheme"), "scheme")
+    if scheme and scheme not in ("http", "https"):
+        raise DetectorError("nginx scheme must be http or https")
+    if scheme:
+        evidence_values["scheme"] = scheme
+    protocol = _optional_token(record.get("protocol"), "protocol", _HTTP_PROTOCOL)
+    if protocol:
+        evidence_values["protocol"] = protocol
+    for field in ("tls_protocol", "tls_cipher"):
+        value = _optional_token(record.get(field), field)
+        if value:
+            evidence_values[field] = value
+    for field in ("request_time", "upstream_connect_time", "upstream_header_time",
+                  "upstream_response_time"):
+        value = _canonical_number_list(record.get(field), 0, 3600, field)
+        if value:
+            evidence_values[field] = value
+    for field in ("upstream_response_length", "upstream_bytes_received",
+                  "upstream_bytes_sent"):
+        value = _canonical_number_list(
+            record.get(field), 0, 2 ** 63 - 1, field, integer=True)
+        if value:
+            evidence_values[field] = value
+    upstream_status = _canonical_number_list(
+        record.get("upstream_status"), 100, 599, "upstream_status", integer=True)
+    evidence_values["upstream_status"] = upstream_status
     observed_at = _nginx_time(record)
 
     kind = None

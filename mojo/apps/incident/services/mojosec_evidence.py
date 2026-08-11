@@ -1,7 +1,9 @@
 """Central validation and secret-safe Event projection for MojoSec evidence."""
 
+import datetime
 import hashlib
 import ipaddress
+import math
 import re
 import shlex
 import urllib.parse
@@ -13,6 +15,10 @@ _TTY = re.compile(r"^[A-Za-z0-9_.\-/]{1,96}$")
 _HOST = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
 _BOOT = re.compile(r"^[a-f0-9]{32}$")
 _PRODUCT = re.compile(r"(?P<family>[A-Za-z][A-Za-z0-9._-]{0,63})/(?P<major>\d{1,6})")
+_REQUEST_ID = re.compile(r"^[a-f0-9]{32}$")
+_HTTP_PROTOCOL = re.compile(r"^HTTP/(?:0\.9|1\.0|1\.1|2(?:\.0)?|3(?:\.0)?)$")
+_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9._-]{1,96}$")
+_SYSTEMD_UNIT = re.compile(r"^user@(?P<uid>0|[1-9][0-9]{0,9})\.service$")
 _UUID_SEGMENT = re.compile(
     r"^[a-f0-9]{8}-[a-f0-9]{4}-[1-5a-f0-9][a-f0-9]{3}-"
     r"[89ab0-9][a-f0-9]{3}-[a-f0-9]{12}$", re.I)
@@ -147,11 +153,60 @@ def _referrer_origin(value):
     return f"{parsed.scheme.lower()}://{authority}"
 
 
+def _referrer(value):
+    origin = _referrer_origin(value)
+    if origin is None:
+        return None
+    try:
+        path = urllib.parse.urlsplit(_text(value, 2048)).path
+    except ValueError:
+        return None
+    safe_path = _safe_path(path)
+    return origin + (safe_path if safe_path != "/" else "")
+
+
+def _sanitize_url(match):
+    value = match.group(0).rstrip(").,;]")
+    suffix = match.group(0)[len(value):]
+    safe = _referrer(value)
+    return (safe or "<redacted-url>") + suffix
+
+
+def _user_agent_display(value):
+    value = _text(value, 1536)
+    if not value:
+        return None
+    value = "".join(character if ord(character) >= 32 and ord(character) != 127 else " "
+                    for character in value)
+    value = re.sub(r"https?://[^\s]+", _sanitize_url, value, flags=re.I)
+    value = re.sub(
+        r"(?i)(authorization\s*[:=]\s*(?:basic|bearer)?\s*)[^\s,;]+",
+        r"\1<redacted>", value)
+    value = re.sub(r"(?i)\b(?:basic|bearer)\s+[^\s,;]+", "<redacted>", value)
+    value = re.sub(
+        r"(?i)\b(?:access[_-]?token|api[_-]?key|auth|authorization|password|secret|token)="
+        r"[^\s&;,]+", "<redacted>", value)
+    value = re.sub(
+        r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
+        "<redacted>", value)
+    value = re.sub(r"-----BEGIN[ A-Z0-9_-]{1,64}-----", "<redacted>", value)
+    value = re.sub(
+        r"\b(?:AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b",
+        "<redacted>", value)
+    value = re.sub(
+        r"(?<![A-Za-z0-9_])[A-Za-z0-9_+/=-]{24,}(?![A-Za-z0-9_])",
+        "<redacted>", value)
+    return re.sub(r"\s+", " ", value).strip()[:512] or None
+
+
 def _user_agent(value):
     raw = _text(value, 2048)
     if not raw:
         return None
     result = {"sha256": _digest(raw)}
+    display = _user_agent_display(raw)
+    if display:
+        result["display"] = display
     match = _PRODUCT.search(raw)
     if match:
         family = _KNOWN_UA.get(match.group("family").lower(), "Other")
@@ -168,12 +223,65 @@ def _numbers(value, minimum, maximum, scale=1):
             continue
         try:
             number = float(item)
-        except ValueError:
+        except (TypeError, ValueError, OverflowError):
             return None
-        if not minimum <= number <= maximum:
+        if not math.isfinite(number) or not minimum <= number <= maximum:
             return None
         values.append(int(number * scale))
     return values or None
+
+
+def _integers(value, minimum, maximum):
+    values = []
+    for item in re.split(r"\s*[,;:]\s*", _text(value, 256))[:8]:
+        if not item or item == "-":
+            continue
+        number = _integer(item, minimum, maximum)
+        if number is None:
+            return None
+        values.append(number)
+    return values or None
+
+
+def _integer(value, minimum, maximum):
+    try:
+        if isinstance(value, bool) or isinstance(value, float):
+            return None
+        text = str(value)
+        if not re.fullmatch(r"0|[1-9][0-9]*", text):
+            return None
+        number = int(text)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if minimum <= number <= maximum else None
+
+
+def _token(value, pattern=_SAFE_TOKEN):
+    value = _text(value, 96)
+    return value if pattern.fullmatch(value) else None
+
+
+def _observed_at(value):
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value if parsed.tzinfo is not None else None
+
+
+def _identity_context(attributes, evidence):
+    boot_id = _text(attributes.get("boot_id"), 64).replace("-", "").lower()
+    if _BOOT.fullmatch(boot_id):
+        evidence["boot_id"] = boot_id
+    for field in ("audit_session", "audit_loginuid"):
+        value = _integer(attributes.get(field), 0, 4294967294)
+        if value is not None:
+            evidence[field] = value
+    tty = _tty(attributes.get("tty"))
+    if tty is not None:
+        evidence["tty"] = tty
 
 
 def _sudo_command(attributes):
@@ -194,7 +302,7 @@ def _sudo_command(attributes):
     }
 
 
-def project(kind, attributes, count=1):
+def project(kind, attributes, count=1, last_seen=None):
     """Return only canonical, secret-safe fields for Event projection."""
     if not isinstance(attributes, dict):
         return {"source_ip": None, "evidence": {}}
@@ -206,6 +314,7 @@ def project(kind, attributes, count=1):
             value = func(attributes.get(key))
             if value is not None:
                 evidence[key] = value
+        _identity_context(attributes, evidence)
     elif kind in ("auth.sudo_command", "auth.sudo_failure"):
         provenance = attributes.get("attribution_provenance")
         if provenance in ("audit_session", "who"):
@@ -215,29 +324,42 @@ def project(kind, attributes, count=1):
             value = _user(attributes.get(key))
             if value is not None:
                 evidence[key] = value
-        tty = _tty(attributes.get("tty"))
-        if tty is not None:
-            evidence["tty"] = tty
-        boot_id = _text(attributes.get("boot_id"), 64).replace("-", "").lower()
-        if _BOOT.fullmatch(boot_id):
-            evidence["boot_id"] = boot_id
-        try:
-            audit_session = int(attributes.get("audit_session"))
-        except (TypeError, ValueError):
-            audit_session = None
-        if audit_session is not None and 0 <= audit_session < 4294967295:
-            evidence["audit_session"] = audit_session
+        _identity_context(attributes, evidence)
         if kind == "auth.sudo_command":
             evidence["command"] = _sudo_command(attributes)
+    elif kind == "auth.session_open":
+        if attributes.get("attribution_provenance") == "audit_session":
+            source_ip = _ip(attributes.get("source_ip"))
+            if source_ip:
+                evidence["attribution"] = "audit_session"
+        service = _text(attributes.get("service"), 128).lower()
+        if service == "systemd-user":
+            evidence["service"] = service
+        target_user = _user(attributes.get("target_user"))
+        if target_user:
+            evidence["target_user"] = target_user
+        for field in ("target_uid", "opener_uid", "producer_uid", "producer_pid"):
+            value = _integer(attributes.get(field), 0 if field != "producer_pid" else 1,
+                             4294967294)
+            if value is not None:
+                evidence[field] = value
+        producer_comm = _text(attributes.get("producer_comm"), 96)
+        if producer_comm == "(systemd)":
+            evidence["producer_comm"] = producer_comm
+        producer_exe = _text(attributes.get("producer_exe"), 256)
+        if producer_exe == "/usr/lib/systemd/systemd":
+            evidence["producer_exe"] = producer_exe
+        unit = _text(attributes.get("systemd_unit"), 256)
+        unit_match = _SYSTEMD_UNIT.fullmatch(unit)
+        if unit_match:
+            evidence["systemd_unit"] = unit
+        _identity_context(attributes, evidence)
     elif kind in ("web.probe", "web.error", "web.denied"):
         source_ip = _ip(attributes.get("source_ip"))
         peer_ip = _ip(attributes.get("peer_ip"))
         method = _method(attributes.get("method"))
         host = _host(attributes.get("host"))
-        try:
-            status = int(attributes.get("status"))
-        except (TypeError, ValueError):
-            status = None
+        status = _integer(attributes.get("status"), 100, 599)
         if peer_ip:
             evidence["peer_ip"] = peer_ip
         if method:
@@ -248,23 +370,62 @@ def project(kind, attributes, count=1):
             evidence["status"] = status
         evidence["path"] = _safe_path(
             attributes.get("request_uri") or attributes.get("path"))
-        upstream = _numbers(attributes.get("upstream_status"), 100, 599)
+        upstream = _integers(attributes.get("upstream_status"), 100, 599)
         if upstream:
             evidence["upstream_status"] = upstream
-        # A repeated Event represents one fingerprint bucket; volatile samples
-        # are omitted instead of presenting the last request as the whole set.
+        volatile = {}
+        request_id = _token(attributes.get("request_id"), _REQUEST_ID)
+        if request_id:
+            volatile["request_id"] = request_id
+        scheme = _token(attributes.get("scheme"))
+        if scheme in ("http", "https"):
+            volatile["scheme"] = scheme
+        protocol = _token(attributes.get("protocol"), _HTTP_PROTOCOL)
+        if protocol:
+            volatile["protocol"] = protocol
+        for field in ("tls_protocol", "tls_cipher"):
+            value = _token(attributes.get(field))
+            if value:
+                volatile[field] = value
+        for field in ("remote_port", "peer_port", "server_port"):
+            value = _integer(attributes.get(field), 1, 65535)
+            if value is not None:
+                volatile[field] = value
+        for field in ("request_length", "response_bytes", "response_body_bytes"):
+            value = _integer(attributes.get(field), 0, 2 ** 63 - 1)
+            if value is not None:
+                volatile[field] = value
+        time_fields = (
+            ("request_time", "request_time_ms", False),
+            ("upstream_connect_time", "upstream_connect_time_ms", True),
+            ("upstream_header_time", "upstream_header_time_ms", True),
+            ("upstream_response_time", "upstream_response_time_ms", True),
+        )
+        for source, target, multiple in time_fields:
+            values = _numbers(attributes.get(source), 0, 3600, 1000)
+            if values:
+                volatile[target] = values if multiple else values[0]
+        for field in ("upstream_response_length", "upstream_bytes_received",
+                      "upstream_bytes_sent"):
+            values = _integers(attributes.get(field), 0, 2 ** 63 - 1)
+            if values:
+                volatile[field] = values
+        referrer_origin = _referrer_origin(attributes.get("referrer"))
+        referrer = _referrer(attributes.get("referrer"))
+        user_agent = _user_agent(attributes.get("user_agent"))
+        if referrer_origin:
+            volatile["referrer_origin"] = referrer_origin
+        if referrer:
+            volatile["referrer"] = referrer
+        if user_agent:
+            volatile["user_agent"] = user_agent
         if count == 1:
-            request_time = _numbers(attributes.get("request_time"), 0, 3600, 1000)
-            upstream_time = _numbers(
-                attributes.get("upstream_response_time"), 0, 3600, 1000)
-            referrer = _referrer_origin(attributes.get("referrer"))
-            user_agent = _user_agent(attributes.get("user_agent"))
-            if request_time:
-                evidence["request_time_ms"] = request_time[0]
-            if upstream_time:
-                evidence["upstream_response_time_ms"] = upstream_time
-            if referrer:
-                evidence["referrer_origin"] = referrer
-            if user_agent:
-                evidence["user_agent"] = user_agent
+            evidence.update(volatile)
+        elif count > 1 and volatile:
+            observed_at = _observed_at(last_seen)
+            if observed_at:
+                evidence["last_occurrence_sample"] = {
+                    "semantics": "last_occurrence", "observed_at": observed_at,
+                    **volatile,
+                }
     return {"source_ip": source_ip, "evidence": evidence}

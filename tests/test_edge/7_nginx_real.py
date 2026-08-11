@@ -118,6 +118,8 @@ def test_real_nginx_accepts_every_kind(opts):
                         return_value=root), \
                 mock.patch("mojo.apps.edge.services.render.mime_types_path",
                            return_value=mime_path), \
+                mock.patch("mojo.apps.edge.services.render.mojosec_mode",
+                           return_value="observe"), \
                 mock.patch(
                     "mojo.apps.edge.services.render.default_server_enabled",
                     return_value=True):
@@ -169,6 +171,9 @@ def test_real_nginx_accepts_every_kind(opts):
             # Linux (macOS allows low-port binds unprivileged, which is how
             # the original privileged-bind bug shipped — item 1623).
             for name, text in render.render_generation(vhosts, GENERATION).items():
+                if name == "http.d/00_base.conf":
+                    assert '"request_length":"$request_length"' in text, (
+                        "the real nginx harness did not include enriched MojoSec observe logging")
                 for target, body in ((name, text),
                                      (f"staging/{name}",
                                       render.render_staged_variant(text))):

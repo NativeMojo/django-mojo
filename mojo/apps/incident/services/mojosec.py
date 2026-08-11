@@ -24,7 +24,7 @@ KIND_POLICY = {
     "auth.ssh_failure": {"level": 5},
     "auth.sudo_command": {"level": 8},
     "auth.sudo_failure": {"level": 8},
-    "auth.session_open": {"level": 8},
+    "auth.session_open": {"level": 2},
     "system.oom": {"level": 12},
     "system.service_error": {"level": 8},
     "web.probe": {"level": 8},
@@ -193,7 +193,8 @@ def _event_projection(batch, sensor_event):
     attributes = sensor_event["attributes"]
     policy = KIND_POLICY.get(kind, UNKNOWN_KIND_POLICY)
     category = policy.get("category", f"mojosec.{kind}")
-    projection = mojosec_evidence.project(kind, attributes, sensor_event["count"])
+    projection = mojosec_evidence.project(
+        kind, attributes, sensor_event["count"], sensor_event["last_seen"])
     source_ip = projection["source_ip"]
     expected_change = _expected_change_projection(kind, attributes)
     projected_metadata = {
@@ -215,12 +216,16 @@ def _event_projection(batch, sensor_event):
         projected_metadata["expected_change"] = expected_change
     if projection["evidence"]:
         projected_metadata["evidence"] = projection["evidence"]
+    title = (
+        "MojoSec detected local PAM service session"
+        if kind == "auth.session_open" else f"MojoSec detected {kind}"
+    )
     event = Event(
         category=category,
         scope="mojosec",
         level=policy["level"],
         source_ip=source_ip,
-        title=f"MojoSec detected {kind}"[:256],
+        title=title[:256],
         details=(
             f"MojoSec sensor {batch['sensor_id']} reported {sensor_event['count']} "
             f"occurrence(s) of {kind}. Host recommendation: "

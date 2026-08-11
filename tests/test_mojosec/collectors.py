@@ -105,7 +105,7 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
     failed = detect_journal({
         "SYSLOG_IDENTIFIER": "sshd",
         "_UID": "0", "_COMM": "sshd", "_EXE": "/usr/sbin/sshd",
-        "_SYSTEMD_UNIT": "session-187.scope",
+        "_SYSTEMD_UNIT": "sshd.service",
         "MESSAGE": "Failed password for invalid user admin from 198.51.100.9 port 43812 ssh2",
     })
     th.assert_eq(failed["kind"], "auth.ssh_failure",
@@ -152,6 +152,86 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
              "MESSAGE": "deploy : TTY=pts/0 ; USER=root ; COMMAND=/usr/bin/id"}):
         th.assert_eq(detect_journal(forged), None,
                      "user-controlled journal identifiers/messages must not forge auth events")
+
+
+@th.django_unit_test()
+def test_live_al2023_auth_tuples_are_exactly_trusted(opts):
+    from mojo.mojosec.detectors import detect_journal
+
+    split = {
+        "SYSLOG_IDENTIFIER": "attacker-controlled-and-irrelevant",
+        "_UID": "0", "_COMM": "sshd-session",
+        "_EXE": "/usr/libexec/openssh/sshd-session",
+        "_SYSTEMD_UNIT": "sshd.service",
+        "_BOOT_ID": "a" * 32, "_AUDIT_SESSION": "91", "_TTY": "pts/2",
+        "MESSAGE": "Accepted publickey for deploy from 192.0.2.91 port 50221 ssh2",
+    }
+    login = detect_journal(split)
+    th.assert_eq(login["kind"], "auth.ssh_login",
+                 "the deployed split-OpenSSH tuple must produce a login event")
+    th.assert_eq(login["attributes"]["source_ip"], "192.0.2.91",
+                 "the accepted login must retain its validated remote address")
+
+    for field, value in (
+            ("_UID", "1000"), ("_COMM", "sshd"),
+            ("_EXE", "/usr/sbin/sshd"), ("_SYSTEMD_UNIT", "session-91.scope")):
+        mutated = dict(split, **{field: value})
+        th.assert_eq(detect_journal(mutated), None,
+                     f"mutating authoritative split-SSH field {field} must fail closed")
+
+    sudo = {
+        "SYSLOG_IDENTIFIER": "not-authoritative", "_UID": "1000",
+        "_COMM": "sudo", "_EXE": "/usr/bin/sudo",
+        "_SYSTEMD_UNIT": "session-202.scope", "_BOOT_ID": "a" * 32,
+        "_AUDIT_SESSION": "91",
+        "MESSAGE": "deploy : USER=root ; COMMAND=/usr/bin/id",
+    }
+    command = detect_journal(sudo)
+    th.assert_eq(command["kind"], "auth.sudo_command",
+                 "the deployed non-root invoking UID sudo tuple must be trusted")
+    th.assert_true("tty" not in command["attributes"] and
+                   "cwd" not in command["attributes"],
+                   "missing sudo TTY and PWD must remain absent")
+    for field, value in (
+            ("_UID", "01000"), ("_COMM", "sudoedit"),
+            ("_EXE", ""), ("_SYSTEMD_UNIT", "user@1000.service")):
+        mutated = dict(sudo, **{field: value})
+        th.assert_eq(detect_journal(mutated), None,
+                     f"mutating authoritative sudo field {field} must fail closed")
+
+
+@th.django_unit_test()
+def test_systemd_user_session_open_is_local_rich_and_exact(opts):
+    from mojo.mojosec.attribution import AttributionResolver
+    from mojo.mojosec.detectors import detect_journal
+
+    record = {
+        "_UID": "0", "_PID": "4123", "_COMM": "(systemd)",
+        "_EXE": "/usr/lib/systemd/systemd", "_SYSTEMD_UNIT": "user@80.service",
+        "_BOOT_ID": "b" * 32, "_AUDIT_SESSION": "44", "_AUDIT_LOGINUID": "80",
+        "MESSAGE": "pam_unix(systemd-user:session): session opened for user www(uid=80) by (uid=0)",
+    }
+    session = detect_journal(record, AttributionResolver([], [{
+        "actor": "www", "tty": "pts/9", "source_ip": "198.51.100.80",
+        "observed_at": 1786190400,
+    }]))
+    th.assert_eq((session["kind"], session["severity"], session["summary"]),
+                 ("auth.session_open", "info", "PAM service session opened"),
+                 "a trusted systemd-user open must be informational local PAM evidence")
+    th.assert_eq(session["attributes"]["target_uid"], 80,
+                 "the target UID must survive as structured evidence")
+    th.assert_eq(session["attributes"]["producer_exe"], "/usr/lib/systemd/systemd",
+                 "the trusted producer executable must survive as evidence")
+    th.assert_true("source_ip" not in session["attributes"],
+                   "generic PAM opens must never use the looser who fallback")
+
+    for field, value in (
+            ("_UID", "80"), ("_PID", "0"), ("_COMM", "systemd"),
+            ("_EXE", "/tmp/systemd"), ("_SYSTEMD_UNIT", "user@81.service"),
+            ("_AUDIT_LOGINUID", "81"), ("_BOOT_ID", "bad"),
+            ("_AUDIT_SESSION", "4294967295")):
+        th.assert_eq(detect_journal(dict(record, **{field: value})), None,
+                     f"mutating authoritative PAM field {field} must fail closed")
 
 
 @th.django_unit_test()

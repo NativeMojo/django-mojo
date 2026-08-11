@@ -56,6 +56,11 @@ vhost**, asserted in `tests/test_edge/3_render_injection.py`.
   `/var/log/nginx/mojosec.json.log`; unlike ordinary Edge logs it may not live
   beneath the app-owned staging directory. Root sensor enrollment uses
   `nginx_plane=edge` and the same fixed protected collector path.
+  The shared standard/Edge format includes request ID, scheme/protocol/TLS,
+  user agent/referrer, client/direct-peer/server ports, request/response byte
+  counts, and upstream status/timing/length/byte measurements. It deliberately
+  excludes bodies, cookies, authorization and arbitrary headers. Observe-mode
+  generation is exercised by the real `nginx -t` test when nginx is installed.
 
 - **`quiet_paths`** (`api`, `site_api`) — exact-match locations whose hits
   stay out of the *main* access log. They are never blind: the location

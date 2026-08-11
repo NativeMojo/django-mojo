@@ -108,8 +108,10 @@ Raw bounded request targets, referrers, user agents, and sudo command context
 are retained only in the protected `MojoSecReceipt.replay_features` audit
 record (`DENY_AI`, excluded from the default graph). Event metadata contains a
 central allowlisted projection: queryless/token-normalized path, canonical
-method/host/status/upstream values, HTTP(S) referrer origin, structured UA
-family/major plus digest, and a strict server-owned sudo command family (or
+method/host/status/upstream values, HTTP(S) referrer origin plus safe path,
+structured UA family/major/digest plus centrally scrubbed display, request ID,
+protocol/TLS, ports, byte counts and upstream measurements, and a strict
+server-owned sudo command family (or
 `unknown`) plus one constant redaction marker. Raw executable/path, command
 digest, argument count, generic arguments, and per-token digests never project.
 The native nginx stream never collects bodies, cookies, the Authorization
@@ -128,10 +130,11 @@ directory and executable-path caps. Truncated retained values carry
 `<field>_truncated: true` and a full-value `<field>_sha256`; lower-priority
 fields may be absent once the total budget is full.
 
-For nginx observations, the native sender supplies `request_uri`, `host`,
-`referrer`, `user_agent`, `request_time`, `upstream_status`,
-`upstream_response_time`, `remote_addr`, and `peer_addr`, plus timestamp,
-method, and status. The raw request target/referrer/user-agent values stay in
+For nginx observations, the native sender also supplies request ID,
+scheme/protocol/TLS, client/direct-peer/server ports, request/response bytes,
+and upstream connect/header/response timing and length/byte measurements.
+Optional empty or `-` upstream entries are absent. The raw request
+target/referrer/user-agent values stay in
 the protected receipt; the Event receives only the projection described above.
 User-agent text alone is never a detector signal.
 
@@ -148,6 +151,18 @@ Conflicting identity for one audit key becomes a sticky ambiguous tombstone.
 `attribution_provenance` is `audit_session`, `who`, or `none`; only the first
 two allow sudo's address to populate `Event.source_ip`. Stale, reused, or
 ambiguous rows therefore remain unattributed.
+
+The current AL2023 split-OpenSSH executable and non-root invoking sudo UID are
+accepted only under exact kernel/journal provenance. `auth.session_open` is an
+informational local PAM service session—not an SSH login—and can use only exact
+audit-session attribution. A sudo event records one sudo invocation; it does
+not claim to capture commands later typed inside `sudo -s`.
+
+For count-one web Events, occurrence fields are direct evidence. For an
+aggregate count greater than one, volatile fields exist only in
+`last_occurrence_sample`, explicitly labeled `semantics: "last_occurrence"`
+with `observed_at` from `last_seen`. Invalid individual public fields are
+omitted fail-soft rather than poisoning receipt publication.
 
 An `accepted` result also means any required RuleSet handler dispatch has a
 durable receipt outbox job. Queue failure returns `retry`. Request replay and a

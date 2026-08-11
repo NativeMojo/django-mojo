@@ -77,7 +77,7 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
         "request_uri": "/wp-login.php?token=must-stay-protected",
         "host": "EXAMPLE.invalid",
         "referrer": "https://example.invalid/private?secret=must-not-project",
-        "user_agent": "curl/8.9 must-not-project",
+        "user_agent": "curl/8.9 Authorization: Bearer must-not-project",
         "request_time": "1.250",
         "upstream_status": "502, 200",
         "upstream_response_time": "1.100, 0.100",
@@ -162,7 +162,9 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
                  "https://example.invalid",
                  "central projection should retain only the validated HTTP origin")
     th.assert_eq(probe.metadata["mojosec"]["evidence"]["user_agent"]["family"], "curl",
-                 "central projection should structure UA family without retaining raw text")
+                 "central projection should structure the UA family")
+    th.assert_in("curl/8.9", probe.metadata["mojosec"]["evidence"]["user_agent"]["display"],
+                 "central projection should retain a useful scrubbed UA display")
     th.assert_true(receipt.RestMeta.DENY_AI,
                    "the model holding raw replay features must be denied to generic AI queries")
     th.assert_true(
@@ -180,6 +182,9 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
                  "central events must expose a non-secret installation identity")
     th.assert_true(probe.group_id is None,
                    "host identity must not be confused with customer tenant attribution")
+    activity_fields = Event.RestMeta.GRAPHS["activity"]["fields"]
+    th.assert_true("metadata" in activity_fields and "source_ip" in activity_fields,
+                   "the activity graph must serialize rich MojoSec evidence and canonical source IP")
 
 
 @th.django_unit_test()

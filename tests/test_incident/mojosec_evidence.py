@@ -115,3 +115,131 @@ def test_mojosec_web_projection_never_exposes_token_path_or_query(opts):
                    "path and query secrets must never enter Event evidence")
     th.assert_true("referrer_origin" not in projected,
                    "credential-bearing referrers must be rejected rather than repaired")
+
+
+@th.django_unit_test()
+def test_mojosec_web_projection_is_rich_scrubbed_and_aggregate_truthful(opts):
+    from mojo.apps.incident.services.mojosec_evidence import project
+
+    attributes = {
+        "source_ip": "192.0.2.5", "peer_ip": "10.0.0.8", "method": "GET",
+        "status": 403, "host": "example.invalid", "request_uri": "/private?id=secret",
+        "upstream_status": "403", "request_id": "a" * 32, "scheme": "https",
+        "protocol": "HTTP/2.0", "tls_protocol": "TLSv1.3",
+        "tls_cipher": "TLS_AES_256_GCM_SHA384", "remote_port": 52344,
+        "peer_port": 443, "server_port": 443, "request_length": 512,
+        "response_bytes": 1024, "response_body_bytes": 900, "request_time": "0.125",
+        "upstream_connect_time": "0.010", "upstream_header_time": "0.020",
+        "upstream_response_time": "0.030", "upstream_response_length": "777",
+        "upstream_bytes_received": "800", "upstream_bytes_sent": "400",
+        "referrer": "https://ref.invalid/reset/short-secret?q=secret#fragment",
+        "user_agent": "curl/8.9 Authorization: Bearer secret-token-value",
+    }
+    one = project("web.denied", attributes, count=1,
+                  last_seen="2026-08-11T02:44:00Z")["evidence"]
+    th.assert_eq(one["response_bytes"], 1024,
+                 "count-one Event evidence must expose validated response bytes")
+    th.assert_eq(one["referrer"], "https://ref.invalid/reset/~token",
+                 "public referrer must retain useful origin/path without query or token")
+    th.assert_eq(one["referrer_origin"], "https://ref.invalid",
+                 "legacy referrer_origin compatibility must remain")
+    encoded = json.dumps(one, sort_keys=True)
+    th.assert_true("secret-token-value" not in encoded and "q=secret" not in encoded,
+                   "public web evidence must scrub UA/referrer secret material")
+    th.assert_in("<redacted>", one["user_agent"]["display"],
+                 "the public UA display must mark scrubbed authorization material")
+
+    many = project("web.denied", attributes, count=2,
+                   last_seen="2026-08-11T02:44:01Z")["evidence"]
+    th.assert_true("response_bytes" not in many and "user_agent" not in many,
+                   "volatile request values must not appear as aggregate invariants")
+    sample = many["last_occurrence_sample"]
+    th.assert_eq((sample["semantics"], sample["observed_at"], sample["request_id"]),
+                 ("last_occurrence", "2026-08-11T02:44:01Z", "a" * 32),
+                 "aggregate sample semantics and authoritative last_seen must be explicit")
+
+    poisoned = dict(attributes, response_bytes="not-a-number",
+                    upstream_response_time="0.1,broken", remote_port="70000")
+    projected = project("web.denied", poisoned, count=1,
+                        last_seen="2026-08-11T02:44:00Z")["evidence"]
+    th.assert_true("response_bytes" not in projected and
+                   "upstream_response_time_ms" not in projected and
+                   "remote_port" not in projected,
+                   "invalid projected subfields must be omitted independently without raising")
+
+    secrets = (
+        "eyJhbGciOiJIUzI1NiJ9.abcdefghijk.signature123",
+        "-----BEGIN PRIVATE KEY-----", "AKIAABCDEFGHIJKLMNOP",
+        "ghp_abcdefghijklmnopqrstuvwxyz123456",
+        "VeryLongHighEntropyValue_0123456789_ABCDEFG", "token=short-secret",
+    )
+    adversarial = project("web.denied", dict(
+        attributes, user_agent="Agent/1.0 " + " ".join(secrets)), count=1,
+        last_seen="2026-08-11T02:44:00Z")["evidence"]["user_agent"]
+    encoded = json.dumps(adversarial, sort_keys=True)
+    for secret in secrets:
+        th.assert_true(secret not in encoded,
+                       f"the UA display leaked adversarial secret class {secret[:12]}")
+
+
+@th.django_unit_test()
+def test_mojosec_local_session_projection_is_distinct_from_remote_login(opts):
+    from mojo.apps.incident.services.mojosec_evidence import project
+
+    projected = project("auth.session_open", {
+        "source_ip": "192.0.2.80", "attribution_provenance": "audit_session",
+        "service": "systemd-user", "target_user": "www", "target_uid": 80,
+        "opener_uid": 0, "producer_uid": 0, "producer_pid": 4123,
+        "producer_comm": "(systemd)", "producer_exe": "/usr/lib/systemd/systemd",
+        "systemd_unit": "user@80.service", "boot_id": "b" * 32,
+        "audit_session": 44, "audit_loginuid": 80,
+    })
+    th.assert_eq(projected["source_ip"], "192.0.2.80",
+                 "only exact audit-session attribution may populate local session source IP")
+    th.assert_eq(projected["evidence"]["target_uid"], 80,
+                 "local session evidence must identify the target account")
+
+    from mojo.apps.incident.models import Event
+    from mojo.apps.incident.services import mojosec
+    sensor_event = {
+        "id": "c" * 64, "kind": "auth.session_open", "severity": "info",
+        "summary": "PAM service session opened", "count": 1,
+        "recommendation": "none", "attributes": {
+            "service": "systemd-user", "target_user": "www", "target_uid": 80,
+            "opener_uid": 0, "producer_uid": 0, "producer_pid": 4123,
+            "producer_comm": "(systemd)",
+            "producer_exe": "/usr/lib/systemd/systemd",
+            "systemd_unit": "user@80.service", "boot_id": "b" * 32,
+            "audit_session": 44, "audit_loginuid": 80,
+        },
+        "observed_at": "2026-08-11T02:44:00Z",
+        "first_seen": "2026-08-11T02:44:00Z",
+        "last_seen": "2026-08-11T02:44:00Z",
+    }
+    event = mojosec._event_projection({
+        "sensor_id": "session-test", "installation_key_id": 42,
+        "version": 1, "policy_revision": "test",
+    }, sensor_event)
+    try:
+        th.assert_eq(event.level, 2,
+                     "local PAM service opens must be informational centrally")
+        th.assert_in("local PAM service session", event.title,
+                     "the server-owned title must not call a local PAM open a host login")
+    finally:
+        Event.objects.filter(pk=event.pk).delete()
+
+
+@th.django_unit_test()
+def test_mojosec_ssh_projection_retains_safe_session_context(opts):
+    from mojo.apps.incident.services.mojosec_evidence import project
+
+    projected = project("auth.ssh_login", {
+        "source_ip": "192.0.2.91", "user": "deploy", "auth_method": "publickey",
+        "tty": "pts/2", "boot_id": "a" * 32, "audit_session": 91,
+    })
+    th.assert_eq(projected["source_ip"], "192.0.2.91",
+                 "trusted SSH evidence must populate the canonical source IP")
+    th.assert_eq(projected["evidence"]["boot_id"], "a" * 32,
+                 "SSH Event evidence must retain the safe boot identity")
+    th.assert_eq(projected["evidence"]["audit_session"], 91,
+                 "SSH Event evidence must retain the safe audit session")

@@ -734,8 +734,11 @@ credential and restarts it; it never prints `ok:true` after a failed restart.
 
 MojoSec's nginx JSON log uses `escape=json` and retains bounded raw request URI,
 referrer, user agent, host, method/status, upstream status/timing, request
-timing, direct peer (`$realip_remote_addr`), and resolved client
-(`$remote_addr`). It never includes bodies, cookies, authorization, or
+timing, request ID, scheme/protocol/TLS, client/direct-peer/server ports,
+request/response byte counts, upstream connect/header/response timing and
+upstream response-length/received/sent bytes. It retains direct peer
+(`$realip_remote_addr`) and resolved client (`$remote_addr`). It never includes
+bodies, cookies, authorization, or
 arbitrary headers. Only exact file-configured CIDRs render `set_real_ip_from`.
 Both standard and Edge planes securely use the fixed root:root 0600
 `/var/log/nginx/mojosec.json.log`; the standard plane installs the generated

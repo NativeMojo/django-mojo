@@ -1017,7 +1017,11 @@ only in `MojoSecReceipt.replay_features`; that field is sensitive, excluded
 from the default graph, and the receipt model is `DENY_AI`. The Event receives
 only the central per-kind projection: canonical source/peer IP, method, user,
 TTY, host, status/upstream numbers, token-normalized path, HTTP(S) referrer
-origin and structured UA family/major plus digest. Sudo command context projects
+origin plus queryless token-normalized path, and structured UA family/major,
+digest, and centrally scrubbed bounded display. Web request identity,
+protocol/TLS, ports, byte counts and upstream measurements also project after
+field-local validation; one bad subfield is omitted rather than retrying the
+whole deterministic event. Sudo command context projects
 only a strict server-owned command family (or `unknown`) and one constant
 redaction marker. Raw executable/path, command digest, argument count, generic
 arguments, and per-token digests remain receipt-only.
@@ -1026,6 +1030,13 @@ Raw secrets never enter Event metadata/title/details or ordinary logs.
 Source-bearing SSH, reliably attributed sudo, and known web kinds populate
 `Event.source_ip`. Sensor fingerprints include each projected identity scalar,
 so an aggregate cannot misrepresent interleaved IP/host/method/status values.
+For a count-one web Event, occurrence-specific values remain top-level. For a
+count greater than one, every volatile value appears only under
+`last_occurrence_sample`, with `semantics="last_occurrence"` and
+`observed_at` equal to authoritative `last_seen`; it is never presented as a
+property of the entire bucket. `auth.session_open` is level-2 local PAM
+service evidence, distinct from remote `auth.ssh_login`, and uses only exact
+audit-session attribution.
 The source and host recommendation remain evidence only: automated action
 requires an enrolled installation and an exact active server-owned RuleSet.
 

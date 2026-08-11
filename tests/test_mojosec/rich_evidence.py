@@ -170,7 +170,7 @@ def test_store_repairs_old_v2_ambiguity_column_atomically(opts):
 
 @th.django_unit_test()
 def test_ssh_session_overlay_fallback_freshness_and_ambiguity(opts):
-    from mojo.mojosec.attribution import AttributionResolver
+    from mojo.mojosec.attribution import AttributionResolver, ssh_session
 
     timestamp = 1786190400000000
     ssh = {
@@ -213,6 +213,30 @@ def test_ssh_session_overlay_fallback_freshness_and_ambiguity(opts):
     th.assert_eq(AttributionResolver([], []).overlay([forged]), [],
                  "an accepted-looking user journal message must not establish audit identity")
 
+    split = dict(
+        ssh,
+        MESSAGE=('op=login acct="deploy" '
+                 'exe="/usr/libexec/openssh/sshd-session" '
+                 'addr=192.0.2.8 terminal=ssh res=success'),
+    )
+    th.assert_eq(ssh_session(split)["source_ip"], "192.0.2.8",
+                 "the deployed split-OpenSSH audit executable must establish attribution")
+    mutations = (
+        ("_TRANSPORT", "journal"), ("_AUDIT_TYPE_NAME", "USER_AUTH"),
+        ("_UID", "1000"), ("_BOOT_ID", "bad"),
+        ("_AUDIT_SESSION", "4294967295"),
+    )
+    for field, value in mutations:
+        th.assert_eq(ssh_session(dict(split, **{field: value})), None,
+                     f"mutating authoritative SSH audit field {field} must fail closed")
+    for old, new in (
+            ("res=success", "res=failed"), ("terminal=ssh", "terminal=pts/1"),
+            ("exe=\"/usr/libexec/openssh/sshd-session\"", "exe=\"/tmp/sshd\""),
+            ("acct=\"deploy\"", "acct=\"bad user\""),
+            ("addr=192.0.2.8", "addr=not-an-ip")):
+        th.assert_eq(ssh_session(dict(split, MESSAGE=split["MESSAGE"].replace(old, new))), None,
+                     f"mutating authoritative SSH audit message field {old} must fail closed")
+
 
 @th.django_unit_test()
 def test_who_fallback_is_stream_bounded_and_times_out_closed(opts):
@@ -234,6 +258,12 @@ def test_who_fallback_is_stream_bounded_and_times_out_closed(opts):
             sys.executable, "-c", "import time;time.sleep(1)",
         ])
     th.assert_eq(timed_out, [], "a stalled who process must be killed and fail closed")
+
+    commands = []
+    with mock.patch.object(attribution, "_who_output", side_effect=lambda command: commands.append(command) or b""):
+        attribution.load_who_sessions()
+    th.assert_eq(commands, [["/usr/bin/who"]],
+                 "the production fallback must use portable plain who without unsupported flags")
 
 
 @th.django_unit_test()
@@ -363,3 +393,50 @@ def test_evidence_byte_budget_unicode_poison_and_truthful_fingerprints(opts):
     th.assert_true(len({first["fingerprint"], second["fingerprint"],
                         third["fingerprint"]}) == 3,
                    "interleaved IP, host, method, and status identities must not collapse")
+
+
+@th.django_unit_test()
+def test_nginx_rich_measurements_and_latest_aggregate_sample(opts):
+    from mojo.mojosec.aggregation import merge
+    from mojo.mojosec.detectors import detect_nginx
+    from mojo.mojosec.protocol import make_event
+
+    base = {
+        "time": "2026-08-11T02:44:00Z", "status": 403, "method": "GET",
+        "request_uri": "/private", "remote_addr": "192.0.2.80",
+        "peer_addr": "10.0.0.8", "host": "example.invalid",
+        "upstream_status": "403, -", "request_id": "a" * 32,
+        "scheme": "https", "protocol": "HTTP/2.0", "tls_protocol": "TLSv1.3",
+        "tls_cipher": "TLS_AES_256_GCM_SHA384", "remote_port": "52344",
+        "peer_port": "443", "server_port": "443", "request_length": "512",
+        "response_bytes": "1024", "response_body_bytes": "900",
+        "request_time": "0.125", "upstream_connect_time": "0.010, -",
+        "upstream_header_time": "0.020", "upstream_response_time": "0.030",
+        "upstream_response_length": "777", "upstream_bytes_received": "800",
+        "upstream_bytes_sent": "400", "referrer": "https://ref.invalid/path?q=secret",
+        "user_agent": "curl/8.9.0",
+    }
+    first = detect_nginx(base)
+    th.assert_eq(first["attributes"]["response_body_bytes"], 900,
+                 "validated nginx response body bytes must reach protected evidence")
+    th.assert_eq(first["attributes"]["upstream_connect_time"], "0.010",
+                 "mixed nginx upstream '-' sentinels must be normalized as absence")
+
+    latest = detect_nginx(dict(base, time="2026-08-11T02:44:01Z",
+                               request_id="b" * 32, response_bytes="2048",
+                               user_agent="Mozilla/5.0 Firefox/141.0"))
+    aggregate = merge(None, first, 60)
+    aggregate = merge(aggregate, latest, 60)
+    event = make_event("sensor", aggregate["observation"], count=aggregate["count"],
+                       first_seen=aggregate["first_seen"], last_seen=aggregate["last_seen"])
+    th.assert_eq(event["count"], 2,
+                 "two requests varying only volatile sample values must aggregate")
+    th.assert_eq(event["attributes"]["request_id"], "b" * 32,
+                 "the aggregate payload must retain the actual latest occurrence")
+
+    from mojo.mojosec.detectors import DetectorError
+    for field, value in (("remote_port", "0"), ("request_length", "-1"),
+                         ("request_id", "A" * 32),
+                         ("upstream_bytes_received", "1,broken")):
+        with th.assert_raises(DetectorError):
+            detect_nginx(dict(base, **{field: value}))
