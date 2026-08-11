@@ -205,6 +205,24 @@ def test_generation_is_stable(opts):
         "two identical polls returned different generation ids"
 
 
+@th.django_unit_test("the shared nginx temp mapping participates in the generation hash")
+def test_nginx_temp_mapping_moves_generation(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import render
+
+    before = render.desired_state([opts.vhost])
+    mapping = list(render.nginx_temp_paths())
+    mapping[0] = dict(mapping[0], leaf="changed-client-body")
+    with mock.patch.object(render, "nginx_temp_paths", return_value=mapping):
+        after = render.desired_state([opts.vhost])
+
+    assert before["generation"] != after["generation"], (
+        "changing a rendered staging temp path did not move the generation hash")
+    assert "nginx_temp_paths" not in before["http"], (
+        "renderer-private scratch paths unexpectedly changed the REST payload")
+
+
 @th.django_unit_test("a disabled vhost drops out of the desired state")
 def test_disabled_vhost_excluded(opts):
     from mojo.apps.edge.models import Vhost

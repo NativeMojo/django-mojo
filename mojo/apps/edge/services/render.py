@@ -31,6 +31,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 
 from mojo import errors as me
 from mojo.helpers.settings import settings
@@ -185,6 +186,13 @@ def staged_http_port():
 
 def staged_https_port():
     return _staged_ports()[1]
+
+
+def nginx_temp_paths():
+    """Hashable copy of the shared staging/production temp-path mapping."""
+    from mojo.deploy.nginx_runtime import TEMP_PATHS
+    return [dict(directive=directive, leaf=leaf)
+            for directive, leaf in TEMP_PATHS]
 
 
 def http_knobs():
@@ -916,7 +924,7 @@ def _staged_listen_map():
     return entries
 
 
-def render_staged_variant(text):
+def render_staged_variant(text, temp_root=None):
     """The same rendered file with every listen port remapped unprivileged.
 
     The staged `nginx -t` runs as the app user, and nginx DOES attempt
@@ -925,7 +933,10 @@ def render_staged_variant(text):
     convergence on the first standard node (item #1623). The staged copies
     keep every byte identical except the listen ports, so the pre-filter
     still validates the real certificate material, maps and upstreams while
-    binding only unprivileged ports. `ssl`, `default_server` and the address
+    binding only unprivileged ports. When `temp_root` is supplied for the
+    single staged HTTP base, the five staging-only scratch directives are
+    prepended there; the main harness never declares an independent copy.
+    `ssl`, `default_server` and the address
     family are preserved — stripping `listen` instead would drop the ssl
     context and skip certificate validation, the pre-filter's chief value.
 
@@ -953,7 +964,17 @@ def render_staged_variant(text):
                 f"edge staged remap refused an unknown listen line: {line!r}")
         indent = line[:len(line) - len(line.lstrip())]
         out.append(indent + replacement)
-    return "\n".join(out)
+    staged = "\n".join(out)
+    if temp_root is not None:
+        from mojo.deploy.nginx_runtime import TEMP_PATHS, render_http_fragment
+        for directive, _leaf in TEMP_PATHS:
+            if re.search(r"(?m)^\s*%s\s+" % re.escape(directive), staged):
+                raise me.ValueException(
+                    f"edge staged base already declares {directive}; "
+                    "the scratch mapping must have one owner")
+        staged = ("# staging-only nginx scratch paths\n" +
+                  render_http_fragment(temp_root) + staged)
+    return staged
 
 
 def render_nginx_harness(generation):
@@ -962,7 +983,7 @@ def render_nginx_harness(generation):
     This approximates the real bootstrap and is documented as such — but
     since the generation now carries its own http base (maps, log format,
     upstreams), the approximation is close: the harness contributes only the
-    main context, the scratch paths, and the two directives the bootstrap
+    main context and the two directives the bootstrap
     owns (`default_type`, `types_hash_max_size`). It includes the `staging/`
     listen-remapped copies rather than the real trees: `nginx -t` attempts
     `bind()` on every listen (EADDRINUSE tolerated in test mode, anything
@@ -973,10 +994,10 @@ def render_nginx_harness(generation):
     swap — see services/installer.py.
     """
     gen = generation_dir(generation)
-    return "\n".join([
+    lines = [
         "# staging harness — nginx -t pre-filter only, never loaded to serve",
         "#",
-        "# Every path below points INSIDE the generation because this check runs",
+        "# Every path used by this staged graph points INSIDE the generation because this check runs",
         "# UNPRIVILEGED (see services/installer.py: a sudo'd `nginx -t -c` over an",
         "# app-writable file is a root escalation via load_module). An app user",
         "# cannot write nginx's packaged prefix, so leaving these at their",
@@ -989,16 +1010,12 @@ def render_nginx_harness(generation):
         "http {",
         "    default_type application/octet-stream;",
         "    types_hash_max_size 4096;",
-        f"    client_body_temp_path {gen}/tmp/client_body;",
-        f"    proxy_temp_path {gen}/tmp/proxy;",
-        f"    fastcgi_temp_path {gen}/tmp/fastcgi;",
-        f"    uwsgi_temp_path {gen}/tmp/uwsgi;",
-        f"    scgi_temp_path {gen}/tmp/scgi;",
         f"    include {gen}/staging/http.d/*.conf;",
         f"    include {gen}/staging/conf.d/*.conf;",
         "}",
         "",
-    ])
+    ]
+    return "\n".join(lines)
 
 
 # ----------------------------------------------------------------------
@@ -1063,7 +1080,11 @@ def generation_id(payload):
     rather than a vhost list: a promote must move the hash, or nodes will not
     install it.
     """
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"),
+    # Renderer-owned inputs participate without becoming a new node-facing
+    # REST field. A mapping change must re-stage Edge's scratch graph, while
+    # first rollout remains owned by the synchronous global fragment repair.
+    hashed = dict(payload, nginx_temp_paths=nginx_temp_paths())
+    canonical = json.dumps(hashed, sort_keys=True, separators=(",", ":"),
                            default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

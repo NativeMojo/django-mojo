@@ -426,6 +426,25 @@ dies loudly on an unwritable dest or any placeholder left unsubstituted, and
 post_deploy dies if the rendered set comes back empty — /etc is never
 converged against an unknown contract.
 
+On a root, production-shaped `${PROJ_PATH}/var/deploy` invocation, `render`
+also converges nginx's persistent spill contract before it writes templates.
+This placement is intentional: an upgrading `post_deploy.sh` continues running
+its old inode after pip replaces the package, but its unchanged
+`python3 -m mojo.deploy render ...` argv imports the newly installed module.
+The first release carrying a repair therefore fixes the node before the old
+shell reaches MojoSec, `nginx -t`, or reload; it does not wait for a later Edge
+generation.
+
+The contract is `/var/lib/django-mojo/nginx/` with private worker-owned `0700`
+leaves for `client_body`, `proxy`, `fastcgi`, `uwsgi`, and `scgi`, plus the
+root-owned `/etc/nginx/conf.d/00_django_mojo_runtime.conf`. The active
+`nginx -T` worker user must equal `WEB_USER`. Deployment applies a durable
+nginx-writable SELinux label where enforcing, drops to the actual worker uid
+and gid to create/unlink a sentinel in every leaf, and requires every active
+temp directive exactly once before continuing. The tree and global fragment
+survive framework rollback, so an older renderer cannot recreate the outage.
+Do not replace this with `/tmp` or a package-owned `/var/lib/nginx` directory.
+
 `var/deploy/` is the single source of truth for what the last deploy shipped:
 post_deploy installs `/etc` copies FROM it, and check_node byte-compares
 `/etc` AGAINST it. The template names deliberately match the historical
@@ -468,6 +487,13 @@ The complement of `check_setup`: audits one node, never calls an AWS API,
 mutates nothing. Sections: `repo`, `framework`, `cron`, `systemd`, `nginx`,
 `certs`, `config_plane`, `shims`, `legacy`, `var_ownership`, `jobs`. Exit 1
 iff anything FAILed.
+
+The nginx section audits the same five-path runtime contract, worker identity,
+metadata, SELinux accessibility, active `nginx -T` directives, and a real
+worker create/unlink probe. Repair is the ordinary automated deployment. An
+emergency per-instance ownership change is break-glass debt: record the node
+and reason, then keep the incident open until a deployment converges and
+`check_node --section nginx` proves the durable contract.
 
 ```bash
 python3 -m mojo.deploy.check_node                      # on the node

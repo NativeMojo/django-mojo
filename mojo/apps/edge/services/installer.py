@@ -467,7 +467,9 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
     os.makedirs(os.path.join(gen_dir, "www"), exist_ok=True)
     # The staged check runs unprivileged, so nginx needs writable scratch
     # paths inside the generation — the harness names these.
-    os.makedirs(os.path.join(gen_dir, "tmp"), exist_ok=True)
+    from mojo.deploy.nginx_runtime import TEMP_PATHS
+    for _directive, leaf in TEMP_PATHS:
+        os.makedirs(os.path.join(gen_dir, "tmp", leaf), exist_ok=True)
     # The base's access_log (and the stage-4 watch log) point here, and
     # `nginx -t` opens log files while validating — the directory has to
     # exist before the staged check runs.
@@ -547,10 +549,14 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
     for name, text in files.items():
         # Two copies of every rendered file: the real tree (what `current`
         # serves after the swap) and the staging/ listen-remapped copy the
-        # unprivileged pre-filter validates — see render.render_staged_variant.
+        # unprivileged pre-filter validates. The staged HTTP base alone owns
+        # the rewritten scratch directives — never the main harness too.
         for target, body in ((name, text),
                              (f"staging/{name}",
-                              render.render_staged_variant(text))):
+                              render.render_staged_variant(
+                                  text,
+                                  temp_root=os.path.join(gen_dir, "tmp")
+                                  if name == "http.d/00_base.conf" else None))):
             path = os.path.join(gen_dir, target)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as handle:

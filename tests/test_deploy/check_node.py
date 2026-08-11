@@ -153,6 +153,26 @@ def test_absent_rendered_contract_is_info_never_fail(opts):
 
 
 @th.django_unit_test()
+def test_nginx_runtime_audit_fails_closed_and_names_automated_repair(opts):
+    from mojo.deploy import check_node as cn
+
+    run = FakeRunner([
+        ("mojo.deploy.nginx_runtime audit",
+         (1, "", "unsafe nginx runtime metadata: /var/lib/django-mojo/nginx/client_body")),
+    ])
+    report = cn.Report()
+    cn.check_nginx_runtime(report, run, "sudo -n ", "www")
+
+    finding = _find(report, "nginx", "runtime spill contract drift")
+    th.assert_true(finding is not None,
+                   f"runtime drift must be a node-check failure: {report.findings}")
+    th.assert_in("automated deployment", finding["fix"],
+                 "node-check remediation must direct operators to convergence")
+    th.assert_true(any("--web-user www" in command for command in run.commands),
+                   f"audit must use the configured worker identity: {run.commands}")
+
+
+@th.django_unit_test()
 def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
     from mojo.deploy import check_node as cn
 

@@ -143,8 +143,10 @@ Notes that bite:
   everywhere" but does not serve, check the node's bootstrap first.
 
 The staging harness (`nginx.conf` inside the generation) mirrors the
-bootstrap: main context + scratch paths + the same two directives — but its
-two includes read the **`staging/`** copies, not the real trees. The staged
+bootstrap: main context + the same two directives — but its two includes read
+the **`staging/`** copies, not the real trees. The staged `http.d/00_base.conf`
+is the single owner of the five generation-local scratch directives; the
+harness deliberately carries no duplicate. The staged
 `nginx -t` runs unprivileged, and nginx attempts `bind()` on every `listen`
 during `-t` (only `EADDRINUSE` is tolerated in test mode; the `EACCES` an
 unprivileged process gets for 443/80 on Linux is fatal) — so the staged
@@ -153,6 +155,14 @@ copies remap every listen port to `EDGE_STAGED_HTTP_PORT` /
 staged certificates are still opened and validated. The authoritative check
 is still the real config, real ports included, after the swap — see README's
 install sequence.
+
+Those five names come from `mojo.deploy.nginx_runtime.TEMP_PATHS`, the same
+mapping that renders the persistent global production fragment. The installer
+creates every scratch leaf before the unprivileged check. Never copy the
+directive list into an Edge template: a missing leaf recreates staging-only
+validation drift, while a duplicate at HTTP context makes nginx refuse the
+generation. Production spill ownership is converged by the root deploy render,
+not by the app-owned Edge installer.
 
 ## Node prerequisites (1.6.0)
 

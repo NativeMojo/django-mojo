@@ -310,8 +310,16 @@ mojo ALL=(root) NOPASSWD: /usr/bin/systemctl reload nginx
 >
 > The staged check therefore runs **unprivileged**, and two things make that
 > survivable. First, every file it reads is app-owned: `render_nginx_harness`
-> puts `pid`, `error_log` and every `*_temp_path` inside the generation
-> directory, because an app user cannot write nginx's packaged prefix and the
+> puts `pid` and `error_log` inside the generation, while the staged
+> `http.d/00_base.conf` owns every `*_temp_path`. The harness carries no
+> duplicate. The five scratch leaves are created from the same ordered mapping as the
+> permanent production fragment; staging rewrites the root to the generation
+> and never declares a second production directive. Production itself uses
+> private worker-owned leaves under `/var/lib/django-mojo/nginx`, activated by
+> the deploy renderer before any Edge generation or nginx reload. An Edge
+> generation is therefore not responsible for repairing host spill paths.
+> The generation-local paths exist because an app user cannot write nginx's
+> packaged prefix, and leaving these at their
 > defaults would fail the check for permissions rather than for config.
 > Second — and this is NOT folklore-compatible — **`nginx -t` attempts
 > `bind()` on every `listen` it parses.** Only `EADDRINUSE` is tolerated in
@@ -396,7 +404,9 @@ hand-written nginx block (row vs conf).
 render injection, golden files, desired state, and the installer.
 
 `7_nginx_real.py` feeds the generated configuration to a **real** `nginx -t`
-under `--extra extended` (or `--all`). It **skips** when nginx is absent.
+and forces a request larger than `client_body_buffer_size` through the
+persistent production mapping under `--extra extended` (or `--all`). It
+**skips** when nginx is absent.
 
 That skip is not optional. django-mojo's suite runs inside every project that
 uses the framework, so a test that fails on a missing binary turns all of them

@@ -984,7 +984,28 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
 # nginx
 # ---------------------------------------------------------------------------
 
-def check_nginx(report, run, repo, sudo, probe_url, retired_confd):
+def check_nginx_runtime(report, run, sudo, web_user):
+    if not sudo and os.geteuid() != 0:
+        report.info("nginx", "runtime spill contract needs root",
+                    "rerun with passwordless sudo to inspect private worker paths")
+        return
+    command = (f"{sudo}/usr/bin/python3 -E -P -m mojo.deploy.nginx_runtime "
+               f"audit --web-user {q(web_user)}")
+    rc, out, err = run(command, timeout=60)
+    if rc == 0:
+        report.passed(
+            "nginx", "private runtime spill contract",
+            "all five active temp paths have exact metadata and pass the worker write probe")
+    else:
+        detail = (err or out or "runtime audit returned no detail").splitlines()[0]
+        report.fail(
+            "nginx", "private runtime spill contract drift", detail,
+            "run the normal automated deployment; its render step repairs this before reload")
+
+
+def check_nginx(report, run, repo, sudo, probe_url, retired_confd,
+                web_user="www"):
+    check_nginx_runtime(report, run, sudo, web_user)
     # Repo-owned nginx files: the three top-level files, plus every conf.d
     # vhost the repo ships (post_deploy converges exactly that set; other
     # public vhosts on a node — single-node domains — stay node-managed and
@@ -1634,7 +1655,8 @@ def main(argv):
         check_mojosec(report, run, args.mojosec_mode, sudo,
                       args.mojosec_sensor_id)
     if "nginx" in wanted:
-        check_nginx(report, run, repo, sudo, args.probe_url, retired_confd)
+        check_nginx(report, run, repo, sudo, args.probe_url, retired_confd,
+                    args.web_user)
     if "certs" in wanted:
         check_certs(report, run, sudo)
     if "config_plane" in wanted:
