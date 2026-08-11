@@ -20,6 +20,10 @@ _REQUEST_ID = re.compile(r"^[a-f0-9]{32}$")
 _HTTP_PROTOCOL = re.compile(r"^HTTP/(?:0\.9|1\.0|1\.1|2(?:\.0)?|3(?:\.0)?)$")
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9._-]{1,96}$")
 _SYSTEMD_UNIT = re.compile(r"^user@(?P<uid>0|[1-9][0-9]{0,9})\.service$")
+_FAILED_UNIT = re.compile(
+    r"^[A-Za-z0-9@:.\\_-]{1,128}"
+    r"\.(?:service|socket|target|device|mount|automount|swap|path|timer|slice|scope)$")
+_FAILURE_KIND = re.compile(r"^[a-z0-9-]{1,64}$")
 _UUID_SEGMENT = re.compile(
     r"^[a-f0-9]{8}-[a-f0-9]{4}-[1-5a-f0-9][a-f0-9]{3}-"
     r"[89ab0-9][a-f0-9]{3}-[a-f0-9]{12}$", re.I)
@@ -460,4 +464,11 @@ def project(kind, attributes, count=1, last_seen=None):
                     "semantics": "last_occurrence", "observed_at": observed_at,
                     **volatile,
                 }
+    elif kind in ("system.service_error", "system.oom"):
+        unit = attributes.get("unit")
+        if isinstance(unit, str) and (unit == "kernel" or _FAILED_UNIT.fullmatch(unit)):
+            evidence["unit"] = unit
+        failure_kind = attributes.get("failure_kind")
+        if isinstance(failure_kind, str) and _FAILURE_KIND.fullmatch(failure_kind):
+            evidence["failure_kind"] = failure_kind
     return {"source_ip": source_ip, "evidence": evidence}

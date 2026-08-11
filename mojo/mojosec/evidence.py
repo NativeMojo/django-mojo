@@ -57,6 +57,7 @@ FIELD_POLICIES = {
     "system.oom": (("unit", 256), ("message", 1024)),
     "system.service_error": (
         ("unit", 256), ("priority", None), ("message", 1024),
+        ("failure_kind", 64),
     ),
 }
 FIELD_POLICIES["web.error"] = FIELD_POLICIES["web.probe"]
