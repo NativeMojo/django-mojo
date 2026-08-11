@@ -56,11 +56,12 @@ def test_default_pool_legacy_read_only_fallback(opts):
 
 @th.django_unit_test("fleet discovery calls only live edge-channel runners")
 def test_fleet_discovery_is_edge_channel_only(opts):
+    import mojo
     from mojo.apps.edge.services import readiness
 
     runner = {"runner_id": "edge-a-engine", "alive": True, "channels": ["edge"]}
     proof = {"status": "success", "result": {
-        "node_id": "edge-a", "django_mojo_version": "1.9.0",
+        "node_id": "edge-a", "django_mojo_version": mojo.__version__,
         "pools": {"default": {"generation": "g", "excluded": 0,
                                 "www_pending": 0, "cert_pending": 0,
                                 "serving_generation": "combined",
@@ -80,12 +81,13 @@ def test_fleet_discovery_is_edge_channel_only(opts):
 
 @th.django_unit_test("a missing node or pool proof can never report green")
 def test_missing_node_and_pool_are_pending(opts):
+    import mojo
     from mojo.apps.edge.services import readiness
 
     topology = {"nodes": ["edge-a", "edge-b"], "pools": ["default", "blue"]}
     runner = {"runner_id": "edge-a-engine", "alive": True, "channels": ["edge"]}
     proof = {"status": "success", "result": {
-        "node_id": "edge-a", "django_mojo_version": "1.9.0",
+        "node_id": "edge-a", "django_mojo_version": mojo.__version__,
         "pools": {"default": {"generation": "gd", "excluded": 0,
                                 "www_pending": 0, "cert_pending": 0,
                                 "serving_generation": "combined",
