@@ -146,14 +146,17 @@ def test_store_migrates_old_v2_compatibility_columns_atomically(opts):
         os.chmod(root, 0o700)
         path = _old_v2_database(root)
         with mock.patch.object(
-                Store, "_add_ssh_session_ambiguous_column",
-                side_effect=RuntimeError("injected")):
+                Store, "_add_event_delivery_class",
+                side_effect=RuntimeError("injected after ambiguous ALTER")):
             with th.assert_raises(RuntimeError):
                 Store(root, "sensor", AGGREGATION, DELIVERY)
         db = sqlite3.connect(path)
         columns = {row[1] for row in db.execute("PRAGMA table_info(ssh_sessions)")}
         th.assert_true("ambiguous" not in columns,
-                       "failed v2 compatibility repair must roll back its ALTER")
+                       "failure after the ambiguous ALTER must roll that ALTER back")
+        event_columns = {row[1] for row in db.execute("PRAGMA table_info(events)")}
+        th.assert_true("delivery_class" not in event_columns,
+                       "failed v2-to-v3 migration must not expose its delivery column")
         th.assert_eq(json.loads(db.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]), 2,
             "failed compatibility repair must preserve the advertised v2 version")
@@ -162,6 +165,10 @@ def test_store_migrates_old_v2_compatibility_columns_atomically(opts):
         store = Store(root, "sensor", AGGREGATION, DELIVERY)
         th.assert_eq(store.get_meta("schema_version"), 3,
                      "retry must advance the repaired v2 store to v3")
+        th.assert_eq(store.db.execute(
+            "SELECT delivery_class FROM events WHERE id='queued-event'"
+        ).fetchone()[0], "legacy",
+                     "v2 queued rows must be marked legacy before the migrated store closes")
         row = store.load_ssh_sessions()[0]
         th.assert_eq((row["actor"], row["source_ip"], row["ambiguous"]),
                      ("deploy", "192.0.2.71", 0),

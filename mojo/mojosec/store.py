@@ -131,6 +131,8 @@ class Store:
             )""",
             "CREATE INDEX events_delivery ON events(next_attempt, created)",
             "CREATE INDEX events_delivery_class ON events(delivery_class, next_attempt, created)",
+            "CREATE INDEX events_delivery_class_created "
+            "ON events(delivery_class, created, id)",
             """CREATE TABLE aggregates (
                 fingerprint TEXT PRIMARY KEY,
                 payload TEXT NOT NULL,
@@ -178,6 +180,9 @@ class Store:
             "ALTER TABLE events ADD COLUMN delivery_class TEXT NOT NULL DEFAULT 'legacy'")
         self.db.execute(
             "CREATE INDEX events_delivery_class ON events(delivery_class, next_attempt, created)")
+        self.db.execute(
+            "CREATE INDEX events_delivery_class_created "
+            "ON events(delivery_class, created, id)")
 
     def _ensure_v3_schema(self):
         """Repair compatibility columns and indexes transactionally."""
@@ -204,6 +209,9 @@ class Store:
                 self.db.execute(
                     "CREATE INDEX IF NOT EXISTS events_delivery_class "
                     "ON events(delivery_class, next_attempt, created)")
+                self.db.execute(
+                    "CREATE INDEX IF NOT EXISTS events_delivery_class_created "
+                    "ON events(delivery_class, created, id)")
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")

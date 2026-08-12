@@ -298,17 +298,22 @@ invocation; commands subsequently entered inside `sudo -s` are not observed by
 this journal detector.
 
 That one complete `systemd-user` lifecycle tuple is server-owned
-`local_only`. It requires coherent exact kind/severity/summary/recommendation,
-nonaggregate/count-one shape, canonical target user and UID, root opener and
-producer, target UID equal to audit login UID, a positive producer PID, exact
-`(systemd)` comm, `/usr/lib/systemd/systemd` executable and
-`user@<uid>.service`, canonical boot/audit session, and either no attribution
+`local_only`. It requires literal `kind="auth.session_open"`,
+`severity="info"`, `summary="PAM service session opened"`, and
+`recommendation="none"`; a canonical lowercase 64-hex observation fingerprint
+or wire event ID; observation `aggregate=false` or wire `count=1` with
+`first_seen == last_seen == observed_at`; canonical target user and UID; root
+opener and producer; target UID equal to audit login UID; a positive producer
+PID; exact `(systemd)` comm, `/usr/lib/systemd/systemd` executable, and
+`user@<uid>.service`; canonical boot/audit session; and either no attribution
 with no source-IP field or exact audit-session attribution with a canonical IP.
 An optional TTY must be a canonical string when present. Missing, extra,
 malformed, boolean-as-integer, explicit-null optional, contradictory, `who`, or
-otherwise near-match fields do not classify. A protocol-valid near match
-remains ordinary fleet evidence; an invalid wire event still rejects under the
-unchanged protocol validator.
+otherwise near-match lifecycle attributes do not classify. Fail-open-to-
+ordinary applies only after the protocol has accepted the event: a
+protocol-valid lifecycle near match remains ordinary fleet evidence, while a
+malformed envelope, required wire field, identity, or timestamp still rejects
+under the unchanged protocol validator.
 
 For an exact original observation, the sensor advances its journal cursor and
 updates local-only metadata in the same SQLite transaction, without aggregate
@@ -332,16 +337,30 @@ For short diagnostics only, a root operator may create
 `/etc/mojosec/local_only_diagnostic.json`. This is not desired/effective
 configuration and does not change protocol v1. The file must be a root:root
 regular file at exact mode `0600`, at most 512 bytes, opened with `O_NOFOLLOW`,
-with no duplicate JSON keys, and contain exactly:
+with no duplicate JSON keys, and contain exactly the three schema keys. Generate
+a fresh 15-minute expiry and install a new regular file with exact metadata:
 
-```json
-{"schema":"mojosec.local_only_diagnostic","version":1,"until":"2026-08-11T20:30:00Z"}
+```bash
+diagnostic_tmp=$(mktemp)
+python3 - <<'PY' > "$diagnostic_tmp"
+import datetime, json
+until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=15)
+print(json.dumps({
+    "schema": "mojosec.local_only_diagnostic",
+    "version": 1,
+    "until": until.isoformat().replace("+00:00", "Z"),
+}, separators=(",", ":")))
+PY
+sudo install --owner=root --group=root --mode=0600 \
+  "$diagnostic_tmp" /etc/mojosec/local_only_diagnostic.json
+rm -f "$diagnostic_tmp"
 ```
 
 `until` must be timezone-aware and no later than one hour after both the file's
-mtime and current time; a future mtime beyond fixed clock-skew tolerance is
-unsafe. Delivery is active only while current time is strictly before `until`.
+mtime and current time; an mtime more than five seconds in the future is unsafe.
+Delivery is active only while current time is strictly before `until`.
 Missing, expired, unsafe, malformed, and far-future files preserve suppression.
+An unsupported integer version is ignored as inactive with an empty error.
 The public status adds exactly the signed-64 informational counters
 `local_only_observed`, `local_only_diagnostic_delivered`, and
 `local_only_suppressed`, nullable `local_only_last_seen`, and fixed
@@ -451,9 +470,16 @@ off, then run:
   --mode enrolled --criticality enrolled)
 ```
 
-`/run/mojosec/status.json` is atomically written as root:root mode `0640` and contains
-only sensor identity, collector freshness/errors, delivery counts, spool depth,
-aggregation depth, capacity-drop counters, and desired/effective config hashes.
+`/run/mojosec/status.json` is atomically written as root:root mode `0640`. Its
+exhaustive top-level field set is `schema`, `version`, `sensor_id`, `state`,
+`updated_at`, `config`, `collectors`, `delivery`, optional `integrity`,
+`expected_changes`, `spooled_events`, `pending_aggregates`, `dropped_capacity`,
+`dropped_aggregate_capacity`, `aggregate_evicted_for_priority`,
+`delivery_accepted`, `delivery_duplicate`, `delivery_rejected`,
+`delivery_retry`, signed-64 `local_only_observed`,
+`local_only_diagnostic_delivered`, and `local_only_suppressed`, nullable
+`local_only_last_seen`, and fixed
+`local_only_diagnostic.{active,until,error}`.
 It contains no API key, endpoint, raw log record, database row, FIM digest, or
 file content. `check_node` reads that projection with sudo; ordinary app users
 do not receive collector/backlog timing.
@@ -464,11 +490,17 @@ Private state lives in root-owned mode-`0700` `/var/lib/mojosec`; it must not be
 placed under the application-writable `/opt/api/var` tree. SQLite uses WAL mode
 and `synchronous=FULL`.
 
-State schema v2 adds only the `ssh_sessions` correlation table and expiry
-index. Startup inspects the stored version before mutation. The v1-to-v2
-migration is one exclusive transaction, creates the table/index, and writes
-the new version last; rollback is retryable and preserves events, aggregates,
-FIM baselines, metadata, and cursors. A future version is rejected unchanged.
+State schema v3 contains the v2 `ssh_sessions` correlation table/expiry index
+and adds the private `events.delivery_class` plus separate indexed paths for
+due delivery and `(delivery_class, created, id)` reconciliation. Fresh rows are
+`ordinary`; rows preserved by v1/v2 migration are `legacy` until the bounded
+classifier reconciles them. Startup inspects the stored version before
+mutation. Both v1-to-v3 and v2-to-v3 run in one exclusive transaction, create
+or repair every column/index, and write schema version 3 last. Rollback is
+retryable and preserves queued events, aggregates, FIM baselines, SSH-session
+state, metadata, and cursors. A future version is rejected unchanged. Schema
+v3 is intentionally not downgrade-compatible with binaries that only support
+v1/v2; roll back application code only together with compatible private state.
 
 - A journal/nginx cursor advances in the same transaction that processes the
   observations preceding it. Capacity rejection records a drop counter in that
@@ -570,8 +602,8 @@ duplicate fields, the shared protocol schema, and every event before writing.
 It persists a unique receipt for `(authenticated API key, event_id)` and the
 canonical payload digest. Identical replay of an already terminalized identity
 returns `duplicate` whether or not that receipt has an Event; reusing an ID for changed
-evidence returns `rejected`. A receipt is acknowledged `accepted` only after
-its bounded Event projection has completed central publication and any required
+evidence returns `rejected`. For ordinary events, a receipt is acknowledged
+`accepted` only after its bounded Event projection has completed central publication and any required
 exact-RuleSet handler has a durably queued outbox job. Incomplete publication
 or queueing returns `retry`.
 
@@ -584,11 +616,16 @@ the identity, its receipt/Event/Incident are historical evidence and remain
 untouched. If the same digest is still pending, the receipt row is locked,
 terminalized, and its existing nullable Event pointer/row, protected replay
 fields, and original policy/protocol provenance are preserved without
-publication or handler dispatch. New eventless receipts retain the complete
+publication or handler dispatch: every replay/provenance field survives except
+that `feature_schema` is replaced with `local_only_receipt_v1` and
+`disposition="local_only"` is added. New eventless receipts retain the complete
 validated sensor event in protected replay. A different digest rejects. Only
 the `local_only_receipt_v1` compatibility schema is excluded from feedback,
 explicit replay/shadow, metric candidate selection, and quotas; historical
 published `replay_features_v1` evidence remains eligible and unchanged.
+Compatibility handling never rewrites or deletes a historical published
+receipt, Event, Incident, or projected evidence row, and normal receipt/Event
+retention remains unchanged.
 
 `MojoSecReceipt` is an internal durable outbox/audit model, not writable browser
 CRUD state. Its unique key is

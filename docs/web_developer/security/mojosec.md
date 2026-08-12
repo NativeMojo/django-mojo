@@ -162,15 +162,19 @@ not claim to capture commands later typed inside `sudo -s`.
 
 The one complete root-produced `systemd-user` PAM lifecycle is retained as
 local sensor health rather than fleet incident evidence. The exact classifier
-requires coherent kind/severity/summary/recommendation, nonaggregate/count one,
+requires literal `kind="auth.session_open"`, `severity="info"`,
+`summary="PAM service session opened"`, and `recommendation="none"`,
+a canonical lowercase 64-hex fingerprint or event ID, observation
+`aggregate=false` or wire `count=1` with equal first/last/observed timestamps,
 canonical target user/UID, root opener and producer, target UID equal to audit
 login UID, positive PID, exact systemd comm/executable/unit, canonical
 boot/audit session, and coherent none-or-audit-session attribution. Optional
 source IP and TTY fields must be canonical strings when present; explicit null
 does not match. Exact matches normally create no batch item, central Event,
 Incident, notification, RuleSet handler, or public evidence. Protocol-valid
-near matches remain ordinary events with the established protected replay and
-rich safe Event projection; protocol-invalid wire events still reject.
+lifecycle-attribute near matches remain ordinary events with the established
+protected replay and rich safe Event projection; malformed protocol envelopes,
+required wire fields, identities, or timestamps still reject.
 
 Sensor status adds signed-64 saturating informational `local_only_observed`,
 `local_only_suppressed`, and `local_only_diagnostic_delivered` counters, nullable
@@ -188,9 +192,11 @@ handler-none `MojoSecReceipt` with `feature_schema=local_only_receipt_v1` and no
 new Event; its protected replay retains the complete validated sensor event.
 First receipt is `accepted`, identical terminalized replay is `duplicate`, and
 a same-ID/different-digest delivery is `rejected`. Terminalizing an identical
-pending receipt preserves every existing protected replay/provenance field and
-its Event pointer/row. Existing published Event/Incident evidence is never
-rewritten or deleted, and ordinary retention is unchanged. Only the
+pending receipt preserves its Event pointer/row and every protected
+replay/provenance field except that `feature_schema` becomes
+`local_only_receipt_v1` and `disposition="local_only"` is added. Compatibility
+handling never rewrites or deletes historical published receipts,
+Events/Incidents, or their evidence, and normal retention is unchanged. Only the
 `local_only_receipt_v1` compatibility schema is rejected as feedback and
 explicit replay/shadow and filtered before learning candidate selection,
 stratification, and quotas; legacy published `replay_features_v1` remains
@@ -202,8 +208,9 @@ aggregate count greater than one, volatile fields exist only in
 with `observed_at` from `last_seen`. Invalid individual public fields are
 omitted fail-soft rather than poisoning receipt publication.
 
-An `accepted` result also means any required RuleSet handler dispatch has a
-durable receipt outbox job. Queue failure returns `retry`. Request replay and a
+For ordinary Event publication, an `accepted` result also means any required
+RuleSet handler dispatch has a durable receipt outbox job. Queue failure returns
+`retry`. Request replay and a
 five-minute central replayer recover pending/failed dispatch without duplicate
 handler jobs.
 

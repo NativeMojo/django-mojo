@@ -447,6 +447,21 @@ def test_local_only_diagnostic_and_stale_reconciliation_are_bounded(opts):
                 found["fingerprint"] = f"{index:064x}"
                 store._enqueue(make_event("sensor-test", found), now=index + 1)
             store.db.execute("UPDATE events SET delivery_class = 'legacy'")
+            for delivery_class, projection in (
+                    ("local_only_diagnostic", "id"), ("legacy", "id, payload")):
+                plan = store.db.execute(
+                    f"EXPLAIN QUERY PLAN SELECT {projection} FROM events "
+                    "WHERE delivery_class = ? ORDER BY created, id LIMIT ?",
+                    (delivery_class, store_module.LOCAL_ONLY_RECONCILE_LIMIT),
+                ).fetchall()
+                detail = " ".join(row["detail"] for row in plan)
+                th.assert_in(
+                    "events_delivery_class_created", detail,
+                    f"{delivery_class} reconciliation must use the class/order index")
+                th.assert_in("SEARCH events", detail,
+                             "reconciliation must seek to one class, not scan all events")
+                th.assert_true("USE TEMP B-TREE" not in detail,
+                               f"reconciliation order must not sort a whole class: {detail}")
             store._enqueue(make_event("sensor-test", _observation(aggregate=False)), now=999)
             pending = store.pending_batch(10, 65536)
             th.assert_eq([item["kind"] for item in pending], ["web.probe"],

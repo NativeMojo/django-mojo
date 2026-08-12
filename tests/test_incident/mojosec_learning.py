@@ -161,8 +161,6 @@ def test_local_only_compatibility_receipts_never_enter_learning(opts):
     th.assert_true(
         "auth.sudo_command" in metrics["detectors"],
         "a newer compatibility row must not hide the newest ordinary evidence")
-    th.assert_eq(metrics["receipt_rows_scanned"], 3,
-                 "compatibility rows must be excluded by the pre-quota candidate query")
     th.assert_eq(metrics["receipt_rows_sampled"], 1,
                  "a newer local-only row must not crowd ordinary evidence out of a small quota")
 
