@@ -63,6 +63,12 @@ docs/
 
 Use `bin/run_tests` — it handles starting and stopping the test server automatically:
 
+> **Suite ownership rule:** bare `bin/run_tests` is for the django-mojo
+> repository itself. Every application that consumes django-mojo must run its
+> own full suite with `bin/run_tests --nomojo`; consumer projects do not retest
+> the framework suite they inherit. Targeted application modules may still use
+> `bin/run_tests -t <module>`.
+
 - Run everything:
   `./bin/run_tests`
 - Target a module or a specific file:
