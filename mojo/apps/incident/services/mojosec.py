@@ -12,6 +12,7 @@ from django.db.models import F, Q
 from mojo.helpers import dates, logit
 from mojo.helpers.settings import settings
 from mojo.mojosec import protocol
+from mojo.mojosec.disposition import is_local_only
 from . import mojosec_evidence
 
 
@@ -19,6 +20,7 @@ logger = logit.get_logger(__name__, "incident.log")
 
 MAX_COMPRESSED_BYTES = protocol.MAX_BATCH_BYTES
 MAX_ERROR = 256
+LOCAL_ONLY_REPLAY_SCHEMA = "local_only_receipt_v1"
 KIND_POLICY = {
     "auth.ssh_login": {"level": 8},
     "auth.ssh_failure": {"level": 5},
@@ -306,6 +308,69 @@ def _create_receipt(api_key, batch, sensor_event, digest):
         return receipt, False
 
 
+def _local_only_replay(batch, sensor_event):
+    return {
+        "feature_schema": LOCAL_ONLY_REPLAY_SCHEMA,
+        "schema": batch["schema"],
+        "version": batch["version"],
+        "sensor_id": batch["sensor_id"],
+        "policy_revision": batch["policy_revision"],
+        "event_id": sensor_event["id"],
+        "kind": sensor_event["kind"],
+        "disposition": "local_only",
+        "event": sensor_event,
+    }
+
+
+def _accept_local_only(api_key, batch, sensor_event, digest):
+    """Create or terminalize an eventless receipt under the publication lock."""
+    from mojo.apps.incident.models import MojoSecReceipt
+
+    replay = _local_only_replay(batch, sensor_event)
+    try:
+        with transaction.atomic():
+            receipt = MojoSecReceipt.objects.create(
+                api_key=api_key,
+                event=None,
+                sensor_id=batch["sensor_id"],
+                wire_event_id=sensor_event["id"],
+                payload_digest=digest,
+                protocol_version=batch["version"],
+                sensor_policy_revision=batch["policy_revision"],
+                publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
+                published_at=dates.utcnow(),
+                handler_state=MojoSecReceipt.HANDLER_NONE,
+                replay_features=replay,
+            )
+        return receipt, True
+    except IntegrityError:
+        pass
+    with transaction.atomic():
+        receipt = MojoSecReceipt.objects.select_for_update().get(
+            api_key=api_key, wire_event_id=sensor_event["id"])
+        if receipt.payload_digest != digest:
+            return receipt, False
+        if receipt.publish_state == MojoSecReceipt.PUBLISH_PUBLISHED:
+            return receipt, False
+        if not isinstance(receipt.replay_features, dict):
+            raise ValueError("pending receipt replay evidence is not an object")
+        replay = dict(receipt.replay_features)
+        replay["feature_schema"] = LOCAL_ONLY_REPLAY_SCHEMA
+        replay["disposition"] = "local_only"
+        receipt.publish_state = MojoSecReceipt.PUBLISH_PUBLISHED
+        receipt.published_at = dates.utcnow()
+        receipt.handler_state = MojoSecReceipt.HANDLER_NONE
+        receipt.handler_job_id = ""
+        receipt.handler_last_error = ""
+        receipt.last_error = ""
+        receipt.replay_features = replay
+        receipt.save(update_fields=[
+            "publish_state", "published_at", "handler_state", "handler_job_id",
+            "handler_last_error", "last_error", "replay_features", "modified",
+        ])
+        return receipt, True
+
+
 def _publish_receipt(receipt):
     from mojo.apps.incident.models import MojoSecReceipt
 
@@ -474,6 +539,20 @@ def ingest_batch(api_key, batch):
                 })
                 continue
             digest = _payload_digest(sensor_event)
+            if is_local_only(sensor_event, wire=True):
+                receipt, accepted = _accept_local_only(
+                    api_key, batch, sensor_event, digest)
+                if receipt.payload_digest != digest:
+                    results.append({
+                        "id": sensor_event["id"], "status": "rejected",
+                        "reason": "event id was already used for different evidence",
+                    })
+                else:
+                    results.append({
+                        "id": sensor_event["id"],
+                        "status": "accepted" if accepted else "duplicate",
+                    })
+                continue
             receipt, created = _create_receipt(api_key, batch, sensor_event, digest)
             if receipt.payload_digest != digest:
                 results.append({

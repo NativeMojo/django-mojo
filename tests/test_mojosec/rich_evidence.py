@@ -86,7 +86,7 @@ def _old_v2_database(root):
 
 
 @th.django_unit_test()
-def test_store_v1_to_v2_migration_is_atomic_retryable_and_future_safe(opts):
+def test_store_v1_to_v3_migration_is_atomic_retryable_and_future_safe(opts):
     from mojo.mojosec.store import Store, StoreError
 
     with tempfile.TemporaryDirectory() as root:
@@ -106,8 +106,8 @@ def test_store_v1_to_v2_migration_is_atomic_retryable_and_future_safe(opts):
         db.close()
 
         store = Store(root, "sensor", AGGREGATION, DELIVERY)
-        th.assert_eq(store.get_meta("schema_version"), 2,
-                     "retry must complete the idempotent v1-to-v2 migration")
+        th.assert_eq(store.get_meta("schema_version"), 3,
+                     "retry must complete the idempotent v1-to-v3 migration")
         th.assert_eq(store.get_meta("cursor:journal"), "cursor-kept",
                      "migration must preserve durable collection cursors")
         th.assert_eq(store.load_fim_baseline("profile")["/etc/kept"]["kind"], "file",
@@ -116,12 +116,15 @@ def test_store_v1_to_v2_migration_is_atomic_retryable_and_future_safe(opts):
             "SELECT COUNT(*) FROM events WHERE id='queued-event'").fetchone()[0], 1,
             "migration must preserve the delivery spool")
         th.assert_eq(store.db.execute(
+            "SELECT delivery_class FROM events WHERE id='queued-event'").fetchone()[0],
+            "legacy", "migrated spool rows must enter bounded compatibility reconciliation")
+        th.assert_eq(store.db.execute(
             "SELECT count FROM aggregates WHERE fingerprint='queued-aggregate'"
         ).fetchone()[0], 2, "migration must preserve pending aggregates")
         store.close()
         reopened = Store(root, "sensor", AGGREGATION, DELIVERY)
-        th.assert_eq(reopened.get_meta("schema_version"), 2,
-                     "opening an already-migrated v2 store must be idempotent")
+        th.assert_eq(reopened.get_meta("schema_version"), 3,
+                     "opening an already-migrated v3 store must be idempotent")
         reopened.close()
 
     with tempfile.TemporaryDirectory() as root:
@@ -136,27 +139,36 @@ def test_store_v1_to_v2_migration_is_atomic_retryable_and_future_safe(opts):
 
 
 @th.django_unit_test()
-def test_store_repairs_old_v2_ambiguity_column_atomically(opts):
+def test_store_migrates_old_v2_compatibility_columns_atomically(opts):
     from mojo.mojosec.store import Store
 
     with tempfile.TemporaryDirectory() as root:
         os.chmod(root, 0o700)
         path = _old_v2_database(root)
         with mock.patch.object(
-                Store, "_add_ssh_session_ambiguous_column",
-                side_effect=RuntimeError("injected")):
+                Store, "_add_event_delivery_class",
+                side_effect=RuntimeError("injected after ambiguous ALTER")):
             with th.assert_raises(RuntimeError):
                 Store(root, "sensor", AGGREGATION, DELIVERY)
         db = sqlite3.connect(path)
         columns = {row[1] for row in db.execute("PRAGMA table_info(ssh_sessions)")}
         th.assert_true("ambiguous" not in columns,
-                       "failed v2 compatibility repair must roll back its ALTER")
+                       "failure after the ambiguous ALTER must roll that ALTER back")
+        event_columns = {row[1] for row in db.execute("PRAGMA table_info(events)")}
+        th.assert_true("delivery_class" not in event_columns,
+                       "failed v2-to-v3 migration must not expose its delivery column")
         th.assert_eq(json.loads(db.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]), 2,
             "failed compatibility repair must preserve the advertised v2 version")
         db.close()
 
         store = Store(root, "sensor", AGGREGATION, DELIVERY)
+        th.assert_eq(store.get_meta("schema_version"), 3,
+                     "retry must advance the repaired v2 store to v3")
+        th.assert_eq(store.db.execute(
+            "SELECT delivery_class FROM events WHERE id='queued-event'"
+        ).fetchone()[0], "legacy",
+                     "v2 queued rows must be marked legacy before the migrated store closes")
         row = store.load_ssh_sessions()[0]
         th.assert_eq((row["actor"], row["source_ip"], row["ambiguous"]),
                      ("deploy", "192.0.2.71", 0),

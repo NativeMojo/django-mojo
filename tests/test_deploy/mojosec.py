@@ -139,6 +139,10 @@ def test_desired_policy_cannot_override_root_enrollment_or_log_boundary(opts):
                  "app policy must be pinned to the dedicated security log")
     th.assert_eq(protected["trusted_proxy_cidrs"], ["10.0.0.0/8"],
                  "trusted proxy identity boundary belongs to enrollment")
+    th.assert_true("local_only_diagnostic" not in config,
+                   "the root diagnostic sidecar must never enter effective configuration")
+    th.assert_true("local_only_diagnostic" not in deploy.DESIRED_KEYS,
+                   "fleet desired policy must not grow a diagnostic override knob")
 
     for key, value in (
             ("endpoint", "https://evil.example/api/incident/mojosec/batch"),

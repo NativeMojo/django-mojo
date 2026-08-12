@@ -1,5 +1,6 @@
 """Crash-safe MojoSec state, aggregation, FIM baseline, and delivery spool."""
 
+import datetime
 import json
 import os
 import sqlite3
@@ -8,16 +9,22 @@ import time
 
 from .aggregation import merge, should_flush
 from .attribution import merge_session
+from .disposition import (
+    LOCAL_ONLY_DIAGNOSTIC_PATH, diagnostic_override, is_local_only,
+    observed_timestamp,
+)
 from .protocol import canonical_json, make_event
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SSH_SESSION_CAP = 4096
 SSH_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 ANNOTATION_GRACE_SECONDS = 120
 # The producer caps an active operation at 15 minutes. Retain exact active
 # paths for that ceiling plus the five-minute post-completion match window.
 ANNOTATION_MAX_GRACE_SECONDS = 20 * 60
+LOCAL_ONLY_RECONCILE_LIMIT = 256
+SATURATING_COUNTER_MAX = 2 ** 63 - 1
 
 
 class StoreError(RuntimeError):
@@ -39,11 +46,14 @@ def _private_directory(path):
 
 
 class Store:
-    def __init__(self, state_dir, sensor_id, aggregation_config, delivery_config):
+    def __init__(self, state_dir, sensor_id, aggregation_config, delivery_config,
+                 local_only_diagnostic_path=LOCAL_ONLY_DIAGNOSTIC_PATH):
         _private_directory(state_dir)
         self.sensor_id = sensor_id
         self.aggregation_config = aggregation_config
         self.delivery_config = delivery_config
+        self.local_only_diagnostic_path = local_only_diagnostic_path
+        self.local_only_diagnostic = {"active": False, "until": "", "error": ""}
         self.path = os.path.join(state_dir, "state.sqlite3")
         self.db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         self.db.row_factory = sqlite3.Row
@@ -93,11 +103,14 @@ class Store:
         if not isinstance(version, int) or isinstance(version, bool):
             raise StoreError("state schema version is invalid")
         if version == SCHEMA_VERSION:
-            self._ensure_v2_schema()
+            self._ensure_v3_schema()
+            return
+        if version == 2:
+            self._migrate_v2_to_v3()
             return
         if version != 1:
             raise StoreError(f"unsupported state schema version: {version}")
-        self._migrate_v1_to_v2()
+        self._migrate_v1_to_v3()
 
     def _create_base_schema(self):
         statements = (
@@ -113,9 +126,13 @@ class Store:
                 attempts INTEGER NOT NULL DEFAULT 0,
                 next_attempt REAL NOT NULL DEFAULT 0,
                 annotation_deadline REAL NOT NULL DEFAULT 0,
-                last_error TEXT NOT NULL DEFAULT ''
+                last_error TEXT NOT NULL DEFAULT '',
+                delivery_class TEXT NOT NULL DEFAULT 'ordinary'
             )""",
             "CREATE INDEX events_delivery ON events(next_attempt, created)",
+            "CREATE INDEX events_delivery_class ON events(delivery_class, next_attempt, created)",
+            "CREATE INDEX events_delivery_class_created "
+            "ON events(delivery_class, created, id)",
             """CREATE TABLE aggregates (
                 fingerprint TEXT PRIMARY KEY,
                 payload TEXT NOT NULL,
@@ -158,8 +175,17 @@ class Store:
             "ALTER TABLE ssh_sessions "
             "ADD COLUMN ambiguous INTEGER NOT NULL DEFAULT 0")
 
-    def _ensure_v2_schema(self):
-        """Repair the brief pre-ambiguity v2 shape transactionally."""
+    def _add_event_delivery_class(self):
+        self.db.execute(
+            "ALTER TABLE events ADD COLUMN delivery_class TEXT NOT NULL DEFAULT 'legacy'")
+        self.db.execute(
+            "CREATE INDEX events_delivery_class ON events(delivery_class, next_attempt, created)")
+        self.db.execute(
+            "CREATE INDEX events_delivery_class_created "
+            "ON events(delivery_class, created, id)")
+
+    def _ensure_v3_schema(self):
+        """Repair compatibility columns and indexes transactionally."""
         self.db.execute("BEGIN IMMEDIATE")
         try:
             row = self.db.execute(
@@ -173,12 +199,25 @@ class Store:
             }
             if "ambiguous" not in columns:
                 self._add_ssh_session_ambiguous_column()
+            event_columns = {
+                row["name"] for row in self.db.execute(
+                    "PRAGMA table_info(events)").fetchall()
+            }
+            if "delivery_class" not in event_columns:
+                self._add_event_delivery_class()
+            else:
+                self.db.execute(
+                    "CREATE INDEX IF NOT EXISTS events_delivery_class "
+                    "ON events(delivery_class, next_attempt, created)")
+                self.db.execute(
+                    "CREATE INDEX IF NOT EXISTS events_delivery_class_created "
+                    "ON events(delivery_class, created, id)")
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
             raise
 
-    def _migrate_v1_to_v2(self):
+    def _migrate_v1_to_v3(self):
         self.db.execute("BEGIN IMMEDIATE")
         try:
             row = self.db.execute(
@@ -186,8 +225,30 @@ class Store:
             if row is None or json.loads(row["value"]) != 1:
                 raise StoreError("state schema changed during migration")
             self._create_ssh_session_schema()
+            self._add_event_delivery_class()
             # Version is deliberately last: rollback/retry can never advertise
-            # v2 before every v2 object exists.
+            # v3 before every v3 object exists.
+            self.set_meta("schema_version", SCHEMA_VERSION)
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def _migrate_v2_to_v3(self):
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.db.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            if row is None or json.loads(row["value"]) != 2:
+                raise StoreError("state schema changed during migration")
+            self._create_ssh_session_schema()
+            columns = {
+                row["name"] for row in self.db.execute(
+                    "PRAGMA table_info(ssh_sessions)").fetchall()
+            }
+            if "ambiguous" not in columns:
+                self._add_ssh_session_ambiguous_column()
+            self._add_event_delivery_class()
             self.set_meta("schema_version", SCHEMA_VERSION)
             self.db.execute("COMMIT")
         except Exception:
@@ -215,6 +276,79 @@ class Store:
 
     def _increment(self, key, amount=1):
         self.set_meta(key, int(self.get_meta(key, 0)) + amount)
+
+    def _increment_saturating(self, key, amount=1):
+        current = self.get_meta(key, 0)
+        if not isinstance(current, int) or isinstance(current, bool) or current < 0:
+            current = 0
+        self.set_meta(key, min(SATURATING_COUNTER_MAX, current + max(0, amount)))
+
+    @staticmethod
+    def _payload_local_only(payload):
+        try:
+            return int(is_local_only(json.loads(payload), wire=True))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return 0
+
+    def _record_local_only(self, found, diagnostic, now):
+        self._increment_saturating("local_only_observed")
+        seen = observed_timestamp(found)
+        current = self.get_meta("local_only_last_seen")
+        if seen is not None:
+            try:
+                current_time = datetime.datetime.fromisoformat(
+                    current.replace("Z", "+00:00"))
+            except (AttributeError, ValueError):
+                current_time = None
+            seen_time = datetime.datetime.fromisoformat(seen.replace("Z", "+00:00"))
+            if current_time is None or seen_time > current_time:
+                self.set_meta("local_only_last_seen", seen)
+        if diagnostic["active"]:
+            event = make_event(self.sensor_id, found)
+            if self._enqueue(event, now=now, delivery_class="local_only_diagnostic"):
+                self._increment_saturating("local_only_diagnostic_delivered")
+        else:
+            self._increment_saturating("local_only_suppressed")
+
+    def _reconcile_local_only(self, diagnostic_active):
+        suppressed = 0
+        if not diagnostic_active:
+            rows = self.db.execute(
+                "SELECT id FROM events WHERE delivery_class = 'local_only_diagnostic' "
+                "ORDER BY created, id LIMIT ?", (LOCAL_ONLY_RECONCILE_LIMIT,)
+            ).fetchall()
+            if rows:
+                self.db.executemany(
+                    "DELETE FROM events WHERE id = ?", ((row["id"],) for row in rows))
+                suppressed += len(rows)
+        legacy = self.db.execute(
+            "SELECT id, payload FROM events WHERE delivery_class = 'legacy' "
+            "ORDER BY created, id LIMIT ?", (LOCAL_ONLY_RECONCILE_LIMIT,)
+        ).fetchall()
+        ordinary = []
+        diagnostic = []
+        stale = []
+        for row in legacy:
+            if self._payload_local_only(row["payload"]):
+                if diagnostic_active:
+                    diagnostic.append((row["id"],))
+                else:
+                    stale.append((row["id"],))
+            else:
+                ordinary.append((row["id"],))
+        if ordinary:
+            self.db.executemany(
+                "UPDATE events SET delivery_class = 'ordinary' WHERE id = ?", ordinary)
+        if diagnostic:
+            self.db.executemany(
+                "UPDATE events SET delivery_class = 'local_only_diagnostic' WHERE id = ?",
+                diagnostic)
+        if stale:
+            self.db.executemany("DELETE FROM events WHERE id = ?", stale)
+            suppressed += len(stale)
+        if suppressed:
+            self._increment_saturating("local_only_suppressed", suppressed)
+        return suppressed
 
     def load_ssh_sessions(self, now=None):
         cutoff = (now if now is not None else time.time()) - SSH_SESSION_TTL_SECONDS
@@ -253,8 +387,10 @@ class Store:
             "SELECT rowid FROM ssh_sessions ORDER BY observed_at DESC, rowid DESC "
             "LIMIT -1 OFFSET ?)", (SSH_SESSION_CAP,))
 
-    def _enqueue(self, event, now=None):
+    def _enqueue(self, event, now=None, delivery_class="ordinary"):
         now = now if now is not None else time.time()
+        if delivery_class not in ("ordinary", "local_only_diagnostic"):
+            raise StoreError("event delivery class is invalid")
         if self.db.execute("SELECT 1 FROM events WHERE id = ?", (event["id"],)).fetchone():
             self._increment("deduped_events")
             return False
@@ -274,10 +410,10 @@ class Store:
         )
         cursor = self.db.execute(
             "INSERT OR IGNORE INTO events("
-            "id, payload, severity, created, next_attempt, annotation_deadline) "
-            "VALUES(?, ?, ?, ?, ?, ?)",
+            "id, payload, severity, created, next_attempt, annotation_deadline, delivery_class) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
             (event["id"], canonical_json(event), event["severity"], now,
-             now + grace, now + grace if grace else 0),
+             now + grace, now + grace if grace else 0, delivery_class),
         )
         return cursor.rowcount == 1
 
@@ -320,7 +456,11 @@ class Store:
         self._enqueue(event, now=now)
         self.db.execute("DELETE FROM aggregates WHERE fingerprint = ?", (aggregate["fingerprint"],))
 
-    def _ingest_one(self, observation, now):
+    def _ingest_one(self, observation, now, diagnostic=None):
+        if is_local_only(observation, wire=False):
+            self._record_local_only(
+                observation, diagnostic or self.local_only_diagnostic, now)
+            return
         if not observation.get("aggregate"):
             self._enqueue(make_event(self.sensor_id, observation), now=now)
             return
@@ -363,10 +503,12 @@ class Store:
     def ingest(self, observations, cursor_key=None, cursor=None, ssh_sessions=None):
         """Durably queue observations and advance their collector cursor atomically."""
         now = time.time()
+        diagnostic = diagnostic_override(self.local_only_diagnostic_path, now=now)
+        self.local_only_diagnostic = diagnostic
         self.db.execute("BEGIN IMMEDIATE")
         try:
             for found in observations:
-                self._ingest_one(found, now)
+                self._ingest_one(found, now, diagnostic=diagnostic)
             if ssh_sessions is not None:
                 self._record_ssh_sessions(ssh_sessions, now)
             self._flush_due(now)
@@ -448,10 +590,31 @@ class Store:
         return changed
 
     def pending_batch(self, max_events, max_bytes):
-        rows = self.db.execute(
-            "SELECT id, payload FROM events WHERE next_attempt <= ? ORDER BY created LIMIT ?",
-            (time.time(), max_events),
-        ).fetchall()
+        now = time.time()
+        diagnostic_state = diagnostic_override(
+            self.local_only_diagnostic_path, now=now)
+        self.local_only_diagnostic = diagnostic_state
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self._reconcile_local_only(diagnostic_state["active"])
+            ordinary = self.db.execute(
+                "SELECT id, payload, created FROM events WHERE next_attempt <= ? "
+                "AND delivery_class = 'ordinary' ORDER BY created, id LIMIT ?",
+                (now, max_events),
+            ).fetchall()
+            diagnostic = []
+            remaining = max_events - len(ordinary)
+            if diagnostic_state["active"] and remaining > 0:
+                diagnostic = self.db.execute(
+                    "SELECT id, payload, created FROM events WHERE next_attempt <= ? "
+                    "AND delivery_class = 'local_only_diagnostic' "
+                    "ORDER BY created, id LIMIT ?", (now, remaining),
+                ).fetchall()
+            rows = [*ordinary, *diagnostic]
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
         events = []
         used = 1024
         for row in rows:
@@ -641,4 +804,10 @@ class Store:
             "delivery_duplicate": int(self.get_meta("delivery_duplicate", 0)),
             "delivery_rejected": int(self.get_meta("delivery_rejected", 0)),
             "delivery_retry": int(self.get_meta("delivery_retry", 0)),
+            "local_only_observed": int(self.get_meta("local_only_observed", 0)),
+            "local_only_diagnostic_delivered": int(self.get_meta(
+                "local_only_diagnostic_delivered", 0)),
+            "local_only_suppressed": int(self.get_meta("local_only_suppressed", 0)),
+            "local_only_last_seen": self.get_meta("local_only_last_seen"),
+            "local_only_diagnostic": dict(self.local_only_diagnostic),
         }
