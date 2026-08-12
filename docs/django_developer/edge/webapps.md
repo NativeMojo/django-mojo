@@ -110,6 +110,11 @@ Rows are neither editable nor deletable.
 5. CI:  GET /api/edge/release/deployment/<id> until live or terminal failure
 ```
 
+Manifest paths are relative and slash-delimited. Each segment accepts letters,
+digits, `.`, `_`, `-`, `!`, and `~`; the last two are required by Next.js
+static exports. Empty, absolute, `.`/`..`, control-character, space, and other
+shell/metacharacter paths are refused before an upload URL is minted.
+
 ### Why presigned PUTs rather than STS session credentials
 
 The original design called for minting short-lived STS credentials scoped to

@@ -47,6 +47,9 @@ POST /api/edge/release
 
 You declare the manifest **before** uploading. That is what lets the API mint
 one URL per file rather than handing you credentials for a whole prefix.
+Paths are relative and slash-delimited; each segment may use letters, digits,
+`.`, `_`, `-`, `!`, and `~`. This includes Next.js static-export route and
+Turbopack filenames without allowing absolute or traversing paths.
 
 Response:
 

@@ -142,6 +142,23 @@ def test_manifest_paths(opts):
             f"per path, so that is a write primitive")
 
 
+@th.django_unit_test("a manifest accepts Next.js static export filenames")
+def test_manifest_next_export_paths(opts):
+    from mojo.apps.edge import validators
+
+    good = "a" * 64
+    paths = [
+        "__next.!KGFwcCk.__PAGE__.txt",
+        "about/__next.!KGFwcCk.about.txt",
+        "_next/static/chunks/0au83~zq0~0pf.js",
+    ]
+    manifest = [dict(path=path, sha256=good, size=1) for path in paths]
+
+    assert validators.validate_manifest(manifest) == manifest, (
+        "Next.js 16 static-export filenames should remain intact so client "
+        "navigation can fetch its route payloads")
+
+
 @th.django_unit_test("a manifest entry needs a real sha256 and a real size")
 def test_manifest_entry_shape(opts):
     from mojo.apps.edge import validators
