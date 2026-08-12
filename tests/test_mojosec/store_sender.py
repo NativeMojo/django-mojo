@@ -759,3 +759,145 @@ def test_runtime_publishes_secret_free_status_with_collectors_disabled(opts):
                            "the public status snapshot must not expose credentials or secrets")
         finally:
             runtime.store.close()
+
+
+@th.django_unit_test()
+def test_incomplete_fast_snapshot_never_feeds_rpm_tier(opts):
+    from mojo.mojosec.collectors.fim import FimCollector
+    from mojo.mojosec.runtime import Runtime
+
+    identity = {"name": "al2023-web-test", "version": 1, "digest": "f" * 64}
+    fast_key = f"al2023-web-test:{'f' * 64}:fast"
+    slow_key = f"al2023-web-test:{'f' * 64}:slow"
+    rpm_key = f"al2023-web-test:{'f' * 64}:rpm"
+    kept = "/usr/local/lib/python3.11/site-packages/kept.py"
+    fast_baseline = {
+        kept: {"kind": "file", "sha256": "1" * 64},
+        "/etc/example.conf": {"kind": "file", "sha256": "2" * 64},
+    }
+    slow_baseline = {"/usr/bin/example": {"kind": "file", "sha256": "3" * 64}}
+    # The real rpm tier derives its snapshot from the /usr/local paths in the
+    # shared fast traversal, so a clean fallback pass (fast baseline unchanged)
+    # produces exactly the rpm baseline and zero diffs.
+    rpm_baseline = {kept: {"kind": "file", "sha256": "1" * 64}}
+    partial_fast = {"/etc/example.conf": {"kind": "file", "sha256": "2" * 64}}
+
+    class FakeTier:
+        def __init__(self, baseline_key, result):
+            self.config = {"interval_seconds": 0}
+            self.baseline_key = baseline_key
+            self.result = result
+
+        def scan(self, previous):
+            return dict(self.result, snapshot=dict(self.result["snapshot"]))
+
+        def diff(self, baseline, scan):
+            return []
+
+    class FakeRpm:
+        def __init__(self):
+            self.config = {"interval_seconds": 0}
+            self.baseline_key = rpm_key
+            self.seen_shared = []
+
+        def scan(self, previous, shared_snapshot=None):
+            self.seen_shared.append(shared_snapshot)
+            snapshot = {path: dict(entry) for path, entry in (shared_snapshot or {}).items()
+                        if path.startswith("/usr/local/")}
+            return {"profile": identity["digest"], "baseline_key": rpm_key,
+                    "tier": "rpm", "snapshot": snapshot, "complete": True,
+                    "descriptor_safe": True, "entries": len(snapshot)}
+
+        def diff(self, baseline, scan):
+            helper = FimCollector(
+                {"targets": [], "max_entries": 1, "max_file_bytes": 0, "max_depth": 1},
+                None, identity, "rpm")
+            return helper.diff(baseline, scan)
+
+    class IdleSender:
+        def send_once(self):
+            return {"sent": 0, "accepted": 0, "retry": 0}
+
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        config = {
+            "sensor_id": "sensor-test", "state_dir": os.path.join(root, "state"),
+            "status_path": os.path.join(root, "run", "status.json"),
+            "poll_seconds": 5, "aggregation": AGGREGATION, "delivery": DELIVERY,
+            "collectors": {
+                "journal": {"enabled": False}, "nginx": {"enabled": False},
+                "fim": {"enabled": False},
+            },
+        }
+        runtime = Runtime(config, sender=IdleSender())
+        try:
+            store = runtime.store
+            store.activate_fim_profile(identity, {
+                "fast": {"tier": "fast", "baseline_key": fast_key,
+                         "complete": True, "snapshot": fast_baseline},
+                "slow": {"tier": "slow", "baseline_key": slow_key,
+                         "complete": True, "snapshot": slow_baseline},
+                "rpm": {"tier": "rpm", "baseline_key": rpm_key,
+                        "complete": True, "snapshot": rpm_baseline},
+            })
+            runtime.profile = {"name": identity["name"]}
+            runtime.profile_identity = identity
+            fake_rpm = FakeRpm()
+            incomplete_fast = FakeTier(fast_key, {
+                "profile": identity["digest"], "baseline_key": fast_key,
+                "tier": "fast", "snapshot": partial_fast, "complete": False,
+                "descriptor_safe": True, "entries": len(partial_fast),
+            })
+            runtime.integrity_collectors = {
+                "fast": incomplete_fast,
+                "slow": FakeTier(slow_key, {
+                    "profile": identity["digest"], "baseline_key": slow_key,
+                    "tier": "slow", "snapshot": dict(slow_baseline), "complete": True,
+                    "descriptor_safe": True, "entries": len(slow_baseline),
+                }),
+                "rpm": fake_rpm,
+            }
+            runtime.last_integrity = {}
+            runtime.integrity_scans = {}
+            spooled_before = store.stats()["spooled_events"]
+
+            runtime._poll_integrity()
+
+            th.assert_eq(len(fake_rpm.seen_shared), 1,
+                         "the rpm tier must still run during an incomplete-fast pass")
+            th.assert_eq(fake_rpm.seen_shared[0], fast_baseline,
+                         "rpm must receive the last complete fast baseline, "
+                         "never a partial live snapshot")
+            th.assert_true(kept in store.load_fim_baseline(rpm_key),
+                         "a /usr/local path must never be dropped from the rpm baseline "
+                         "by a truncated fast scan (pre-fix it vanished as a deletion)")
+            th.assert_eq(store.stats()["spooled_events"], spooled_before,
+                         "no deleted/created events may be derived from a truncated "
+                         "fast snapshot")
+
+            complete_snapshot = dict(fast_baseline)
+            runtime.integrity_collectors["fast"] = FakeTier(fast_key, {
+                "profile": identity["digest"], "baseline_key": fast_key,
+                "tier": "fast", "snapshot": complete_snapshot, "complete": True,
+                "descriptor_safe": True, "entries": len(complete_snapshot),
+            })
+            runtime.last_integrity = {}
+            runtime._poll_integrity()
+            th.assert_eq(fake_rpm.seen_shared[-1], complete_snapshot,
+                         "a complete fast scan must restore the live-snapshot handoff to rpm")
+
+            runtime.integrity_collectors["fast"] = incomplete_fast
+            rpm_scans_before = len(fake_rpm.seen_shared)
+            previews = runtime.preview_integrity()
+            th.assert_eq(len(fake_rpm.seen_shared), rpm_scans_before,
+                         "preview must never hand the rpm collector an incomplete "
+                         "fast traversal")
+            th.assert_eq(previews["rpm"]["complete"], False,
+                         "the rpm preview row must be marked incomplete, never "
+                         "fabricated as complete")
+            th.assert_true("incomplete" in previews["rpm"].get("reason", ""),
+                           "the rpm preview row must say why it could not run")
+            th.assert_eq(previews["fast"]["complete"], False,
+                         "the fast preview row must keep naming the actually faulty tier")
+        finally:
+            runtime.store.close()

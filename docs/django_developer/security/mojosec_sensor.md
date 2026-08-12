@@ -392,7 +392,11 @@ descriptor and checked again afterward. Enumeration is streaming and bounded
 by `max_entries` and `max_depth`. A symlink race, permission loss, unsupported
 descriptor-relative platform, or bound overflow makes the scan incomplete:
 the previous baseline remains authoritative and a critical overflow event is
-queued. There is no pathname-based fallback.
+queued. There is no pathname-based fallback. An incomplete fast scan is also
+never handed to the rpm tier as its shared `/usr/local` traversal — the polling
+pass falls back to the last complete fast baseline, and a baseline preview marks
+the rpm tier incomplete (with a reason) rather than displaying package state
+derived from a truncated walk.
 
 ## Commands and health
 
