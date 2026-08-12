@@ -325,8 +325,10 @@ def validate_pool(pool):
 # S3 prefix — this string becomes part of an object key.
 VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
-# A path INSIDE a release bundle. Relative, forward slashes only.
-RELEASE_PATH_RE = re.compile(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\Z")
+# A path INSIDE a release bundle. Relative, forward slashes only. ``!`` and
+# ``~`` are ordinary POSIX/S3 filename characters emitted by Next.js static
+# exports for route segments and Turbopack chunks; neither can traverse.
+RELEASE_PATH_RE = re.compile(r"^[A-Za-z0-9._!~-]+(/[A-Za-z0-9._!~-]+)*\Z")
 
 SHA256_RE = re.compile(r"^[a-f0-9]{64}\Z")
 GITHUB_REPOSITORY_RE = re.compile(
