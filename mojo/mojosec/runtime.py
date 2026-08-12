@@ -108,11 +108,29 @@ class Runtime:
             started = time.monotonic()
             previous = self.store.load_fim_baseline(collector.baseline_key)
             if tier == "rpm":
+                if fast_snapshot is None:
+                    # The fast preview walk was incomplete, so there is no
+                    # trustworthy shared /usr/local traversal to verify against.
+                    # Report the rpm tier as honestly incomplete instead of
+                    # previewing package state derived from a truncated walk.
+                    config = collector.config
+                    scans[tier] = {
+                        "tier": "rpm", "baseline_key": collector.baseline_key,
+                        "snapshot": {}, "complete": False, "entries": 0,
+                        "duration": 0.0,
+                        "bounds": {
+                            key: config[key] for key in (
+                                "max_entries", "max_file_bytes", "max_depth")
+                            if key in config
+                        },
+                        "reason": "shared fast-tier traversal was incomplete",
+                    }
+                    continue
                 scan = collector.scan(previous, shared_snapshot=fast_snapshot)
             else:
                 scan = collector.scan(previous)
                 if tier == "fast":
-                    fast_snapshot = scan["snapshot"]
+                    fast_snapshot = scan["snapshot"] if scan["complete"] else None
             scan["duration"] = round(time.monotonic() - started, 6)
             config = collector.config
             scan["bounds"] = {
@@ -154,7 +172,10 @@ class Runtime:
                 else:
                     scan = collector.scan(baseline)
                     if tier == "fast":
-                        fast_snapshot = scan["snapshot"]
+                        # An incomplete traversal must never become the rpm
+                        # tier's shared /usr/local view; leaving None routes
+                        # rpm to the last complete fast baseline above.
+                        fast_snapshot = scan["snapshot"] if scan["complete"] else None
                 scan["duration"] = round(time.monotonic() - started, 6)
                 observations = collector.diff(baseline, scan)
                 self.store.record_fim_scan(
