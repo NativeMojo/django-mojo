@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from unittest import mock
 
 from testit import helpers as th
@@ -91,6 +92,16 @@ def test_local_only_diagnostic_sidecar_is_exact_bounded_and_not_protocol_config(
                 st_size=info.st_size, st_mtime=info.st_mtime,
             )
 
+        def other_fstat(descriptor):
+            info = root_fstat(descriptor)
+            info.st_uid = 501
+            return info
+
+        def other_group_fstat(descriptor):
+            info = root_fstat(descriptor)
+            info.st_gid = 501
+            return info
+
         active_until = now + datetime.timedelta(minutes=10)
         write({
             "schema": "mojosec.local_only_diagnostic", "version": 1,
@@ -103,17 +114,69 @@ def test_local_only_diagnostic_sidecar_is_exact_bounded_and_not_protocol_config(
         th.assert_eq(active["error"], "",
                      "a safe active sidecar must expose no status error")
 
+        write({
+            "schema": "mojosec.local_only_diagnostic", "version": 1,
+            "until": (now - datetime.timedelta(seconds=1)).isoformat(),
+        })
+        with mock.patch.object(disposition.os, "fstat", side_effect=root_fstat):
+            expired = disposition.diagnostic_override(path, now=now)
+        th.assert_eq(expired["active"], False,
+                     "an expired safe sidecar must leave local-only suppression active")
+        th.assert_eq(expired["error"], "",
+                     "expiry is normal inactive state, not a malformed-sidecar error")
+
         os.chmod(path, 0o640)
         with mock.patch.object(disposition.os, "fstat", side_effect=root_fstat):
             unsafe = disposition.diagnostic_override(path, now=now)
         th.assert_eq(unsafe["error"], "sidecar_unsafe",
                      "group-readable diagnostic policy must fail closed")
         os.chmod(path, 0o600)
+        with mock.patch.object(disposition.os, "fstat", side_effect=other_fstat):
+            wrong_owner = disposition.diagnostic_override(path, now=now)
+        th.assert_eq(wrong_owner["error"], "sidecar_unsafe",
+                     "a non-root-owned diagnostic sidecar must fail closed")
+        with mock.patch.object(disposition.os, "fstat", side_effect=other_group_fstat):
+            wrong_group = disposition.diagnostic_override(path, now=now)
+        th.assert_eq(wrong_group["error"], "sidecar_unsafe",
+                     "a non-root-group diagnostic sidecar must fail closed")
+        os.chmod(path, 0o4600)
+        with mock.patch.object(disposition.os, "fstat", side_effect=root_fstat):
+            special_mode = disposition.diagnostic_override(path, now=now)
+        th.assert_eq(special_mode["error"], "sidecar_unsafe",
+                     "special mode bits must not be accepted as exact 0600")
+        os.chmod(path, 0o600)
         link = os.path.join(root, "diagnostic-link.json")
         os.symlink(path, link)
         linked = disposition.diagnostic_override(link, now=now)
         th.assert_eq(linked["error"], "sidecar_unreadable",
                      "O_NOFOLLOW must reject a diagnostic sidecar symlink")
+        fifo = os.path.join(root, "diagnostic.fifo")
+        os.mkfifo(fifo, 0o600)
+        started = time.monotonic()
+        nonregular = disposition.diagnostic_override(fifo, now=now)
+        th.assert_true(time.monotonic() - started < 1,
+                       "O_NONBLOCK must reject a FIFO without waiting for a writer")
+        th.assert_eq(nonregular["error"], "sidecar_unsafe",
+                     "a nonregular diagnostic descriptor must fail closed")
+
+        with open(path, "wb") as handle:
+            handle.write(b" " * 513)
+        os.chmod(path, 0o600)
+        with mock.patch.object(disposition.os, "fstat", side_effect=root_fstat):
+            oversized = disposition.diagnostic_override(path, now=now)
+        th.assert_eq(oversized["error"], "sidecar_too_large",
+                     "the sidecar byte ceiling must be enforced from descriptor metadata")
+
+        write({
+            "schema": "mojosec.local_only_diagnostic", "version": 1,
+            "until": active_until.isoformat(),
+        })
+        future_mtime = now.timestamp() + disposition.MAX_MTIME_FUTURE_SECONDS + 30
+        os.utime(path, (future_mtime, future_mtime))
+        with mock.patch.object(disposition.os, "fstat", side_effect=root_fstat):
+            future_metadata = disposition.diagnostic_override(path, now=now)
+        th.assert_eq(future_metadata["error"], "sidecar_unsafe",
+                     "a sidecar mtime beyond clock-skew tolerance must fail closed")
 
         write('{"schema":"mojosec.local_only_diagnostic","version":1,'
               '"version":1,"until":"2026-08-11T12:00:00Z"}')
@@ -146,6 +209,11 @@ def test_local_only_diagnostic_sidecar_is_exact_bounded_and_not_protocol_config(
             batch = json.load(handle)
         th.assert_true("local_only_diagnostic" not in batch,
                        "the emergency sidecar must not extend the wire protocol")
+        poisoned = copy.deepcopy(batch)
+        poisoned["local_only_diagnostic"] = {"until": active_until.isoformat()}
+        from mojo.mojosec.protocol import ProtocolError, validate_batch
+        with th.assert_raises(ProtocolError):
+            validate_batch(poisoned)
 
 
 @th.django_unit_test()

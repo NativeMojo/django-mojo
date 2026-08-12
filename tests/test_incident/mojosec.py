@@ -22,7 +22,7 @@ def _golden_batch():
     return batch
 
 
-def _local_only_event(event_id="9" * 64):
+def _local_only_event(event_id="a9" * 32):
     event = copy.deepcopy(_golden_batch()["events"][0])
     event.update({
         "id": event_id, "kind": "auth.session_open", "severity": "info",
@@ -281,13 +281,15 @@ def test_exact_local_only_receipts_are_eventless_idempotent_and_race_safe(opts):
                  "the first exact local-only identity must durably accept")
     th.assert_eq(second["results"][0]["status"], "duplicate",
                  "a published local-only identity must replay as duplicate")
-    receipt = MojoSecReceipt.objects.get(api_key=key, wire_event_id="9" * 64)
+    receipt = MojoSecReceipt.objects.get(api_key=key, wire_event_id="a9" * 32)
     th.assert_true(receipt.event_id is None and receipt.incident_id is None,
                    "a new local-only receipt must never create or link public evidence")
     th.assert_eq(receipt.handler_state, MojoSecReceipt.HANDLER_NONE,
                  "local-only terminal receipts must never enter handler dispatch")
     th.assert_eq(receipt.replay_features["feature_schema"], "local_only_receipt_v1",
                  "local-only receipts need a distinct non-learning compatibility schema")
+    th.assert_eq(receipt.replay_features["event"], batch["events"][0],
+                 "eventless compatibility receipts must retain complete protected raw evidence")
     th.assert_eq(Event.objects.count(), event_count,
                  "local-only central acceptance must create no Event")
     th.assert_eq(Incident.objects.count(), incident_count,
@@ -296,12 +298,20 @@ def test_exact_local_only_receipts_are_eventless_idempotent_and_race_safe(opts):
     pending_event = Event.objects.create(
         category="mojosec.auth.session_open", scope="mojosec", level=2,
         title="pre-race local event")
-    pending_wire = _local_only_event("8" * 64)
+    pending_wire = _local_only_event("a8" * 32)
+    prior_replay = {
+        "feature_schema": "replay_features_v1", "schema": "mojosec.batch",
+        "version": 1, "sensor_id": "original-sensor",
+        "policy_revision": "original-policy", "event": pending_wire,
+        "effective": {"kind": "auth.session_open", "count": 1,
+                      "level": 2, "severity": "info"},
+        "protected_extra": {"audit": "must-survive"},
+    }
     pending = MojoSecReceipt.objects.create(
         api_key=key, event=pending_event, sensor_id=SENSOR_ID,
         wire_event_id=pending_wire["id"],
         payload_digest=mojosec._payload_digest(pending_wire),
-        replay_features={"feature_schema": "replay_features_v1", "event": pending_wire},
+        sensor_policy_revision="original-policy", replay_features=prior_replay,
         publish_state=MojoSecReceipt.PUBLISH_PENDING,
         handler_state=MojoSecReceipt.HANDLER_PENDING,
     )
@@ -316,13 +326,22 @@ def test_exact_local_only_receipts_are_eventless_idempotent_and_race_safe(opts):
                  "pending compatibility conversion must close publication under its row lock")
     th.assert_eq(pending.handler_state, MojoSecReceipt.HANDLER_NONE,
                  "pending compatibility conversion must close handler dispatch")
+    for field, value in prior_replay.items():
+        if field == "feature_schema":
+            continue
+        th.assert_eq(pending.replay_features[field], value,
+                     f"pending conversion must preserve protected replay field {field}")
+    th.assert_eq(pending.replay_features["disposition"], "local_only",
+                 "pending conversion may add only its non-learning disposition marker")
+    th.assert_eq(pending.sensor_policy_revision, "original-policy",
+                 "a retry batch must not overwrite original receipt policy provenance")
     th.assert_true(Event.objects.filter(pk=pending_event.pk).exists(),
                    "compatibility conversion must never delete historical Event evidence")
 
     historical_event = Event.objects.create(
         category="mojosec.auth.session_open", scope="mojosec", level=2,
         title="published historical local event")
-    historical_wire = _local_only_event("7" * 64)
+    historical_wire = _local_only_event("a7" * 32)
     historical = MojoSecReceipt.objects.create(
         api_key=key, event=historical_event, sensor_id=SENSOR_ID,
         wire_event_id=historical_wire["id"],
@@ -348,12 +367,126 @@ def test_exact_local_only_receipts_are_eventless_idempotent_and_race_safe(opts):
     th.assert_eq(conflict["results"][0]["status"], "rejected",
                  "a local-only identity reused for different evidence must reject")
 
-    batch["events"] = [_local_only_event("6" * 64)]
+    batch["events"] = [_local_only_event("a6" * 32)]
     with mock.patch.object(mojosec, "_accept_local_only",
                            side_effect=RuntimeError("database unavailable")):
         retry = mojosec.ingest_batch(key, batch)
     th.assert_eq(retry["results"][0]["status"], "retry",
                  "local-only persistence failure must retain sender retry semantics")
+
+
+@th.django_unit_test()
+def test_protocol_valid_local_only_near_match_keeps_ordinary_central_projection(opts):
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models import Event, MojoSecReceipt
+    from mojo.apps.incident.services import mojosec
+
+    key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+    batch = _golden_batch()
+    near_match = _local_only_event("15" * 32)
+    near_match["attributes"]["source_ip"] = None
+    batch["events"] = [near_match]
+    result = mojosec.ingest_batch(key, batch)
+    th.assert_eq(result["results"][0]["status"], "accepted",
+                 "a protocol-valid explicit-null near match must follow ordinary publication")
+    receipt = MojoSecReceipt.objects.get(api_key=key, wire_event_id="15" * 32)
+    projected = Event.objects.get(pk=receipt.event_id)
+    th.assert_eq(receipt.replay_features["feature_schema"], "replay_features_v1",
+                 "ordinary near matches must retain the established learning schema")
+    th.assert_true("source_ip" in receipt.replay_features["event"]["attributes"] and
+                   receipt.replay_features["event"]["attributes"]["source_ip"] is None,
+                   "ordinary protected replay must preserve explicit-null raw evidence")
+    th.assert_eq(projected.metadata["mojosec"]["evidence"]["target_uid"], 80,
+                 "ordinary near matches must keep the unchanged rich Event projection")
+
+
+@th.django_unit_test()
+def test_local_only_create_and_publication_terminalization_races_are_safe(opts):
+    import threading
+
+    from django.db import close_old_connections
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.incident.models import Event, MojoSecReceipt
+    from mojo.apps.incident.services import mojosec
+
+    create_wire = _local_only_event("14" * 32)
+    create_batch = _golden_batch()
+    create_batch["events"] = [create_wire]
+    barrier = threading.Barrier(2)
+
+    def create_once():
+        close_old_connections()
+        try:
+            key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+            barrier.wait(timeout=5)
+            return mojosec.ingest_batch(key, copy.deepcopy(create_batch))["results"][0]["status"]
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = list(pool.map(lambda unused: create_once(), range(2)))
+    th.assert_eq(sorted(statuses), ["accepted", "duplicate"],
+                 f"concurrent local-only creates must admit one identity once: {statuses}")
+    created = MojoSecReceipt.objects.get(wire_event_id="14" * 32)
+    th.assert_true(created.event_id is None,
+                   "the concurrent winner must still create only an eventless receipt")
+
+    key = ApiKey.objects.get(name="mojosec_receiver_test_authorized")
+    race_event = Event.objects.create(
+        category="mojosec.auth.session_open", scope="mojosec", level=2,
+        title="publication race fixture")
+    race_wire = _local_only_event("13" * 32)
+    race_receipt = MojoSecReceipt.objects.create(
+        api_key=key, event=race_event, sensor_id=SENSOR_ID,
+        wire_event_id=race_wire["id"], payload_digest=mojosec._payload_digest(race_wire),
+        sensor_policy_revision="race-original", publish_state="pending",
+        handler_state="pending", replay_features={
+            "feature_schema": "replay_features_v1", "event": race_wire,
+            "policy_revision": "race-original", "protected_extra": "preserve",
+        })
+    race_batch = _golden_batch()
+    race_batch["events"] = [race_wire]
+    race_barrier = threading.Barrier(2)
+
+    def publish_old():
+        close_old_connections()
+        try:
+            receipt = MojoSecReceipt.objects.get(pk=race_receipt.pk)
+            race_barrier.wait(timeout=5)
+            locked, did_publish = mojosec._publish_receipt(receipt)
+            return "published" if locked is not None and did_publish else "terminal"
+        finally:
+            close_old_connections()
+
+    def terminalize_new():
+        close_old_connections()
+        try:
+            local_key = ApiKey.objects.get(pk=key.pk)
+            race_barrier.wait(timeout=5)
+            return mojosec.ingest_batch(
+                local_key, copy.deepcopy(race_batch))["results"][0]["status"]
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        old_future = pool.submit(publish_old)
+        new_future = pool.submit(terminalize_new)
+        old_result = old_future.result(timeout=15)
+        new_result = new_future.result(timeout=15)
+    race_receipt.refresh_from_db()
+    th.assert_eq(race_receipt.publish_state, MojoSecReceipt.PUBLISH_PUBLISHED,
+                 "either race winner must leave one terminal published receipt")
+    th.assert_eq(race_receipt.event_id, race_event.pk,
+                 "publication races must preserve the preexisting Event pointer")
+    th.assert_true(Event.objects.filter(pk=race_event.pk).exists(),
+                   "publication races must never delete the preexisting Event row")
+    th.assert_true(
+        (old_result == "published" and new_result == "duplicate") or
+        (old_result == "terminal" and new_result == "accepted"),
+        f"lock ordering must yield one safe publication outcome: {old_result}, {new_result}")
+    if new_result == "accepted":
+        th.assert_eq(race_receipt.replay_features["protected_extra"], "preserve",
+                     "terminalization race winner must preserve protected replay provenance")
 
 
 @th.django_unit_test()

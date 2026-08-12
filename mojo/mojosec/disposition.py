@@ -13,6 +13,7 @@ LOCAL_ONLY_DIAGNOSTIC_SCHEMA = "mojosec.local_only_diagnostic"
 LOCAL_ONLY_DIAGNOSTIC_VERSION = 1
 MAX_DIAGNOSTIC_BYTES = 512
 MAX_DIAGNOSTIC_SECONDS = 60 * 60
+MAX_MTIME_FUTURE_SECONDS = 5
 
 _OBSERVATION_FIELDS = {
     "kind", "severity", "summary", "attributes", "fingerprint",
@@ -82,7 +83,8 @@ def is_local_only(value, wire=None):
     if observed is None:
         return False
     if wire:
-        if (value.get("count") != 1 or
+        if (not isinstance(value.get("count"), int) or
+                isinstance(value.get("count"), bool) or value.get("count") != 1 or
                 _timestamp(value.get("first_seen")) != observed or
                 _timestamp(value.get("last_seen")) != observed):
             return False
@@ -95,30 +97,34 @@ def is_local_only(value, wire=None):
         return False
     target_uid = attributes.get("target_uid")
     target_user = attributes.get("target_user")
+    opener_uid = attributes.get("opener_uid")
+    producer_uid = attributes.get("producer_uid")
+    audit_loginuid = attributes.get("audit_loginuid")
     if (not _canonical_uid(target_uid) or not isinstance(target_user, str) or
             not _USER.fullmatch(target_user) or
             attributes.get("service") != "systemd-user" or
-            attributes.get("opener_uid") != 0 or
-            attributes.get("producer_uid") != 0 or
+            not _canonical_uid(opener_uid) or opener_uid != 0 or
+            not _canonical_uid(producer_uid) or producer_uid != 0 or
             not _canonical_uid(attributes.get("producer_pid")) or
             attributes.get("producer_pid") == 0 or
             attributes.get("producer_comm") != "(systemd)" or
             attributes.get("producer_exe") != "/usr/lib/systemd/systemd" or
             attributes.get("systemd_unit") != f"user@{target_uid}.service" or
-            attributes.get("audit_loginuid") != target_uid or
+            not _canonical_uid(audit_loginuid) or audit_loginuid != target_uid or
             not isinstance(attributes.get("boot_id"), str) or
             not _BOOT_ID.fullmatch(attributes["boot_id"]) or
             not _canonical_uid(attributes.get("audit_session"))):
         return False
-    tty = attributes.get("tty")
-    if tty is not None and (not isinstance(tty, str) or not _TTY.fullmatch(tty) or ".." in tty):
-        return False
+    if "tty" in attributes:
+        tty = attributes["tty"]
+        if not isinstance(tty, str) or not _TTY.fullmatch(tty) or ".." in tty:
+            return False
     provenance = attributes.get("attribution_provenance")
     source_ip = attributes.get("source_ip")
     if provenance == "none":
-        return source_ip is None
+        return "source_ip" not in attributes
     if provenance == "audit_session":
-        return _canonical_ip(source_ip)
+        return "source_ip" in attributes and _canonical_ip(source_ip)
     return False
 
 
@@ -141,7 +147,7 @@ def _strict_object(pairs):
 def diagnostic_override(path=LOCAL_ONLY_DIAGNOSTIC_PATH, now=None):
     """Read the bounded root-owned diagnostic sidecar from one descriptor."""
     result = {"active": False, "until": "", "error": ""}
-    flags = os.O_RDONLY
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
@@ -154,7 +160,7 @@ def diagnostic_override(path=LOCAL_ONLY_DIAGNOSTIC_PATH, now=None):
     try:
         try:
             info = os.fstat(descriptor)
-            if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o777 != 0o600 or
+            if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or
                     info.st_uid != 0 or info.st_gid != 0):
                 result["error"] = "sidecar_unsafe"
                 return result
@@ -207,12 +213,18 @@ def diagnostic_override(path=LOCAL_ONLY_DIAGNOSTIC_PATH, now=None):
         result["error"] = "sidecar_malformed"
         return result
     try:
+        mtime = datetime.datetime.fromtimestamp(info.st_mtime, datetime.timezone.utc)
         mtime_limit = datetime.datetime.fromtimestamp(
             info.st_mtime + MAX_DIAGNOSTIC_SECONDS, datetime.timezone.utc)
     except (OSError, OverflowError, ValueError):
         result["error"] = "sidecar_unsafe"
         return result
-    if until > mtime_limit:
+    current = current.astimezone(datetime.timezone.utc)
+    if mtime > current + datetime.timedelta(seconds=MAX_MTIME_FUTURE_SECONDS):
+        result["error"] = "sidecar_unsafe"
+        return result
+    if (until > mtime_limit or
+            until > current + datetime.timedelta(seconds=MAX_DIAGNOSTIC_SECONDS)):
         result["error"] = "sidecar_until_too_late"
         return result
     result["until"] = until.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")

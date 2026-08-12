@@ -1,5 +1,6 @@
 """Crash-safe MojoSec state, aggregation, FIM baseline, and delivery spool."""
 
+import datetime
 import json
 import os
 import sqlite3
@@ -15,7 +16,7 @@ from .disposition import (
 from .protocol import canonical_json, make_event
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SSH_SESSION_CAP = 4096
 SSH_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 ANNOTATION_GRACE_SECONDS = 120
@@ -53,12 +54,9 @@ class Store:
         self.delivery_config = delivery_config
         self.local_only_diagnostic_path = local_only_diagnostic_path
         self.local_only_diagnostic = {"active": False, "until": "", "error": ""}
-        self._local_only_diagnostic_ids = set()
         self.path = os.path.join(state_dir, "state.sqlite3")
         self.db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         self.db.row_factory = sqlite3.Row
-        self.db.create_function(
-            "mojosec_local_only", 1, self._sqlite_local_only, deterministic=True)
         try:
             self._create_schema()
         except Exception:
@@ -105,11 +103,14 @@ class Store:
         if not isinstance(version, int) or isinstance(version, bool):
             raise StoreError("state schema version is invalid")
         if version == SCHEMA_VERSION:
-            self._ensure_v2_schema()
+            self._ensure_v3_schema()
+            return
+        if version == 2:
+            self._migrate_v2_to_v3()
             return
         if version != 1:
             raise StoreError(f"unsupported state schema version: {version}")
-        self._migrate_v1_to_v2()
+        self._migrate_v1_to_v3()
 
     def _create_base_schema(self):
         statements = (
@@ -125,9 +126,11 @@ class Store:
                 attempts INTEGER NOT NULL DEFAULT 0,
                 next_attempt REAL NOT NULL DEFAULT 0,
                 annotation_deadline REAL NOT NULL DEFAULT 0,
-                last_error TEXT NOT NULL DEFAULT ''
+                last_error TEXT NOT NULL DEFAULT '',
+                delivery_class TEXT NOT NULL DEFAULT 'ordinary'
             )""",
             "CREATE INDEX events_delivery ON events(next_attempt, created)",
+            "CREATE INDEX events_delivery_class ON events(delivery_class, next_attempt, created)",
             """CREATE TABLE aggregates (
                 fingerprint TEXT PRIMARY KEY,
                 payload TEXT NOT NULL,
@@ -170,8 +173,14 @@ class Store:
             "ALTER TABLE ssh_sessions "
             "ADD COLUMN ambiguous INTEGER NOT NULL DEFAULT 0")
 
-    def _ensure_v2_schema(self):
-        """Repair the brief pre-ambiguity v2 shape transactionally."""
+    def _add_event_delivery_class(self):
+        self.db.execute(
+            "ALTER TABLE events ADD COLUMN delivery_class TEXT NOT NULL DEFAULT 'legacy'")
+        self.db.execute(
+            "CREATE INDEX events_delivery_class ON events(delivery_class, next_attempt, created)")
+
+    def _ensure_v3_schema(self):
+        """Repair compatibility columns and indexes transactionally."""
         self.db.execute("BEGIN IMMEDIATE")
         try:
             row = self.db.execute(
@@ -185,12 +194,22 @@ class Store:
             }
             if "ambiguous" not in columns:
                 self._add_ssh_session_ambiguous_column()
+            event_columns = {
+                row["name"] for row in self.db.execute(
+                    "PRAGMA table_info(events)").fetchall()
+            }
+            if "delivery_class" not in event_columns:
+                self._add_event_delivery_class()
+            else:
+                self.db.execute(
+                    "CREATE INDEX IF NOT EXISTS events_delivery_class "
+                    "ON events(delivery_class, next_attempt, created)")
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
             raise
 
-    def _migrate_v1_to_v2(self):
+    def _migrate_v1_to_v3(self):
         self.db.execute("BEGIN IMMEDIATE")
         try:
             row = self.db.execute(
@@ -198,8 +217,30 @@ class Store:
             if row is None or json.loads(row["value"]) != 1:
                 raise StoreError("state schema changed during migration")
             self._create_ssh_session_schema()
+            self._add_event_delivery_class()
             # Version is deliberately last: rollback/retry can never advertise
-            # v2 before every v2 object exists.
+            # v3 before every v3 object exists.
+            self.set_meta("schema_version", SCHEMA_VERSION)
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def _migrate_v2_to_v3(self):
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.db.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            if row is None or json.loads(row["value"]) != 2:
+                raise StoreError("state schema changed during migration")
+            self._create_ssh_session_schema()
+            columns = {
+                row["name"] for row in self.db.execute(
+                    "PRAGMA table_info(ssh_sessions)").fetchall()
+            }
+            if "ambiguous" not in columns:
+                self._add_ssh_session_ambiguous_column()
+            self._add_event_delivery_class()
             self.set_meta("schema_version", SCHEMA_VERSION)
             self.db.execute("COMMIT")
         except Exception:
@@ -235,37 +276,71 @@ class Store:
         self.set_meta(key, min(SATURATING_COUNTER_MAX, current + max(0, amount)))
 
     @staticmethod
-    def _sqlite_local_only(payload):
+    def _payload_local_only(payload):
         try:
             return int(is_local_only(json.loads(payload), wire=True))
         except (TypeError, ValueError, json.JSONDecodeError):
             return 0
 
-    def _record_local_only(self, found, diagnostic):
+    def _record_local_only(self, found, diagnostic, now):
         self._increment_saturating("local_only_observed")
         seen = observed_timestamp(found)
         current = self.get_meta("local_only_last_seen")
-        if seen is not None and (not isinstance(current, str) or seen > current):
-            self.set_meta("local_only_last_seen", seen)
+        if seen is not None:
+            try:
+                current_time = datetime.datetime.fromisoformat(
+                    current.replace("Z", "+00:00"))
+            except (AttributeError, ValueError):
+                current_time = None
+            seen_time = datetime.datetime.fromisoformat(seen.replace("Z", "+00:00"))
+            if current_time is None or seen_time > current_time:
+                self.set_meta("local_only_last_seen", seen)
         if diagnostic["active"]:
             event = make_event(self.sensor_id, found)
-            if self._enqueue(event):
-                self._local_only_diagnostic_ids.add(event["id"])
+            if self._enqueue(event, now=now, delivery_class="local_only_diagnostic"):
                 self._increment_saturating("local_only_diagnostic_delivered")
         else:
             self._increment_saturating("local_only_suppressed")
 
-    def _reconcile_local_only(self):
-        rows = self.db.execute(
-            "SELECT id, payload FROM events WHERE mojosec_local_only(payload) = 1 "
+    def _reconcile_local_only(self, diagnostic_active):
+        suppressed = 0
+        if not diagnostic_active:
+            rows = self.db.execute(
+                "SELECT id FROM events WHERE delivery_class = 'local_only_diagnostic' "
+                "ORDER BY created, id LIMIT ?", (LOCAL_ONLY_RECONCILE_LIMIT,)
+            ).fetchall()
+            if rows:
+                self.db.executemany(
+                    "DELETE FROM events WHERE id = ?", ((row["id"],) for row in rows))
+                suppressed += len(rows)
+        legacy = self.db.execute(
+            "SELECT id, payload FROM events WHERE delivery_class = 'legacy' "
             "ORDER BY created, id LIMIT ?", (LOCAL_ONLY_RECONCILE_LIMIT,)
         ).fetchall()
-        rows = [row for row in rows if row["id"] not in self._local_only_diagnostic_ids]
-        if not rows:
-            return 0
-        self.db.executemany("DELETE FROM events WHERE id = ?", ((row["id"],) for row in rows))
-        self._increment_saturating("local_only_suppressed", len(rows))
-        return len(rows)
+        ordinary = []
+        diagnostic = []
+        stale = []
+        for row in legacy:
+            if self._payload_local_only(row["payload"]):
+                if diagnostic_active:
+                    diagnostic.append((row["id"],))
+                else:
+                    stale.append((row["id"],))
+            else:
+                ordinary.append((row["id"],))
+        if ordinary:
+            self.db.executemany(
+                "UPDATE events SET delivery_class = 'ordinary' WHERE id = ?", ordinary)
+        if diagnostic:
+            self.db.executemany(
+                "UPDATE events SET delivery_class = 'local_only_diagnostic' WHERE id = ?",
+                diagnostic)
+        if stale:
+            self.db.executemany("DELETE FROM events WHERE id = ?", stale)
+            suppressed += len(stale)
+        if suppressed:
+            self._increment_saturating("local_only_suppressed", suppressed)
+        return suppressed
 
     def load_ssh_sessions(self, now=None):
         cutoff = (now if now is not None else time.time()) - SSH_SESSION_TTL_SECONDS
@@ -304,8 +379,10 @@ class Store:
             "SELECT rowid FROM ssh_sessions ORDER BY observed_at DESC, rowid DESC "
             "LIMIT -1 OFFSET ?)", (SSH_SESSION_CAP,))
 
-    def _enqueue(self, event, now=None):
+    def _enqueue(self, event, now=None, delivery_class="ordinary"):
         now = now if now is not None else time.time()
+        if delivery_class not in ("ordinary", "local_only_diagnostic"):
+            raise StoreError("event delivery class is invalid")
         if self.db.execute("SELECT 1 FROM events WHERE id = ?", (event["id"],)).fetchone():
             return False
         current = self.db.execute("SELECT COUNT(*) AS count FROM events").fetchone()["count"]
@@ -324,10 +401,10 @@ class Store:
         )
         cursor = self.db.execute(
             "INSERT OR IGNORE INTO events("
-            "id, payload, severity, created, next_attempt, annotation_deadline) "
-            "VALUES(?, ?, ?, ?, ?, ?)",
+            "id, payload, severity, created, next_attempt, annotation_deadline, delivery_class) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
             (event["id"], canonical_json(event), event["severity"], now,
-             now + grace, now + grace if grace else 0),
+             now + grace, now + grace if grace else 0, delivery_class),
         )
         return cursor.rowcount == 1
 
@@ -372,7 +449,8 @@ class Store:
 
     def _ingest_one(self, observation, now, diagnostic=None):
         if is_local_only(observation, wire=False):
-            self._record_local_only(observation, diagnostic or self.local_only_diagnostic)
+            self._record_local_only(
+                observation, diagnostic or self.local_only_diagnostic, now)
             return
         if not observation.get("aggregate"):
             self._enqueue(make_event(self.sensor_id, observation), now=now)
@@ -416,10 +494,10 @@ class Store:
     def ingest(self, observations, cursor_key=None, cursor=None, ssh_sessions=None):
         """Durably queue observations and advance their collector cursor atomically."""
         now = time.time()
+        diagnostic = diagnostic_override(self.local_only_diagnostic_path, now=now)
+        self.local_only_diagnostic = diagnostic
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            diagnostic = diagnostic_override(self.local_only_diagnostic_path, now=now)
-            self.local_only_diagnostic = diagnostic
             for found in observations:
                 self._ingest_one(found, now, diagnostic=diagnostic)
             if ssh_sessions is not None:
@@ -503,25 +581,27 @@ class Store:
         return changed
 
     def pending_batch(self, max_events, max_bytes):
+        now = time.time()
+        diagnostic_state = diagnostic_override(
+            self.local_only_diagnostic_path, now=now)
+        self.local_only_diagnostic = diagnostic_state
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            self._reconcile_local_only()
-            due = self.db.execute(
+            self._reconcile_local_only(diagnostic_state["active"])
+            ordinary = self.db.execute(
                 "SELECT id, payload, created FROM events WHERE next_attempt <= ? "
-                "AND mojosec_local_only(payload) = 0 ORDER BY created LIMIT ?",
-                (time.time(), max_events),
+                "AND delivery_class = 'ordinary' ORDER BY created, id LIMIT ?",
+                (now, max_events),
             ).fetchall()
             diagnostic = []
-            if self._local_only_diagnostic_ids:
-                placeholders = ",".join("?" for unused in self._local_only_diagnostic_ids)
+            remaining = max_events - len(ordinary)
+            if diagnostic_state["active"] and remaining > 0:
                 diagnostic = self.db.execute(
-                    f"SELECT id, payload, created FROM events "
-                    f"WHERE next_attempt <= ? AND id IN ({placeholders})",
-                    (time.time(), *sorted(self._local_only_diagnostic_ids)),
+                    "SELECT id, payload, created FROM events WHERE next_attempt <= ? "
+                    "AND delivery_class = 'local_only_diagnostic' "
+                    "ORDER BY created, id LIMIT ?", (now, remaining),
                 ).fetchall()
-            rows = sorted(
-                [*due, *diagnostic], key=lambda row: (row["created"], row["id"])
-            )[:max_events]
+            rows = [*ordinary, *diagnostic]
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
@@ -554,7 +634,6 @@ class Store:
                 status_value = result["status"]
                 if status_value in ("accepted", "duplicate", "rejected"):
                     self.db.execute("DELETE FROM events WHERE id = ?", (event_id,))
-                    self._local_only_diagnostic_ids.discard(event_id)
                     self._increment(f"delivery_{status_value}")
                     continue
                 row = self.db.execute("SELECT attempts FROM events WHERE id = ?", (event_id,)).fetchone()

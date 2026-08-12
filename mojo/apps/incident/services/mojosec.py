@@ -318,6 +318,7 @@ def _local_only_replay(batch, sensor_event):
         "event_id": sensor_event["id"],
         "kind": sensor_event["kind"],
         "disposition": "local_only",
+        "event": sensor_event,
     }
 
 
@@ -351,6 +352,11 @@ def _accept_local_only(api_key, batch, sensor_event, digest):
             return receipt, False
         if receipt.publish_state == MojoSecReceipt.PUBLISH_PUBLISHED:
             return receipt, False
+        if not isinstance(receipt.replay_features, dict):
+            raise ValueError("pending receipt replay evidence is not an object")
+        replay = dict(receipt.replay_features)
+        replay["feature_schema"] = LOCAL_ONLY_REPLAY_SCHEMA
+        replay["disposition"] = "local_only"
         receipt.publish_state = MojoSecReceipt.PUBLISH_PUBLISHED
         receipt.published_at = dates.utcnow()
         receipt.handler_state = MojoSecReceipt.HANDLER_NONE

@@ -259,6 +259,26 @@ def test_mojosec_local_only_status_shape_is_fail_closed(opts):
         th.assert_true(not cn._valid_local_only_status(changed),
                        f"malformed local-only status field {field} must fail node checks")
 
+    malformed = json.dumps({
+        "schema": "mojosec.status", "version": 1, "state": "running",
+        "sensor_id": "i-test", "updated_at": "2026-08-11T12:00:00Z",
+        "spooled_events": 0, "delivery_accepted": 0,
+        "collectors": {"journal": {"ok": True}, "nginx": {"ok": True}},
+        "delivery": {}, "config": {},
+        **dict(valid, local_only_observed=True),
+    })
+    run = FakeRunner([
+        ("/run/mojosec/status.json", (0, "root root 640", "")),
+        ("python3 -c", (0, malformed, "")),
+    ])
+    report = cn.Report()
+    cn.check_mojosec(report, run, "observe", "")
+    finding = _find(report, "mojosec", "public status malformed")
+    th.assert_true(
+        finding is not None and finding["status"] == cn.FAIL,
+        f"check_mojosec must fail a malformed local-only status projection: "
+        f"{report.findings}")
+
 
 @th.django_unit_test()
 def test_mojosec_auto_mode_keeps_legacy_nodes_informational(opts):

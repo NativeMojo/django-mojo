@@ -89,7 +89,7 @@ Statuses are per event:
 | Status | Sensor behavior |
 |---|---|
 | `accepted` | Remove from the local spool. |
-| `duplicate` | Remove; the same event was already published. |
+| `duplicate` | Remove; the same identity and digest already reached a terminal receipt (which need not have an Event). |
 | `rejected` | Remove; the evidence is permanently invalid or conflicts with the ID. |
 | `retry` | Keep and retry with bounded backoff. |
 
@@ -161,23 +161,40 @@ audit-session attribution. A sudo event records one sudo invocation; it does
 not claim to capture commands later typed inside `sudo -s`.
 
 The one complete root-produced `systemd-user` PAM lifecycle is retained as
-local sensor health rather than fleet incident evidence. Exact matches normally
-create no batch item, central Event, Incident, notification, RuleSet handler, or
-public evidence. Near matches remain ordinary events: the exception does not
-cover missing/extra fields, aggregates, count greater than one, noncanonical
-identity, `who` attribution, or conflicting source/session data. Sensor status
-adds informational observed/suppressed/diagnostic-delivered counters, last
-observation time, and fixed diagnostic-override state. The root-only emergency
-sidecar is host operations state—not an API, framework setting, desired policy
-field, or protocol field.
+local sensor health rather than fleet incident evidence. The exact classifier
+requires coherent kind/severity/summary/recommendation, nonaggregate/count one,
+canonical target user/UID, root opener and producer, target UID equal to audit
+login UID, positive PID, exact systemd comm/executable/unit, canonical
+boot/audit session, and coherent none-or-audit-session attribution. Optional
+source IP and TTY fields must be canonical strings when present; explicit null
+does not match. Exact matches normally create no batch item, central Event,
+Incident, notification, RuleSet handler, or public evidence. Protocol-valid
+near matches remain ordinary events with the established protected replay and
+rich safe Event projection; protocol-invalid wire events still reject.
+
+Sensor status adds signed-64 saturating informational `local_only_observed`,
+`local_only_suppressed`, and `local_only_diagnostic_delivered` counters, nullable
+maximum observed time, and fixed `{active,until,error}` diagnostic state.
+Observed and diagnostic-delivered count original ingestion only; suppressed
+counts default suppression or bounded stale-queue reconciliation once. Ordinary
+rows are selected before diagnostic rows, and bounded persistent reconciliation
+cannot starve ordinary/high-signal delivery. The root-only emergency sidecar is
+host operations state—not an API, framework setting, desired policy field, or
+protocol field—and queued diagnostics are suppressed in bounded passes once it
+is inactive.
 
 A compatibility delivery of the exact class produces only a published,
 handler-none `MojoSecReceipt` with `feature_schema=local_only_receipt_v1` and no
-new Event. First receipt is `accepted`, identical replay is `duplicate`, and a
-same-ID/different-digest delivery is `rejected`. Existing published historical
-evidence is never rewritten or deleted. Local-only receipts are rejected as
-feedback and explicit replay/shadow exemplars and are filtered before learning
-candidate selection, stratification, and quotas.
+new Event; its protected replay retains the complete validated sensor event.
+First receipt is `accepted`, identical terminalized replay is `duplicate`, and
+a same-ID/different-digest delivery is `rejected`. Terminalizing an identical
+pending receipt preserves every existing protected replay/provenance field and
+its Event pointer/row. Existing published Event/Incident evidence is never
+rewritten or deleted, and ordinary retention is unchanged. Only the
+`local_only_receipt_v1` compatibility schema is rejected as feedback and
+explicit replay/shadow and filtered before learning candidate selection,
+stratification, and quotas; legacy published `replay_features_v1` remains
+eligible and untouched.
 
 For count-one web Events, occurrence fields are direct evidence. For an
 aggregate count greater than one, volatile fields exist only in

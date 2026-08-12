@@ -263,11 +263,16 @@ def test_local_only_classifier_requires_the_complete_coherent_tuple(opts):
     th.assert_true(is_local_only(attributed, wire=True),
                    "exact audit-session attribution with a canonical IP remains local-only")
 
+    aggregate = copy.deepcopy(found)
+    aggregate["aggregate"] = True
+    th.assert_true(not is_local_only(aggregate, wire=False),
+                   "an aggregate-capable observation must retain ordinary delivery")
+
     mutations = []
     for field, value in (
             ("kind", "auth.ssh_login"), ("severity", "warning"),
             ("summary", "PAM session opened"), ("recommendation", "review"),
-            ("count", 2)):
+            ("count", 2), ("count", True)):
         changed = copy.deepcopy(wire)
         changed[field] = value
         mutations.append((field, changed))
@@ -281,6 +286,12 @@ def test_local_only_classifier_requires_the_complete_coherent_tuple(opts):
         changed = copy.deepcopy(wire)
         changed["attributes"][field] = value
         mutations.append((field, changed))
+    for field in (
+            "target_uid", "opener_uid", "producer_uid", "producer_pid",
+            "audit_session", "audit_loginuid"):
+        changed = copy.deepcopy(wire)
+        changed["attributes"][field] = False
+        mutations.append((f"boolean {field}", changed))
     missing = copy.deepcopy(wire)
     del missing["attributes"]["producer_exe"]
     mutations.append(("missing producer_exe", missing))
@@ -292,6 +303,10 @@ def test_local_only_classifier_requires_the_complete_coherent_tuple(opts):
         "attribution_provenance": "none", "source_ip": "192.0.2.1",
     })
     mutations.append(("contradictory source", contradictory))
+    for field in ("source_ip", "tty"):
+        explicit_null = copy.deepcopy(wire)
+        explicit_null["attributes"][field] = None
+        mutations.append((f"null {field}", explicit_null))
     for label, changed in mutations:
         th.assert_true(not is_local_only(changed, wire=True),
                        f"near-match {label} must retain ordinary fleet delivery")
