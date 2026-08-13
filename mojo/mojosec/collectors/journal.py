@@ -9,6 +9,7 @@ import time
 
 from ..detectors import detect_journal
 from ..attribution import AttributionResolver
+from ..lineage import CompoundAssembler, firewall_receipt, walk_parents
 
 
 MAX_STDERR_BYTES = 4096
@@ -34,7 +35,8 @@ class JournalCollector:
     def __init__(self, config):
         self.config = config
 
-    def poll(self, cursor=None, ssh_sessions=None, who_sessions=None):
+    def poll(self, cursor=None, ssh_sessions=None, who_sessions=None,
+             audit_fragments=None):
         command = ["/usr/bin/journalctl", "--output=json", "--no-pager"]
         if cursor:
             command.append(f"--after-cursor={cursor}")
@@ -153,6 +155,16 @@ class JournalCollector:
             raise RuntimeError(error or f"journalctl exited {returncode}")
         resolver = AttributionResolver(ssh_sessions, who_sessions=who_sessions)
         sessions = resolver.overlay(parsed_records)
+        lineage = CompoundAssembler(audit_fragments).ingest(parsed_records)
+        process_nodes = []
+        for node in lineage["complete"]:
+            if node.get("pid"):
+                parents = walk_parents(node["pid"])
+                node["live_ancestors"] = parents["nodes"]
+                node["ambiguous"] = bool(node.get("ambiguous") or parents["ambiguous"])
+            process_nodes.append(node)
+        receipts = [found for found in
+                    (firewall_receipt(record) for record in parsed_records) if found]
         for record in parsed_records:
             try:
                 detected = detect_journal(record, resolver)
@@ -164,4 +176,6 @@ class JournalCollector:
         return {
             "observations": observations, "cursor": next_cursor,
             "malformed": malformed, "ssh_sessions": sessions,
+            "audit_fragments": lineage["fragments"],
+            "process_nodes": process_nodes, "firewall_receipts": receipts,
         }

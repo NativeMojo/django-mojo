@@ -62,13 +62,30 @@ class Runtime:
         try:
             cursor = self.store.get_meta(f"cursor:{collector.name}")
             if collector.name == "journal":
+                from mojo.deploy.audit import read_health, validate_health
+                previous_health = self.store.get_meta("audit_health")
+                health_value = read_health()
+                health_result = (validate_health(
+                    health_value, previous=previous_health)
+                    if health_value is not None else
+                    {"healthy": False, "reason": "sidecar_unavailable"})
+                if health_value is not None:
+                    health_value = dict(
+                        health_value, healthy=health_result["healthy"],
+                        reason=health_result["reason"])
                 result = collector.poll(
-                    cursor, ssh_sessions=self.store.load_ssh_sessions())
+                    cursor, ssh_sessions=self.store.load_ssh_sessions(),
+                    audit_fragments=self.store.load_audit_fragments())
             else:
+                health_value = None
                 result = collector.poll(cursor)
             self.store.ingest(
                 result["observations"], cursor_key=collector.name, cursor=result["cursor"],
                 ssh_sessions=result.get("ssh_sessions"),
+                audit_fragments=result.get("audit_fragments"),
+                process_nodes=result.get("process_nodes"),
+                audit_health=health_value,
+                firewall_receipts=result.get("firewall_receipts"),
             )
             self._collector_ok(collector.name, result.get("malformed", 0))
         except Exception as err:

@@ -23,6 +23,13 @@ FIELD_POLICIES = {
         ("source_ip", 64), ("actor", 128), ("target_user", 128),
         ("tty", 96), ("boot_id", 64), ("audit_session", 32),
         ("attribution_provenance", 32), ("cwd", 512),
+        ("producer_uid", None), ("producer_pid", None),
+        ("producer_comm", 96), ("producer_exe", 256),
+        ("audit_loginuid", None), ("systemd_unit", 256),
+        ("cgroup", 512), ("selinux", 256), ("monotonic", None),
+        ("origin_kind", 32), ("operation_id", 64),
+        ("execution_id", 64), ("job_id", 64), ("job_function", 256),
+        ("lineage", None), ("local_disposition", 64),
         ("command_path", 512), ("command_sha256", 64), ("command", 2048),
     ),
     "auth.sudo_failure": (
@@ -142,6 +149,26 @@ def build_evidence(kind, values):
         if key not in values or values[key] is None or values[key] == "":
             continue
         value = values[key]
+        if key == "lineage" and isinstance(value, list):
+            clean = []
+            for node in value[:8]:
+                if not isinstance(node, dict):
+                    continue
+                projected = {}
+                for field in ("pid", "ppid", "start_ticks"):
+                    child = node.get(field)
+                    if isinstance(child, int) and not isinstance(child, bool) and child >= 0:
+                        projected[field] = child
+                for field, limit in (("exe", 512), ("unit", 256), ("cgroup", 512),
+                                     ("selinux", 256)):
+                    child = node.get(field)
+                    if isinstance(child, str) and child:
+                        projected[field] = _prefix(safe_text(child), limit)
+                clean.append(projected)
+            trial = dict(result, lineage=clean)
+            if _fits(trial):
+                result = trial
+            continue
         if byte_limit is not None:
             _add_text(result, key, value, byte_limit)
             continue

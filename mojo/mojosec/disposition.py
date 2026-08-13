@@ -34,6 +34,8 @@ _USER = re.compile(r"^[A-Za-z0-9_.@-]{1,128}$")
 _BOOT_ID = re.compile(r"^[a-f0-9]{32}$")
 _TTY = re.compile(r"^[A-Za-z0-9_.\-/]{1,96}$")
 _DIGEST = re.compile(r"^[a-f0-9]{64}$")
+SYSTEMD_USER_PAM_CLASSIFIER = "systemd_user_pam_v1"
+JOBMAN_FIREWALL_CLASSIFIER = "jobman_firewall_operation_v1"
 
 
 def _timestamp(value):
@@ -62,23 +64,47 @@ def _canonical_ip(value):
         return False
 
 
-def is_local_only(value, wire=None):
-    """Return True only for the complete canonical lifecycle tuple."""
+def classify_local_only(value, wire=None):
+    """Return a fixed classifier only for a complete canonical proof."""
     if not isinstance(value, dict):
-        return False
+        return ""
     if wire is None:
         wire = "count" in value
     expected = _EVENT_FIELDS if wire else _OBSERVATION_FIELDS
     if set(value) != expected:
-        return False
+        return ""
+    if value.get("kind") == "auth.sudo_command":
+        attributes = value.get("attributes")
+        identity = value.get("id") if wire else value.get("fingerprint")
+        observed = _timestamp(value.get("observed_at"))
+        envelope = (
+            isinstance(identity, str) and _DIGEST.fullmatch(identity) and
+            observed is not None and
+            (wire or value.get("aggregate") is False) and
+            (not wire or (
+                value.get("count") == 1 and
+                _timestamp(value.get("first_seen")) == observed and
+                _timestamp(value.get("last_seen")) == observed)))
+        if (envelope and value.get("severity") == "high" and
+                value.get("recommendation") == "review" and
+                isinstance(attributes, dict) and
+                attributes.get("local_disposition") == JOBMAN_FIREWALL_CLASSIFIER and
+                attributes.get("attribution_provenance") == "none" and
+                not attributes.get("source_ip") and not attributes.get("tty") and
+                attributes.get("command") ==
+                "/usr/local/sbin/mojo-firewall-broker" and
+                isinstance(attributes.get("operation_id"), str) and
+                re.fullmatch(r"[a-f0-9]{32}", attributes["operation_id"])):
+            return JOBMAN_FIREWALL_CLASSIFIER
+        return ""
     if (value.get("kind") != "auth.session_open" or
             value.get("severity") != "info" or
             value.get("summary") != "PAM service session opened" or
             value.get("recommendation") != "none"):
-        return False
+        return ""
     identity = value.get("id") if wire else value.get("fingerprint")
     if not isinstance(identity, str) or not _DIGEST.fullmatch(identity):
-        return False
+        return ""
     observed = _timestamp(value.get("observed_at"))
     if observed is None:
         return False
@@ -87,9 +113,9 @@ def is_local_only(value, wire=None):
                 isinstance(value.get("count"), bool) or value.get("count") != 1 or
                 _timestamp(value.get("first_seen")) != observed or
                 _timestamp(value.get("last_seen")) != observed):
-            return False
+            return ""
     elif value.get("aggregate") is not False:
-        return False
+        return ""
     attributes = value.get("attributes")
     if (not isinstance(attributes, dict) or
             not _ATTRIBUTE_FIELDS.issubset(attributes) or
@@ -118,14 +144,19 @@ def is_local_only(value, wire=None):
     if "tty" in attributes:
         tty = attributes["tty"]
         if not isinstance(tty, str) or not _TTY.fullmatch(tty) or ".." in tty:
-            return False
+            return ""
     provenance = attributes.get("attribution_provenance")
     source_ip = attributes.get("source_ip")
     if provenance == "none":
-        return "source_ip" not in attributes
+        return SYSTEMD_USER_PAM_CLASSIFIER if "source_ip" not in attributes else ""
     if provenance == "audit_session":
-        return "source_ip" in attributes and _canonical_ip(source_ip)
-    return False
+        return (SYSTEMD_USER_PAM_CLASSIFIER
+                if "source_ip" in attributes and _canonical_ip(source_ip) else "")
+    return ""
+
+
+def is_local_only(value, wire=None):
+    return bool(classify_local_only(value, wire=wire))
 
 
 def observed_timestamp(value):
