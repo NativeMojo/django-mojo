@@ -187,7 +187,7 @@ def on_admin_bootstrap(request):
         },
         "groups": groups,
         "webapp_groups": [
-            {"id": group.pk, "name": group.name}
+            {"id": group.pk, "name": group.name, "can_manage_dns": True}
             for group in webapp_groups
         ],
         "can_create_webapp_group": can_create_webapp_group,

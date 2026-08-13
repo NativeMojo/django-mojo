@@ -220,7 +220,11 @@ and the WebApp's derived storage prefix committed together. Invalid input,
 authorization failure, or storage failure creates none of them. Replaying the
 same UUID/profile/actor/origin/intent returns the one receipt; changing any
 binding is refused. Persist that UUID and nonsecret draft until
-success/replay/cancel, so a lost response never creates a second Group.
+success/replay/cancel, so a lost response never creates a second Group. Freeze
+the exact submitted payload: after transport ambiguity, query `detail` for the
+UUID first. If it exists, discard the draft and mount that authoritative
+operation. If it does not, replay only the unchanged payload; edits require
+explicit abandonment and a new UUID.
 Cancelling after the initial commit preserves the deliberate Group+WebApp pair
 for recovery rather than deleting user-owned resources.
 

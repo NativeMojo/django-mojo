@@ -26,7 +26,7 @@ def bootstrap(groups, membership_groups=None, can_create_webapp_group=True):
     return {
         "version": "1.9.0", "admin_path": "/",
         "groups": groups if membership_groups is None else membership_groups,
-        "webapp_groups": groups,
+        "webapp_groups": [dict(group, can_manage_dns=True) for group in groups],
         "can_create_webapp_group": can_create_webapp_group,
         "user": {"id": 1, "display_name": "Ian Smith",
                  "email": "ian@example.com", "is_superuser": True},

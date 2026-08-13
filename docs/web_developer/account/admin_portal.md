@@ -58,13 +58,17 @@ renewal are automatic and do not appear as onboarding decisions.
 `GET /api/account/admin/bootstrap` includes additive `webapp_groups` and
 `can_create_webapp_group` fields. `webapp_groups` contains every effectively
 active group covered by global authority, or only exact/inherited member
-authority for a scoped operator. Existing-group authority is superuser,
+authority for a scoped operator; each row carries `can_manage_dns`, which the
+address step uses instead of the flat global network capability. Existing-group authority is superuser,
 `security`, or both `manage_webapp` and `manage_dns`. Create New Group also
 requires global `manage_groups`/`groups` for a non-superuser. Literal `admin`,
 Admin admission, API keys, group tokens, and returned capability booleans do
-not grant backend access. The browser retains one nonsecret UUID/profile draft
-in origin-scoped session storage across modal close, navigation, and reload,
-and retries that UUID after an ambiguous create response.
+not grant backend access. The browser retains one nonsecret UUID draft in
+origin-scoped session storage across modal close, navigation, and reload. First
+submission freezes the exact payload. Reopen first queries detail for that UUID
+and mounts the authoritative operation when it exists; otherwise the UI permits
+only exact replay with every identity field disabled. **Start over** is the
+explicit abandonment boundary before any edits or a new UUID.
 
 Certificates poll list/detail metadata only. Upstreams are declared or retired,
 never repointed. The Vhost wizard exposes only the four structured edge shapes;

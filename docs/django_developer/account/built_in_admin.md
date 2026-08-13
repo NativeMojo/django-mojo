@@ -74,8 +74,11 @@ secrets.
 
 WebApps uses two additive bootstrap fields instead of the shared membership
 list: `webapp_groups` is the case-insensitively sorted set of effectively active
-groups the caller may manage, and `can_create_webapp_group` says whether the
-wizard may offer **Create New Group**. Global WebApp authority means
+groups the caller may manage, each row includes `can_manage_dns`, and
+`can_create_webapp_group` says whether the wizard may offer **Create New
+Group**. The address step uses that selected-group flag for managed-domain and
+purchase controls; it does not substitute the flat global network capability.
+Global WebApp authority means
 `security`, or both `manage_webapp` and `manage_dns`; the same two-part check
 may instead be supplied by an exact or inherited GroupMember grant. A
 non-superuser creating a group additionally needs global `manage_groups` or
@@ -84,11 +87,14 @@ capabilities, and literal `permissions.admin` are not backend authority.
 
 The wizard defaults to the nonnumeric Create New Group sentinel only when that
 flag is true; otherwise it selects the first eligible existing group and never
-coerces an empty value to id `0`. A new-group draft stores one client UUID and
-its nonsecret frozen profile in origin-scoped `sessionStorage`. Modal dismissal,
-Admin navigation, reload, or a lost response therefore reuses the same receipt;
-only an authoritative success/replay/cancel result or explicit **Start over**
-clears it.
+coerces an empty value to id `0`. A draft stores one client UUID in
+origin-scoped `sessionStorage`. At first submission it also freezes the exact
+nonsecret request payload. On modal reopen or reload, a submitted draft first
+queries operation detail by UUID: an existing receipt clears the draft and
+mounts authoritative state. If detail is absent or temporarily unavailable,
+only that exact frozen payload can be replayed; all identity controls remain
+disabled. Editing requires explicit **Start over**, which abandons the pending
+UUID and creates a fresh draft.
 
 Shared `TableView`, `FormView`, overlay, model, relationship, icon, API, and
 view-state primitives live under `assets/components/` and `assets/core.js`.

@@ -8,7 +8,8 @@ from unittest import mock
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
-    declare_release_buckets, login, make_group, make_group_member, make_webapp,
+    declare_release_buckets, login, make_group, make_group_member, make_user,
+    make_webapp,
 )
 
 
@@ -69,14 +70,14 @@ def test_group_intent_validation(opts):
     from mojo.apps.edge.rest import webapp_onboarding
 
     invalid = (
-        {}, {"group": ""}, {"group": 0}, {"group": False},
+        {}, {"group": ""}, {"group": 0}, {"group": False}, {"group": 1.0},
         {"group": [opts.group.pk]}, {"group_intent": "other"},
         {"group": opts.group.pk, "group_intent": "new"},
     )
     for data in invalid:
         request = SimpleNamespace(
             user=opts.actor, group_token=None, DATA=data)
-        with th.assert_raises(me.MojoException):
+        with th.assert_raises(me.ValueException):
             webapp_onboarding._group_intent(request)
 
 
@@ -352,14 +353,97 @@ def test_new_group_create_and_replay(opts):
         "cancellation deleted the committed recoverable Group/WebApp pair"
 
     changed = dict(payload, slug="different-profile")
-    with th.assert_raises(Exception):
+    from mojo import errors as me
+    with th.assert_raises(me.ValueException):
         webapp_onboarding.create(
             None, actor, "https://admin.example.com", changed,
             group_intent="new")
-    with th.assert_raises(Exception):
+    with th.assert_raises(me.PermissionDeniedException):
         webapp_onboarding.create(
             None, actor, "https://other.example.com", payload,
             group_intent="new")
+
+
+@th.django_unit_test("operation UUID binds actor origin intent and profile exactly")
+def test_operation_uuid_identity_boundaries(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import User
+    from mojo.apps.edge.services import webapp_onboarding
+
+    actor = User.objects.get(pk=opts.actor.pk)
+    actor.permissions = {
+        "manage_webapp": True, "manage_dns": True, "manage_groups": True}
+    actor.save(update_fields=["permissions", "modified"])
+    other, _, _ = make_user(
+        ["manage_webapp", "manage_dns", "manage_groups"])
+    operation_id = str(uuid.uuid4())
+    payload = {
+        "operation_id": operation_id, "display_name": "Bound Portal",
+        "slug": "bound-portal", "bucket": "edge-test-releases",
+    }
+    operation, _ = webapp_onboarding.create(
+        None, actor, "https://admin.example.com", payload,
+        group_intent="new")
+
+    with th.assert_raises(me.PermissionDeniedException):
+        webapp_onboarding.create(
+            None, other, "https://admin.example.com", payload,
+            group_intent="new")
+    with th.assert_raises(me.ValueException):
+        webapp_onboarding.create(
+            opts.group, actor, "https://admin.example.com", payload,
+            group_intent="existing")
+    with th.assert_raises(me.ValueException):
+        webapp_onboarding.create(
+            None, actor, "https://admin.example.com",
+            dict(payload, display_name="Changed Portal"),
+            group_intent="new")
+    assert operation.group.name == "Bound Portal", \
+        "a refused UUID reuse changed the authoritative operation"
+
+
+@th.django_unit_test("different UUIDs retain concrete-profile compatibility")
+def test_existing_profile_different_uuid_compatibility(opts):
+    from mojo.apps.account.models import GroupMember, User
+    from mojo.apps.edge.services import webapp_onboarding
+
+    actor = User.objects.get(pk=opts.actor.pk)
+    actor.permissions = {}
+    actor.save(update_fields=["permissions", "modified"])
+    member = GroupMember.objects.get(group=opts.group, user=actor)
+    member.permissions = {"manage_webapp": True, "manage_dns": True}
+    member.save(update_fields=["permissions", "modified"])
+    profile = {
+        "display_name": "Compatible Existing Portal",
+        "slug": "compatible-existing-portal", "bucket": "edge-test-releases",
+    }
+    first, created = webapp_onboarding.create(
+        opts.group, actor, "https://admin.example.com",
+        dict(profile, operation_id=str(uuid.uuid4())))
+    second, replay_created = webapp_onboarding.create(
+        opts.group, actor, "https://admin.example.com",
+        dict(profile, operation_id=str(uuid.uuid4())))
+
+    assert created is True and replay_created is False and first.pk == second.pk, \
+        "a different UUID broke concrete-group profile reconciliation"
+
+
+@th.django_unit_test("API-key and group-token requests cannot enter onboarding")
+def test_noninteractive_credentials_denied(opts):
+    from types import SimpleNamespace
+
+    from mojo import errors as me
+    from mojo.apps.edge.rest import webapp_onboarding
+
+    requests = (
+        SimpleNamespace(user=opts.actor, api_key=object(), group_token=None,
+                        DATA={"group": opts.group.pk}),
+        SimpleNamespace(user=opts.actor, api_key=None, group_token=object(),
+                        DATA={"group": opts.group.pk}),
+    )
+    for request in requests:
+        with th.assert_raises(me.PermissionDeniedException):
+            webapp_onboarding._group_intent(request)
 
 
 @th.django_unit_test("new-group validation and initial failure leave no partial rows")

@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from .gallery import bootstrap, reset
-from .features import activity, advanced, platform, settings
+from .features import activity, advanced, platform, settings, webapps
 from .features import dashboard
 
 
@@ -608,7 +608,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if activity_response is not None:
             status, payload = activity_response
             return self._send(payload, status=status)
-        for provider in (dashboard, platform, advanced, settings):
+        for provider in (dashboard, webapps, platform, advanced, settings):
             response = provider.get(self, parsed)
             if response is not None:
                 status, payload = response
@@ -695,8 +695,6 @@ class PreviewHandler(BaseHTTPRequestHandler):
                                "group_intent": "new" if new_intent else "existing",
                                "github_connected": False if new_intent else True,
                                "limits": {"attempts": 8, "lease_seconds": 90}})
-        if path == "/api/edge/webapp/onboarding/detail":
-            return self._send(self.onboarding_operation or webapp_onboarding_operation("address"))
         if path == "/api/edge/webapp/summary":
             return self._send({"schema_version": 1, "webapp": WEBAPPS[0],
                                "address": {"hostname": "portal.nativemojo.com", "https_origin": "https://portal.nativemojo.com"},
@@ -736,7 +734,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         payload = self._read_body()
         self._record_event(path, payload)
-        for provider in (platform, advanced, settings):
+        for provider in (webapps, platform, advanced, settings):
             response = provider.post(self, path, payload)
             if response is not None:
                 status, body = response
@@ -747,38 +745,6 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if path == "/api/edge/webapp/revoke_key":
             type(self).key_state = "revoked"
             return self._send({"webapp": 42, "secret_name": "MOJO_DEPLOY_KEY", "replayed": False, "operation_id": "preview", "status": self._key_status()})
-        if path == "/api/edge/webapp/onboarding/create":
-            operation_id = str(payload.get("operation_id") or "preview")
-            receipt = self.onboarding_receipts.get(operation_id)
-            if receipt is not None:
-                return self._send({"created": False, "operation": receipt})
-            type(self).onboarding_operation = webapp_onboarding_operation("address")
-            self.onboarding_operation["operation_id"] = operation_id
-            self.onboarding_operation["profile"].update({
-                key: value for key, value in payload.items()
-                if key in self.onboarding_operation["profile"]})
-            if payload.get("group_intent") == "new":
-                group = {"id": 109,
-                         "name": payload.get("display_name") or "New WebApp Group"}
-                self.onboarding_operation["group"] = group
-                self.onboarding_operation["resources"]["webapp"] = 142
-                if not any(row.get("id") == group["id"] for row in self.groups):
-                    type(self).groups.append({
-                        **group, "uuid": "preview-group-109", "kind": "organization",
-                        "is_active": True, "member_count": 0, "last_activity": None,
-                        "metadata": {}, "parent": None})
-                if not any(row.get("id") == 142 for row in self.webapps):
-                    type(self).webapps.append({
-                        "id": 142, "slug": payload.get("slug"),
-                        "display_name": group["name"],
-                        "environment": payload.get("environment", "production"),
-                        "github_repository": "", "deployment_ref": "main",
-                        "build_output": "dist", "created": "2026-08-13T12:00:00Z",
-                        "current_release": None})
-            type(self).onboarding_receipts[operation_id] = self.onboarding_operation
-            if self.onboarding_state == "new_group":
-                return self._send({"error": "Deterministic committed WebApp response loss"}, status=503)
-            return self._send({"created": True, "operation": self.onboarding_operation})
         if path == "/api/edge/webapp/onboarding/choose":
             order = {"app": "address", "address": "github", "github": "verify", "verify": "complete"}
             current = self.onboarding_operation or webapp_onboarding_operation("address")

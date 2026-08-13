@@ -18,7 +18,7 @@ def _human(request):
 
 
 def _positive_group(value):
-    if isinstance(value, bool) or isinstance(value, (list, tuple, dict)):
+    if isinstance(value, (bool, float, list, tuple, dict)):
         raise me.ValueException("group must be a positive numeric id")
     if isinstance(value, str):
         value = value.strip()

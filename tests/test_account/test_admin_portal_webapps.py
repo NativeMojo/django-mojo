@@ -1,6 +1,7 @@
 """Built-in Admin WebApp reveal-once key lifecycle smoke coverage."""
 
 import uuid
+from pathlib import Path
 from unittest import mock
 
 from testit import helpers as th
@@ -87,6 +88,9 @@ def test_scoped_webapp_authority_bootstrap(opts):
         f"scoped Admin bootstrap returned {response.status_code}: {response.json}"
     assert choice_ids == opts.scoped_group_ids, \
         f"scoped and inherited WebApp choices drifted: {choice_ids}"
+    assert all(row.get("can_manage_dns") is True
+               for row in data.get("webapp_groups") or []), \
+        "eligible scoped groups did not publish their DNS-management authority"
     assert opts.partial_group_id not in choice_ids, \
         "a partial WebApp-only member grant entered the eligible choices"
     assert not set(opts.dark_group_ids).intersection(choice_ids), \
@@ -97,6 +101,24 @@ def test_scoped_webapp_authority_bootstrap(opts):
         "eligible scoped groups did not enable WebApp onboarding"
     assert data.get("features", {}).get("webapps", {}).get("enabled") is True, \
         "eligible scoped groups did not enable the WebApps feature"
+
+
+@th.django_unit_test("WebApp draft recovery freezes replay and uses selected-group DNS authority")
+def test_webapp_onboarding_browser_contract(opts):
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "mojo/apps/account/admin_portal/assets/features/webapps/page.js").read_text()
+
+    assert "recoverPendingDraft(draft" in source and \
+        "/api/edge/webapp/onboarding/detail?operation=" in source, \
+        "reload does not reconcile a saved operation UUID before create"
+    assert "draft?.submitted && draft.payload" in source and \
+        "body: JSON.stringify(frozenPayload)" in source and \
+        "control.disabled = frozen" in source, \
+        "an ambiguous create can mutate or rebuild its frozen replay payload"
+    assert "Start over" in source and "clearPendingDraft()" in source, \
+        "the frozen draft has no explicit abandonment path"
+    assert "groupDnsAuthority" in source and "group?.can_manage_dns" in source, \
+        "address choices still depend on global rather than selected-group DNS authority"
 
 
 @th.django_unit_test("literal admin and partial globals do not grant backend WebApp authority")

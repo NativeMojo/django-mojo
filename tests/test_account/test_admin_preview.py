@@ -218,25 +218,50 @@ def test_platform_preview_truth_axes(opts):
         "preview cannot exercise compatibility filtering for legacy local-listener noise"
 
 
-@th.django_unit_test("preview covers membership-free new-group response-loss reconciliation")
+@th.django_unit_test("preview recovers committed new-group response loss after reload")
 def test_webapp_new_group_preview_contract(opts):
-    server = (ROOT / "bin/admin_preview_support/server.py").read_text()
-    gallery = (ROOT / "bin/admin_preview_support/gallery.py").read_text()
-    provider = (ROOT / "bin/admin_preview_support/features/webapps.py").read_text()
+    from urllib.parse import urlparse
 
-    assert '"new_group"' in server and \
-        "Deterministic committed WebApp response loss" in server, \
-        "preview cannot simulate a committed new-group response loss"
-    assert "onboarding_receipts" in server and \
-        'return self._send({"created": False, "operation": receipt})' in server, \
-        "preview cannot reconcile a repeated client UUID"
-    assert 'memberships = [] if self.onboarding_state == "new_group"' in server, \
-        "new-group preview does not exercise zero memberships"
-    assert '"webapp_groups": groups' in gallery and \
-        '"can_create_webapp_group": can_create_webapp_group' in gallery, \
-        "deterministic bootstrap omitted the additive WebApp group contract"
-    assert "handler.onboarding_receipts = {}" in provider, \
-        "preview receipts can leak between deterministic scenarios"
+    server = _server()
+
+    class Handler:
+        groups = [dict(row) for row in server.GROUPS]
+
+    fixtures = {"webapps": server.WEBAPPS,
+                "webapp_onboarding": server.webapp_onboarding_operation}
+    server.webapps.reset(Handler, fixtures, onboarding_state="new_group")
+    first = Handler()
+    payload = {
+        "operation_id": "00000000-0000-4000-8000-000000001920",
+        "group_intent": "new", "display_name": "Recovered Portal",
+        "slug": "recovered-portal", "environment": "production",
+    }
+
+    status, lost = server.webapps.post(
+        first, "/api/edge/webapp/onboarding/create", payload)
+    reloaded = Handler()
+    detail_status, operation = server.webapps.get(
+        reloaded, urlparse(
+            "/api/edge/webapp/onboarding/detail?operation=" +
+            payload["operation_id"]))
+    replay_status, replay = server.webapps.post(
+        reloaded, "/api/edge/webapp/onboarding/create", dict(payload))
+
+    assert status == 503 and "committed" in lost["error"], \
+        "preview did not lose the response after committing the operation"
+    assert detail_status == 200 and operation["operation_id"] == payload["operation_id"], \
+        "reload could not mount the authoritative committed operation"
+    assert replay_status == 200 and replay["created"] is False and \
+        replay["operation"] is operation, \
+        "exact replay did not reconcile the committed receipt"
+    assert sum(row.get("id") == 109 for row in Handler.groups) == 1 and \
+        sum(row.get("id") == 142 for row in Handler.webapps) == 1, \
+        "committed-loss recovery duplicated its Group or WebApp"
+
+    bootstrap = server.bootstrap(Handler.groups)
+    assert all(row.get("can_manage_dns") is True
+               for row in bootstrap["webapp_groups"]), \
+        "preview bootstrap omitted per-group DNS management authority"
 
 
 @th.django_unit_test("preview covers Settings provenance, duplicate, delay, error, and 440")
