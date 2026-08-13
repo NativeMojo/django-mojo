@@ -98,6 +98,27 @@ function field(label, input, help = '') {
     help ? h('small', {text: help}) : null);
 }
 
+const ONBOARDING_DRAFT_KEY = 'mojo-admin:webapp-onboarding-draft:v1';
+const NEW_GROUP_VALUE = 'new';
+
+function pendingDraft() {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(ONBOARDING_DRAFT_KEY) || 'null');
+    return value && typeof value === 'object' && typeof value.operation_id === 'string' ? value : null;
+  } catch (_) { return null; }
+}
+
+function savePendingDraft(value) {
+  sessionStorage.setItem(ONBOARDING_DRAFT_KEY, JSON.stringify(value));
+}
+
+function clearPendingDraft() { sessionStorage.removeItem(ONBOARDING_DRAFT_KEY); }
+
+function groupDnsAuthority(ctx, groupId) {
+  const group = (ctx.webapp_groups || []).find((row) => String(row.id) === String(groupId));
+  return Boolean(group?.can_manage_dns || (!group && ctx.can_create_webapp_group));
+}
+
 function stepList(operation) {
   const steps = [['app', 'WebApp'], ['address', 'Domain & DNS'], ['github', 'GitHub'], ['verify', 'Go live']];
   const current = steps.findIndex(([id]) => id === operation.cursor);
@@ -130,6 +151,8 @@ function addressChoice(operation, ctx, update, groupId) {
   const hostname = h('strong', {class: 'hostname-value', text: 'www.your-domain.com'});
   let mode = 'existing';
   let quote = null;
+  const canManageDns = groupDnsAuthority(ctx, groupId);
+  const canOpenDomains = Boolean(ctx.capabilities.network || ctx.capabilities.manage_network);
 
   function selectMode(next) {
     mode = next;
@@ -142,7 +165,7 @@ function addressChoice(operation, ctx, update, groupId) {
   }
 
   const modes = [['existing', 'Use managed domain']];
-  if (ctx.capabilities.manage_network) modes.push(['purchase', 'Buy new domain']);
+  if (canManageDns) modes.push(['purchase', 'Buy new domain']);
   modes.forEach(([value, text]) => modeButtons.append(h('button', {
     class: `choice-tab ${value === mode ? 'active' : ''}`, type: 'button', 'data-mode': value,
     'aria-pressed': value === mode ? 'true' : 'false', onclick: () => selectMode(value),
@@ -165,9 +188,10 @@ function addressChoice(operation, ctx, update, groupId) {
           listData(await api(`/api/dnsman/domain?group=${encodeURIComponent(groupId || '')}`))
             .filter((row) => row.status === 'active' && row.verified !== false)
             .forEach((row) => domain.append(h('option', {value: row.id, text: row.name, 'data-name': row.name})));
-          if (domain.options.length === 1) message.textContent = ctx.capabilities.manage_network ?
-            'No managed domains yet. Add or connect one, then refresh this list.' :
-            'No managed domains are available. Ask a DNS administrator to add one, then refresh this list.';
+          if (domain.options.length === 1) message.textContent = canOpenDomains ?
+            'No managed domains yet. Add or connect one, then refresh this list.' : canManageDns ?
+              'No managed domains yet. Use Buy new domain above to purchase one inline.' :
+              'No managed domains are available. Ask a DNS administrator to add one, then refresh this list.';
           updateHostname();
         } catch (error) { message.textContent = error.message; }
         finally { refresh.disabled = false; }
@@ -177,7 +201,7 @@ function addressChoice(operation, ctx, update, groupId) {
       label.addEventListener('input', updateHostname);
       choices.append(field('Managed domain', domain, 'Choose a domain already controlled by this group.'),
         h('div', {class: 'domain-actions'},
-          ctx.capabilities.network || ctx.capabilities.manage_network ? h('a', {
+          canOpenDomains ? h('a', {
             class: 'button ghost compact', href: routeHref('domains'), target: '_blank', rel: 'noopener',
           }, icon('plus'), 'Add or connect a domain') : null,
           refresh),
@@ -274,46 +298,129 @@ function onboardingPanel(initial, ctx, reloadApps, groupId) {
   render(); return root;
 }
 
-function startOnboarding(ctx, mount, reloadApps) {
-  const group = h('select', {}, ...(ctx.groups || []).map((row) => h('option', {value: row.id, text: row.name})));
+async function recoverPendingDraft(draft, ctx, mount, reloadApps) {
+  if (!draft?.submitted || !draft.operation_id) return false;
+  try {
+    const operation = await api(`/api/edge/webapp/onboarding/detail?operation=${encodeURIComponent(draft.operation_id)}`);
+    clearPendingDraft();
+    await reloadApps();
+    mount.replaceChildren(onboardingPanel(operation, ctx, reloadApps, operation.group.id));
+    return true;
+  } catch (_) { return false; }
+}
+
+async function startOnboarding(ctx, mount, reloadApps) {
+  let draft = pendingDraft();
+  if (await recoverPendingDraft(draft, ctx, mount, reloadApps)) return;
+  let frozenPayload = draft?.submitted && draft.payload ? draft.payload : null;
+  const restored = frozenPayload || draft || {};
+  const groupOptions = [];
+  if (ctx.can_create_webapp_group) groupOptions.push(h('option', {value: NEW_GROUP_VALUE, text: 'Create New Group'}));
+  (ctx.webapp_groups || []).forEach((row) => groupOptions.push(h('option', {value: row.id, text: row.name})));
+  const group = h('select', {}, ...groupOptions);
   const slug = h('input', {placeholder: 'customer-portal', autocomplete: 'off'});
   const name = h('input', {placeholder: 'Customer portal', autocomplete: 'off'});
   const environment = h('select', {}, ...['production', 'staging', 'preview', 'development'].map((value) => h('option', {value, text: value})));
   const bucket = h('select');
   const advanced = h('details', {class: 'wizard-advanced'}, h('summary', {text: 'Advanced'}), field('Release bucket', bucket, 'Storage is selected automatically when only one bucket is available.'));
   const message = h('div', {class: 'form-message', role: 'alert'});
-  const submit = h('button', {class: 'button primary'}, 'Continue to Domain & DNS');
+  const submit = h('button', {class: 'button primary'}, frozenPayload ? 'Reconcile saved operation' : 'Continue to Domain & DNS');
+  const startOver = h('button', {class: 'button ghost', type: 'button'}, 'Start over');
   let slugEdited = false;
   const slugify = (value) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  name.addEventListener('input', () => { if (!slugEdited) slug.value = slugify(name.value); });
-  slug.addEventListener('input', () => { slugEdited = true; });
+  const controls = [group, slug, name, environment, bucket];
+  function setFrozen(frozen) {
+    controls.forEach((control) => { control.disabled = frozen; });
+    submit.textContent = frozen ? 'Reconcile saved operation' : 'Continue to Domain & DNS';
+  }
+  function snapshot() {
+    if (frozenPayload) return;
+    if (!draft) draft = {operation_id: crypto.randomUUID()};
+    draft = {...draft, submitted: false,
+      group_intent: group.value === NEW_GROUP_VALUE ? 'new' : 'existing',
+      group: group.value === NEW_GROUP_VALUE ? null : group.value,
+      display_name: name.value, slug: slug.value, environment: environment.value,
+      bucket: bucket.value};
+    savePendingDraft(draft);
+  }
+  if (draft) {
+    const restoredGroup = restored.group_intent === 'new' ? NEW_GROUP_VALUE : String(restored.group || '');
+    if (frozenPayload && restoredGroup &&
+        ![...group.options].some((option) => option.value === restoredGroup)) {
+      group.append(h('option', {value: restoredGroup, text: restoredGroup === NEW_GROUP_VALUE ?
+        'Saved new group' : `Saved group #${restoredGroup}`}));
+    }
+    if ([...group.options].some((option) => option.value === restoredGroup)) group.value = restoredGroup;
+    name.value = restored.display_name || '';
+    slug.value = restored.slug || '';
+    environment.value = restored.environment || 'production';
+    slugEdited = Boolean(restored.slug);
+  }
+  setFrozen(Boolean(frozenPayload));
+  name.addEventListener('input', () => { if (!slugEdited) slug.value = slugify(name.value); snapshot(); });
+  slug.addEventListener('input', () => { slugEdited = true; snapshot(); });
+  environment.addEventListener('change', snapshot);
   async function loadOptions() {
     submit.disabled = true; message.textContent = '';
     try {
-      const data = await api(`/api/edge/webapp/onboarding/options?group=${encodeURIComponent(group.value)}`);
+      if (!group.value) throw new Error('No eligible WebApp group is available.');
+      const intent = group.value === NEW_GROUP_VALUE ? 'group_intent=new' :
+        `group=${encodeURIComponent(group.value)}`;
+      const data = await api(`/api/edge/webapp/onboarding/options?${intent}`);
       bucket.replaceChildren(...(data.buckets || []).map((value) => h('option', {value, text: value})));
+      if (restored.bucket && [...bucket.options].some((option) => option.value === restored.bucket)) bucket.value = restored.bucket;
       advanced.hidden = bucket.options.length <= 1;
       if (!bucket.options.length) message.textContent = 'No release storage is configured for this installation.';
       submit.disabled = !bucket.options.length;
+      snapshot();
+      bucket.disabled = Boolean(frozenPayload);
     } catch (error) { message.textContent = error.message; }
   }
-  group.addEventListener('change', loadOptions);
-  loadOptions();
+  group.addEventListener('change', () => { snapshot(); loadOptions(); });
+  bucket.addEventListener('change', snapshot);
+  startOver.addEventListener('click', () => {
+    clearPendingDraft(); frozenPayload = null;
+    draft = {operation_id: crypto.randomUUID(), submitted: false};
+    setFrozen(false);
+    group.value = ctx.can_create_webapp_group ? NEW_GROUP_VALUE : String(ctx.webapp_groups?.[0]?.id || '');
+    name.value = ''; slug.value = ''; environment.value = 'production'; slugEdited = false;
+    snapshot(); loadOptions();
+  });
+  if (frozenPayload) {
+    bucket.replaceChildren(h('option', {value: frozenPayload.bucket, text: frozenPayload.bucket}));
+    advanced.hidden = true;
+    submit.disabled = false;
+  } else loadOptions();
   const content = h('div', {class: 'wizard-form'},
     h('div', {class: 'wizard-progress'}, h('span', {class: 'current', text: '1 WebApp'}), h('span', {text: '2 Domain & DNS'}), h('span', {text: '3 GitHub'}), h('span', {text: '4 Go live'})),
     h('div', {class: 'wizard-intro'}, icon('deploy'), h('div', {}, h('strong', {text: 'Name the application'}), h('p', {text: 'Start with the WebApp itself. Domain and GitHub setup come next, one clear step at a time.'}))),
     field('Group', group), field('Display name', name, 'The human-friendly name shown in Admin.'),
     field('WebApp slug', slug, 'A short stable identifier, generated from the name.'), field('Environment', environment),
-    advanced, message, h('div', {class: 'form-actions'}, submit));
+    advanced, message, h('div', {class: 'form-actions'}, startOver, submit));
   const close = openModal({title: 'Create WebApp', subtitle: 'A guided setup with DNS included.', content});
   submit.addEventListener('click', async () => {
     submit.disabled = true;
     try {
-      const result = await api('/api/edge/webapp/onboarding/create', {method: 'POST', body: JSON.stringify({
-        group: Number(group.value), slug: slug.value, display_name: name.value,
-        environment: environment.value, bucket: bucket.value,
-        github_repository: '', deployment_ref: 'main', build_output: 'dist',
-      })});
+      if (!frozenPayload) {
+        snapshot();
+        const groupPayload = group.value === NEW_GROUP_VALUE ? {group_intent: 'new'} :
+          {group: Number.parseInt(group.value, 10)};
+        if (groupPayload.group !== undefined && (!Number.isInteger(groupPayload.group) || groupPayload.group <= 0)) {
+          throw new Error('Select an eligible group.');
+        }
+        frozenPayload = {
+          ...groupPayload, operation_id: draft.operation_id,
+          slug: slug.value, display_name: name.value,
+          environment: environment.value, bucket: bucket.value,
+          github_repository: '', deployment_ref: 'main', build_output: 'dist',
+        };
+        draft = {operation_id: draft.operation_id, submitted: true, payload: frozenPayload};
+        savePendingDraft(draft);
+        setFrozen(true);
+      }
+      const result = await apiOnce('/api/edge/webapp/onboarding/create', {
+        method: 'POST', body: JSON.stringify(frozenPayload),
+      });
       let operation = result.operation;
       if (operation.cursor === 'app') {
         try {
@@ -325,8 +432,13 @@ function startOnboarding(ctx, mount, reloadApps) {
           // The durable panel keeps the explicit App continuation available.
         }
       }
-      close(); mount.replaceChildren(onboardingPanel(operation, ctx, reloadApps, Number(group.value)));
-    } catch (error) { message.textContent = error.message; submit.disabled = false; }
+      clearPendingDraft();
+      close(); mount.replaceChildren(onboardingPanel(
+        operation, ctx, reloadApps, operation.group.id));
+    } catch (error) {
+      message.textContent = `${error.message} The submitted values are frozen. Reconcile the same operation, or Start over to abandon it.`;
+      submit.disabled = false;
+    }
   });
 }
 
@@ -334,9 +446,9 @@ export async function webappsPage(ctx) {
   const root = h('div', {class: 'page'}); let linkedInspectorOpened = false;
   const onboarding = h('div', {class: 'onboarding-mount'});
   async function render() {
-    const canManageDomains = ctx.capabilities.network || ctx.capabilities.manage_network;
+    const canOpenDomains = Boolean(ctx.capabilities.network || ctx.capabilities.manage_network);
     root.replaceChildren(pageHeader('Deployments', 'WebApps', 'Create an application, connect its domain, then deploy from GitHub.', [
-      canManageDomains ? h('a', {class: 'button ghost', href: routeHref('domains')}, icon('globe'), 'Domains & DNS') : null,
+      canOpenDomains ? h('a', {class: 'button ghost', href: routeHref('domains')}, icon('globe'), 'Domains & DNS') : null,
       ctx.capabilities.manage_webapps ? h('button', {class: 'button primary', onclick: () => startOnboarding(ctx, onboarding, render)}, icon('plus'), 'Onboard WebApp') : null,
     ].filter(Boolean)), onboarding);
     const panel = h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: 'Applications'}), h('p', {text: 'Manage onboarding and MOJO_DEPLOY_KEY without exposing unrelated API keys.'}))));

@@ -7,10 +7,11 @@ from datetime import timedelta
 from urllib.parse import quote, urlsplit
 
 import requests
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from mojo import errors as me
+from mojo.apps.account.services import webapp_authority
 from mojo.helpers.settings import settings
 
 from mojo.apps.edge import validators
@@ -67,6 +68,72 @@ def _fingerprint(group, payload):
     return hashlib.sha256(f"{group.pk}:{stable}".encode()).hexdigest()
 
 
+def _operation_uuid(value, required=False):
+    if value in (None, "") and not required:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (AttributeError, TypeError, ValueError):
+        raise me.ValueException("operation_id must be a UUID")
+
+
+def _profile(payload, require_display_name=False):
+    slug = str(payload.get("slug") or "").strip().lower()
+    display_name = str(payload.get("display_name") or "").strip()
+    if require_display_name and not display_name:
+        raise me.ValueException("display_name is required for a new group")
+    profile = {
+        "slug": slug,
+        "display_name": display_name or slug,
+        "environment": str(payload.get("environment") or "production").strip(),
+        "bucket": str(payload.get("bucket") or "").strip(),
+        "github_repository": str(payload.get("github_repository") or "").strip(),
+        "deployment_ref": str(payload.get("deployment_ref") or "main").strip(),
+        "build_output": str(payload.get("build_output") or "dist").strip(),
+    }
+    if not profile["slug"]:
+        raise me.ValueException("slug is required")
+    validators.validate_release_bucket(profile["bucket"])
+    if not validators.NAME_RE.match(profile["slug"]):
+        raise me.ValueException(
+            "slug must be lowercase letters, digits, '-' or '_'")
+    if (profile["display_name"] and
+            not validators.DISPLAY_NAME_RE.match(profile["display_name"])):
+        raise me.ValueException(
+            "display name must be 1-120 printable characters")
+    if profile["environment"] not in (
+            "production", "staging", "preview", "development"):
+        raise me.ValueException("unknown WebApp environment")
+    if profile["github_repository"]:
+        validators.validate_github_repository(profile["github_repository"])
+    validators.validate_deployment_ref(profile["deployment_ref"])
+    validators.validate_build_output(profile["build_output"])
+    return profile
+
+
+def _intent(operation):
+    value = (operation.state or {}).get("group_intent")
+    if value == "new":
+        return "new"
+    return "existing"
+
+
+def _assert_receipt(operation, actor, origin, profile, group_intent, group=None):
+    if operation.actor_id != actor.pk or operation.origin != origin:
+        raise me.PermissionDeniedException(
+            "operation_id is owned by another administrator or origin")
+    if _intent(operation) != group_intent:
+        raise me.ValueException("operation_id was already used for another group intent")
+    if ((operation.state or {}).get("profile") or {}) != profile:
+        raise me.ValueException("operation_id was already used for another WebApp profile")
+    if group_intent == "existing" and operation.group_id != group.pk:
+        raise me.ValueException("operation_id was already used for another group")
+    if not webapp_authority.can_manage_group_webapps(actor, operation.group):
+        raise me.PermissionDeniedException(
+            "WebApp and DNS management are no longer granted in this group")
+    return operation
+
+
 def request_origin(request):
     raw = str(request.META.get("HTTP_ORIGIN") or "").strip().rstrip("/")
     request_scheme = "https" if request.is_secure() else "http"
@@ -110,10 +177,14 @@ def _assert_current(operation, request, mutate=False):
         raise me.PermissionDeniedException("Only the initiating administrator may continue")
     if not operation.group.is_effectively_active():
         raise me.PermissionDeniedException("The onboarding group is no longer active")
+    if not webapp_authority.can_manage_group_webapps(
+            request.user, operation.group):
+        raise me.PermissionDeniedException(
+            "WebApp and DNS management are no longer granted in this group")
     WebAppOnboardingOperation.rest_check_permission_or_raise(
         request, ["SAVE_PERMS", "VIEW_PERMS"] if mutate else ["VIEW_PERMS"],
         operation)
-    if mutate and operation.origin != request_origin(request):
+    if operation.origin != request_origin(request):
         raise me.PermissionDeniedException("Onboarding must continue on its original origin")
 
 
@@ -125,6 +196,7 @@ def serialize(operation):
         "schema_version": SCHEMA_VERSION,
         "id": operation.pk,
         "operation_id": str(operation.operation_id),
+        "group": {"id": operation.group_id, "name": operation.group.name},
         "status": operation.status,
         "cursor": operation.cursor,
         "revision": operation.revision,
@@ -144,7 +216,7 @@ def serialize(operation):
     }
 
 
-def options(group):
+def options(group, group_intent="existing"):
     from mojo.apps.github.models import GitHubInstall
 
     buckets = validators.release_buckets()
@@ -154,42 +226,103 @@ def options(group):
         "environments": ["production", "staging", "preview", "development"],
         "cname_target": str(settings.get_static(
             "EDGE_WEBAPP_CNAME_TARGET", "") or ""),
-        "github_connected": GitHubInstall.objects.filter(group=group).exists(),
+        "group_intent": group_intent,
+        "github_connected": bool(
+            group is not None and
+            GitHubInstall.objects.filter(group=group).exists()),
         "limits": {"attempts": MAX_ATTEMPTS, "lease_seconds": LEASE_SECONDS},
     }
 
 
-@transaction.atomic
-def create(group, actor, origin, payload):
-    slug = str(payload.get("slug") or "").strip().lower()
-    profile = {
-        "slug": slug,
-        "display_name": str(payload.get("display_name") or slug).strip(),
-        "environment": str(payload.get("environment") or "production").strip(),
-        "bucket": str(payload.get("bucket") or "").strip(),
-        "github_repository": str(payload.get("github_repository") or "").strip(),
-        "deployment_ref": str(payload.get("deployment_ref") or "main").strip(),
-        "build_output": str(payload.get("build_output") or "dist").strip(),
-    }
-    candidate = WebApp(group=group, prefix="pending", **profile)
-    validators.validate_web_app(candidate)
-    fingerprint = _fingerprint(group, profile)
-    current = WebAppOnboardingOperation.objects.select_for_update().filter(
-        group=group, replay_fingerprint=fingerprint,
-        status__in=(STATUS_ACTIVE, STATUS_WAITING)).first()
-    if current is not None:
-        if current.actor_id != actor.pk or current.origin != origin:
+def create(group, actor, origin, payload, group_intent="existing"):
+    from mojo.apps.account.models import Group
+
+    is_new = group_intent == "new"
+    if group_intent not in ("existing", "new"):
+        raise me.ValueException("Unknown WebApp group intent")
+    if is_new:
+        if not webapp_authority.can_create_webapp_group(actor):
             raise me.PermissionDeniedException(
-                "Matching onboarding is already owned by another session")
-        return current, False
-    operation = WebAppOnboardingOperation.objects.create(
-        group=group, actor=actor, origin=origin,
-        replay_fingerprint=fingerprint,
-        state={"profile": profile, "choices": {}, "intent": {}},
-        evidence={})
-    _activity(operation, "Onboarding created; application intent frozen")
-    _save_state(operation, operation.state)
-    return operation, True
+                "Creating a WebApp group is not granted globally")
+    elif not webapp_authority.can_manage_group_webapps(actor, group):
+        raise me.PermissionDeniedException(
+            "WebApp and DNS management are not granted in this group")
+    profile = _profile(payload, require_display_name=is_new)
+    operation_id = _operation_uuid(
+        payload.get("operation_id"), required=is_new)
+
+    if operation_id is not None:
+        receipt = WebAppOnboardingOperation.objects.select_related(
+            "group", "actor").filter(operation_id=operation_id).first()
+        if receipt is not None:
+            return _assert_receipt(
+                receipt, actor, origin, profile, group_intent, group), False
+
+    if not is_new:
+        candidate = WebApp(group=group, prefix="pending", **profile)
+        validators.validate_web_app(candidate)
+        fingerprint = _fingerprint(group, profile)
+        with transaction.atomic():
+            current = WebAppOnboardingOperation.objects.select_for_update().filter(
+                group=group, replay_fingerprint=fingerprint,
+                status__in=(STATUS_ACTIVE, STATUS_WAITING)).first()
+            if current is not None:
+                return _assert_receipt(
+                    current, actor, origin, profile, "existing", group), False
+            try:
+                with transaction.atomic():
+                    operation = WebAppOnboardingOperation.objects.create(
+                        operation_id=operation_id or uuid.uuid4(),
+                        group=group, actor=actor, origin=origin,
+                        replay_fingerprint=fingerprint,
+                        state={"profile": profile, "choices": {}, "intent": {},
+                               "group_intent": "existing"}, evidence={})
+            except IntegrityError:
+                if operation_id is not None:
+                    receipt = WebAppOnboardingOperation.objects.select_related(
+                        "group", "actor").filter(
+                            operation_id=operation_id).first()
+                    if receipt is not None:
+                        return _assert_receipt(
+                            receipt, actor, origin, profile, "existing", group), False
+                operation = WebAppOnboardingOperation.objects.select_related(
+                    "group", "actor").filter(
+                        group=group, replay_fingerprint=fingerprint,
+                        status__in=(STATUS_ACTIVE, STATUS_WAITING)).first()
+                if operation is None:
+                    raise
+                return _assert_receipt(
+                    operation, actor, origin, profile, "existing", group), False
+            _activity(operation, "Onboarding created; application intent frozen")
+            _save_state(operation, operation.state)
+            return operation, True
+
+    # The inner savepoint owns the complete first commit. A UUID loser rolls
+    # back its Group and WebApp before the winning receipt is inspected.
+    try:
+        with transaction.atomic():
+            group = Group.objects.create(
+                name=profile["display_name"], kind="organization", is_active=True)
+            fingerprint = _fingerprint(group, profile)
+            operation = WebAppOnboardingOperation.objects.create(
+                operation_id=operation_id, group=group, actor=actor,
+                origin=origin, replay_fingerprint=fingerprint,
+                state={"profile": profile, "choices": {}, "intent": {},
+                       "group_intent": "new"}, evidence={})
+            _activity(operation, "Group and application intent frozen")
+            _advance_app(operation)
+            operation.revision += 1
+            operation.save(update_fields=[
+                "state", "activity", "evidence", "web_app", "cursor",
+                "attempts", "next_attempt_at", "revision", "modified"])
+            return operation, True
+    except IntegrityError:
+        receipt = WebAppOnboardingOperation.objects.select_related(
+            "group", "actor").filter(operation_id=operation_id).first()
+        if receipt is None:
+            raise
+        return _assert_receipt(
+            receipt, actor, origin, profile, "new"), False
 
 
 def choose(operation, request, payload):
@@ -409,9 +542,8 @@ def advance(operation_id, owner=None):
             pk=operation_id)
     try:
         if (operation.actor is None or not operation.actor.is_active or
-                not operation.group.is_effectively_active() or not
-                operation.group.user_has_permission(
-                    operation.actor, ["manage_webapp", "security"])):
+                not webapp_authority.can_manage_group_webapps(
+                    operation.actor, operation.group)):
             raise me.PermissionDeniedException("Onboarding authority is no longer current")
         if operation.cursor == "app":
             wait = _advance_app(operation)

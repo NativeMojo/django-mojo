@@ -6,7 +6,7 @@ from .features import activity, advanced, dashboard, people, platform, settings,
 PROVIDERS = (dashboard, people, webapps, activity, platform, advanced, settings)
 
 
-def bootstrap(groups):
+def bootstrap(groups, membership_groups=None, can_create_webapp_group=True):
     capabilities = {
         "setup": True, "people": True, "groups": True,
         "manage_users": True, "manage_groups": True,
@@ -24,7 +24,10 @@ def bootstrap(groups):
         "settings_owner_display": True, "settings_owner_edit": True,
     }
     return {
-        "version": "1.9.0", "admin_path": "/", "groups": groups,
+        "version": "1.9.0", "admin_path": "/",
+        "groups": groups if membership_groups is None else membership_groups,
+        "webapp_groups": [dict(group, can_manage_dns=True) for group in groups],
+        "can_create_webapp_group": can_create_webapp_group,
         "user": {"id": 1, "display_name": "Ian Smith",
                  "email": "ian@example.com", "is_superuser": True},
         "capabilities": capabilities,

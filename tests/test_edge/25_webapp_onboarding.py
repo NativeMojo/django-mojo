@@ -1,12 +1,15 @@
 """WebApp onboarding durability, tenancy, and secret-boundary regressions."""
 
 import socket
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
-    declare_release_buckets, login, make_group, make_group_member, make_webapp,
+    declare_release_buckets, login, make_group, make_group_member, make_user,
+    make_webapp,
 )
 
 
@@ -57,6 +60,25 @@ def test_profile_input_validation(opts):
         except me.ValueException as exc:
             error = exc
         assert error is not None, f"{validator.__name__} accepted {value!r}"
+
+
+@th.django_unit_test("group intent rejects empty mixed boolean list zero and unknown forms")
+def test_group_intent_validation(opts):
+    from types import SimpleNamespace
+
+    from mojo import errors as me
+    from mojo.apps.edge.rest import webapp_onboarding
+
+    invalid = (
+        {}, {"group": ""}, {"group": 0}, {"group": False}, {"group": 1.0},
+        {"group": [opts.group.pk]}, {"group_intent": "other"},
+        {"group": opts.group.pk, "group_intent": "new"},
+    )
+    for data in invalid:
+        request = SimpleNamespace(
+            user=opts.actor, group_token=None, DATA=data)
+        with th.assert_raises(me.ValueException):
+            webapp_onboarding._group_intent(request)
 
 
 @th.django_unit_test("address onboarding refuses apex and wildcard serving names")
@@ -268,11 +290,286 @@ def test_inactive_parent_denies_onboarding(opts):
 
     root = Path(__file__).resolve().parents[2]
     service = (root / "mojo/apps/edge/services/webapp_onboarding.py").read_text()
-    assert service.count("operation.group.is_effectively_active()") >= 2, \
-        "request or worker authority checks use only the direct group flag"
+    assert service.count("webapp_authority.can_manage_group_webapps") >= 2, \
+        "request or worker authority bypasses the centralized two-part gate"
     opts.group.parent = None
     opts.group.save(update_fields=["parent", "modified"])
     parent.delete()
+
+
+@th.django_unit_test("new-group create is atomic replay-safe and derives its storage prefix")
+def test_new_group_create_and_replay(opts):
+    from django.test import RequestFactory
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.edge.models import WebApp, WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    actor = User.objects.get(pk=opts.actor.pk)
+    actor.permissions = {
+        "manage_webapp": True, "manage_dns": True, "manage_groups": True}
+    actor.save(update_fields=["permissions", "modified"])
+    operation_id = str(uuid.uuid4())
+    payload = {
+        "operation_id": operation_id, "display_name": "Atomic Customer Portal",
+        "slug": "atomic-customer-portal", "bucket": "edge-test-releases",
+        "environment": "production", "deployment_ref": "main",
+        "build_output": "dist", "github_repository": "",
+    }
+    before_groups = Group.objects.filter(name="Atomic Customer Portal").count()
+    operation, created = webapp_onboarding.create(
+        None, actor, "https://admin.example.com", payload, group_intent="new")
+    replay, replay_created = webapp_onboarding.create(
+        None, actor, "https://admin.example.com", payload, group_intent="new")
+    web_app = WebApp.objects.get(pk=operation.web_app_id)
+
+    assert created is True and replay_created is False, \
+        "new-group create/replay did not distinguish the first commit"
+    assert replay.pk == operation.pk and str(replay.operation_id) == operation_id, \
+        "same UUID did not reconcile the authoritative receipt"
+    assert operation.cursor == "address", \
+        "new-group create did not return directly at Domain & DNS"
+    assert operation.group.name == payload["display_name"], \
+        "new group was not named from the WebApp display name"
+    assert web_app.group_id == operation.group_id, \
+        "new Group and WebApp were not paired"
+    assert web_app.prefix == web_app.storage_prefix(), \
+        "new WebApp retained a pending or foreign storage prefix"
+    assert Group.objects.filter(name="Atomic Customer Portal").count() == before_groups + 1, \
+        "same UUID created more than one owning group"
+    assert WebAppOnboardingOperation.objects.filter(operation_id=operation_id).count() == 1, \
+        "same UUID created more than one onboarding receipt"
+
+    request = RequestFactory().post(
+        "/api/edge/webapp/onboarding/cancel",
+        HTTP_ORIGIN="https://admin.example.com", secure=True,
+        HTTP_HOST="admin.example.com")
+    request.user = actor
+    request.group_token = None
+    cancelled = webapp_onboarding.cancel(operation, request)
+    assert cancelled.status == "cancelled", \
+        "new-group onboarding did not cancel authoritatively"
+    assert Group.objects.filter(pk=operation.group_id).exists() and \
+        WebApp.objects.filter(pk=operation.web_app_id).exists(), \
+        "cancellation deleted the committed recoverable Group/WebApp pair"
+
+    changed = dict(payload, slug="different-profile")
+    from mojo import errors as me
+    with th.assert_raises(me.ValueException):
+        webapp_onboarding.create(
+            None, actor, "https://admin.example.com", changed,
+            group_intent="new")
+    with th.assert_raises(me.PermissionDeniedException):
+        webapp_onboarding.create(
+            None, actor, "https://other.example.com", payload,
+            group_intent="new")
+
+
+@th.django_unit_test("operation UUID binds actor origin intent and profile exactly")
+def test_operation_uuid_identity_boundaries(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import User
+    from mojo.apps.edge.services import webapp_onboarding
+
+    actor = User.objects.get(pk=opts.actor.pk)
+    actor.permissions = {
+        "manage_webapp": True, "manage_dns": True, "manage_groups": True}
+    actor.save(update_fields=["permissions", "modified"])
+    other, _, _ = make_user(
+        ["manage_webapp", "manage_dns", "manage_groups"])
+    operation_id = str(uuid.uuid4())
+    payload = {
+        "operation_id": operation_id, "display_name": "Bound Portal",
+        "slug": "bound-portal", "bucket": "edge-test-releases",
+    }
+    operation, _ = webapp_onboarding.create(
+        None, actor, "https://admin.example.com", payload,
+        group_intent="new")
+
+    with th.assert_raises(me.PermissionDeniedException):
+        webapp_onboarding.create(
+            None, other, "https://admin.example.com", payload,
+            group_intent="new")
+    with th.assert_raises(me.ValueException):
+        webapp_onboarding.create(
+            opts.group, actor, "https://admin.example.com", payload,
+            group_intent="existing")
+    with th.assert_raises(me.ValueException):
+        webapp_onboarding.create(
+            None, actor, "https://admin.example.com",
+            dict(payload, display_name="Changed Portal"),
+            group_intent="new")
+    assert operation.group.name == "Bound Portal", \
+        "a refused UUID reuse changed the authoritative operation"
+
+
+@th.django_unit_test("different UUIDs retain concrete-profile compatibility")
+def test_existing_profile_different_uuid_compatibility(opts):
+    from mojo.apps.account.models import GroupMember, User
+    from mojo.apps.edge.services import webapp_onboarding
+
+    actor = User.objects.get(pk=opts.actor.pk)
+    actor.permissions = {}
+    actor.save(update_fields=["permissions", "modified"])
+    member = GroupMember.objects.get(group=opts.group, user=actor)
+    member.permissions = {"manage_webapp": True, "manage_dns": True}
+    member.save(update_fields=["permissions", "modified"])
+    profile = {
+        "display_name": "Compatible Existing Portal",
+        "slug": "compatible-existing-portal", "bucket": "edge-test-releases",
+    }
+    first, created = webapp_onboarding.create(
+        opts.group, actor, "https://admin.example.com",
+        dict(profile, operation_id=str(uuid.uuid4())))
+    second, replay_created = webapp_onboarding.create(
+        opts.group, actor, "https://admin.example.com",
+        dict(profile, operation_id=str(uuid.uuid4())))
+
+    assert created is True and replay_created is False and first.pk == second.pk, \
+        "a different UUID broke concrete-group profile reconciliation"
+
+
+@th.django_unit_test("API-key and group-token requests cannot enter onboarding")
+def test_noninteractive_credentials_denied(opts):
+    from types import SimpleNamespace
+
+    from mojo import errors as me
+    from mojo.apps.edge.rest import webapp_onboarding
+
+    requests = (
+        SimpleNamespace(user=opts.actor, api_key=object(), group_token=None,
+                        DATA={"group": opts.group.pk}),
+        SimpleNamespace(user=opts.actor, api_key=None, group_token=object(),
+                        DATA={"group": opts.group.pk}),
+    )
+    for request in requests:
+        with th.assert_raises(me.PermissionDeniedException):
+            webapp_onboarding._group_intent(request)
+
+
+@th.django_unit_test("new-group validation and initial failure leave no partial rows")
+def test_new_group_create_rolls_back_all_initial_rows(opts):
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.edge.models import WebApp, WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    actor = User.objects.get(pk=opts.actor.pk)
+    actor.permissions = {
+        "manage_webapp": True, "manage_dns": True, "groups": True}
+    actor.save(update_fields=["permissions", "modified"])
+    operation_id = str(uuid.uuid4())
+    payload = {
+        "operation_id": operation_id, "display_name": "Rollback Customer Portal",
+        "slug": "rollback-customer-portal", "bucket": "edge-test-releases",
+    }
+    with mock.patch.object(
+            webapp_onboarding, "_advance_app",
+            side_effect=RuntimeError("deterministic storage failure")):
+        with th.assert_raises(RuntimeError):
+            webapp_onboarding.create(
+                None, actor, "https://admin.example.com", payload,
+                group_intent="new")
+
+    assert not Group.objects.filter(name="Rollback Customer Portal").exists(), \
+        "failed initial transaction leaked the owning Group"
+    assert not WebApp.objects.filter(slug="rollback-customer-portal").exists(), \
+        "failed initial transaction leaked the WebApp"
+    assert not WebAppOnboardingOperation.objects.filter(
+        operation_id=operation_id).exists(), \
+        "failed initial transaction leaked the onboarding receipt"
+
+
+@th.django_unit_test("concurrent same-UUID new-group requests converge on one receipt")
+def test_new_group_create_concurrency(opts):
+    from django.db import close_old_connections
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    actor = User.objects.get(pk=opts.actor.pk)
+    actor.permissions = {
+        "manage_webapp": True, "manage_dns": True, "manage_groups": True}
+    actor.save(update_fields=["permissions", "modified"])
+    operation_id = str(uuid.uuid4())
+    payload = {
+        "operation_id": operation_id, "display_name": "Concurrent Customer Portal",
+        "slug": "concurrent-customer-portal", "bucket": "edge-test-releases",
+    }
+
+    def create_once():
+        close_old_connections()
+        try:
+            thread_actor = User.objects.get(pk=actor.pk)
+            operation, created = webapp_onboarding.create(
+                None, thread_actor, "https://admin.example.com", payload,
+                group_intent="new")
+            return operation.pk, created
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: create_once(), range(2)))
+
+    assert len({result[0] for result in results}) == 1, \
+        f"concurrent UUID requests returned different receipts: {results}"
+    assert sorted(result[1] for result in results) == [False, True], \
+        f"concurrent UUID requests did not report one creation: {results}"
+    assert Group.objects.filter(name="Concurrent Customer Portal").count() == 1, \
+        "concurrent UUID requests committed duplicate groups"
+    assert WebAppOnboardingOperation.objects.filter(operation_id=operation_id).count() == 1, \
+        "concurrent UUID requests committed duplicate receipts"
+
+
+@th.django_unit_test("new intent options are state-free and exact-group options retain evidence")
+def test_group_intent_options(opts):
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    before = WebAppOnboardingOperation.objects.count()
+    new_options = webapp_onboarding.options(None, group_intent="new")
+    existing_options = webapp_onboarding.options(
+        opts.group, group_intent="existing")
+
+    assert new_options["github_connected"] is False, \
+        "new-group options reported a group-scoped GitHub installation"
+    assert new_options["group_intent"] == "new", \
+        "new-group options lost their explicit intent"
+    assert existing_options["group_intent"] == "existing", \
+        "concrete-group options lost their explicit intent"
+    assert WebAppOnboardingOperation.objects.count() == before, \
+        "options created onboarding state"
+
+
+@th.django_unit_test("revoking either authority half stops worker progress")
+def test_worker_rechecks_two_part_authority(opts):
+    from mojo.apps.account.models import GroupMember, User
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    actor = User.objects.get(pk=opts.actor.pk)
+    actor.permissions = {}
+    actor.save(update_fields=["permissions", "modified"])
+    operation = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=actor, origin="http://testserver",
+        replay_fingerprint="f" * 64,
+        state={"profile": {
+            "slug": "revoked-worker", "display_name": "Revoked worker",
+            "environment": "production", "bucket": "edge-test-releases",
+            "github_repository": "", "deployment_ref": "main",
+            "build_output": "dist"}, "choices": {}, "intent": {},
+            "group_intent": "existing"})
+    member = GroupMember.objects.get(group=opts.group, user=actor)
+    member.permissions = {"manage_webapp": True}
+    member.save(update_fields=["permissions", "modified"])
+
+    result = webapp_onboarding.advance(operation.pk, owner="revoked-worker-test")
+    operation.refresh_from_db()
+
+    assert result.startswith("waiting:Onboarding authority is no longer current"), \
+        f"worker progressed after DNS authority revocation: {result}"
+    assert operation.web_app_id is None and operation.cursor == "app", \
+        "revoked worker created or advanced the WebApp"
+    member.permissions = {"manage_webapp": True, "manage_dns": True}
+    member.save(update_fields=["permissions", "modified"])
 
 
 @th.django_unit_test("stale worker release cannot resurrect cancellation")

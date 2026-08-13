@@ -4,29 +4,65 @@ import mojo.decorators as md
 
 from mojo import errors as me
 from mojo.apps.account.models import Group
+from mojo.apps.account.services import webapp_authority
 from mojo.apps.edge.models import WebApp, WebAppOnboardingOperation
 from mojo.apps.edge.services import webapp_onboarding as _webapp_onboarding
 
 
 def _human(request):
-    from mojo.helpers.request import is_request_user
-
-    if (not is_request_user(request) or
+    if (not webapp_authority.is_interactive_request(request) or
             not getattr(request.user, "is_authenticated", False) or
             getattr(request, "group_token", None) is not None):
         raise me.PermissionDeniedException(
             "An interactive user session is required for WebApp onboarding")
 
 
-def _group(request):
+def _positive_group(value):
+    if isinstance(value, (bool, float, list, tuple, dict)):
+        raise me.ValueException("group must be a positive numeric id")
+    if isinstance(value, str):
+        value = value.strip()
+        if not value.isdigit():
+            raise me.ValueException("group must be a positive numeric id")
+    try:
+        group_id = int(value)
+    except (TypeError, ValueError):
+        raise me.ValueException("group must be a positive numeric id")
+    if group_id <= 0:
+        raise me.ValueException("group must be a positive numeric id")
+    group = Group.get_active(group_id)
+    if group is None:
+        raise me.PermissionDeniedException("The selected group is unavailable")
+    return group
+
+
+def _group_intent(request):
     _human(request)
-    group = Group.get_instance_or_404(request.DATA.get("group"))
-    if not group.is_effectively_active():
-        raise me.PermissionDeniedException("The selected group is inactive")
-    if not group.user_has_permission(
-            request.user, ["manage_webapp", "security"]):
+    has_group = "group" in request.DATA
+    has_intent = "group_intent" in request.DATA
+    if has_group == has_intent:
+        raise me.ValueException(
+            "Provide exactly one of group or group_intent=new")
+    if has_intent:
+        intent = request.DATA.get("group_intent")
+        if not isinstance(intent, str) or intent.strip().lower() != "new":
+            raise me.ValueException("group_intent must be new")
+        if not webapp_authority.can_create_webapp_group(request.user):
+            raise me.PermissionDeniedException(
+                "Creating a WebApp group is not granted globally")
+        return "new", None
+    group = _positive_group(request.DATA.get("group"))
+    if not webapp_authority.can_manage_group_webapps(request.user, group):
         raise me.PermissionDeniedException(
-            "WebApp management is not granted in this group")
+            "WebApp and DNS management are not granted in this group")
+    return "existing", group
+
+
+def _group(request):
+    """Compatibility helper for concrete-group callers and focused tests."""
+    intent, group = _group_intent(request)
+    if intent != "existing":
+        raise me.ValueException("A concrete group is required")
     return group
 
 
@@ -44,20 +80,20 @@ def _operation(request, mutate=False):
 
 @md.GET("webapp/onboarding/options")
 @md.denies_key_backed_session()
-@md.requires_params("group")
-@md.requires_perms("manage_webapp", "security")
+@md.custom_security("interactive user plus centralized WebApp group authority")
 def on_webapp_onboarding_options(request):
-    return _webapp_onboarding.options(_group(request))
+    intent, group = _group_intent(request)
+    return _webapp_onboarding.options(group, group_intent=intent)
 
 
 @md.POST("webapp/onboarding/create")
 @md.denies_key_backed_session()
-@md.requires_params("group", "slug", "bucket")
-@md.requires_perms("manage_webapp", "security")
+@md.custom_security("interactive user plus centralized WebApp group authority")
 def on_webapp_onboarding_create(request):
-    group = _group(request)
+    intent, group = _group_intent(request)
     operation, created = _webapp_onboarding.create(
-        group, request.user, _webapp_onboarding.request_origin(request), request.DATA)
+        group, request.user, _webapp_onboarding.request_origin(request),
+        request.DATA, group_intent=intent)
     return {"created": created, "operation": _webapp_onboarding.serialize(operation)}
 
 
@@ -103,11 +139,10 @@ def on_webapp_onboarding_workflow(request):
 
     _human(request)
     web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
-    if (not web_app.group.is_effectively_active() or not
-            web_app.group.user_has_permission(
-                request.user, ["manage_webapp", "security"])):
+    if not webapp_authority.can_manage_group_webapps(
+            request.user, web_app.group):
         raise me.PermissionDeniedException(
-            "WebApp management is not granted in this group")
+            "WebApp and DNS management are not granted in this group")
     result = _webapp_onboarding.workflow(web_app)
     action = str(request.DATA.get("action") or "").strip().lower()
     if action:

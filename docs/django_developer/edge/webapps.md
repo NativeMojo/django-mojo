@@ -233,11 +233,37 @@ The model and the WebApp profile fields (`display_name`, `environment`,
 `edge.0009_webapp_onboarding`, after `edge.0008_webappkeyoperation` and the DNS
 reservation dependency.
 
-The operation is actor-, group-, and origin-bound. Every continuation rechecks
-the active actor, group permission, object scope, and original origin. API keys
-and group tokens are refused. Workers use atomic leases and bounded backoff;
+The operation is actor-, group-, profile-, intent-, and origin-bound. Every
+request, replay, and worker rechecks the active actor plus the full authority
+contract: superuser, `security`, or both `manage_webapp` and `manage_dns`,
+resolved globally or through the concrete group (including inherited member
+grants). Literal `permissions.admin` is not a backend wildcard. API keys,
+group tokens, and override-user key sessions are refused. Workers use atomic
+leases and bounded backoff;
 after an uncertain provider result they read authoritative inventory before
 writing again. Cancellation stops recovery but preserves proved resources.
+
+Options accepts exactly one of a positive integer `group` or
+`group_intent=new`. New intent is state-free, reports no group-scoped GitHub
+installation, and requires global `manage_groups`/`groups` as well as global
+WebApp+DNS authority for a non-superuser. New create also requires a client
+UUID and display name. One transaction creates the organization Group, UUID
+receipt, and WebApp through `_advance_app()`, persists the derived
+`webapps/<group>/<id>` prefix, and returns at `address`. A validation,
+authorization, or storage failure rolls back all three. Concurrent UUID losers
+leave their failed savepoint before reconciling the winner; concrete-group
+callers separately retain the existing live `(group, replay_fingerprint)`
+reconciliation and may still omit a UUID.
+
+Serialized operations add `group: {id, name}`. Numeric floats are not accepted
+as group identifiers. Replaying a UUID requires the same actor, origin,
+normalized profile, and group intent; otherwise it fails. Admin persists the
+exact first submitted payload. A reload queries detail before attempting an
+exact replay, and a found receipt replaces the draft with authoritative state;
+submitted identity fields stay immutable until explicit abandonment.
+Cancellation or a later provider failure deliberately preserves a committed
+Group+WebApp pair as recoverable application state—the atomic no-orphan
+guarantee applies to the initial transaction, not later deletion.
 
 Domain purchase still uses the registrar's live quote and typed domain/price
 confirmation. The operation commits only a hash-bound purchase intent, then
