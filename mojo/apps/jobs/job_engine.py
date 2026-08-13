@@ -13,6 +13,7 @@ import json
 import threading
 import random
 import traceback
+import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -31,6 +32,7 @@ from typing import Callable
 
 from mojo.apps import metrics
 from mojo.helpers import dates
+from .execution_context import execution
 
 logger = logit.get_logger("jobs", "jobs.log", debug=True)
 
@@ -481,8 +483,15 @@ class JobEngine:
                     try:
                         logger.info(f"Executing broadcast function {func_path}")
                         func = load_job_function(func_path)
-                        # Execute with the message data as context
-                        result = func(message.get('data', {}))
+                        # Execute with immutable provenance context. A broadcast
+                        # has no Job row, so its generated execution id is also
+                        # its bounded job identity.
+                        broadcast_job_id = uuid.uuid4().hex
+                        with execution(
+                                broadcast_job_id, func_path, 1,
+                                str(message.get("channel") or "broadcast"),
+                                self.runner_id, broadcast=True):
+                            result = func(message.get('data', {}))
                         logger.info(f"Executed broadcast function {func_path}: {result}")
 
                         # Send reply if reply_channel is provided
@@ -735,7 +744,10 @@ class JobEngine:
 
             # Load and execute function
             func = load_job_function(job.func)
-            func(job)
+            with execution(
+                    job.id, job.func, job.attempt, job.channel,
+                    self.runner_id, broadcast=bool(job.broadcast)):
+                func(job)
             if JOBS_DEBUG:
                 logger.info(f"Completed job {job_id} from channel {channel}")
             # Mark complete

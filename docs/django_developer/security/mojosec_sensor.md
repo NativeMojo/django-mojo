@@ -850,6 +850,90 @@ the entire sent batch for retry.
 
 ## Trust boundary
 
+### Privileged-process provenance and firewall noise
+
+MojoSec records selective Linux Audit execution breadcrumbs rather than every
+process. The managed AL2023 policy captures root-EUID execution, execution by
+the deployed application AUID, and the exact sudo executable path. Audit
+`SYSCALL`, `EXECVE`, `PROCTITLE`, `CWD`, and `EOE` rows are assembled by boot
+ID plus Audit serial across polls; EOE closes a compound and a two-second
+timeout closes it as incomplete. `/proc` is immediate optional enrichment for
+PID generation, parents, cgroup/unit, namespace, executable, command line, and
+SELinux context. Audit remains durable truth: a short-lived process or ancestor
+that has already left `/proc` does not poison a complete Audit edge. A live
+`/proc` identity that conflicts with Audit, PID reuse, cycles, ordering
+conflicts, gaps, loss, or stale health makes suppression ineligible. Only the
+long-lived JobEngine anchor must still have a live verified PID generation.
+
+The cron origin is not inferred from a fabricated same-session `crond` exec.
+It requires both halves of the production AL2023 launch: the trusted root
+CROND CMD row (`_COMM=crond`, `_EXE=/usr/sbin/crond`, `_CMDLINE=/usr/sbin/CROND
+-n`) carrying the exact project-specific jobman command, and an earlier Audit
+`USER_START` row whose bounded quoted PAM message exactly names the app account,
+the authorized `pam_loginuid,pam_keyinit,pam_limits,pam_systemd` grantors,
+crond executable, cron terminal and successful result. If journald also exposes
+`AUDIT_FIELD_GRANTORS` (or the legacy underscored spelling), every exposed
+spelling must agree exactly. They agree on boot,
+Audit session, app login UID, session scope and crond SELinux domain; the CMD
+row additionally proves the app GID and launch PID. Strict monotonic order then
+joins audited bash → jobman → engine generations. Bash and jobman may be
+successive execs of the same launch PID or a strict parent/child pair. The
+bounded launch record survives polling and restart; a conflicting duplicate is
+sticky and makes the session permanently ineligible for suppression.
+
+The root-owned Audit health oneshot has only `CAP_AUDIT_CONTROL` and publishes
+a root-only sidecar every five seconds. The main sensor's capability set is
+unchanged. It validates boot, managed generation, rules digest, sequence,
+freshness, loss, backlog, failure mode, and rate limit. Deployment accepts only
+the exact AL2023 `task,never` seed or a complete prior Mojo generation after
+hashing every rules source, the generated rules and the active rules. It keeps
+an exact rollback record and restores it on convergence failure or downgrade.
+Mode-off and package downgrade first stop and verify the sensor inactive.
+Before an older package is allowed to start or Audit assets are consumed, the stable root helper
+transactionally converts every held broker candidate to an ordinary spool
+Event and verifies that no pending row remains. The writer stays stopped through
+handoff; failure restores the prior service/assets only after safe rollback.
+The capability probe also selects the command-line contract: a pre-feature
+module receives only its historical `--mode` and `--criticality` flags, never
+new provenance-generation arguments such as `--project-path`.
+Health units/timer, broker sudoers/wrapper, stable helper and sidecar are
+retired by one shared finalizer only after the old-module converge or the
+module-absent fallback cleanup has fully succeeded. Every earlier failure keeps
+those recovery assets intact.
+
+Process nodes live locally for seven days (131,072 rows), incomplete compounds
+for ten minutes (8,192), origin sessions for 30 days (4,096), health epochs for
+128 samples, and root-owned firewall receipt payloads for seven days (32,768 and 32
+MiB). Pending broker observations are capped at 4,096/32 MiB and wait at most
+30 seconds. Payload pruning targets a 256 MiB provenance operating budget and
+SQLite checkpoints target a 64 MiB WAL; these are operational pressure budgets,
+not hard whole-database file ceilings. Capacity pressure fails open and is
+reported in sensor counters. A
+non-journal collector has no new Audit-health authority and therefore cannot
+flush a pending proof candidate; only an explicit unhealthy journal bracket or
+the ordinary expiry deadline does so.
+central Event receives at most eight compact ancestors; the complete graph and
+raw Audit records remain on the sensor.
+
+Application firewall work no longer invokes raw iptables/ipset sudo commands.
+It sends one strict semantic JSON request to exactly
+`sudo -n -- /usr/local/sbin/mojo-firewall-broker`; sudoers authorizes that
+empty-argument command only. The broker generates the operation ID, validates
+the SUDO caller and the same-runner JobEngine context, constructs all argv and
+restore input, and emits root-owned begin/result receipts. Requests are at most
+16 MiB/250,000 canonical networks; restore is at most 24 MiB; address space is
+256 MiB; scalar work has 15 seconds and bulk work 120 seconds. Output overflow
+is failure (64 KiB, or an 8 MiB hard ceiling for semantic rules reads).
+
+`jobman_firewall_operation_v1` is local-only only after healthy post-cutover
+cron/jobman → sudo → broker → target lineage and exact receipt/PID-generation
+agreement. SSH, TTY, IP attribution, direct legacy sudo, missing context,
+timeouts, restarts, audit gaps, eviction, receipt disagreement, and every
+incomplete proof retain the original rich sudo Event. Legacy direct grants
+remain for one rollback generation but never qualify for suppression.
+The JobEngine context prevents accidental cross-job attribution through the
+normal API; it does not resist hostile Python already running in that process.
+
 Sensor `recommendation` values (`none`, `review`, `block_ip`) are advice, not an
 instruction. A compromised root node can forge its own observations, so the
 central receiver must authenticate the installation, revalidate every bounded

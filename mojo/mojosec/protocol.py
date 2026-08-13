@@ -107,7 +107,10 @@ def _require_timestamp(value, label):
 
 
 def _validate_attributes(value, depth=0):
-    if depth > 2:
+    # One bounded list of flat objects is required for process ancestors:
+    # attributes -> list -> ancestor -> scalar. Deeper arbitrary structures
+    # remain forbidden.
+    if depth > 3:
         raise ProtocolError("event attributes are nested too deeply")
     if isinstance(value, dict):
         if len(value) > 64:

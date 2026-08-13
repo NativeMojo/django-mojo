@@ -50,6 +50,7 @@ def _journal_config(max_records=10, max_bytes=65536):
     return {
         "max_records": max_records, "max_bytes_per_poll": max_bytes,
         "max_record_bytes": 16384, "timeout_seconds": 5, "lookback_seconds": 300,
+        "project_path": "/opt/api", "app_uid": 1000, "app_gid": 1000,
     }
 
 
@@ -84,6 +85,52 @@ def _patch_journal_popen(journal_module, payload, commands):
         TimeoutExpired=subprocess.TimeoutExpired,
     )
     return mock.patch.object(journal_module, "subprocess", proxy)
+
+
+@th.django_unit_test()
+def test_journal_audit_proc_enrichment_is_optional_but_conflicts_fail_closed(opts):
+    from mojo.mojosec.collectors import journal as journal_module
+
+    records = [
+        {"__CURSOR": "c1", "_BOOT_ID": "a" * 32, "_AUDIT_ID": "300",
+         "_TRANSPORT": "audit", "_AUDIT_TYPE_NAME": "SYSCALL",
+         "_AUDIT_FIELD_PID": "4242", "_AUDIT_FIELD_PPID": "100",
+         "_AUDIT_FIELD_UID": "1000", "_AUDIT_FIELD_EUID": "0",
+         "_AUDIT_LOGINUID": "1000", "_AUDIT_SESSION": "71",
+         "_AUDIT_FIELD_TTY": "pts1", "_AUDIT_FIELD_EXE": "/usr/bin/sudo",
+         "_AUDIT_FIELD_SUCCESS": "yes", "_AUDIT_FIELD_EXIT": "0",
+         "MESSAGE": "SYSCALL arch=c000003e syscall=59 success=yes exit=0"},
+        {"__CURSOR": "c2", "_BOOT_ID": "a" * 32, "_AUDIT_ID": "300",
+         "_TRANSPORT": "audit", "_AUDIT_TYPE_NAME": "EXECVE",
+         "_AUDIT_FIELD_ARGC": "2", "_AUDIT_FIELD_A0": "/usr/bin/sudo",
+         "_AUDIT_FIELD_A1": "-s", "MESSAGE": "EXECVE argc=2"},
+        {"__CURSOR": "c3", "_BOOT_ID": "a" * 32, "_AUDIT_ID": "300",
+         "_TRANSPORT": "audit", "_AUDIT_TYPE_NAME": "EOE", "MESSAGE": "EOE"},
+    ]
+    payload = b"".join(json.dumps(row).encode() + b"\n" for row in records)
+    commands = []
+    collector = journal_module.JournalCollector(_journal_config())
+    with _patch_journal_popen(journal_module, payload, commands), \
+            mock.patch.object(journal_module, "walk_parents", return_value={
+                "nodes": [], "ambiguous": False,
+            }):
+        result = collector.poll()
+    node = result["process_nodes"][0]
+    th.assert_true(node["success"] and node["eoe"] and not node["ambiguous"],
+                   "an exited short-lived process must retain its complete Audit edge")
+    th.assert_true("start_ticks" not in node and not node.get("pinned"),
+                   "missing /proc enrichment cannot invent a live PID generation")
+
+    live = {"pid": 4242, "ppid": 100, "start_ticks": 99,
+            "exe": "/usr/bin/other", "cmdline": [], "unit": "", "cgroup": "",
+            "namespaces": {}, "selinux": ""}
+    with _patch_journal_popen(journal_module, payload, commands), \
+            mock.patch.object(journal_module, "walk_parents", return_value={
+                "nodes": [live], "ambiguous": False,
+            }):
+        conflict = collector.poll()["process_nodes"][0]
+    th.assert_true(conflict["ambiguous"],
+                   "a live executable that conflicts with Audit must poison proof")
 
 
 @th.django_unit_test()

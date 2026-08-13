@@ -91,6 +91,18 @@ results = jobs.broadcast_execute(
 
 ## Writing Job Functions
 
+### Execution provenance
+
+The packaged JobEngine installs a scoped `contextvars` identity immediately
+around the actual Job or broadcast function call. It contains the real job or
+broadcast execution ID, function path, attempt, channel, runner, and broadcast
+flag and is always cleared in `finally`; nested or conflicting contexts are
+rejected. Privileged framework services use this identity for MojoSec
+correlation. Application callers cannot supply a different function identity.
+This is normal-API attribution inside one cooperative runner. It is neither
+cryptographic isolation nor root-unforgeable identity: hostile Python already
+executing in that process can call or replace the same framework APIs.
+
 ```python
 def process_order(job):
     order_id = job.payload["order_id"]
@@ -241,6 +253,12 @@ On a deployed node the cron runs `bin/jobman start` every minute, so `jobman` is
 what is actually managing the engine and scheduler there. `jobman stop` will not
 touch a daemon-mode engine, and the jobs CLI will not see anything jobman
 started.
+
+MojoSec proves that deployed origin from the real CROND launch record plus its
+matching PAM/Audit `USER_START`, then follows the audited bash → jobman → engine
+chain. The CROND row itself retains real crond process metadata; its launch PID
+is joined to the later bash and jobman execs, which may be successive execs of
+that same PID. MojoSec does not invent a same-session long-lived crond exec.
 
 `jobman` lives in `mojo.deploy` rather than in this app because it has to work
 on a box with no settings at all — see

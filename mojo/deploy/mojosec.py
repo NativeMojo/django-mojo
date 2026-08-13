@@ -25,6 +25,7 @@ from mojo.mojosec.config import CANONICAL_CONFIG_PATH
 
 
 SERVICE = "mojosec.service"
+PROVENANCE_CAPABILITY = 1
 SERVICE_PATH = "/etc/systemd/system/mojosec.service"
 CONFIG_PATH = CANONICAL_CONFIG_PATH
 DESIRED_CONFIG_PATH = "/opt/api/var/mojosec.json"
@@ -39,6 +40,9 @@ NGINX_FRAGMENT_PATH = "/etc/nginx/conf.d/00_mojosec.conf"
 RECEIVER_SNIPPET_PATH = "/etc/nginx/snippets/mojosec_receiver.conf"
 LOGROTATE_PATH = "/etc/logrotate.d/mojosec"
 DEPLOY_STATE_PATH = "/etc/mojosec/deploy.json"
+AUDIT_HEALTH_SERVICE_PATH = "/etc/systemd/system/mojosec-audit-health.service"
+AUDIT_HEALTH_TIMER_PATH = "/etc/systemd/system/mojosec-audit-health.timer"
+AUDIT_STABLE_HELPER_PATH = "/usr/local/lib/mojosec/mojosec_audit.py"
 DJANGO_INCLUDE_PATH = "/etc/nginx/django.inc"
 DJANGO_RECEIVER_INCLUDE = "include /etc/nginx/snippets/mojosec_receiver.conf;"
 DJANGO_RECEIVER_COMMENT = "# MojoSec exact receiver cap"
@@ -130,6 +134,42 @@ LOGROTATE_TEXT = """/var/log/nginx/mojosec.json.log {
     su root root
     create 0600 root root
 }
+"""
+
+BROKER_WRAPPER_TEXT = """#!/bin/sh
+exec /usr/bin/python3 -E -P -m mojo.deploy.firewall_broker
+"""
+
+AUDIT_HEALTH_SERVICE_TEXT = """[Unit]
+Description=Publish constrained MojoSec Linux Audit health
+After=auditd.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 -E -P -m mojo.deploy.audit publish-health --generation {generation} --rules-sha256 {rules_sha256}
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+CapabilityBoundingSet=CAP_AUDIT_CONTROL
+AmbientCapabilities=CAP_AUDIT_CONTROL
+ReadWritePaths=/run/mojosec
+"""
+
+AUDIT_HEALTH_TIMER_TEXT = """[Unit]
+Description=Refresh MojoSec Linux Audit health
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=5s
+AccuracySec=1s
+Unit=mojosec-audit-health.service
+
+[Install]
+WantedBy=timers.target
 """
 
 
@@ -623,7 +663,7 @@ def _target_allowed(path, roots):
     return any(os.path.commonpath((path, root)) == root for root in roots)
 
 
-def _prepare_effective_config():
+def _prepare_effective_config(app_account=None, project_path="/opt/api"):
     """Validate desired policy and merge only root-protected enrollment fields."""
     desired, source_payload = _read_json_file(DESIRED_CONFIG_PATH)
     unknown = set(desired) - DESIRED_KEYS
@@ -650,6 +690,11 @@ def _prepare_effective_config():
         raise DeployError("desired config cannot override the dedicated nginx log path")
     nginx["paths"] = [enrollment["nginx_log_path"]]
     nginx["max_line_bytes"] = MAX_STRUCTURED_LINE_BYTES
+    collectors["journal"].update({
+        "project_path": project_path,
+        "app_uid": app_account.pw_uid if app_account is not None else 1000,
+        "app_gid": app_account.pw_gid if app_account is not None else 1000,
+    })
     fim = collectors.setdefault("fim", {"enabled": False})
     if not isinstance(fim, dict):
         raise DeployError("desired collectors.fim must be an object")
@@ -798,7 +843,7 @@ def _restore_unit_set(service_path, unit_snapshot, service_state,
 def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
              service_path=SERVICE_PATH, nginx_path=NGINX_FRAGMENT_PATH,
              receiver_snippet_path=RECEIVER_SNIPPET_PATH,
-             django_include_path=DJANGO_INCLUDE_PATH):
+             django_include_path=DJANGO_INCLUDE_PATH, project_path="/opt/api"):
     """Converge one exact service. `off` preserves spool and credentials."""
     if mode not in MODES or criticality not in CRITICALITIES:
         raise DeployError("unsupported MojoSec deployment mode or criticality")
@@ -806,8 +851,13 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         raise DeployError("nginx log path is protected by root enrollment")
     if proxy_cidrs:
         raise DeployError("trusted proxy CIDRs are protected by root enrollment")
+    project_path = _normal_path(project_path, "MojoSec project path")
     unit_snapshot = service_state = retired_snapshot = None
     nginx_snapshot = deploy_state_snapshot = config_snapshot = None
+    broker_snapshots = {}
+    audit_state_snapshot = None
+    audit_converged = False
+    audit_prior_restored = False
     unit_changed = nginx_changed = config_changed = retired_changed = False
     mutation_started = False
     prepared = None
@@ -821,7 +871,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         # has already started producing a new log. best_effort failure must
         # leave an unenrolled legacy node operationally unchanged.
         if mode == "observe":
-            prepared = _prepare_effective_config()
+            prepared = _prepare_effective_config(project_path=project_path)
             _lstat_regular(CREDENTIAL_PATH, mode=0o600)
             proxy_cidrs = prepared[2]["trusted_proxy_cidrs"]
         _ensure_dir(STATE_DIR, 0o700)
@@ -854,11 +904,67 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         nginx_snapshot = _nginx_snapshot(
             nginx_paths, DEFAULT_LOG_PATH, inspect_log=mode == "observe")
         mutation_started = True
+        if mode == "off":
+            # Quiesce the only writer before converting proof candidates. The
+            # outer unit rollback restores the exact prior lifecycle on any
+            # later refusal or failure.
+            _systemctl("stop", SERVICE)
+            if _systemctl_is("is-active", SERVICE):
+                raise DeployError("cannot quiesce MojoSec before mode-off flush")
+            from mojo.deploy import audit as audit_deploy
+            try:
+                audit_deploy.flush_pending_firewall()
+            except (audit_deploy.AuditError, OSError, ValueError) as err:
+                raise DeployError(f"cannot preserve pending MojoSec evidence: {err}") from err
         retired_changed = _retire_stale_units(retired_snapshot)
         if prepared is not None:
             config_changed = _write_if_changed(
                 CONFIG_PATH, prepared[1].decode("utf-8"), 0o600)
             _audit_config()
+        audit_state = None
+        broker_changed = False
+        if mode == "observe":
+            from mojo.deploy import audit as audit_deploy
+            from mojo.deploy.firewall_broker import (
+                BROKER_PATH, SUDOERS_PATH, render_sudoers,
+            )
+            app_account = pwd.getpwnam("ec2-user")
+            journal_identity = prepared[0].get("collectors", {}).get(
+                "journal", {"app_uid": app_account.pw_uid,
+                            "app_gid": app_account.pw_gid})
+            if (app_account.pw_uid != journal_identity["app_uid"] or
+                    app_account.pw_gid != journal_identity["app_gid"]):
+                raise DeployError("ec2-user identity differs from protected MojoSec config")
+            app_uid = app_account.pw_uid
+            audit_state_snapshot = _owned_snapshot(audit_deploy.STATE_PATH)
+            for path in (BROKER_PATH, SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
+                         AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH):
+                broker_snapshots[path] = _owned_snapshot(path)
+            try:
+                audit_state = audit_deploy.converge(app_uid)
+                audit_converged = True
+            except audit_deploy.AuditError as err:
+                raise DeployError(f"Linux Audit convergence failed: {err}") from err
+            for parent in (os.path.dirname(BROKER_PATH), os.path.dirname(SUDOERS_PATH)):
+                _require_root_install_dir(parent)
+            broker_changed |= _write_if_changed(BROKER_PATH, BROKER_WRAPPER_TEXT, 0o755)
+            broker_changed |= _write_if_changed(SUDOERS_PATH, render_sudoers(), 0o440)
+            # Keep legacy direct grants for exactly the rollback generation;
+            # #1964 owns their later removal.
+            process = subprocess.run(
+                ["/usr/sbin/visudo", "-c", "-f", SUDOERS_PATH],
+                capture_output=True, text=True, timeout=10)
+            if process.returncode:
+                raise DeployError(process.stderr.strip() or "broker sudoers validation failed")
+            health_service = AUDIT_HEALTH_SERVICE_TEXT.format(**audit_state)
+            broker_changed |= _write_if_changed(
+                AUDIT_HEALTH_SERVICE_PATH, health_service, 0o644)
+            broker_changed |= _write_if_changed(
+                AUDIT_HEALTH_TIMER_PATH, AUDIT_HEALTH_TIMER_TEXT, 0o644)
+            _require_root_install_dir(os.path.dirname(AUDIT_STABLE_HELPER_PATH), create=True)
+            with open(audit_deploy.__file__, encoding="utf-8") as handle:
+                broker_changed |= _write_if_changed(
+                    AUDIT_STABLE_HELPER_PATH, handle.read(), 0o755)
         unit_changed = _write_if_changed(service_path, UNIT_TEXT, 0o644)
         edge_log_changed = False
         if mode == "observe" and nginx_plane == "edge":
@@ -871,14 +977,39 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         nginx_changed |= edge_log_changed
         if mode == "observe":
             _audit_active_nginx(runtime_log_path, proxy_cidrs)
-        if unit_changed or retired_changed:
+        if unit_changed or retired_changed or broker_changed:
             _systemctl("daemon-reload")
         if mode == "off":
-            _systemctl("disable", "--now", SERVICE)
+            _systemctl("disable", SERVICE)
             if (_systemctl_is("is-enabled", SERVICE) or
                     _systemctl_is("is-active", SERVICE)):
                 raise DeployError("MojoSec off convergence left service enabled or active")
+            from mojo.deploy import audit as audit_deploy
+            from mojo.deploy.firewall_broker import BROKER_PATH, SUDOERS_PATH
+            feature_paths = (
+                BROKER_PATH, SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
+                AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH,
+                audit_deploy.HEALTH_PATH,
+            )
+            audit_state_snapshot = _owned_snapshot(audit_deploy.STATE_PATH)
+            managed_policy = _owned_snapshot(audit_deploy.MANAGED_PATH)
+            if audit_state_snapshot is None and managed_policy is not None:
+                raise DeployError(
+                    "managed Audit policy has no rollback inventory for mode off")
+            for path in feature_paths:
+                broker_snapshots[path] = _owned_snapshot(path)
+            if audit_state_snapshot is not None:
+                audit_deploy.restore_prior()
+                audit_prior_restored = True
+            _systemctl("disable", "--now", "mojosec-audit-health.timer")
+            if (_systemctl_is("is-enabled", "mojosec-audit-health.timer") or
+                    _systemctl_is("is-active", "mojosec-audit-health.timer")):
+                raise DeployError("MojoSec off convergence left Audit health timer active")
+            for path in feature_paths:
+                broker_changed |= _remove_owned(path)
+            _systemctl("daemon-reload")
         else:
+            _systemctl("enable", "--now", "mojosec-audit-health.timer")
             _systemctl("enable", "--now", SERVICE)
             if unit_changed or config_changed:
                 _systemctl("restart", SERVICE)
@@ -894,14 +1025,31 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             state["sensor_id"] = prepared[0]["sensor_id"]
             state["config"] = prepared[0]["config_provenance"]
             state["nginx_plane"] = nginx_plane
+            state["audit_generation"] = audit_state["generation"]
+            state["audit_rules_sha256"] = audit_state["rules_sha256"]
+            state["firewall_broker"] = True
         _write_if_changed(DEPLOY_STATE_PATH,
                           json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
                           0o600)
-        return {"changed": unit_changed or nginx_changed or config_changed or retired_changed,
+        return {"changed": unit_changed or nginx_changed or config_changed or retired_changed or broker_changed,
                 **state}
     except (DeployError, OSError, ValueError) as err:
         rollback_errors = []
         if mutation_started:
+            if broker_snapshots:
+                try:
+                    from mojo.deploy import audit as audit_deploy
+                    if mode == "observe" and audit_converged:
+                        audit_deploy.restore_immediate()
+                        _restore_snapshot(audit_deploy.STATE_PATH, audit_state_snapshot)
+                    elif mode == "off" and audit_prior_restored:
+                        _restore_snapshot(audit_deploy.STATE_PATH, audit_state_snapshot)
+                        audit_deploy.restore_immediate()
+                    for path, snapshot in broker_snapshots.items():
+                        _restore_snapshot(path, snapshot)
+                    _systemctl("daemon-reload")
+                except (DeployError, OSError, ValueError, RuntimeError) as rollback_error:
+                    rollback_errors.append(f"Audit/broker: {rollback_error}")
             try:
                 _restore_snapshot(CONFIG_PATH, config_snapshot)
             except (DeployError, OSError) as rollback_error:
@@ -1021,6 +1169,7 @@ def main(argv=None):
     install.add_argument("--mode", choices=("enrolled",) + MODES, default="enrolled")
     install.add_argument("--criticality", choices=("enrolled",) + CRITICALITIES,
                          default="enrolled")
+    install.add_argument("--project-path", default="/opt/api")
     rotate = sub.add_parser("rotate-credential")
     rotate.add_argument("--no-restart", action="store_true")
     sub.add_parser("install-enrollment")
@@ -1035,7 +1184,7 @@ def main(argv=None):
                       "sensor_id": enrollment["sensor_id"]}
         else:
             mode, criticality = resolve_lifecycle(args.mode, args.criticality)
-            result = converge(mode, criticality)
+            result = converge(mode, criticality, project_path=args.project_path)
             result.setdefault("ok", True)
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0

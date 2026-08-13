@@ -252,7 +252,22 @@ receipts whose projected evidence was already pruned by retention return
 per-event `rejected` — terminal, so the sensor frees the spool slot — never
 `retry`.
 
-## Learning API
+## Privileged-operation evidence
+
+Delivered `auth.sudo_command` Events remain rich: the exact bounded command,
+actor, target, source IP when SSH attribution is proven, TTY, Audit session,
+producer identity, unit/cgroup/SELinux context, semantic broker operation and
+up to eight validated ancestors may be present. The wire and Event schemas are
+still version 1 and all additions are optional, so older sensors and retained
+receipts remain compatible.
+
+Expected firewall automation may be absent from the central Event feed only
+when the sensor proves healthy post-cutover jobman, sudo, root broker, and
+target lineage plus matching begin/result receipts. The fixed classifier is
+`jobman_firewall_operation_v1`. Missing, stale, conflicting, interactive,
+direct, SSH-attributed, or audit-unhealthy activity is sent as an ordinary
+Event. A diagnostic window uses the existing eventless local-only receipt
+contract and does not create an Incident or enter learning/feedback metrics.
 
 The browser-facing learning endpoints are separate from machine ingestion.
 They require a human JWT with global security permissions; API keys are always

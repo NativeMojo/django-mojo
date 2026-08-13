@@ -1,13 +1,14 @@
 """
-Standalone firewall management module.
+Standalone brokered firewall management module.
 
-Manages iptables and ipset rules directly — no dependency on OSSEC scripts.
+Sends semantic requests to a root-owned firewall broker.
 Used by the broadcast job system to enforce fleet-wide IP blocks.
 
-Must run as ec2-user (which has passwordless sudo for iptables/ipset).
+Must run as ec2-user (which may sudo only the empty-argv broker).
 Called only from async jobs — never from the web process.
 """
 import getpass
+import json
 import subprocess
 import re
 from mojo.helpers import logit
@@ -26,6 +27,7 @@ SUDO = "/usr/bin/sudo"
 IPTABLES = "/sbin/iptables"
 IPTABLES_SAVE = "/sbin/iptables-save"
 IPSET = "/sbin/ipset"
+BROKER = "/usr/local/sbin/mojo-firewall-broker"
 
 
 def _validate_ip(ip):
@@ -95,6 +97,42 @@ def _run_stdin(args, stdin_data, timeout=30):
         return False, "", str(e)
 
 
+def _broker_request(operation, timeout=20, **values):
+    """Call the exact empty-argv broker with immutable engine identity."""
+    if not _check_user():
+        return None
+    from mojo.apps.jobs.execution_context import current
+    context = current()
+    if context is None:
+        logit.error("firewall operation rejected outside JobEngine execution context")
+        return None
+    payload = json.dumps(
+        {"operation": operation, "context": context, **values},
+        sort_keys=True, separators=(",", ":"))
+    try:
+        result = subprocess.run(
+            [SUDO, "-n", "--", BROKER], input=payload,
+            capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        logit.error(f"firewall broker timed out during {operation}")
+        return None
+    except OSError as err:
+        logit.error(f"firewall broker could not start during {operation}: {err}")
+        return None
+    if result.returncode:
+        logit.error(f"firewall broker rejected {operation}: {result.stderr[:512]}")
+        return None
+    try:
+        value = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError):
+        logit.error(f"firewall broker returned malformed output for {operation}")
+        return None
+    if not isinstance(value, dict) or not isinstance(value.get("ok"), bool):
+        logit.error(f"firewall broker returned an invalid result for {operation}")
+        return None
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Single IP blocking (iptables)
 # ---------------------------------------------------------------------------
@@ -104,10 +142,8 @@ def is_blocked(ip):
     ip = _validate_ip(ip)
     if not ip:
         return False
-    ok, stdout, _ = _run([IPTABLES_SAVE])
-    if not ok:
-        return False
-    return ip in stdout
+    result = _broker_request("rules.contains", source=ip)
+    return bool(result and result.get("present") is True)
 
 
 def block(ip):
@@ -122,16 +158,16 @@ def block(ip):
     if is_blocked(ip):
         return True
 
-    ok, _, stderr = _run([IPTABLES, "-I", "INPUT", "-s", ip, "-j", "DROP"])
-    if not ok:
-        logit.error(f"iptables block INPUT failed for {ip}: {stderr}")
+    result = _broker_request("rule.insert", chain="INPUT", source=ip)
+    if not result or not result["ok"]:
+        logit.error(f"firewall broker failed to block INPUT source {ip}")
         return False
 
     # Also block forwarded traffic if forwarding is enabled
     try:
         with open("/proc/sys/net/ipv4/ip_forward") as f:
             if f.read().strip() == "1":
-                _run([IPTABLES, "-I", "FORWARD", "-s", ip, "-j", "DROP"])
+                _broker_request("rule.insert", chain="FORWARD", source=ip)
     except (FileNotFoundError, PermissionError):
         pass
 
@@ -151,8 +187,8 @@ def unblock(ip):
     if not is_blocked(ip):
         return True
 
-    _run([IPTABLES, "-D", "INPUT", "-s", ip, "-j", "DROP"])
-    _run([IPTABLES, "-D", "FORWARD", "-s", ip, "-j", "DROP"])
+    _broker_request("rule.delete", chain="INPUT", source=ip)
+    _broker_request("rule.delete", chain="FORWARD", source=ip)
 
     logit.info(f"Unblocked IP: {ip}")
     return True
@@ -174,20 +210,12 @@ def ipset_add(name, ip):
     if not name or not ip:
         return False
 
-    # Create the set if it doesn't exist (hash:net handles IPs as /32)
-    _run([IPSET, "create", name, "hash:net", "-exist"])
-
-    ok, _, stderr = _run([IPSET, "add", name, ip, "-exist"])
-    if not ok:
-        logit.error(f"ipset add failed for {name}/{ip}: {stderr}")
+    result = _broker_request("set.add", set_name=name, source=ip)
+    if not result or not result["ok"]:
+        logit.error(f"firewall broker failed set add for {name}/{ip}")
         return False
-
-    # Ensure iptables rule exists for this set
-    ok, stdout, _ = _run([IPTABLES_SAVE])
-    if ok and f"--match-set {name}" not in stdout:
-        _run([IPTABLES, "-I", "INPUT", "-m", "set", "--match-set", name, "src", "-j", "DROP"])
-
-    return True
+    ensured = _broker_request("set.rule_ensure", set_name=name)
+    return bool(ensured and ensured["ok"])
 
 
 def ipset_del(name, ip):
@@ -202,11 +230,8 @@ def ipset_del(name, ip):
     if not name or not ip:
         return False
 
-    ok, _, stderr = _run([IPSET, "del", name, ip, "-exist"])
-    if not ok:
-        logit.error(f"ipset del failed for {name}/{ip}: {stderr}")
-        return False
-    return True
+    result = _broker_request("set.delete", set_name=name, source=ip)
+    return bool(result and result["ok"])
 
 
 def _build_restore_script(name, cidrs):
@@ -256,24 +281,17 @@ def ipset_load(name, cidrs):
     if not name:
         return False, 0
 
-    # Ensure the live set exists before we can swap into it
-    ok, _, stderr = _run([IPSET, "create", name, "hash:net", "-exist"])
-    if not ok:
-        logit.error(f"ipset create failed for {name}: {stderr}")
+    values = [value for value in (_validate_ip(cidr) for cidr in cidrs) if value]
+    if not values:
         return False, 0
-
-    # Build and execute the restore script (atomic swap via temp set)
-    script, loaded = _build_restore_script(name, cidrs)
-    ok, _, stderr = _run_stdin([IPSET, "restore"], script)
-    if not ok:
-        logit.error(f"ipset restore failed for {name}: {stderr}")
+    result = _broker_request("set.replace", timeout=125, set_name=name, cidrs=values)
+    if not result or not result["ok"]:
+        logit.error(f"firewall broker failed set replace for {name}")
         return False, 0
-
-    # Ensure iptables rule exists for this set (check first to avoid duplicates)
-    ok, stdout, _ = _run([IPTABLES_SAVE])
-    if ok and f"--match-set {name}" not in stdout:
-        _run([IPTABLES, "-I", "INPUT", "-m", "set", "--match-set", name, "src", "-j", "DROP"])
-
+    ensured = _broker_request("set.rule_ensure", set_name=name)
+    if not ensured or not ensured["ok"]:
+        return False, 0
+    loaded = len(values)
     logit.info(f"ipset {name}: loaded {loaded}/{len(cidrs)} CIDRs")
     return True, loaded
 
@@ -287,12 +305,9 @@ def ipset_remove(name):
     if not name:
         return False
 
-    # Remove iptables rule first
-    _run([IPTABLES, "-D", "INPUT", "-m", "set", "--match-set", name, "src", "-j", "DROP"])
-
-    # Flush and destroy the set
-    _run([IPSET, "flush", name])
-    _run([IPSET, "destroy", name])
+    result = _broker_request("set.remove", set_name=name)
+    if not result or not result["ok"]:
+        return False
 
     logit.info(f"ipset {name}: removed")
     return True

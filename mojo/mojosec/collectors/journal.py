@@ -9,6 +9,7 @@ import time
 
 from ..detectors import detect_journal
 from ..attribution import AttributionResolver
+from ..lineage import CompoundAssembler, crond_launch, firewall_receipt, walk_parents
 
 
 MAX_STDERR_BYTES = 4096
@@ -34,7 +35,8 @@ class JournalCollector:
     def __init__(self, config):
         self.config = config
 
-    def poll(self, cursor=None, ssh_sessions=None, who_sessions=None):
+    def poll(self, cursor=None, ssh_sessions=None, who_sessions=None,
+             audit_fragments=None):
         command = ["/usr/bin/journalctl", "--output=json", "--no-pager"]
         if cursor:
             command.append(f"--after-cursor={cursor}")
@@ -153,6 +155,35 @@ class JournalCollector:
             raise RuntimeError(error or f"journalctl exited {returncode}")
         resolver = AttributionResolver(ssh_sessions, who_sessions=who_sessions)
         sessions = resolver.overlay(parsed_records)
+        lineage = CompoundAssembler(audit_fragments).ingest(parsed_records)
+        process_nodes = []
+        for node in lineage["complete"]:
+            if node.get("pid"):
+                parents = walk_parents(node["pid"])
+                node["live_ancestors"] = parents["nodes"]
+                node["ambiguous"] = bool(node.get("ambiguous") or parents["ambiguous"])
+                live = parents["nodes"][0] if parents["nodes"] else None
+                if live is not None:
+                    if (live.get("pid") != node.get("pid") or
+                            (node.get("exe") and live.get("exe") != node.get("exe"))):
+                        node["ambiguous"] = True
+                    node["start_ticks"] = live["start_ticks"]
+                    node["unit"] = live.get("unit", "")
+                    node["cgroup"] = live.get("cgroup", "")
+                    node["namespaces"] = live.get("namespaces", {})
+                    node["selinux"] = node.get("selinux") or live.get("selinux", "")
+                    node["pinned"] = bool(
+                        os.path.basename(node.get("exe", "")).startswith("python3") and
+                        any(str(part).endswith("/bin/jobs.py") or part == "bin/jobs.py"
+                            for part in live.get("cmdline", [])) and
+                        "engine" in live.get("cmdline", []) and
+                        "foreground" in live.get("cmdline", []))
+            process_nodes.append(node)
+        receipts = [found for found in
+                    (firewall_receipt(record) for record in parsed_records) if found]
+        crond_launches = [found for found in (crond_launch(
+            record, self.config["project_path"], self.config["app_uid"],
+            self.config["app_gid"]) for record in parsed_records) if found]
         for record in parsed_records:
             try:
                 detected = detect_journal(record, resolver)
@@ -164,4 +195,7 @@ class JournalCollector:
         return {
             "observations": observations, "cursor": next_cursor,
             "malformed": malformed, "ssh_sessions": sessions,
+            "audit_fragments": lineage["fragments"],
+            "process_nodes": process_nodes, "firewall_receipts": receipts,
+            "crond_launches": crond_launches,
         }
