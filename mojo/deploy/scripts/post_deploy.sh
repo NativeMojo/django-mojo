@@ -280,6 +280,18 @@ restore_mojosec_django() {
     fi
     rm -f -- "$MOJOSEC_DJANGO_BACKUP"
 }
+MOJOSEC_PRIOR_ACTIVE=0
+MOJOSEC_PRIOR_ENABLED=0
+quiesce_mojosec_for_downgrade() {
+    systemctl is-active --quiet mojosec.service && MOJOSEC_PRIOR_ACTIVE=1 || true
+    systemctl is-enabled --quiet mojosec.service && MOJOSEC_PRIOR_ENABLED=1 || true
+    systemctl stop mojosec.service
+    ! systemctl is-active --quiet mojosec.service
+}
+restore_mojosec_service_after_failure() {
+    if [ "$MOJOSEC_PRIOR_ENABLED" = "1" ]; then systemctl enable mojosec.service; fi
+    if [ "$MOJOSEC_PRIOR_ACTIVE" = "1" ]; then systemctl start mojosec.service; fi
+}
 
 # Distinguish the current provenance-aware module, an installed older module,
 # and a package with no MojoSec deployment support. A downgrade must restore
@@ -308,10 +320,15 @@ if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ] && \
     [ ! -L /usr/local/lib/mojosec/mojosec_audit.py ] && \
     [ "$(stat -c %u /usr/local/lib/mojosec/mojosec_audit.py)" = "0" ] \
         || { restore_mojosec_django; die "cannot trust MojoSec Audit downgrade helper"; }
+    quiesce_mojosec_for_downgrade \
+        || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+             die "cannot quiesce MojoSec for downgrade"; }
     /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py flush-pending \
-        || { restore_mojosec_django; die "cannot flush MojoSec pending events"; }
+        || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+             die "cannot flush MojoSec pending events"; }
     /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py restore \
-        || { restore_mojosec_django; die "cannot restore pre-feature Audit state"; }
+        || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+             die "cannot restore pre-feature Audit state"; }
     systemctl disable --now mojosec-audit-health.timer 2>/dev/null || true
     rm -f -- /etc/systemd/system/mojosec-audit-health.service \
               /etc/systemd/system/mojosec-audit-health.timer \
@@ -360,10 +377,15 @@ else
         [ ! -L /usr/local/lib/mojosec/mojosec_audit.py ] && \
         [ "$(stat -c %u /usr/local/lib/mojosec/mojosec_audit.py)" = "0" ] \
             || { restore_mojosec_django; die "cannot trust MojoSec Audit downgrade helper"; }
+        quiesce_mojosec_for_downgrade \
+            || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+                 die "cannot quiesce MojoSec for downgrade"; }
         /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py flush-pending \
-            || { restore_mojosec_django; die "cannot flush MojoSec pending events"; }
+            || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+                 die "cannot flush MojoSec pending events"; }
         /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py restore \
-            || { restore_mojosec_django; die "cannot restore pre-feature Audit state"; }
+            || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+                 die "cannot restore pre-feature Audit state"; }
         systemctl disable --now mojosec-audit-health.timer 2>/dev/null || true
         rm -f -- /etc/systemd/system/mojosec-audit-health.service \
                   /etc/systemd/system/mojosec-audit-health.timer \

@@ -694,7 +694,7 @@ class Store:
             clean = {name: launch[name] for name in (
                 "boot_id", "audit_session", "half", "monotonic", "command_sha256")}
             if half == "syslog":
-                clean["bash_pid"] = launch["bash_pid"]
+                clean["launch_pid"] = launch["launch_pid"]
             if prior is not None and prior != clean:
                 conflict = True
             payload[half] = clean
@@ -733,7 +733,11 @@ class Store:
             "ORDER BY updated_at DESC LIMIT ?", (PROCESS_PINNED_CAP,)).fetchall()
         for row in rows:
             live = enrich_process(row["pid"])
-            if live is not None and str(live["start_ticks"]) == row["generation"]:
+            payload = self.db.execute(
+                "SELECT payload FROM process_nodes WHERE rowid=?", (row["rowid"],)).fetchone()
+            node = json.loads(payload["payload"]) if payload is not None else {}
+            if (self._eligible_process_node(node) and live is not None and
+                    str(live["start_ticks"]) == row["generation"]):
                 self.db.execute(
                     "UPDATE process_nodes SET updated_at=? WHERE rowid=?", (now, row["rowid"]))
             else:
@@ -787,40 +791,30 @@ class Store:
             by_pid = {}
             for node in nodes:
                 by_pid.setdefault(node.get("pid"), []).append(node)
-            current = json.loads(anchor["payload"])
-            anchor_node = current
-            jobman = False
-            jobman_node = None
-            seen = set()
-            for unused in range(8):
-                parent_pid = current.get("ppid")
-                if not isinstance(parent_pid, int) or parent_pid <= 0 or parent_pid in seen:
-                    break
-                seen.add(parent_pid)
-                candidates = [node for node in by_pid.get(parent_pid, [])
-                              if not node.get("ambiguous") and not node.get("incomplete")]
-                if len(candidates) != 1:
-                    break
-                current = candidates[0]
-                argv = [str(part) for part in current.get("argv", [])]
-                if ("start" in argv and any(
-                        part.endswith("/bin/jobman") or
-                        part == "mojo.deploy.jobman" for part in argv)):
-                    jobman = True
-                    jobman_node = current
-                    break
-            if not jobman or jobman_node is None:
+            anchor_node = json.loads(anchor["payload"])
+            if not self._eligible_process_node(anchor_node):
                 continue
-            bash = [node for node in by_pid.get(jobman_node.get("ppid"), [])
-                    if node.get("pid") == syslog.get("bash_pid") and
+            launch_pid = syslog.get("launch_pid")
+            jobman = [node for node in nodes if self._eligible_process_node(node) and
+                      node.get("pid") == anchor_node.get("ppid") and
+                      "start" in [str(part) for part in node.get("argv", [])] and
+                      any(str(part).endswith("/bin/jobman") or
+                          part == "mojo.deploy.jobman" for part in node.get("argv", []))]
+            if len(jobman) != 1:
+                continue
+            jobman_node = jobman[0]
+            bash = [node for node in nodes if self._eligible_process_node(node) and
                     node.get("exe") == "/usr/bin/bash" and
-                    node.get("success") is True and node.get("eoe") is True and
-                    not node.get("ambiguous") and not node.get("incomplete")]
+                    (node.get("pid") == launch_pid == jobman_node.get("pid") or
+                     node.get("pid") == launch_pid == jobman_node.get("ppid"))]
             if len(bash) != 1:
                 continue
-            bash = bash[0]
+            bash_node = bash[0]
+            if not (jobman_node.get("pid") == bash_node.get("pid") or
+                    jobman_node.get("ppid") == bash_node.get("pid")):
+                continue
             order = (pam["monotonic"], syslog["monotonic"],
-                     bash.get("monotonic"), jobman_node.get("monotonic"),
+                     bash_node.get("monotonic"), jobman_node.get("monotonic"),
                      anchor_node.get("monotonic"))
             if (any(not isinstance(value, int) for value in order) or
                     any(left >= right for left, right in zip(order, order[1:]))):
@@ -904,10 +898,11 @@ class Store:
                 break
             seen.add(current_pid)
             found = by_pid.get(current_pid, [])
-            if len(found) != 1:
-                conflict = len(found) > 1
+            eligible = [node for node in found if self._eligible_process_node(node)]
+            if len(eligible) != 1:
+                conflict = len(found) > 1 or bool(found and not eligible)
                 break
-            node = found[0]
+            node = eligible[0]
             lineage.append(node)
             conflict = conflict or bool(node.get("ambiguous") or node.get("incomplete"))
             current_pid = node.get("ppid")
@@ -1020,12 +1015,20 @@ class Store:
             all(child.get("ok") is True for child in result["children"]))
 
     @staticmethod
+    def _eligible_process_node(node):
+        argv = node.get("argv")
+        return bool(
+            isinstance(node, dict) and node.get("success") is True and
+            node.get("eoe") is True and not node.get("ambiguous") and
+            not node.get("incomplete") and isinstance(argv, list) and
+            1 <= len(argv) <= 64 and all(isinstance(part, str) for part in argv) and
+            sum(len(part.encode("utf-8", errors="replace")) for part in argv) <= 16384)
+
+    @staticmethod
     def _one_pid_generation(nodes, pid, start_ticks, earliest, latest, exe=None):
         found = []
         for node in nodes:
-            if (node.get("pid") != pid or node.get("ambiguous") or
-                    node.get("incomplete") or node.get("success") is not True or
-                    node.get("eoe") is not True or not node.get("argv")):
+            if node.get("pid") != pid or not Store._eligible_process_node(node):
                 continue
             if exe is not None and node.get("exe") != exe:
                 continue
@@ -1046,7 +1049,7 @@ class Store:
     def _parent_node(nodes, child):
         found = [node for node in nodes
                  if node.get("pid") == child.get("ppid") and
-                 not node.get("ambiguous") and not node.get("incomplete")]
+                 Store._eligible_process_node(node)]
         if len(found) == 1:
             return found[0]
         # Several exec generations of one parent PID are safe only when one is
@@ -1061,7 +1064,9 @@ class Store:
         for row in candidates:
             observation = json.loads(row["payload"])
             attributes = observation["attributes"]
-            if not current_health:
+            if current_health is None:
+                continue
+            if current_health is False:
                 self._ingest_one(observation, now)
                 self._increment_saturating("provenance_health_fail_open")
                 self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
@@ -1332,8 +1337,8 @@ class Store:
                 "ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET ?)",
                 (SSH_SESSION_CAP,))
             self._resolve_pending_firewall(
-                now, current_health=bool(
-                    audit_health is not None and audit_health.get("healthy")))
+                now, current_health=(None if audit_health is None else
+                                     bool(audit_health.get("healthy"))))
             self._flush_expired_firewall(now)
             self._flush_due(now)
             if cursor_key is not None:

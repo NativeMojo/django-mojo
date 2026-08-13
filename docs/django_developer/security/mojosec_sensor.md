@@ -866,11 +866,15 @@ conflicts, gaps, loss, or stale health makes suppression ineligible. Only the
 long-lived JobEngine anchor must still have a live verified PID generation.
 
 The cron origin is not inferred from a fabricated same-session `crond` exec.
-It requires both halves of the production AL2023 launch: a trusted root CROND
-syslog record for the exact project-specific `bash -c` jobman command and a
-matching Audit `USER_START` crond/PAM record. Both must agree on boot and Audit
-session, application UID/GID, `session-<id>.scope`, crond SELinux domain and
-strict monotonic order before the audited bash → jobman → engine chain. The
+It requires both halves of the production AL2023 launch: the trusted root
+CROND CMD row (`_COMM=crond`, `_EXE=/usr/sbin/crond`, `_CMDLINE=/usr/sbin/CROND
+-n`) carrying the exact project-specific jobman command, and an earlier Audit
+`USER_START` row whose bounded quoted PAM message exactly names the app account,
+crond executable, cron terminal and successful result. They agree on boot,
+Audit session, app login UID, session scope and crond SELinux domain; the CMD
+row additionally proves the app GID and launch PID. Strict monotonic order then
+joins audited bash → jobman → engine generations. Bash and jobman may be
+successive execs of the same launch PID or a strict parent/child pair. The
 bounded launch record survives polling and restart; a conflicting duplicate is
 sticky and makes the session permanently ineligible for suppression.
 
@@ -881,9 +885,11 @@ freshness, loss, backlog, failure mode, and rate limit. Deployment accepts only
 the exact AL2023 `task,never` seed or a complete prior Mojo generation after
 hashing every rules source, the generated rules and the active rules. It keeps
 an exact rollback record and restores it on convergence failure or downgrade.
-Before an older package is allowed to start, the stable root helper
+Mode-off and package downgrade first stop and verify the sensor inactive.
+Before an older package is allowed to start or Audit assets are consumed, the stable root helper
 transactionally converts every held broker candidate to an ordinary spool
-Event and verifies that no pending row remains.
+Event and verifies that no pending row remains. The writer stays stopped through
+handoff; failure restores the prior service/assets only after safe rollback.
 
 Process nodes live locally for seven days (131,072 rows), incomplete compounds
 for ten minutes (8,192), origin sessions for 30 days (4,096), health epochs for
@@ -893,6 +899,9 @@ MiB). Pending broker observations are capped at 4,096/32 MiB and wait at most
 SQLite checkpoints target a 64 MiB WAL; these are operational pressure budgets,
 not hard whole-database file ceilings. Capacity pressure fails open and is
 reported in sensor counters. A
+non-journal collector has no new Audit-health authority and therefore cannot
+flush a pending proof candidate; only an explicit unhealthy journal bracket or
+the ordinary expiry deadline does so.
 central Event receives at most eight compact ancestors; the complete graph and
 raw Audit records remain on the sensor.
 

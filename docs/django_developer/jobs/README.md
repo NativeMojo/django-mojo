@@ -256,8 +256,9 @@ started.
 
 MojoSec proves that deployed origin from the real CROND launch record plus its
 matching PAM/Audit `USER_START`, then follows the audited bash → jobman → engine
-chain. It does not assume the long-lived `crond` daemon shares the child's
-Audit session.
+chain. The CROND row itself retains real crond process metadata; its launch PID
+is joined to the later bash and jobman execs, which may be successive execs of
+that same PID. MojoSec does not invent a same-session long-lived crond exec.
 
 `jobman` lives in `mojo.deploy` rather than in this app because it has to work
 on a box with no settings at all — see

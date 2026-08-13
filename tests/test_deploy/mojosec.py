@@ -430,8 +430,10 @@ def test_off_and_best_effort_preserve_evidence(opts):
 
     def systemctl(*args):
         calls.append(args)
-        if args[:2] == ("disable", "--now"):
-            states.update(enabled=False, active=False)
+        if args == ("stop", deploy.SERVICE):
+            states["active"] = False
+        elif args == ("disable", deploy.SERVICE):
+            states["enabled"] = False
 
     with mock.patch.object(deploy, "_ensure_dir"), \
             mock.patch.object(deploy, "_require_root_install_dir"), \
@@ -444,10 +446,14 @@ def test_off_and_best_effort_preserve_evidence(opts):
             mock.patch.object(deploy, "_systemctl_is",
                               side_effect=lambda verb, unit: states[verb[3:]]), \
             mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
+            mock.patch("mojo.deploy.audit.flush_pending_firewall") as flush, \
             mock.patch.object(deploy.os, "geteuid", return_value=0):
         result = deploy.converge("off", "required")
-    th.assert_in(("disable", "--now", deploy.SERVICE), calls,
+    th.assert_in(("stop", deploy.SERVICE), calls,
                  "off must stop and disable a prior installation")
+    th.assert_in(("disable", deploy.SERVICE), calls,
+                 "off must keep the quiesced sensor disabled")
+    flush.assert_called_once_with()
     th.assert_eq(result["spool_preserved"], True,
                  "off/rollback must preserve local evidence")
 
@@ -471,8 +477,10 @@ def test_off_restores_audit_and_removes_feature_assets(opts):
 
     def systemctl(*args):
         calls.append(args)
-        if args[:2] == ("disable", "--now") and args[-1] == deploy.SERVICE:
-            states.update(enabled=False, active=False)
+        if args == ("stop", deploy.SERVICE):
+            states["active"] = False
+        elif args == ("disable", deploy.SERVICE):
+            states["enabled"] = False
 
     with mock.patch.object(deploy.os, "geteuid", return_value=0), \
             mock.patch.object(deploy, "_ensure_dir"), \
@@ -492,9 +500,11 @@ def test_off_restores_audit_and_removes_feature_assets(opts):
             mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
             mock.patch.object(deploy, "_remove_owned",
                               side_effect=lambda path: removed.append(path) or True), \
+            mock.patch.object(audit, "flush_pending_firewall") as flush, \
             mock.patch.object(audit, "restore_prior") as restore:
         deploy.converge("off", "required")
 
+    flush.assert_called_once_with()
     restore.assert_called_once_with()
     for path in (BROKER_PATH, SUDOERS_PATH, deploy.AUDIT_HEALTH_SERVICE_PATH,
                  deploy.AUDIT_HEALTH_TIMER_PATH, deploy.AUDIT_STABLE_HELPER_PATH,
@@ -518,8 +528,8 @@ def test_off_refuses_managed_audit_without_rollback_inventory(opts):
     states = {"enabled": True, "active": True}
 
     def systemctl(*args):
-        if args[:2] == ("disable", "--now") and args[-1] == deploy.SERVICE:
-            states.update(enabled=False, active=False)
+        if args == ("stop", deploy.SERVICE):
+            states["active"] = False
 
     with mock.patch.object(deploy.os, "geteuid", return_value=0), \
             mock.patch.object(deploy, "_ensure_dir"), \
@@ -535,9 +545,51 @@ def test_off_refuses_managed_audit_without_rollback_inventory(opts):
             mock.patch.object(deploy, "_restore_snapshot"), \
             mock.patch.object(deploy, "_systemctl_is",
                               side_effect=lambda verb, unit: states[verb[3:]]), \
-            mock.patch.object(deploy, "_systemctl", side_effect=systemctl):
+            mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
+            mock.patch.object(audit, "flush_pending_firewall"):
         with th.assert_raises(deploy.DeployError):
             deploy.converge("off", "required")
+
+
+@th.django_unit_test()
+def test_off_flush_failure_restores_service_without_removing_assets(opts):
+    from mojo.deploy import audit
+    from mojo.deploy import mojosec as deploy
+
+    states = {"enabled": True, "active": True}
+    calls = []
+
+    def systemctl(*args):
+        calls.append(args)
+        if args == ("stop", deploy.SERVICE):
+            states["active"] = False
+        elif args == ("start", deploy.SERVICE):
+            states["active"] = True
+        elif args == ("enable", deploy.SERVICE):
+            states["enabled"] = True
+
+    with mock.patch.object(deploy.os, "geteuid", return_value=0), \
+            mock.patch.object(deploy, "_ensure_dir"), \
+            mock.patch.object(deploy, "_require_root_install_dir"), \
+            mock.patch.object(deploy, "_owned_snapshot", return_value=None), \
+            mock.patch.object(deploy, "_retired_unit_snapshot", return_value={}), \
+            mock.patch.object(deploy, "_nginx_snapshot", return_value={}), \
+            mock.patch.object(deploy, "_restore_nginx"), \
+            mock.patch.object(deploy, "_restore_unit_set",
+                              side_effect=lambda *unused: systemctl("start", deploy.SERVICE)), \
+            mock.patch.object(deploy, "_restore_snapshot"), \
+            mock.patch.object(deploy, "_systemctl_is",
+                              side_effect=lambda verb, unit: states[verb[3:]]), \
+            mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
+            mock.patch.object(deploy, "_remove_owned") as remove, \
+            mock.patch.object(audit, "flush_pending_firewall",
+                              side_effect=audit.AuditError("locked")):
+        with th.assert_raises(deploy.DeployError):
+            deploy.converge("off", "required")
+    th.assert_true(states["active"],
+                   "failed evidence flush must restore the prior active service")
+    th.assert_true(not remove.called,
+                   "off refusal must preserve provenance assets for a safe retry")
 
 
 @th.django_unit_test()
@@ -689,6 +741,28 @@ def test_audit_internal_rollback_is_not_rolled_back_again(opts):
             deploy.converge("observe", "required")
     th.assert_true(not restore.called,
                    "outer rollback must not apply an old generation after Audit restored itself")
+
+
+@th.django_unit_test()
+def test_downgrade_handoff_quiesces_writer_through_flush_and_restore(opts):
+    from mojo.deploy import mojosec as deploy
+
+    path = os.path.join(os.path.dirname(deploy.__file__), "scripts", "post_deploy.sh")
+    with open(path, encoding="utf-8") as handle:
+        script = handle.read()
+    function = script.index("quiesce_mojosec_for_downgrade()")
+    stop = script.index("systemctl stop mojosec.service", function)
+    inactive = script.index("! systemctl is-active --quiet mojosec.service", stop)
+    handoff = script.index("quiesce_mojosec_for_downgrade", function + 1)
+    flush = script.index("mojosec_audit.py flush-pending", handoff)
+    restore = script.index("mojosec_audit.py restore", flush)
+    th.assert_true(stop < inactive < handoff < flush < restore,
+                   "downgrade must stop and verify the writer before flush and handoff")
+    between = script[flush:restore]
+    th.assert_true("systemctl start mojosec.service" not in between,
+                   "no writer may restart between the pending flush and old-module handoff")
+    th.assert_in("restore_mojosec_service_after_failure", script[handoff:restore],
+                 "a failed safe handoff must restore the prior service lifecycle")
 
 
 @th.django_unit_test()

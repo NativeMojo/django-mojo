@@ -904,6 +904,18 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         nginx_snapshot = _nginx_snapshot(
             nginx_paths, DEFAULT_LOG_PATH, inspect_log=mode == "observe")
         mutation_started = True
+        if mode == "off":
+            # Quiesce the only writer before converting proof candidates. The
+            # outer unit rollback restores the exact prior lifecycle on any
+            # later refusal or failure.
+            _systemctl("stop", SERVICE)
+            if _systemctl_is("is-active", SERVICE):
+                raise DeployError("cannot quiesce MojoSec before mode-off flush")
+            from mojo.deploy import audit as audit_deploy
+            try:
+                audit_deploy.flush_pending_firewall()
+            except (audit_deploy.AuditError, OSError, ValueError) as err:
+                raise DeployError(f"cannot preserve pending MojoSec evidence: {err}") from err
         retired_changed = _retire_stale_units(retired_snapshot)
         if prepared is not None:
             config_changed = _write_if_changed(
@@ -968,7 +980,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         if unit_changed or retired_changed or broker_changed:
             _systemctl("daemon-reload")
         if mode == "off":
-            _systemctl("disable", "--now", SERVICE)
+            _systemctl("disable", SERVICE)
             if (_systemctl_is("is-enabled", SERVICE) or
                     _systemctl_is("is-active", SERVICE)):
                 raise DeployError("MojoSec off convergence left service enabled or active")

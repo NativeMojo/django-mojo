@@ -90,26 +90,24 @@ def test_production_crond_launch_shape(opts):
 
     boot = "a" * 32
     command = "/opt/api/bin/jobman start >> /opt/api/var/logs/jobman.log 2>&1"
-    common = {"_BOOT_ID": boot, "_UID": "0", "_GID": "1000",
+    common = {"_BOOT_ID": boot, "_UID": "0",
               "_AUDIT_LOGINUID": "1000", "_AUDIT_SESSION": "71",
               "_SELINUX_CONTEXT": CROND_SELINUX}
-    syslog = dict(common, _TRANSPORT="syslog", _PID="190", _COMM="bash",
-                  _EXE="/usr/bin/bash", SYSLOG_IDENTIFIER="CROND",
-                  _CMDLINE=f'/bin/bash -c "{command}"',
+    syslog = dict(common, _TRANSPORT="syslog", _PID="190", _GID="1000",
+                  _COMM="crond", _EXE="/usr/sbin/crond", SYSLOG_IDENTIFIER="CROND",
+                  _CMDLINE="/usr/sbin/CROND -n",
                   MESSAGE=f"(ec2-user) CMD ({command})",
                   _SYSTEMD_UNIT="session-71.scope",
                   _SYSTEMD_CGROUP="/user.slice/user-1000.slice/session-71.scope",
                   __MONOTONIC_TIMESTAMP="200")
     pam = dict(common, _TRANSPORT="audit", _AUDIT_TYPE_NAME="USER_START",
                __MONOTONIC_TIMESTAMP="100",
-               _AUDIT_FIELD_AUID="1000", _AUDIT_FIELD_SES="71",
-               _AUDIT_FIELD_EXE="/usr/sbin/crond", _AUDIT_FIELD_ACCT="ec2-user",
-               _AUDIT_FIELD_TERMINAL="cron", _AUDIT_FIELD_RES="success",
-               MESSAGE=("USER_START pid=411 uid=0 auid=1000 ses=71 "
-                        "msg='op=PAM:session_open acct=ec2-user "
-                        "exe=/usr/sbin/crond terminal=cron res=success'"))
-    th.assert_eq(crond_launch(syslog, "/opt/api", 1000, 1000)["bash_pid"], 190,
-                 "the trusted CROND record must bind the real bash generation")
+               MESSAGE=('USER_START pid=411 uid=0 auid=1000 ses=71 '
+                        'msg=\'op=PAM:session_open acct="ec2-user" '
+                        'exe="/usr/sbin/crond" hostname=? addr=? terminal=cron '
+                        'res=success\''))
+    th.assert_eq(crond_launch(syslog, "/opt/api", 1000, 1000)["launch_pid"], 190,
+                 "the trusted CROND record must bind the real launch PID")
     th.assert_eq(crond_launch(pam, "/opt/api", 1000, 1000)["half"], "pam",
                  "the matching Audit USER_START record must provide the PAM half")
     for field in ("_CMDLINE", "MESSAGE", "_SYSTEMD_UNIT", "_GID"):
@@ -117,6 +115,10 @@ def test_production_crond_launch_shape(opts):
         changed[field] = "mutated"
         th.assert_eq(crond_launch(changed, "/opt/api", 1000, 1000), None,
                      f"a mutated {field} must not attest a CROND launch")
+    changed_pam = dict(pam, MESSAGE=pam["MESSAGE"].replace(
+        'acct="ec2-user"', 'acct="root"'))
+    th.assert_eq(crond_launch(changed_pam, "/opt/api", 1000, 1000), None,
+                 "one nested PAM field mutation must invalidate the launch")
 
 
 @th.unit_test("CROND origin requires both ordered halves and conflict is sticky")
@@ -146,10 +148,10 @@ def test_crond_origin_missing_order_and_conflict(opts):
     pam = {"boot_id": boot, "audit_session": 9, "half": "pam",
            "monotonic": 100, "command_sha256": "7" * 64}
     syslog = {"boot_id": boot, "audit_session": 9, "half": "syslog",
-              "bash_pid": 19, "monotonic": 200, "command_sha256": "7" * 64}
+              "launch_pid": 19, "monotonic": 200, "command_sha256": "7" * 64}
     cases = (([syslog], False),
              ([pam, dict(syslog, monotonic=50)], False),
-             ([pam, syslog, dict(syslog, bash_pid=99)], True))
+             ([pam, syslog, dict(syslog, launch_pid=99)], True))
     for launches, conflict in cases:
         with tempfile.TemporaryDirectory() as root:
             store = Store(root, "sensor", aggregation, delivery,
@@ -167,6 +169,23 @@ def test_crond_origin_missing_order_and_conflict(opts):
                 th.assert_true(row["ambiguous"],
                                "a duplicate launch mutation must remain sticky conflict")
             store.close()
+
+
+@th.unit_test("every provenance graph edge uses one complete Audit eligibility contract")
+def test_process_edge_eligibility_is_shared(opts):
+    from mojo.mojosec.store import Store
+
+    valid = {"success": True, "eoe": True, "ambiguous": False,
+             "incomplete": False, "argv": ["/usr/bin/true"]}
+    for edge in ("anchor", "bash", "jobman", "engine", "sudo", "broker", "target"):
+        th.assert_true(Store._eligible_process_node(dict(valid)),
+                       f"the complete {edge} Audit edge should be eligible")
+        for field, value in (("success", False), ("eoe", False),
+                             ("ambiguous", True), ("incomplete", True),
+                             ("argv", [])):
+            changed = dict(valid, **{field: value})
+            th.assert_true(not Store._eligible_process_node(changed),
+                           f"{edge} with invalid {field} must stay ordinary/no-anchor")
 
 
 @th.unit_test("audit compounds reject conflicting duplicate fields")
@@ -273,23 +292,20 @@ def test_pending_firewall_resolution(opts):
                       "pid": 23, "start_ticks": 230, "exe": "/sbin/iptables",
                       "argv_digest": child_digest, "returncode": 0, "ok": True}])
     command = "/opt/api/bin/jobman start >> /opt/api/var/logs/jobman.log 2>&1"
-    common = {"_BOOT_ID": boot, "_UID": "0", "_GID": "1000",
+    common = {"_BOOT_ID": boot, "_UID": "0",
               "_AUDIT_LOGINUID": "1000", "_AUDIT_SESSION": str(session),
               "_SELINUX_CONTEXT": CROND_SELINUX}
     launches = [
         crond_launch(dict(common, _TRANSPORT="audit", _AUDIT_TYPE_NAME="USER_START",
                     __MONOTONIC_TIMESTAMP="100",
-                    _AUDIT_FIELD_AUID="1000", _AUDIT_FIELD_SES=str(session),
-                    _AUDIT_FIELD_EXE="/usr/sbin/crond",
-                    _AUDIT_FIELD_ACCT="ec2-user", _AUDIT_FIELD_TERMINAL="cron",
-                    _AUDIT_FIELD_RES="success",
                     MESSAGE=(f"USER_START pid=411 uid=0 auid=1000 ses={session} "
-                             "msg='op=PAM:session_open acct=ec2-user "
-                             "exe=/usr/sbin/crond terminal=cron res=success'")),
+                             "msg='op=PAM:session_open acct=\"ec2-user\" "
+                             "exe=\"/usr/sbin/crond\" hostname=? addr=? terminal=cron "
+                             "res=success'")),
                     "/opt/api", 1000, 1000),
-        crond_launch(dict(common, _TRANSPORT="syslog", _PID="19", _COMM="bash",
-                    _EXE="/usr/bin/bash", SYSLOG_IDENTIFIER="CROND",
-                    _CMDLINE=f'/bin/bash -c "{command}"',
+        crond_launch(dict(common, _TRANSPORT="syslog", _PID="19", _GID="1000",
+                    _COMM="crond", _EXE="/usr/sbin/crond", SYSLOG_IDENTIFIER="CROND",
+                    _CMDLINE="/usr/sbin/CROND -n",
                     MESSAGE=f"(ec2-user) CMD ({command})",
                     _SYSTEMD_UNIT=f"session-{session}.scope",
                     _SYSTEMD_CGROUP=(f"/user.slice/user-1000.slice/"
@@ -300,12 +316,12 @@ def test_pending_firewall_resolution(opts):
         {"boot_id": boot, "audit_id": "5", "pid": 19, "ppid": 1,
          "audit_session": session, "exe": "/usr/bin/bash", "argv": ["/usr/bin/bash"],
          "monotonic": 300},
-        {"boot_id": boot, "audit_id": "6", "pid": 18, "ppid": 19,
+        {"boot_id": boot, "audit_id": "6", "pid": 19, "ppid": 1,
          "audit_session": session, "exe": "/usr/bin/python3",
          "argv": ["python3", "-m", "mojo.deploy.jobman", "start"], "monotonic": 400},
         {"boot_id": boot, "audit_id": "1", "pid": 20, "ppid": 21,
          "audit_session": session, "exe": "/usr/bin/sudo", "argv": ["/usr/bin/sudo"]},
-        {"boot_id": boot, "audit_id": "2", "pid": 21, "ppid": 18,
+        {"boot_id": boot, "audit_id": "2", "pid": 21, "ppid": 19,
          "audit_session": session, "exe": "/usr/bin/python3",
          "argv": ["/opt/api/bin/jobs.py", "engine", "foreground"], "pinned": True,
          "start_ticks": 210, "monotonic": 500},
@@ -332,13 +348,31 @@ def test_pending_firewall_resolution(opts):
                          local_only_diagnostic_path=os.path.join(root, "missing"))
         with mock.patch("mojo.mojosec.lineage.enrich_process",
                         return_value={"start_ticks": 210}):
-            reopened.ingest([candidate], audit_health=health,
+            reopened.ingest([candidate], audit_health=health)
+            th.assert_eq(reopened.stats()["provenance"]["pending_firewall"], 1,
+                         "healthy journal observation should wait for later proof")
+            reopened.ingest([], cursor_key="nginx", cursor={"offset": 1})
+            th.assert_eq(reopened.stats()["provenance"]["pending_firewall"], 1,
+                         "nginx ingest has no Audit authority and must preserve pending")
+            reopened.ingest([], audit_health=health,
                             firewall_receipts=[begin, result])
         th.assert_eq(reopened.stats()["local_only_suppressed"], 1,
                      "complete healthy process and receipt proof should suppress centrally")
         th.assert_eq(reopened.pending_batch(10, 65536), [],
                      "proven expected automation must not create an ordinary Event")
         reopened.close()
+
+    unhealthy = dict(health, healthy=False, sequence=2, reason="lost")
+    with tempfile.TemporaryDirectory() as root:
+        store = Store(root, "sensor", aggregation, delivery,
+                      local_only_diagnostic_path=os.path.join(root, "missing"))
+        store.ingest([dict(candidate, fingerprint="8" * 64)], audit_health=health)
+        store.ingest([], audit_health=unhealthy)
+        th.assert_eq(store.stats()["provenance"]["pending_firewall"], 0,
+                     "explicit unhealthy journal authority must fail open immediately")
+        th.assert_eq(len(store.pending_batch(10, 65536)), 1,
+                     "health failure must retain the ordinary sudo Event")
+        store.close()
 
     bad_result = dict(result, children=[dict(result["children"][0],
                                             argv_digest="9" * 64)])
