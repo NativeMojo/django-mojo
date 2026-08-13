@@ -870,7 +870,9 @@ It requires both halves of the production AL2023 launch: the trusted root
 CROND CMD row (`_COMM=crond`, `_EXE=/usr/sbin/crond`, `_CMDLINE=/usr/sbin/CROND
 -n`) carrying the exact project-specific jobman command, and an earlier Audit
 `USER_START` row whose bounded quoted PAM message exactly names the app account,
-crond executable, cron terminal and successful result. They agree on boot,
+the authorized `pam_loginuid,pam_keyinit,pam_limits,pam_systemd` grantors,
+crond executable, cron terminal and successful result. If journald also exposes
+`_AUDIT_FIELD_GRANTORS`, it must agree exactly. They agree on boot,
 Audit session, app login UID, session scope and crond SELinux domain; the CMD
 row additionally proves the app GID and launch PID. Strict monotonic order then
 joins audited bash → jobman → engine generations. Bash and jobman may be
@@ -890,6 +892,9 @@ Before an older package is allowed to start or Audit assets are consumed, the st
 transactionally converts every held broker candidate to an ordinary spool
 Event and verifies that no pending row remains. The writer stays stopped through
 handoff; failure restores the prior service/assets only after safe rollback.
+The capability probe also selects the command-line contract: a pre-feature
+module receives only its historical `--mode` and `--criticality` flags, never
+new provenance-generation arguments such as `--project-path`.
 
 Process nodes live locally for seven days (131,072 rows), incomplete compounds
 for ten minutes (8,192), origin sessions for 30 days (4,096), health epochs for

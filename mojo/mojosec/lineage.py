@@ -20,9 +20,12 @@ COMPOUND_TIMEOUT_SECONDS = 2
 _AUDIT_ID = re.compile(r"^[0-9]{1,20}$")
 _AUDIT_TYPES = {"SYSCALL", "EXECVE", "PROCTITLE", "CWD", "EOE"}
 CROND_SELINUX = "system_u:system_r:crond_t:s0-s0:c0.c1023"
+CROND_PAM_GRANTORS = "pam_loginuid,pam_keyinit,pam_limits,pam_systemd"
 _PAM_MESSAGE = re.compile(
     r'^USER_START(?: [A-Za-z][A-Za-z0-9_]{0,31}=[^ ]{1,256})* '
-    r'msg=\'op=[A-Za-z0-9_:.-]{1,64} acct="([A-Za-z0-9_.-]{1,128})" '
+    r'msg=\'op=PAM:session_open grantors=('
+    + re.escape(CROND_PAM_GRANTORS) +
+    r') acct="([A-Za-z0-9_.-]{1,128})" '
     r'exe="(/usr/sbin/crond)" hostname=\? addr=\? terminal=(cron) '
     r'res=(success)\'(?: [A-Za-z][A-Za-z0-9_]{0,31}=[^ ]{1,256})*$')
 
@@ -64,8 +67,10 @@ def crond_launch(record, project_path, app_uid, app_gid):
         if len(message.encode("utf-8", errors="replace")) > 4096:
             return None
         match = _PAM_MESSAGE.fullmatch(message)
-        if (match is None or match.groups() !=
-                ("ec2-user", "/usr/sbin/crond", "cron", "success")):
+        top_grantors = record.get("_AUDIT_FIELD_GRANTORS")
+        if (top_grantors not in (None, "", CROND_PAM_GRANTORS) or match is None or
+                match.groups() != (CROND_PAM_GRANTORS, "ec2-user",
+                                   "/usr/sbin/crond", "cron", "success")):
             return None
         return {"boot_id": boot, "audit_session": session, "half": "pam",
                 "monotonic": monotonic,

@@ -282,14 +282,30 @@ restore_mojosec_django() {
 }
 MOJOSEC_PRIOR_ACTIVE=0
 MOJOSEC_PRIOR_ENABLED=0
-quiesce_mojosec_for_downgrade() {
+MOJOSEC_LIFECYCLE_SNAPSHOTTED=0
+MOJOSEC_DOWNGRADE_HANDOFF=0
+MOJOSEC_AUDIT_HELPER="${MOJOSEC_AUDIT_HELPER:-/usr/local/lib/mojosec/mojosec_audit.py}"
+MOJOSEC_AUDIT_STATE="${MOJOSEC_AUDIT_STATE:-/etc/mojosec/audit-state.json}"
+MOJOSEC_AUDIT_PYTHON="${MOJOSEC_AUDIT_PYTHON:-/usr/bin/python3}"
+snapshot_mojosec_lifecycle() {
+    [ "$MOJOSEC_LIFECYCLE_SNAPSHOTTED" = "0" ] || return 0
     systemctl is-active --quiet mojosec.service && MOJOSEC_PRIOR_ACTIVE=1 || true
     systemctl is-enabled --quiet mojosec.service && MOJOSEC_PRIOR_ENABLED=1 || true
+    MOJOSEC_LIFECYCLE_SNAPSHOTTED=1
+}
+quiesce_mojosec_for_downgrade() {
+    snapshot_mojosec_lifecycle
     systemctl stop mojosec.service
     ! systemctl is-active --quiet mojosec.service
 }
 restore_mojosec_service_after_failure() {
-    if [ "$MOJOSEC_PRIOR_ENABLED" = "1" ]; then systemctl enable mojosec.service; fi
+    [ "$MOJOSEC_LIFECYCLE_SNAPSHOTTED" = "1" ] || return 0
+    systemctl stop mojosec.service 2>/dev/null || true
+    if [ "$MOJOSEC_PRIOR_ENABLED" = "1" ]; then
+        systemctl enable mojosec.service
+    else
+        systemctl disable mojosec.service 2>/dev/null || true
+    fi
     if [ "$MOJOSEC_PRIOR_ACTIVE" = "1" ]; then systemctl start mojosec.service; fi
 }
 
@@ -312,33 +328,32 @@ case "$module_rc" in
     *) restore_mojosec_django; die "cannot preflight MojoSec deployment module" ;;
 esac
 
-if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ] && \
-   [ "$MOJOSEC_PROVENANCE_AVAILABLE" = "0" ] && \
-   [ -f /etc/mojosec/audit-state.json ]; then
+if [ "$MOJOSEC_PROVENANCE_AVAILABLE" = "0" ] && \
+   { [ -f "$MOJOSEC_AUDIT_STATE" ] || [ -f "$MOJOSEC_AUDIT_HELPER" ]; }; then
     log "Restoring pre-feature Audit state for MojoSec package downgrade"
-    [ -f /usr/local/lib/mojosec/mojosec_audit.py ] && \
-    [ ! -L /usr/local/lib/mojosec/mojosec_audit.py ] && \
-    [ "$(stat -c %u /usr/local/lib/mojosec/mojosec_audit.py)" = "0" ] \
+    [ -f "$MOJOSEC_AUDIT_HELPER" ] && [ ! -L "$MOJOSEC_AUDIT_HELPER" ] && \
+    [ "$(stat -c %u "$MOJOSEC_AUDIT_HELPER")" = "0" ] \
         || { restore_mojosec_django; die "cannot trust MojoSec Audit downgrade helper"; }
     quiesce_mojosec_for_downgrade \
         || { restore_mojosec_django; restore_mojosec_service_after_failure; \
              die "cannot quiesce MojoSec for downgrade"; }
-    /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py flush-pending \
+    "$MOJOSEC_AUDIT_PYTHON" -E -P "$MOJOSEC_AUDIT_HELPER" flush-pending \
         || { restore_mojosec_django; restore_mojosec_service_after_failure; \
              die "cannot flush MojoSec pending events"; }
-    /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py restore \
-        || { restore_mojosec_django; restore_mojosec_service_after_failure; \
-             die "cannot restore pre-feature Audit state"; }
-    systemctl disable --now mojosec-audit-health.timer 2>/dev/null || true
-    rm -f -- /etc/systemd/system/mojosec-audit-health.service \
-              /etc/systemd/system/mojosec-audit-health.timer \
-              /etc/sudoers.d/70-mojo-firewall-broker \
-              /usr/local/sbin/mojo-firewall-broker \
-              /usr/local/lib/mojosec/mojosec_audit.py
-    systemctl daemon-reload
+    if [ -f "$MOJOSEC_AUDIT_STATE" ]; then
+        "$MOJOSEC_AUDIT_PYTHON" -E -P "$MOJOSEC_AUDIT_HELPER" restore \
+            || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+                 die "cannot restore pre-feature Audit state"; }
+    fi
+    MOJOSEC_DOWNGRADE_HANDOFF=1
 fi
 
 if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ]; then
+    MOJOSEC_CONVERGE_ARGS=(--mode "$MOJOSEC_MODE" \
+                          --criticality "$MOJOSEC_DEPLOY_CRITICALITY")
+    if [ "$MOJOSEC_PROVENANCE_AVAILABLE" = "1" ]; then
+        MOJOSEC_CONVERGE_ARGS+=(--project-path "$PROJ_PATH")
+    fi
     if ! trusted_change mojosec-converge \
             "${SYSTEMD_ETC}/mojosec.service" \
             "${NGINX_ETC}/conf.d/00_mojosec.conf" \
@@ -354,14 +369,22 @@ if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ]; then
             /usr/local/lib/mojosec/mojosec_audit.py -- \
             "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" \
             -m mojo.deploy.mojosec converge \
-            --mode "$MOJOSEC_MODE" \
-            --criticality "$MOJOSEC_DEPLOY_CRITICALITY" \
-            --project-path "$PROJ_PATH"; then
+            "${MOJOSEC_CONVERGE_ARGS[@]}"; then
         restore_mojosec_django
+        restore_mojosec_service_after_failure
         nginx -t || die "MojoSec failed and the exact prior django.inc is invalid"
         systemctl reload nginx \
             || die "cannot reload exact prior nginx graph after MojoSec failure"
         die "MojoSec deployment failed"
+    fi
+    if [ "$MOJOSEC_DOWNGRADE_HANDOFF" = "1" ]; then
+        systemctl disable --now mojosec-audit-health.timer 2>/dev/null || true
+        rm -f -- /etc/systemd/system/mojosec-audit-health.service \
+                  /etc/systemd/system/mojosec-audit-health.timer \
+                  /etc/sudoers.d/70-mojo-firewall-broker \
+                  /usr/local/sbin/mojo-firewall-broker \
+                  "$MOJOSEC_AUDIT_HELPER"
+        systemctl daemon-reload
     fi
 else
     # A downgrade can replace the package while this script keeps running from
@@ -372,48 +395,31 @@ else
     # pre-broker django-mojo. Restore the exact pre-feature Audit state with
     # the root-owned stable helper before removing broker-only assets. Legacy
     # direct firewall grants deliberately remain usable for this generation.
-    if [ -f /etc/mojosec/audit-state.json ]; then
-        [ -f /usr/local/lib/mojosec/mojosec_audit.py ] && \
-        [ ! -L /usr/local/lib/mojosec/mojosec_audit.py ] && \
-        [ "$(stat -c %u /usr/local/lib/mojosec/mojosec_audit.py)" = "0" ] \
-            || { restore_mojosec_django; die "cannot trust MojoSec Audit downgrade helper"; }
-        quiesce_mojosec_for_downgrade \
-            || { restore_mojosec_django; restore_mojosec_service_after_failure; \
-                 die "cannot quiesce MojoSec for downgrade"; }
-        /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py flush-pending \
-            || { restore_mojosec_django; restore_mojosec_service_after_failure; \
-                 die "cannot flush MojoSec pending events"; }
-        /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py restore \
-            || { restore_mojosec_django; restore_mojosec_service_after_failure; \
-                 die "cannot restore pre-feature Audit state"; }
-        systemctl disable --now mojosec-audit-health.timer 2>/dev/null || true
-        rm -f -- /etc/systemd/system/mojosec-audit-health.service \
-                  /etc/systemd/system/mojosec-audit-health.timer \
-                  /etc/sudoers.d/70-mojo-firewall-broker \
-                  /usr/local/sbin/mojo-firewall-broker \
-                  /usr/local/lib/mojosec/mojosec_audit.py
-        systemctl daemon-reload
-    fi
+    snapshot_mojosec_lifecycle
+    quiesce_mojosec_for_downgrade \
+        || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+             die "cannot quiesce MojoSec module-absent cleanup"; }
     if [ "$fallback_mode" = "enrolled" ]; then
         [ ! -e /etc/mojosec/enrollment.json ] \
-            || { restore_mojosec_django; die "old package cannot resolve enrolled MojoSec lifecycle"; }
+            || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+                 die "old package cannot resolve enrolled MojoSec lifecycle"; }
         fallback_mode=off
     fi
     [ "$fallback_mode" = "off" ] \
-        || { restore_mojosec_django; die "old package cannot deploy MojoSec observe mode"; }
+        || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+             die "old package cannot deploy MojoSec observe mode"; }
     log "MojoSec module absent; applying transactional pre-feature off cleanup"
     fallback_dir="$(mktemp -d "${DEPLOY_DIR}/.mojosec-off.XXXXXX")"
-    prior_active=0
-    prior_enabled=0
-    systemctl is-active --quiet mojosec.service && prior_active=1
-    systemctl is-enabled --quiet mojosec.service && prior_enabled=1
     managed=("${NGINX_ETC}/conf.d/00_mojosec.conf" "${LOGROTATE_ETC}/mojosec")
     index=0
     for path in "${managed[@]}"; do
-        [ ! -L "$path" ] || { restore_mojosec_django; die "refusing symlink during MojoSec cleanup: $path"; }
+        [ ! -L "$path" ] || { restore_mojosec_django; \
+            restore_mojosec_service_after_failure; \
+            die "refusing symlink during MojoSec cleanup: $path"; }
         if [ -e "$path" ]; then
             [ -f "$path" ] && [ "$(stat -c %u "$path")" = "0" ] \
-                || { restore_mojosec_django; die "refusing unsafe MojoSec cleanup target: $path"; }
+                || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+                     die "refusing unsafe MojoSec cleanup target: $path"; }
             cp -p "$path" "$fallback_dir/$index"
         else
             : > "$fallback_dir/$index.absent"
@@ -421,9 +427,10 @@ else
         index=$((index+1))
     done
     if [ -e "${SYSTEMD_ETC}/mojosec.service" ] || \
-            [ "$prior_active" = "1" ] || [ "$prior_enabled" = "1" ]; then
+            [ "$MOJOSEC_PRIOR_ACTIVE" = "1" ] || [ "$MOJOSEC_PRIOR_ENABLED" = "1" ]; then
         systemctl disable --now mojosec.service \
-            || { restore_mojosec_django; die "cannot stop pre-feature MojoSec service"; }
+            || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+                 die "cannot stop pre-feature MojoSec service"; }
     fi
     rm -f -- "${managed[@]}"
     fallback_ok=1
@@ -440,10 +447,11 @@ else
             index=$((index+1))
         done
         restore_mojosec_django
-        nginx -t || die "pre-feature cleanup rollback restored an invalid graph"
-        systemctl reload nginx || die "cannot reload pre-feature cleanup rollback"
-        [ "$prior_enabled" = "0" ] || systemctl enable mojosec.service
-        [ "$prior_active" = "0" ] || systemctl start mojosec.service
+        nginx -t || { restore_mojosec_service_after_failure; \
+            die "pre-feature cleanup rollback restored an invalid graph"; }
+        systemctl reload nginx || { restore_mojosec_service_after_failure; \
+            die "cannot reload pre-feature cleanup rollback"; }
+        restore_mojosec_service_after_failure
         die "pre-feature MojoSec off cleanup failed and was rolled back"
     fi
     rm -f -- "$fallback_dir/0" "$fallback_dir/0.absent" \

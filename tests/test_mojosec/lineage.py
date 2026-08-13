@@ -103,7 +103,9 @@ def test_production_crond_launch_shape(opts):
     pam = dict(common, _TRANSPORT="audit", _AUDIT_TYPE_NAME="USER_START",
                __MONOTONIC_TIMESTAMP="100",
                MESSAGE=('USER_START pid=411 uid=0 auid=1000 ses=71 '
-                        'msg=\'op=PAM:session_open acct="ec2-user" '
+                        'msg=\'op=PAM:session_open '
+                        'grantors=pam_loginuid,pam_keyinit,pam_limits,pam_systemd '
+                        'acct="ec2-user" '
                         'exe="/usr/sbin/crond" hostname=? addr=? terminal=cron '
                         'res=success\''))
     th.assert_eq(crond_launch(syslog, "/opt/api", 1000, 1000)["launch_pid"], 190,
@@ -119,6 +121,20 @@ def test_production_crond_launch_shape(opts):
         'acct="ec2-user"', 'acct="root"'))
     th.assert_eq(crond_launch(changed_pam, "/opt/api", 1000, 1000), None,
                  "one nested PAM field mutation must invalidate the launch")
+    for grantors in ("", "pam_permit"):
+        changed = dict(pam, MESSAGE=pam["MESSAGE"].replace(
+            "grantors=pam_loginuid,pam_keyinit,pam_limits,pam_systemd ",
+            (f"grantors={grantors} " if grantors else "")))
+        th.assert_eq(crond_launch(changed, "/opt/api", 1000, 1000), None,
+                     "missing or wrong nested grantors must invalidate PAM proof")
+    th.assert_true(crond_launch(dict(
+        pam, _AUDIT_FIELD_GRANTORS=(
+            "pam_loginuid,pam_keyinit,pam_limits,pam_systemd")),
+        "/opt/api", 1000, 1000),
+        "matching optional top-level grantors should be accepted")
+    th.assert_eq(crond_launch(dict(pam, _AUDIT_FIELD_GRANTORS="pam_permit"),
+                              "/opt/api", 1000, 1000), None,
+                 "top-level grantors must agree exactly when journald exposes them")
 
 
 @th.unit_test("CROND origin requires both ordered halves and conflict is sticky")
@@ -299,7 +315,9 @@ def test_pending_firewall_resolution(opts):
         crond_launch(dict(common, _TRANSPORT="audit", _AUDIT_TYPE_NAME="USER_START",
                     __MONOTONIC_TIMESTAMP="100",
                     MESSAGE=(f"USER_START pid=411 uid=0 auid=1000 ses={session} "
-                             "msg='op=PAM:session_open acct=\"ec2-user\" "
+                             "msg='op=PAM:session_open "
+                             "grantors=pam_loginuid,pam_keyinit,pam_limits,pam_systemd "
+                             "acct=\"ec2-user\" "
                              "exe=\"/usr/sbin/crond\" hostname=? addr=? terminal=cron "
                              "res=success'")),
                     "/opt/api", 1000, 1000),

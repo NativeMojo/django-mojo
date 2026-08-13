@@ -126,6 +126,22 @@ exit 0
 EOF
         chmod +x "$STUB/$cmd"
     done
+    cat > "$STUB/systemctl" <<'EOF'
+#!/bin/bash
+echo "CMD systemctl $*" >> "$CALLLOG"
+case "$1 $2" in
+    "is-active --quiet") [ ! -f "$STUBCTL/mojosec.inactive" ]; exit $? ;;
+    "is-enabled --quiet") [ ! -f "$STUBCTL/mojosec.disabled" ]; exit $? ;;
+    "stop mojosec.service") touch "$STUBCTL/mojosec.inactive"; exit 0 ;;
+    "start mojosec.service") rm -f "$STUBCTL/mojosec.inactive"; exit 0 ;;
+    "enable mojosec.service") rm -f "$STUBCTL/mojosec.disabled"; exit 0 ;;
+    "disable mojosec.service") touch "$STUBCTL/mojosec.disabled"; exit 0 ;;
+esac
+ctl="$STUBCTL/systemctl.exit"
+[ -f "$ctl" ] && exit "$(cat "$ctl")"
+exit 0
+EOF
+    chmod +x "$STUB/systemctl"
     cat > "$STUB/stat" <<'EOF'
 #!/bin/bash
 # Fallback ownership probe: the harness models root-owned /etc seams.
@@ -151,7 +167,20 @@ case "\$*" in
         ;;
     "-E -P -m mojo.deploy.mojosec converge"*|"-E -m mojo.deploy.mojosec converge"*)
         echo "MOJOSEC_CWD \$PWD" >> "\$CALLLOG"
+        if [ "\$(cat "\$STUBCTL/mojosec.preflight.exit" 2>/dev/null || true)" = "4" ] &&
+                [[ " \$* " == *" --project-path "* ]]; then
+            echo "old argparse rejected --project-path" >> "\$CALLLOG"
+            exit 2
+        fi
         [ -f "\$STUBCTL/mojosec.converge.exit" ] && exit "\$(cat "\$STUBCTL/mojosec.converge.exit")"
+        exit 0
+        ;;
+    *"mojosec_audit.py flush-pending"*)
+        [ -f "\$STUBCTL/audit.flush.exit" ] && exit "\$(cat "\$STUBCTL/audit.flush.exit")"
+        exit 0
+        ;;
+    *"mojosec_audit.py restore"*)
+        [ -f "\$STUBCTL/audit.restore.exit" ] && exit "\$(cat "\$STUBCTL/audit.restore.exit")"
         exit 0
         ;;
     "-m mojo.deploy"*)
@@ -336,6 +365,53 @@ run_post_deploy > "$OUT" 2>&1
 assert_eq "$?" 0 "Python 3.10 package-present unenrolled node can converge enrolled-off"
 assert_in_log "CMD python3 -E -m mojo.deploy.mojosec converge --mode enrolled --criticality enrolled" \
     "legacy enrolled-off convergence uses -E from root-owned cwd without unsupported -P"
+
+echo "post_deploy.sh: old MojoSec argparse and downgrade lifecycle are exact"
+setup_env
+echo "4" > "$CTL/mojosec.preflight.exit"
+run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" -- \
+    > "$OUT" 2>&1
+assert_eq "$?" 0 "capability-zero old module accepts its historical argparse contract"
+assert_in_log "CMD python3 -E -P -m mojo.deploy.mojosec converge --mode off --criticality required" \
+    "old module receives mode and criticality"
+assert_not_in_log "old argparse rejected --project-path" \
+    "new project-path flag is omitted for a capability-zero old module"
+
+for prior in active inactive; do
+    setup_env
+    helper="$TMP/mojosec_audit.py"
+    state="$TMP/audit-state.json"
+    : > "$helper"; : > "$state"
+    echo "4" > "$CTL/mojosec.preflight.exit"
+    echo "1" > "$CTL/mojosec.converge.exit"
+    [ "$prior" = "active" ] || touch "$CTL/mojosec.inactive"
+    run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" \
+        MOJOSEC_AUDIT_HELPER="$helper" MOJOSEC_AUDIT_STATE="$state" \
+        MOJOSEC_AUDIT_PYTHON=python3 -- > "$OUT" 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ]; then ok "old converge failure exits non-zero ($prior)"; \
+    else fail "old converge failure was masked ($prior)"; fi
+    if [ "$prior" = "active" ]; then
+        [ ! -f "$CTL/mojosec.inactive" ] && ok "old converge failure restores active" || \
+            fail "old converge failure stranded active service stopped"
+    else
+        [ -f "$CTL/mojosec.inactive" ] && ok "old converge failure preserves inactive" || \
+            fail "old converge failure started an originally inactive service"
+    fi
+done
+
+setup_env
+helper="$TMP/mojosec_audit.py"; state="$TMP/audit-state.json"
+: > "$helper"; : > "$state"
+echo "3" > "$CTL/mojosec.preflight.exit"
+run_post_deploy_env MOJOSEC_MODE="observe" MOJOSEC_DEPLOY_CRITICALITY="required" \
+    MOJOSEC_AUDIT_HELPER="$helper" MOJOSEC_AUDIT_STATE="$state" \
+    MOJOSEC_AUDIT_PYTHON=python3 -- > "$OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then ok "module-absent terminal failure exits non-zero"; \
+else fail "module-absent observe failure was masked"; fi
+[ ! -f "$CTL/mojosec.inactive" ] && ok "module-absent failure restores active" || \
+    fail "module-absent failure stranded active service stopped"
 
 setup_env
 printf '# active old graph\n# MojoSec exact receiver cap\ninclude /etc/nginx/snippets/mojosec_receiver.conf;\n' \

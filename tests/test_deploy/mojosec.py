@@ -754,8 +754,8 @@ def test_downgrade_handoff_quiesces_writer_through_flush_and_restore(opts):
     stop = script.index("systemctl stop mojosec.service", function)
     inactive = script.index("! systemctl is-active --quiet mojosec.service", stop)
     handoff = script.index("quiesce_mojosec_for_downgrade", function + 1)
-    flush = script.index("mojosec_audit.py flush-pending", handoff)
-    restore = script.index("mojosec_audit.py restore", flush)
+    flush = script.index('"$MOJOSEC_AUDIT_HELPER" flush-pending', handoff)
+    restore = script.index('"$MOJOSEC_AUDIT_HELPER" restore', flush)
     th.assert_true(stop < inactive < handoff < flush < restore,
                    "downgrade must stop and verify the writer before flush and handoff")
     between = script[flush:restore]
