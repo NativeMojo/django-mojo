@@ -1,20 +1,13 @@
 import json
-import hashlib
 
 from testit import helpers as th
 
 
 @th.django_unit_test()
-def test_mojosec_sudo_projection_redacts_adversarial_secret_classes(opts):
+def test_mojosec_sudo_projection_exposes_exact_admin_command_and_context(opts):
     from mojo.apps.incident.models import Event
     from mojo.apps.incident.services import mojosec
 
-    secret_values = (
-        "hunter2", "eyJhbGciOiJIUzI1NiJ9.abcdefghijk.signature123",
-        "AKIAABCDEFGHIJKLMNOP", "ghp_abcdefghijklmnopqrstuvwxyz123456",
-        "VeryLongHighEntropyValue_0123456789_ABCDEFG", "-----BEGIN_PRIVATE_KEY-----",
-        "Bearer short-authorization-secret", "mysql-short-secret", "positional-secret",
-    )
     raw_command = (
         "/usr/bin/curl --password hunter2 "
         "TOKEN=eyJhbGciOiJIUzI1NiJ9.abcdefghijk.signature123 "
@@ -45,57 +38,126 @@ def test_mojosec_sudo_projection_redacts_adversarial_secret_classes(opts):
     }
     event = mojosec._event_projection(batch, sensor_event)
     try:
-        encoded = json.dumps({
-            "metadata": event.metadata, "title": event.title, "details": event.details,
-        }, sort_keys=True)
-        for secret in secret_values:
-            th.assert_true(secret not in encoded,
-                           f"Event projection leaked adversarial secret class {secret[:12]}")
-            th.assert_true(hashlib.sha256(secret.encode()).hexdigest()[:12] not in encoded,
-                           "Event projection must not expose per-token secret digests")
+        evidence = event.metadata["mojosec"]["evidence"]
         th.assert_eq(event.source_ip, "192.0.2.30",
                      "reliably attributed sudo evidence should populate Event.source_ip")
-        command = event.metadata["mojosec"]["evidence"]["command"]
-        th.assert_eq(command, {"family": "network_client", "detail": "<redacted>"},
-                     "Event should expose only a server-owned family and constant marker")
-        th.assert_true("/usr/bin/curl" not in encoded and "0" * 64 not in encoded,
-                       "raw executable and command digest must remain receipt-only")
+        th.assert_eq(evidence, {
+            "actor": "deploy", "target_user": "root", "tty": "pts/2",
+            "boot_id": "a" * 32, "audit_session": 91,
+            "attribution": "audit_session", "command": raw_command,
+            "command_path": "/usr/bin/curl", "cwd": "/opt/api",
+            "command_family": "network_client",
+        }, "the security-admin Event should expose the exact bounded sudo command and context")
+        encoded = json.dumps(evidence, sort_keys=True)
+        for value in ("hunter2", "AKIAABCDEFGHIJKLMNOP",
+                      "Bearer short-authorization-secret", "mysql-short-secret",
+                      "positional-secret"):
+            th.assert_in(value, encoded,
+                         f"authorized sudo evidence must not redact secret-looking text {value}")
+        th.assert_true("0" * 64 not in encoded,
+                       "the receipt-only full command digest must not be copied into Event evidence")
     finally:
         Event.objects.filter(pk=event.pk).delete()
 
 
 @th.django_unit_test()
-def test_mojosec_sudo_unknown_projection_has_constant_non_oracle_shape(opts):
+def test_mojosec_sudo_projection_enforces_exact_bounds_and_honest_attribution(opts):
+    from mojo.mojosec.evidence import build_evidence
     from mojo.apps.incident.services.mojosec_evidence import project
 
-    unknown_inputs = (
-        ("sudo short-positional-secret", "short-positional-secret"),
-        ("/opt/path-secret/curl --version", "/opt/path-secret/curl"),
-        ("'unterminated secret", "secret-executable"),
-    )
-    projections = []
-    for raw, command_path in unknown_inputs:
-        projected = project("auth.sudo_command", {
-            "actor": "deploy", "target_user": "root", "tty": "pts/1",
-            "command": raw, "command_path": command_path,
-            "command_sha256": hashlib.sha256(raw.encode()).hexdigest(),
-        })["evidence"]["command"]
-        projections.append(projected)
-        encoded = json.dumps(projected, sort_keys=True)
-        th.assert_true(raw not in encoded and command_path not in encoded and
-                       hashlib.sha256(raw.encode()).hexdigest() not in encoded,
-                       "unknown commands must expose no raw string, path, or digest oracle")
-    th.assert_eq(projections, [{"family": "unknown", "detail": "<redacted>"}] * 3,
-                 "all unknown command shapes must project identically")
+    ascii_command = "x" * 2048
+    ascii_path = "y" * 512
+    ascii_exact = project("auth.sudo_command", {
+        "command": ascii_command, "command_path": ascii_path, "cwd": ascii_path,
+    })["evidence"]
+    th.assert_eq((ascii_exact["command"], ascii_exact["command_path"],
+                  ascii_exact["cwd"]), (ascii_command, ascii_path, ascii_path),
+                 "ASCII sudo fields at each byte ceiling must remain exact")
+    exact_command = "é" * 1024
+    exact_path = "é" * 256
+    exact = project("auth.sudo_command", {
+        "command": exact_command, "command_path": exact_path, "cwd": exact_path,
+        "command_truncated": True, "command_path_truncated": True,
+        "cwd_truncated": True,
+    })["evidence"]
+    th.assert_eq(exact["command"], exact_command,
+                 "a command at the exact 2,048-byte UTF-8 limit must remain byte-exact")
+    th.assert_eq((exact["command_path"], exact["cwd"]), (exact_path, exact_path),
+                 "path and cwd at the exact 512-byte UTF-8 limit must remain byte-exact")
+    th.assert_true(exact["command_truncated"] is True and
+                   exact["command_path_truncated"] is True and
+                   exact["cwd_truncated"] is True,
+                   "literal sensor truncation markers must project with accepted values")
+    th.assert_true("command_family" not in exact,
+                   "a truncated executable path must never drive command classification")
 
-    mysql = project("auth.sudo_command", {
-        "command": "/usr/bin/mysql -pguessable-secret", "command_path": "/usr/bin/mysql",
-        "command_sha256": hashlib.sha256(b"guessable-secret").hexdigest(),
-    })["evidence"]["command"]
-    th.assert_eq(mysql, {"family": "database_client", "detail": "<redacted>"},
-                 "a known executable may map only to its server-owned command family")
-    th.assert_true("guessable-secret" not in json.dumps(mysql),
-                   "known-family projection must not leak inline mysql passwords")
+    invalid = project("auth.sudo_command", {
+        "command": exact_command + "a", "command_path": exact_path + "a",
+        "cwd": exact_path + "a", "command_truncated": 1,
+        "command_path_truncated": True, "cwd_truncated": True,
+    })["evidence"]
+    for field in ("command", "command_path", "cwd", "command_truncated",
+                  "command_path_truncated", "cwd_truncated", "command_family"):
+        th.assert_true(field not in invalid,
+                       f"overflow or marker-only sudo field {field} must fail soft by omission")
+
+    poisoned = project("auth.sudo_command", {
+        "command": "contains\x00nul", "command_path": ["/usr/bin/curl"],
+        "cwd": 7, "actor": "deploy", "target_user": "root",
+    })["evidence"]
+    th.assert_eq(poisoned, {"actor": "deploy", "target_user": "root",
+                            "attribution": "none"},
+                 "invalid optional command context must not stringify or poison valid identity")
+    empty = project("auth.sudo_command", {
+        "command": "", "command_path": "", "cwd": "",
+    })["evidence"]
+    th.assert_eq(empty, {"attribution": "none"},
+                 "empty exact sudo fields must be omitted independently")
+    unencodable = project("auth.sudo_command", {
+        "command": "\ud800", "command_path": "\ud800", "cwd": "\ud800",
+    })["evidence"]
+    th.assert_eq(unencodable, {"attribution": "none"},
+                 "text that cannot encode as UTF-8 must be omitted without transformation")
+
+    built = build_evidence("auth.sudo_command", {
+        "command": "x" * 2049, "command_path": "/usr/bin/curl", "cwd": "/opt/api",
+    })
+    truncated = project("auth.sudo_command", built)["evidence"]
+    th.assert_eq(truncated["command"], "x" * 2048,
+                 "the receiver must expose the sensor-retained command prefix unchanged")
+    th.assert_true(truncated["command_truncated"] is True,
+                   "a sensor-truncated command must never be presented as complete")
+    th.assert_eq(truncated["command_family"], "network_client",
+                 "an independently complete executable path may add a command family")
+    th.assert_true("command_sha256" not in truncated,
+                   "the truncation digest remains receipt-only rather than replacing command text")
+
+    base = {
+        "source_ip": "192.0.2.30", "actor": "deploy", "target_user": "root",
+        "tty": "pts/1", "boot_id": "b" * 32, "audit_session": 92,
+        "command": "/usr/bin/true", "command_path": "/usr/bin/true",
+    }
+    audit = project("auth.sudo_command", dict(
+        base, attribution_provenance="audit_session"))
+    th.assert_eq((audit["source_ip"], audit["evidence"]["attribution"]),
+                 ("192.0.2.30", "audit_session"),
+                 "a complete trusted audit-session proof may promote its source IP")
+    who = project("auth.sudo_command", dict(base, attribution_provenance="who"))
+    th.assert_eq((who["source_ip"], who["evidence"]["attribution"]),
+                 ("192.0.2.30", "who"),
+                 "a complete unique actor-plus-TTY who proof may promote its source IP")
+    cases = (
+        dict(base, attribution_provenance="none"),
+        dict(base, attribution_provenance="claimed"),
+        dict(base, attribution_provenance="audit_session", source_ip="invalid"),
+        dict(base, attribution_provenance="audit_session", boot_id="bad"),
+        dict(base, attribution_provenance="who", tty="bad tty"),
+    )
+    for attributes in cases:
+        result = project("auth.sudo_command", attributes)
+        th.assert_eq((result["source_ip"], result["evidence"]["attribution"]),
+                     (None, "none"),
+                     f"an incomplete or invalid attribution proof must be explicit: {attributes}")
 
 
 @th.django_unit_test()

@@ -22,14 +22,17 @@ package from a root-owned working directory with safe-path mode:
 | structured nginx log | known exploit-path probes, 401/403 denials, and 5xx responses; bounded raw request target, referrer, and user agent in root-only sensor state and the protected central receipt | ordinary 2xx/3xx/404/499 traffic, User-Agent-only suspicion, bodies, cookies, authorization, arbitrary headers, and raw log lines |
 | immutable tiered integrity | 60-second host/config FIM, six-hour boot/system-binary FIM, RPM verification, and system-Python package integrity under the packaged `al2023-web-v2` profile | application release trees, MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
 
-Sudo evidence retains bounded raw command context only in the root-owned sensor
-spool and protected central receipt: actor, target user, TTY, audit context,
-working directory, executable path, and command digest accompany the command.
-The Event projection is closed rather than heuristically scrubbed: it exposes
-only a strict server-owned command family (or `unknown`) and one constant
-redaction marker. Raw command text, executable/path, command digest, argument
-count, and per-token digests never enter Event metadata, titles, details,
-ordinary logs, or AI/default graphs.
+Sudo evidence retains bounded command context in the root-owned sensor spool,
+the protected central receipt, and the existing security-admin Event surface:
+actor, target user, TTY, audit context, working directory, executable path, and
+the exact accepted command. The central projection validates without rewriting:
+`command` is at most 2,048 UTF-8 bytes, while `command_path` and `cwd` are at
+most 512 bytes each; NUL, invalid UTF-8, non-string, empty, and oversized values
+are omitted independently. Literal sensor truncation markers project with an
+accepted value so a retained prefix is never presented as complete. The full
+command digest remains receipt-only, while `command_family` may be added from
+a valid non-truncated executable path. Secret-looking arguments are deliberately
+not redacted on Events already gated by `view_security` or `security`.
 
 This catches common automated reconnaissance for WordPress, PHP, ASP/JSP,
 `.env`, `.git`, phpMyAdmin, PHPUnit, actuator, Swagger/OpenAPI, CGI, and similar
@@ -303,7 +306,11 @@ reused, or ambiguous rows produce no source attribution. Sudo evidence records
 two may promote the correlated address to `Event.source_ip`. SSH and valid web
 source addresses also populate that canonical Event field. Sudo evidence
 includes bounded actor, target, TTY, audit identity, working directory, raw
-command, executable, digest, and attribution provenance.
+command, executable, digest, and attribution provenance. The central Event
+always reports `attribution` as `audit_session`, `who`, or `none`: audit-session
+promotion requires a valid address, actor, boot ID, and audit session; `who`
+promotion requires a valid address, actor, and TTY. Missing or malformed proof
+therefore stays explicit `none` and cannot promote a stray address.
 The `who` subprocess runs in a fixed C locale with a two-second timeout and
 strict 128 KiB/4,096-line streaming caps; timeout or overflow fails closed.
 
@@ -673,9 +680,9 @@ evidence. The default `RestMeta` graph omits
 sensitive, the whole model is denied to generic AI queries, and generic model
 REST create/update/delete are disabled.
 
-Wire attributes remain only in the receipt's protected `replay_features`, which
-is absent from the default graph and denied to generic AI/model query tools.
-The central Event contains a fixed title/detail plus a per-kind scrubbed
+Wire attributes remain in the receipt's protected `replay_features`, which is
+absent from the default graph and denied to generic AI/model query tools. The
+central Event contains a fixed title/detail plus a per-kind validated
 projection. SSH, reliably attributed sudo, and known web kinds promote a
 canonical source IP. Web evidence canonicalizes method, host, peer, status,
 path, upstream status/timing, and retains only an HTTP(S) referrer origin plus
@@ -683,10 +690,13 @@ token-normalized safe path, and structured UA family/major/digest plus its
 centrally scrubbed display. This settled safe projection is unchanged by the
 local-only disposition. Aggregated volatile samples are
 omitted instead of presenting the last request as the whole distribution.
-Sudo Event command evidence exposes only a strict server-owned command family
-(or `unknown`) and a constant `<redacted>` marker; raw command, executable/path,
-command digest, argument count, request target, referrer, and UA strings never
-enter Event metadata, title, details, ordinary logs, or AI/default graphs. For
+Sudo Event evidence exposes the exact accepted `command`, `command_path`, and
+`cwd`, plus true-only truncation markers and an optional additive
+`command_family` derived from a complete executable path. It retains actor,
+target user, TTY, boot ID, audit session, and explicit attribution. The command
+digest stays receipt-only. This raw administrative command evidence is
+deliberately available through the existing `view_security`/`security` Event
+surface; no public endpoint or broader graph is added. For
 `fim.change`, the sole optional
 sensor annotation projected centrally is exact
 `expected_change.{deployment_id,expires_at,operation_id,operation_kind,completed_at}`
