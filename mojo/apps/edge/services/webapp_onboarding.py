@@ -181,9 +181,10 @@ def _assert_current(operation, request, mutate=False):
             request.user, operation.group):
         raise me.PermissionDeniedException(
             "WebApp and DNS management are no longer granted in this group")
-    WebAppOnboardingOperation.rest_check_permission_or_raise(
-        request, ["SAVE_PERMS", "VIEW_PERMS"] if mutate else ["VIEW_PERMS"],
-        operation)
+    # These dedicated endpoints deliberately use the stricter actor + current
+    # WebApp/DNS group-authority contract above.  RestMeta's generic request
+    # group inference is a separate boundary and would turn a valid scoped
+    # membership into an accidental global-permission requirement here.
     if operation.origin != request_origin(request):
         raise me.PermissionDeniedException("Onboarding must continue on its original origin")
 
@@ -330,7 +331,7 @@ def choose(operation, request, payload):
     purchase_confirmation = None
     with transaction.atomic():
         locked = WebAppOnboardingOperation.objects.select_for_update().select_related(
-            "group", "actor").get(pk=operation.pk)
+            "group").get(pk=operation.pk)
         _assert_current(locked, request, mutate=True)
         if locked.status in TERMINAL_STATUSES:
             raise me.ValueException("This onboarding operation is already finished")
@@ -461,8 +462,11 @@ def choose(operation, request, payload):
 
 @transaction.atomic
 def cancel(operation, request):
+    # ``actor`` is nullable, so joining it under FOR UPDATE creates a nullable
+    # outer-join lock that PostgreSQL rejects.  _assert_current only needs the
+    # actor id and the concrete group.
     locked = WebAppOnboardingOperation.objects.select_for_update().select_related(
-        "group", "actor").get(pk=operation.pk)
+        "group").get(pk=operation.pk)
     _assert_current(locked, request, mutate=True)
     if locked.status in TERMINAL_STATUSES:
         return locked
