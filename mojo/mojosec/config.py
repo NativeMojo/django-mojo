@@ -37,6 +37,9 @@ DEFAULTS = {
     "collectors": {
         "journal": {
             "enabled": True,
+            "project_path": "/opt/api",
+            "app_uid": 1000,
+            "app_gid": 1000,
             "max_records": 2000,
             "max_bytes_per_poll": 8 * 1024 * 1024,
             "max_record_bytes": 256 * 1024,
@@ -250,6 +253,11 @@ def validate_config(value):
         raise ConfigError("collectors.journal.max_record_bytes must not exceed max_bytes_per_poll")
     _integer(collectors["journal"]["timeout_seconds"], "collectors.journal.timeout_seconds", 1, 120)
     _integer(collectors["journal"]["lookback_seconds"], "collectors.journal.lookback_seconds", 1, 86400)
+    _absolute(collectors["journal"]["project_path"], "collectors.journal.project_path")
+    if len(collectors["journal"]["project_path"]) > 1024:
+        raise ConfigError("collectors.journal.project_path is too long")
+    _integer(collectors["journal"]["app_uid"], "collectors.journal.app_uid", 1, 4294967294)
+    _integer(collectors["journal"]["app_gid"], "collectors.journal.app_gid", 1, 4294967294)
     nginx = collectors["nginx"]
     if not isinstance(nginx["paths"], list) or not nginx["paths"] or len(nginx["paths"]) > 32:
         raise ConfigError("collectors.nginx.paths must contain 1-32 paths")

@@ -15,7 +15,7 @@ from testit import helpers as th
 @contextlib.contextmanager
 def _provenance_deploy_mocks(deploy):
     with mock.patch.object(deploy.pwd, "getpwnam",
-                           return_value=mock.Mock(pw_uid=1000)), \
+                           return_value=mock.Mock(pw_uid=1000, pw_gid=1000)), \
             mock.patch("mojo.deploy.audit.converge", return_value={
                 "generation": "a" * 64, "rules_sha256": "b" * 64}), \
             mock.patch("mojo.deploy.audit.restore_immediate"), \
@@ -650,6 +650,45 @@ def test_late_converge_failure_restores_nginx_config_and_units(opts):
     th.assert_in(("systemd", deploy.SERVICE_PATH), restored,
                  "late failure must restore prior unit files and lifecycle")
     restore_audit.assert_called_once_with()
+
+
+@th.django_unit_test()
+def test_audit_internal_rollback_is_not_rolled_back_again(opts):
+    from mojo.deploy import audit
+    from mojo.deploy import mojosec as deploy
+
+    prepared = (
+        {"sensor_id": "i-host", "config_provenance": {}}, b"{}\n",
+        {"trusted_proxy_cidrs": [], "nginx_plane": "standard",
+         "nginx_log_path": deploy.DEFAULT_LOG_PATH},
+    )
+    snapshot = {"path": "prior", "payload": b"prior", "mode": 0o600}
+    with mock.patch.object(deploy.os, "geteuid", return_value=0), \
+            mock.patch.object(deploy, "_prepare_effective_config", return_value=prepared), \
+            mock.patch.object(deploy, "_prepare_home_binds"), \
+            mock.patch.object(deploy, "_lstat_regular"), \
+            mock.patch.object(deploy, "_ensure_dir"), \
+            mock.patch.object(deploy, "_require_root_install_dir"), \
+            mock.patch.object(deploy, "_owned_snapshot", return_value=snapshot), \
+            mock.patch.object(deploy, "_retired_unit_snapshot", return_value={}), \
+            mock.patch.object(deploy, "_retire_stale_units", return_value=False), \
+            mock.patch.object(deploy, "_nginx_snapshot", return_value={}), \
+            mock.patch.object(deploy, "_write_if_changed", return_value=False), \
+            mock.patch.object(deploy, "_audit_config"), \
+            mock.patch.object(deploy, "_restore_snapshot"), \
+            mock.patch.object(deploy, "_restore_nginx"), \
+            mock.patch.object(deploy, "_restore_unit_set"), \
+            mock.patch.object(deploy, "_systemctl_is", return_value=False), \
+            mock.patch.object(deploy, "_systemctl"), \
+            mock.patch.object(deploy.pwd, "getpwnam",
+                              return_value=mock.Mock(pw_uid=1000, pw_gid=1000)), \
+            mock.patch.object(audit, "converge",
+                              side_effect=audit.AuditError("internally restored")), \
+            mock.patch.object(audit, "restore_immediate") as restore:
+        with th.assert_raises(deploy.DeployError):
+            deploy.converge("observe", "required")
+    th.assert_true(not restore.called,
+                   "outer rollback must not apply an old generation after Audit restored itself")
 
 
 @th.django_unit_test()

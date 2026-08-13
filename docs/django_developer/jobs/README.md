@@ -254,6 +254,11 @@ what is actually managing the engine and scheduler there. `jobman stop` will not
 touch a daemon-mode engine, and the jobs CLI will not see anything jobman
 started.
 
+MojoSec proves that deployed origin from the real CROND launch record plus its
+matching PAM/Audit `USER_START`, then follows the audited bash → jobman → engine
+chain. It does not assume the long-lived `crond` daemon shares the child's
+Audit session.
+
 `jobman` lives in `mojo.deploy` rather than in this app because it has to work
 on a box with no settings at all — see
 [deploy/README.md](../deploy/README.md#jobman) for the status contract, the

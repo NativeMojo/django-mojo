@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import tempfile
@@ -26,6 +27,7 @@ MANAGED_PATH = "/etc/audit/rules.d/70-mojosec.rules"
 STATE_PATH = "/etc/mojosec/audit-state.json"
 HEALTH_PATH = "/run/mojosec/audit-health.json"
 LOCK_PATH = "/run/mojosec-audit.lock"
+SENSOR_STATE_PATH = "/var/lib/mojosec/state.sqlite3"
 MANAGED_MARKER = "# managed-by: django-mojo mojosec-audit-v1"
 HEALTH_SCHEMA = "mojosec.audit-health"
 MAX_HEALTH_AGE_SECONDS = 15
@@ -400,6 +402,67 @@ def restore_prior(state_path=STATE_PATH, consume=True):
     return state
 
 
+def flush_pending_firewall(path=SENSOR_STATE_PATH):
+    """Fail open held broker candidates before an older v3 sensor can start."""
+    if not os.path.exists(path):
+        return 0
+    db = sqlite3.connect(path, timeout=30, isolation_level=None)
+    db.row_factory = sqlite3.Row
+    flushed = 0
+    try:
+        tables = {row[0] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if "pending_firewall" not in tables:
+            return 0
+        db.execute("BEGIN IMMEDIATE")
+        sensor = db.execute("SELECT value FROM meta WHERE key='sensor_id'").fetchone()
+        if sensor is None:
+            raise AuditError("pending firewall state has no sensor identity")
+        sensor_id = json.loads(sensor[0])
+        columns = {row[1] for row in db.execute("PRAGMA table_info(events)")}
+        for row in db.execute(
+                "SELECT observation_id,payload FROM pending_firewall "
+                "WHERE state='pending' ORDER BY created,rowid").fetchall():
+            observation = json.loads(row["payload"])
+            first = observation["observed_at"]
+            event = {
+                "id": hashlib.sha256("\0".join((sensor_id, observation["kind"],
+                    observation["fingerprint"], first)).encode()).hexdigest(),
+                "kind": observation["kind"], "observed_at": first,
+                "first_seen": first, "last_seen": first,
+                "severity": observation["severity"],
+                "summary": observation["summary"][:256], "count": 1,
+                "attributes": observation.get("attributes", {}),
+                "recommendation": observation.get("recommendation", "none"),
+            }
+            payload = json.dumps(event, sort_keys=True, separators=(",", ":"))
+            if "delivery_class" in columns:
+                db.execute(
+                    "INSERT OR IGNORE INTO events(id,payload,severity,created,delivery_class) "
+                    "VALUES(?,?,?,?, 'ordinary')",
+                    (event["id"], payload, event["severity"], time.time()))
+            else:
+                db.execute(
+                    "INSERT OR IGNORE INTO events(id,payload,severity,created) VALUES(?,?,?,?)",
+                    (event["id"], payload, event["severity"], time.time()))
+            if db.execute("SELECT 1 FROM events WHERE id=?", (event["id"],)).fetchone():
+                db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
+                           (row["observation_id"],))
+                flushed += 1
+        remaining = db.execute(
+            "SELECT COUNT(*) FROM pending_firewall WHERE state='pending'").fetchone()[0]
+        if remaining:
+            raise AuditError("pending firewall downgrade flush was incomplete")
+        db.execute("COMMIT")
+        return flushed
+    except Exception:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        raise
+    finally:
+        db.close()
+
+
 def publish_health(generation, rules_sha256, sequence, status_text=None,
                    path=HEALTH_PATH, boot_id=None, active_rules_text=None):
     if status_text is None:
@@ -441,7 +504,8 @@ def publish_health(generation, rules_sha256, sequence, status_text=None,
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python3 -m mojo.deploy.audit")
-    parser.add_argument("command", choices=("render", "converge", "restore", "publish-health"))
+    parser.add_argument("command", choices=(
+        "render", "converge", "restore", "publish-health", "flush-pending"))
     parser.add_argument("--app-uid", type=int)
     parser.add_argument("--generation", default="")
     parser.add_argument("--rules-sha256", default="")
@@ -453,6 +517,8 @@ def main(argv=None):
         print(json.dumps(converge(args.app_uid), sort_keys=True))
     elif args.command == "restore":
         restore_prior()
+    elif args.command == "flush-pending":
+        flush_pending_firewall()
     else:
         publish_health(args.generation, args.rules_sha256, args.sequence)
     return 0

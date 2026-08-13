@@ -15,6 +15,7 @@ from .disposition import (
     classify_local_only, diagnostic_override, is_local_only,
     observed_timestamp,
 )
+from .evidence import build_evidence
 from .protocol import canonical_json, make_event
 
 
@@ -312,6 +313,14 @@ class Store:
                 PRIMARY KEY(boot_id,audit_session)
             )""",
             "CREATE INDEX IF NOT EXISTS origin_sessions_updated ON origin_sessions(updated_at)",
+            """CREATE TABLE IF NOT EXISTS crond_launches (
+                boot_id TEXT NOT NULL, audit_session INTEGER NOT NULL,
+                payload TEXT NOT NULL CHECK(length(payload) <= 4096),
+                observed_at REAL NOT NULL, updated_at REAL NOT NULL,
+                ambiguous INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(boot_id,audit_session)
+            )""",
+            "CREATE INDEX IF NOT EXISTS crond_launches_updated ON crond_launches(updated_at)",
             """CREATE TABLE IF NOT EXISTS audit_health_epochs (
                 boot_id TEXT NOT NULL, sequence INTEGER NOT NULL,
                 payload TEXT NOT NULL CHECK(length(payload) <= 4096),
@@ -581,7 +590,8 @@ class Store:
                 continue
         return result
 
-    def _record_provenance(self, fragments, process_nodes, health, receipts, now):
+    def _record_provenance(self, fragments, process_nodes, health, receipts,
+                           crond_launches, now):
         self.db.execute("DELETE FROM audit_fragments WHERE updated_at < ?",
                         (now - AUDIT_FRAGMENT_TTL_SECONDS,))
         for item in fragments or ():
@@ -619,6 +629,7 @@ class Store:
                 (item["boot_id"], item["pid"], generation,
                  item.get("audit_session"), payload, now, now,
                  int(bool(item.get("pinned")))))
+        self._record_crond_launches(crond_launches, now)
         self._record_jobman_origins(now)
         self.db.execute(
             "DELETE FROM process_nodes WHERE rowid IN (SELECT rowid FROM process_nodes "
@@ -664,6 +675,39 @@ class Store:
             (FIREWALL_RECEIPT_CAP,))
         self._prune_payload_budget(
             "firewall_receipts", "observed_at", FIREWALL_RECEIPT_MAX_BYTES)
+
+    def _record_crond_launches(self, launches, now):
+        """Merge trusted CROND syslog and PAM halves with sticky conflict."""
+        self.db.execute("DELETE FROM crond_launches WHERE updated_at < ?",
+                        (now - SSH_SESSION_TTL_SECONDS,))
+        for launch in launches or ():
+            key = (launch.get("boot_id"), launch.get("audit_session"))
+            half = launch.get("half")
+            if half not in ("syslog", "pam"):
+                continue
+            row = self.db.execute(
+                "SELECT payload,ambiguous FROM crond_launches "
+                "WHERE boot_id=? AND audit_session=?", key).fetchone()
+            payload = {} if row is None else json.loads(row["payload"])
+            conflict = bool(row and row["ambiguous"])
+            prior = payload.get(half)
+            clean = {name: launch[name] for name in (
+                "boot_id", "audit_session", "half", "monotonic", "command_sha256")}
+            if half == "syslog":
+                clean["bash_pid"] = launch["bash_pid"]
+            if prior is not None and prior != clean:
+                conflict = True
+            payload[half] = clean
+            encoded = canonical_json(payload)
+            self.db.execute(
+                "INSERT INTO crond_launches(boot_id,audit_session,payload,observed_at,"
+                "updated_at,ambiguous) VALUES(?,?,?,?,?,?) ON CONFLICT(boot_id,audit_session) "
+                "DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at,"
+                "ambiguous=max(crond_launches.ambiguous,excluded.ambiguous)",
+                (key[0], key[1], encoded, now, now, int(conflict)))
+        self.db.execute(
+            "DELETE FROM crond_launches WHERE rowid IN (SELECT rowid FROM crond_launches "
+            "ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET ?)", (SSH_SESSION_CAP,))
 
     def _prune_payload_budget(self, table, order_column, maximum, where="1=1"):
         """Retain newest bounded payload bytes using one indexed window scan."""
@@ -722,12 +766,31 @@ class Store:
         }
         for anchor in anchors:
             key = (anchor["boot_id"], anchor["audit_session"])
+            launch_row = self.db.execute(
+                "SELECT payload,ambiguous FROM crond_launches WHERE boot_id=? "
+                "AND audit_session=?", key).fetchone()
+            if launch_row is not None and launch_row["ambiguous"]:
+                self.db.execute(
+                    "UPDATE origin_sessions SET ambiguous=1,updated_at=? "
+                    "WHERE boot_id=? AND audit_session=?", (now, key[0], key[1]))
+                continue
+            if launch_row is None:
+                continue
+            launch = json.loads(launch_row["payload"])
+            syslog = launch.get("syslog")
+            pam = launch.get("pam")
+            if (not syslog or not pam or
+                    syslog.get("command_sha256") != pam.get("command_sha256") or
+                    pam.get("monotonic", 0) >= syslog.get("monotonic", 0)):
+                continue
             nodes = session_nodes.get(key, [])
             by_pid = {}
             for node in nodes:
                 by_pid.setdefault(node.get("pid"), []).append(node)
             current = json.loads(anchor["payload"])
-            jobman = cron = False
+            anchor_node = current
+            jobman = False
+            jobman_node = None
             seen = set()
             for unused in range(8):
                 parent_pid = current.get("ppid")
@@ -744,10 +807,23 @@ class Store:
                         part.endswith("/bin/jobman") or
                         part == "mojo.deploy.jobman" for part in argv)):
                     jobman = True
-                if (os.path.basename(str(current.get("exe") or "")) in ("cron", "crond") or
-                        str(current.get("unit") or "") in ("cron.service", "crond.service")):
-                    cron = True
-            if not (jobman and cron):
+                    jobman_node = current
+                    break
+            if not jobman or jobman_node is None:
+                continue
+            bash = [node for node in by_pid.get(jobman_node.get("ppid"), [])
+                    if node.get("pid") == syslog.get("bash_pid") and
+                    node.get("exe") == "/usr/bin/bash" and
+                    node.get("success") is True and node.get("eoe") is True and
+                    not node.get("ambiguous") and not node.get("incomplete")]
+            if len(bash) != 1:
+                continue
+            bash = bash[0]
+            order = (pam["monotonic"], syslog["monotonic"],
+                     bash.get("monotonic"), jobman_node.get("monotonic"),
+                     anchor_node.get("monotonic"))
+            if (any(not isinstance(value, int) for value in order) or
+                    any(left >= right for left, right in zip(order, order[1:]))):
                 continue
             existing = origins.get(key)
             conflict = bool(existing and (
@@ -1090,6 +1166,8 @@ class Store:
                     "lineage_sha256": hashlib.sha256(canonical_json(
                         targets + [broker, sudo, engine]).encode()).hexdigest(),
                 })
+                observation["attributes"] = build_evidence(
+                    observation["kind"], observation["attributes"])
                 self._record_local_only(observation, self.local_only_diagnostic, now)
                 self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
                                 (row["observation_id"],))
@@ -1172,6 +1250,9 @@ class Store:
         self.db.execute("DELETE FROM aggregates WHERE fingerprint = ?", (aggregate["fingerprint"],))
 
     def _ingest_one(self, observation, now, diagnostic=None):
+        if observation.get("kind") == "auth.sudo_command":
+            observation["attributes"] = build_evidence(
+                observation["kind"], observation.get("attributes", {}))
         if is_local_only(observation, wire=False):
             self._record_local_only(
                 observation, diagnostic or self.local_only_diagnostic, now)
@@ -1217,7 +1298,7 @@ class Store:
 
     def ingest(self, observations, cursor_key=None, cursor=None, ssh_sessions=None,
                audit_fragments=None, process_nodes=None, audit_health=None,
-               firewall_receipts=None):
+               firewall_receipts=None, crond_launches=None):
         """Durably queue observations and advance their collector cursor atomically."""
         now = time.time()
         diagnostic = diagnostic_override(self.local_only_diagnostic_path, now=now)
@@ -1227,10 +1308,14 @@ class Store:
             if ssh_sessions is not None:
                 self._record_ssh_sessions(ssh_sessions, now)
             self._record_provenance(
-                audit_fragments, process_nodes, audit_health, firewall_receipts, now)
+                audit_fragments, process_nodes, audit_health, firewall_receipts,
+                crond_launches, now)
             for found in observations:
                 self._record_local_origin(found, now)
                 self._enrich_sudo(found, now)
+                if found.get("kind") == "auth.sudo_command":
+                    found["attributes"] = build_evidence(
+                        found["kind"], found.get("attributes", {}))
                 if self._broker_candidate(found):
                     boot_id = found["attributes"]["boot_id"]
                     healthy = self.db.execute(

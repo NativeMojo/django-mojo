@@ -84,6 +84,91 @@ def test_production_journal_shape(opts):
                  "legacy synthetic timestamp identities must not be accepted")
 
 
+@th.unit_test("production CROND launch requires exact trusted syslog and PAM halves")
+def test_production_crond_launch_shape(opts):
+    from mojo.mojosec.lineage import CROND_SELINUX, crond_launch
+
+    boot = "a" * 32
+    command = "/opt/api/bin/jobman start >> /opt/api/var/logs/jobman.log 2>&1"
+    common = {"_BOOT_ID": boot, "_UID": "0", "_GID": "1000",
+              "_AUDIT_LOGINUID": "1000", "_AUDIT_SESSION": "71",
+              "_SELINUX_CONTEXT": CROND_SELINUX}
+    syslog = dict(common, _TRANSPORT="syslog", _PID="190", _COMM="bash",
+                  _EXE="/usr/bin/bash", SYSLOG_IDENTIFIER="CROND",
+                  _CMDLINE=f'/bin/bash -c "{command}"',
+                  MESSAGE=f"(ec2-user) CMD ({command})",
+                  _SYSTEMD_UNIT="session-71.scope",
+                  _SYSTEMD_CGROUP="/user.slice/user-1000.slice/session-71.scope",
+                  __MONOTONIC_TIMESTAMP="200")
+    pam = dict(common, _TRANSPORT="audit", _AUDIT_TYPE_NAME="USER_START",
+               __MONOTONIC_TIMESTAMP="100",
+               _AUDIT_FIELD_AUID="1000", _AUDIT_FIELD_SES="71",
+               _AUDIT_FIELD_EXE="/usr/sbin/crond", _AUDIT_FIELD_ACCT="ec2-user",
+               _AUDIT_FIELD_TERMINAL="cron", _AUDIT_FIELD_RES="success",
+               MESSAGE=("USER_START pid=411 uid=0 auid=1000 ses=71 "
+                        "msg='op=PAM:session_open acct=ec2-user "
+                        "exe=/usr/sbin/crond terminal=cron res=success'"))
+    th.assert_eq(crond_launch(syslog, "/opt/api", 1000, 1000)["bash_pid"], 190,
+                 "the trusted CROND record must bind the real bash generation")
+    th.assert_eq(crond_launch(pam, "/opt/api", 1000, 1000)["half"], "pam",
+                 "the matching Audit USER_START record must provide the PAM half")
+    for field in ("_CMDLINE", "MESSAGE", "_SYSTEMD_UNIT", "_GID"):
+        changed = dict(syslog)
+        changed[field] = "mutated"
+        th.assert_eq(crond_launch(changed, "/opt/api", 1000, 1000), None,
+                     f"a mutated {field} must not attest a CROND launch")
+
+
+@th.unit_test("CROND origin requires both ordered halves and conflict is sticky")
+def test_crond_origin_missing_order_and_conflict(opts):
+    from mojo.mojosec.store import Store
+
+    aggregation = {"window_seconds": 60, "flush_count": 10,
+                   "max_aggregates": 100, "critical_reserve_aggregates": 10}
+    delivery = {"max_spool_events": 100, "critical_reserve_events": 10,
+                "retry_min_seconds": 1, "retry_max_seconds": 60}
+    boot = "a" * 32
+    nodes = [
+        {"boot_id": boot, "audit_id": "1", "pid": 19, "ppid": 1,
+         "audit_session": 9, "exe": "/usr/bin/bash", "argv": ["/usr/bin/bash"],
+         "monotonic": 300},
+        {"boot_id": boot, "audit_id": "2", "pid": 18, "ppid": 19,
+         "audit_session": 9, "exe": "/usr/bin/python3",
+         "argv": ["python3", "-m", "mojo.deploy.jobman", "start"], "monotonic": 400},
+        {"boot_id": boot, "audit_id": "3", "pid": 21, "ppid": 18,
+         "audit_session": 9, "exe": "/usr/bin/python3", "start_ticks": 210,
+         "argv": ["/opt/api/bin/jobs.py", "engine", "foreground"],
+         "monotonic": 500, "pinned": True},
+    ]
+    for node in nodes:
+        node.update(success=True, eoe=True, argv_sha256=hashlib.sha256(
+            b"\0".join(part.encode() for part in node["argv"])).hexdigest())
+    pam = {"boot_id": boot, "audit_session": 9, "half": "pam",
+           "monotonic": 100, "command_sha256": "7" * 64}
+    syslog = {"boot_id": boot, "audit_session": 9, "half": "syslog",
+              "bash_pid": 19, "monotonic": 200, "command_sha256": "7" * 64}
+    cases = (([syslog], False),
+             ([pam, dict(syslog, monotonic=50)], False),
+             ([pam, syslog, dict(syslog, bash_pid=99)], True))
+    for launches, conflict in cases:
+        with tempfile.TemporaryDirectory() as root:
+            store = Store(root, "sensor", aggregation, delivery,
+                          local_only_diagnostic_path=os.path.join(root, "missing"))
+            store.ingest([], process_nodes=nodes, crond_launches=launches)
+            origin = store.db.execute(
+                "SELECT ambiguous FROM origin_sessions WHERE boot_id=? AND audit_session=9",
+                (boot,)).fetchone()
+            th.assert_eq(origin, None,
+                         "missing, misordered, or conflicting launch proof must not anchor")
+            if conflict:
+                row = store.db.execute(
+                    "SELECT ambiguous FROM crond_launches WHERE boot_id=? AND audit_session=9",
+                    (boot,)).fetchone()
+                th.assert_true(row["ambiguous"],
+                               "a duplicate launch mutation must remain sticky conflict")
+            store.close()
+
+
 @th.unit_test("audit compounds reject conflicting duplicate fields")
 def test_compound_conflict_is_ambiguous(opts):
     from mojo.mojosec.lineage import CompoundAssembler
@@ -137,6 +222,7 @@ def test_project_ancestors_is_bounded(opts):
 @th.unit_test("proven firewall operation resolves local-only and incomplete proof fails open")
 def test_pending_firewall_resolution(opts):
     from mojo.mojosec.events import observation
+    from mojo.mojosec.lineage import CROND_SELINUX, crond_launch
     from mojo.mojosec.store import Store
 
     aggregation = {"window_seconds": 60, "flush_count": 10,
@@ -154,6 +240,14 @@ def test_pending_firewall_resolution(opts):
             "command": "/usr/local/sbin/mojo-firewall-broker",
             "command_path": "/usr/local/sbin/mojo-firewall-broker",
             "command_sha256": "b" * 64,
+            "cwd": "/" + "x" * 511,
+            "receipt_semantics": ["s" * 160 for unused in range(8)],
+            "lineage_sha256": "d" * 64,
+            "lineage": [{"pid": index + 1, "ppid": index,
+                         "start_ticks": index + 100,
+                         "exe": "/" + "e" * 511,
+                         "cgroup": "/" + "c" * 511,
+                         "selinux": "z" * 256} for index in range(8)],
         }, fingerprint_values=("candidate",), aggregate=False,
         recommendation="review", observed_at="2026-08-13T20:00:00Z")
     health = {
@@ -178,17 +272,43 @@ def test_pending_firewall_resolution(opts):
                   monotonic_ns=1_100_000_000, ok=True, children=[{
                       "pid": 23, "start_ticks": 230, "exe": "/sbin/iptables",
                       "argv_digest": child_digest, "returncode": 0, "ok": True}])
+    command = "/opt/api/bin/jobman start >> /opt/api/var/logs/jobman.log 2>&1"
+    common = {"_BOOT_ID": boot, "_UID": "0", "_GID": "1000",
+              "_AUDIT_LOGINUID": "1000", "_AUDIT_SESSION": str(session),
+              "_SELINUX_CONTEXT": CROND_SELINUX}
+    launches = [
+        crond_launch(dict(common, _TRANSPORT="audit", _AUDIT_TYPE_NAME="USER_START",
+                    __MONOTONIC_TIMESTAMP="100",
+                    _AUDIT_FIELD_AUID="1000", _AUDIT_FIELD_SES=str(session),
+                    _AUDIT_FIELD_EXE="/usr/sbin/crond",
+                    _AUDIT_FIELD_ACCT="ec2-user", _AUDIT_FIELD_TERMINAL="cron",
+                    _AUDIT_FIELD_RES="success",
+                    MESSAGE=(f"USER_START pid=411 uid=0 auid=1000 ses={session} "
+                             "msg='op=PAM:session_open acct=ec2-user "
+                             "exe=/usr/sbin/crond terminal=cron res=success'")),
+                    "/opt/api", 1000, 1000),
+        crond_launch(dict(common, _TRANSPORT="syslog", _PID="19", _COMM="bash",
+                    _EXE="/usr/bin/bash", SYSLOG_IDENTIFIER="CROND",
+                    _CMDLINE=f'/bin/bash -c "{command}"',
+                    MESSAGE=f"(ec2-user) CMD ({command})",
+                    _SYSTEMD_UNIT=f"session-{session}.scope",
+                    _SYSTEMD_CGROUP=(f"/user.slice/user-1000.slice/"
+                                    f"session-{session}.scope"),
+                    __MONOTONIC_TIMESTAMP="200"), "/opt/api", 1000, 1000),
+    ]
     nodes = [
         {"boot_id": boot, "audit_id": "5", "pid": 19, "ppid": 1,
-         "audit_session": session, "exe": "/usr/sbin/crond", "argv": ["/usr/sbin/crond"]},
+         "audit_session": session, "exe": "/usr/bin/bash", "argv": ["/usr/bin/bash"],
+         "monotonic": 300},
         {"boot_id": boot, "audit_id": "6", "pid": 18, "ppid": 19,
          "audit_session": session, "exe": "/usr/bin/python3",
-         "argv": ["python3", "-m", "mojo.deploy.jobman", "start"]},
+         "argv": ["python3", "-m", "mojo.deploy.jobman", "start"], "monotonic": 400},
         {"boot_id": boot, "audit_id": "1", "pid": 20, "ppid": 21,
          "audit_session": session, "exe": "/usr/bin/sudo", "argv": ["/usr/bin/sudo"]},
         {"boot_id": boot, "audit_id": "2", "pid": 21, "ppid": 18,
          "audit_session": session, "exe": "/usr/bin/python3",
-         "argv": ["/opt/api/bin/jobs.py", "engine", "foreground"], "pinned": True},
+         "argv": ["/opt/api/bin/jobs.py", "engine", "foreground"], "pinned": True,
+         "start_ticks": 210, "monotonic": 500},
         {"boot_id": boot, "audit_id": "3", "pid": 22, "ppid": 20,
          "audit_session": session, "start_ticks": 220, "exe": "/usr/bin/python3", "argv": []},
         {"boot_id": boot, "audit_id": "4", "pid": 23, "ppid": 22,
@@ -205,13 +325,20 @@ def test_pending_firewall_resolution(opts):
         os.chmod(root, 0o700)
         store = Store(root, "sensor", aggregation, delivery,
                       local_only_diagnostic_path=os.path.join(root, "missing"))
-        store.ingest([candidate], audit_health=health, process_nodes=nodes,
-                     firewall_receipts=[begin, result])
-        th.assert_eq(store.stats()["local_only_suppressed"], 1,
-                     "complete healthy process and receipt proof should suppress centrally")
-        th.assert_eq(store.pending_batch(10, 65536), [],
-                     "proven expected automation must not create an ordinary Event")
+        store.ingest([], audit_health=health, process_nodes=nodes,
+                     crond_launches=launches)
         store.close()
+        reopened = Store(root, "sensor", aggregation, delivery,
+                         local_only_diagnostic_path=os.path.join(root, "missing"))
+        with mock.patch("mojo.mojosec.lineage.enrich_process",
+                        return_value={"start_ticks": 210}):
+            reopened.ingest([candidate], audit_health=health,
+                            firewall_receipts=[begin, result])
+        th.assert_eq(reopened.stats()["local_only_suppressed"], 1,
+                     "complete healthy process and receipt proof should suppress centrally")
+        th.assert_eq(reopened.pending_batch(10, 65536), [],
+                     "proven expected automation must not create an ordinary Event")
+        reopened.close()
 
     bad_result = dict(result, children=[dict(result["children"][0],
                                             argv_digest="9" * 64)])
@@ -220,7 +347,7 @@ def test_pending_firewall_resolution(opts):
         store = Store(root, "sensor", aggregation, delivery,
                       local_only_diagnostic_path=os.path.join(root, "missing"))
         store.ingest([bad_candidate], audit_health=health, process_nodes=nodes,
-                     firewall_receipts=[begin, bad_result])
+                     firewall_receipts=[begin, bad_result], crond_launches=launches)
         events = store.pending_batch(10, 65536)
         th.assert_eq(len(events), 1,
                      "one child argv mismatch must immediately fail open ordinary")
@@ -248,6 +375,14 @@ def test_pending_firewall_restart_expiry(opts):
             "command": "/usr/local/sbin/mojo-firewall-broker",
             "command_path": "/usr/local/sbin/mojo-firewall-broker",
             "command_sha256": "b" * 64,
+            "cwd": "/" + "x" * 511,
+            "receipt_semantics": ["s" * 160 for unused in range(8)],
+            "lineage_sha256": "d" * 64,
+            "lineage": [{"pid": index + 1, "ppid": index,
+                         "start_ticks": index + 100,
+                         "exe": "/" + "e" * 511,
+                         "cgroup": "/" + "c" * 511,
+                         "selinux": "z" * 256} for index in range(8)],
         }, fingerprint_values=("restart-expiry",), aggregate=False,
         recommendation="review", observed_at="2026-08-13T20:00:00Z")
     health = {
@@ -279,6 +414,11 @@ def test_pending_firewall_restart_expiry(opts):
         th.assert_eq(event["attributes"]["command"],
                      "/usr/local/sbin/mojo-firewall-broker",
                      "restart expiry must preserve the untouched admin command evidence")
+        th.assert_true(len(json.dumps(event["attributes"], sort_keys=True,
+                                      separators=(",", ":")).encode()) <= 8192,
+                       "post-enrichment fallback must reapply the wire evidence budget")
+        th.assert_eq(event["attributes"].get("lineage_sha256"), "d" * 64,
+                     "priority projection must preserve the lineage digest")
         th.assert_eq(reopened.stats()["provenance"]["pending_firewall"], 0,
                      "the durable candidate may be deleted only after ordinary enqueue")
         reopened.close()

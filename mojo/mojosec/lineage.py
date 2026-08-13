@@ -19,6 +19,56 @@ COMPOUND_TIMEOUT_SECONDS = 2
 # MESSAGE text to form a compound identity.
 _AUDIT_ID = re.compile(r"^[0-9]{1,20}$")
 _AUDIT_TYPES = {"SYSCALL", "EXECVE", "PROCTITLE", "CWD", "EOE"}
+CROND_SELINUX = "system_u:system_r:crond_t:s0-s0:c0.c1023"
+
+
+def crond_launch(record, project_path, app_uid, app_gid):
+    """Project one half of the exact AL2023 CROND/PAM launch attestation."""
+    boot = str(record.get("_BOOT_ID") or "").replace("-", "").lower()
+    session = _integer(record.get("_AUDIT_SESSION"), 4294967294)
+    if not re.fullmatch(r"[a-f0-9]{32}", boot) or session is None:
+        return None
+    command = (f'{project_path}/bin/jobman start >> '
+               f'{project_path}/var/logs/jobman.log 2>&1')
+    common = bool(
+        str(record.get("_UID") or "") == "0" and
+        str(record.get("_GID") or "") == str(app_gid) and
+        str(record.get("_AUDIT_LOGINUID") or "") == str(app_uid) and
+        str(record.get("_SELINUX_CONTEXT") or "") == CROND_SELINUX)
+    monotonic = _integer(record.get("__MONOTONIC_TIMESTAMP"))
+    if not common or monotonic is None:
+        return None
+    if record.get("_TRANSPORT") == "syslog":
+        expected_message = f"(ec2-user) CMD ({command})"
+        expected_cmdline = f'/bin/bash -c "{command}"'
+        pid = _integer(record.get("_PID"), 2 ** 31 - 1)
+        scope = f"session-{session}.scope"
+        cgroup = str(record.get("_SYSTEMD_CGROUP") or "")
+        if (record.get("SYSLOG_IDENTIFIER") != "CROND" or
+                record.get("_COMM") != "bash" or
+                record.get("_EXE") != "/usr/bin/bash" or
+                record.get("_CMDLINE") != expected_cmdline or
+                record.get("MESSAGE") != expected_message or not pid or
+                record.get("_SYSTEMD_UNIT") != scope or
+                not cgroup.endswith("/" + scope)):
+            return None
+        return {"boot_id": boot, "audit_session": session, "half": "syslog",
+                "bash_pid": pid, "monotonic": monotonic,
+                "command_sha256": hashlib.sha256(command.encode()).hexdigest()}
+    if (record.get("_TRANSPORT") == "audit" and
+            str(record.get("_AUDIT_TYPE_NAME") or "") == "USER_START"):
+        fields = _message_fields(record)
+        if (str(_field(record, fields, "auid", "_AUDIT_LOGINUID")) != str(app_uid) or
+                str(_field(record, fields, "ses", "_AUDIT_SESSION")) != str(session) or
+                _field(record, fields, "exe") != "/usr/sbin/crond" or
+                _field(record, fields, "acct") != "ec2-user" or
+                _field(record, fields, "terminal") != "cron" or
+                str(_field(record, fields, "res")).lower() not in ("success", "yes", "1")):
+            return None
+        return {"boot_id": boot, "audit_session": session, "half": "pam",
+                "monotonic": monotonic,
+                "command_sha256": hashlib.sha256(command.encode()).hexdigest()}
+    return None
 
 
 def _integer(value, maximum=2 ** 63 - 1):

@@ -865,6 +865,15 @@ that has already left `/proc` does not poison a complete Audit edge. A live
 conflicts, gaps, loss, or stale health makes suppression ineligible. Only the
 long-lived JobEngine anchor must still have a live verified PID generation.
 
+The cron origin is not inferred from a fabricated same-session `crond` exec.
+It requires both halves of the production AL2023 launch: a trusted root CROND
+syslog record for the exact project-specific `bash -c` jobman command and a
+matching Audit `USER_START` crond/PAM record. Both must agree on boot and Audit
+session, application UID/GID, `session-<id>.scope`, crond SELinux domain and
+strict monotonic order before the audited bash → jobman → engine chain. The
+bounded launch record survives polling and restart; a conflicting duplicate is
+sticky and makes the session permanently ineligible for suppression.
+
 The root-owned Audit health oneshot has only `CAP_AUDIT_CONTROL` and publishes
 a root-only sidecar every five seconds. The main sensor's capability set is
 unchanged. It validates boot, managed generation, rules digest, sequence,
@@ -872,6 +881,9 @@ freshness, loss, backlog, failure mode, and rate limit. Deployment accepts only
 the exact AL2023 `task,never` seed or a complete prior Mojo generation after
 hashing every rules source, the generated rules and the active rules. It keeps
 an exact rollback record and restores it on convergence failure or downgrade.
+Before an older package is allowed to start, the stable root helper
+transactionally converts every held broker candidate to an ordinary spool
+Event and verifies that no pending row remains.
 
 Process nodes live locally for seven days (131,072 rows), incomplete compounds
 for ten minutes (8,192), origin sessions for 30 days (4,096), health epochs for

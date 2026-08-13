@@ -9,7 +9,7 @@ import time
 
 from ..detectors import detect_journal
 from ..attribution import AttributionResolver
-from ..lineage import CompoundAssembler, firewall_receipt, walk_parents
+from ..lineage import CompoundAssembler, crond_launch, firewall_receipt, walk_parents
 
 
 MAX_STDERR_BYTES = 4096
@@ -181,6 +181,9 @@ class JournalCollector:
             process_nodes.append(node)
         receipts = [found for found in
                     (firewall_receipt(record) for record in parsed_records) if found]
+        crond_launches = [found for found in (crond_launch(
+            record, self.config["project_path"], self.config["app_uid"],
+            self.config["app_gid"]) for record in parsed_records) if found]
         for record in parsed_records:
             try:
                 detected = detect_journal(record, resolver)
@@ -194,4 +197,5 @@ class JournalCollector:
             "malformed": malformed, "ssh_sessions": sessions,
             "audit_fragments": lineage["fragments"],
             "process_nodes": process_nodes, "firewall_receipts": receipts,
+            "crond_launches": crond_launches,
         }

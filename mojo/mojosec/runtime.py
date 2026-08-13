@@ -96,6 +96,7 @@ class Runtime:
                 process_nodes=result.get("process_nodes"),
                 audit_health=health_value,
                 firewall_receipts=result.get("firewall_receipts"),
+                crond_launches=result.get("crond_launches"),
             )
             self._collector_ok(collector.name, result.get("malformed", 0))
         except Exception as err:

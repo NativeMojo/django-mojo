@@ -308,6 +308,8 @@ if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ] && \
     [ ! -L /usr/local/lib/mojosec/mojosec_audit.py ] && \
     [ "$(stat -c %u /usr/local/lib/mojosec/mojosec_audit.py)" = "0" ] \
         || { restore_mojosec_django; die "cannot trust MojoSec Audit downgrade helper"; }
+    /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py flush-pending \
+        || { restore_mojosec_django; die "cannot flush MojoSec pending events"; }
     /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py restore \
         || { restore_mojosec_django; die "cannot restore pre-feature Audit state"; }
     systemctl disable --now mojosec-audit-health.timer 2>/dev/null || true
@@ -336,7 +338,8 @@ if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ]; then
             "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" \
             -m mojo.deploy.mojosec converge \
             --mode "$MOJOSEC_MODE" \
-            --criticality "$MOJOSEC_DEPLOY_CRITICALITY"; then
+            --criticality "$MOJOSEC_DEPLOY_CRITICALITY" \
+            --project-path "$PROJ_PATH"; then
         restore_mojosec_django
         nginx -t || die "MojoSec failed and the exact prior django.inc is invalid"
         systemctl reload nginx \
@@ -357,6 +360,8 @@ else
         [ ! -L /usr/local/lib/mojosec/mojosec_audit.py ] && \
         [ "$(stat -c %u /usr/local/lib/mojosec/mojosec_audit.py)" = "0" ] \
             || { restore_mojosec_django; die "cannot trust MojoSec Audit downgrade helper"; }
+        /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py flush-pending \
+            || { restore_mojosec_django; die "cannot flush MojoSec pending events"; }
         /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py restore \
             || { restore_mojosec_django; die "cannot restore pre-feature Audit state"; }
         systemctl disable --now mojosec-audit-health.timer 2>/dev/null || true

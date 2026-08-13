@@ -1,6 +1,7 @@
 import os
 import json
 import tempfile
+import time
 from unittest import mock
 
 from testit import helpers as th
@@ -104,6 +105,46 @@ def test_transactional_restore_generations(opts):
             audit.restore_prior("/state")
         th.assert_true(not unlink.called,
                        "permanent rollback state may be consumed only after verified restore")
+
+
+@th.unit_test("package downgrade flushes every held broker event before old v3 starts")
+def test_downgrade_flush_pending(opts):
+    from mojo.deploy.audit import flush_pending_firewall
+    from mojo.mojosec.events import observation
+    from mojo.mojosec.store import Store
+
+    aggregation = {"window_seconds": 60, "flush_count": 10,
+                   "max_aggregates": 100, "critical_reserve_aggregates": 10}
+    delivery = {"max_spool_events": 100, "critical_reserve_events": 10,
+                "retry_min_seconds": 1, "retry_max_seconds": 60}
+    with tempfile.TemporaryDirectory() as root:
+        store = Store(root, "sensor", aggregation, delivery,
+                      local_only_diagnostic_path=os.path.join(root, "missing"))
+        candidate = observation(
+            "auth.sudo_command", "high", "Privileged sudo command executed",
+            attributes={"actor": "ec2-user", "target_user": "root",
+                        "command": "/usr/local/sbin/mojo-firewall-broker",
+                        "command_path": "/usr/local/sbin/mojo-firewall-broker"},
+            fingerprint_values=("downgrade",), aggregate=False,
+            observed_at="2026-08-13T20:00:00Z")
+        store.db.execute("BEGIN IMMEDIATE")
+        store.hold_firewall_observation(candidate, now=time.time())
+        store.db.execute("COMMIT")
+        store.close()
+
+        th.assert_eq(flush_pending_firewall(os.path.join(root, "state.sqlite3")), 1,
+                     "stable helper must convert held proof to ordinary evidence")
+        reopened = Store(root, "sensor", aggregation, delivery,
+                         local_only_diagnostic_path=os.path.join(root, "missing"))
+        th.assert_eq(reopened.stats()["provenance"]["pending_firewall"], 0,
+                     "an older v3 process must never inherit an invisible held candidate")
+        events = reopened.pending_batch(10, 65536)
+        th.assert_eq(len(events), 1,
+                     "the exact held command must survive restart as an ordinary Event")
+        th.assert_eq(events[0]["attributes"]["command_path"],
+                     "/usr/local/sbin/mojo-firewall-broker",
+                     "downgrade conversion must preserve admin evidence")
+        reopened.close()
 
 
 @th.unit_test("managed Audit upgrade late failure restores state bytes and retries")

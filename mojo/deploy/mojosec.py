@@ -663,7 +663,7 @@ def _target_allowed(path, roots):
     return any(os.path.commonpath((path, root)) == root for root in roots)
 
 
-def _prepare_effective_config():
+def _prepare_effective_config(app_account=None, project_path="/opt/api"):
     """Validate desired policy and merge only root-protected enrollment fields."""
     desired, source_payload = _read_json_file(DESIRED_CONFIG_PATH)
     unknown = set(desired) - DESIRED_KEYS
@@ -690,6 +690,11 @@ def _prepare_effective_config():
         raise DeployError("desired config cannot override the dedicated nginx log path")
     nginx["paths"] = [enrollment["nginx_log_path"]]
     nginx["max_line_bytes"] = MAX_STRUCTURED_LINE_BYTES
+    collectors["journal"].update({
+        "project_path": project_path,
+        "app_uid": app_account.pw_uid if app_account is not None else 1000,
+        "app_gid": app_account.pw_gid if app_account is not None else 1000,
+    })
     fim = collectors.setdefault("fim", {"enabled": False})
     if not isinstance(fim, dict):
         raise DeployError("desired collectors.fim must be an object")
@@ -838,7 +843,7 @@ def _restore_unit_set(service_path, unit_snapshot, service_state,
 def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
              service_path=SERVICE_PATH, nginx_path=NGINX_FRAGMENT_PATH,
              receiver_snippet_path=RECEIVER_SNIPPET_PATH,
-             django_include_path=DJANGO_INCLUDE_PATH):
+             django_include_path=DJANGO_INCLUDE_PATH, project_path="/opt/api"):
     """Converge one exact service. `off` preserves spool and credentials."""
     if mode not in MODES or criticality not in CRITICALITIES:
         raise DeployError("unsupported MojoSec deployment mode or criticality")
@@ -846,11 +851,13 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         raise DeployError("nginx log path is protected by root enrollment")
     if proxy_cidrs:
         raise DeployError("trusted proxy CIDRs are protected by root enrollment")
+    project_path = _normal_path(project_path, "MojoSec project path")
     unit_snapshot = service_state = retired_snapshot = None
     nginx_snapshot = deploy_state_snapshot = config_snapshot = None
     broker_snapshots = {}
     audit_state_snapshot = None
     audit_converged = False
+    audit_prior_restored = False
     unit_changed = nginx_changed = config_changed = retired_changed = False
     mutation_started = False
     prepared = None
@@ -864,7 +871,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         # has already started producing a new log. best_effort failure must
         # leave an unenrolled legacy node operationally unchanged.
         if mode == "observe":
-            prepared = _prepare_effective_config()
+            prepared = _prepare_effective_config(project_path=project_path)
             _lstat_regular(CREDENTIAL_PATH, mode=0o600)
             proxy_cidrs = prepared[2]["trusted_proxy_cidrs"]
         _ensure_dir(STATE_DIR, 0o700)
@@ -909,7 +916,14 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             from mojo.deploy.firewall_broker import (
                 BROKER_PATH, SUDOERS_PATH, render_sudoers,
             )
-            app_uid = pwd.getpwnam("ec2-user").pw_uid
+            app_account = pwd.getpwnam("ec2-user")
+            journal_identity = prepared[0].get("collectors", {}).get(
+                "journal", {"app_uid": app_account.pw_uid,
+                            "app_gid": app_account.pw_gid})
+            if (app_account.pw_uid != journal_identity["app_uid"] or
+                    app_account.pw_gid != journal_identity["app_gid"]):
+                raise DeployError("ec2-user identity differs from protected MojoSec config")
+            app_uid = app_account.pw_uid
             audit_state_snapshot = _owned_snapshot(audit_deploy.STATE_PATH)
             for path in (BROKER_PATH, SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
                          AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH):
@@ -974,6 +988,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 broker_snapshots[path] = _owned_snapshot(path)
             if audit_state_snapshot is not None:
                 audit_deploy.restore_prior()
+                audit_prior_restored = True
             _systemctl("disable", "--now", "mojosec-audit-health.timer")
             if (_systemctl_is("is-enabled", "mojosec-audit-health.timer") or
                     _systemctl_is("is-active", "mojosec-audit-health.timer")):
@@ -1015,7 +1030,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                     if mode == "observe" and audit_converged:
                         audit_deploy.restore_immediate()
                         _restore_snapshot(audit_deploy.STATE_PATH, audit_state_snapshot)
-                    elif audit_state_snapshot is not None:
+                    elif mode == "off" and audit_prior_restored:
                         _restore_snapshot(audit_deploy.STATE_PATH, audit_state_snapshot)
                         audit_deploy.restore_immediate()
                     for path, snapshot in broker_snapshots.items():
@@ -1142,6 +1157,7 @@ def main(argv=None):
     install.add_argument("--mode", choices=("enrolled",) + MODES, default="enrolled")
     install.add_argument("--criticality", choices=("enrolled",) + CRITICALITIES,
                          default="enrolled")
+    install.add_argument("--project-path", default="/opt/api")
     rotate = sub.add_parser("rotate-credential")
     rotate.add_argument("--no-restart", action="store_true")
     sub.add_parser("install-enrollment")
@@ -1156,7 +1172,7 @@ def main(argv=None):
                       "sensor_id": enrollment["sensor_id"]}
         else:
             mode, criticality = resolve_lifecycle(args.mode, args.criticality)
-            result = converge(mode, criticality)
+            result = converge(mode, criticality, project_path=args.project_path)
             result.setdefault("ok", True)
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0

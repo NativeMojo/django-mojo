@@ -50,6 +50,7 @@ def _journal_config(max_records=10, max_bytes=65536):
     return {
         "max_records": max_records, "max_bytes_per_poll": max_bytes,
         "max_record_bytes": 16384, "timeout_seconds": 5, "lookback_seconds": 300,
+        "project_path": "/opt/api", "app_uid": 1000, "app_gid": 1000,
     }
 
 
