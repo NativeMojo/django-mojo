@@ -91,6 +91,23 @@ def test_mojosec_sudo_projection_enforces_exact_bounds_and_honest_attribution(op
     th.assert_true("command_family" not in exact,
                    "a truncated executable path must never drive command classification")
 
+    unmapped = project("auth.sudo_command", {
+        "command": "/opt/vendor/bin/tool --secret visible",
+        "command_path": "/opt/vendor/bin/tool", "cwd": "/opt/vendor",
+    })["evidence"]
+    th.assert_eq(unmapped["command_family"], "unknown",
+                 "a valid complete unmapped executable path must yield literal unknown")
+
+    malformed_markers = project("auth.sudo_command", {
+        "command": "/usr/bin/true", "command_path": "/usr/bin/curl", "cwd": "/opt/api",
+        "command_truncated": 1, "command_path_truncated": "true",
+        "cwd_truncated": False,
+    })["evidence"]
+    for field in ("command", "command_path", "cwd", "command_truncated",
+                  "command_path_truncated", "cwd_truncated", "command_family"):
+        th.assert_true(field not in malformed_markers,
+                       f"a non-literal truncation marker must invalidate paired field {field}")
+
     invalid = project("auth.sudo_command", {
         "command": exact_command + "a", "command_path": exact_path + "a",
         "cwd": exact_path + "a", "command_truncated": 1,
@@ -152,6 +169,11 @@ def test_mojosec_sudo_projection_enforces_exact_bounds_and_honest_attribution(op
         dict(base, attribution_provenance="audit_session", source_ip="invalid"),
         dict(base, attribution_provenance="audit_session", boot_id="bad"),
         dict(base, attribution_provenance="who", tty="bad tty"),
+        dict(base, attribution_provenance="audit_session", actor=123),
+        dict(base, attribution_provenance="audit_session", actor=["deploy"]),
+        dict(base, attribution_provenance="audit_session", boot_id=int("1" * 32)),
+        dict(base, attribution_provenance="who", tty=7),
+        dict(base, attribution_provenance="who", tty={"name": "pts/1"}),
     )
     for attributes in cases:
         result = project("auth.sudo_command", attributes)

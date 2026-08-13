@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -144,6 +145,22 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
                    "raw bounded command evidence must reach only the protected receipt layer")
     th.assert_eq(sensitive_sudo["attributes"]["command_path"], "/usr/bin/curl",
                  "sudo evidence should retain only the invoked executable path")
+
+    oversized_command = "/usr/bin/curl " + "x" * 3000
+    oversized_sudo = detect_journal({
+        "SYSLOG_IDENTIFIER": "sudo", "SYSLOG_FACILITY": "10",
+        "_UID": "0", "_COMM": "sudo", "_EXE": "/usr/bin/sudo",
+        "MESSAGE": f"deploy : USER=root ; COMMAND={oversized_command}",
+    })
+    th.assert_eq(oversized_sudo["attributes"]["command"], oversized_command[:2048],
+                 "trusted sudo parsing must retain the sensor's exact 2,048-byte prefix")
+    th.assert_true(oversized_sudo["attributes"]["command_truncated"] is True,
+                   "an oversized raw sudo command must carry a truthful truncation marker")
+    th.assert_eq(oversized_sudo["attributes"]["command_sha256"],
+                 hashlib.sha256(oversized_command.encode()).hexdigest(),
+                 "the sensor must digest the full raw command rather than a message prefix")
+    th.assert_eq(oversized_sudo["attributes"]["command_path"], "/usr/bin/curl",
+                 "executable parsing must use the complete trusted sudo message")
 
     for forged in (
             {"SYSLOG_IDENTIFIER": "sshd", "_UID": "1000", "_COMM": "python3",

@@ -1026,8 +1026,12 @@ security administrators: `metadata.mojosec.evidence` exposes the exact accepted
 `command` (2,048 UTF-8 bytes maximum), `command_path` and `cwd` (512 bytes each),
 actor, target user, TTY, boot ID, audit session, and explicit `attribution`.
 True-only `<field>_truncated` markers identify sensor-retained prefixes, and
-`command_family` is optional additive classification from a valid complete
-path. The command digest remains receipt-only. No secret-pattern redaction,
+any present marker value other than literal boolean `true` invalidates and
+omits both the marker and its paired field.
+`command_family` is additive classification from a valid complete path: every
+such path yields a known server-owned family or literal `unknown`; invalid,
+missing, and truncated paths yield no family. The command digest remains
+receipt-only. No secret-pattern redaction,
 argument removal, or URL rewriting occurs on this existing
 `view_security`/`security` Event surface. System-service kinds
 (`system.service_error`, `system.oom`) project only a validated failed-unit
@@ -1039,8 +1043,9 @@ Event readers by product policy.
 
 Source-bearing SSH, reliably attributed sudo, and known web kinds populate
 `Event.source_ip`. Sudo evidence always reports `attribution`: `audit_session`
-requires a valid IP, actor, boot ID, and audit session; `who` requires a valid
-IP, actor, and TTY; every incomplete or invalid tuple becomes explicit `none`
+requires a valid IP, sensor-shaped actor and boot-ID strings, and an audit
+session; `who` requires a valid IP plus sensor-shaped actor and TTY strings.
+Every incomplete, invalid, or non-string proof tuple becomes explicit `none`
 and leaves `Event.source_ip` null. For `web.probe` and `web.denied`, sensor
 fingerprints include each projected identity scalar, so an aggregate cannot
 misrepresent interleaved IP/host/method/status values. `web.error` fingerprints omit

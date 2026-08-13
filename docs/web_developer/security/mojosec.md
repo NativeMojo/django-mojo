@@ -116,10 +116,14 @@ structured UA family/major/digest plus centrally scrubbed display, request ID,
 protocol/TLS, ports, byte counts and upstream measurements. For
 `auth.sudo_command`, the existing `view_security`/`security` Event surface also
 returns exact accepted `command`, `command_path`, and `cwd`, plus actor, target
-user, TTY, boot ID, audit session, and explicit attribution. A
-`command_family` may be present as additive classification. Literal
+user, TTY, boot ID, audit session, and explicit attribution. For every valid,
+non-truncated `command_path`, `command_family` is present as a server-owned
+known family or literal `unknown`; invalid, missing, and truncated paths omit
+it. Literal
 `command_truncated`, `command_path_truncated`, and `cwd_truncated` booleans are
-present only when the corresponding sensor value is a retained prefix. The
+present only when the corresponding sensor value is a retained prefix. If a
+marker key is present with `false`, a truthy number/string, or any value other
+than literal boolean `true`, the marker and its paired field are omitted. The
 full-value digest remains receipt-only; secret-looking command arguments are
 not redacted for authorized administrators.
 For system events (`system.service_error`, `system.oom`) the projection
@@ -164,8 +168,9 @@ Conflicting identity for one audit key becomes a sticky ambiguous tombstone.
 `attribution_provenance` is `audit_session`, `who`, or `none`; only the first
 two allow sudo's address to populate `Event.source_ip`. The projected
 `attribution` is always explicit: audit-session promotion requires a valid IP,
-actor, boot ID, and audit session, while `who` promotion requires a valid IP,
-actor, and TTY. An incomplete or malformed tuple becomes `none` and leaves
+sensor-shaped actor and boot-ID strings, and an audit session, while `who`
+promotion requires a valid IP plus sensor-shaped actor and TTY strings. An
+incomplete, malformed, or non-string tuple becomes `none` and leaves
 `source_ip` null, even if the receipt contains a stray address. Stale, reused,
 or ambiguous rows therefore remain unattributed.
 

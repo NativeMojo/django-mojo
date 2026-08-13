@@ -29,10 +29,14 @@ the exact accepted command. The central projection validates without rewriting:
 `command` is at most 2,048 UTF-8 bytes, while `command_path` and `cwd` are at
 most 512 bytes each; NUL, invalid UTF-8, non-string, empty, and oversized values
 are omitted independently. Literal sensor truncation markers project with an
-accepted value so a retained prefix is never presented as complete. The full
-command digest remains receipt-only, while `command_family` may be added from
-a valid non-truncated executable path. Secret-looking arguments are deliberately
-not redacted on Events already gated by `view_security` or `security`.
+accepted value so a retained prefix is never presented as complete. If a
+marker key is present with anything other than literal boolean `true`, its
+paired value and marker are malformed and both are omitted. The full command
+digest remains receipt-only, while `command_family` may be added from
+a valid non-truncated executable path. Every such path gets a server-owned
+known family or the literal `unknown`; a missing, invalid, or sensor-truncated
+path gets no family. Secret-looking arguments are deliberately not redacted on
+Events already gated by `view_security` or `security`.
 
 This catches common automated reconnaissance for WordPress, PHP, ASP/JSP,
 `.env`, `.git`, phpMyAdmin, PHPUnit, actuator, Swagger/OpenAPI, CGI, and similar
@@ -308,8 +312,9 @@ source addresses also populate that canonical Event field. Sudo evidence
 includes bounded actor, target, TTY, audit identity, working directory, raw
 command, executable, digest, and attribution provenance. The central Event
 always reports `attribution` as `audit_session`, `who`, or `none`: audit-session
-promotion requires a valid address, actor, boot ID, and audit session; `who`
-promotion requires a valid address, actor, and TTY. Missing or malformed proof
+promotion requires a valid address, sensor-shaped actor and boot-ID strings,
+and an audit session; `who` promotion requires a valid address plus
+sensor-shaped actor and TTY strings. Missing, malformed, or non-string proof
 therefore stays explicit `none` and cannot promote a stray address.
 The `who` subprocess runs in a fixed C locale with a two-second timeout and
 strict 128 KiB/4,096-line streaming caps; timeout or overflow fails closed.
@@ -696,16 +701,19 @@ Sudo Event evidence exposes the exact accepted `command`, `command_path`, and
 target user, TTY, boot ID, audit session, and explicit attribution. The command
 digest stays receipt-only. This raw administrative command evidence is
 deliberately available through the existing `view_security`/`security` Event
-surface; no public endpoint or broader graph is added. For
+surface; a present non-boolean or false truncation marker invalidates its
+paired field rather than silently claiming the value is complete. No public
+endpoint or broader graph is added. For
 `fim.change`, the sole optional
 sensor annotation projected centrally is exact
 `expected_change.{deployment_id,expires_at,operation_id,operation_kind,completed_at}`
 after revalidation; raw FIM
 attributes never project and the annotation never suppresses publication. Host severity is
 preserved only as advisory evidence; the registry selects the effective level
-and category. Sensor summaries, paths,
-messages, commands, and other raw strings do not enter LLM-visible Event
-metadata.
+and category. Sensor summaries, journal messages, and other non-allowlisted raw
+strings do not enter LLM-visible Event metadata. The explicit exception is the
+exact bounded sudo `command`, `command_path`, and `cwd`, which intentionally
+enter the existing security-admin Event metadata described above.
 
 Events use exact categories such as `mojosec.web.probe` and
 `mojosec.auth.ssh_login`. Only an active RuleSet for that exact category can
