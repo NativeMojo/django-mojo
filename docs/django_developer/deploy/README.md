@@ -831,7 +831,12 @@ then exercise every collector:
 
 1. Perform a benign SSH login/logout with the normal canary account and one
    harmless `sudo -n /usr/bin/true`; require the corresponding login/session
-   and sudo evidence without command arguments.
+   and sudo evidence. On the security-admin Event, require the exact bounded
+   command, actor, target user, executable path, cwd, TTY, boot ID, audit
+   session, and a true truncation marker whenever the sensor retained only a
+   prefix. Require `source_ip` plus `attribution="audit_session"` or `"who"`
+   only when the proof tuple is complete; otherwise require explicit
+   `attribution="none"` and a null source IP.
 2. Under an explicitly enrolled canary FIM root, create a file, modify it,
    `chmod` it, and delete it. Require create/modify/delete evidence and no
    traversal outside that root.

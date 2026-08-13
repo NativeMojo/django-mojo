@@ -1011,29 +1011,44 @@ To verify a retune took effect, publish a single matching event and confirm the 
 
 ## MojoSec evidence projection
 
-MojoSec raw evidence is an internal audit boundary, not ordinary Event data.
-Bounded raw request targets/referrers/user agents and sudo command context live
-only in `MojoSecReceipt.replay_features`; that field is sensitive, excluded
-from the default graph, and the receipt model is `DENY_AI`. The Event receives
+MojoSec receipts remain the durable original audit record. Bounded raw request
+targets/referrers/user agents live in `MojoSecReceipt.replay_features`; that
+field is sensitive, excluded from the default graph, and the receipt model is
+`DENY_AI`. The Event receives
 only the central per-kind projection: canonical source/peer IP, method, user,
 TTY, host, status/upstream numbers, token-normalized path, HTTP(S) referrer
 origin plus queryless token-normalized path, and structured UA family/major,
 digest, and centrally scrubbed bounded display. Web request identity,
 protocol/TLS, ports, byte counts and upstream measurements also project after
 field-local validation; one bad subfield is omitted rather than retrying the
-whole deterministic event. Sudo command context projects
-only a strict server-owned command family (or `unknown`) and one constant
-redaction marker. Raw executable/path, command digest, argument count, generic
-arguments, and per-token digests remain receipt-only. System-service kinds
+whole deterministic event. Sudo command context is intentionally richer for
+security administrators: `metadata.mojosec.evidence` exposes the exact accepted
+`command` (2,048 UTF-8 bytes maximum), `command_path` and `cwd` (512 bytes each),
+actor, target user, TTY, boot ID, audit session, and explicit `attribution`.
+True-only `<field>_truncated` markers identify sensor-retained prefixes, and
+any present marker value other than literal boolean `true` invalidates and
+omits both the marker and its paired field.
+`command_family` is additive classification from a valid complete path: every
+such path yields a known server-owned family or literal `unknown`; invalid,
+missing, and truncated paths yield no family. The command digest remains
+receipt-only. No secret-pattern redaction,
+argument removal, or URL rewriting occurs on this existing
+`view_security`/`security` Event surface. System-service kinds
 (`system.service_error`, `system.oom`) project only a validated failed-unit
 name (or `kernel`) and a bounded `failure_kind`; the raw journal message stays
 receipt-only.
-Raw secrets never enter Event metadata/title/details or ordinary logs.
+Malformed optional sudo fields are omitted independently; exact accepted
+command text, including secret-looking arguments, remains visible to authorized
+Event readers by product policy.
 
 Source-bearing SSH, reliably attributed sudo, and known web kinds populate
-`Event.source_ip`. For `web.probe` and `web.denied`, sensor fingerprints
-include each projected identity scalar, so an aggregate cannot misrepresent
-interleaved IP/host/method/status values. `web.error` fingerprints omit
+`Event.source_ip`. Sudo evidence always reports `attribution`: `audit_session`
+requires a valid IP, sensor-shaped actor and boot-ID strings, and an audit
+session; `who` requires a valid IP plus sensor-shaped actor and TTY strings.
+Every incomplete, invalid, or non-string proof tuple becomes explicit `none`
+and leaves `Event.source_ip` null. For `web.probe` and `web.denied`, sensor
+fingerprints include each projected identity scalar, so an aggregate cannot
+misrepresent interleaved IP/host/method/status values. `web.error` fingerprints omit
 source/peer IP by design — one server fault hits every client at once, so its
 aggregate deliberately collapses across callers — and its `Event.source_ip`
 holds only a latest-occurrence witness, not an actor attribution.

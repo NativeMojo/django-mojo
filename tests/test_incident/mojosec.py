@@ -89,6 +89,7 @@ def setup_mojosec_receiver(opts):
 @th.django_unit_test()
 def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
     from mojo.apps.incident.models import Event, MojoSecReceipt
+    from mojo.mojosec.evidence import build_evidence
 
     batch = _golden_batch()
     batch["events"][0]["id"] = "d" * 64
@@ -122,6 +123,29 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
         },
     })
     batch["events"].append(sudo_event)
+    local_sudo_command = "/usr/bin/systemctl restart api.service --no-block"
+    local_sudo_event = copy.deepcopy(sudo_event)
+    local_sudo_event.update({
+        "id": "ab" * 32,
+        "attributes": {
+            "source_ip": "198.51.100.99", "actor": "deploy", "target_user": "root",
+            "tty": "pts/8", "boot_id": "b" * 32, "audit_session": 94,
+            "attribution_provenance": "none", "cwd": "/opt/api",
+            "command_path": "/usr/bin/systemctl",
+            "command_sha256": hashlib.sha256(local_sudo_command.encode()).hexdigest(),
+            "command": local_sudo_command,
+        },
+    })
+    batch["events"].append(local_sudo_event)
+    truncated_attributes = build_evidence("auth.sudo_command", {
+        "source_ip": "192.0.2.45", "actor": "deploy", "target_user": "root",
+        "tty": "pts/4", "boot_id": "c" * 32, "audit_session": 95,
+        "attribution_provenance": "audit_session", "cwd": "/opt/api",
+        "command_path": "/usr/bin/curl", "command": "x" * 2049,
+    })
+    truncated_sudo_event = copy.deepcopy(sudo_event)
+    truncated_sudo_event.update({"id": "ac" * 32, "attributes": truncated_attributes})
+    batch["events"].append(truncated_sudo_event)
     poisoned_event = copy.deepcopy(batch["events"][1])
     poisoned_event.update({
         "id": "6" * 64, "kind": "web.error", "severity": "warning",
@@ -150,13 +174,13 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
                  f"an enrolled MojoSec key should ingest a gzip batch: {response.response}")
     th.assert_eq(response.response.schema, "mojosec.ack",
                  "the receiver must return the shared acknowledgement schema without wrappers")
-    th.assert_eq(len(response.response.results), 4,
+    th.assert_eq(len(response.response.results), 6,
                  "the receiver must acknowledge every event in the batch")
     th.assert_eq(
-        MojoSecReceipt.objects.filter(sensor_id=SENSOR_ID, publish_state="published").count(), 4,
+        MojoSecReceipt.objects.filter(sensor_id=SENSOR_ID, publish_state="published").count(), 6,
         "accepted acknowledgements must have durable published receipts")
     th.assert_eq(
-        Event.objects.filter(metadata__mojosec__sensor_id=SENSOR_ID).count(), 4,
+        Event.objects.filter(metadata__mojosec__sensor_id=SENSOR_ID).count(), 6,
         "the batch should create one bounded central Event projection per wire event")
 
     probe = Event.objects.get(metadata__mojosec__event_id="e" * 64)
@@ -164,6 +188,10 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
     receipt = MojoSecReceipt.objects.get(wire_event_id="e" * 64)
     sudo_receipt = MojoSecReceipt.objects.get(wire_event_id="0" * 64)
     sudo_projected = Event.objects.get(metadata__mojosec__event_id="0" * 64)
+    local_sudo_receipt = MojoSecReceipt.objects.get(wire_event_id="ab" * 32)
+    local_sudo_projected = Event.objects.get(metadata__mojosec__event_id="ab" * 32)
+    truncated_sudo_receipt = MojoSecReceipt.objects.get(wire_event_id="ac" * 32)
+    truncated_sudo_projected = Event.objects.get(metadata__mojosec__event_id="ac" * 32)
     poisoned_receipt = MojoSecReceipt.objects.get(wire_event_id="6" * 64)
     poisoned_projected = Event.objects.get(metadata__mojosec__event_id="6" * 64)
     th.assert_eq(probe.source_ip, "198.51.100.7",
@@ -197,20 +225,45 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
                    "RECEIPT-METHOD-SECRET", "receipt-request-id-secret"):
         th.assert_true(secret not in poisoned_visible,
                        f"central projection stringified non-string raw field {secret}")
-    th.assert_in(sudo_secret, sudo_receipt.replay_features["event"]["attributes"]["command"],
-                 "bounded raw sudo context must remain only in the protected receipt")
-    sudo_visible = json.dumps(sudo_projected.metadata, sort_keys=True)
-    for secret in (sudo_secret, "auth-secret", "db-secret"):
-        th.assert_true(secret not in sudo_visible and
-                       hashlib.sha256(secret.encode()).hexdigest()[:12] not in sudo_visible,
-                       "sudo secrets and per-token digests must not enter Event metadata")
-    th.assert_eq(
-        sudo_projected.metadata["mojosec"]["evidence"]["command"],
-        {"family": "network_client", "detail": "<redacted>"},
-        "Event evidence should retain only a server-owned command family")
-    th.assert_true(hashlib.sha256(sudo_command.encode()).hexdigest() not in sudo_visible and
-                   "/usr/bin/curl" not in sudo_visible and "/opt/api" not in sudo_visible,
-                   "command digest, executable, and working path must remain receipt-only")
+    th.assert_eq(sudo_receipt.replay_features["event"]["attributes"],
+                 sudo_event["attributes"],
+                 "the protected receipt must retain the byte-for-byte original full sudo evidence")
+    sudo_evidence = sudo_projected.metadata["mojosec"]["evidence"]
+    th.assert_eq(sudo_evidence["command"], sudo_command,
+                 "the security-admin Event must expose the exact bounded sudo command")
+    th.assert_eq((sudo_evidence["command_path"], sudo_evidence["cwd"],
+                  sudo_evidence["actor"], sudo_evidence["target_user"],
+                  sudo_evidence["tty"], sudo_evidence["boot_id"],
+                  sudo_evidence["audit_session"], sudo_evidence["attribution"]),
+                 ("/usr/bin/curl", "/opt/api", "deploy", "root", "pts/3",
+                  "a" * 32, 93, "audit_session"),
+                 "the admin Event must preserve complete validated execution context")
+    th.assert_eq(sudo_evidence["command_family"], "network_client",
+                 "server-owned command family may remain as additive evidence")
+    th.assert_true(sudo_secret in json.dumps(sudo_evidence) and
+                   "auth-secret" in json.dumps(sudo_evidence) and
+                   "db-secret" in json.dumps(sudo_evidence),
+                   "secret-looking command text must remain visible to authorized administrators")
+    th.assert_eq(local_sudo_receipt.replay_features["event"]["attributes"],
+                 local_sudo_event["attributes"],
+                 "a receipt must retain even an unpromoted source claim for deterministic replay")
+    th.assert_eq(local_sudo_projected.source_ip, None,
+                 "a stray address with unattributed provenance must not populate Event.source_ip")
+    th.assert_eq(local_sudo_projected.metadata["mojosec"]["evidence"]["attribution"],
+                 "none", "local or unmapped sudo evidence must report explicit none attribution")
+    th.assert_eq(local_sudo_projected.metadata["mojosec"]["evidence"]["command"],
+                 local_sudo_command,
+                 "unattributed sudo evidence must still retain the exact administrative command")
+    th.assert_eq(truncated_sudo_receipt.replay_features["event"]["attributes"],
+                 truncated_attributes,
+                 "sensor-truncated evidence and its digest must remain byte-for-byte in replay")
+    truncated_visible = truncated_sudo_projected.metadata["mojosec"]["evidence"]
+    th.assert_eq(truncated_visible["command"], "x" * 2048,
+                 "the accepted sensor prefix must project unchanged")
+    th.assert_true(truncated_visible["command_truncated"] is True,
+                   "the Event must explicitly identify a projected command prefix as truncated")
+    th.assert_true("command_sha256" not in truncated_visible,
+                   "full-value truncation digests must remain receipt-only")
     th.assert_eq(probe.metadata["mojosec"]["evidence"]["referrer_origin"],
                  "https://example.invalid",
                  "central projection should retain only the validated HTTP origin")
@@ -236,6 +289,8 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
     th.assert_true(probe.group_id is None,
                    "host identity must not be confused with customer tenant attribution")
     activity_fields = Event.RestMeta.GRAPHS["activity"]["fields"]
+    th.assert_eq(Event.RestMeta.VIEW_PERMS, ["view_security", "security"],
+                 "rich sudo evidence must remain on the established security-admin Event surface")
     th.assert_true("metadata" in activity_fields and "source_ip" in activity_fields,
                    "the activity graph must serialize rich MojoSec evidence and canonical source IP")
 

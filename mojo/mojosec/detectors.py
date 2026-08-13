@@ -102,7 +102,9 @@ def _normalized_web_paths(path):
 
 
 def _sudo_command_identity(command):
-    command = str(command or "")[:4096]
+    # `command` came from the collector-bounded journal record. Preserve the
+    # parsed executable exactly here; build_evidence owns its 512-byte cap,
+    # truncation marker, and full-value digest.
     digest = digest_text(command)
     try:
         words = shlex.split(command, posix=True)
@@ -114,7 +116,7 @@ def _sudo_command_identity(command):
             continue
         executable = word
         break
-    return bounded_text(executable, 256), digest
+    return executable, digest
 
 
 def _journal_time(record):
@@ -215,7 +217,10 @@ def _systemd_user_session(record, session, attribution):
 
 def detect_journal(record, attribution=None):
     """Return zero or one observation for a bounded journal JSON record."""
-    message = bounded_text(record.get("MESSAGE"), 2048)
+    raw_message = record.get("MESSAGE")
+    if not isinstance(raw_message, str):
+        return None
+    message = bounded_text(raw_message, 2048)
     if not message:
         return None
     identifier = bounded_text(
@@ -257,8 +262,11 @@ def detect_journal(record, attribution=None):
             )
 
     if (trusted_journal_source(record, "sudo") and
-            (_SUDO_COMMAND.search(message) or "authentication failure" in message.lower())):
-        match = _SUDO_COMMAND.search(message)
+            (_SUDO_COMMAND.search(raw_message) or
+             "authentication failure" in raw_message.lower())):
+        # Parse the trusted raw journal string before bounding. build_evidence
+        # owns the command's UTF-8 byte cap and truthful truncation marker.
+        match = _SUDO_COMMAND.search(raw_message)
         if match:
             values = match.groupdict()
             command_path, command_digest = _sudo_command_identity(values["command"])
@@ -290,7 +298,7 @@ def detect_journal(record, attribution=None):
                 fingerprint_values=(values["actor"], values["target"], command_digest, observed_at or ""),
                 aggregate=False, recommendation="review", observed_at=observed_at,
             )
-        if "authentication failure" in message.lower():
+        if "authentication failure" in raw_message.lower():
             context = audit_context(record)
             attributes = build_evidence("auth.sudo_failure", context)
             return observation(

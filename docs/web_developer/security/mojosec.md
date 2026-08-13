@@ -107,25 +107,34 @@ callers — one outage is one growing event per failure shape — and their
 failure, not an actor attribution. The source alone still performs no action:
 only an exact active central RuleSet may create an Incident or run a handler.
 
-Raw bounded request targets, referrers, user agents, and sudo command context
-are retained only in the protected `MojoSecReceipt.replay_features` audit
-record (`DENY_AI`, excluded from the default graph). Event metadata contains a
+Raw bounded request targets, referrers, and user agents are retained in the
+protected `MojoSecReceipt.replay_features` audit record (`DENY_AI`, excluded
+from the default graph). Event metadata contains a
 central allowlisted projection: queryless/token-normalized path, canonical
 method/host/status/upstream values, HTTP(S) referrer origin plus safe path,
 structured UA family/major/digest plus centrally scrubbed display, request ID,
-protocol/TLS, ports, byte counts and upstream measurements, and a strict
-server-owned sudo command family (or
-`unknown`) plus one constant redaction marker. Raw executable/path, command
-digest, argument count, generic arguments, and per-token digests never project.
+protocol/TLS, ports, byte counts and upstream measurements. For
+`auth.sudo_command`, the existing `view_security`/`security` Event surface also
+returns exact accepted `command`, `command_path`, and `cwd`, plus actor, target
+user, TTY, boot ID, audit session, and explicit attribution. For every valid,
+non-truncated `command_path`, `command_family` is present as a server-owned
+known family or literal `unknown`; invalid, missing, and truncated paths omit
+it. Literal
+`command_truncated`, `command_path_truncated`, and `cwd_truncated` booleans are
+present only when the corresponding sensor value is a retained prefix. If a
+marker key is present with `false`, a truthy number/string, or any value other
+than literal boolean `true`, the marker and its paired field are omitted. The
+full-value digest remains receipt-only; secret-looking command arguments are
+not redacted for authorized administrators.
 For system events (`system.service_error`, `system.oom`) the projection
 carries only the validated failed-unit name and failure kind; raw journal
 message text never projects.
 The native nginx stream never collects bodies, cookies, the Authorization
-header, or arbitrary headers. Bounded request targets, referrers, user agents,
-and sudo commands can still contain untrusted sensitive text, but those raw
-values remain in the protected receipt. Event receives only centrally
-validated and scrubbed forms; malformed or non-string textual fields are
-omitted rather than stringified.
+header, or arbitrary headers. Bounded web request targets, referrers, and user
+agents receive centrally scrubbed projections. Sudo command evidence follows
+the separate admin contract above: the receiver enforces byte bounds and omits
+malformed/non-string/NUL values without stripping, normalizing, truncating, or
+redacting accepted command text.
 
 ### Native sensor evidence limits and attribution
 
@@ -157,8 +166,13 @@ actor-plus-TTY `who` row.
 Conflicting identity for one audit key becomes a sticky ambiguous tombstone.
 `who` itself is streamed under fixed locale, timeout, byte, and line caps.
 `attribution_provenance` is `audit_session`, `who`, or `none`; only the first
-two allow sudo's address to populate `Event.source_ip`. Stale, reused, or
-ambiguous rows therefore remain unattributed.
+two allow sudo's address to populate `Event.source_ip`. The projected
+`attribution` is always explicit: audit-session promotion requires a valid IP,
+sensor-shaped actor and boot-ID strings, and an audit session, while `who`
+promotion requires a valid IP plus sensor-shaped actor and TTY strings. An
+incomplete, malformed, or non-string tuple becomes `none` and leaves
+`source_ip` null, even if the receipt contains a stray address. Stale, reused,
+or ambiguous rows therefore remain unattributed.
 
 The current AL2023 split-OpenSSH executable and non-root invoking sudo UID are
 accepted only under exact kernel/journal provenance. `auth.session_open` is an

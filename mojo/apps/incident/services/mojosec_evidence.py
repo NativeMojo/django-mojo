@@ -1,11 +1,15 @@
-"""Central validation and secret-safe Event projection for MojoSec evidence."""
+"""Central validation and per-kind Event projection for MojoSec evidence.
+
+Web and other free text stays validated or safely derived. Exact bounded sudo
+command, executable-path, and cwd text intentionally enters security-admin
+Event metadata.
+"""
 
 import datetime
 import hashlib
 import ipaddress
 import math
 import re
-import shlex
 import unicodedata
 import urllib.parse
 
@@ -316,26 +320,39 @@ def _identity_context(attributes, evidence):
         evidence["tty"] = tty
 
 
-def _sudo_command(attributes):
-    raw = _text(attributes.get("command"), 4096)
+def _exact_bounded_text(value, byte_limit):
+    """Accept trusted sensor text without changing one code point."""
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return None
     try:
-        words = shlex.split(raw, posix=True) if raw else []
-    except ValueError:
-        words = []
-    command_path = _text(attributes.get("command_path"), 512)
-    candidate = command_path if command_path in _SUDO_COMMAND_FAMILIES else ""
-    if not candidate and words and words[0] in _SUDO_COMMAND_FAMILIES:
-        candidate = words[0]
-    # The receipt owns the executable, digest, command, and arguments. Event
-    # exposes only a server-owned classification with a constant shape.
-    return {
-        "family": _SUDO_COMMAND_FAMILIES.get(candidate, "unknown"),
-        "detail": "<redacted>",
-    }
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    return value if len(encoded) <= byte_limit else None
+
+
+def _sudo_command(attributes, evidence):
+    for field, byte_limit in (("command", 2048), ("command_path", 512), ("cwd", 512)):
+        marker = field + "_truncated"
+        if marker in attributes and attributes.get(marker) is not True:
+            continue
+        value = _exact_bounded_text(attributes.get(field), byte_limit)
+        if value is None:
+            continue
+        evidence[field] = value
+        if attributes.get(marker) is True:
+            evidence[marker] = True
+    command_path = evidence.get("command_path")
+    if command_path is not None and "command_path_truncated" not in evidence:
+        evidence["command_family"] = _SUDO_COMMAND_FAMILIES.get(command_path, "unknown")
 
 
 def project(kind, attributes, count=1, last_seen=None):
-    """Return only canonical, secret-safe fields for Event projection."""
+    """Return the validated per-kind fields authorized for Event projection.
+
+    Most free text is omitted or safely derived. Sudo's exact bounded command,
+    executable path, and cwd are an intentional security-admin exception.
+    """
     if not isinstance(attributes, dict):
         return {"source_ip": None, "evidence": {}}
     evidence = {}
@@ -348,17 +365,35 @@ def project(kind, attributes, count=1, last_seen=None):
                 evidence[key] = value
         _identity_context(attributes, evidence)
     elif kind in ("auth.sudo_command", "auth.sudo_failure"):
-        provenance = attributes.get("attribution_provenance")
-        if provenance in ("audit_session", "who"):
-            source_ip = _ip(attributes.get("source_ip"))
-            evidence["attribution"] = provenance
         for key in ("actor", "target_user"):
             value = _user(attributes.get(key))
             if value is not None:
                 evidence[key] = value
         _identity_context(attributes, evidence)
         if kind == "auth.sudo_command":
-            evidence["command"] = _sudo_command(attributes)
+            _sudo_command(attributes, evidence)
+        provenance = attributes.get("attribution_provenance")
+        candidate_ip = _ip(attributes.get("source_ip"))
+        raw_actor = attributes.get("actor")
+        actor_proof = bool(isinstance(raw_actor, str) and _USER.fullmatch(raw_actor))
+        raw_boot_id = attributes.get("boot_id")
+        boot_proof = bool(isinstance(raw_boot_id, str) and _BOOT.fullmatch(raw_boot_id))
+        raw_tty = attributes.get("tty")
+        tty_proof = (
+            isinstance(raw_tty, str) and _TTY.fullmatch(raw_tty) and
+            ".." not in raw_tty)
+        audit_proof = (
+            provenance == "audit_session" and candidate_ip is not None and
+            actor_proof and boot_proof and
+            "audit_session" in evidence)
+        who_proof = (
+            provenance == "who" and candidate_ip is not None and
+            actor_proof and tty_proof)
+        if audit_proof or who_proof:
+            source_ip = candidate_ip
+            evidence["attribution"] = provenance
+        else:
+            evidence["attribution"] = "none"
     elif kind == "auth.session_open":
         if attributes.get("attribution_provenance") == "audit_session":
             source_ip = _ip(attributes.get("source_ip"))
