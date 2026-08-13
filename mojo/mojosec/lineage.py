@@ -147,20 +147,42 @@ def _read_proc_file(root, pid, name, maximum):
 def enrich_process(pid, proc_root="/proc"):
     """Read a compact identity from one live process; absence is expected."""
     try:
-        stat_fields = _read_proc_file(proc_root, pid, "stat", 4096).decode().split()
-        if len(stat_fields) < 22:
+        first_stat = _read_proc_file(proc_root, pid, "stat", 4096).decode().split()
+        if len(first_stat) < 22:
             return None
-        ppid = int(stat_fields[3])
-        start_ticks = int(stat_fields[21])
+        ppid = int(first_stat[3])
+        start_ticks = int(first_stat[21])
         cmdline = _read_proc_file(proc_root, pid, "cmdline", 4096).rstrip(b"\0").split(b"\0")
         cgroup = _read_proc_file(proc_root, pid, "cgroup", 4096).decode(errors="replace")
+        try:
+            selinux = _read_proc_file(
+                proc_root, pid, os.path.join("attr", "current"), 512
+            ).decode(errors="replace").strip()
+        except OSError:
+            selinux = ""
         exe = os.readlink(os.path.join(proc_root, str(pid), "exe"))[:512]
+        namespaces = {}
+        for name in ("mnt", "pid", "user", "net"):
+            try:
+                target = os.readlink(os.path.join(proc_root, str(pid), "ns", name))
+            except OSError:
+                continue
+            if re.fullmatch(r"[a-z]+:\[[0-9]{1,20}\]", target):
+                namespaces[name] = target
+        second_stat = _read_proc_file(proc_root, pid, "stat", 4096).decode().split()
+        if len(second_stat) < 22 or int(second_stat[21]) != start_ticks:
+            return None
     except (OSError, UnicodeError, ValueError):
         return None
+    unit = ""
+    for component in re.split(r"[/\n]", cgroup):
+        if component.endswith((".service", ".scope")) and len(component) <= 256:
+            unit = component
     return {
         "pid": pid, "ppid": ppid, "start_ticks": start_ticks, "exe": exe,
         "cmdline": [value.decode("utf-8", errors="replace")[:512] for value in cmdline[:16]],
-        "cgroup": cgroup[:1024],
+        "cgroup": cgroup[:1024], "unit": unit, "selinux": selinux[:256],
+        "namespaces": namespaces,
     }
 
 
@@ -210,15 +232,43 @@ def firewall_receipt(record):
     required = {
         "schema", "version", "kind", "operation_id", "execution_id", "job_id",
         "function", "operation", "semantic", "argv_digest", "stdin_digest",
-        "stdin_length", "count", "broker_pid", "broker_start_ticks", "monotonic_ns",
+        "stdin_length", "count", "broker_pid", "broker_start_ticks", "target_exe",
+        "monotonic_ns",
     }
-    if not isinstance(value, dict) or not required.issubset(value):
+    optional = {"target_pid", "target_start_ticks", "returncode", "duration_ms",
+                "ok", "error"}
+    if (not isinstance(value, dict) or not required.issubset(value) or
+            not set(value).issubset(required | optional)):
         return None
     if (value.get("schema") != "mojosec.firewall-receipt" or value.get("version") != 1 or
             value.get("kind") not in ("begin", "result") or
             not re.fullmatch(r"[a-f0-9]{32}", str(value.get("operation_id") or "")) or
+            not re.fullmatch(r"[A-Za-z0-9_.:@+-]{1,160}",
+                             str(value.get("execution_id") or "")) or
+            not re.fullmatch(r"[A-Za-z0-9_.:@+-]{1,160}", str(value.get("job_id") or "")) or
+            not re.fullmatch(r"mojo\.apps\.incident\.asyncjobs\.[A-Za-z0-9_]{1,96}",
+                             str(value.get("function") or "")) or
+            not re.fullmatch(r"[a-f0-9]{64}", str(value.get("argv_digest") or "")) or
+            not re.fullmatch(r"[a-f0-9]{64}", str(value.get("stdin_digest") or "")) or
+            value.get("operation") not in {
+                "rules.contains", "rule.insert", "rule.delete", "set.add", "set.delete",
+                "set.replace", "set.remove", "set.rule_ensure"} or
+            not isinstance(value.get("semantic"), str) or
+            not 1 <= len(value["semantic"]) <= 160 or
+            any(ord(char) < 32 for char in value["semantic"]) or
+            _integer(value.get("stdin_length"), 24 * 1024 * 1024) is None or
+            _integer(value.get("count"), 250000) is None or
+            value.get("target_exe") not in (
+                "/sbin/iptables", "/sbin/iptables-save", "/sbin/ipset") or
+            not _integer(value.get("broker_start_ticks")) or
+            _integer(value.get("monotonic_ns")) is None or
             _integer(value.get("broker_pid"), 2 ** 31 - 1) !=
             _integer(record.get("_PID"), 2 ** 31 - 1)):
+        return None
+    if value["kind"] == "result" and (
+            not isinstance(value.get("ok"), bool) or
+            _integer(value.get("target_pid"), 2 ** 31 - 1) is None or
+            _integer(value.get("target_start_ticks")) is None):
         return None
     boot_id = str(record.get("_BOOT_ID") or "").replace("-", "").lower()
     session = _integer(record.get("_AUDIT_SESSION"), 4294967294)

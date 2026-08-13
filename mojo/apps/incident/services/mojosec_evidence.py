@@ -345,6 +345,41 @@ def _sudo_command(attributes, evidence):
     command_path = evidence.get("command_path")
     if command_path is not None and "command_path_truncated" not in evidence:
         evidence["command_family"] = _SUDO_COMMAND_FAMILIES.get(command_path, "unknown")
+    for field in ("producer_uid", "producer_pid", "audit_loginuid", "monotonic"):
+        minimum = 1 if field == "producer_pid" else 0
+        value = _integer(attributes.get(field), minimum, 2 ** 63 - 1)
+        if value is not None:
+            evidence[field] = value
+    for field, limit in (("producer_comm", 96), ("producer_exe", 256),
+                         ("systemd_unit", 256), ("cgroup", 512),
+                         ("selinux", 256), ("job_function", 256)):
+        value = _text(attributes.get(field), limit)
+        if value and all(ord(char) >= 32 for char in value):
+            evidence[field] = value
+    for field in ("origin_kind", "operation_id", "execution_id", "job_id"):
+        value = _text(attributes.get(field), 96)
+        if _SAFE_TOKEN.fullmatch(value):
+            evidence[field] = value
+    lineage = attributes.get("lineage")
+    if isinstance(lineage, list):
+        ancestors = []
+        for node in lineage[:8]:
+            if not isinstance(node, dict):
+                continue
+            child = {}
+            pid = _integer(node.get("pid"), 1, 2 ** 31 - 1)
+            if pid is not None:
+                child["pid"] = pid
+            exe = _exact_bounded_text(node.get("exe"), 512)
+            if exe:
+                child["exe"] = exe
+            unit = _text(node.get("unit"), 256)
+            if unit:
+                child["unit"] = unit
+            if child:
+                ancestors.append(child)
+        if ancestors:
+            evidence["ancestors"] = ancestors
 
 
 def project(kind, attributes, count=1, last_seen=None):

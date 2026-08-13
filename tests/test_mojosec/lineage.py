@@ -1,4 +1,7 @@
 from testit import helpers as th
+import os
+import tempfile
+from unittest import mock
 
 
 def _record(serial, kind, **values):
@@ -45,6 +48,20 @@ def test_compound_conflict_is_ambiguous(opts):
                    "conflicting rows in one Audit serial must fail ambiguous")
 
 
+@th.unit_test("audit compound timeout emits an incomplete fail-open generation")
+def test_compound_timeout_is_incomplete(opts):
+    from mojo.mojosec import lineage
+
+    assembler = lineage.CompoundAssembler()
+    with mock.patch.object(lineage.time, "time", return_value=100.0):
+        assembler.ingest([_record(44, "SYSCALL", pid="8", ppid="1")])
+    with mock.patch.object(lineage.time, "time", return_value=102.1):
+        result = assembler.ingest([])
+    th.assert_true(result["complete"][0]["incomplete"] and
+                   result["complete"][0]["ambiguous"],
+                   "a compound without EOE must close after two seconds but never prove lineage")
+
+
 @th.unit_test("event lineage projection is bounded")
 def test_project_ancestors_is_bounded(opts):
     from mojo.mojosec.lineage import project_ancestors
@@ -52,3 +69,73 @@ def test_project_ancestors_is_bounded(opts):
     ancestors = [{"pid": i, "exe": f"/bin/p{i}"} for i in range(20)]
     projected = project_ancestors(ancestors)
     th.assert_eq(len(projected), 8, "central Event evidence may carry at most eight ancestors")
+
+
+@th.unit_test("proven firewall operation resolves local-only and incomplete proof fails open")
+def test_pending_firewall_resolution(opts):
+    from mojo.mojosec.events import observation
+    from mojo.mojosec.store import Store
+
+    aggregation = {"window_seconds": 60, "flush_count": 10,
+                   "max_aggregates": 100, "critical_reserve_aggregates": 10}
+    delivery = {"max_spool_events": 100, "critical_reserve_events": 10,
+                "retry_min_seconds": 1, "retry_max_seconds": 60}
+    boot = "a" * 32
+    session = 9
+    candidate = observation(
+        "auth.sudo_command", "high", "Privileged sudo command executed",
+        attributes={
+            "actor": "ec2-user", "target_user": "root", "boot_id": boot,
+            "audit_session": session, "attribution_provenance": "none",
+            "producer_pid": 20, "monotonic": 1_000_000,
+            "command": "/usr/local/sbin/mojo-firewall-broker",
+            "command_path": "/usr/local/sbin/mojo-firewall-broker",
+            "command_sha256": "b" * 64,
+        }, fingerprint_values=("candidate",), aggregate=False,
+        recommendation="review", observed_at="2026-08-13T20:00:00Z")
+    health = {
+        "schema": "mojosec.audit-health", "version": 1, "boot_id": boot,
+        "generation": "c" * 64, "rules_sha256": "d" * 64,
+        "sequence": 1, "enabled": 1, "failure": 1, "rate_limit": 0,
+        "backlog_limit": 8192, "backlog": 0, "lost": 0,
+        "updated_at": 1.0, "healthy": True, "reason": "",
+    }
+    begin = {
+        "operation_id": "e" * 32, "kind": "begin", "boot_id": boot,
+        "audit_session": session, "broker_pid": 22, "broker_start_ticks": 220,
+        "execution_id": "f" * 32, "job_id": "1" * 32,
+        "function": "mojo.apps.incident.asyncjobs.broadcast_block_ip",
+        "operation": "rule.insert", "semantic": "-I INPUT source DROP",
+        "argv_digest": "2" * 64, "stdin_digest": "3" * 64,
+        "stdin_length": 0, "count": 0, "target_exe": "/sbin/iptables",
+        "monotonic_ns": 1_000_000_000,
+    }
+    result = dict(begin, kind="result", target_pid=23, target_start_ticks=230,
+                  monotonic_ns=1_100_000_000, ok=True)
+    nodes = [
+        {"boot_id": boot, "audit_serial": 5, "pid": 19, "ppid": 1,
+         "audit_session": session, "exe": "/usr/sbin/crond", "argv": ["/usr/sbin/crond"]},
+        {"boot_id": boot, "audit_serial": 6, "pid": 18, "ppid": 19,
+         "audit_session": session, "exe": "/usr/bin/python3",
+         "argv": ["python3", "-m", "mojo.deploy.jobman", "start"]},
+        {"boot_id": boot, "audit_serial": 1, "pid": 20, "ppid": 21,
+         "audit_session": session, "exe": "/usr/bin/sudo", "argv": ["/usr/bin/sudo"]},
+        {"boot_id": boot, "audit_serial": 2, "pid": 21, "ppid": 18,
+         "audit_session": session, "exe": "/usr/bin/python3",
+         "argv": ["/opt/api/bin/jobs.py", "engine", "foreground"], "pinned": True},
+        {"boot_id": boot, "audit_serial": 3, "pid": 22, "ppid": 20,
+         "audit_session": session, "start_ticks": 220, "exe": "/usr/bin/python3", "argv": []},
+        {"boot_id": boot, "audit_serial": 4, "pid": 23, "ppid": 22,
+         "audit_session": session, "start_ticks": 230, "exe": "/sbin/iptables", "argv": []},
+    ]
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        store = Store(root, "sensor", aggregation, delivery,
+                      local_only_diagnostic_path=os.path.join(root, "missing"))
+        store.ingest([candidate], audit_health=health, process_nodes=nodes,
+                     firewall_receipts=[begin, result])
+        th.assert_eq(store.stats()["local_only_suppressed"], 1,
+                     "complete healthy process and receipt proof should suppress centrally")
+        th.assert_eq(store.pending_batch(10, 65536), [],
+                     "proven expected automation must not create an ordinary Event")
+        store.close()

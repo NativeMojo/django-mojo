@@ -1,6 +1,7 @@
 """Focused contracts for MojoSec root deployment and nginx rendering."""
 
 import io
+import contextlib
 import json
 import os
 import subprocess
@@ -9,6 +10,18 @@ import tempfile
 from unittest import mock
 
 from testit import helpers as th
+
+
+@contextlib.contextmanager
+def _provenance_deploy_mocks(deploy):
+    with mock.patch.object(deploy.pwd, "getpwnam",
+                           return_value=mock.Mock(pw_uid=1000)), \
+            mock.patch("mojo.deploy.audit.converge", return_value={
+                "generation": "a" * 64, "rules_sha256": "b" * 64}), \
+            mock.patch("mojo.deploy.audit.restore_prior"), \
+            mock.patch.object(deploy.subprocess, "run",
+                              return_value=mock.Mock(returncode=0, stderr="")):
+        yield
 
 
 @th.django_unit_test()
@@ -383,7 +396,7 @@ def test_converge_lifecycle_is_an_exact_allowlist(opts):
                 {"sensor_id": "i-host", "config_provenance": {}}, b"{}\n",
                 {"trusted_proxy_cidrs": [], "nginx_plane": "standard",
                  "nginx_log_path": deploy.DEFAULT_LOG_PATH})), \
-            mock.patch.object(deploy, "_write_if_changed", side_effect=[True, True, True]), \
+            mock.patch.object(deploy, "_write_if_changed", return_value=True), \
             mock.patch.object(deploy, "_converge_nginx", return_value=False), \
             mock.patch.object(deploy, "_audit_active_nginx"), \
             mock.patch.object(deploy, "_audit_config", return_value={}), \
@@ -391,12 +404,14 @@ def test_converge_lifecycle_is_an_exact_allowlist(opts):
             mock.patch.object(deploy, "_systemctl_is",
                               side_effect=lambda verb, unit: states[verb[3:]]), \
             mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
+            _provenance_deploy_mocks(deploy), \
             mock.patch.object(deploy.os, "geteuid", return_value=0):
         result = deploy.converge("observe", "required")
 
     th.assert_eq(result["mode"], "observe", "observe convergence must report its mode")
     th.assert_true(all(
-        not call or call[-1] in ("daemon-reload", "nginx", deploy.SERVICE)
+        not call or call[-1] in (
+            "daemon-reload", "nginx", deploy.SERVICE, "mojosec-audit-health.timer")
         for call in calls),
         f"lifecycle may address only nginx and the exact MojoSec unit: {calls}")
     th.assert_in(("enable", "--now", deploy.SERVICE), calls,
@@ -540,7 +555,8 @@ def test_late_converge_failure_restores_nginx_config_and_units(opts):
             mock.patch.object(deploy, "_restore_nginx",
                               side_effect=lambda prior, path: restored.append(("nginx", path))), \
             mock.patch.object(deploy, "_restore_unit_set",
-                              side_effect=lambda *args: restored.append(("systemd", args[0]))):
+                              side_effect=lambda *args: restored.append(("systemd", args[0]))), \
+            _provenance_deploy_mocks(deploy):
         with th.assert_raises(deploy.DeployError):
             deploy.converge("observe", "required")
 

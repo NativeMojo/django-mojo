@@ -25,6 +25,7 @@ from mojo.mojosec.config import CANONICAL_CONFIG_PATH
 
 
 SERVICE = "mojosec.service"
+PROVENANCE_CAPABILITY = 1
 SERVICE_PATH = "/etc/systemd/system/mojosec.service"
 CONFIG_PATH = CANONICAL_CONFIG_PATH
 DESIRED_CONFIG_PATH = "/opt/api/var/mojosec.json"
@@ -39,6 +40,9 @@ NGINX_FRAGMENT_PATH = "/etc/nginx/conf.d/00_mojosec.conf"
 RECEIVER_SNIPPET_PATH = "/etc/nginx/snippets/mojosec_receiver.conf"
 LOGROTATE_PATH = "/etc/logrotate.d/mojosec"
 DEPLOY_STATE_PATH = "/etc/mojosec/deploy.json"
+AUDIT_HEALTH_SERVICE_PATH = "/etc/systemd/system/mojosec-audit-health.service"
+AUDIT_HEALTH_TIMER_PATH = "/etc/systemd/system/mojosec-audit-health.timer"
+AUDIT_STABLE_HELPER_PATH = "/usr/local/lib/mojosec/mojosec_audit.py"
 DJANGO_INCLUDE_PATH = "/etc/nginx/django.inc"
 DJANGO_RECEIVER_INCLUDE = "include /etc/nginx/snippets/mojosec_receiver.conf;"
 DJANGO_RECEIVER_COMMENT = "# MojoSec exact receiver cap"
@@ -130,6 +134,42 @@ LOGROTATE_TEXT = """/var/log/nginx/mojosec.json.log {
     su root root
     create 0600 root root
 }
+"""
+
+BROKER_WRAPPER_TEXT = """#!/bin/sh
+exec /usr/bin/python3 -E -P -m mojo.deploy.firewall_broker
+"""
+
+AUDIT_HEALTH_SERVICE_TEXT = """[Unit]
+Description=Publish constrained MojoSec Linux Audit health
+After=auditd.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 -E -P -m mojo.deploy.audit publish-health --generation {generation} --rules-sha256 {rules_sha256}
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+CapabilityBoundingSet=CAP_AUDIT_CONTROL
+AmbientCapabilities=CAP_AUDIT_CONTROL
+ReadWritePaths=/run/mojosec
+"""
+
+AUDIT_HEALTH_TIMER_TEXT = """[Unit]
+Description=Refresh MojoSec Linux Audit health
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=5s
+AccuracySec=1s
+Unit=mojosec-audit-health.service
+
+[Install]
+WantedBy=timers.target
 """
 
 
@@ -808,6 +848,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         raise DeployError("trusted proxy CIDRs are protected by root enrollment")
     unit_snapshot = service_state = retired_snapshot = None
     nginx_snapshot = deploy_state_snapshot = config_snapshot = None
+    broker_snapshots = {}
     unit_changed = nginx_changed = config_changed = retired_changed = False
     mutation_started = False
     prepared = None
@@ -859,6 +900,41 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             config_changed = _write_if_changed(
                 CONFIG_PATH, prepared[1].decode("utf-8"), 0o600)
             _audit_config()
+        audit_state = None
+        broker_changed = False
+        if mode == "observe":
+            from mojo.deploy import audit as audit_deploy
+            from mojo.deploy.firewall_broker import (
+                BROKER_PATH, SUDOERS_PATH, render_sudoers,
+            )
+            app_uid = pwd.getpwnam("ec2-user").pw_uid
+            for path in (BROKER_PATH, SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
+                         AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH):
+                broker_snapshots[path] = _owned_snapshot(path)
+            try:
+                audit_state = audit_deploy.converge(app_uid)
+            except audit_deploy.AuditError as err:
+                raise DeployError(f"Linux Audit convergence failed: {err}") from err
+            for parent in (os.path.dirname(BROKER_PATH), os.path.dirname(SUDOERS_PATH)):
+                _require_root_install_dir(parent)
+            broker_changed |= _write_if_changed(BROKER_PATH, BROKER_WRAPPER_TEXT, 0o755)
+            broker_changed |= _write_if_changed(SUDOERS_PATH, render_sudoers(), 0o440)
+            # Keep legacy direct grants for exactly the rollback generation;
+            # #1964 owns their later removal.
+            process = subprocess.run(
+                ["/usr/sbin/visudo", "-c", "-f", SUDOERS_PATH],
+                capture_output=True, text=True, timeout=10)
+            if process.returncode:
+                raise DeployError(process.stderr.strip() or "broker sudoers validation failed")
+            health_service = AUDIT_HEALTH_SERVICE_TEXT.format(**audit_state)
+            broker_changed |= _write_if_changed(
+                AUDIT_HEALTH_SERVICE_PATH, health_service, 0o644)
+            broker_changed |= _write_if_changed(
+                AUDIT_HEALTH_TIMER_PATH, AUDIT_HEALTH_TIMER_TEXT, 0o644)
+            _require_root_install_dir(os.path.dirname(AUDIT_STABLE_HELPER_PATH), create=True)
+            with open(audit_deploy.__file__, encoding="utf-8") as handle:
+                broker_changed |= _write_if_changed(
+                    AUDIT_STABLE_HELPER_PATH, handle.read(), 0o755)
         unit_changed = _write_if_changed(service_path, UNIT_TEXT, 0o644)
         edge_log_changed = False
         if mode == "observe" and nginx_plane == "edge":
@@ -871,7 +947,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         nginx_changed |= edge_log_changed
         if mode == "observe":
             _audit_active_nginx(runtime_log_path, proxy_cidrs)
-        if unit_changed or retired_changed:
+        if unit_changed or retired_changed or broker_changed:
             _systemctl("daemon-reload")
         if mode == "off":
             _systemctl("disable", "--now", SERVICE)
@@ -879,6 +955,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                     _systemctl_is("is-active", SERVICE)):
                 raise DeployError("MojoSec off convergence left service enabled or active")
         else:
+            _systemctl("enable", "--now", "mojosec-audit-health.timer")
             _systemctl("enable", "--now", SERVICE)
             if unit_changed or config_changed:
                 _systemctl("restart", SERVICE)
@@ -894,14 +971,26 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             state["sensor_id"] = prepared[0]["sensor_id"]
             state["config"] = prepared[0]["config_provenance"]
             state["nginx_plane"] = nginx_plane
+            state["audit_generation"] = audit_state["generation"]
+            state["audit_rules_sha256"] = audit_state["rules_sha256"]
+            state["firewall_broker"] = True
         _write_if_changed(DEPLOY_STATE_PATH,
                           json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
                           0o600)
-        return {"changed": unit_changed or nginx_changed or config_changed or retired_changed,
+        return {"changed": unit_changed or nginx_changed or config_changed or retired_changed or broker_changed,
                 **state}
     except (DeployError, OSError, ValueError) as err:
         rollback_errors = []
         if mutation_started:
+            if broker_snapshots:
+                try:
+                    from mojo.deploy.audit import restore_prior
+                    restore_prior()
+                    for path, snapshot in broker_snapshots.items():
+                        _restore_snapshot(path, snapshot)
+                    _systemctl("daemon-reload")
+                except (DeployError, OSError, ValueError, RuntimeError) as rollback_error:
+                    rollback_errors.append(f"Audit/broker: {rollback_error}")
             try:
                 _restore_snapshot(CONFIG_PATH, config_snapshot)
             except (DeployError, OSError) as rollback_error:

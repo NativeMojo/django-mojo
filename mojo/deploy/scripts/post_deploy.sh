@@ -281,18 +281,42 @@ restore_mojosec_django() {
     rm -f -- "$MOJOSEC_DJANGO_BACKUP"
 }
 
-# Distinguish an old package that truly lacks the module from any safety or
-# convergence failure inside a present module. Only exact exit 3 means absent.
-if (cd / && "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" -c \
-        'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("mojo.deploy.mojosec") else 3)'); then
-    MOJOSEC_MODULE_AVAILABLE=1
-else
-    module_rc=$?
-    [ "$module_rc" = "3" ] || {
-        restore_mojosec_django
-        die "cannot preflight MojoSec deployment module"
-    }
-    MOJOSEC_MODULE_AVAILABLE=0
+# Distinguish the current provenance-aware module, an installed older module,
+# and a package with no MojoSec deployment support. A downgrade must restore
+# the exact pre-feature Audit state before the old module is allowed to run.
+set +e
+(cd / && "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" -c \
+    'import importlib.util,sys
+spec=importlib.util.find_spec("mojo.deploy.mojosec")
+if spec is None: sys.exit(3)
+from mojo.deploy import mojosec
+sys.exit(0 if getattr(mojosec,"PROVENANCE_CAPABILITY",0)==1 else 4)')
+module_rc=$?
+set -e
+case "$module_rc" in
+    0) MOJOSEC_MODULE_AVAILABLE=1; MOJOSEC_PROVENANCE_AVAILABLE=1 ;;
+    4) MOJOSEC_MODULE_AVAILABLE=1; MOJOSEC_PROVENANCE_AVAILABLE=0 ;;
+    3) MOJOSEC_MODULE_AVAILABLE=0; MOJOSEC_PROVENANCE_AVAILABLE=0 ;;
+    *) restore_mojosec_django; die "cannot preflight MojoSec deployment module" ;;
+esac
+
+if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ] && \
+   [ "$MOJOSEC_PROVENANCE_AVAILABLE" = "0" ] && \
+   [ -f /etc/mojosec/audit-state.json ]; then
+    log "Restoring pre-feature Audit state for MojoSec package downgrade"
+    [ -f /usr/local/lib/mojosec/mojosec_audit.py ] && \
+    [ ! -L /usr/local/lib/mojosec/mojosec_audit.py ] && \
+    [ "$(stat -c %u /usr/local/lib/mojosec/mojosec_audit.py)" = "0" ] \
+        || { restore_mojosec_django; die "cannot trust MojoSec Audit downgrade helper"; }
+    /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py restore \
+        || { restore_mojosec_django; die "cannot restore pre-feature Audit state"; }
+    systemctl disable --now mojosec-audit-health.timer 2>/dev/null || true
+    rm -f -- /etc/systemd/system/mojosec-audit-health.service \
+              /etc/systemd/system/mojosec-audit-health.timer \
+              /etc/sudoers.d/70-mojo-firewall-broker \
+              /usr/local/sbin/mojo-firewall-broker \
+              /usr/local/lib/mojosec/mojosec_audit.py
+    systemctl daemon-reload
 fi
 
 if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ]; then
@@ -301,7 +325,14 @@ if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ]; then
             "${NGINX_ETC}/conf.d/00_mojosec.conf" \
             "${NGINX_ETC}/snippets/mojosec_receiver.conf" \
             "${NGINX_ETC}/django.inc" \
-            "${LOGROTATE_ETC}/mojosec" -- \
+            "${LOGROTATE_ETC}/mojosec" \
+            /etc/audit/rules.d /etc/audit/audit.rules \
+            /etc/mojosec/audit-state.json \
+            /etc/systemd/system/mojosec-audit-health.service \
+            /etc/systemd/system/mojosec-audit-health.timer \
+            /etc/sudoers.d/70-mojo-firewall-broker \
+            /usr/local/sbin/mojo-firewall-broker \
+            /usr/local/lib/mojosec/mojosec_audit.py -- \
             "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" \
             -m mojo.deploy.mojosec converge \
             --mode "$MOJOSEC_MODE" \
@@ -317,6 +348,25 @@ else
     # its old inode. Enrolled lifecycle cannot be guessed when enrollment
     # exists; only an explicitly off or genuinely unenrolled node is retired.
     fallback_mode="$MOJOSEC_MODE"
+    # This script may still be the new shim while pip has just installed a
+    # pre-broker django-mojo. Restore the exact pre-feature Audit state with
+    # the root-owned stable helper before removing broker-only assets. Legacy
+    # direct firewall grants deliberately remain usable for this generation.
+    if [ -f /etc/mojosec/audit-state.json ]; then
+        [ -f /usr/local/lib/mojosec/mojosec_audit.py ] && \
+        [ ! -L /usr/local/lib/mojosec/mojosec_audit.py ] && \
+        [ "$(stat -c %u /usr/local/lib/mojosec/mojosec_audit.py)" = "0" ] \
+            || { restore_mojosec_django; die "cannot trust MojoSec Audit downgrade helper"; }
+        /usr/bin/python3 -E -P /usr/local/lib/mojosec/mojosec_audit.py restore \
+            || { restore_mojosec_django; die "cannot restore pre-feature Audit state"; }
+        systemctl disable --now mojosec-audit-health.timer 2>/dev/null || true
+        rm -f -- /etc/systemd/system/mojosec-audit-health.service \
+                  /etc/systemd/system/mojosec-audit-health.timer \
+                  /etc/sudoers.d/70-mojo-firewall-broker \
+                  /usr/local/sbin/mojo-firewall-broker \
+                  /usr/local/lib/mojosec/mojosec_audit.py
+        systemctl daemon-reload
+    fi
     if [ "$fallback_mode" = "enrolled" ]; then
         [ ! -e /etc/mojosec/enrollment.json ] \
             || { restore_mojosec_django; die "old package cannot resolve enrolled MojoSec lifecycle"; }

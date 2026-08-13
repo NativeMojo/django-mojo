@@ -50,6 +50,7 @@ multiplexing (ControlMaster) in ~/.ssh/config if the round-trips add up.
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -773,6 +774,82 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
     if present.get("service unit"):
         _audit_mojosec_unit(report, run, sudo, mode)
 
+    provenance_assets = (
+        ("Audit rollback state", "/etc/mojosec/audit-state.json", "600"),
+        ("Audit managed policy", "/etc/audit/rules.d/70-mojosec.rules", "600"),
+        ("Audit health unit", "/etc/systemd/system/mojosec-audit-health.service", "644"),
+        ("Audit health timer", "/etc/systemd/system/mojosec-audit-health.timer", "644"),
+        ("Audit stable helper", "/usr/local/lib/mojosec/mojosec_audit.py", "755"),
+        ("firewall broker", "/usr/local/sbin/mojo-firewall-broker", "755"),
+        ("firewall broker sudoers", "/etc/sudoers.d/70-mojo-firewall-broker", "440"),
+    )
+    if mode == "observe":
+        for name, path, wanted in provenance_assets:
+            found = _secure_metadata(run, path, wanted, sudo=sudo)
+            if found is not None and found[1]:
+                report.passed("mojosec", name, f"{path} is root:root {wanted}")
+            else:
+                report.fail("mojosec", f"{name} absent or unsafe", path,
+                            "sudo bash aws/post_deploy.sh")
+        rc, audit_status, _ = run(f"{sudo}/sbin/auditctl -s")
+        rc_rules, audit_rules, _ = run(f"{sudo}/sbin/auditctl -l")
+        projection = (
+            "import json;"
+            "p=json.load(open('/etc/mojosec/deploy-state.json'));"
+            "print(json.dumps({'generation':p.get('audit_generation'),"
+            "'rules':p.get('audit_rules_sha256')},separators=(',',':')))"
+        )
+        rc_expected, expected_text, _ = run(f"{sudo}python3 -c {q(projection)}")
+        try:
+            expected_audit = json.loads(expected_text) if rc_expected == 0 else {}
+        except json.JSONDecodeError:
+            expected_audit = {}
+        rc_policy, policy_digest, _ = run(
+            f"{sudo}sha256sum /etc/audit/rules.d/70-mojosec.rules")
+        policy_parts = policy_digest.split(None, 1) if rc_policy == 0 else []
+        policy_digest = policy_parts[0] if policy_parts else ""
+        generated_exact = run(f"{sudo}/sbin/augenrules --check")[0] == 0
+        active_digest = hashlib.sha256(audit_rules.encode()).hexdigest()
+        required_status = ("enabled 1", "failure 1", "rate_limit 0", "backlog_limit 8192")
+        if (rc == 0 and rc_rules == 0 and
+                all(value in audit_status for value in required_status) and
+                "lost 0" in audit_status and
+                "task,never" not in audit_rules and "never,task" not in audit_rules and
+                generated_exact and
+                policy_digest == expected_audit.get("generation") and
+                active_digest == expected_audit.get("rules") and
+                all(key in audit_rules for key in (
+                    "mojosec-root-exec", "mojosec-app-exec", "mojosec-sudo"))):
+            report.passed("mojosec", "active Audit provenance",
+                          "managed selective rules are loaded with zero loss")
+        else:
+            report.fail("mojosec", "active Audit provenance unhealthy",
+                        "active rules/status differ, are lossy, or still disable task auditing")
+        sidecar = _secure_metadata(
+            run, "/run/mojosec/audit-health.json", "600", sudo=sudo)
+        if sidecar is not None and sidecar[1]:
+            report.passed("mojosec", "Audit health sidecar",
+                          "root-only constrained live health is present")
+        else:
+            report.fail("mojosec", "Audit health sidecar absent or unsafe",
+                        "suppression is disabled without a fresh root-owned sidecar")
+        timer = run("systemctl is-active mojosec-audit-health.timer 2>&1")[1]
+        capabilities = run(
+            "systemctl show mojosec-audit-health.service "
+            "-p CapabilityBoundingSet -p AmbientCapabilities --value 2>&1")[1]
+        if timer == "active" and capabilities.count("CAP_AUDIT_CONTROL") >= 1:
+            report.passed("mojosec", "Audit health publisher",
+                          "timer active with constrained Audit control capability")
+        else:
+            report.fail("mojosec", "Audit health publisher unavailable",
+                        "timer/capability drift disables suppression")
+        legacy = run(
+            f"{sudo}grep -R -E 'NOPASSWD:.*(iptables|ipset)' /etc/sudoers /etc/sudoers.d "
+            "2>/dev/null")[1]
+        if legacy:
+            report.warn("mojosec", "legacy direct firewall grants retained",
+                        "transitional rollback authorization is present; direct calls remain ordinary")
+
     desired_rc = run(
         "test ! -L /opt/api/var/mojosec.json && "
         "test -f /opt/api/var/mojosec.json && "
@@ -833,7 +910,8 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
             "keys=('schema','version','sensor_id','state','updated_at',"
             "'spooled_events','delivery_accepted','collectors','delivery','config',"
             "'integrity','local_only_observed','local_only_diagnostic_delivered',"
-            "'local_only_suppressed','local_only_last_seen','local_only_diagnostic');"
+            "'local_only_suppressed','local_only_last_seen','local_only_diagnostic',"
+            "'provenance');"
             "print(json.dumps({k:p.get(k) for k in keys},separators=(',',':')))"
         )
         command = f"{sudo}python3 -c {q(projection)}"
@@ -874,6 +952,24 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                             "missing or unhealthy core collectors: " + ", ".join(unhealthy))
             else:
                 report.passed("mojosec", "collector health", "journal and nginx are healthy")
+            process = status.get("provenance")
+            if isinstance(process, dict):
+                audit_health = process.get("audit_health")
+                healthy = (
+                    isinstance(audit_health, dict) and audit_health.get("healthy") is True and
+                    audit_health.get("lost") == 0 and audit_health.get("backlog_limit", 0) >= 8192 and
+                    isinstance(process.get("process_nodes"), int) and
+                    0 <= process["process_nodes"] <= 131072 and
+                    isinstance(process.get("pending_firewall"), int) and
+                    0 <= process["pending_firewall"] <= 4096 and
+                    isinstance(process.get("engine_anchors"), int) and
+                    process["engine_anchors"] >= 1)
+                if healthy:
+                    report.passed("mojosec", "provenance health",
+                                  "Audit epoch, bounded graph, and post-cutover engine are healthy")
+                else:
+                    report.fail("mojosec", "provenance health unhealthy",
+                                "suppression is disabled until the current Audit epoch is healthy")
             integrity = status.get("integrity")
             if integrity is not None:
                 identity = integrity.get("identity") if isinstance(integrity, dict) else None

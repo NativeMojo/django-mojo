@@ -12,6 +12,8 @@ run on the node itself, outside Django:
 | `mojo.deploy.jobman` | Starts, stops and reports the node's **foreground** job engine and scheduler |
 | `mojo.deploy.node_setup` | Converges `var/` ownership, systemd units, and the jobs cron |
 | `mojo.deploy.mojosec` | Safely installs and operates the privileged, observe-only MojoSec sensor |
+| `mojo.deploy.audit` | Converges selective Linux Audit execution provenance and publishes constrained health |
+| `mojo.deploy.firewall_broker` | Root semantic firewall executor; accepts no argv and constructs closed operations |
 | `python3 -m mojo.deploy locate <name>` | Prints the absolute packaged path of `update.sh` / `post_deploy.sh` for the project shims |
 | `python3 -m mojo.deploy render --dest …` | Materializes the packaged cron/systemd templates into `${PROJ_PATH}/var/deploy` |
 | `mojo/deploy/scripts/update.sh` | The fleet update entry (deploy / manual modes) — packaged bash, run through a project shim |
@@ -29,6 +31,24 @@ python3 -m mojo.deploy.node_setup --dry-run
 (cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.mojosec converge --mode observe)
 python3 -m mojo.deploy locate update.sh
 ```
+
+MojoSec convergence snapshots every Audit rules source, generated and active
+state before replacing the AL2023 `task,never` seed. Unknown operator rules or
+concurrent changes stop deployment. Failed load/verification restores the
+snapshot. The installed health timer owns `CAP_AUDIT_CONTROL`; the main sensor
+does not. A root-owned stable helper lets the currently running deployment shim
+restore the pre-feature rules when a release downgrades to a framework without
+the feature. Broker-only units, sudoers and executable are then removed while
+the intentionally retained legacy direct grants keep rollback operational.
+
+The existing stop-last invariant in `update.sh` is also the explicit engine
+cutover: Audit policy and the sensor are converged first, the old foreground
+engine is stopped only after every fallible deployment step, and the installed
+cron starts the new engine generation. Until the sensor has captured that
+cron → jobman → engine exec chain and pinned its live PID generation, firewall
+suppression remains disabled. `check_node` treats the missing post-cutover
+anchor as a deployment failure; no old in-memory engine can attest new broker
+work.
 
 ## Why these live here and not in each project
 

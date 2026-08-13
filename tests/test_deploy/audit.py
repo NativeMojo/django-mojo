@@ -15,6 +15,10 @@ def test_render_policy_is_selective(opts):
                      f"root exec capture must include {arch}")
         th.assert_in(f"-a always,exit -F arch={arch} -S execve,execveat -F auid=1000", text,
                      f"application execution capture must include {arch}")
+        th.assert_in(f"-F euid=0 -F auid!=1000", text,
+                     "application-origin root exec must not overlap the root rule")
+        th.assert_in("-F exe!=/usr/bin/sudo -k mojosec-app-exec", text,
+                     "the exact sudo watch must not overlap the application rule")
     th.assert_in("-w /usr/bin/sudo -p x -k mojosec-sudo", text,
                  "sudo executable execution must have an exact path watch")
     th.assert_true("fork" not in text and "clone" not in text,
@@ -37,6 +41,9 @@ def test_health_sidecar_validation(opts):
     }
     result = validate_health(health, now=1001.0, previous=None)
     th.assert_true(result["healthy"], "a fresh exact healthy epoch should enable proof")
+    result = validate_health(health, now=1001.5, previous=health)
+    th.assert_true(result["healthy"],
+                   "reading the same still-fresh sidecar twice is not a sequence gap")
     gap = dict(health, sequence=9, updated_at=1002.0)
     result = validate_health(gap, now=1002.0, previous=health)
     th.assert_true(not result["healthy"], "a sequence gap must disable suppression")

@@ -59,10 +59,11 @@ def render_policy(app_uid):
     for arch in ("b64", "b32"):
         lines.append(
             f"-a always,exit -F arch={arch} -S execve,execveat "
-            "-F euid=0 -k mojosec-root-exec")
+            f"-F euid=0 -F auid!={app_uid} -k mojosec-root-exec")
         lines.append(
             f"-a always,exit -F arch={arch} -S execve,execveat "
-            f"-F auid={app_uid} -F auid!=4294967295 -k mojosec-app-exec")
+            f"-F auid={app_uid} -F auid!=4294967295 "
+            "-F exe!=/usr/bin/sudo -k mojosec-app-exec")
     # A path watch catches sudo execution without authorizing a command-name
     # based disposition.  Audit can emit the same exec via another rule; the
     # compound identity de-duplicates it later.
@@ -184,18 +185,23 @@ def validate_health(value, now=None, previous=None):
         reason = "stale"
     elif (value["enabled"] != 1 or value["failure"] != 1 or
           value["rate_limit"] != 0 or value["backlog_limit"] < 8192 or
+          value["backlog"] >= value["backlog_limit"] or
           value["lost"] != 0):
         reason = "audit_unhealthy"
     elif previous is not None:
-        if (value["boot_id"] == previous.get("boot_id") and
-                value["sequence"] != previous.get("sequence", -1) + 1):
-            reason = "sequence_gap"
-        elif (value["boot_id"] == previous.get("boot_id") and
-              value["lost"] < previous.get("lost", 0)):
-            reason = "loss_counter_regressed"
-        elif (value["generation"] != previous.get("generation") or
-              value["rules_sha256"] != previous.get("rules_sha256")):
-            reason = "generation_changed"
+        if value["boot_id"] == previous.get("boot_id"):
+            repeated = (
+                value["sequence"] == previous.get("sequence") and
+                value["updated_at"] == previous.get("updated_at") and
+                value["generation"] == previous.get("generation") and
+                value["rules_sha256"] == previous.get("rules_sha256"))
+            if (value["generation"] != previous.get("generation") or
+                    value["rules_sha256"] != previous.get("rules_sha256")):
+                reason = "generation_changed"
+            elif value["lost"] < previous.get("lost", 0):
+                reason = "loss_counter_regressed"
+            elif not repeated and value["sequence"] != previous.get("sequence", -1) + 1:
+                reason = "sequence_gap"
     return {"healthy": not reason, "reason": reason, "value": value}
 
 
@@ -250,23 +256,50 @@ def _active_rules():
     return _run(["/sbin/auditctl", "-l"])
 
 
-def _state_payload(inventory, generation, app_uid):
+def _load_state(path):
+    try:
+        data, info = _read_regular(path, maximum=16 * 1024 * 1024)
+    except FileNotFoundError:
+        return None, None
+    if info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
+        raise AuditError("Audit rollback record is unsafe")
+    try:
+        value = json.loads(data.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as err:
+        raise AuditError("Audit rollback record is malformed") from err
+    if (not isinstance(value, dict) or value.get("schema") != "mojosec.audit-state" or
+            value.get("version") != 1 or not isinstance(value.get("prior"), dict)):
+        raise AuditError("Audit rollback record is unsupported")
+    return value, data
+
+
+def _state_payload(prior, previous, generation, app_uid, rules_dir,
+                   generated_path, managed_path):
     return {
         "schema": "mojosec.audit-state", "version": 1,
         "generation": generation, "app_uid": app_uid,
-        "prior": inventory, "installed_at": time.time(),
+        "prior": prior, "previous": previous,
+        "rules_dir": rules_dir, "generated_path": generated_path,
+        "managed_path": managed_path, "installed_at": time.time(),
     }
 
 
-def _restore_snapshot(state):
-    for path in glob.glob(os.path.join(RULES_DIR, "*.rules")):
-        if path == MANAGED_PATH or any(item["path"] == path for item in state["prior"]["sources"]):
-            os.unlink(path)
-    for item in state["prior"]["sources"]:
+def _restore_inventory(inventory, rules_dir, managed_path):
+    expected_paths = {item["path"] for item in inventory["sources"]}
+    for path in glob.glob(os.path.join(rules_dir, "*.rules")):
+        if path != managed_path and path not in expected_paths:
+            raise AuditError(f"unknown Audit source appeared during restore: {path}")
+        info = os.lstat(path)
+        if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+            raise AuditError(f"unsafe Audit source during restore: {path}")
+    for path in glob.glob(os.path.join(rules_dir, "*.rules")):
+        os.unlink(path)
+    for item in inventory["sources"]:
         _atomic_write(item["path"], item["content"].encode(), item["mode"])
+        os.chown(item["path"], item["uid"], item["gid"], follow_symlinks=False)
     _run(["/sbin/augenrules", "--load"])
     active = _active_rules()
-    expected = state["prior"]["active_rules"].strip()
+    expected = inventory["active_rules"].strip()
     if active.strip() != expected:
         raise AuditError("restored active Audit rules differ from snapshot")
 
@@ -284,15 +317,27 @@ def converge(app_uid, rules_dir=RULES_DIR, generated_path=GENERATED_PATH,
         inventory = inventory_sources(rules_dir, generated_path, before_active)
         policy = render_policy(app_uid)
         generation = _sha256(policy.encode())
-        state = _state_payload(inventory, generation, app_uid)
+        old_state, old_state_bytes = _load_state(state_path)
+        if inventory["state"] == "managed":
+            if old_state is None or old_state.get("generation") != _sha256(
+                    inventory["sources"][0]["content"].encode()):
+                raise AuditError("managed Audit generation has no matching rollback record")
+            prior = old_state["prior"]
+        else:
+            if old_state is not None:
+                raise AuditError("seed Audit state conflicts with existing rollback record")
+            prior = inventory
+        state = _state_payload(
+            prior, inventory, generation, app_uid, rules_dir,
+            generated_path, managed_path)
         os.makedirs(os.path.dirname(state_path), mode=0o700, exist_ok=True)
-        _atomic_write(state_path, (json.dumps(
-            state, sort_keys=True, separators=(",", ":")) + "\n").encode(), 0o600)
         # Re-hash every source immediately before mutation; an operator edit
         # between inventory and install is not silently overwritten.
         current = inventory_sources(rules_dir, generated_path, _active_rules())
         if current["inventory_sha256"] != inventory["inventory_sha256"]:
             raise AuditError("Audit state changed concurrently")
+        _atomic_write(state_path, (json.dumps(
+            state, sort_keys=True, separators=(",", ":")) + "\n").encode(), 0o600)
         try:
             for item in inventory["sources"]:
                 if not item["content"].startswith(MANAGED_MARKER):
@@ -306,7 +351,11 @@ def converge(app_uid, rules_dir=RULES_DIR, generated_path=GENERATED_PATH,
                     "task,never" in active or "never,task" in active):
                 raise AuditError("active Audit policy verification failed")
         except Exception:
-            _restore_snapshot(state)
+            _restore_inventory(inventory, rules_dir, managed_path)
+            if old_state_bytes is None:
+                os.unlink(state_path)
+            else:
+                _atomic_write(state_path, old_state_bytes, 0o600)
             raise
         return {"generation": generation, "rules_sha256": _sha256(active.encode()),
                 "state": state_path}
@@ -316,22 +365,17 @@ def converge(app_uid, rules_dir=RULES_DIR, generated_path=GENERATED_PATH,
 
 
 def restore_prior(state_path=STATE_PATH):
-    data, info = _read_regular(state_path, maximum=4 * 1024 * 1024)
-    if info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
-        raise AuditError("Audit rollback record is unsafe")
-    try:
-        state = json.loads(data.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as err:
-        raise AuditError("Audit rollback record is malformed") from err
-    if (not isinstance(state, dict) or state.get("schema") != "mojosec.audit-state" or
-            state.get("version") != 1):
-        raise AuditError("Audit rollback record is unsupported")
-    _restore_snapshot(state)
+    state, unused = _load_state(state_path)
+    if state is None:
+        raise AuditError("Audit rollback record is absent")
+    _restore_inventory(
+        state["prior"], state.get("rules_dir", RULES_DIR),
+        state.get("managed_path", MANAGED_PATH))
     return state
 
 
 def publish_health(generation, rules_sha256, sequence, status_text=None,
-                   path=HEALTH_PATH, boot_id=None):
+                   path=HEALTH_PATH, boot_id=None, active_rules_text=None):
     if status_text is None:
         process = subprocess.run(
             ["/sbin/auditctl", "-s"], capture_output=True, text=True, timeout=5)
@@ -339,6 +383,20 @@ def publish_health(generation, rules_sha256, sequence, status_text=None,
             raise AuditError(process.stderr.strip() or "auditctl -s failed")
         status_text = process.stdout
     status = parse_status(status_text)
+    if active_rules_text is None:
+        process = subprocess.run(
+            ["/sbin/auditctl", "-l"], capture_output=True, text=True, timeout=5)
+        if process.returncode:
+            raise AuditError(process.stderr.strip() or "auditctl -l failed")
+        active_rules_text = process.stdout
+    active_digest = _sha256(active_rules_text.encode())
+    if (active_digest != rules_sha256 or
+            any(value not in active_rules_text for value in (
+                "mojosec-root-exec", "mojosec-app-exec", "mojosec-sudo")) or
+            "task,never" in active_rules_text or "never,task" in active_rules_text):
+        # Preserve a valid bounded sidecar while making it ineligible for
+        # suppression. The actual digest proves what drifted.
+        status["enabled"] = 0
     if boot_id is None:
         with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as handle:
             boot_id = handle.read().strip().replace("-", "")
@@ -348,7 +406,7 @@ def publish_health(generation, rules_sha256, sequence, status_text=None,
                     if prior and prior.get("boot_id") == boot_id else 0)
     payload = {
         "schema": HEALTH_SCHEMA, "version": 1, "boot_id": boot_id,
-        "generation": generation, "rules_sha256": rules_sha256,
+        "generation": generation, "rules_sha256": active_digest,
         "sequence": sequence, "updated_at": time.time(), **status,
     }
     _atomic_write(path, (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode(), 0o600)

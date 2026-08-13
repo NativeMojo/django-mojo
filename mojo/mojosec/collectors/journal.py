@@ -162,6 +162,19 @@ class JournalCollector:
                 parents = walk_parents(node["pid"])
                 node["live_ancestors"] = parents["nodes"]
                 node["ambiguous"] = bool(node.get("ambiguous") or parents["ambiguous"])
+                live = parents["nodes"][0] if parents["nodes"] else None
+                if live is not None:
+                    node["start_ticks"] = live["start_ticks"]
+                    node["unit"] = live.get("unit", "")
+                    node["cgroup"] = live.get("cgroup", "")
+                    node["namespaces"] = live.get("namespaces", {})
+                    node["selinux"] = node.get("selinux") or live.get("selinux", "")
+                    node["pinned"] = bool(
+                        os.path.basename(node.get("exe", "")).startswith("python3") and
+                        any(str(part).endswith("/bin/jobs.py") or part == "bin/jobs.py"
+                            for part in live.get("cmdline", [])) and
+                        "engine" in live.get("cmdline", []) and
+                        "foreground" in live.get("cmdline", []))
             process_nodes.append(node)
         receipts = [found for found in
                     (firewall_receipt(record) for record in parsed_records) if found]
