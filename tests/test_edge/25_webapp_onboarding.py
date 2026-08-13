@@ -233,7 +233,7 @@ def test_detail_uses_operation_group_scope(opts):
     from mojo.apps.edge.models import WebAppOnboardingOperation
 
     operation = WebAppOnboardingOperation.objects.create(
-        group=opts.group, actor=opts.actor, origin="http://testserver",
+        group=opts.group, actor=opts.actor, origin=opts.client.host.rstrip("/"),
         replay_fingerprint="c" * 64)
     login(opts, opts.actor_email, opts.actor_password)
     response = opts.client.get(
