@@ -67,8 +67,11 @@ def crond_launch(record, project_path, app_uid, app_gid):
         if len(message.encode("utf-8", errors="replace")) > 4096:
             return None
         match = _PAM_MESSAGE.fullmatch(message)
-        top_grantors = record.get("_AUDIT_FIELD_GRANTORS")
-        if (top_grantors not in (None, "", CROND_PAM_GRANTORS) or match is None or
+        exposed_grantors = [record.get(key) for key in (
+            "AUDIT_FIELD_GRANTORS", "_AUDIT_FIELD_GRANTORS")
+                            if record.get(key) not in (None, "")]
+        if (any(value != CROND_PAM_GRANTORS for value in exposed_grantors) or
+                len(set(exposed_grantors)) > 1 or match is None or
                 match.groups() != (CROND_PAM_GRANTORS, "ec2-user",
                                    "/usr/sbin/crond", "cron", "success")):
             return None

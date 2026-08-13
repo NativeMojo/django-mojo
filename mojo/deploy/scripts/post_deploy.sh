@@ -308,6 +308,24 @@ restore_mojosec_service_after_failure() {
     fi
     if [ "$MOJOSEC_PRIOR_ACTIVE" = "1" ]; then systemctl start mojosec.service; fi
 }
+retire_mojosec_provenance_assets() {
+    [ "$MOJOSEC_DOWNGRADE_HANDOFF" = "1" ] || return 0
+    systemctl disable --now mojosec-audit-health.timer 2>/dev/null || true
+    assets=(
+        /etc/systemd/system/mojosec-audit-health.service
+        /etc/systemd/system/mojosec-audit-health.timer
+        /etc/sudoers.d/70-mojo-firewall-broker
+        /usr/local/sbin/mojo-firewall-broker
+        "$MOJOSEC_AUDIT_HELPER"
+        /run/mojosec/audit-health.json
+    )
+    rm -f -- "${assets[@]}"
+    systemctl daemon-reload
+    for asset in "${assets[@]}"; do
+        [ ! -e "$asset" ] && [ ! -L "$asset" ] \
+            || return 1
+    done
+}
 
 # Distinguish the current provenance-aware module, an installed older module,
 # and a package with no MojoSec deployment support. A downgrade must restore
@@ -378,13 +396,9 @@ if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ]; then
         die "MojoSec deployment failed"
     fi
     if [ "$MOJOSEC_DOWNGRADE_HANDOFF" = "1" ]; then
-        systemctl disable --now mojosec-audit-health.timer 2>/dev/null || true
-        rm -f -- /etc/systemd/system/mojosec-audit-health.service \
-                  /etc/systemd/system/mojosec-audit-health.timer \
-                  /etc/sudoers.d/70-mojo-firewall-broker \
-                  /usr/local/sbin/mojo-firewall-broker \
-                  "$MOJOSEC_AUDIT_HELPER"
-        systemctl daemon-reload
+        retire_mojosec_provenance_assets \
+            || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+                 die "cannot retire MojoSec provenance assets after old-module handoff"; }
     fi
 else
     # A downgrade can replace the package while this script keeps running from
@@ -457,6 +471,9 @@ else
     rm -f -- "$fallback_dir/0" "$fallback_dir/0.absent" \
               "$fallback_dir/1" "$fallback_dir/1.absent"
     rmdir "$fallback_dir"
+    retire_mojosec_provenance_assets \
+        || { restore_mojosec_django; restore_mojosec_service_after_failure; \
+             die "cannot retire MojoSec provenance assets after module-absent handoff"; }
 fi
 rm -f -- "$MOJOSEC_DJANGO_BACKUP"
 

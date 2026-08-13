@@ -176,10 +176,12 @@ case "\$*" in
         exit 0
         ;;
     *"mojosec_audit.py flush-pending"*)
+        [ -f "\$MOJOSEC_AUDIT_HELPER" ] && echo "ASSET_PRESENT flush" >> "\$CALLLOG"
         [ -f "\$STUBCTL/audit.flush.exit" ] && exit "\$(cat "\$STUBCTL/audit.flush.exit")"
         exit 0
         ;;
     *"mojosec_audit.py restore"*)
+        [ -f "\$MOJOSEC_AUDIT_HELPER" ] && echo "ASSET_PRESENT restore" >> "\$CALLLOG"
         [ -f "\$STUBCTL/audit.restore.exit" ] && exit "\$(cat "\$STUBCTL/audit.restore.exit")"
         exit 0
         ;;
@@ -377,6 +379,18 @@ assert_in_log "CMD python3 -E -P -m mojo.deploy.mojosec converge --mode off --cr
 assert_not_in_log "old argparse rejected --project-path" \
     "new project-path flag is omitted for a capability-zero old module"
 
+setup_env
+helper="$TMP/mojosec_audit.py"; state="$TMP/audit-state.json"
+: > "$helper"; : > "$state"
+echo "4" > "$CTL/mojosec.preflight.exit"
+run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" \
+    MOJOSEC_AUDIT_HELPER="$helper" MOJOSEC_AUDIT_STATE="$state" \
+    MOJOSEC_AUDIT_PYTHON=python3 -- > "$OUT" 2>&1
+assert_eq "$?" 0 "old module handoff succeeds before provenance retirement"
+assert_in_log "ASSET_PRESENT flush" "old handoff retains helper through flush"
+assert_in_log "ASSET_PRESENT restore" "old handoff retains helper through Audit restore"
+assert_no_file "$helper" "old converge success retires provenance helper"
+
 for prior in active inactive; do
     setup_env
     helper="$TMP/mojosec_audit.py"
@@ -398,6 +412,7 @@ for prior in active inactive; do
         [ -f "$CTL/mojosec.inactive" ] && ok "old converge failure preserves inactive" || \
             fail "old converge failure started an originally inactive service"
     fi
+    assert_file "$helper" "old converge failure preserves provenance assets ($prior)"
 done
 
 setup_env
@@ -412,6 +427,19 @@ if [ "$rc" -ne 0 ]; then ok "module-absent terminal failure exits non-zero"; \
 else fail "module-absent observe failure was masked"; fi
 [ ! -f "$CTL/mojosec.inactive" ] && ok "module-absent failure restores active" || \
     fail "module-absent failure stranded active service stopped"
+assert_file "$helper" "module-absent terminal failure preserves provenance assets"
+
+setup_env
+helper="$TMP/mojosec_audit.py"; state="$TMP/audit-state.json"
+: > "$helper"; : > "$state"
+echo "3" > "$CTL/mojosec.preflight.exit"
+run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" \
+    MOJOSEC_AUDIT_HELPER="$helper" MOJOSEC_AUDIT_STATE="$state" \
+    MOJOSEC_AUDIT_PYTHON=python3 -- > "$OUT" 2>&1
+assert_eq "$?" 0 "module-absent success completes downgrade handoff"
+assert_in_log "ASSET_PRESENT flush" "stable helper exists throughout pending flush"
+assert_in_log "ASSET_PRESENT restore" "stable helper exists throughout Audit restore"
+assert_no_file "$helper" "stable helper retires only after fallback cleanup succeeds"
 
 setup_env
 printf '# active old graph\n# MojoSec exact receiver cap\ninclude /etc/nginx/snippets/mojosec_receiver.conf;\n' \

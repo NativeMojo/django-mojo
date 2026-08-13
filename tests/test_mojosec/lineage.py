@@ -86,7 +86,7 @@ def test_production_journal_shape(opts):
 
 @th.unit_test("production CROND launch requires exact trusted syslog and PAM halves")
 def test_production_crond_launch_shape(opts):
-    from mojo.mojosec.lineage import CROND_SELINUX, crond_launch
+    from mojo.mojosec.lineage import CROND_PAM_GRANTORS, CROND_SELINUX, crond_launch
 
     boot = "a" * 32
     command = "/opt/api/bin/jobman start >> /opt/api/var/logs/jobman.log 2>&1"
@@ -128,13 +128,17 @@ def test_production_crond_launch_shape(opts):
         th.assert_eq(crond_launch(changed, "/opt/api", 1000, 1000), None,
                      "missing or wrong nested grantors must invalidate PAM proof")
     th.assert_true(crond_launch(dict(
-        pam, _AUDIT_FIELD_GRANTORS=(
+        pam, AUDIT_FIELD_GRANTORS=(
             "pam_loginuid,pam_keyinit,pam_limits,pam_systemd")),
         "/opt/api", 1000, 1000),
         "matching optional top-level grantors should be accepted")
-    th.assert_eq(crond_launch(dict(pam, _AUDIT_FIELD_GRANTORS="pam_permit"),
+    th.assert_eq(crond_launch(dict(pam, AUDIT_FIELD_GRANTORS="pam_permit"),
                               "/opt/api", 1000, 1000), None,
                  "top-level grantors must agree exactly when journald exposes them")
+    th.assert_eq(crond_launch(dict(
+        pam, AUDIT_FIELD_GRANTORS=CROND_PAM_GRANTORS,
+        _AUDIT_FIELD_GRANTORS="pam_permit"), "/opt/api", 1000, 1000), None,
+        "real and legacy top-level spellings must not contradict each other")
 
 
 @th.unit_test("CROND origin requires both ordered halves and conflict is sticky")

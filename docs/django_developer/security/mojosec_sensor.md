@@ -872,7 +872,8 @@ CROND CMD row (`_COMM=crond`, `_EXE=/usr/sbin/crond`, `_CMDLINE=/usr/sbin/CROND
 `USER_START` row whose bounded quoted PAM message exactly names the app account,
 the authorized `pam_loginuid,pam_keyinit,pam_limits,pam_systemd` grantors,
 crond executable, cron terminal and successful result. If journald also exposes
-`_AUDIT_FIELD_GRANTORS`, it must agree exactly. They agree on boot,
+`AUDIT_FIELD_GRANTORS` (or the legacy underscored spelling), every exposed
+spelling must agree exactly. They agree on boot,
 Audit session, app login UID, session scope and crond SELinux domain; the CMD
 row additionally proves the app GID and launch PID. Strict monotonic order then
 joins audited bash → jobman → engine generations. Bash and jobman may be
@@ -895,6 +896,10 @@ handoff; failure restores the prior service/assets only after safe rollback.
 The capability probe also selects the command-line contract: a pre-feature
 module receives only its historical `--mode` and `--criticality` flags, never
 new provenance-generation arguments such as `--project-path`.
+Health units/timer, broker sudoers/wrapper, stable helper and sidecar are
+retired by one shared finalizer only after the old-module converge or the
+module-absent fallback cleanup has fully succeeded. Every earlier failure keeps
+those recovery assets intact.
 
 Process nodes live locally for seven days (131,072 rows), incomplete compounds
 for ten minutes (8,192), origin sessions for 30 days (4,096), health epochs for
