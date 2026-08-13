@@ -88,6 +88,7 @@ def _patch_journal_popen(journal_module, payload, commands):
 
 @th.django_unit_test()
 def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
+    from mojo.apps.incident.services.mojosec_evidence import project
     from mojo.mojosec.detectors import detect_journal
 
     accepted = detect_journal({
@@ -142,7 +143,7 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
     })
     encoded = json.dumps(sensitive_sudo)
     th.assert_true(secret in encoded and "--password" in encoded,
-                   "raw bounded command evidence must reach only the protected receipt layer")
+                   "sensor evidence must retain exact bounded text for receipt and admin Event projection")
     th.assert_eq(sensitive_sudo["attributes"]["command_path"], "/usr/bin/curl",
                  "sudo evidence should retain only the invoked executable path")
 
@@ -161,6 +162,24 @@ def test_journal_detector_keeps_logins_and_aggregates_failures(opts):
                  "the sensor must digest the full raw command rather than a message prefix")
     th.assert_eq(oversized_sudo["attributes"]["command_path"], "/usr/bin/curl",
                  "executable parsing must use the complete trusted sudo message")
+
+    long_path = "/opt/" + "é" * 300
+    long_path_sudo = detect_journal({
+        "SYSLOG_IDENTIFIER": "sudo", "SYSLOG_FACILITY": "10",
+        "_UID": "0", "_COMM": "sudo", "_EXE": "/usr/bin/sudo",
+        "MESSAGE": f"deploy : USER=root ; COMMAND={long_path}",
+    })
+    expected_path = long_path.encode("utf-8")[:512].decode("utf-8", errors="ignore")
+    th.assert_eq(long_path_sudo["attributes"]["command_path"], expected_path,
+                 "build_evidence must retain the exact UTF-8-safe 512-byte executable prefix")
+    th.assert_true(long_path_sudo["attributes"]["command_path_truncated"] is True,
+                   "an executable path over 512 UTF-8 bytes must be marked truncated")
+    th.assert_eq(long_path_sudo["attributes"]["command_path_sha256"],
+                 hashlib.sha256(long_path.encode()).hexdigest(),
+                 "the executable digest must cover the complete parsed path")
+    projected = project("auth.sudo_command", long_path_sudo["attributes"])["evidence"]
+    th.assert_true("command_family" not in projected,
+                   "a sensor-truncated executable path must not drive Event command family")
 
     for forged in (
             {"SYSLOG_IDENTIFIER": "sshd", "_UID": "1000", "_COMM": "python3",

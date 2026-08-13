@@ -102,6 +102,9 @@ def _normalized_web_paths(path):
 
 
 def _sudo_command_identity(command):
+    # `command` came from the collector-bounded journal record. Preserve the
+    # parsed executable exactly here; build_evidence owns its 512-byte cap,
+    # truncation marker, and full-value digest.
     digest = digest_text(command)
     try:
         words = shlex.split(command, posix=True)
@@ -113,7 +116,7 @@ def _sudo_command_identity(command):
             continue
         executable = word
         break
-    return bounded_text(executable, 256), digest
+    return executable, digest
 
 
 def _journal_time(record):
