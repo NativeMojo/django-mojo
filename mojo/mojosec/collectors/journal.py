@@ -164,6 +164,9 @@ class JournalCollector:
                 node["ambiguous"] = bool(node.get("ambiguous") or parents["ambiguous"])
                 live = parents["nodes"][0] if parents["nodes"] else None
                 if live is not None:
+                    if (live.get("pid") != node.get("pid") or
+                            (node.get("exe") and live.get("exe") != node.get("exe"))):
+                        node["ambiguous"] = True
                     node["start_ticks"] = live["start_ticks"]
                     node["unit"] = live.get("unit", "")
                     node["cgroup"] = live.get("cgroup", "")

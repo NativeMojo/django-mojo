@@ -106,8 +106,8 @@ def test_store_v1_to_v3_migration_is_atomic_retryable_and_future_safe(opts):
         db.close()
 
         store = Store(root, "sensor", AGGREGATION, DELIVERY)
-        th.assert_eq(store.get_meta("schema_version"), 4,
-                     "retry must complete the idempotent v1-to-v4 migration")
+        th.assert_eq(store.get_meta("schema_version"), 3,
+                     "retry must complete the idempotent v1-to-v3 migration")
         th.assert_eq(store.get_meta("cursor:journal"), "cursor-kept",
                      "migration must preserve durable collection cursors")
         th.assert_eq(store.load_fim_baseline("profile")["/etc/kept"]["kind"], "file",
@@ -123,9 +123,17 @@ def test_store_v1_to_v3_migration_is_atomic_retryable_and_future_safe(opts):
         ).fetchone()[0], 2, "migration must preserve pending aggregates")
         store.close()
         reopened = Store(root, "sensor", AGGREGATION, DELIVERY)
-        th.assert_eq(reopened.get_meta("schema_version"), 4,
-                     "opening an already-migrated v4 store must be idempotent")
+        th.assert_eq(reopened.get_meta("schema_version"), 3,
+                     "private provenance tables must not advance the shared v3 schema")
         reopened.close()
+        legacy_v3 = sqlite3.connect(path)
+        th.assert_eq(json.loads(legacy_v3.execute(
+            "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]), 3,
+            "an older v3 package must see its supported shared schema despite extras")
+        th.assert_eq(legacy_v3.execute(
+            "SELECT COUNT(*) FROM events WHERE id='queued-event'").fetchone()[0], 1,
+            "an older v3 package can ignore additive private tables and retain its spool")
+        legacy_v3.close()
 
     with tempfile.TemporaryDirectory() as root:
         os.chmod(root, 0o700)
@@ -156,15 +164,15 @@ def test_store_migrates_old_v2_compatibility_columns_atomically(opts):
                        "failure after the ambiguous ALTER must roll that ALTER back")
         event_columns = {row[1] for row in db.execute("PRAGMA table_info(events)")}
         th.assert_true("delivery_class" not in event_columns,
-                       "failed v2-to-v4 migration must not expose its delivery column")
+                       "failed v2-to-v3 migration must not expose its delivery column")
         th.assert_eq(json.loads(db.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]), 2,
             "failed compatibility repair must preserve the advertised v2 version")
         db.close()
 
         store = Store(root, "sensor", AGGREGATION, DELIVERY)
-        th.assert_eq(store.get_meta("schema_version"), 4,
-                     "retry must advance the repaired v2 store to v4")
+        th.assert_eq(store.get_meta("schema_version"), 3,
+                     "retry must advance the repaired v2 store to v3")
         th.assert_eq(store.db.execute(
             "SELECT delivery_class FROM events WHERE id='queued-event'"
         ).fetchone()[0], "legacy",
@@ -178,6 +186,55 @@ def test_store_migrates_old_v2_compatibility_columns_atomically(opts):
         th.assert_eq(reopened.load_ssh_sessions()[0]["audit_session"], 71,
                      "the repaired v2 store must reopen idempotently")
         reopened.close()
+
+
+@th.django_unit_test()
+def test_never_public_v4_marker_repairs_back_to_shared_v3(opts):
+    from mojo.mojosec.events import observation
+    from mojo.mojosec.store import Store
+
+    with tempfile.TemporaryDirectory() as root:
+        os.chmod(root, 0o700)
+        store = Store(root, "sensor", AGGREGATION, DELIVERY)
+        candidate = observation(
+            "auth.sudo_command", "high", "Privileged sudo command executed",
+            attributes={"actor": "ec2-user", "target_user": "root",
+                        "command": "/usr/local/sbin/mojo-firewall-broker",
+                        "command_path": "/usr/local/sbin/mojo-firewall-broker"},
+            fingerprint_values=("v4-pending",), aggregate=False,
+            observed_at="2026-08-13T20:00:00Z")
+        store.db.execute("BEGIN IMMEDIATE")
+        store.hold_firewall_observation(candidate, now=time.time())
+        store.db.execute("COMMIT")
+        store.close()
+        path = os.path.join(root, "state.sqlite3")
+        db = sqlite3.connect(path)
+        db.execute("ALTER TABLE audit_fragments RENAME COLUMN audit_id TO audit_serial")
+        db.execute(
+            "INSERT INTO audit_fragments VALUES(?,?,?,?,?)",
+            ("a" * 32, 77, json.dumps({"boot_id": "a" * 32, "audit_id": "77"}),
+             time.time(), time.time()))
+        db.execute("UPDATE meta SET value=? WHERE key='schema_version'", (json.dumps(4),))
+        db.commit()
+        db.close()
+
+        repaired = Store(root, "sensor", AGGREGATION, DELIVERY)
+        th.assert_eq(repaired.get_meta("schema_version"), 3,
+                     "the transitional v4 marker must be retired for older v3 reopen")
+        th.assert_true(("a" * 32, "77") in repaired.load_audit_fragments(),
+                       "compatibility repair must preserve private pending fragments")
+        th.assert_eq(repaired.db.execute(
+            "SELECT COUNT(*) FROM pending_firewall").fetchone()[0], 0,
+            "transitional pending candidates must not disappear into an older runtime")
+        th.assert_eq(repaired.db.execute(
+            "SELECT delivery_class FROM events").fetchone()[0], "ordinary",
+            "v4 downgrade repair must fail open pending candidates before deletion")
+        repaired.close()
+        legacy = sqlite3.connect(path)
+        th.assert_eq(json.loads(legacy.execute(
+            "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]), 3,
+            "an older package must no longer reject the shared schema marker")
+        legacy.close()
 
 
 @th.django_unit_test()

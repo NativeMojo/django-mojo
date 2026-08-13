@@ -360,6 +360,21 @@ def _sudo_command(attributes, evidence):
         value = _text(attributes.get(field), 96)
         if _SAFE_TOKEN.fullmatch(value):
             evidence[field] = value
+    proof_status = _text(attributes.get("proof_status"), 32)
+    if proof_status in ("missing", "partial", "conflict", "proven", "ineligible"):
+        evidence["proof_status"] = proof_status
+    lineage_digest = _text(attributes.get("lineage_sha256"), 64)
+    if re.fullmatch(r"[a-f0-9]{64}", lineage_digest):
+        evidence["lineage_sha256"] = lineage_digest
+    semantics = attributes.get("receipt_semantics")
+    if isinstance(semantics, list):
+        clean = []
+        for value in semantics[:8]:
+            value = _exact_bounded_text(value, 160)
+            if value and all(ord(char) >= 32 for char in value):
+                clean.append(value)
+        if clean:
+            evidence["receipt_semantics"] = clean
     lineage = attributes.get("lineage")
     if isinstance(lineage, list):
         ancestors = []

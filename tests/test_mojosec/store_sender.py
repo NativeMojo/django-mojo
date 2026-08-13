@@ -3,6 +3,7 @@ import gzip
 import json
 import os
 import tempfile
+import time
 from unittest import mock
 
 from testit import helpers as th
@@ -759,6 +760,102 @@ def test_runtime_publishes_secret_free_status_with_collectors_disabled(opts):
                            "the public status snapshot must not expose credentials or secrets")
         finally:
             runtime.store.close()
+
+
+@th.django_unit_test()
+def test_runtime_requires_post_poll_audit_health_bracket(opts):
+    from mojo.mojosec.runtime import Runtime
+    from mojo.deploy import audit
+
+    base = {
+        "schema": "mojosec.audit-health", "version": 1, "boot_id": "a" * 32,
+        "generation": "b" * 64, "rules_sha256": "c" * 64,
+        "sequence": 4, "enabled": 1, "failure": 1, "rate_limit": 0,
+        "backlog_limit": 8192, "backlog": 0, "lost": 0,
+        "updated_at": time.time(),
+    }
+
+    class FakeStore:
+        def __init__(self):
+            self.health = []
+
+        def get_meta(self, key):
+            return None
+
+        def load_ssh_sessions(self):
+            return []
+
+        def load_audit_fragments(self):
+            return {}
+
+        def ingest(self, observations, **values):
+            self.health.append(values["audit_health"])
+
+    class FakeJournal:
+        name = "journal"
+
+        def poll(self, *args, **kwargs):
+            return {"observations": [], "cursor": "c1", "malformed": 0}
+
+    runtime = Runtime.__new__(Runtime)
+    runtime.store = FakeStore()
+    runtime.collector_status = {}
+    for changed in (dict(base, sequence=5, lost=1),
+                    dict(base, sequence=5, rules_sha256="d" * 64)):
+        with mock.patch.object(audit, "read_health", side_effect=[base, changed]):
+            runtime._poll_stream(FakeJournal())
+        th.assert_true(runtime.store.health[-1]["healthy"] is False,
+                       "loss or rule drift during collection must fail open ordinary")
+
+    healthy_post = dict(base, sequence=5, updated_at=base["updated_at"] + 0.01)
+    with mock.patch.object(audit, "read_health", side_effect=[base, healthy_post]):
+        runtime._poll_stream(FakeJournal())
+    th.assert_true(runtime.store.health[-1]["healthy"] is True,
+                   "only a healthy matching post-poll sidecar may authorize proof")
+
+
+@th.django_unit_test()
+def test_runtime_reconciles_pending_even_when_journal_fails(opts):
+    from mojo.mojosec.runtime import Runtime
+
+    class FakeStore:
+        def __init__(self):
+            self.reconciled = 0
+
+        def get_meta(self, key):
+            return None
+
+        def load_ssh_sessions(self):
+            return []
+
+        def load_audit_fragments(self):
+            return {}
+
+        def annotate_pending_fim(self, *args, **kwargs):
+            return 0
+
+        def reconcile_pending_firewall(self):
+            self.reconciled += 1
+
+    class BrokenJournal:
+        name = "journal"
+
+        def poll(self, *args, **kwargs):
+            raise RuntimeError("journal unavailable")
+
+    runtime = Runtime.__new__(Runtime)
+    runtime.config = {"expected_changes_path": ""}
+    runtime.store = FakeStore()
+    runtime.journal = BrokenJournal()
+    runtime.nginx = None
+    runtime.fim = None
+    runtime.integrity_collectors = {}
+    runtime.collector_status = {}
+    runtime.sender = mock.Mock(send_once=mock.Mock(return_value={"accepted": 0}))
+    runtime._publish_status = mock.Mock()
+    runtime.run_once()
+    th.assert_eq(runtime.store.reconciled, 1,
+                 "pending deadlines must reconcile on every cycle despite collector failure")
 
 
 @th.django_unit_test()

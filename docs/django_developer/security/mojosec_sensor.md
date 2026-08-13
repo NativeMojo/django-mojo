@@ -859,9 +859,11 @@ the deployed application AUID, and the exact sudo executable path. Audit
 ID plus Audit serial across polls; EOE closes a compound and a two-second
 timeout closes it as incomplete. `/proc` is immediate optional enrichment for
 PID generation, parents, cgroup/unit, namespace, executable, command line, and
-SELinux context. Audit remains durable truth. PID reuse, missing generations,
-cycles, ordering conflicts, gaps, loss, or stale health make the lineage
-ambiguous and therefore ineligible for suppression.
+SELinux context. Audit remains durable truth: a short-lived process or ancestor
+that has already left `/proc` does not poison a complete Audit edge. A live
+`/proc` identity that conflicts with Audit, PID reuse, cycles, ordering
+conflicts, gaps, loss, or stale health makes suppression ineligible. Only the
+long-lived JobEngine anchor must still have a live verified PID generation.
 
 The root-owned Audit health oneshot has only `CAP_AUDIT_CONTROL` and publishes
 a root-only sidecar every five seconds. The main sensor's capability set is
@@ -873,9 +875,12 @@ an exact rollback record and restores it on convergence failure or downgrade.
 
 Process nodes live locally for seven days (131,072 rows), incomplete compounds
 for ten minutes (8,192), origin sessions for 30 days (4,096), health epochs for
-128 samples, and successful firewall receipts for seven days (32,768 and 32
+128 samples, and root-owned firewall receipt payloads for seven days (32,768 and 32
 MiB). Pending broker observations are capped at 4,096/32 MiB and wait at most
-30 seconds. New provenance state is limited to 256 MiB plus a 64 MiB WAL. A
+30 seconds. Payload pruning targets a 256 MiB provenance operating budget and
+SQLite checkpoints target a 64 MiB WAL; these are operational pressure budgets,
+not hard whole-database file ceilings. Capacity pressure fails open and is
+reported in sensor counters. A
 central Event receives at most eight compact ancestors; the complete graph and
 raw Audit records remain on the sensor.
 
@@ -883,7 +888,7 @@ Application firewall work no longer invokes raw iptables/ipset sudo commands.
 It sends one strict semantic JSON request to exactly
 `sudo -n -- /usr/local/sbin/mojo-firewall-broker`; sudoers authorizes that
 empty-argument command only. The broker generates the operation ID, validates
-the SUDO caller and immutable JobEngine context, constructs all argv and
+the SUDO caller and the same-runner JobEngine context, constructs all argv and
 restore input, and emits root-owned begin/result receipts. Requests are at most
 16 MiB/250,000 canonical networks; restore is at most 24 MiB; address space is
 256 MiB; scalar work has 15 seconds and bulk work 120 seconds. Output overflow
@@ -895,6 +900,8 @@ agreement. SSH, TTY, IP attribution, direct legacy sudo, missing context,
 timeouts, restarts, audit gaps, eviction, receipt disagreement, and every
 incomplete proof retain the original rich sudo Event. Legacy direct grants
 remain for one rollback generation but never qualify for suppression.
+The JobEngine context prevents accidental cross-job attribution through the
+normal API; it does not resist hostile Python already running in that process.
 
 Sensor `recommendation` values (`none`, `review`, `block_ip`) are advice, not an
 instruction. A compromised root node can forge its own observations, so the

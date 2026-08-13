@@ -93,14 +93,15 @@ results = jobs.broadcast_execute(
 
 ### Execution provenance
 
-The packaged JobEngine installs an immutable `contextvars` identity immediately
+The packaged JobEngine installs a scoped `contextvars` identity immediately
 around the actual Job or broadcast function call. It contains the real job or
 broadcast execution ID, function path, attempt, channel, runner, and broadcast
 flag and is always cleared in `finally`; nested or conflicting contexts are
 rejected. Privileged framework services use this identity for MojoSec
 correlation. Application callers cannot supply a different function identity.
-This is trustworthy attribution inside the packaged engine, not cryptographic
-isolation from hostile Python already executing in that same process.
+This is normal-API attribution inside one cooperative runner. It is neither
+cryptographic isolation nor root-unforgeable identity: hostile Python already
+executing in that process can call or replace the same framework APIs.
 
 ```python
 def process_order(job):

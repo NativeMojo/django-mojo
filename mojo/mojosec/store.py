@@ -1,6 +1,7 @@
 """Crash-safe MojoSec state, aggregation, FIM baseline, and delivery spool."""
 
 import datetime
+import hashlib
 import json
 import os
 import sqlite3
@@ -17,7 +18,7 @@ from .disposition import (
 from .protocol import canonical_json, make_event
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 3
 SSH_SESSION_CAP = 4096
 SSH_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 PROCESS_NODE_CAP = 131072
@@ -82,6 +83,7 @@ class Store:
         self.delivery_config = delivery_config
         self.local_only_diagnostic_path = local_only_diagnostic_path
         self.local_only_diagnostic = {"active": False, "until": "", "error": ""}
+        self._repaired_v4 = False
         self.path = os.path.join(state_dir, "state.sqlite3")
         self.db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         self.db.row_factory = sqlite3.Row
@@ -108,6 +110,8 @@ class Store:
             raise StoreError(
                 f"state belongs to sensor {stored_sensor_id!r}, not configured sensor {sensor_id!r}"
             )
+        if self._repaired_v4:
+            self._flush_repaired_v4_pending()
 
     def _create_schema(self):
         tables = {row["name"] for row in self.db.execute(
@@ -117,7 +121,7 @@ class Store:
             try:
                 self._create_base_schema()
                 self._create_ssh_session_schema()
-                self._create_v4_schema()
+                self._create_private_schema()
                 self.set_meta("schema_version", SCHEMA_VERSION)
                 self.db.execute("COMMIT")
             except Exception:
@@ -137,11 +141,76 @@ class Store:
         if not isinstance(version, int) or isinstance(version, bool):
             raise StoreError("state schema version is invalid")
         if version == SCHEMA_VERSION:
-            self._ensure_v4_schema()
+            self._ensure_v3_schema()
             return
-        if version not in (1, 2, 3):
+        if version == 4:
+            self._repair_development_v4_to_v3()
+            self._ensure_v3_schema()
+            return
+        if version not in (1, 2):
             raise StoreError(f"unsupported state schema version: {version}")
-        self._migrate_to_v4(version)
+        if version == 1:
+            self._migrate_v1_to_v3()
+        else:
+            self._migrate_v2_to_v3()
+        self._ensure_v3_schema()
+
+    def _repair_development_v4_to_v3(self):
+        """Retire the never-public shared v4 marker without losing private state."""
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.db.execute(
+                "SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            if row is None or json.loads(row["value"]) != 4:
+                raise StoreError("state schema changed during v4 compatibility repair")
+            columns = {row["name"] for row in self.db.execute(
+                "PRAGMA table_info(audit_fragments)").fetchall()}
+            if "audit_serial" in columns and "audit_id" not in columns:
+                statements = (
+                    "CREATE TABLE audit_fragments_v3 ("
+                    "boot_id TEXT NOT NULL,audit_id TEXT NOT NULL,"
+                    "payload TEXT NOT NULL CHECK(length(payload)<=32768),"
+                    "observed_at REAL NOT NULL,updated_at REAL NOT NULL,"
+                    "PRIMARY KEY(boot_id,audit_id))",
+                    "INSERT INTO audit_fragments_v3 SELECT boot_id,"
+                    "CAST(audit_serial AS TEXT),payload,observed_at,updated_at "
+                    "FROM audit_fragments",
+                    "DROP TABLE audit_fragments",
+                    "ALTER TABLE audit_fragments_v3 RENAME TO audit_fragments",
+                    "CREATE INDEX audit_fragments_updated ON audit_fragments(updated_at)",
+                )
+                for statement in statements:
+                    self.db.execute(statement)
+            self.set_meta("schema_version", SCHEMA_VERSION)
+            self.db.execute("COMMIT")
+            self._repaired_v4 = True
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def _flush_repaired_v4_pending(self):
+        """Make transitional v4 candidates ordinary before an older v3 downgrade."""
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            rows = self.db.execute(
+                "SELECT observation_id,payload FROM pending_firewall "
+                "WHERE state='pending' ORDER BY created,rowid LIMIT ?",
+                (PENDING_OPERATION_CAP,)).fetchall()
+            now = time.time()
+            for row in rows:
+                observation = json.loads(row["payload"])
+                event = make_event(self.sensor_id, observation)
+                exists = self.db.execute(
+                    "SELECT 1 FROM events WHERE id=?", (event["id"],)).fetchone()
+                if exists is not None or self._enqueue(event, now=now):
+                    self.db.execute(
+                        "DELETE FROM pending_firewall WHERE observation_id=?",
+                        (row["observation_id"],))
+                    self._increment_saturating("provenance_pending_downgrade_flush")
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
 
     def _create_base_schema(self):
         statements = (
@@ -215,13 +284,13 @@ class Store:
             "CREATE INDEX events_delivery_class_created "
             "ON events(delivery_class, created, id)")
 
-    def _create_v4_schema(self):
+    def _create_private_schema(self):
         statements = (
             """CREATE TABLE IF NOT EXISTS audit_fragments (
-                boot_id TEXT NOT NULL, audit_serial INTEGER NOT NULL,
+                boot_id TEXT NOT NULL, audit_id TEXT NOT NULL,
                 payload TEXT NOT NULL CHECK(length(payload) <= 32768),
                 observed_at REAL NOT NULL, updated_at REAL NOT NULL,
-                PRIMARY KEY(boot_id, audit_serial)
+                PRIMARY KEY(boot_id, audit_id)
             )""",
             "CREATE INDEX IF NOT EXISTS audit_fragments_updated ON audit_fragments(updated_at)",
             """CREATE TABLE IF NOT EXISTS process_nodes (
@@ -269,47 +338,6 @@ class Store:
         for statement in statements:
             self.db.execute(statement)
 
-    def _ensure_v4_schema(self):
-        self.db.execute("BEGIN IMMEDIATE")
-        try:
-            row = self.db.execute(
-                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
-            if row is None or json.loads(row["value"]) != SCHEMA_VERSION:
-                raise StoreError("state schema changed during compatibility check")
-            self._create_ssh_session_schema()
-            self._create_v4_schema()
-            event_columns = {row["name"] for row in self.db.execute(
-                "PRAGMA table_info(events)").fetchall()}
-            if "delivery_class" not in event_columns:
-                self._add_event_delivery_class()
-            self.db.execute("COMMIT")
-        except Exception:
-            self.db.execute("ROLLBACK")
-            raise
-
-    def _migrate_to_v4(self, version):
-        self.db.execute("BEGIN IMMEDIATE")
-        try:
-            row = self.db.execute(
-                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
-            if row is None or json.loads(row["value"]) != version:
-                raise StoreError("state schema changed during migration")
-            self._create_ssh_session_schema()
-            ssh_columns = {row["name"] for row in self.db.execute(
-                "PRAGMA table_info(ssh_sessions)").fetchall()}
-            if "ambiguous" not in ssh_columns:
-                self._add_ssh_session_ambiguous_column()
-            event_columns = {row["name"] for row in self.db.execute(
-                "PRAGMA table_info(events)").fetchall()}
-            if "delivery_class" not in event_columns:
-                self._add_event_delivery_class()
-            self._create_v4_schema()
-            self.set_meta("schema_version", SCHEMA_VERSION)
-            self.db.execute("COMMIT")
-        except Exception:
-            self.db.execute("ROLLBACK")
-            raise
-
     def _ensure_v3_schema(self):
         """Repair compatibility columns and indexes transactionally."""
         self.db.execute("BEGIN IMMEDIATE")
@@ -338,6 +366,9 @@ class Store:
                 self.db.execute(
                     "CREATE INDEX IF NOT EXISTS events_delivery_class_created "
                     "ON events(delivery_class, created, id)")
+            # Provenance is an additive private extension beneath the shared
+            # v3 compatibility marker. Older v3 code ignores these tables.
+            self._create_private_schema()
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
@@ -539,13 +570,13 @@ class Store:
     def load_audit_fragments(self, now=None):
         cutoff = (time.time() if now is None else now) - AUDIT_FRAGMENT_TTL_SECONDS
         rows = self.db.execute(
-            "SELECT boot_id,audit_serial,payload FROM audit_fragments "
+            "SELECT boot_id,audit_id,payload FROM audit_fragments "
             "WHERE updated_at >= ? ORDER BY updated_at DESC LIMIT ?",
             (cutoff, AUDIT_FRAGMENT_CAP)).fetchall()
         result = {}
         for row in rows:
             try:
-                result[(row["boot_id"], row["audit_serial"])] = json.loads(row["payload"])
+                result[(row["boot_id"], row["audit_id"])] = json.loads(row["payload"])
             except json.JSONDecodeError:
                 continue
         return result
@@ -558,10 +589,10 @@ class Store:
             if len(payload.encode()) > 32768:
                 continue
             self.db.execute(
-                "INSERT INTO audit_fragments(boot_id,audit_serial,payload,observed_at,updated_at) "
-                "VALUES(?,?,?,?,?) ON CONFLICT(boot_id,audit_serial) DO UPDATE SET "
+                "INSERT INTO audit_fragments(boot_id,audit_id,payload,observed_at,updated_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(boot_id,audit_id) DO UPDATE SET "
                 "payload=excluded.payload,updated_at=excluded.updated_at",
-                (item["boot_id"], item["audit_serial"], payload, now, now))
+                (item["boot_id"], item["audit_id"], payload, now, now))
         self.db.execute(
             "DELETE FROM audit_fragments WHERE rowid IN (SELECT rowid FROM audit_fragments "
             "ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET ?)",
@@ -578,7 +609,7 @@ class Store:
             if len(payload.encode()) > 8192:
                 continue
             generation = str(item.get("start_ticks") or
-                             f"audit-{item.get('audit_serial', 0)}")[:128]
+                             f"audit-{item.get('audit_id', '')}")[:128]
             self.db.execute(
                 "INSERT INTO process_nodes(boot_id,pid,generation,audit_session,payload,"
                 "observed_at,updated_at,pinned) VALUES(?,?,?,?,?,?,?,?) "
@@ -770,6 +801,65 @@ class Store:
                 "UPDATE origin_sessions SET updated_at=? WHERE boot_id=? AND audit_session=?",
                 (now, key[0], key[1]))
 
+    def _enrich_sudo(self, observation, now):
+        if observation.get("kind") != "auth.sudo_command":
+            return
+        attributes = observation.get("attributes", {})
+        boot = attributes.get("boot_id")
+        session = attributes.get("audit_session")
+        producer = attributes.get("producer_pid")
+        if not boot or not isinstance(session, int):
+            attributes["proof_status"] = "ineligible"
+            return
+        rows = self.db.execute(
+            "SELECT payload FROM process_nodes WHERE boot_id=? AND audit_session=? "
+            "ORDER BY updated_at DESC LIMIT 256", (boot, session)).fetchall()
+        nodes = [json.loads(row["payload"]) for row in rows]
+        by_pid = {}
+        for node in nodes:
+            by_pid.setdefault(node.get("pid"), []).append(node)
+        lineage = []
+        current_pid = producer
+        seen = set()
+        conflict = False
+        for unused in range(8):
+            if not isinstance(current_pid, int) or current_pid <= 0 or current_pid in seen:
+                conflict = current_pid in seen
+                break
+            seen.add(current_pid)
+            found = by_pid.get(current_pid, [])
+            if len(found) != 1:
+                conflict = len(found) > 1
+                break
+            node = found[0]
+            lineage.append(node)
+            conflict = conflict or bool(node.get("ambiguous") or node.get("incomplete"))
+            current_pid = node.get("ppid")
+        if lineage:
+            from .lineage import project_ancestors
+            attributes["lineage"] = project_ancestors(lineage)
+            attributes["lineage_sha256"] = hashlib.sha256(
+                canonical_json(lineage).encode()).hexdigest()
+        origin = self.db.execute(
+            "SELECT origin_kind,ambiguous FROM origin_sessions "
+            "WHERE boot_id=? AND audit_session=?", (boot, session)).fetchone()
+        if origin is not None:
+            attributes["origin_kind"] = origin["origin_kind"]
+            conflict = conflict or bool(origin["ambiguous"])
+        receipt_rows = self.db.execute(
+            "SELECT payload FROM firewall_receipts WHERE observed_at>=? "
+            "ORDER BY observed_at DESC LIMIT 64", (now - 30,)).fetchall()
+        semantics = []
+        for row in receipt_rows:
+            receipt = json.loads(row["payload"])
+            if (receipt.get("boot_id") == boot and receipt.get("audit_session") == session and
+                    receipt.get("semantic") not in semantics):
+                semantics.append(receipt["semantic"])
+        if semantics:
+            attributes["receipt_semantics"] = semantics[:8]
+        attributes["proof_status"] = (
+            "conflict" if conflict else "partial" if lineage or semantics else "missing")
+
     def hold_firewall_observation(self, observation, operation_id="", now=None):
         now = time.time() if now is None else now
         payload = canonical_json(observation)
@@ -785,6 +875,7 @@ class Store:
         for row in rows:
             # Capacity pressure is fail-open: enqueue the untouched original.
             self._ingest_one(json.loads(row["payload"]), now)
+            self._increment_saturating("provenance_pending_cap_flush")
             self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
                             (row["observation_id"],))
         while True:
@@ -800,6 +891,7 @@ class Store:
                 break
             for row in rows:
                 self._ingest_one(json.loads(row["payload"]), now)
+                self._increment_saturating("provenance_pending_cap_flush")
                 self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
                                 (row["observation_id"],))
 
@@ -810,6 +902,7 @@ class Store:
             (now,)).fetchall()
         for row in rows:
             self._ingest_one(json.loads(row["payload"]), now)
+            self._increment_saturating("provenance_pending_expired")
             self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
                             (row["observation_id"],))
 
@@ -844,13 +937,19 @@ class Store:
             result["monotonic_ns"] >= begin["monotonic_ns"] and
             isinstance(result.get("target_pid"), int) and result["target_pid"] > 0 and
             isinstance(result.get("target_start_ticks"), int) and
-            result["target_start_ticks"] > 0)
+            result["target_start_ticks"] > 0 and
+            begin.get("children") == [] and
+            isinstance(result.get("children"), list) and
+            1 <= len(result["children"]) <= 8 and
+            all(child.get("ok") is True for child in result["children"]))
 
     @staticmethod
     def _one_pid_generation(nodes, pid, start_ticks, earliest, latest, exe=None):
         found = []
         for node in nodes:
-            if node.get("pid") != pid or node.get("ambiguous") or node.get("incomplete"):
+            if (node.get("pid") != pid or node.get("ambiguous") or
+                    node.get("incomplete") or node.get("success") is not True or
+                    node.get("eoe") is not True or not node.get("argv")):
                 continue
             if exe is not None and node.get("exe") != exe:
                 continue
@@ -888,6 +987,7 @@ class Store:
             attributes = observation["attributes"]
             if not current_health:
                 self._ingest_one(observation, now)
+                self._increment_saturating("provenance_health_fail_open")
                 self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
                                 (row["observation_id"],))
                 continue
@@ -896,6 +996,7 @@ class Store:
                 "ORDER BY sequence DESC LIMIT 1", (attributes["boot_id"],)).fetchone()
             if health is None or not health["healthy"]:
                 self._ingest_one(observation, now)
+                self._increment_saturating("provenance_health_fail_open")
                 self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
                                 (row["observation_id"],))
                 continue
@@ -939,11 +1040,21 @@ class Store:
                 broker = self._one_pid_generation(
                     nodes, begin["broker_pid"], begin["broker_start_ticks"],
                     begin["monotonic_ns"], result["monotonic_ns"])
-                target = self._one_pid_generation(
-                    nodes, result["target_pid"], result["target_start_ticks"],
-                    begin["monotonic_ns"], result["monotonic_ns"],
-                    exe=begin["target_exe"])
-                if broker is None or target is None or target.get("ppid") != broker.get("pid"):
+                targets = []
+                for child in result["children"]:
+                    target = self._one_pid_generation(
+                        nodes, child["pid"], child["start_ticks"],
+                        begin["monotonic_ns"], result["monotonic_ns"], exe=child["exe"])
+                    if target is None:
+                        targets = []
+                        break
+                    if (target.get("ppid") != begin["broker_pid"] or
+                            target.get("argv_sha256") != child["argv_digest"]):
+                        conflicted = True
+                        targets = []
+                        break
+                    targets.append(target)
+                if broker is None or len(targets) != len(result["children"]):
                     if any(node.get("ambiguous") or node.get("incomplete") for node in nodes
                            if node.get("pid") in (
                                begin["broker_pid"], result["target_pid"])):
@@ -960,12 +1071,13 @@ class Store:
                 if (engine is None or not engine.get("pinned") or
                         engine.get("pid") != origin["anchor_pid"] or
                         str(engine.get("start_ticks") or
-                            f"audit-{engine.get('audit_serial', 0)}") !=
+                            f"audit-{engine.get('audit_id', '')}") !=
                         origin["anchor_generation"] or
                         not any("bin/jobs.py" in str(part) for part in engine.get("argv", [])) or
                         "engine" not in engine.get("argv", []) or
                         "foreground" not in engine.get("argv", [])):
                     continue
+                from .lineage import project_ancestors
                 attributes.update({
                     "local_disposition": JOBMAN_FIREWALL_CLASSIFIER,
                     "operation_id": operation_id,
@@ -973,7 +1085,10 @@ class Store:
                     "job_id": begin.get("job_id"),
                     "job_function": begin.get("function"),
                     "origin_kind": "cron_jobman",
-                    "lineage": [target, broker, sudo, engine][:8],
+                    "proof_status": "proven",
+                    "lineage": project_ancestors(targets + [broker, sudo, engine]),
+                    "lineage_sha256": hashlib.sha256(canonical_json(
+                        targets + [broker, sudo, engine]).encode()).hexdigest(),
                 })
                 self._record_local_only(observation, self.local_only_diagnostic, now)
                 self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
@@ -981,7 +1096,9 @@ class Store:
                 break
             else:
                 if conflicted:
+                    observation["attributes"]["proof_status"] = "conflict"
                     self._ingest_one(observation, now)
+                    self._increment_saturating("provenance_proof_conflict")
                     self.db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
                                     (row["observation_id"],))
 
@@ -1113,6 +1230,7 @@ class Store:
                 audit_fragments, process_nodes, audit_health, firewall_receipts, now)
             for found in observations:
                 self._record_local_origin(found, now)
+                self._enrich_sudo(found, now)
                 if self._broker_candidate(found):
                     boot_id = found["attributes"]["boot_id"]
                     healthy = self.db.execute(
@@ -1144,6 +1262,17 @@ class Store:
         self.db.execute("BEGIN IMMEDIATE")
         try:
             self._flush_due(time.time())
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def reconcile_pending_firewall(self, now=None):
+        """Fail open expired proof candidates independently of journal health."""
+        now = time.time() if now is None else now
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self._flush_expired_firewall(now)
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
@@ -1442,8 +1571,18 @@ class Store:
                 "engine_anchors": engine_anchors,
                 "pending_firewall": pending_firewall,
                 "audit_health": json.loads(last_health["payload"]) if last_health else None,
-                "state_max_bytes": STATE_MAX_BYTES,
-                "wal_max_bytes": WAL_MAX_BYTES,
+                "payload_budget_bytes": STATE_MAX_BYTES,
+                "wal_checkpoint_target_bytes": WAL_MAX_BYTES,
+                "pending_cap_flush": int(self.get_meta(
+                    "provenance_pending_cap_flush", 0)),
+                "pending_expired": int(self.get_meta(
+                    "provenance_pending_expired", 0)),
+                "proof_conflict": int(self.get_meta(
+                    "provenance_proof_conflict", 0)),
+                "health_fail_open": int(self.get_meta(
+                    "provenance_health_fail_open", 0)),
+                "pending_downgrade_flush": int(self.get_meta(
+                    "provenance_pending_downgrade_flush", 0)),
             },
             "local_only_last_seen": self.get_meta("local_only_last_seen"),
             "local_only_diagnostic": dict(self.local_only_diagnostic),

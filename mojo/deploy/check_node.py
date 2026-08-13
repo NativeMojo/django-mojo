@@ -58,6 +58,8 @@ import shlex
 import subprocess
 import sys
 
+from mojo.deploy.mojosec import DEPLOY_STATE_PATH as MOJOSEC_DEPLOY_STATE_PATH
+
 PASS = "PASS"
 WARN = "WARN"
 FAIL = "FAIL"
@@ -741,6 +743,23 @@ def _valid_local_only_status(status):
     )
 
 
+def _valid_provenance_status(process):
+    if not isinstance(process, dict):
+        return False
+    audit_health = process.get("audit_health")
+    integer_fields = (process.get("process_nodes"),
+                      process.get("pending_firewall"),
+                      process.get("engine_anchors"))
+    return bool(
+        isinstance(audit_health, dict) and audit_health.get("healthy") is True and
+        audit_health.get("lost") == 0 and audit_health.get("backlog_limit", 0) >= 8192 and
+        all(isinstance(value, int) and not isinstance(value, bool)
+            for value in integer_fields) and
+        0 <= process["process_nodes"] <= 131072 and
+        0 <= process["pending_firewall"] <= 4096 and
+        process["engine_anchors"] >= 1)
+
+
 def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
     active = run("systemctl is-active mojosec.service 2>&1")[1]
     enabled = run("systemctl is-enabled mojosec.service 2>&1")[1]
@@ -795,7 +814,7 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
         rc_rules, audit_rules, _ = run(f"{sudo}/sbin/auditctl -l")
         projection = (
             "import json;"
-            "p=json.load(open('/etc/mojosec/deploy-state.json'));"
+            f"p=json.load(open('{MOJOSEC_DEPLOY_STATE_PATH}'));"
             "print(json.dumps({'generation':p.get('audit_generation'),"
             "'rules':p.get('audit_rules_sha256')},separators=(',',':')))"
         )
@@ -954,22 +973,16 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                 report.passed("mojosec", "collector health", "journal and nginx are healthy")
             process = status.get("provenance")
             if isinstance(process, dict):
-                audit_health = process.get("audit_health")
-                healthy = (
-                    isinstance(audit_health, dict) and audit_health.get("healthy") is True and
-                    audit_health.get("lost") == 0 and audit_health.get("backlog_limit", 0) >= 8192 and
-                    isinstance(process.get("process_nodes"), int) and
-                    0 <= process["process_nodes"] <= 131072 and
-                    isinstance(process.get("pending_firewall"), int) and
-                    0 <= process["pending_firewall"] <= 4096 and
-                    isinstance(process.get("engine_anchors"), int) and
-                    process["engine_anchors"] >= 1)
-                if healthy:
+                if _valid_provenance_status(process):
                     report.passed("mojosec", "provenance health",
                                   "Audit epoch, bounded graph, and post-cutover engine are healthy")
                 else:
                     report.fail("mojosec", "provenance health unhealthy",
                                 "suppression is disabled until the current Audit epoch is healthy")
+            else:
+                report.fail("mojosec", "provenance health absent or malformed",
+                            "post-cutover status must report Audit health, graph bounds, "
+                            "and at least one live engine anchor")
             integrity = status.get("integrity")
             if integrity is not None:
                 identity = integrity.get("identity") if isinstance(integrity, dict) else None

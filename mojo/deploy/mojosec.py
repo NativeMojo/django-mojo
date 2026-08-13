@@ -849,6 +849,8 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
     unit_snapshot = service_state = retired_snapshot = None
     nginx_snapshot = deploy_state_snapshot = config_snapshot = None
     broker_snapshots = {}
+    audit_state_snapshot = None
+    audit_converged = False
     unit_changed = nginx_changed = config_changed = retired_changed = False
     mutation_started = False
     prepared = None
@@ -908,11 +910,13 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 BROKER_PATH, SUDOERS_PATH, render_sudoers,
             )
             app_uid = pwd.getpwnam("ec2-user").pw_uid
+            audit_state_snapshot = _owned_snapshot(audit_deploy.STATE_PATH)
             for path in (BROKER_PATH, SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
                          AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH):
                 broker_snapshots[path] = _owned_snapshot(path)
             try:
                 audit_state = audit_deploy.converge(app_uid)
+                audit_converged = True
             except audit_deploy.AuditError as err:
                 raise DeployError(f"Linux Audit convergence failed: {err}") from err
             for parent in (os.path.dirname(BROKER_PATH), os.path.dirname(SUDOERS_PATH)):
@@ -954,6 +958,29 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             if (_systemctl_is("is-enabled", SERVICE) or
                     _systemctl_is("is-active", SERVICE)):
                 raise DeployError("MojoSec off convergence left service enabled or active")
+            from mojo.deploy import audit as audit_deploy
+            from mojo.deploy.firewall_broker import BROKER_PATH, SUDOERS_PATH
+            feature_paths = (
+                BROKER_PATH, SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
+                AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH,
+                audit_deploy.HEALTH_PATH,
+            )
+            audit_state_snapshot = _owned_snapshot(audit_deploy.STATE_PATH)
+            managed_policy = _owned_snapshot(audit_deploy.MANAGED_PATH)
+            if audit_state_snapshot is None and managed_policy is not None:
+                raise DeployError(
+                    "managed Audit policy has no rollback inventory for mode off")
+            for path in feature_paths:
+                broker_snapshots[path] = _owned_snapshot(path)
+            if audit_state_snapshot is not None:
+                audit_deploy.restore_prior()
+            _systemctl("disable", "--now", "mojosec-audit-health.timer")
+            if (_systemctl_is("is-enabled", "mojosec-audit-health.timer") or
+                    _systemctl_is("is-active", "mojosec-audit-health.timer")):
+                raise DeployError("MojoSec off convergence left Audit health timer active")
+            for path in feature_paths:
+                broker_changed |= _remove_owned(path)
+            _systemctl("daemon-reload")
         else:
             _systemctl("enable", "--now", "mojosec-audit-health.timer")
             _systemctl("enable", "--now", SERVICE)
@@ -984,8 +1011,13 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         if mutation_started:
             if broker_snapshots:
                 try:
-                    from mojo.deploy.audit import restore_prior
-                    restore_prior()
+                    from mojo.deploy import audit as audit_deploy
+                    if mode == "observe" and audit_converged:
+                        audit_deploy.restore_immediate()
+                        _restore_snapshot(audit_deploy.STATE_PATH, audit_state_snapshot)
+                    elif audit_state_snapshot is not None:
+                        _restore_snapshot(audit_deploy.STATE_PATH, audit_state_snapshot)
+                        audit_deploy.restore_immediate()
                     for path, snapshot in broker_snapshots.items():
                         _restore_snapshot(path, snapshot)
                     _systemctl("daemon-reload")

@@ -1,4 +1,5 @@
 import io
+import sys
 from unittest import mock
 
 from testit import helpers as th
@@ -86,3 +87,47 @@ def test_semantic_rules_read(opts):
     th.assert_true(_rules_contain_source(
         payload + "-A INPUT -s 192.0.2.8 -j DROP\n", "192.0.2.8/32"),
         "canonical exact source and DROP target should decide blocked status")
+
+
+@th.unit_test("broker kills output overflow without unbounded communicate buffering")
+def test_bounded_child_output(opts):
+    from mojo.deploy import firewall_broker as broker
+
+    with mock.patch.object(broker, "_start_ticks", return_value=1234):
+        with th.assert_raises(broker.BrokerChildError):
+            broker._run_child(
+                [sys.executable, "-c", "import sys;sys.stdout.write('x'*70000)"],
+                stdout_limit=64 * 1024)
+
+
+@th.unit_test("multi-step broker receipts bind every ordered child")
+def test_multistep_child_receipts(opts):
+    from mojo.deploy import firewall_broker as broker
+
+    context = {
+        "execution_id": "exec-1", "job_id": "job-1",
+        "function": "mojo.apps.incident.asyncjobs.broadcast_ipset_add_blocked",
+        "attempt": 1, "channel": "default", "runner": "runner-1",
+        "broadcast": False,
+    }
+    request = {"operation": "set.rule_ensure", "set_name": "blocked",
+               "context": context}
+    children = [
+        ({"pid": 101, "start_ticks": 1001, "exe": broker.IPTABLES,
+          "argv_digest": "a" * 64, "returncode": 1, "ok": False}, "", ""),
+        ({"pid": 102, "start_ticks": 1002, "exe": broker.IPTABLES,
+          "argv_digest": "b" * 64, "returncode": 0, "ok": True}, "", ""),
+    ]
+    receipts = []
+    with mock.patch.object(broker, "_run_child", side_effect=children), \
+            mock.patch.object(broker, "_receipt",
+                              side_effect=lambda kind, op, ctx, built, **values:
+                              receipts.append(dict(kind=kind, **values)) or values):
+        result = broker.execute(request)
+    recorded = receipts[-1]["children"]
+    th.assert_eq([item["pid"] for item in recorded], [101, 102],
+                 "result receipt must preserve every subprocess in execution order")
+    th.assert_true(all(item["ok"] for item in recorded) and result["ok"],
+                   "the expected rule-miss step and successful insert are both semantic success")
+    th.assert_eq([item["argv_digest"] for item in recorded], ["a" * 64, "b" * 64],
+                 "each child must retain its own exact argv digest")

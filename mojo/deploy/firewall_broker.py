@@ -14,6 +14,7 @@ import os
 import pwd
 import re
 import resource
+import selectors
 import shlex
 import stat
 import subprocess
@@ -72,6 +73,15 @@ _FUNCTION_OPERATIONS = {
 
 class BrokerError(RuntimeError):
     pass
+
+
+class BrokerChildError(BrokerError):
+    """A launched child failed before normal result handling."""
+
+    def __init__(self, message, child, timeout=False):
+        super().__init__(message)
+        self.child = child
+        self.timeout = timeout
 
 
 def _strict_object(pairs):
@@ -229,7 +239,7 @@ def _start_ticks(pid):
             os.close(descriptor)
 
 
-def _receipt(kind, operation_id, context, built, **values):
+def _receipt(kind, operation_id, context, built, children=None, **values):
     broker_start_ticks = _start_ticks(os.getpid())
     if not broker_start_ticks:
         raise BrokerError("cannot prove broker PID generation")
@@ -241,6 +251,7 @@ def _receipt(kind, operation_id, context, built, **values):
         "argv_digest": built["argv_digest"], "stdin_digest": built["stdin_digest"],
         "stdin_length": built["stdin_length"], "count": built["count"],
         "target_exe": built["argv"][0],
+        "children": list(children or ()),
         "broker_pid": os.getpid(), "broker_start_ticks": broker_start_ticks,
         "monotonic_ns": time.monotonic_ns(), **values,
     }
@@ -249,12 +260,80 @@ def _receipt(kind, operation_id, context, built, **values):
     return value
 
 
-def _bounded_completed(process, label):
-    stdout = process.stdout or ""
-    stderr = process.stderr or ""
-    if len(stdout.encode()) > MAX_OUTPUT_BYTES or len(stderr.encode()) > MAX_OUTPUT_BYTES:
-        raise BrokerError(f"{label} output exceeded bound")
-    return process.returncode == 0
+def _run_child(argv, stdin_text="", timeout=SCALAR_TIMEOUT_SECONDS,
+               stdout_limit=MAX_OUTPUT_BYTES):
+    """Run one exact child while retaining at most the reviewed output bounds."""
+    process = subprocess.Popen(
+        argv, stdin=subprocess.PIPE if stdin_text else subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"})
+    ticks = _start_ticks(process.pid)
+    if not ticks:
+        process.kill()
+        process.wait()
+        raise BrokerError("cannot prove child PID generation")
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    stdin_bytes = stdin_text.encode()
+    stdin_offset = 0
+    if stdin_text:
+        os.set_blocking(process.stdin.fileno(), False)
+        selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
+    stdout = bytearray()
+    stderr = bytearray()
+    deadline = time.monotonic() + timeout
+    failure = None
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            ready = selector.select(min(remaining, 0.1))
+            for key, unused in ready:
+                if key.data == "stdin":
+                    try:
+                        written = os.write(
+                            key.fileobj.fileno(), stdin_bytes[stdin_offset:stdin_offset + 65536])
+                    except BrokenPipeError:
+                        written = 0
+                    stdin_offset += written
+                    if written == 0 or stdin_offset >= len(stdin_bytes):
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                    continue
+                chunk = os.read(key.fileobj.fileno(), 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                target = stdout if key.data == "stdout" else stderr
+                limit = stdout_limit if key.data == "stdout" else MAX_OUTPUT_BYTES
+                if len(target) + len(chunk) > limit:
+                    raise BrokerError("target output exceeded semantic decision bound")
+                target.extend(chunk)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        returncode = process.wait(timeout=remaining)
+    except Exception as err:
+        failure = err
+        process.kill()
+        process.wait()
+    finally:
+        selector.close()
+    child = {
+        "pid": process.pid, "start_ticks": ticks, "exe": argv[0],
+        "argv_digest": _digest_argv(argv),
+        "returncode": process.returncode if failure is not None else returncode,
+        "ok": failure is None and returncode == 0,
+    }
+    if failure is not None:
+        raise BrokerChildError(
+            "target timed out" if isinstance(failure, subprocess.TimeoutExpired)
+            else "target output or I/O failed",
+            child, timeout=isinstance(failure, subprocess.TimeoutExpired)) from failure
+    return child, stdout.decode("utf-8", errors="replace"), stderr.decode(
+        "utf-8", errors="replace")
 
 
 def _rules_contain_source(payload, source):
@@ -277,94 +356,97 @@ def _rules_contain_source(payload, source):
     return False
 
 
+def _expected_absence(stderr, target):
+    message = str(stderr or "").lower()
+    if target == "iptables":
+        return "does a matching rule exist in that chain" in message
+    return "does not exist" in message or "set with the given name does not exist" in message
+
+
 def execute(request):
     context = request["context"]
     built = build_operation(request)
     operation_id = uuid.uuid4().hex
-    _receipt("begin", operation_id, context, built)
+    _receipt("begin", operation_id, context, built, children=[])
     started = time.monotonic()
-    process = None
-    child_ticks = 0
+    children = []
     try:
         if built["operation"] == "set.add":
-            created = subprocess.run(
-                [IPSET, "create", built["set_name"], "hash:net", "-exist"],
-                capture_output=True, text=True, timeout=SCALAR_TIMEOUT_SECONDS,
-                env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"})
-            if not _bounded_completed(created, "ipset create"):
+            child, unused_stdout, unused_stderr = _run_child(
+                [IPSET, "create", built["set_name"], "hash:net", "-exist"])
+            children.append(child)
+            if not child["ok"]:
                 raise BrokerError("cannot create hash:net set")
         if built["operation"] == "set.remove":
-            removed_rule = subprocess.run(
+            child, unused_stdout, unused_stderr = _run_child(
                 [IPTABLES, "-D", "INPUT", "-m", "set", "--match-set",
-                 built["set_name"], "src", "-j", "DROP"],
-                capture_output=True, text=True, timeout=SCALAR_TIMEOUT_SECONDS,
-                env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"})
-            _bounded_completed(removed_rule, "set rule removal")
-            flushed = subprocess.run(
-                [IPSET, "flush", built["set_name"]], capture_output=True, text=True,
-                timeout=SCALAR_TIMEOUT_SECONDS,
-                env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"})
-            _bounded_completed(flushed, "set flush")
-        process = subprocess.Popen(
-            built["argv"], stdin=subprocess.PIPE if built["stdin"] else subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"},
-        )
-        child_ticks = _start_ticks(process.pid)
-        stdout, stderr = process.communicate(
-            built["stdin"] or None,
-            timeout=BULK_TIMEOUT_SECONDS if built["operation"] == "set.replace"
-            else SCALAR_TIMEOUT_SECONDS)
+                 built["set_name"], "src", "-j", "DROP"])
+            children.append(child)
+            if child["returncode"] == 1 and _expected_absence(
+                    unused_stderr, "iptables"):
+                child["ok"] = True
+            elif not child["ok"]:
+                raise BrokerError("cannot remove set rule")
+            child, unused_stdout, unused_stderr = _run_child(
+                [IPSET, "flush", built["set_name"]])
+            children.append(child)
+            if child["returncode"] == 1 and _expected_absence(
+                    unused_stderr, "ipset"):
+                child["ok"] = True
+            elif not child["ok"]:
+                raise BrokerError("cannot flush set")
         stdout_limit = (MAX_RULES_OUTPUT_BYTES if built["operation"] == "rules.contains"
                         else MAX_OUTPUT_BYTES)
-        if len(stdout.encode()) > stdout_limit or len(stderr.encode()) > MAX_OUTPUT_BYTES:
-            raise BrokerError("target output exceeded semantic decision bound")
-        ok = process.returncode == 0
+        child, stdout, stderr = _run_child(
+            built["argv"], built["stdin"],
+            BULK_TIMEOUT_SECONDS if built["operation"] == "set.replace"
+            else SCALAR_TIMEOUT_SECONDS, stdout_limit=stdout_limit)
+        children.append(child)
+        ok = child["ok"]
         if built["operation"] == "rules.contains":
             if not ok:
                 raise BrokerError("cannot read firewall rules")
             result = {"ok": True, "present": _rules_contain_source(
                 stdout, built["source"])}
-        elif built["operation"] == "set.rule_ensure" and process.returncode == 1:
+        elif built["operation"] == "set.rule_ensure" and child["returncode"] == 1:
+            child["ok"] = True
             insert = [IPTABLES, "-I", "INPUT", "-m", "set", "--match-set",
                       built["set_name"], "src", "-j", "DROP"]
-            process = subprocess.Popen(
-                insert, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True,
-                env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"})
-            child_ticks = _start_ticks(process.pid)
-            stdout, stderr = process.communicate(timeout=SCALAR_TIMEOUT_SECONDS)
-            if (len(stdout.encode()) > MAX_OUTPUT_BYTES or
-                    len(stderr.encode()) > MAX_OUTPUT_BYTES):
-                raise BrokerError("set rule insert output exceeded bound")
-            ok = process.returncode == 0
+            child, stdout, stderr = _run_child(insert)
+            children.append(child)
+            ok = child["ok"]
             result = {"ok": ok}
-        elif (built["operation"] == "set.remove" and process.returncode == 1 and
-              "does not exist" in stderr.lower()):
+        elif (built["operation"] == "set.remove" and child["returncode"] == 1 and
+              _expected_absence(stderr, "ipset")):
+            child["ok"] = True
             ok = True
             result = {"ok": True}
         else:
             result = {"ok": ok}
         receipt = _receipt(
-            "result", operation_id, context, built, target_pid=process.pid,
-            target_start_ticks=child_ticks, returncode=process.returncode,
+            "result", operation_id, context, built, children=children,
+            target_pid=child["pid"], target_start_ticks=child["start_ticks"],
+            returncode=child["returncode"],
             duration_ms=int((time.monotonic() - started) * 1000), ok=ok)
         result["operation_id"] = operation_id
         result["receipt"] = receipt
         return result
+    except BrokerChildError as err:
+        children.append(err.child)
+        _receipt(
+            "result", operation_id, context, built, children=children,
+            target_pid=err.child["pid"], target_start_ticks=err.child["start_ticks"],
+            returncode=err.child["returncode"], ok=False,
+            error="timeout" if err.timeout else "target_failure")
+        raise BrokerError("target timed out" if err.timeout else
+                          "target execution failed") from err
     except subprocess.TimeoutExpired as err:
-        if process is not None:
-            process.kill()
-            process.wait()
-        _receipt("result", operation_id, context, built,
-                 target_pid=process.pid if process is not None else 0,
-                 target_start_ticks=child_ticks, returncode=-1, ok=False,
-                 error="timeout")
+        _receipt("result", operation_id, context, built, children=children,
+                 target_pid=0, target_start_ticks=0, returncode=-1, ok=False, error="timeout")
         raise BrokerError("target timed out") from err
     except (BrokerError, OSError, subprocess.SubprocessError) as err:
-        _receipt("result", operation_id, context, built,
-                 target_pid=process.pid if process is not None else 0,
-                 target_start_ticks=child_ticks, returncode=-1, ok=False,
+        _receipt("result", operation_id, context, built, children=children,
+                 target_pid=0, target_start_ticks=0, returncode=-1, ok=False,
                  error="target_failure")
         raise BrokerError("target execution failed") from err
 

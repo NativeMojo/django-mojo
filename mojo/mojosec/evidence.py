@@ -29,7 +29,8 @@ FIELD_POLICIES = {
         ("cgroup", 512), ("selinux", 256), ("monotonic", None),
         ("origin_kind", 32), ("operation_id", 64),
         ("execution_id", 64), ("job_id", 64), ("job_function", 256),
-        ("lineage", None), ("local_disposition", 64),
+        ("proof_status", 32), ("lineage_sha256", 64),
+        ("receipt_semantics", None), ("lineage", None), ("local_disposition", 64),
         ("command_path", 512), ("command_sha256", 64), ("command", 2048),
     ),
     "auth.sudo_failure": (
@@ -149,6 +150,13 @@ def build_evidence(kind, values):
         if key not in values or values[key] is None or values[key] == "":
             continue
         value = values[key]
+        if key == "receipt_semantics" and isinstance(value, list):
+            clean = [_prefix(safe_text(item), 160) for item in value[:8]
+                     if isinstance(item, str) and item]
+            trial = dict(result, receipt_semantics=clean)
+            if _fits(trial):
+                result = trial
+            continue
         if key == "lineage" and isinstance(value, list):
             clean = []
             for node in value[:8]:

@@ -281,6 +281,25 @@ def test_mojosec_local_only_status_shape_is_fail_closed(opts):
 
 
 @th.django_unit_test()
+def test_mojosec_provenance_status_requires_a_live_engine_anchor(opts):
+    from mojo.deploy import check_node as cn
+
+    healthy = {
+        "audit_health": {"healthy": True, "lost": 0, "backlog_limit": 8192},
+        "process_nodes": 42, "pending_firewall": 2, "engine_anchors": 1,
+    }
+    th.assert_true(cn._valid_provenance_status(healthy),
+                   "healthy bounded provenance with a live engine anchor must pass")
+    for malformed in (
+            None, {}, dict(healthy, audit_health=None),
+            dict(healthy, engine_anchors=0), dict(healthy, process_nodes=True)):
+        th.assert_true(not cn._valid_provenance_status(malformed),
+                       f"absent, malformed, or anchorless provenance must fail: {malformed!r}")
+    th.assert_eq(cn.MOJOSEC_DEPLOY_STATE_PATH, "/etc/mojosec/deploy.json",
+                 "node checks must read the shared deployment-state path")
+
+
+@th.django_unit_test()
 def test_mojosec_auto_mode_keeps_legacy_nodes_informational(opts):
     from mojo.deploy import check_node as cn
 

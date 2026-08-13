@@ -298,6 +298,14 @@ def _restore_inventory(inventory, rules_dir, managed_path):
         _atomic_write(item["path"], item["content"].encode(), item["mode"])
         os.chown(item["path"], item["uid"], item["gid"], follow_symlinks=False)
     _run(["/sbin/augenrules", "--load"])
+    generated = inventory.get("generated")
+    if generated is not None:
+        restored_generated, generated_info = _read_regular(generated["path"])
+        if (restored_generated != generated["content"].encode("utf-8") or
+                stat.S_IMODE(generated_info.st_mode) != generated["mode"] or
+                generated_info.st_uid != generated["uid"] or
+                generated_info.st_gid != generated["gid"]):
+            raise AuditError("restored generated Audit rules differ from snapshot")
     active = _active_rules()
     expected = inventory["active_rules"].strip()
     if active.strip() != expected:
@@ -350,6 +358,12 @@ def converge(app_uid, rules_dir=RULES_DIR, generated_path=GENERATED_PATH,
                     status["backlog_limit"] < 8192 or status["lost"] != 0 or
                     "task,never" in active or "never,task" in active):
                 raise AuditError("active Audit policy verification failed")
+            installed = inventory_sources(rules_dir, generated_path, active)
+            managed = [item for item in installed["sources"]
+                       if item["path"] == managed_path]
+            if (installed["state"] != "managed" or len(managed) != 1 or
+                    managed[0]["content"] != policy):
+                raise AuditError("persistent Audit generation verification failed")
         except Exception:
             _restore_inventory(inventory, rules_dir, managed_path)
             if old_state_bytes is None:
@@ -364,13 +378,25 @@ def converge(app_uid, rules_dir=RULES_DIR, generated_path=GENERATED_PATH,
         os.close(lock)
 
 
-def restore_prior(state_path=STATE_PATH):
+def restore_immediate(state_path=STATE_PATH):
+    state, unused = _load_state(state_path)
+    if state is None:
+        raise AuditError("Audit rollback record is absent")
+    _restore_inventory(
+        state["previous"], state.get("rules_dir", RULES_DIR),
+        state.get("managed_path", MANAGED_PATH))
+    return state
+
+
+def restore_prior(state_path=STATE_PATH, consume=True):
     state, unused = _load_state(state_path)
     if state is None:
         raise AuditError("Audit rollback record is absent")
     _restore_inventory(
         state["prior"], state.get("rules_dir", RULES_DIR),
         state.get("managed_path", MANAGED_PATH))
+    if consume:
+        os.unlink(state_path)
     return state
 
 

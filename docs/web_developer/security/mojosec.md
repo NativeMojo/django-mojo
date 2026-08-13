@@ -252,8 +252,6 @@ receipts whose projected evidence was already pruned by retention return
 per-event `rejected` — terminal, so the sensor frees the spool slot — never
 `retry`.
 
-## Learning API
-
 ## Privileged-operation evidence
 
 Delivered `auth.sudo_command` Events remain rich: the exact bounded command,

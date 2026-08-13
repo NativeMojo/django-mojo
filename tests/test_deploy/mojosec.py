@@ -18,6 +18,7 @@ def _provenance_deploy_mocks(deploy):
                            return_value=mock.Mock(pw_uid=1000)), \
             mock.patch("mojo.deploy.audit.converge", return_value={
                 "generation": "a" * 64, "rules_sha256": "b" * 64}), \
+            mock.patch("mojo.deploy.audit.restore_immediate"), \
             mock.patch("mojo.deploy.audit.restore_prior"), \
             mock.patch.object(deploy.subprocess, "run",
                               return_value=mock.Mock(returncode=0, stderr="")):
@@ -459,6 +460,87 @@ def test_off_and_best_effort_preserve_evidence(opts):
 
 
 @th.django_unit_test()
+def test_off_restores_audit_and_removes_feature_assets(opts):
+    from mojo.deploy import audit
+    from mojo.deploy import mojosec as deploy
+    from mojo.deploy.firewall_broker import BROKER_PATH, SUDOERS_PATH
+
+    removed = []
+    calls = []
+    states = {"enabled": True, "active": True}
+
+    def systemctl(*args):
+        calls.append(args)
+        if args[:2] == ("disable", "--now") and args[-1] == deploy.SERVICE:
+            states.update(enabled=False, active=False)
+
+    with mock.patch.object(deploy.os, "geteuid", return_value=0), \
+            mock.patch.object(deploy, "_ensure_dir"), \
+            mock.patch.object(deploy, "_require_root_install_dir"), \
+            mock.patch.object(deploy, "_owned_snapshot", return_value={
+                "path": "prior", "payload": b"prior", "mode": 0o600}), \
+            mock.patch.object(deploy, "_retired_unit_snapshot", return_value={}), \
+            mock.patch.object(deploy, "_retire_stale_units", return_value=False), \
+            mock.patch.object(deploy, "_nginx_snapshot", return_value={}), \
+            mock.patch.object(deploy, "_write_if_changed", return_value=False), \
+            mock.patch.object(deploy, "_converge_nginx", return_value=False), \
+            mock.patch.object(deploy, "_restore_nginx"), \
+            mock.patch.object(deploy, "_restore_unit_set"), \
+            mock.patch.object(deploy, "_restore_snapshot"), \
+            mock.patch.object(deploy, "_systemctl_is",
+                              side_effect=lambda verb, unit: states[verb[3:]]), \
+            mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
+            mock.patch.object(deploy, "_remove_owned",
+                              side_effect=lambda path: removed.append(path) or True), \
+            mock.patch.object(audit, "restore_prior") as restore:
+        deploy.converge("off", "required")
+
+    restore.assert_called_once_with()
+    for path in (BROKER_PATH, SUDOERS_PATH, deploy.AUDIT_HEALTH_SERVICE_PATH,
+                 deploy.AUDIT_HEALTH_TIMER_PATH, deploy.AUDIT_STABLE_HELPER_PATH,
+                 audit.HEALTH_PATH):
+        th.assert_in(path, removed,
+                     f"off must remove package-owned provenance asset {path}")
+    th.assert_in(("disable", "--now", "mojosec-audit-health.timer"), calls,
+                 "off must disable the privileged Audit health publisher")
+
+
+@th.django_unit_test()
+def test_off_refuses_managed_audit_without_rollback_inventory(opts):
+    from mojo.deploy import audit
+    from mojo.deploy import mojosec as deploy
+
+    def snapshot(path):
+        if path == audit.MANAGED_PATH:
+            return (b"managed", 0o600)
+        return None
+
+    states = {"enabled": True, "active": True}
+
+    def systemctl(*args):
+        if args[:2] == ("disable", "--now") and args[-1] == deploy.SERVICE:
+            states.update(enabled=False, active=False)
+
+    with mock.patch.object(deploy.os, "geteuid", return_value=0), \
+            mock.patch.object(deploy, "_ensure_dir"), \
+            mock.patch.object(deploy, "_require_root_install_dir"), \
+            mock.patch.object(deploy, "_owned_snapshot", side_effect=snapshot), \
+            mock.patch.object(deploy, "_retired_unit_snapshot", return_value={}), \
+            mock.patch.object(deploy, "_retire_stale_units", return_value=False), \
+            mock.patch.object(deploy, "_nginx_snapshot", return_value={}), \
+            mock.patch.object(deploy, "_write_if_changed", return_value=False), \
+            mock.patch.object(deploy, "_converge_nginx", return_value=False), \
+            mock.patch.object(deploy, "_restore_nginx"), \
+            mock.patch.object(deploy, "_restore_unit_set"), \
+            mock.patch.object(deploy, "_restore_snapshot"), \
+            mock.patch.object(deploy, "_systemctl_is",
+                              side_effect=lambda verb, unit: states[verb[3:]]), \
+            mock.patch.object(deploy, "_systemctl", side_effect=systemctl):
+        with th.assert_raises(deploy.DeployError):
+            deploy.converge("off", "required")
+
+
+@th.django_unit_test()
 def test_unenrolled_best_effort_observe_does_not_mutate_nginx_or_units(opts):
     from mojo.deploy import mojosec as deploy
 
@@ -556,7 +638,8 @@ def test_late_converge_failure_restores_nginx_config_and_units(opts):
                               side_effect=lambda prior, path: restored.append(("nginx", path))), \
             mock.patch.object(deploy, "_restore_unit_set",
                               side_effect=lambda *args: restored.append(("systemd", args[0]))), \
-            _provenance_deploy_mocks(deploy):
+            _provenance_deploy_mocks(deploy), \
+            mock.patch("mojo.deploy.audit.restore_immediate") as restore_audit:
         with th.assert_raises(deploy.DeployError):
             deploy.converge("observe", "required")
 
@@ -566,6 +649,7 @@ def test_late_converge_failure_restores_nginx_config_and_units(opts):
                  "late failure must restore and reload the prior nginx graph")
     th.assert_in(("systemd", deploy.SERVICE_PATH), restored,
                  "late failure must restore prior unit files and lifecycle")
+    restore_audit.assert_called_once_with()
 
 
 @th.django_unit_test()
