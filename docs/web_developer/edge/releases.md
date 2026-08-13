@@ -165,15 +165,20 @@ The built-in Admin portal creates sites through App → Address → Connect GitH
 → Verify. The browser may resume an operation with:
 
 - `GET /api/edge/webapp/onboarding/options?group=<id>`
+- `GET /api/edge/webapp/onboarding/options?group_intent=new`
 - `POST /api/edge/webapp/onboarding/create`
 - `GET /api/edge/webapp/onboarding/detail?operation=<uuid>`
 - `POST /api/edge/webapp/onboarding/choose` with the current `revision`
 - `POST /api/edge/webapp/onboarding/cancel`
 
-All onboarding routes require an interactive User session and refuse API keys
-and group tokens. Options and create require `manage_webapp` or `security` in
-the selected effectively active Group. Detail is readable only by the original
-actor while that same Group authority and active ancestry remain current.
+All onboarding routes require an interactive User session and refuse API keys,
+group tokens, and override-user key sessions. Existing-group authority is
+superuser, `security`, or both `manage_webapp` and `manage_dns`, resolved
+globally or through the selected effectively active Group. New-group intent
+also requires global `manage_groups`/`groups` for a non-superuser. Literal
+`permissions.admin`, Admin admission, and UI capability data do not substitute
+for that authority. Detail is readable only by the original actor while the
+same two-part Group authority and active ancestry remain current.
 Choose and cancel add a 600-second fresh-auth check; they also require the
 original request origin, and choose must match the returned `revision` and
 current `step`. Revoking the actor's WebApp authority or disabling any Group
@@ -194,8 +199,34 @@ Create accepts:
 }
 ```
 
+That concrete-group form remains compatible and `operation_id` stays optional.
+To create the owning Group, send no `group` and use a client UUID:
+
+```json
+{
+  "group_intent": "new",
+  "operation_id": "8f581ec1-e70f-4b90-8147-461e0308887e",
+  "slug": "customer-portal",
+  "display_name": "Customer portal",
+  "environment": "production",
+  "bucket": "edge-releases",
+  "deployment_ref": "main",
+  "build_output": "dist"
+}
+```
+
+The new-group response returns at `cursor: "address"`: Group, WebApp, receipt,
+and the WebApp's derived storage prefix committed together. Invalid input,
+authorization failure, or storage failure creates none of them. Replaying the
+same UUID/profile/actor/origin/intent returns the one receipt; changing any
+binding is refused. Persist that UUID and nonsecret draft until
+success/replay/cancel, so a lost response never creates a second Group.
+Cancelling after the initial commit preserves the deliberate Group+WebApp pair
+for recovery rather than deleting user-owned resources.
+
 It returns `created` and a serialized operation. Detail, choose, and cancel
-return the same versioned shape: `schema_version`, `operation_id`, `status`,
+return the same versioned shape: `schema_version`, `operation_id`, `group`
+(`id`, `name`), `status`,
 `cursor`, `revision`, safe profile/choices/evidence/activity, related resource
 ids, bounded recovery timing, and timestamps. Internal reconciliation state,
 leases, actor/origin bindings, raw provider errors, and secrets are omitted.
@@ -216,8 +247,8 @@ one WebApp. It can also mint or rotate `MOJO_DEPLOY_KEY` when supplied `action`
 and a fresh `operation_id`; the token appears only on the first successful
 response. A replay returns `delivery: secret_unavailable`, so rotate explicitly
 if the response was lost. The endpoint requires 600-second fresh interactive
-auth and `manage_webapp` or `security` in that WebApp's effectively active
-Group. Its request is `{"webapp":42}` for the secret-free workflow, or adds
+auth and the same two-part WebApp+DNS authority in that WebApp's effectively
+active Group. Its request is `{"webapp":42}` for the secret-free workflow, or adds
 `"action":"mint|rotate"` and `"operation_id":"<uuid>"` for a one-time key
 receipt. The response contains `schema_version:1`, repository, filename, and
 validated YAML, plus `deployment_key` only when a key action was requested.
