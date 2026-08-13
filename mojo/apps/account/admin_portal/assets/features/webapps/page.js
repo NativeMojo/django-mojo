@@ -152,6 +152,7 @@ function addressChoice(operation, ctx, update, groupId) {
   let mode = 'existing';
   let quote = null;
   const canManageDns = groupDnsAuthority(ctx, groupId);
+  const canOpenDomains = Boolean(ctx.capabilities.network || ctx.capabilities.manage_network);
 
   function selectMode(next) {
     mode = next;
@@ -187,9 +188,10 @@ function addressChoice(operation, ctx, update, groupId) {
           listData(await api(`/api/dnsman/domain?group=${encodeURIComponent(groupId || '')}`))
             .filter((row) => row.status === 'active' && row.verified !== false)
             .forEach((row) => domain.append(h('option', {value: row.id, text: row.name, 'data-name': row.name})));
-          if (domain.options.length === 1) message.textContent = canManageDns ?
-            'No managed domains yet. Add or connect one, then refresh this list.' :
-            'No managed domains are available. Ask a DNS administrator to add one, then refresh this list.';
+          if (domain.options.length === 1) message.textContent = canOpenDomains ?
+            'No managed domains yet. Add or connect one, then refresh this list.' : canManageDns ?
+              'No managed domains yet. Use Buy new domain above to purchase one inline.' :
+              'No managed domains are available. Ask a DNS administrator to add one, then refresh this list.';
           updateHostname();
         } catch (error) { message.textContent = error.message; }
         finally { refresh.disabled = false; }
@@ -199,7 +201,7 @@ function addressChoice(operation, ctx, update, groupId) {
       label.addEventListener('input', updateHostname);
       choices.append(field('Managed domain', domain, 'Choose a domain already controlled by this group.'),
         h('div', {class: 'domain-actions'},
-          canManageDns ? h('a', {
+          canOpenDomains ? h('a', {
             class: 'button ghost compact', href: routeHref('domains'), target: '_blank', rel: 'noopener',
           }, icon('plus'), 'Add or connect a domain') : null,
           refresh),
@@ -444,10 +446,9 @@ export async function webappsPage(ctx) {
   const root = h('div', {class: 'page'}); let linkedInspectorOpened = false;
   const onboarding = h('div', {class: 'onboarding-mount'});
   async function render() {
-    const canManageDomains = ctx.capabilities.network || ctx.capabilities.manage_network ||
-      (ctx.webapp_groups || []).some((group) => group.can_manage_dns);
+    const canOpenDomains = Boolean(ctx.capabilities.network || ctx.capabilities.manage_network);
     root.replaceChildren(pageHeader('Deployments', 'WebApps', 'Create an application, connect its domain, then deploy from GitHub.', [
-      canManageDomains ? h('a', {class: 'button ghost', href: routeHref('domains')}, icon('globe'), 'Domains & DNS') : null,
+      canOpenDomains ? h('a', {class: 'button ghost', href: routeHref('domains')}, icon('globe'), 'Domains & DNS') : null,
       ctx.capabilities.manage_webapps ? h('button', {class: 'button primary', onclick: () => startOnboarding(ctx, onboarding, render)}, icon('plus'), 'Onboard WebApp') : null,
     ].filter(Boolean)), onboarding);
     const panel = h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: 'Applications'}), h('p', {text: 'Manage onboarding and MOJO_DEPLOY_KEY without exposing unrelated API keys.'}))));

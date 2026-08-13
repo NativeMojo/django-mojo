@@ -119,6 +119,16 @@ def test_webapp_onboarding_browser_contract(opts):
         "the frozen draft has no explicit abandonment path"
     assert "groupDnsAuthority" in source and "group?.can_manage_dns" in source, \
         "address choices still depend on global rather than selected-group DNS authority"
+    address = source[source.index("function addressChoice"):
+                     source.index("function githubChoice")]
+    page = source[source.index("export async function webappsPage"):]
+    assert "Use Buy new domain above" in address and \
+        "canOpenDomains ? h('a'" in address and \
+        "canManageDns ? h('a'" not in address, \
+        "scoped DNS authority still renders a dead Advanced Domains link"
+    assert "(ctx.webapp_groups || []).some" not in page and \
+        "canOpenDomains ? h('a'" in page, \
+        "the WebApps header exposes globally gated Domains to a scoped-only admin"
 
 
 @th.django_unit_test("literal admin and partial globals do not grant backend WebApp authority")
