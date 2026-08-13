@@ -98,6 +98,22 @@ function field(label, input, help = '') {
     help ? h('small', {text: help}) : null);
 }
 
+const ONBOARDING_DRAFT_KEY = 'mojo-admin:webapp-onboarding-draft:v1';
+const NEW_GROUP_VALUE = 'new';
+
+function pendingDraft() {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(ONBOARDING_DRAFT_KEY) || 'null');
+    return value && typeof value === 'object' && typeof value.operation_id === 'string' ? value : null;
+  } catch (_) { return null; }
+}
+
+function savePendingDraft(value) {
+  sessionStorage.setItem(ONBOARDING_DRAFT_KEY, JSON.stringify(value));
+}
+
+function clearPendingDraft() { sessionStorage.removeItem(ONBOARDING_DRAFT_KEY); }
+
 function stepList(operation) {
   const steps = [['app', 'WebApp'], ['address', 'Domain & DNS'], ['github', 'GitHub'], ['verify', 'Go live']];
   const current = steps.findIndex(([id]) => id === operation.cursor);
@@ -275,7 +291,11 @@ function onboardingPanel(initial, ctx, reloadApps, groupId) {
 }
 
 function startOnboarding(ctx, mount, reloadApps) {
-  const group = h('select', {}, ...(ctx.groups || []).map((row) => h('option', {value: row.id, text: row.name})));
+  let draft = pendingDraft();
+  const groupOptions = [];
+  if (ctx.can_create_webapp_group) groupOptions.push(h('option', {value: NEW_GROUP_VALUE, text: 'Create New Group'}));
+  (ctx.webapp_groups || []).forEach((row) => groupOptions.push(h('option', {value: row.id, text: row.name})));
+  const group = h('select', {}, ...groupOptions);
   const slug = h('input', {placeholder: 'customer-portal', autocomplete: 'off'});
   const name = h('input', {placeholder: 'Customer portal', autocomplete: 'off'});
   const environment = h('select', {}, ...['production', 'staging', 'preview', 'development'].map((value) => h('option', {value, text: value})));
@@ -283,34 +303,71 @@ function startOnboarding(ctx, mount, reloadApps) {
   const advanced = h('details', {class: 'wizard-advanced'}, h('summary', {text: 'Advanced'}), field('Release bucket', bucket, 'Storage is selected automatically when only one bucket is available.'));
   const message = h('div', {class: 'form-message', role: 'alert'});
   const submit = h('button', {class: 'button primary'}, 'Continue to Domain & DNS');
+  const startOver = h('button', {class: 'button ghost', type: 'button'}, 'Start over');
   let slugEdited = false;
   const slugify = (value) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  name.addEventListener('input', () => { if (!slugEdited) slug.value = slugify(name.value); });
-  slug.addEventListener('input', () => { slugEdited = true; });
+  function snapshot() {
+    if (!draft) draft = {operation_id: crypto.randomUUID()};
+    draft = {...draft, group_intent: group.value === NEW_GROUP_VALUE ? 'new' : 'existing',
+      group: group.value === NEW_GROUP_VALUE ? null : group.value,
+      display_name: name.value, slug: slug.value, environment: environment.value,
+      bucket: bucket.value};
+    savePendingDraft(draft);
+  }
+  if (draft) {
+    const restoredGroup = draft.group_intent === 'new' ? NEW_GROUP_VALUE : String(draft.group || '');
+    if ([...group.options].some((option) => option.value === restoredGroup)) group.value = restoredGroup;
+    name.value = draft.display_name || '';
+    slug.value = draft.slug || '';
+    environment.value = draft.environment || 'production';
+    slugEdited = Boolean(draft.slug);
+  }
+  name.addEventListener('input', () => { if (!slugEdited) slug.value = slugify(name.value); snapshot(); });
+  slug.addEventListener('input', () => { slugEdited = true; snapshot(); });
+  environment.addEventListener('change', snapshot);
   async function loadOptions() {
     submit.disabled = true; message.textContent = '';
     try {
-      const data = await api(`/api/edge/webapp/onboarding/options?group=${encodeURIComponent(group.value)}`);
+      if (!group.value) throw new Error('No eligible WebApp group is available.');
+      const intent = group.value === NEW_GROUP_VALUE ? 'group_intent=new' :
+        `group=${encodeURIComponent(group.value)}`;
+      const data = await api(`/api/edge/webapp/onboarding/options?${intent}`);
       bucket.replaceChildren(...(data.buckets || []).map((value) => h('option', {value, text: value})));
+      if (draft?.bucket && [...bucket.options].some((option) => option.value === draft.bucket)) bucket.value = draft.bucket;
       advanced.hidden = bucket.options.length <= 1;
       if (!bucket.options.length) message.textContent = 'No release storage is configured for this installation.';
       submit.disabled = !bucket.options.length;
+      snapshot();
     } catch (error) { message.textContent = error.message; }
   }
-  group.addEventListener('change', loadOptions);
+  group.addEventListener('change', () => { snapshot(); loadOptions(); });
+  bucket.addEventListener('change', snapshot);
+  startOver.addEventListener('click', () => {
+    clearPendingDraft(); draft = {operation_id: crypto.randomUUID()};
+    group.value = ctx.can_create_webapp_group ? NEW_GROUP_VALUE : String(ctx.webapp_groups?.[0]?.id || '');
+    name.value = ''; slug.value = ''; environment.value = 'production'; slugEdited = false;
+    snapshot(); loadOptions();
+  });
   loadOptions();
   const content = h('div', {class: 'wizard-form'},
     h('div', {class: 'wizard-progress'}, h('span', {class: 'current', text: '1 WebApp'}), h('span', {text: '2 Domain & DNS'}), h('span', {text: '3 GitHub'}), h('span', {text: '4 Go live'})),
     h('div', {class: 'wizard-intro'}, icon('deploy'), h('div', {}, h('strong', {text: 'Name the application'}), h('p', {text: 'Start with the WebApp itself. Domain and GitHub setup come next, one clear step at a time.'}))),
     field('Group', group), field('Display name', name, 'The human-friendly name shown in Admin.'),
     field('WebApp slug', slug, 'A short stable identifier, generated from the name.'), field('Environment', environment),
-    advanced, message, h('div', {class: 'form-actions'}, submit));
+    advanced, message, h('div', {class: 'form-actions'}, startOver, submit));
   const close = openModal({title: 'Create WebApp', subtitle: 'A guided setup with DNS included.', content});
   submit.addEventListener('click', async () => {
     submit.disabled = true;
     try {
-      const result = await api('/api/edge/webapp/onboarding/create', {method: 'POST', body: JSON.stringify({
-        group: Number(group.value), slug: slug.value, display_name: name.value,
+      snapshot();
+      const groupPayload = group.value === NEW_GROUP_VALUE ? {group_intent: 'new'} :
+        {group: Number.parseInt(group.value, 10)};
+      if (groupPayload.group !== undefined && (!Number.isInteger(groupPayload.group) || groupPayload.group <= 0)) {
+        throw new Error('Select an eligible group.');
+      }
+      const result = await apiOnce('/api/edge/webapp/onboarding/create', {method: 'POST', body: JSON.stringify({
+        ...groupPayload, operation_id: draft.operation_id,
+        slug: slug.value, display_name: name.value,
         environment: environment.value, bucket: bucket.value,
         github_repository: '', deployment_ref: 'main', build_output: 'dist',
       })});
@@ -325,8 +382,13 @@ function startOnboarding(ctx, mount, reloadApps) {
           // The durable panel keeps the explicit App continuation available.
         }
       }
-      close(); mount.replaceChildren(onboardingPanel(operation, ctx, reloadApps, Number(group.value)));
-    } catch (error) { message.textContent = error.message; submit.disabled = false; }
+      clearPendingDraft();
+      close(); mount.replaceChildren(onboardingPanel(
+        operation, ctx, reloadApps, operation.group.id));
+    } catch (error) {
+      message.textContent = `${error.message} Your draft is saved. Retry to reconcile the same operation, or Start over.`;
+      submit.disabled = false;
+    }
   });
 }
 

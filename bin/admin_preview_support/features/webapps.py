@@ -11,6 +11,9 @@ def describe(capabilities):
 
 def reset(handler, fixtures, *, key_state="active", onboarding_state="idle", **options):
     handler.key_state = key_state
+    handler.onboarding_state = onboarding_state
+    handler.onboarding_receipts = {}
+    handler.webapps = [dict(row) for row in fixtures["webapps"]]
     handler.onboarding_operation = (
         fixtures["webapp_onboarding"](onboarding_state)
         if onboarding_state != "idle" else None)

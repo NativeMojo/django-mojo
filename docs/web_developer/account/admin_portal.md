@@ -51,9 +51,20 @@ WebApp onboarding is a focused **WebApp → Domain & DNS → GitHub → Go live*
 wizard. The identity screen does not ask for repository details. Choosing a
 managed domain creates the required CNAME automatically, while the permanent
 Domains & DNS page handles adding, adopting, purchasing, and inspecting names.
-Users with WebApp authority but without `manage_dns` can select an available
-managed domain; adding one remains a DNS administrator action. HTTPS issuance
-and renewal are automatic and do not appear as onboarding decisions.
+Users need both WebApp and DNS authority to own an existing WebApp group;
+adding a managed domain remains a DNS administrator action. HTTPS issuance and
+renewal are automatic and do not appear as onboarding decisions.
+
+`GET /api/account/admin/bootstrap` includes additive `webapp_groups` and
+`can_create_webapp_group` fields. `webapp_groups` contains every effectively
+active group covered by global authority, or only exact/inherited member
+authority for a scoped operator. Existing-group authority is superuser,
+`security`, or both `manage_webapp` and `manage_dns`. Create New Group also
+requires global `manage_groups`/`groups` for a non-superuser. Literal `admin`,
+Admin admission, API keys, group tokens, and returned capability booleans do
+not grant backend access. The browser retains one nonsecret UUID/profile draft
+in origin-scoped session storage across modal close, navigation, and reload,
+and retries that UUID after an ambiguous create response.
 
 Certificates poll list/detail metadata only. Upstreams are declared or retired,
 never repointed. The Vhost wizard exposes only the four structured edge shapes;
@@ -391,7 +402,7 @@ This prevents non-admin users from escalating their own access.
 | WebApp key status | `GET /api/edge/webapp/key_status?webapp=<id>` | `view_dns`, `manage_dns`, or `security`, plus object access |
 | WebApp key create/rotate | `POST /api/edge/webapp/link_key` | `manage_webapp`, recent interactive auth, plus object access |
 | WebApp key revoke | `POST /api/edge/webapp/revoke_key` | `manage_webapp`, recent interactive auth, plus object access |
-| WebApp onboarding | `/api/edge/webapp/onboarding/{options,create,detail,choose,cancel,workflow}` | `manage_webapp` or `security`, exact group/actor/origin; mutations require interactive auth |
+| WebApp onboarding | `/api/edge/webapp/onboarding/{options,create,detail,choose,cancel,workflow}` | `security` or both `manage_webapp` and `manage_dns`, global or exact/inherited group; new group also needs global `manage_groups`/`groups`; actor/origin bound and interactive only |
 | WebApp summary v1 | `GET /api/edge/webapp/summary?webapp=<id>` | `view_dns`, `manage_dns`, or `security`, plus object access |
 | Domains and live DNS | `/api/dnsman/domain`, `/api/dnsman/dns*`, `/api/dnsman/registrar/*` | `view_dns` / `manage_dns`; adopt/discover are literal superuser only |
 | DNS provider credentials | `/api/dnsman/credential`, `/api/dnsman/credential/link` | `view_dns` / `manage_dns`; secrets are write-only |

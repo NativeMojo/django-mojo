@@ -175,7 +175,8 @@ WEBAPPS = [
 
 def webapp_onboarding_operation(state="address"):
     cursors = {"address": "address", "github": "github", "verify": "verify",
-               "complete": "complete", "lost_key": "complete"}
+               "complete": "complete", "lost_key": "complete",
+               "new_group": "address"}
     cursor = cursors.get(state, "address")
     completed = ["app", "address", "github", "verify"].index(cursor) if cursor != "complete" else 4
     evidence = {}
@@ -186,6 +187,7 @@ def webapp_onboarding_operation(state="address"):
     return {
         "schema_version": 1, "id": 1816,
         "operation_id": "00000000-0000-4000-8000-000000001816",
+        "group": {"id": 109, "name": "Customer Portal"},
         "status": "succeeded" if cursor == "complete" else "waiting",
         "cursor": cursor, "revision": completed + 2,
         "profile": {"slug": "customer-portal", "display_name": "Customer Portal",
@@ -274,6 +276,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
     vhosts = []
     routes = []
     onboarding_operation = None
+    onboarding_state = "idle"
+    onboarding_receipts = {}
+    webapps = []
     users = []
     groups = []
     members = []
@@ -597,7 +602,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if path == "/api/account/static/mojo-auth.js":
             return self._send("window.MojoAuth={init:function(){},getAuthHeader:function(){return 'Bearer preview';},getRefreshToken:function(){return null;},logout:function(){}};", "application/javascript; charset=utf-8")
         if path == "/api/account/admin/bootstrap":
-            return self._send(bootstrap(self.groups))
+            memberships = [] if self.onboarding_state == "new_group" else None
+            return self._send(bootstrap(self.groups, membership_groups=memberships))
         activity_response = activity.get(self, parsed)
         if activity_response is not None:
             status, payload = activity_response
@@ -634,7 +640,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             "/api/dnsman/domain": DOMAINS,
             "/api/dnsman/credential": self.credentials, "/api/dnsman/certificate": CERTIFICATES,
             "/api/edge/upstream": UPSTREAMS, "/api/edge/vhost": self.vhosts,
-            "/api/edge/route": self.routes, "/api/edge/webapp": WEBAPPS,
+            "/api/edge/route": self.routes, "/api/edge/webapp": self.webapps,
         }
         if path in fixtures:
             rows = fixtures[path]
@@ -682,9 +688,12 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if path == "/api/edge/webapp/key_status":
             return self._send({"webapp": 42, "secret_name": "MOJO_DEPLOY_KEY", "status": self._key_status()})
         if path == "/api/edge/webapp/onboarding/options":
+            new_intent = parse_qs(parsed.query).get("group_intent") == ["new"]
             return self._send({"schema_version": 1, "buckets": ["mojo-releases"],
                                "environments": ["production", "staging", "preview", "development"],
-                               "cname_target": "edge.nativemojo.com", "github_connected": True,
+                               "cname_target": "edge.nativemojo.com",
+                               "group_intent": "new" if new_intent else "existing",
+                               "github_connected": False if new_intent else True,
                                "limits": {"attempts": 8, "lease_seconds": 90}})
         if path == "/api/edge/webapp/onboarding/detail":
             return self._send(self.onboarding_operation or webapp_onboarding_operation("address"))
@@ -739,10 +748,36 @@ class PreviewHandler(BaseHTTPRequestHandler):
             type(self).key_state = "revoked"
             return self._send({"webapp": 42, "secret_name": "MOJO_DEPLOY_KEY", "replayed": False, "operation_id": "preview", "status": self._key_status()})
         if path == "/api/edge/webapp/onboarding/create":
+            operation_id = str(payload.get("operation_id") or "preview")
+            receipt = self.onboarding_receipts.get(operation_id)
+            if receipt is not None:
+                return self._send({"created": False, "operation": receipt})
             type(self).onboarding_operation = webapp_onboarding_operation("address")
+            self.onboarding_operation["operation_id"] = operation_id
             self.onboarding_operation["profile"].update({
                 key: value for key, value in payload.items()
                 if key in self.onboarding_operation["profile"]})
+            if payload.get("group_intent") == "new":
+                group = {"id": 109,
+                         "name": payload.get("display_name") or "New WebApp Group"}
+                self.onboarding_operation["group"] = group
+                self.onboarding_operation["resources"]["webapp"] = 142
+                if not any(row.get("id") == group["id"] for row in self.groups):
+                    type(self).groups.append({
+                        **group, "uuid": "preview-group-109", "kind": "organization",
+                        "is_active": True, "member_count": 0, "last_activity": None,
+                        "metadata": {}, "parent": None})
+                if not any(row.get("id") == 142 for row in self.webapps):
+                    type(self).webapps.append({
+                        "id": 142, "slug": payload.get("slug"),
+                        "display_name": group["name"],
+                        "environment": payload.get("environment", "production"),
+                        "github_repository": "", "deployment_ref": "main",
+                        "build_output": "dist", "created": "2026-08-13T12:00:00Z",
+                        "current_release": None})
+            type(self).onboarding_receipts[operation_id] = self.onboarding_operation
+            if self.onboarding_state == "new_group":
+                return self._send({"error": "Deterministic committed WebApp response loss"}, status=503)
             return self._send({"created": True, "operation": self.onboarding_operation})
         if path == "/api/edge/webapp/onboarding/choose":
             order = {"app": "address", "address": "github", "github": "verify", "verify": "complete"}
@@ -924,7 +959,7 @@ def main():
     parser.add_argument("--setup-state", choices=("idle", "choice", "delay", "error", "fresh", "ambiguous"), default="idle")
     parser.add_argument("--activity-state", choices=("full", "empty", "unavailable"), default="full")
     parser.add_argument("--dashboard-state", choices=("healthy", "degraded", "denied", "unknown"), default="healthy")
-    parser.add_argument("--onboarding-state", choices=("idle", "address", "github", "verify", "complete", "lost_key"), default="idle")
+    parser.add_argument("--onboarding-state", choices=("idle", "address", "github", "verify", "complete", "lost_key", "new_group"), default="idle")
     parser.add_argument("--settings-state", choices=("normal", "duplicate", "invalid", "delay", "error", "fresh"), default="normal")
     parser.add_argument("--upstream", help="Public HTTPS django-mojo origin for live QA")
     args = parser.parse_args()
@@ -940,6 +975,7 @@ def main():
         "vhosts": VHOSTS, "routes": ROUTES,
         "users": USERS, "groups": GROUPS, "members": MEMBERS,
         "api_keys": API_KEYS,
+        "webapps": WEBAPPS,
         "setup_choice": setup_choice_operation,
         "webapp_onboarding": webapp_onboarding_operation,
     }, key_state=args.key_state, setup_state=args.setup_state,

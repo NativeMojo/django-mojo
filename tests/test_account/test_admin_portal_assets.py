@@ -155,6 +155,23 @@ def test_webapp_onboarding_asset_contract(opts):
         "domain discovery and purchase are not bound to the selected WebApp group"
     assert "ctx.groups?.[0]?.id" not in webapps, \
         "WebApp onboarding silently fell back to the first visible group"
+    assert "ctx.webapp_groups || []" in webapps and "ctx.can_create_webapp_group" in webapps, \
+        "WebApp onboarding does not consume its purpose-specific group choices"
+    assert "Create New Group" in webapps and "NEW_GROUP_VALUE = 'new'" in webapps, \
+        "the conditional nonnumeric new-group sentinel is missing"
+    assert "Number.parseInt(group.value, 10)" in webapps and \
+        "Number(group.value)" not in webapps, \
+        "the group selector can still coerce an empty or new intent to zero"
+    assert "sessionStorage.getItem(ONBOARDING_DRAFT_KEY)" in webapps and \
+        "sessionStorage.setItem(ONBOARDING_DRAFT_KEY" in webapps, \
+        "pending onboarding UUID/profile does not survive navigation and reload"
+    assert "operation_id: crypto.randomUUID()" in webapps and \
+        "apiOnce('/api/edge/webapp/onboarding/create'" in webapps, \
+        "create cannot reconcile a lost response with one durable UUID"
+    assert "operation.group.id" in webapps and "operation.cursor === 'app'" in webapps, \
+        "serialized owning group or legacy app-cursor compatibility was lost"
+    assert "clearPendingDraft();" in webapps and "Start over" in webapps, \
+        "the browser lacks authoritative draft clearing or deliberate abandonment"
     assert "Add domains and manage the public records" not in platform, \
         "Platform duplicates the first-class Domains & DNS destination"
     assert "evidenceSummary" in platform and "View raw evidence" in platform, \
@@ -182,7 +199,7 @@ def test_webapp_onboarding_asset_contract(opts):
         "provider evidence or empty states can leak raw values into the wizard"
     assert "var(--border)" not in webapp_styles, \
         "WebApp progress uses an undefined border token"
-    assert "--onboarding-state" in preview and "lost_key" in preview, \
+    assert "--onboarding-state" in preview and "lost_key" in preview and "new_group" in preview, \
         "preview cannot render onboarding recovery states"
     assert "cls._safe_payload(value)" in preview, \
         "preview redaction is not recursive"

@@ -72,6 +72,24 @@ is validated as named boolean capabilities. An exception or malformed provider
 disables only that feature and logs its exception class, never request data or
 secrets.
 
+WebApps uses two additive bootstrap fields instead of the shared membership
+list: `webapp_groups` is the case-insensitively sorted set of effectively active
+groups the caller may manage, and `can_create_webapp_group` says whether the
+wizard may offer **Create New Group**. Global WebApp authority means
+`security`, or both `manage_webapp` and `manage_dns`; the same two-part check
+may instead be supplied by an exact or inherited GroupMember grant. A
+non-superuser creating a group additionally needs global `manage_groups` or
+`groups`. Superusers pass all of these checks. Admin admission, emitted UI
+capabilities, and literal `permissions.admin` are not backend authority.
+
+The wizard defaults to the nonnumeric Create New Group sentinel only when that
+flag is true; otherwise it selects the first eligible existing group and never
+coerces an empty value to id `0`. A new-group draft stores one client UUID and
+its nonsecret frozen profile in origin-scoped `sessionStorage`. Modal dismissal,
+Admin navigation, reload, or a lost response therefore reuses the same receipt;
+only an authoritative success/replay/cancel result or explicit **Start over**
+clears it.
+
 Shared `TableView`, `FormView`, overlay, model, relationship, icon, API, and
 view-state primitives live under `assets/components/` and `assets/core.js`.
 The full-envelope API helper preserves `data`, `results`, `items`, `count`,
@@ -155,7 +173,8 @@ The launcher is intentionally thin; `bin/admin_preview_support/` owns the
 support server, foundation gallery, and resettable feature providers. Use
 `--key-state missing|active|rotated|revoked` to exercise the four WebApp
 deployment-key presentations, `--onboarding-state
-idle|address|github|verify|complete|lost_key` for WebApp onboarding,
+idle|address|github|verify|complete|lost_key|new_group` for WebApp onboarding
+(the last state has zero memberships and loses the first committed response),
 `--setup-state idle|choice|delay|error|fresh|ambiguous` for resumable Setup and
 its busy/error/440/lost-response states,
 `--dashboard-state healthy|degraded|denied|unknown` for Dashboard source states,
