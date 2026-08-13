@@ -9,6 +9,7 @@ from django.http import HttpResponse, HttpResponseRedirect
 import mojo
 from mojo import decorators as md
 from mojo.apps.account.services import admin_assets, admin_features, admin_portal
+from mojo.apps.account.services import webapp_authority
 from mojo.helpers.response import JsonResponse
 
 
@@ -130,6 +131,10 @@ def on_admin_bootstrap(request):
         for member in memberships if member.group.is_effectively_active()
     ]
     has = request.user.has_permission
+    webapp_groups = webapp_authority.eligible_webapp_groups(request.user)
+    can_create_webapp_group = webapp_authority.can_create_webapp_group(
+        request.user)
+    can_manage_webapps = bool(webapp_groups or can_create_webapp_group)
     permissions = request.user.permissions if isinstance(request.user.permissions, dict) else {}
     exact = lambda key: bool(request.user.is_superuser or permissions.get(key) is True)
     capabilities = {
@@ -147,9 +152,10 @@ def on_admin_bootstrap(request):
         "view_tickets": has(["view_security", "manage_security", "security", "admin"]),
         "network": has(["view_dns", "manage_dns", "security"]),
         "manage_network": has(["manage_dns", "security"]),
-        "webapps": has(["view_dns", "manage_dns", "security"]),
-        "manage_webapps": (
-            has("manage_webapp") and has(["manage_dns", "security"])),
+        "webapps": bool(
+            has(["view_dns", "manage_dns", "security"]) or
+            can_manage_webapps),
+        "manage_webapps": can_manage_webapps,
         "view_platform": has(["view_platform", "manage_platform", "admin"]),
         "manage_platform": has(["manage_platform", "admin"]),
         "view_platform_security": has([
@@ -180,6 +186,11 @@ def on_admin_bootstrap(request):
             "is_superuser": request.user.is_superuser,
         },
         "groups": groups,
+        "webapp_groups": [
+            {"id": group.pk, "name": group.name}
+            for group in webapp_groups
+        ],
+        "can_create_webapp_group": can_create_webapp_group,
         "capabilities": capabilities,
         "features": admin_features.bootstrap_features(request, capabilities),
     }
