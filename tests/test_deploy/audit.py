@@ -87,6 +87,39 @@ def test_inventory_adopts_empty_rules_dir(opts):
             inventory_sources(rules, generated_path="", active_rules="-w /etc -p wa\n")
 
 
+@th.unit_test("audit inventory admits the stock AL2023 seed with its comments")
+def test_inventory_admits_commented_stock_seed(opts):
+    from mojo.deploy.audit import AuditError, inventory_sources
+
+    # Byte-for-byte shape of the file the distro actually ships (observed in
+    # production, item 2002): the seed directives wrapped in comments and
+    # blank lines. Classification must read effective directives, not bytes.
+    stock = (
+        "## This set of rules is to suppress the performance effects of the\n"
+        "## audit system. The result is that you only get hardwired events.\n"
+        "-D\n"
+        "\n"
+        "## This suppresses syscall auditing for all tasks started\n"
+        "## with this rule in effect.  Remove it if you need syscall\n"
+        "## auditing.\n"
+        "-a task,never\n"
+        "\n"
+    )
+    with tempfile.TemporaryDirectory() as root:
+        rules = os.path.join(root, "rules.d")
+        os.mkdir(rules)
+        with open(os.path.join(rules, "audit.rules"), "w", encoding="utf-8") as handle:
+            handle.write(stock)
+        found = inventory_sources(rules, generated_path="", active_rules="-a never,task\n")
+        th.assert_eq(found["state"], "seed",
+                     "the distro-shipped seed file must classify as seed despite "
+                     "its comments and blank lines (item 2002)")
+        with open(os.path.join(rules, "extra.rules"), "w", encoding="utf-8") as handle:
+            handle.write("# watch passwd\n-w /etc/passwd -p wa\n")
+        with th.assert_raises(AuditError):
+            inventory_sources(rules, generated_path="", active_rules="-a never,task\n")
+
+
 @th.unit_test("Audit rollback distinguishes immediate generation from permanent prior")
 def test_transactional_restore_generations(opts):
     from mojo.deploy import audit

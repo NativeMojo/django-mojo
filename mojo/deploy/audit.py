@@ -33,10 +33,26 @@ HEALTH_SCHEMA = "mojosec.audit-health"
 MAX_HEALTH_AGE_SECONDS = 15
 _DIGEST = re.compile(r"^[a-f0-9]{64}$")
 _BOOT = re.compile(r"^[a-f0-9]{32}$")
-_SEED_FORMS = {
-    "-D\n-a task,never\n",
-    "-D\n-a never,task\n",
-}
+# Seed classification is by EFFECTIVE DIRECTIVES, never bytes: the distro
+# ships these exact semantics wrapped in comments and blank lines, and a
+# byte-exact form matches only skeleton-provisioned nodes (item 2002). A file
+# is seed-form when every directive in it deletes or suppresses; anything
+# substantive refuses adoption and protects real local audit policy.
+_SEED_DIRECTIVES = ("-D", "-a task,never", "-a never,task")
+
+
+def _effective_directives(content):
+    lines = []
+    for line in content.splitlines():
+        line = " ".join(line.split())
+        if not line or line.startswith("#"):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _is_seed_form(content):
+    return all(line in _SEED_DIRECTIVES for line in _effective_directives(content))
 
 
 class AuditError(RuntimeError):
@@ -118,23 +134,21 @@ def _source_snapshot(rules_dir, generated_path):
 def inventory_sources(rules_dir=RULES_DIR, generated_path=GENERATED_PATH,
                       active_rules=""):
     sources, generated = _source_snapshot(rules_dir, generated_path)
-    combined = "".join(item["content"] for item in sources)
     managed = [item for item in sources if item["content"].startswith(MANAGED_MARKER)]
     unknown = [item for item in sources
                if not item["content"].startswith(MANAGED_MARKER) and
-               item["content"] not in _SEED_FORMS]
+               not _is_seed_form(item["content"])]
     if unknown or len(managed) > 1:
         raise AuditError("unknown or conflicting Audit rule source exists")
     if managed:
         state = "managed"
-    elif (combined in _SEED_FORMS or not sources) and active_rules.strip() in (
-            "-a task,never", "-a never,task"):
-        # An empty rules.d with inert active rules is the other shape a
-        # never-adopted node takes — brownfield boxes whose stock seed file
-        # was removed long before this feature existed (item 2002). There is
-        # nothing to preserve, so it adopts exactly like the pristine seed:
-        # `prior` becomes this empty inventory and rollback restores
-        # emptiness. Any non-seed CONTENT still refuses above.
+    elif active_rules.strip() in ("-a task,never", "-a never,task"):
+        # Everything present is seed-form (the unknown gate above), which
+        # covers all three shapes a never-adopted node takes in the wild:
+        # the distro's commented stock file, a normalized skeleton file, and
+        # an empty rules.d whose stock file earlier tooling removed
+        # (item 2002). None of it needs preserving beyond `prior` — rollback
+        # restores exactly what was inventoried, including nothing.
         state = "seed"
     else:
         raise AuditError("Audit state is neither exact AL2023 seed nor Mojo-managed")
