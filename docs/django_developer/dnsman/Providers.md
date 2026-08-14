@@ -61,6 +61,30 @@ and Maestro Sites HTTP-01 therefore keep their existing dispatch paths.
 | Propagation signal | `ChangeInfo` → `INSYNC`, then authoritative probe | authoritative probe only |
 | Purchase | yes | **no** — management only |
 
+### Change ids and the INSYNC gate
+
+`get_adapter()` returns a **fresh adapter instance on every call** — there is no
+adapter cache. `Route53Provider` caches change ids on `self`, so that cache never
+survives between a `dns.upsert_record()` call and a later `dns.wait_for_propagation()`
+call; each resolves its own instance. Callers that want the INSYNC gate must
+capture the `change_id` an `upsert_record()` call returns and pass it into the
+matching `wait_for_propagation()` call explicitly — omit it and the gate is
+silently skipped, racing Route53's anycast propagation instead of waiting on it.
+`certs.py`'s issuance flow does this per challenge record name; see
+[Certificates](Certificates.md#propagation).
+
+If `wait_for_propagation` runs with no change id at all (Route53 only),
+`Route53Provider` logs a warning naming the gate as skipped, so a caller that
+forgets to thread the id shows up in logs instead of silently racing.
+
+`upsert_record` can also return `dns.RECONCILED_CHANGE_ID` (`"reconciled"`) when
+an ambiguous provider timeout was settled by inventory reconciliation rather than
+a fresh write — see
+[Durable DNS reservations](Certificates.md#durable-dns-reservations). That
+sentinel has no change batch behind it, so `wait_for_propagation` drops it before
+calling the adapter rather than handing it to `GetChange`; propagation still
+runs, just without the INSYNC gate for that record.
+
 ### TXT quoting
 
 Route53 requires each TXT string wrapped in quotes and split at 255 characters;

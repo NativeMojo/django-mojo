@@ -107,6 +107,18 @@ issuance and burns rate limit.
 Route53 additionally gates on `ChangeInfo` reaching `INSYNC` first. GoDaddy has
 no equivalent, so the probe is the only signal there.
 
+Each `dns.*` call resolves a **fresh** provider adapter (see
+[Providers](Providers.md#change-ids-and-the-insync-gate)), so the INSYNC gate
+only fires when the caller threads the change id back in explicitly. The
+issuance loop above captures the `change_id` each `dns.upsert_record` call
+returns, keyed by record name, and passes it into the matching
+`dns.wait_for_propagation` call. Drop that thread and the gate is silently
+skipped — issuance races Route53's anycast propagation instead of waiting on
+it, which is exactly how a challenge TXT record could be live in one edge but
+still `NXDOMAIN` from Let's Encrypt's vantage. A `wait_for_propagation` call
+with no change id at all now logs a warning from `Route53Provider` naming the
+gate as skipped.
+
 ## Custody
 
 The private key is KMS-envelope-encrypted via `KSMSecrets`. It appears in **no
@@ -215,3 +227,10 @@ intent durable and raises the original provider failure rather than blindly
 replaying it. Cleanup releases ownership only after the provider accepted the
 removal. A failure leaves `cleanup_pending`, and the next issuance must repair
 that old intent before creating a new CA order.
+
+A reconciled upsert returns `change_id="reconciled"` (`dns.RECONCILED_CHANGE_ID`)
+rather than a pollable Route53 change batch id, since the write converged
+through inventory comparison and not a fresh API call. `wait_for_propagation`
+drops that sentinel before calling the adapter — see
+[Providers](Providers.md#change-ids-and-the-insync-gate) — so propagation still
+runs, just without the INSYNC gate for that record.
