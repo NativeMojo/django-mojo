@@ -360,8 +360,20 @@ def reconcile_stale():
         status__in=PlatformDeployment.ACTIVE_STATUSES).order_by("modified")[:100])
     changed = 0
     current = deploy.get_status()
+    target = deploy.get_target() or {}
     for row in active:
         if current and current.get("deployment") == str(row.pk):
+            if current.get("state") != deploy.STATUS_FAILED:
+                # A live lease means the deploy is still running: hands off.
+                continue
+            # A terminal-failed lease is the node's own report that this
+            # attempt is over. Nothing else closes it — the orchestrator that
+            # would have is exactly the thing that died — so the row sat
+            # `canary` forever and the lease held the plane shut for its TTL.
+            changed += int(transition(
+                row.pk, PlatformDeployment.STATUS_FAILED,
+                {"reason": "node_reported_failed"}))
+            deploy.clear_status(row.pk)
             continue
         if (row.status == PlatformDeployment.STATUS_FLEET
                 and row.modified < proof_cutoff):
@@ -377,6 +389,13 @@ def reconcile_stale():
                 PlatformDeployment.STATUS_UNKNOWN,
             })
         elif row.modified < cutoff:
+            if (row.status == PlatformDeployment.STATUS_REQUESTED
+                    and target.get("deployment") == str(row.pk)):
+                # The live target names this row: it is the fleet's desired
+                # state, not an abandoned attempt. resume_stranded_target owns
+                # it — closing it `unknown` here would erase the only record
+                # of what the fleet is supposed to converge onto.
+                continue
             changed += int(transition(
                 row.pk, PlatformDeployment.STATUS_UNKNOWN,
                 {"reason": "coordination_lease_expired"}))

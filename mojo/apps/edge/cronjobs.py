@@ -55,6 +55,15 @@ def converge_edge():
 
 @schedule(minutes="*/5")
 def reconcile_platform_deployments():
-    """Close durable attempts whose Redis coordination lease disappeared."""
+    """Resume a stranded target, then close abandoned coordination attempts.
+
+    Resume runs FIRST, deliberately: it is the only thing that can move a
+    fleet whose deploy never started, and it reads the same rows the closer is
+    about to age out. Reversed, the closer would mark the stranded attempt
+    `unknown` and resume would find nothing to resume.
+    """
+    from mojo.apps.edge.services import deploy
     from mojo.apps.edge.services import platform_deploy
-    return platform_deploy.reconcile_stale()
+    sha = deploy.resume_stranded_target()
+    reconciled = platform_deploy.reconcile_stale()
+    return f"reconciled={reconciled} resumed={sha or 'none'}"

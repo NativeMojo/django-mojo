@@ -324,6 +324,66 @@ def test_chain_on_moved_target(opts):
     deploy.clear_status(status["deployment"])
 
 
+@th.django_unit_test("orchestrate: a lease stolen mid-canary stands down, quietly and promptly")
+def test_poll_loop_supersession(opts):
+    """Before this, a superseded orchestrator kept polling for a canary that
+    was never going to report — then filed a false 'canary went silent'
+    incident and chained a fresh orchestrate ON TOP of the deploy that had
+    taken the lease. It must leave instead: no incident, no chain, no
+    self-update, and without burning the canary timeout first."""
+    import time as _time
+
+    import mojo.apps.incident.reporter as reporter_module
+    import mojo.apps.jobs as jobs_module
+    from mojo.apps.edge import asyncjobs
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(SHA_A, [CANARY_ID, opts.me, FLEET_ID])
+    _publish_orchestrate(SHA_A, deployment)
+    thief = str(uuid.uuid4())
+    reads = []
+
+    def stolen_lease(*args, **kwargs):
+        reads.append(1)
+        if len(reads) == 1:
+            # The pre-flight read: this deploy still owns the lease.
+            return dict(state=deploy.STATUS_MIGRATING, sha=SHA_A,
+                        deployment=str(deployment.pk))
+        return dict(state=deploy.STATUS_MIGRATING, sha=SHA_B, deployment=thief)
+
+    incidents = mock.Mock(return_value=mock.Mock(pk=1997))
+    started = _time.time()
+    with th.capture_publishes(_deploy_publish) as calls, \
+         mock.patch.object(jobs_module, "get_runners",
+                           return_value=_runners(CANARY_ID, opts.me, FLEET_ID)), \
+         mock.patch.object(deploy, "resolve_framework_version",
+                           return_value=FRAMEWORK), \
+         mock.patch.object(deploy, "canary_timeout", return_value=120), \
+         mock.patch.object(asyncjobs, "DEPLOY_POLL_INTERVAL", 0.05), \
+         mock.patch.object(deploy, "get_status", side_effect=stolen_lease), \
+         mock.patch.object(reporter_module, "report_event", incidents):
+        _drain(opts)
+    elapsed = _time.time() - started
+
+    th.assert_true(elapsed < 10,
+                   f"a superseded orchestrator must break out at once, not wait "
+                   f"out the canary timeout — took {elapsed:.1f}s")
+    th.assert_eq(len(_node_calls(calls)), 1,
+                 f"only the canary may ever have been told, got {calls!r}")
+    th.assert_true(not incidents.called,
+                   f"supersession is not a canary failure and must file no "
+                   f"incident, got {incidents.call_args_list!r}")
+    chained = [c for c in calls if c.get("func") == deploy.DEPLOY_ORCHESTRATE_JOB]
+    th.assert_eq(chained, [],
+                 f"a superseded deploy must not chain a second orchestrate on "
+                 f"top of the deploy that took the lease, got {chained!r}")
+    deployment.refresh_from_db()
+    th.assert_eq(deployment.status, "superseded",
+                 f"the stood-down attempt must be recorded superseded, "
+                 f"got {deployment.status}")
+    deploy.clear_status(deployment.pk)
+
+
 @th.django_unit_test("framework resolution failure fails the deploy before any node is told")
 def test_resolution_failure_fails_deploy(opts):
     import mojo.apps.incident.reporter as reporter_module

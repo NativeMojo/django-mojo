@@ -246,8 +246,19 @@ def deploy_orchestrate(job):
     outcome = None
     while _time.time() < deadline:
         status = deploy.get_status()
-        if (status and status.get("sha") == sha
-                and status.get("deployment") == deployment_id
+        if not status or status.get("deployment") != deployment_id:
+            # The lease is gone or belongs to someone else: this deploy has
+            # been superseded and is no longer the one driving the fleet.
+            # Waiting out the canary timeout to then declare the canary
+            # "silent" would file a false incident and, worse, chain a fresh
+            # orchestrate on top of the deploy that took the lease. Leave
+            # quietly instead — no incident, no chain, no self-update.
+            platform_deploy.transition(
+                deployment_id, "superseded", {"reason": "lease_superseded"})
+            logit.info(
+                f"edge deploy {sha}: lease superseded mid-canary, standing down")
+            return f"superseded:{sha}"
+        if (status.get("sha") == sha
                 and status.get("state") in deploy.TERMINAL_STATES):
             outcome = status
             break
@@ -298,6 +309,16 @@ def _deploy_terminal(sha, me, framework, released, deployment_id):
         platform_deploy.transition(
             deployment_id, "superseded",
             {"next_deployment": current.get("deployment")})
+        live = deploy.get_status()
+        if live and live.get("deployment") == current.get("deployment"):
+            # Somebody already claimed the new target's lease — the reconciler
+            # resuming a stranded target, or a receiver that armed it while
+            # this deploy was finishing. That deploy is running; a force re-arm
+            # and a second orchestrate would double-drive it.
+            logit.info(
+                f"edge deploy {sha}: target {current['sha']} is already armed, "
+                "leaving it to its own orchestrator")
+            return f"chained:{current['sha']}"
         deploy.arm_status(
             current["sha"], force=True,
             deployment_id=current.get("deployment"))

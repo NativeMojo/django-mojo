@@ -8,16 +8,25 @@ The deploy state is two Redis keys, both TTL'd (maestro item #1458, D3):
   overwrites the target and the orchestrator's chain check picks it up at its
   terminal, so the fleet converges on the newest commit exactly once.
 - ``STATUS_KEY`` — what is happening right now (``migrating`` | ``deploying`` |
-  ``failed``), stamped with the SHA of the deploy it belongs to. Arming is
-  ``SET NX`` so a same-second webhook race starts exactly one deploy; terminal
-  writes are compare-and-set on the stamped SHA (a Lua script, so a ghost
-  redelivery or a slow canary from a superseded deploy is ignored without
-  needing to know it is stale).
+  ``failed``), stamped with the SHA of the deploy it belongs to. Arming is a
+  Lua compare-and-set that lands only when nothing is armed **or** the armed
+  lease is already terminal-``failed``; ``migrating``/``deploying`` are never
+  stealable, so a same-second webhook race still starts exactly one deploy.
+  Terminal writes are compare-and-set on the stamped SHA (a Lua script, so a
+  ghost redelivery or a slow canary from a superseded deploy is ignored
+  without needing to know it is stale).
+
+The invariant is "never a second concurrent deploy **while one is live**" —
+not "never a second deploy for the whole TTL". A ``failed`` lease describes a
+deploy that is over; holding the plane shut behind it for the remaining TTL
+buys nothing and costs every push in that window.
 
 The TTL is load-bearing: a canary that dies hard would otherwise leave
 ``migrating`` set forever and wedge every future deploy. The multi-node
 orchestrator clears the status at its terminal; the TTL is the backstop for
-every crash in between, and the only cleaner on a single-runner fleet.
+every crash in between, and the only cleaner on a single-runner fleet. A
+target whose deploy never started is not left to that backstop either — the
+five-minute reconciler's ``resume_stranded_target`` republishes it.
 
 Redis remains ephemeral coordination, while ``edge.PlatformDeployment`` is the
 durable UUID-addressed attempt journal. A Redis flush can release coordination,
@@ -102,6 +111,20 @@ local cur = cjson.decode(raw)
 if cur['sha'] ~= ARGV[1] then return 0 end
 if (cur['deployment'] or '') ~= ARGV[2] then return 0 end
 redis.call('SET', KEYS[1], ARGV[3], 'EX', tonumber(ARGV[4]))
+return 1
+"""
+
+# Arming is the same shape: set when NOTHING is armed, or when the armed lease
+# is already terminal-failed. `migrating`/`deploying` are never stealable —
+# that is the "one live deploy" invariant. A lease that will not decode is
+# treated as absent: garbage in the key must not be able to wedge the plane.
+_ARM_STATUS_LUA = """
+local raw = redis.call('GET', KEYS[1])
+if raw then
+  local ok, cur = pcall(cjson.decode, raw)
+  if ok and type(cur) == 'table' and cur['state'] ~= ARGV[3] then return 0 end
+end
+redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
 return 1
 """
 
@@ -205,10 +228,15 @@ def get_status():
 def arm_status(sha, force=False, deployment_id=None):
     """Arm ``migrating`` for one deploy.
 
-    ``SET NX`` by default, so of two same-second webhooks exactly one starts a
-    deploy and the other has merely recorded its target. ``force=True`` is the
-    orchestrator's chain re-arm, where the old status is deliberately replaced.
-    Returns whether the arm landed.
+    Lands when nothing is armed, or when the armed lease is already terminal
+    ``failed`` — a finished deploy is not a reason to refuse the next one, and
+    refusing for the rest of the TTL is how a single failed deploy used to
+    swallow every push behind it. A ``migrating`` or ``deploying`` lease is
+    never stolen: of two same-second webhooks exactly one still starts a
+    deploy and the other has merely recorded its target.
+
+    ``force=True`` is the orchestrator's chain re-arm, where the old status is
+    deliberately replaced whatever it says. Returns whether the arm landed.
     """
     payload = json.dumps(dict(
         state=STATUS_MIGRATING, sha=sha,
@@ -217,7 +245,8 @@ def arm_status(sha, force=False, deployment_id=None):
     client = get_client()
     if force:
         return bool(client.set(STATUS_KEY, payload, ex=status_ttl()))
-    return bool(client.set(STATUS_KEY, payload, ex=status_ttl(), nx=True))
+    return bool(client.eval(
+        _ARM_STATUS_LUA, 1, STATUS_KEY, payload, status_ttl(), STATUS_FAILED))
 
 
 def set_status(state, sha, detail=None, deployment_id=None):
@@ -358,6 +387,70 @@ def request_deploy(sha, actor=None, source="external", created_by=None,
         row.pk, "requested", {"queue": "orchestrator_published"})
     logger.info(f"deploy {sha}: started by {row.actor or 'unknown'}")
     return (True, row) if return_deployment else True
+
+
+def resume_stranded_target():
+    """Republish the orchestrate job for a target whose deploy never started.
+
+    The wedge this heals: something armed the lease and then died before —
+    or instead of — publishing an orchestrator (a queue outage, a runner that
+    vanished between arm and publish, an orchestrate job that expired
+    undelivered). The target is recorded, the durable row still says
+    ``requested``, and nothing is going to move it. Before this, the fleet sat
+    on the old commit until a human pushed again.
+
+    Every guard is a reason NOT to act, and one publish per sweep at most:
+
+    - a live lease (``migrating``/``deploying``) means a deploy IS running;
+    - the target must name a valid sha and a deployment UUID;
+    - that row must exist, carry the same sha, and still be exactly
+      ``requested`` — a row already at canary/fleet/terminal is not stranded;
+    - ``arm_status`` must land. That is the atomic claim: two reconcilers on
+      two nodes race here and exactly one wins, which is the same rule the
+      webhook receiver uses.
+
+    Returns the resumed sha, or None when nothing needed resuming.
+    """
+    from mojo.apps import jobs
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import platform_deploy
+
+    status = get_status()
+    if status and status.get("state") != STATUS_FAILED:
+        return None
+    target = get_target() or {}
+    sha = target.get("sha") or ""
+    row_id = platform_deploy.deployment_id(target.get("deployment"))
+    if not is_valid_sha(sha) or not row_id:
+        return None
+    row = platform_deploy.get(row_id)
+    if (row is None or row.sha != sha
+            or row.status != PlatformDeployment.STATUS_REQUESTED):
+        return None
+    if not arm_status(sha, deployment_id=row.pk):
+        return None
+    try:
+        jobs.publish(
+            func=DEPLOY_ORCHESTRATE_JOB,
+            payload=dict(sha=sha, deployment=str(row.pk)),
+            channel=DEPLOY_CHANNEL,
+            max_retries=0,
+            expires_in=canary_timeout())
+    except Exception:
+        # Same rollback as request_deploy: never leave a claimed lease with
+        # no orchestrator behind it.
+        platform_deploy.transition(
+            row.pk, "failed", {"reason": "orchestrator_publish_failed"})
+        try:
+            clear_status(row.pk)
+        except Exception:
+            pass
+        return None
+    platform_deploy.transition(
+        row.pk, "requested",
+        {"queue": "orchestrator_republished", "reason": "stranded_target"})
+    logger.info(f"deploy {sha}: resumed a stranded target")
+    return sha
 
 
 def _run(argv):

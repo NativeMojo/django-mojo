@@ -189,6 +189,148 @@ def test_reconcile_released_fleet(opts):
         "the released fleet was not closed from restarted-runner proof"
 
 
+def _aged(pk, seconds):
+    from datetime import timedelta
+    from django.utils import timezone
+    from mojo.apps.edge.models import PlatformDeployment
+    PlatformDeployment.objects.filter(pk=pk).update(
+        modified=timezone.now() - timedelta(seconds=seconds))
+
+
+def _clean_deploy_state():
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy
+    PlatformDeployment.objects.all().delete()
+    deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+
+
+def _attempt(status, roster=("edge-a-engine",)):
+    from mojo.apps.edge.models import PlatformDeployment
+    return PlatformDeployment.objects.create(
+        sha=SHA, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=list(roster), status=status, transitions=[])
+
+
+@th.django_unit_test("reconcile_stale closes a node-failed lease, spares live and targeted rows")
+def test_reconcile_lease_ownership(opts):
+    """The lease-owner skip used to be unconditional, so the one case that
+    needed closing most — a node reported `failed` and the orchestrator that
+    would have closed the row is exactly what died — was the one case
+    reconciliation refused to touch. The row stayed active and the lease held
+    the plane shut for its whole TTL."""
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    # 1. The lease is this row's and the node reported it failed. The row is
+    #    NOT aged, so only the new branch can possibly close it.
+    _clean_deploy_state()
+    reported = _attempt("canary")
+    deploy.arm_status(SHA, deployment_id=reported.pk)
+    th.assert_true(
+        deploy.set_status(deploy.STATUS_FAILED, SHA, deployment_id=reported.pk),
+        "the node's failure report must land on its own lease")
+    changed = platform_deploy.reconcile_stale()
+    reported.refresh_from_db()
+    th.assert_eq(reported.status, "failed",
+                 f"a node-reported failure must close the attempt, got {reported.status}")
+    th.assert_eq(reported.transitions[-1]["detail"]["reason"], "node_reported_failed",
+                 f"the closure must name its cause, got {reported.transitions[-1]!r}")
+    th.assert_true(changed >= 1, f"the closure must be counted, got {changed}")
+    th.assert_eq(deploy.get_status(), None,
+                 "the terminal lease must be released so the next push starts clean")
+
+    # 2. A live (migrating) lease is hands-off even when the row is stale.
+    _clean_deploy_state()
+    live = _attempt("canary")
+    deploy.arm_status(SHA, deployment_id=live.pk)
+    _aged(live.pk, max(60, deploy.status_ttl()) + 60)
+    platform_deploy.reconcile_stale()
+    live.refresh_from_db()
+    th.assert_eq(live.status, "canary",
+                 f"a running deploy must not be closed out from under itself, "
+                 f"got {live.status}")
+    status = deploy.get_status()
+    th.assert_true(status and status["deployment"] == str(live.pk),
+                   f"a live lease must survive reconciliation, got {status!r}")
+
+    # 3. The requested row named by the live target is the fleet's desired
+    #    state, not an abandoned attempt — an unrelated stale row still closes.
+    _clean_deploy_state()
+    stranded = _attempt("requested")
+    orphan = _attempt("requested")
+    deploy.set_target(SHA, actor="test", deployment_id=stranded.pk)
+    for row in (stranded, orphan):
+        _aged(row.pk, max(60, deploy.status_ttl()) + 60)
+    platform_deploy.reconcile_stale()
+    stranded.refresh_from_db()
+    orphan.refresh_from_db()
+    th.assert_eq(stranded.status, "requested",
+                 f"the live target's row must stay resumable, got {stranded.status}")
+    th.assert_eq(orphan.status, "unknown",
+                 f"a stale attempt nothing points at must still close, "
+                 f"got {orphan.status}")
+    _clean_deploy_state()
+
+
+@th.django_unit_test("resume_stranded_target republishes exactly one wedged deploy")
+def test_resume_stranded_target(opts):
+    """The TTL wedge: something armed the lease and died before publishing an
+    orchestrator. The target is recorded, the row says `requested`, and
+    nothing was ever going to move it — the fleet sat on the old commit until
+    a human pushed again."""
+    from mojo.apps.edge.services import deploy
+
+    # Nothing armed, target names a `requested` row: resume it.
+    _clean_deploy_state()
+    stranded = _attempt("requested")
+    deploy.set_target(SHA, actor="test", deployment_id=stranded.pk)
+    with mock.patch("mojo.apps.jobs.publish") as publish:
+        resumed = deploy.resume_stranded_target()
+    th.assert_eq(resumed, SHA, f"the stranded target must be resumed, got {resumed!r}")
+    th.assert_eq(publish.call_count, 1,
+                 f"exactly one orchestrate must be republished, got {publish.call_args_list!r}")
+    th.assert_eq(publish.call_args.kwargs["func"], deploy.DEPLOY_ORCHESTRATE_JOB,
+                 f"the republished job must be the orchestrator, got {publish.call_args!r}")
+    th.assert_eq(publish.call_args.kwargs["payload"],
+                 {"sha": SHA, "deployment": str(stranded.pk)},
+                 f"the republish must carry the stranded attempt, got {publish.call_args!r}")
+    th.assert_eq(publish.call_args.kwargs["max_retries"], 0,
+                 "a redelivered orchestrator would double-drive the protocol")
+    th.assert_true(publish.call_args.kwargs.get("expires_in"),
+                   "the republished orchestrate must expire like any deploy job")
+    status = deploy.get_status()
+    th.assert_true(status and status["deployment"] == str(stranded.pk),
+                   f"resuming must claim the lease atomically, got {status!r}")
+    stranded.refresh_from_db()
+    th.assert_eq(stranded.transitions[-1]["detail"]["reason"], "stranded_target",
+                 f"the resume must be journalled, got {stranded.transitions[-1]!r}")
+
+    # The claim is what stops a second sweep (or a second node) republishing.
+    with mock.patch("mojo.apps.jobs.publish") as publish:
+        th.assert_eq(deploy.resume_stranded_target(), None,
+                     "a resumed deploy must not be resumed again while it runs")
+    th.assert_eq(publish.call_count, 0,
+                 f"the live lease must stop a duplicate republish, got {publish.call_args_list!r}")
+
+    # A row that is already past `requested` is not stranded, it is running.
+    _clean_deploy_state()
+    running = _attempt("canary")
+    deploy.set_target(SHA, actor="test", deployment_id=running.pk)
+    with mock.patch("mojo.apps.jobs.publish") as publish:
+        th.assert_eq(deploy.resume_stranded_target(), None,
+                     "an attempt past `requested` is in flight, not stranded")
+    th.assert_eq(publish.call_count, 0, "a canary-stage attempt must not be republished")
+
+    # Neither is a terminal one.
+    _clean_deploy_state()
+    done = _attempt("failed")
+    deploy.set_target(SHA, actor="test", deployment_id=done.pk)
+    with mock.patch("mojo.apps.jobs.publish") as publish:
+        th.assert_eq(deploy.resume_stranded_target(), None,
+                     "a terminal attempt must never be republished")
+    th.assert_eq(publish.call_count, 0, "a closed attempt must not be republished")
+    _clean_deploy_state()
+
+
 @th.django_unit_test("stale declared heartbeats fail roster discovery closed")
 def test_bounded_runner_discovery_rejects_stale_heartbeat(opts):
     import json

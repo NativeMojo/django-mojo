@@ -60,6 +60,39 @@ def test_arm_is_nx(opts):
                    "the chain re-arm (force=True) must replace the status")
 
 
+@th.django_unit_test("arming re-arms over a terminal failed lease, never over a live one")
+def test_arm_over_failed_lease(opts):
+    """A `failed` lease describes a deploy that is OVER. Refusing the next
+    deploy for the rest of the status TTL is how one broken release used to
+    swallow every push behind it. `migrating`/`deploying` stay unstealable —
+    that is the actual invariant, and it is about live deploys."""
+    from mojo.apps.edge.services import deploy
+
+    deploy.clear_status()
+    th.assert_true(deploy.arm_status(SHA_A), "the first arm must land on an empty key")
+    th.assert_true(not deploy.arm_status(SHA_B),
+                   "a migrating lease must never be stolen")
+
+    th.assert_true(deploy.set_status(deploy.STATUS_DEPLOYING, SHA_A),
+                   "the armed deploy's terminal write must apply")
+    th.assert_true(not deploy.arm_status(SHA_B),
+                   "a deploying lease is still a live deploy and must not be stolen")
+
+    th.assert_true(deploy.set_status(deploy.STATUS_FAILED, SHA_A),
+                   "the failing deploy's terminal write must apply")
+    th.assert_true(deploy.arm_status(SHA_B),
+                   "the next deploy must re-arm over a terminal failed lease "
+                   "rather than wait out its TTL")
+    status = deploy.get_status()
+    th.assert_eq(status["sha"], SHA_B,
+                 f"the re-arm must belong to the new deploy, got {status!r}")
+    th.assert_eq(status["state"], deploy.STATUS_MIGRATING,
+                 f"the re-armed lease must start at migrating, got {status!r}")
+    ttl = deploy.get_client().ttl(deploy.STATUS_KEY)
+    th.assert_true(ttl > 0, f"the re-armed lease must still expire, ttl={ttl}")
+    deploy.clear_status()
+
+
 @th.django_unit_test("terminal writes are compare-and-set on the stamped SHA")
 def test_terminal_cas(opts):
     from mojo.apps.edge.services import deploy
