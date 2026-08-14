@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 from mojo.deploy.mojosec_nginx import (
     DEFAULT_LOG_PATH, render_http_log, render_receiver_location,
@@ -40,6 +41,7 @@ NGINX_FRAGMENT_PATH = "/etc/nginx/conf.d/00_mojosec.conf"
 RECEIVER_SNIPPET_PATH = "/etc/nginx/snippets/mojosec_receiver.conf"
 LOGROTATE_PATH = "/etc/logrotate.d/mojosec"
 DEPLOY_STATE_PATH = "/etc/mojosec/deploy.json"
+DEGRADED_PATH = "/etc/mojosec/deploy-degraded.json"
 AUDIT_HEALTH_SERVICE_PATH = "/etc/systemd/system/mojosec-audit-health.service"
 AUDIT_HEALTH_TIMER_PATH = "/etc/systemd/system/mojosec-audit-health.timer"
 AUDIT_STABLE_HELPER_PATH = "/usr/local/lib/mojosec/mojosec_audit.py"
@@ -417,6 +419,27 @@ def _remove_owned(path):
         return False
     os.unlink(path)
     return True
+
+
+def _record_degraded(record):
+    """Best-effort operator breadcrumb; recording failure never fails a deploy."""
+    if not os.path.isdir(ETC_DIR):
+        return
+    payload = dict(record, at=time.time())
+    try:
+        _write_if_changed(DEGRADED_PATH, json.dumps(
+            payload, sort_keys=True, separators=(",", ":")) + "\n", 0o600)
+    except (DeployError, OSError, ValueError):
+        pass
+
+
+def _clear_degraded():
+    if not os.path.lexists(DEGRADED_PATH):
+        return
+    try:
+        _remove_owned(DEGRADED_PATH)
+    except (DeployError, OSError, ValueError):
+        pass
 
 
 def _restore_snapshot(path, snapshot):
@@ -1031,6 +1054,7 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         _write_if_changed(DEPLOY_STATE_PATH,
                           json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
                           0o600)
+        _clear_degraded()
         return {"changed": unit_changed or nginx_changed or config_changed or retired_changed or broker_changed,
                 **state}
     except (DeployError, OSError, ValueError) as err:
@@ -1070,10 +1094,22 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
         message = str(err)
         if rollback_errors:
             message += "; rollback incomplete: " + "; ".join(rollback_errors)
-        if criticality == "best_effort":
-            return {"schema": "mojosec.deploy", "version": 1,
+        degraded = {"schema": "mojosec.deploy", "version": 1,
                     "mode": mode, "criticality": criticality,
                     "ok": False, "warning": message[:500]}
+        if mode != "off":
+            # MojoSec on the deploy path OBSERVES AND REPORTS — it never
+            # vetoes an internal deploy, at any criticality (owner directive,
+            # item 2007; three fleet outages from harmless brownfield state).
+            # Exact prior state was restored above, the sensor is running as
+            # it was, and the skipped convergence is recorded for the
+            # operator instead of thrown as an outage. `off` keeps strict
+            # semantics: retiring the sensor is an explicit operator action
+            # whose failure modes protect spool and evidence.
+            _record_degraded(degraded)
+            return degraded
+        if criticality == "best_effort":
+            return degraded
         if rollback_errors:
             raise DeployError(message) from err
         raise

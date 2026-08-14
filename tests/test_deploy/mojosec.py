@@ -360,16 +360,18 @@ def test_safe_path_launcher_retains_system_site_without_env_or_cwd(opts):
 
 
 @th.django_unit_test()
-def test_python_310_observe_fails_before_any_privileged_mutation(opts):
+def test_python_310_observe_degrades_before_any_privileged_mutation(opts):
     from mojo.deploy import mojosec as deploy
 
     with mock.patch.object(deploy.sys, "version_info", (3, 10, 14)), \
             mock.patch.object(deploy, "_ensure_dir") as ensure_dir, \
             mock.patch.object(deploy, "_prepare_effective_config") as prepare:
-        with th.assert_raises(deploy.DeployError):
-            deploy.converge("observe", "required")
+        result = deploy.converge("observe", "required")
+    th.assert_true(result["ok"] is False and "3.11" in result["warning"],
+                   "unsupported observe must degrade with the version requirement "
+                   "named, never abort the deploy (item 2007)")
     th.assert_true(not ensure_dir.called and not prepare.called,
-                   "unsupported observe must fail before config or filesystem mutation")
+                   "unsupported observe must degrade before config or filesystem mutation")
 
 
 @th.django_unit_test()
@@ -692,9 +694,13 @@ def test_late_converge_failure_restores_nginx_config_and_units(opts):
                               side_effect=lambda *args: restored.append(("systemd", args[0]))), \
             _provenance_deploy_mocks(deploy), \
             mock.patch("mojo.deploy.audit.restore_immediate") as restore_audit:
-        with th.assert_raises(deploy.DeployError):
-            deploy.converge("observe", "required")
+        result = deploy.converge("observe", "required")
 
+    th.assert_true(result["ok"] is False,
+                   "observe convergence failure must degrade and report, never abort "
+                   "the deploy — MojoSec is an observer (item 2007)")
+    th.assert_in("late active audit failed", result["warning"],
+                 "the degraded result must carry the actual failure for the operator")
     th.assert_in(("file", deploy.CONFIG_PATH), restored,
                  "late failure must restore the prior canonical root config")
     th.assert_in(("nginx", deploy.DEFAULT_LOG_PATH), restored,
@@ -737,8 +743,12 @@ def test_audit_internal_rollback_is_not_rolled_back_again(opts):
             mock.patch.object(audit, "converge",
                               side_effect=audit.AuditError("internally restored")), \
             mock.patch.object(audit, "restore_immediate") as restore:
-        with th.assert_raises(deploy.DeployError):
-            deploy.converge("observe", "required")
+        result = deploy.converge("observe", "required")
+    th.assert_true(result["ok"] is False,
+                   "an Audit convergence failure must degrade and report, never abort "
+                   "the deploy — MojoSec is an observer (item 2007)")
+    th.assert_in("internally restored", result["warning"],
+                 "the degraded result must carry the Audit failure for the operator")
     th.assert_true(not restore.called,
                    "outer rollback must not apply an old generation after Audit restored itself")
 
