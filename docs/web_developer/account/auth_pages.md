@@ -2,7 +2,8 @@
 
 Django-served login and registration pages. These are fully functional out of
 the box — no frontend app required. The pages handle all auth flows including
-OAuth, passkeys, SMS login, password reset, and magic login links.
+OAuth, passkeys, SMS login, password reset, administrator-issued temporary
+passwords, and magic login links.
 
 All branding and feature configuration is controlled per group via the auth
 config. See [Auth Config](auth_config.md) for details and the
@@ -82,6 +83,22 @@ and `compact` intentionally do not.
 1. Access and refresh tokens are stored in `localStorage`
 2. An overlay shows "Signed in! Taking you there now..."
 3. User is redirected to `theme.success_redirect` (default `/`)
+
+### Temporary passwords
+
+An administrator-issued temporary password is an incomplete login, not a
+session. After the password is accepted, the server returns
+`requires_password_change: true` and a single-use `forced_password_token`
+instead of access, refresh, or MFA tokens. The hosted `/auth` page immediately
+switches to its permanent-password form, submits the replacement through
+`POST /api/auth/password/forced`, then stores the ordinary login tokens and
+continues the normal redirect.
+
+The `tp:` credential stays only in page memory. Reloading the page requires the
+user to enter the temporary password again; it is never placed in
+`localStorage` or `sessionStorage`. Custom login pages using `mojo-auth.js`
+must branch on `result.requires_password_change` and call
+`MojoAuth.completeForcedPassword(result.forced_password_token, newPassword)`.
 
 ---
 

@@ -59,6 +59,7 @@
         forgotPassword:     '/api/auth/forgot',
         resetWithCode:      '/api/auth/password/reset/code',
         resetWithToken:     '/api/auth/password/reset/token',
+        forcedPassword:     '/api/auth/password/forced',
         magicSend:          '/api/auth/magic/send',
         magicLogin:         '/api/auth/magic/login',
         passkeyLoginBegin:  '/api/auth/passkeys/login/begin',
@@ -159,8 +160,12 @@
     function saveTokens(data) {
         // Response shape: { status, data: { access_token, refresh_token, user } }
         // or, for a gated destination: { access_token: "gt1.…", token_type,
-        // expires_in, group, user } — with NO refresh_token.
+        // expires_in, group, user } — with NO refresh_token. A temporary-password
+        // authentication is successful but deliberately has no access token;
+        // preserve that challenge for the caller instead of treating it as a
+        // malformed login package.
         var d = (data && data.data) ? data.data : data;
+        if (d && d.requires_password_change) return d;
         if (!d || !d.access_token) throw new Error('No access_token in response');
         localStorage.setItem(KEYS.access, d.access_token);
         // CLEAR on absence, never leave the previous one behind. A response
@@ -302,8 +307,11 @@
          *     receive multi-tenant context.
          * @returns {Promise<object>} response data ({ access_token, refresh_token, user })
          *
-         * NOTE: If MFA is enabled, the response will contain { mfa_required: true, mfa_token, mfa_methods }
-         * instead of tokens. Check result.mfa_required before assuming login is complete.
+         * NOTE: An incomplete login returns a challenge instead of tokens:
+         * { mfa_required: true, ... } for MFA, or
+         * { requires_password_change: true, forced_password_token, ... } for
+         * an administrator-issued temporary password. Check both flags before
+         * assuming login is complete.
          */
         login: function (username, password, options) {
             var payload = { username: username, password: password };
@@ -443,6 +451,21 @@
                 token: token,
                 new_password: newPassword
             }).then(saveTokens);
+        },
+
+        /**
+         * Replace an administrator-issued temporary password, then store the
+         * normal login tokens returned on success. Keep the tp: credential in
+         * page memory only; never persist it in browser storage or telemetry.
+         * @param {string} token       - tp: credential from a login challenge
+         * @param {string} newPassword
+         * @returns {Promise<object>}
+         */
+        completeForcedPassword: function (token, newPassword) {
+            return post(ep('forcedPassword'), _withDevice({
+                token: token,
+                new_password: newPassword
+            })).then(saveTokens);
         },
 
         // -----------------------------------------------------------------------

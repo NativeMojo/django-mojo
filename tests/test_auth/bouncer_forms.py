@@ -377,6 +377,65 @@ def test_mojo_auth_login_signature_accepts_options(opts):
     )
 
 
+@th.django_unit_test("mojo-auth.js preserves forced-password challenges and exposes completion")
+def test_mojo_auth_forced_password_contract(opts):
+    import mojo.apps.account as account_pkg
+    js_path = os.path.join(
+        os.path.dirname(account_pkg.__file__),
+        'static', 'account', 'mojo-auth.js',
+    )
+    with open(js_path, 'r') as fh:
+        source = fh.read()
+
+    assert_true(
+        "forcedPassword:     '/api/auth/password/forced'" in source,
+        "mojo-auth.js must register the forced-password completion endpoint")
+    assert_true(
+        'if (d && d.requires_password_change) return d;' in source,
+        "mojo-auth.js must return a forced-password challenge to the caller "
+        "instead of passing it to saveTokens and throwing No access_token")
+    assert_true(
+        'completeForcedPassword: function (token, newPassword)' in source,
+        "mojo-auth.js must expose a helper that exchanges the one-time tp: "
+        "credential and permanent password for the normal login package")
+
+
+@th.django_unit_test("hosted login completes temporary-password replacement in place")
+def test_login_html_completes_forced_password(opts):
+    html = _render('account/login.html', group=opts.group)
+
+    assert_true(
+        'data && data.requires_password_change' in html and
+        'window._mat.onPasswordChangeRequired(data)' in html,
+        "the shared hosted-page completion handler must route every auth "
+        "method's forced-password response to the login page instead of "
+        "redirecting a tokenless result")
+    assert_true(
+        'm.onPasswordChangeRequired = function (data)' in html,
+        "login.html must recognize the successful temporary-password response "
+        "and open its password replacement view")
+    assert_true(
+        'MojoAuth.completeForcedPassword(forcedPasswordToken, np)' in html,
+        "the password replacement form must submit the tp: credential to the "
+        "forced-password endpoint, not the ordinary pr: reset endpoint")
+    assert_true(
+        'sessionStorage.setItem("mat_forced' not in html,
+        "the single-use tp: credential must stay in page memory and never be "
+        "persisted in browser storage")
+
+    opts.group.metadata = {"auth_config": {"login": {"methods": ["sms"]}}}
+    opts.group.save(update_fields=["metadata"])
+    try:
+        passwordless_html = _render('account/login.html', group=opts.group)
+        assert_true(
+            'id="view-set-password"' in passwordless_html,
+            "the permanent-password view must remain available when the "
+            "group's valid authentication method is passwordless")
+    finally:
+        opts.group.metadata = {}
+        opts.group.save(update_fields=["metadata"])
+
+
 # ---------------------------------------------------------------------------
 # Configurable register form (AUTH_REGISTER_FIELDS)
 # ---------------------------------------------------------------------------

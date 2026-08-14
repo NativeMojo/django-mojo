@@ -111,10 +111,12 @@
     </form>
 </div>
 
-<!-- VIEW: Set New Password (from pr: token link) -->
+{% endif %}
+
+<!-- VIEW: Set New Password (from pr: reset link or tp: login challenge) -->
 <div id="view-set-password" class="mat-view">
-    <p class="mat-view-title">Set Your New Password</p>
-    <p class="mat-view-sub">Choose a strong password for your account.</p>
+    <p class="mat-view-title" id="set-password-title">Set Your New Password</p>
+    <p class="mat-view-sub" id="set-password-help">Choose a strong password for your account.</p>
     <form id="form-set-password" novalidate>
         <input type="hidden" autocomplete="username" />
         <div class="mat-field">
@@ -134,7 +136,6 @@
         <button class="mat-btn mat-btn-primary" type="submit" id="btn-set-password"><span class="mat-btn-text">Set Password</span><span class="mat-spinner"></span></button>
     </form>
 </div>
-{% endif %}
 
 {% if 'sms' in login_methods %}
 <!-- VIEW: SMS Code Login — primary view when there is no password method -->
@@ -241,6 +242,23 @@
     function on(id, evt, fn) { var el = $(id); if (el) el.addEventListener(evt, fn); }
     function onForm(id, fn) { var el = $(id); if (el) el.addEventListener("submit", fn); }
 
+    // A tp: credential proves the temporary password was correct, but it is
+    // not a session. Keep it in this page closure only — never browser storage.
+    var forcedPasswordToken = null;
+    m.onPasswordChangeRequired = function (data) {
+        if (!data || !data.forced_password_token) {
+            m.showMessage("Could not start the required password change. Please sign in again.", "error");
+            return;
+        }
+        forcedPasswordToken = data.forced_password_token;
+        $("set-password-title").textContent = "Create a Permanent Password";
+        $("set-password-help").textContent = "Your temporary password worked. Choose a permanent password to finish signing in.";
+        $("set-password-new").value = "";
+        $("set-password-confirm").value = "";
+        showView("setPassword");
+        m.showMessage("You need to replace your temporary password before continuing.", "info");
+    };
+
     var urlToken = cfg.params.get("token");
     if (urlToken && urlToken.indexOf("pr:") === 0) {
         sessionStorage.setItem("mat_reset_token", urlToken);
@@ -267,7 +285,8 @@
             MojoAuth.login(u, p, { group_uuid: cfg.groupUuid })
                 .then(function (data) {
                     if (data && data.mfa_required) { m.showMessage("MFA required — check your authenticator app or phone.", "info"); m.setLoading(btn, false); return; }
-                    m.onAuthSuccess();
+                    m.setLoading(btn, false);
+                    m.onAuthSuccess(data);
                 })
                 .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Invalid credentials.", "error"); });
         });
@@ -421,14 +440,24 @@
     onForm("form-set-password", function (e) {
         e.preventDefault();
         var np = $("set-password-new").value, cp = $("set-password-confirm").value;
-        var token = sessionStorage.getItem("mat_reset_token");
+        var token = forcedPasswordToken || sessionStorage.getItem("mat_reset_token");
         if (!token) { m.showMessage("Invalid or expired link.", "error"); showView("forgot"); return; }
         if (!np) { m.showMessage("Please enter a new password.", "error"); return; }
         if (np !== cp) { m.showMessage("Passwords do not match.", "error"); return; }
         var btn = $("btn-set-password"); m.setLoading(btn, true); m.hideMessage();
-        MojoAuth.resetWithToken(token, np)
-            .then(function () { sessionStorage.removeItem("mat_reset_token"); m.onAuthSuccess(); })
-            .catch(function (err) { m.setLoading(btn, false); m.showMessage(MojoAuth.getError(err) || "Invalid or expired link.", "error"); });
+        var completion = forcedPasswordToken
+            ? MojoAuth.completeForcedPassword(forcedPasswordToken, np)
+            : MojoAuth.resetWithToken(token, np);
+        completion
+            .then(function () {
+                forcedPasswordToken = null;
+                sessionStorage.removeItem("mat_reset_token");
+                m.onAuthSuccess();
+            })
+            .catch(function (err) {
+                m.setLoading(btn, false);
+                m.showMessage(MojoAuth.getError(err) || "Could not set your new password.", "error");
+            });
     });
 
     onForm("form-magic", function (e) {

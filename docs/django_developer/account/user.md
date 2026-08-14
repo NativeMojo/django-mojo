@@ -407,3 +407,9 @@ credential and a strong replacement to `POST /api/auth/password/forced`.
 Completion locks the User, consumes the credential once, persists a permanent
 password, clears the flag, and rotates `auth_key` again. Password-reset and
 invite-password completion use the same permanent-password choke point.
+
+The framework-hosted `/auth` page handles this response in place: it keeps the
+`tp:` credential in page memory, presents the existing new-password form, and
+calls `MojoAuth.completeForcedPassword()` before continuing the ordinary
+post-login redirect. Custom clients must make the same explicit branch; a
+forced-password response intentionally has no `access_token` to store.
