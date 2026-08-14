@@ -519,3 +519,33 @@ def test_protocol_unstorable_text_detection_and_ack_statuses_frozen(opts):
             "schema": protocol.ACK_SCHEMA, "version": protocol.PROTOCOL_VERSION,
             "results": [{"id": "a" * 64, "status": "dead"}],
         })
+
+
+@th.django_unit_test()
+def test_effective_config_tolerates_previous_generation_journal_keys(opts):
+    from mojo.mojosec.config import (
+        ConfigError, DEFAULTS, build_config, validate_effective_config,
+    )
+
+    effective = build_config({
+        "version": 1,
+        "profile": "al2023-web-v2",
+        "sensor_id": "prod-web-i-0123456789abcdef0",
+        "endpoint": "https://incident.example/api/incident/mojosec/batch",
+    })
+
+    legacy = copy.deepcopy(effective)
+    for key in ("project_path", "app_uid", "app_gid"):
+        del legacy["collectors"]["journal"][key]
+    restored = validate_effective_config(legacy)
+    for key in ("project_path", "app_uid", "app_gid"):
+        th.assert_eq(restored["collectors"]["journal"][key],
+                     DEFAULTS["collectors"]["journal"][key],
+                     "a pre-1.11.6 effective artifact must start the sensor with "
+                     "backfilled journal defaults - deploys always restart the "
+                     "sensor one generation ahead of the artifact (item 2000)")
+
+    truncated = copy.deepcopy(effective)
+    del truncated["collectors"]["journal"]["max_records"]
+    with th.assert_raises(ConfigError):
+        validate_effective_config(truncated)

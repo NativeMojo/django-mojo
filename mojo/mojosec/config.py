@@ -364,12 +364,30 @@ def build_config(supplied):
     return validate_config(_merge(DEFAULTS, expanded))
 
 
+# The on-disk artifact is complete only for the generation that wrote it, and
+# every deploy restarts the sensor one package generation ahead of the artifact
+# (converge rewrites it only once the new code is live). Keys added to the
+# effective schema therefore backfill from DEFAULTS for one generation instead
+# of refusing to start the sensor — a refusal fails the whole fleet deploy at
+# post_deploy (item 2000). Any future effective-schema key joins this tuple.
+_PREVIOUS_GENERATION_JOURNAL_KEYS = ("project_path", "app_uid", "app_gid")
+
+
 def validate_effective_config(value):
     """Validate one already-expanded, root-owned runtime artifact."""
+    if isinstance(value, dict):
+        collectors = value.get("collectors")
+        journal = collectors.get("journal") if isinstance(collectors, dict) else None
+        if isinstance(journal, dict):
+            for key in _PREVIOUS_GENERATION_JOURNAL_KEYS:
+                journal.setdefault(key, _copy(DEFAULTS["collectors"]["journal"][key]))
     try:
         config = validate_config(value)
     except ConfigError:
         raise
+    except KeyError as err:
+        raise ConfigError(
+            f"effective config is missing required field: {err.args[0]!r}") from err
     except ValueError as err:
         raise ConfigError(str(err)) from err
     profile_name = config["profile"]
