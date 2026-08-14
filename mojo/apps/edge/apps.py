@@ -10,6 +10,7 @@ class EdgeConfig(AppConfig):
         from mojo.apps import jobs
         from mojo.apps.account.services import system_settings
         from mojo.apps.edge.services import readiness
+        from mojo.apps.edge import settings_validators
         from mojo.apps.edge.settings_validators import expected_topology
         from mojo.apps.account.services.admin_settings import Descriptor, register_descriptor
 
@@ -19,6 +20,12 @@ class EdgeConfig(AppConfig):
         jobs.register_startup_hook("mojo.apps.edge.asyncjobs.on_engine_start")
         system_settings.register_protected_setting(
             system_settings.EXPECTED_EDGE_TOPOLOGY, expected_topology)
+        # Protected, not catalog-writable: this value decides which framework
+        # every node in the fleet installs, so the generic Setting write path
+        # must refuse it and the dedicated writer must prove a superuser.
+        system_settings.register_protected_setting(
+            settings_validators.FRAMEWORK_VERSION_KEY,
+            settings_validators.framework_pin)
         readiness.register_sections()
         register_descriptor(Descriptor(
             "EDGE_EXPECTED_TOPOLOGY", "Expected fleet", "Edge & Web Apps",

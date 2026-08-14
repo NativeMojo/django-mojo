@@ -289,8 +289,17 @@ def test_deploy_status_legacy_upgrade_bridge(opts):
 
 @th.django_unit_test("framework version resolution: success, garbage, and failure fail loudly")
 def test_resolve_framework_version(opts):
+    """The UNSET branch of the hold — still the common case, and still the one
+    that fails loudly rather than letting each node resolve latest on its own.
+
+    `framework_version_pin` is mocked rather than written to its row: the row
+    is process-global and the Admin write-path tests own it in another package,
+    so mocking is what keeps "unset takes the PyPI path" deterministic. The
+    unset SYNONYMS are asserted here against the real validator, and the pinned
+    branches live in 26_deploy_contract.py."""
     import requests as requests_lib
 
+    from mojo.apps.edge import settings_validators
     from mojo.apps.edge.services import deploy
 
     class FakeResponse:
@@ -303,17 +312,25 @@ def test_resolve_framework_version(opts):
         def json(self):
             return self.payload
 
-    with mock.patch.object(deploy.requests, "get",
+    for word in ("", "  ", "latest", "LATEST", "none", "auto"):
+        th.assert_eq(
+            settings_validators.framework_pin("EDGE_FRAMEWORK_VERSION", word), "",
+            f"{word!r} must resolve to an UNSET hold, i.e. the PyPI path")
+
+    with mock.patch.object(deploy, "framework_version_pin", return_value=""), \
+         mock.patch.object(deploy.requests, "get",
                            return_value=FakeResponse({"info": {"version": "1.2.63"}})):
         th.assert_eq(deploy.resolve_framework_version(), "1.2.63",
                      "the PyPI info.version must be returned verbatim")
 
-    with mock.patch.object(deploy.requests, "get",
+    with mock.patch.object(deploy, "framework_version_pin", return_value=""), \
+         mock.patch.object(deploy.requests, "get",
                            return_value=FakeResponse({"info": {"version": "1.0; rm -rf /"}})):
         with th.assert_raises(ValueError):
             deploy.resolve_framework_version()
 
-    with mock.patch.object(deploy.requests, "get",
+    with mock.patch.object(deploy, "framework_version_pin", return_value=""), \
+         mock.patch.object(deploy.requests, "get",
                            side_effect=requests_lib.ConnectionError("pypi down")):
         with th.assert_raises(requests_lib.RequestException):
             deploy.resolve_framework_version()

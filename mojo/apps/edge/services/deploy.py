@@ -56,6 +56,21 @@ logger = logit.get_logger("edge", "edge.log")
 class DeploymentCoordinationError(RuntimeError):
     """A fixed, non-provider failure safe for endpoint classification."""
 
+
+class FrameworkPinError(ValueError):
+    """``EDGE_FRAMEWORK_VERSION`` cannot be turned into a version to install.
+
+    Deliberately never carries the stored value: this becomes an operator-
+    facing incident, and the setting is operator-written data. ``reason``
+    distinguishes the two cases the incident wording separates — an unusable
+    value, and ``hold`` on a fleet that has never converged.
+    """
+
+    def __init__(self, message, reason="unusable"):
+        super().__init__(message)
+        self.reason = reason
+
+
 TARGET_KEY = "edge:deploy:target"
 STATUS_KEY = "edge:deploy:status"
 
@@ -89,6 +104,10 @@ _NODE_FAILURE_PHASES = {
 DEPLOY_CHANNEL = "default"
 DEPLOY_ORCHESTRATE_JOB = "mojo.apps.edge.asyncjobs.deploy_orchestrate"
 DEPLOY_NODE_JOB = "mojo.apps.edge.asyncjobs.deploy_node"
+
+# The value of EDGE_FRAMEWORK_VERSION that means "stay on the framework the
+# fleet last converged onto" instead of naming a version.
+FRAMEWORK_HOLD = "hold"
 
 # A git commit id, abbreviated or full. The zero SHA of a branch deletion is
 # hex-valid, so callers must also refuse it explicitly (see is_valid_sha).
@@ -152,6 +171,31 @@ def deploy_branch():
 def pypi_url():
     return settings.get_static(
         "EDGE_PYPI_URL", "https://pypi.org/pypi/django-mojo/json")
+
+
+def framework_version_pin():
+    """The operator's framework hold, normalized, read live from the database.
+
+    NOT a ``settings.get_static`` read, and the exception to this module's
+    "never ``settings.get``" rule is deliberate: the whole point of this
+    setting is that an operator can freeze the fleet's framework version from
+    the Admin portal without shipping a deploy. It is therefore a **protected**
+    system setting, whose only writer proves an active literal superuser —
+    a generic ``manage_settings`` grant cannot reach it, which is exactly the
+    property the get_static rule protects for the other EDGE_DEPLOY_* keys.
+
+    Re-normalizing what the validator already normalized is defense in depth:
+    a row written before the validator existed must not become a deploy argv.
+    """
+    from mojo.apps.account.services import system_settings
+    from mojo.apps.edge import settings_validators
+
+    raw = system_settings.get_value(settings_validators.FRAMEWORK_VERSION_KEY, "")
+    try:
+        return settings_validators.framework_pin(
+            settings_validators.FRAMEWORK_VERSION_KEY, raw)
+    except ValueError as err:
+        raise FrameworkPinError(str(err)) from None
 
 
 def deploy_script_argv():
@@ -317,12 +361,41 @@ def local_runner_id():
 
 
 def resolve_framework_version():
-    """Resolve the newest django-mojo version, once per deploy (D6).
+    """The ONE django-mojo version this deploy installs, resolved once (D6).
+
+    Not "the newest" — newest is only the DEFAULT. ``EDGE_FRAMEWORK_VERSION``
+    is the operator's hold, and it decides which of three branches runs:
+
+    - **unset** — resolve the newest published release from PyPI. The original
+      behavior, and still the common case.
+    - **``hold``** — the framework version of the last CONVERGED deploy, so a
+      commit ships without also moving the framework.
+    - **a version** — exactly that version, with no PyPI request at all, so a
+      pinned fleet still deploys while PyPI is unreachable.
 
     Raises on any failure — C1's whole point is that a silently skipped
     upgrade is the failure mode, so a deploy that cannot resolve the version
     fails rather than letting each node resolve "latest" at its own moment.
+    The corollary is what the pin adds: an operator who asked NOT to take
+    latest must never be handed latest as a fallback, so an unusable hold
+    raises ``FrameworkPinError`` instead of falling through to PyPI.
     """
+    from mojo.apps.edge.services import platform_deploy
+
+    pin = framework_version_pin()
+    if pin == FRAMEWORK_HOLD:
+        version = platform_deploy.last_converged_framework()
+        if not is_valid_version(version or ""):
+            raise FrameworkPinError(
+                "EDGE_FRAMEWORK_VERSION is 'hold' but this fleet has no "
+                "converged deployment to hold at",
+                reason="hold_without_converged")
+        return version
+    if pin:
+        # Validated on write and re-validated on read; PyPI is never asked
+        # whether the version exists — pip is what discovers that, on the
+        # node, with its own message.
+        return pin
     response = requests.get(pypi_url(), timeout=10)
     response.raise_for_status()
     version = (response.json().get("info") or {}).get("version")

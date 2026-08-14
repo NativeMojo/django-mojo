@@ -267,6 +267,21 @@ def serialize(row, desired_commit=_DESIRED_UNSET):
     }
 
 
+def last_converged_framework():
+    """The framework version of the newest CONVERGED deploy, or None.
+
+    Converged and not merely released: that status is the reconciler's proof
+    that every frozen runner answered with this deployment's UUID and SHA,
+    which is the only evidence the version actually RUNS on this fleet. A
+    `fleet` row is a dispatch, not a proof, and holding at one would freeze the
+    fleet onto a version that may never have booted.
+    """
+    return PlatformDeployment.objects.filter(
+        status=PlatformDeployment.STATUS_CONVERGED).exclude(
+            framework_version="").order_by("-created").values_list(
+                "framework_version", flat=True).first() or None
+
+
 def same_sha_retry(row, actor, created_by=None, idempotency_key=None):
     return create(
         row.sha, actor=actor, source="admin_retry", created_by=created_by,

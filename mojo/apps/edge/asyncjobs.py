@@ -212,6 +212,25 @@ def deploy_orchestrate(job):
 
     try:
         framework = deploy.resolve_framework_version()
+    except deploy.FrameworkPinError as err:
+        # The operator's own hold is unusable. This is NOT a provider failure
+        # and must not read like one: the cure is a settings change, not a
+        # retry, so the incident names the setting and says which way it is
+        # broken. The stored value never travels — it is operator-written data
+        # on an operator-facing surface.
+        message = (
+            f"deploy {sha}: EDGE_FRAMEWORK_VERSION is set to 'hold' but this "
+            "fleet has no converged deployment to hold at"
+            if getattr(err, "reason", "") == "hold_without_converged" else
+            f"deploy {sha}: EDGE_FRAMEWORK_VERSION is not a usable version "
+            "— refusing to deploy")
+        event = reporter.report_event(
+            message, title="Edge deploy framework pin is unusable",
+            category="edge_deploy", level=7)
+        platform_deploy.add_link(deployment_id, "incident_events", event.pk)
+        return _deploy_terminal(
+            sha, me, framework=None, released=False,
+            deployment_id=deployment_id)
     except Exception as err:
         # C1: a deploy that cannot pin the framework version fails loudly
         # rather than letting each node resolve "latest" at its own moment.
