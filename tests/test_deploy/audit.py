@@ -72,6 +72,21 @@ def test_inventory_only_admits_known_seed_or_managed(opts):
             inventory_sources(rules, generated_path="", active_rules="-a task,never\n")
 
 
+@th.unit_test("audit inventory adopts an empty rules.d with inert active rules")
+def test_inventory_adopts_empty_rules_dir(opts):
+    from mojo.deploy.audit import AuditError, inventory_sources
+
+    with tempfile.TemporaryDirectory() as root:
+        rules = os.path.join(root, "rules.d")
+        os.mkdir(rules)
+        found = inventory_sources(rules, generated_path="", active_rules="-a never,task\n")
+        th.assert_eq(found["state"], "seed",
+                     "an empty rules.d with inert active rules is a never-adopted "
+                     "node and must adopt exactly like the pristine seed (item 2002)")
+        with th.assert_raises(AuditError):
+            inventory_sources(rules, generated_path="", active_rules="-w /etc -p wa\n")
+
+
 @th.unit_test("Audit rollback distinguishes immediate generation from permanent prior")
 def test_transactional_restore_generations(opts):
     from mojo.deploy import audit

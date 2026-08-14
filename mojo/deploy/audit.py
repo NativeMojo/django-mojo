@@ -127,8 +127,14 @@ def inventory_sources(rules_dir=RULES_DIR, generated_path=GENERATED_PATH,
         raise AuditError("unknown or conflicting Audit rule source exists")
     if managed:
         state = "managed"
-    elif combined in _SEED_FORMS and active_rules.strip() in (
+    elif (combined in _SEED_FORMS or not sources) and active_rules.strip() in (
             "-a task,never", "-a never,task"):
+        # An empty rules.d with inert active rules is the other shape a
+        # never-adopted node takes — brownfield boxes whose stock seed file
+        # was removed long before this feature existed (item 2002). There is
+        # nothing to preserve, so it adopts exactly like the pristine seed:
+        # `prior` becomes this empty inventory and rollback restores
+        # emptiness. Any non-seed CONTENT still refuses above.
         state = "seed"
     else:
         raise AuditError("Audit state is neither exact AL2023 seed nor Mojo-managed")
