@@ -429,6 +429,29 @@ incident naming the path and this cure; `check_node`'s **shims** section audits
 it (WARN, FAIL under `--require-shims`). `aws/post_deploy.sh` is exempt —
 `update.sh` invokes it as `sudo bash <path>`, which needs no execute bit.
 
+### A fork must declare the argv contract (a shim never has to)
+
+`update.sh` carries a marker line naming the argv contract it speaks:
+
+```bash
+# mojo-deploy-contract: 1     # == mojo.apps.edge.services.deploy.DEPLOY_CONTRACT
+```
+
+and answers it directly, before the `cd`, touching nothing:
+
+```bash
+aws/update.sh --contract      # prints 1, exits 0 (works even with no PROJ_PATH)
+```
+
+`deploy_node` **reads** the configured script before exec'ing it. A shim always
+passes — it references `mojo.deploy`, so its body is whatever the installed
+framework ships and it cannot drift. A **fork** must carry either the marker or
+every required flag (`--sha`, `--framework`, `--deployment`); a fork that parses
+argv without them is refused by name, with a level-7 incident, before the deploy
+starts. Anything the guard cannot read confidently — an unreadable file, a
+`"$@"` forwarder, a wrapper that never mentions `--sha` — proceeds. Full ladder
+and the release skew rule: `docs/django_developer/edge/deploy.md`.
+
 ### Shims can be one framework generation behind
 
 `update.sh` `pip install`s the new framework *inside* the run, replacing both

@@ -33,7 +33,10 @@ def get(handler, parsed):
         "fleet": section({"channel": "edge", "runners": [{"runner": "edge-a-engine", "alive": True}, {"runner": "edge-b-engine", "alive": True}]}),
         "database": section({"reachable": True, "vendor": "postgresql"}),
         "redis": section({"reachable": True}),
-        "deployments": section({"items": handler.platform_deployments, "limit": 50}),
+        "deployments": section({
+            "items": handler.platform_deployments, "limit": 50,
+            "framework_pin": {"configured": True, "value": "hold",
+                              "mode": "hold", "resolved": "1.9.0"}}),
         "certificates": section({"counts": {"active": 1, "issuing": 1}, "expiring_within_30_days": 0}),
         "security": section({
             "open_incidents": {"count": 0, "items": []},

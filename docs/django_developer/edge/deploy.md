@@ -106,6 +106,7 @@ per-runner evidence, and the deploy lease:
 |---|---|
 | `unconfigured` | `EDGE_DEPLOY_SCRIPT` is not set on this node — the deploy is refused. |
 | `preflight_failed` | The configured script has an explicit path and no execute bit. |
+| `contract_mismatch` | The script is a fork that does not speak this framework's argv contract (below). |
 | `exec_failed` | Exec raised (`OSError`) — wrong mode, missing interpreter, gone. |
 | `script_timeout` | The script exceeded `SCRIPT_TIMEOUT` (900s) and was killed. |
 | `update_script` | The script ran and exited non-zero. |
@@ -141,6 +142,93 @@ git update-index --chmod=+x aws/update.sh && commit the mode
 A local `chmod` does not survive a clean checkout, which is why the mode has to
 be in the index. `aws/post_deploy.sh` is exempt — `update.sh` invokes it as
 `sudo bash <path>`.
+
+### The node-script contract
+
+Contract **v1** is the argv the deploy plane speaks to the node script:
+
+```
+--sha <7-40 hex> --framework <version> --deployment <uuid> [--migrate]
+```
+
+The number lives in two places that must agree: `deploy.DEPLOY_CONTRACT`, and a
+marker line at the top of the packaged `mojo/deploy/scripts/update.sh`:
+
+```bash
+# mojo-deploy-contract: 1
+```
+
+`deploy_node` **reads** the configured script before it execs it (never runs
+it to ask — that would mean executing an unknown path to decide whether it is
+safe to execute) and walks a ladder, most authoritative first:
+
+| Verdict | How it was reached | Deploy |
+|---|---|---|
+| `declared` | The marker is present; the integer after it is the answer. | Proceeds, unless it declares a contract **older** than this framework's. |
+| `shim` | The file references `mojo.deploy` — the same adoption predicate `check_node`'s shims audit uses. | Always proceeds. |
+| `inferred` | No marker, but the file parses argv literally and every required flag appears. | Proceeds. |
+| `stale` | Parses argv literally and a required flag is **missing**. | **Refused**, naming the first missing flag. |
+| `unknown` | Unresolvable path, unreadable file, an unparseable marker, a `"$@"` forwarder, or a file that never mentions `--sha`. | Proceeds. |
+
+Two asymmetries are the whole design:
+
+- **Only `declared`-behind and `stale` can refuse.** Everything this guard
+  could not read confidently proceeds. It exists to name a stale fork before it
+  wastes a deploy, not to become a new way for a deploy to fail on a node whose
+  script it simply could not read.
+- **A `"$@"` forwarder is never condemned.** A wrapper that forwards argv
+  wholesale does not inspect the flags, so `--sha` appearing in its own usage
+  comment is not evidence about what the real entry point accepts.
+
+**Shims cannot drift**, which is the point: a shim delegates to the packaged
+body, so its contract is whatever the installed framework ships. The guard is
+for **forks** — a project that copied `update.sh` instead of shimming it, whose
+argv froze at the generation it was copied. A fork taken before `--deployment`
+existed fails in the worst way available: the plane execs it, it refuses (or
+silently drops) the flag, and the deploy dies minutes later as *"the canary did
+not report"* with nothing naming the cause.
+
+A refusal reports on every surface the other node-side refusals do — durable
+evidence (`phase: contract_mismatch`, with the contract read, the contract
+required, and the missing flag), the deploy lease from a migrating node, and a
+level-7 incident titled *Edge deploy node script contract mismatch*:
+
+```
+deploy <uuid> (<sha>): node update script speaks deploy contract v0; this
+framework requires v1 — the script named by EDGE_DEPLOY_SCRIPT is a stale fork
+(see django-mojo docs/django_developer/edge/deploy.md)
+```
+
+The packaged script also answers the question directly, for an operator or a
+checker on the box:
+
+```bash
+aws/update.sh --contract     # prints 1, exits 0, touches nothing
+```
+
+It is answered before the `cd`, so it works on a box whose `PROJ_PATH` does not
+exist yet, and combining it with any other flag is a usage error. The deploy
+path never uses it — it reads the marker.
+
+### Release rule — one framework generation back, in both directions
+
+Node scripts and the framework are installed at different moments (a shim runs
+the body from the framework installed *before* the run — see
+`../deploy/README.md`), so **both** halves must tolerate one generation of skew:
+
+- **A framework at contract N must keep reading the artifacts written under
+  N−1** — the argv it is handed back, the environment, and on-disk state such
+  as `/etc/mojosec/config.json`. A node that has not deployed yet is still
+  running the previous generation's files.
+- **A script declaring contract N must keep accepting the argv a framework at
+  N−1 emits.** The orchestrator on the old release is the one that will invoke
+  the newly installed script.
+
+Breaking either direction requires a compatibility window (accept both shapes
+for one release) **or** a `DEPLOY_CONTRACT` bump plus a migration note telling
+operators to update forks first. A bump is not a free rename: it refuses every
+fork on the fleet at the same moment, which is the intended blast radius only
+when the old argv genuinely cannot be honored.
 
 ### A superseded orchestrator stands down
 
@@ -237,6 +325,57 @@ global `manage_settings` grant.
 | `EDGE_DEPLOY_CANARY_TIMEOUT` | `600` | How long the orchestrator waits for the canary, and the expiry on deploy jobs. Keep it below the status TTL. |
 | `EDGE_PYPI_URL` | `https://pypi.org/pypi/django-mojo/json` | Where the framework version is resolved, once per deploy. A resolution failure **fails the deploy** — a silently skipped upgrade is the failure mode the unpinned-upgrade policy exists to prevent. |
 | `GITHUB_WEBHOOK_SECRET` | — | Reused from the github app; the webhook's HMAC key. |
+| `EDGE_FRAMEWORK_VERSION` | *(unset — newest published release)* | **A protected system setting, not a file setting** — the one exception below. The operator's hold on which django-mojo version every deploy installs. |
+
+### `EDGE_FRAMEWORK_VERSION` — the operator's framework hold
+
+Every other setting here is deployment-owned and read from the file. This one
+is deliberately **portal-writable**, because its whole purpose is to let an
+operator freeze the framework without shipping a deploy. It is safe for the
+same reason `EDGE_EXPECTED_TOPOLOGY` is: it is a **protected** system setting,
+so the generic `Setting` write path refuses it and its only writer
+(`POST /api/account/admin/advanced/settings`, superuser + fresh interactive
+auth, no key-backed sessions) re-reads an active literal superuser first. A
+global `manage_settings` grant cannot reach it.
+
+Three accepted forms:
+
+| Value | Deploy installs |
+|---|---|
+| unset (or `latest` / `none` / `auto` / empty) | The newest published release from PyPI. The default, and the behavior that predates this setting. |
+| a published version, e.g. `1.11.9` | Exactly that version, with **no PyPI request at all** — a pinned fleet still deploys while PyPI is unreachable. |
+| `hold` | The framework version of the last **converged** deploy: ship the commit, keep the framework. |
+
+Anything else is refused at the portal, with a message naming the accepted
+forms — `stable` and `v1.2.3` are the two shapes operators reach for, and
+neither is a version pip can install. Case is normalized (`HOLD` → `hold`,
+`1.0.0RC1` → `1.0.0rc1`, matching PEP 440). The value is re-normalized at read
+time too, so a row written before the validator existed becomes a clean
+refusal rather than a deploy argv.
+
+Semantics that matter operationally:
+
+- **Read live, at orchestrate time.** A change applies from the *next* deploy;
+  it never moves one already running. The version is resolved once and carried
+  in every node payload, so a hold changed mid-deploy cannot split the fleet
+  across two framework versions — the node installs what it was told.
+- **An unusable hold refuses the deploy**, with a level-7 incident titled
+  *Edge deploy framework pin is unusable*. That covers a junk row and `hold` on
+  a fleet that has never converged. There is deliberately no fallback: latest
+  is precisely what the operator asked not to have. The incident names the
+  setting and which way it is broken, never the stored value.
+- **Nothing validates the version against PyPI at write time.** A pin to a
+  version that does not exist is accepted and dies at `pip install` on the
+  canary, with pip's own message — which is the right place for "no such
+  release" to be discovered.
+- `hold` holds at **converged**, not merely released: converged is the
+  reconciler's proof that every frozen runner answered with the deployment's
+  UUID and SHA. Holding at a dispatch would freeze the fleet onto a version
+  that may never have booted.
+
+The Platform overview reports it as `deployments.data.framework_pin`
+(`configured` / `value` / `mode` / `resolved`); see
+[web_developer/account/admin_portal/platform.md](../../web_developer/account/admin_portal/platform.md).
 
 The node's script is invoked as:
 
@@ -251,21 +390,28 @@ interpolation — same seam discipline as the installer).
 > under `mojo/deploy/scripts/`, executed through each project's `aws/` shims —
 > `EDGE_DEPLOY_SCRIPT` keeps naming the project shim path (see `../deploy/README.md`).
 
-## Required skeleton changes (separate item — this app alone does not deploy)
+## What the node script does (and what a fork has to preserve)
 
-The django-mojo side is complete but inert until the skeleton's scripts speak
-the contract above:
+Both node scripts **ship inside django-mojo** (`mojo/deploy/scripts/`) and run
+through a three-line project shim, so a project on the shim needs no changes at
+all — the behavior below moves with every `pip install`. It is written down
+because a **fork** owns all of it, and because the deploy plane depends on it:
 
 - `update.sh` takes `--sha` and checks out **that commit**, not
   `git reset --hard origin/main`; holds an `flock` so overlapping invocations
-  on one box are impossible; short-circuits when already on the target SHA;
-  calls `deploy_status set` at its terminals. On a `--migrate` failure it
-  reports `failed` **first** and only then rolls back — the rollback may
-  reinstall a framework version that predates `deploy_status`, so the report
-  must happen while the reporting tool is guaranteed to exist.
-- `post_deploy.sh` runs `manage.py migrate_locked --noinput` instead of the
-  `var/allow_migrate` gate (which becomes deletable), and installs
-  `pip install django-mojo==<the --framework value>` instead of `--upgrade`.
+  on one box are impossible; short-circuits when already on the target SHA and
+  framework; calls `deploy_status set` at its terminals. On a `--migrate`
+  failure it reports `failed` **first** and only then rolls back — the rollback
+  may reinstall a framework version that predates `deploy_status`, so the
+  report must happen while the reporting tool is guaranteed to exist.
+- `post_deploy.sh` runs `manage.py migrate_locked --noinput` (never a
+  `var/allow_migrate` flag file, which is not a lock) and installs
+  `pip install django-mojo==<the --framework value>` — pinned, never
+  `--upgrade`, because the version was resolved once for the whole fleet.
+- A fork must additionally declare the contract marker, or at minimum accept
+  every required flag; otherwise the deploy plane refuses it (above). The
+  supported answer to "our node script needs a local delta" is a shim with the
+  delta in its exported variables, not a copy.
 
 ## Readiness proof versus deploy runners
 

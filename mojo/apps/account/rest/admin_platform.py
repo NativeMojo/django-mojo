@@ -95,7 +95,16 @@ def on_admin_advanced_settings(request):
             request.user, system_settings.EXPECTED_EDGE_TOPOLOGY,
             request.DATA["edge_topology"])
         action = "edge_topology"
+    elif "framework_pin" in request.DATA:
+        # Which django-mojo version the whole fleet installs. Protected for the
+        # same reason the topology is: it decides what runs on every node, so
+        # a global manage_settings grant must not reach it.
+        from mojo.apps.edge.settings_validators import FRAMEWORK_VERSION_KEY
+        value = system_settings.set_value(
+            request.user, FRAMEWORK_VERSION_KEY, request.DATA["framework_pin"])
+        action = "framework_pin"
     else:
-        raise me.ValueException("auth or edge_topology is required")
+        raise me.ValueException(
+            "auth, edge_topology, or framework_pin is required")
     _admin_platform.audit_after_commit(request.user, action)
     return {"schema_version": 1, "saved": True, "value": value}

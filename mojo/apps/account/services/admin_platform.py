@@ -198,6 +198,17 @@ def _deployments():
     coordination = deploy._loads(status_raw)
     rows = PlatformDeployment.objects.select_related("retry_of").all()[:50]
     status = _platform_deployment_status(rows[0]) if rows else "unconfigured"
+    # The operator's framework hold, and what it currently resolves to. A junk
+    # row would refuse the next DEPLOY loudly; it must not take the read-only
+    # overview down with it, so this reads defensively and shows the raw mode.
+    pin = system_settings.get_value("EDGE_FRAMEWORK_VERSION", "")
+    pin = pin.strip() if isinstance(pin, str) else ""
+    if pin == deploy.FRAMEWORK_HOLD:
+        mode, resolved = "hold", platform_deploy.last_converged_framework()
+    elif pin:
+        mode, resolved = "pinned", pin
+    else:
+        mode, resolved = "latest", None
     return {
         "_collector_status": status,
         "items": [platform_deploy.serialize(
@@ -205,6 +216,8 @@ def _deployments():
         "limit": 50,
         "desired_commit": (target or {}).get("sha"),
         "desired_deployment": (target or {}).get("deployment"),
+        "framework_pin": {"configured": bool(pin), "value": pin or None,
+                          "mode": mode, "resolved": resolved},
         "coordination": {
             "state": (coordination or {}).get("state"),
             "deployment": (coordination or {}).get("deployment"),

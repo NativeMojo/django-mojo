@@ -63,8 +63,14 @@ def test_manage_settings_admin_admission(opts):
 def test_settings_registry_contract(opts):
     from mojo.apps.account.services import admin_settings
     rows = {row.key: row for row in admin_settings.descriptors()}
-    for key in (*CATALOG_KEYS, "BASE_URL", "AUTH_CONFIG", "EDGE_EXPECTED_TOPOLOGY"):
+    for key in (*CATALOG_KEYS, "BASE_URL", "AUTH_CONFIG", "EDGE_EXPECTED_TOPOLOGY",
+                "EDGE_FRAMEWORK_VERSION"):
         assert key in rows, f"the curated catalog omitted {key}"
+    hold = rows["EDGE_FRAMEWORK_VERSION"]
+    assert hold.resolver == "protected" and hold.writable == "owner", \
+        f"the framework hold must stay owner-written and protected: {hold!r}"
+    assert "hold" in hold.constraints, \
+        f"the catalog must tell an operator what it accepts: {hold.constraints!r}"
     descriptor = rows["ALLOW_EMAIL_CHANGE"]
     assert admin_settings.register_descriptor(descriptor) == descriptor, \
         "an identical app-owned registration was not idempotent"

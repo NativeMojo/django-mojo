@@ -254,3 +254,73 @@ def test_platform_write_decorators(opts):
         assert getattr(func, "_mojo_denies_key_backed_session", False), func.__name__
         assert getattr(func, "_mojo_requires_fresh_auth", False), func.__name__
         assert getattr(func, "_mojo_fresh_auth_seconds", None) == 600, func.__name__
+
+
+@th.django_unit_test("the framework hold is written by the typed owner writer, and read back at once")
+def test_framework_pin_write_path(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.services import admin_platform, system_settings
+    from mojo.apps.edge.settings_validators import FRAMEWORK_VERSION_KEY
+
+    root = User.objects.get(pk=opts.platform_root)
+    Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
+    try:
+        assert system_settings.set_value(root, FRAMEWORK_VERSION_KEY, "1.11.6") == "1.11.6", \
+            "an explicit published version must be stored verbatim"
+        assert admin_platform._deployments()["framework_pin"] == {
+            "configured": True, "value": "1.11.6", "mode": "pinned",
+            "resolved": "1.11.6"}, \
+            "the Platform overview did not reflect the pin that was just written"
+
+        assert system_settings.set_value(root, FRAMEWORK_VERSION_KEY, "HOLD") == "hold", \
+            "the hold sentinel must be casefolded on the way in"
+        held = admin_platform._deployments()["framework_pin"]
+        assert held["mode"] == "hold" and held["value"] == "hold", \
+            f"a hold must be reported as such: {held!r}"
+        assert "resolved" in held, \
+            f"a hold must report what it currently resolves to: {held!r}"
+
+        assert system_settings.set_value(root, FRAMEWORK_VERSION_KEY, "latest") == "", \
+            "'latest' is the unset synonym — it must not be stored literally"
+        assert admin_platform._deployments()["framework_pin"] == {
+            "configured": False, "value": None, "mode": "latest", "resolved": None}, \
+            "an unset hold must read back as the newest-release default"
+
+        for bad in ("stable", "v1.2.3", "1.0; rm -rf /"):
+            try:
+                system_settings.set_value(root, FRAMEWORK_VERSION_KEY, bad)
+                raise AssertionError(f"{bad!r} is not a version and must be refused")
+            except me.ValueException as err:
+                assert "'hold'" in str(err), \
+                    f"the refusal must name the accepted forms: {err}"
+
+        # The generic Setting writer must not be able to reach it at all.
+        generic = Setting(key=FRAMEWORK_VERSION_KEY, value="9.9.9")
+        with th.assert_raises(me.PermissionDeniedException):
+            generic.save()
+    finally:
+        Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
+
+
+@th.django_unit_test("the framework hold endpoint demands a fresh interactive superuser")
+def test_framework_pin_endpoint_authority(opts):
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.edge.settings_validators import FRAMEWORK_VERSION_KEY
+
+    Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
+    user = User.objects.get(pk=opts.platform_user)
+    user.add_permission("manage_advanced")
+    user.save()
+    try:
+        assert opts.client.login("platform-user@test.com", "example"), \
+            "the non-superuser fixture could not establish a session"
+        response = opts.client.post(
+            "/api/account/admin/advanced/settings", json={"framework_pin": "1.11.6"})
+        assert response.status_code in (401, 403), \
+            f"a non-superuser wrote the fleet's framework version: {response.response!r}"
+        assert not Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).exists(), \
+            "a refused write still landed a protected row"
+    finally:
+        opts.client.logout()
+        Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()

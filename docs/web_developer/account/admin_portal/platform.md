@@ -51,6 +51,20 @@ seconds per row, and a 2.5-second collector deadline. Each row supplies
 never becomes healthy. Historical `not_started` alone does not degrade a
 currently healthy origin.
 
+`deployments.data.framework_pin` reports which django-mojo version the next
+fleet deploy will install:
+
+```json
+{"configured": true, "value": "hold", "mode": "hold", "resolved": "1.11.9"}
+```
+
+`mode` is `latest` (nothing configured — the newest published release),
+`pinned` (`value` is installed verbatim), or `hold` (stay on the last converged
+fleet version). `resolved` is what the mode currently works out to, and is
+`null` under `latest` — and under `hold` on a fleet with no converged
+deployment, which is a refused-deploy state worth surfacing rather than hiding.
+The object is additive; existing `deployments` fields are unchanged.
+
 The three deployment actions accept `{"deployment":"<uuid>"}`. Retry returns
 `{"schema_version":1,"queued":true|false,"deployment":{...}}`; verify and
 converge return the same version plus the serialized `deployment`. A deployment
@@ -71,6 +85,21 @@ The settings endpoint accepts exactly one typed family:
 ```json
 {"edge_topology": {"nodes": ["edge-a", "edge-b"], "pools": ["public-web"]}}
 ```
+
+```json
+{"framework_pin": "1.11.9"}
+```
+
+`framework_pin` writes the framework version hold behind
+`deployments.data.framework_pin`. Send a published django-mojo version,
+`"hold"`, or `""` to unset (`"latest"`, `"none"`, and `"auto"` are accepted
+synonyms for unset). It carries the same authority as the other two families —
+superuser, fresh interactive session, no key-backed sessions — and the response
+returns the **normalized** stored value, so `"HOLD"` comes back as `"hold"` and
+`"latest"` as `""`. Any other value is a validation error whose message names
+the accepted forms; the version is not checked against PyPI at write time. The
+change applies from the next deploy and never moves one already in flight, so
+re-read the Platform overview rather than assuming a running deploy shifted.
 
 Auth appearance and method fields are allowlisted. Login methods must include
 `password`; enabled registration must have at least one method. Navigation,

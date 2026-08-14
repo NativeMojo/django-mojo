@@ -71,11 +71,23 @@ not a wildcard; only `is_superuser` is a wildcard.
 
 BASE_URL remains focused-Setup-owned; identity is immutable; DNS certificate
 knobs are display/owner-only; file-only rows instruct the operator to change
-Django production settings and deploy. `AUTH_CONFIG` and
-`EDGE_EXPECTED_TOPOLOGY` keep the existing
+Django production settings and deploy. `AUTH_CONFIG`,
+`EDGE_EXPECTED_TOPOLOGY`, and `EDGE_FRAMEWORK_VERSION` keep the existing
 `POST /api/account/admin/advanced/settings` typed writer and active literal
 superuser plus `manage_advanced`/`admin` authority. That endpoint remains for
 compatibility, but Settings is its only browser UI home.
+
+`EDGE_FRAMEWORK_VERSION` ("Framework version hold") is the topology's sibling:
+a protected, owner-writable string in Edge & Web Apps that decides which
+django-mojo version every fleet deploy installs. It accepts a published
+version, `hold` (stay on the last converged fleet version), or unset (newest
+published release); `latest`, `none`, and `auto` are unset synonyms, and
+anything else is refused with a message naming the accepted forms. Unlike the
+other deploy settings it is deliberately database-backed rather than file-only,
+because freezing the framework must not itself require a deploy — protection,
+not a config file, is what keeps a generic `manage_settings` grant away from it.
+Semantics and the refusal behavior live in
+[django_developer/edge/deploy.md](../../edge/deploy.md).
 
 The generic `/api/settings` remains for uncataloged and supported group-scoped
 rows. Its existing permission holders can read non-secret Setting values, so
